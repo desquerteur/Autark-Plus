@@ -1,7 +1,7 @@
 // "Use model X" requests of the agent itself (model.set tool → the routing of later turns) and
 // the choice a turn returns to (RT2).
 // Owns: in the kv table, one pending next-step request per (agent, chat) – the next turn consumes
-// it – and one task request per (agent, chat, task) – every turn on that task applies it until the
+// it – and one task request per (agent, task) (AF-022: keys as the official 0.3.5's migration 094 left them) – every turn on that task applies it until the
 // task is done or cancelled, then its row is dropped; on a stuck task (RT1) a task request whose
 // model stalled gives way to the escalation (a next-step request still wins its one step);
 // `returnChoice`, a turn's RouteRequest.previous:
@@ -73,9 +73,9 @@ export function setNextRoute(db: Db, agentId: string, conversationId: string | u
   put(db, NS, key(agentId, conversationId), value);
 }
 
-/** The request for every turn of the agent on `taskId` in this chat until the task is done (replaces an earlier one). */
-export function setTaskRoute(db: Db, agentId: string, conversationId: string | undefined, taskId: string, value: NextRoute): void {
-  put(db, TASK_NS, `${key(agentId, conversationId)}:${taskId}`, value);
+/** The request for every turn of the agent on `taskId` until the task is done (replaces an earlier one; key agent:task, migration 094). */
+export function setTaskRoute(db: Db, agentId: string, _conversationId: string | undefined, taskId: string, value: NextRoute): void {
+  put(db, TASK_NS, `${agentId}:${taskId}`, value);
 }
 
 /** Returns and deletes the pending next-step request (it applies to one turn only). */
@@ -88,12 +88,12 @@ export function takeNextRoute(db: Db, agentId: string, conversationId: string | 
 
 /**
  * The request in force for a turn: the next step's (consumed) over the task's, field by field;
- * the task requests of finished tasks (`finished`) in this chat are dropped first. `stalled` = on
+ * the agent's task requests of finished tasks (`finished`) are dropped first. `stalled` = on
  * a stuck task (RT1), the models of its stalled turns: a task request for one of them gives way
  * to the escalation on this turn (its row stays and holds again once the task makes progress).
  */
 export function pendingRoute(db: Db, agentId: string, conversationId: string | undefined, taskId: string | undefined, finished: (taskId: string) => boolean, stalled: readonly string[] = []): NextRoute | undefined {
-  const prefix = `${key(agentId, conversationId)}:`;
+  const prefix = `${agentId}:`;
   const rows = db.all<{ key: string }>('SELECT key FROM kv WHERE ns = ? AND substr(key, 1, ?) = ?', [TASK_NS, prefix.length, prefix]);
   for (const row of rows) if (finished(row.key.slice(prefix.length))) db.run('DELETE FROM kv WHERE ns = ? AND key = ?', [TASK_NS, row.key]);
   const step = takeNextRoute(db, agentId, conversationId);

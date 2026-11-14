@@ -1,6 +1,6 @@
 // Quick tasks (the person's task composer, tasks.quickCreate) and "Send to…" (tasks.route): what the person typed
 // becomes ONE plain task – no router, no route records. Title = first line, notes = only the rest (B-078: no copy of
-// the first line, todo-draft.ts restNotes); files are kept with the task (kv QUICK_POST_NS – a chat-free task has no anchor message to carry them).
+// the first line, todo-draft.ts restNotes); files are kept with the task (tasks.files since migration 093, AF-022 – a chat-free task has no anchor message to carry them).
 // Who does it: the target – an agent, a manager's branch (that manager), a team (an agent of that team, the one
 // highest in the org first), a person of the organisation (handed over in the owner's 1:1 chat with her as hers) or
 // 'me' (the person's own to-do). Without a target it is team work: the decision model picks its owner, else the
@@ -17,13 +17,10 @@ import type { CreateTaskInput, TaskView } from '../../shared/model/tasks.ts';
 import type { QuickTaskParams, QuickTaskResult, QuickTaskTarget } from '../../shared/model/task-center.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { directChat } from '../people/direct-chat.ts';
-import { KvRepo } from '../store/kv.ts';
 import type { CreateOptions } from './create.ts';
 import { quickDraft, restNotes } from './todo-draft.ts';
 
 export const MAX_QUICK_TEXT = 8000;
-/** kv namespace of a chat-free quick task's files (key: task id). */
-export const QUICK_POST_NS = 'task_quick_post';
 
 type Deps = Pick<RuntimeServices, 'db' | 'clock' | 'chats' | 'tasks' | 'org'>;
 type CreatingTasks = { create(input: CreateTaskInput & { createdBy: string }, options?: CreateOptions): TaskView };
@@ -34,9 +31,15 @@ export type QuickInput = Omit<QuickTaskParams, 'attachments'> & { attachments?: 
 /** The files a quick task was posted with (empty for any other task). */
 export function quickFiles(db: Deps['db'], taskId: string): Attachment[] {
   try {
-    const post = new KvRepo(db).get<{ attachments?: Attachment[] }>(QUICK_POST_NS, taskId);
-    return Array.isArray(post?.attachments) ? post.attachments : [];
+    const row = db.get<{ files: string }>('SELECT files FROM tasks WHERE id = ?', [taskId]);
+    const files: unknown = row ? JSON.parse(row.files) : [];
+    return Array.isArray(files) ? files as Attachment[] : [];
   } catch { return []; }
+}
+
+/** Keeps the files a quick task was posted with on the task (tasks.files, migration 093). */
+export function setQuickFiles(db: Deps['db'], taskId: string, files: Attachment[]): void {
+  db.run('UPDATE tasks SET files = ? WHERE id = ?', [JSON.stringify(files), taskId]);
 }
 
 /** The agent a target names (undefined: no target, or the person). */
@@ -83,7 +86,7 @@ export function quickCreate(s: Deps, input: QuickInput, createdBy: string): Quic
     ...fields, origin: ORIGINS.intake, ...(input.spaceId ? { spaceId: input.spaceId } : {}),
     ...(mine ? { assigneeKind: 'human', widget: mine.widget, humanReason: mine.humanReason } : owner ? { assigneeKind: 'agent', assigneeId: owner } : { assigneeKind: 'team' }),
   }, clientId ? { clientId } : {});
-  if (attachments.length) new KvRepo(s.db).set(QUICK_POST_NS, task.id, { attachments }, s.clock.now());
+  if (attachments.length) setQuickFiles(s.db, task.id, attachments);
   return { task };
 }
 
