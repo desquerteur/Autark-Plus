@@ -31,6 +31,13 @@ screen's look changes.
   1 px `--line` (focus: `--focus`), radius `--r-composer`, `--shadow-composer`, 16/24 text, min 96 px high, a primary
   "Start session" button. Facts as a 110 px label column (`--secondary`) and a value column, 13/20.
 - **Narrow (≤ 640 px):** paddings 16 px, facts stack in one column.
+- **Agents and side chat (AF-020):** an "Agents" section on the page – rows radius `--r-sm` (hover `--hover`, the
+  chatting one `--selected`), avatar 28 px with its status, name 13/18 600, line 12/16 `--muted`, then two small icon
+  cells: crown (lead; pressed in `--update`) and agent page. The lead comes first with a "Lead" pill: 18 px high,
+  radius 9 px, crown 12 px, 11 px 600 `--update` on 16 % `--update`. Beside the page the side chat: width
+  clamp(360 px, 46 %, 560 px), 1 px `--line` on its left, a 52 px top line (avatar, name with the pill, status line,
+  "Open as full chat"), then the chat column (messages, composer) like the chat view. A main zone under 760 px stacks
+  the chat under the page (45 % / 55 %); the phone has no side chat – an agent opens its 1:1.
 
 ## Agent directory (AF-017) – `src/ui/styles/agent-directory.css`
 

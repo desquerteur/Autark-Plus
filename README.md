@@ -202,6 +202,18 @@ automatically after a secret scan.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send changes, and [SECURITY.md](SECURITY.md) for how
 to report a vulnerability privately.
 
+## Taking changes from this fork
+
+This repository ([desquerteur/OpenAutark](https://github.com/desquerteur/OpenAutark)) is a fork of
+[teydra/OpenAutark](https://github.com/teydra/OpenAutark) with its own features (for example AF-017 agent directory,
+AF-018 projects, AF-019 updates from the fork, AF-020 project lead and project chat). If you bring code, features or
+ideas from this fork into the original repository or any other copy of it, please say so where it lands – in the commit
+message or pull request and in the release notes, for example:
+
+> Taken from (or: inspired by) desquerteur/OpenAutark – https://github.com/desquerteur/OpenAutark
+
+The Apache License 2.0 also asks that changed files say they were changed and that existing notices are kept.
+
 ## License
 
 The source code is licensed under the [Apache License 2.0](LICENSE). The documentation texts and everything in

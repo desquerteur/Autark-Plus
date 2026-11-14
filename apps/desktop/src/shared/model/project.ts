@@ -51,6 +51,8 @@ export interface Project {
   git?: ProjectGit;
   /** Agents whose home project is this folder. */
   agents: Array<{ id: string; name: string }>;
+  /** AF-020: the project's lead – one of `agents` (absent without one): shown first, the default agent of a new session. */
+  leadId?: string;
   /** Its sessions, newest first (at most 30). */
   sessions: ProjectSession[];
   /** One line about the project from its README or manifest ('' when nothing says). */
@@ -61,7 +63,7 @@ export interface StartSessionInput {
   projectId: string;
   /** The first message of the session – the work to do. */
   prompt: string;
-  /** The project agent to run it; default: the project's first agent, or a new one hired from the folder. */
+  /** The project agent to run it; default: the project's lead (AF-020), else its first agent, or a new one hired from the folder. */
   agentId?: string;
   /** The chat's title (default: from the prompt). */
   title?: string;

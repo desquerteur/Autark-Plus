@@ -46,3 +46,20 @@ test('route: #/projects and #/projects/<id>', () => {
   assert.deepEqual(parseRoute('#/projects/prj_abc'), { view: 'projects', id: 'prj_abc' });
   assert.equal(formatRoute({ view: 'projects', id: 'prj_abc' }), '#/projects/prj_abc');
 });
+
+// AF-020: the lead first, whom the side chat talks to, and who runs a new session.
+test('agentsLeadFirst, chatAgentOf and sessionWho follow the project lead', async () => {
+  const { agentsLeadFirst, chatAgentOf, sessionWho } = await import('../../../src/ui/projects/projects-model.ts');
+  const agents = [{ id: 'ag_a', name: 'Ava' }, { id: 'ag_b', name: 'Ben' }, { id: 'ag_c', name: 'Cy' }];
+  const led = project({ agents, leadId: 'ag_b' });
+  assert.deepEqual(agentsLeadFirst(led).map((a) => a.id), ['ag_b', 'ag_a', 'ag_c']);
+  assert.deepEqual(agentsLeadFirst(project({ agents })).map((a) => a.id), ['ag_a', 'ag_b', 'ag_c']);
+  assert.equal(chatAgentOf(led), 'ag_b', 'the lead by default');
+  assert.equal(chatAgentOf(led, 'ag_c'), 'ag_c', 'a picked agent stays');
+  assert.equal(chatAgentOf(led, 'ag_gone'), 'ag_b', 'a picked agent no longer in the project falls back to the lead');
+  assert.equal(chatAgentOf(project({ agents })), 'ag_a');
+  assert.equal(chatAgentOf(project({})), undefined);
+  assert.equal(sessionWho(led), 'Runs with Ben (lead)');
+  assert.equal(sessionWho(project({ agents })), 'Runs with Ava');
+  assert.equal(sessionWho(project({})), 'A new agent is hired from this folder');
+});

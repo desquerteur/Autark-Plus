@@ -2,6 +2,9 @@
 // recent projects as cards). With one: its page – name (rename), folder, branch / changes / sync, the newest commit,
 // who works in it, its sessions, and the big "What should happen in <project>?" field that starts a new session
 // (projects.startSession: a new chat with a project agent, hired from the folder when there is none) and opens it.
+// AF-020: the page also lists the project's agents (ProjectAgents.tsx – the lead first, set with the crown) and, on the
+// desktop, chats with one of them right beside it (ProjectChat.tsx – the lead unless another is picked); on the phone a
+// picked agent opens its 1:1. A new session runs with the lead.
 // Owns: these two pages. Never: git or folder reads, the session logic (runtime/projects).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -13,10 +16,16 @@ import { isMobile } from '../lib/platform.ts';
 import { relative } from '../lib/format.ts';
 import { toastError } from '../lib/toasts.ts';
 import { Button, EmptyState, Icon, Spinner, askText, confirm } from '../lib/ui.tsx';
-import { agentsLine, branchLabel, changedLabel, composerPlaceholder, projectLine, syncLabel } from './projects-model.ts';
+import { branchLabel, changedLabel, chatAgentOf, composerPlaceholder, projectLine, sessionWho, syncLabel } from './projects-model.ts';
 import { loadProjects, pinProject, projectList, projectMap, projectsLoaded, refreshProject, removeProjectFromList, renameProject, startSession } from './projects-store.ts';
 import { addDroppedProject, canPickFolder, pickAndAddProject } from './ProjectsNav.tsx';
 import { mayHoldFolder } from '../team/folder-agent.ts';
+import { openDirect } from '../chat/direct.ts';
+import { ProjectAgents } from './ProjectAgents.tsx';
+import { ProjectChat } from './ProjectChat.tsx';
+
+/** AF-020: the agent picked for each project's side chat in this window (kept while the person moves between projects). */
+const chatPicks = new Map<string, string>();
 
 /** The start page: no project open. */
 export function ProjectsHome() {
@@ -83,7 +92,7 @@ function SessionComposer(props: { project: Project }) {
         onInput={(event) => setText((event.currentTarget as HTMLTextAreaElement).value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey || !event.shiftKey) && !event.isComposing) { event.preventDefault(); void send(); } }} />
       <div class="project-composer-foot">
-        <span class="project-composer-who">{project.agents.length ? `Runs with ${project.agents[0]!.name}` : 'A new agent is hired from this folder'}</span>
+        <span class="project-composer-who">{sessionWho(project)}</span>
         <Button variant="primary" icon="arrow-up" busy={busy} disabled={!text.trim() || disabled} onClick={() => void send()}>Start session</Button>
       </div>
     </div>
@@ -94,6 +103,7 @@ function SessionComposer(props: { project: Project }) {
 export function ProjectPage(props: { projectId: string }) {
   useEffect(() => { void loadProjects(); void refreshProject(props.projectId); }, [props.projectId]);
   const project = projectMap.value.get(props.projectId);
+  const [, setPickTick] = useState(0);
   const back = isMobile.value ? backCell(() => go.project()) : undefined;
   if (!project) {
     return (
@@ -112,6 +122,13 @@ export function ProjectPage(props: { projectId: string }) {
     if (!await confirm({ title: `Remove ${project.name} from the list?`, body: 'The folder, its agents and its chats stay as they are.', confirmLabel: 'Remove' })) return;
     try { await removeProjectFromList(project.id); go.project(); } catch (error) { toastError(error); }
   };
+  const mobile = isMobile.value;
+  const chatAgent = chatAgentOf(project, chatPicks.get(project.id));
+  const pick = (agentId: string) => {
+    if (mobile) { void openDirect(agentId); return; }
+    chatPicks.set(project.id, agentId);
+    setPickTick((tick) => tick + 1);
+  };
   return (
     <div class="projects-view">
       <Header zone="main" title={project.name} sub={project.folder} twoLine lead={back} cells={[
@@ -120,6 +137,7 @@ export function ProjectPage(props: { projectId: string }) {
         { id: 'refresh', icon: 'arrow-clockwise', label: 'Refresh', onClick: () => void refreshProject(project.id) },
         { id: 'remove', icon: 'trash', label: 'Remove from list', onClick: () => void remove() },
       ]} />
+      <div class="project-split">
       <div class="projects-scroll">
         <div class="project-page">
           {project.about && <p class="project-about">{project.about}</p>}
@@ -132,11 +150,8 @@ export function ProjectPage(props: { projectId: string }) {
               <span class="project-fact-value">{changedLabel(git.dirty) || 'Clean'}{syncLabel(git) ? <span class="project-sync tabular"> · {syncLabel(git)}</span> : null}</span></div>}
             {git?.lastCommit && <div class="project-fact"><span class="project-fact-label">Last commit</span>
               <span class="project-fact-value"><code class="project-sha">{git.lastCommit.sha}</code> {git.lastCommit.subject} <span class="project-muted">· {relative(git.lastCommit.at)}</span></span></div>}
-            <div class="project-fact"><span class="project-fact-label">Agents</span>
-              <span class="project-fact-value">{project.agents.length
-                ? project.agents.map((agent, index) => <span key={agent.id}>{index > 0 && ', '}<button type="button" class="text-button" onClick={() => go.agent(agent.id)}>{agent.name}</button></span>)
-                : <span class="project-muted">{agentsLine(project)}</span>}</span></div>
           </div>
+          <ProjectAgents project={project} selected={mobile ? undefined : chatAgent} onSelect={pick} />
           <h2 class="project-section">Sessions</h2>
           {project.sessions.length ? (
             <div class="project-session-list">
@@ -150,6 +165,8 @@ export function ProjectPage(props: { projectId: string }) {
             </div>
           ) : <p class="project-muted">No sessions yet – write above what should happen.</p>}
         </div>
+      </div>
+      {!mobile && <ProjectChat project={project} agentId={chatAgent} />}
       </div>
     </div>
   );

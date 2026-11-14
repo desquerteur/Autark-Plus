@@ -204,7 +204,7 @@ export const METHOD_DOCS: Record<string, { params: string; note?: string }> = {
   "projects.list": {"params":"void","note":"Owner: every project – added ones and those following from agents' home folders; pinned first, then by activity. Git state may be cached (≤ 60 s)."},
   "projects.remove": {"params":"{ id: string }","note":"Owner: takes the project off the list – its folder, agents and chats stay untouched."},
   "projects.startSession": {"params":"StartSessionInput","note":"Owner: a new session – a new chat with a project agent (hired from the folder when it has none) whose first message is the prompt."},
-  "projects.update": {"params":"{ id: string; name?: string; pinned?: boolean }","note":"Owner: renames ('' = the folder's name again) or pins a project."},
+  "projects.update": {"params":"{ id: string; name?: string; pinned?: boolean; leadId?: string }","note":"Owner: renames ('' = the folder's name again), pins a project or sets its lead (AF-020: an agent of the project; '' = none)."},
   "pwa.enable": {"params":"{ enabled: boolean; bind?: Settings['pwa']['bind'] }"},
   "pwa.exchange": {"params":"{ secret: string; name?: string }","note":"Pairing exchange for a new phone/browser: trades the one-time secret from a `pwa.link` URL (`#pair=<secret>`) or that link's 6-digit code for a device token. Callable WITHOUT a token: the PWA sends it as one RpcRequest frame via HTTP `POST…"},
   "pwa.link": {"params":"{ name?: string; route?: string }","note":"The phone QR code: a one-time link (10 minutes) the phone camera opens, and its 6-digit `code` for an installed app – one pairing with either, until `expiresAt`; `route` (#/…) opens after pairing."},
