@@ -161,6 +161,7 @@ export interface ModelPolicy {
   costMode?: 'economy' | 'balanced' | 'best';
   prefer?: string[]; // model ids preferred
   avoid?: string[]; // model ids to avoid
+  account?: string; // AF-021: the agent's default account when its provider has several (shared/model/account-choice.ts)
 }
 
 export interface RouteDecision {
@@ -172,6 +173,15 @@ export interface RouteDecision {
   reason: string; // short human-readable explanation ("video animation · Opus strongest prior")
   by: 'pin' | 'rules' | 'decision-model' | 'fallback' | 'previous' | 'hint'; // 'hint' (SG): the chat's model suggestion, shared/model/model-guide.ts
   alternatives: string[]; // next candidates (failover order)
+  /** AF-021: the chosen account could not run and routing.accountFallback 'switch' took another (the chat says so). */
+  accountSwitch?: AccountSwitch;
+}
+
+/** AF-021 (shared/model/account-choice.ts): the account a choice named, why it could not run, and whose choice it was. */
+export interface AccountSwitch {
+  from: string;
+  problem: 'limit' | 'signed_out' | 'off' | 'model' | 'failed';
+  source: 'chat' | 'agent';
 }
 
 export interface UsageSummary {

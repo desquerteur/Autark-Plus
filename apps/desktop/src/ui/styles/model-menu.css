@@ -1,0 +1,68 @@
+/* AF-021: the model menu's effort slider (chat/composer/EffortSlider.tsx) and its account section
+   (chat/composer/AccountSection.tsx), the chip's account part, the account actions under a failed message and the
+   agent page's account row. Monochrome like the rest of the menu: the thumb and fill take --text, the rail --line,
+   so light and dark need no colours of their own; selection is colour only (B-044 §2).
+   Owns: these rules. Never: the menu frame (base.css) or the chip's width rules elsewhere (composer.css). */
+
+/* ---------------------------------------------------------------- effort slider */
+.effort-slider { padding: 8px 6px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.effort-head { display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px 6px; font-size: 12px; color: var(--muted); }
+.effort-value { color: var(--text); font-variant-numeric: tabular-nums; }
+.effort-track {
+  position: relative; height: 24px; border-radius: 12px; cursor: pointer; touch-action: none; user-select: none;
+}
+.effort-track:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.effort-rail, .effort-fill { position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; }
+.effort-rail { background: var(--line); }
+.effort-fill { background: var(--text); opacity: .85; transition: width .12s ease; }
+.effort-stop {
+  position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--muted);
+}
+.effort-stop.passed { box-shadow: inset 0 0 0 1.5px var(--text); background: var(--text); }
+.effort-thumb {
+  position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+  background: var(--surface); box-shadow: 0 0 0 2px var(--text), var(--shadow-raised, 0 1px 3px rgb(0 0 0 / .2));
+  transition: left .12s ease;
+}
+.effort-track.dragging .effort-thumb, .effort-track.dragging .effort-fill { transition: none; }
+.effort-track:hover .effort-thumb { transform: scale(1.08); }
+.effort-labels { display: grid; margin-top: 2px; }
+.effort-label {
+  min-width: 0; padding: 4px 2px; border-radius: 6px; font-size: 11.5px; color: var(--muted);
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.effort-label:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.effort-label.on { color: var(--text); background: var(--selected); }
+.effort-slider[data-disabled] { opacity: var(--disabled-opacity, .5); }
+@media (prefers-reduced-motion: reduce) { .effort-thumb, .effort-fill { transition: none; } }
+
+/* ---------------------------------------------------------------- account section */
+.account-section { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.account-section-title { padding: 4px 8px 2px; font-size: 12px; color: var(--muted); }
+.account-option { gap: 8px; }
+.account-option .account-face { flex: none; }
+.account-option-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.25; }
+.account-option-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-option-meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.account-option.trouble .account-option-meta { color: var(--warn); }
+.account-auto-face {
+  display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%;
+  color: var(--secondary); box-shadow: inset 0 0 0 1px var(--line);
+}
+.account-fallback { font-size: 12px; color: var(--secondary); }
+
+/* ---------------------------------------------------------------- the chip's account part */
+.model-chip.with-account { width: 184px; }
+.composer-actions > .model-chip.with-account { flex-basis: 184px; }
+.model-chip .chip-label.split { display: flex; min-width: 0; gap: 0; }
+.model-chip .chip-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-chip .chip-account { flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.model-chip .chip-account.trouble { color: var(--warn); }
+@media (max-width: 720px) {
+  .model-chip.with-account { width: 150px; }
+  .composer-actions > .model-chip.with-account { flex-basis: 150px; }
+}
+
+/* ---------------------------------------------------------------- a failed turn's account choices */
+.message-failure .account-actions { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }

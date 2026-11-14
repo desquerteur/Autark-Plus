@@ -82,6 +82,8 @@ export function cleanPolicy(value: unknown): ModelPolicy {
   const avoid = idList(raw.avoid, 'avoided models');
   if (prefer) policy.prefer = prefer;
   if (avoid) policy.avoid = avoid;
+  const account = modelId(raw.account, 'the account'); // AF-021: the agent's default account ('auto' = none)
+  if (account) policy.account = account;
   return policy;
 }
 

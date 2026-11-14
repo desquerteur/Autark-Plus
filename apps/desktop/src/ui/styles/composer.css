@@ -73,13 +73,7 @@
 .menu-item.unavailable { color: var(--muted); }
 .menu-search.input { width: calc(100% - 8px); margin: 2px 4px 6px; padding: 7px 10px; border-radius: 8px; font-size: 13px; }
 .model-list { max-height: min(300px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
-.effort-row { display: flex; gap: 4px; margin-top: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--line); }
-.effort {
-  flex: 1 1 0; min-width: 0; min-height: 30px; padding: 4px 6px; border-radius: 8px;
-  color: var(--secondary); font-size: 12px; text-align: center; white-space: nowrap;
-}
-.effort:hover { background: var(--hover); color: var(--text); }
-.effort.on { background: var(--selected); color: var(--text); } /* B-044 §2: selection = colour only, never weight */
+/* AF-021: effort is a slider now – model-menu.css */
 
 /* Primary round button: Send; empty or busy drafts are visibly disabled. */
 .send-button {

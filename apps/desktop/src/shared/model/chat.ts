@@ -26,6 +26,8 @@ export interface ConversationSettings {
   /** Sticky model choice per member agent (agentId → model id or 'auto'). */
   models?: Record<string, string>;
   efforts?: Record<string, string>;
+  /** AF-021: the account per member agent when its provider has several (agentId → account id; shared/model/account-choice.ts). */
+  accounts?: Record<string, string>;
   mode?: string; // active mode for this chat (status line on change)
   image?: string; // file id or emoji for groups
   hiddenFromList?: boolean; // agent-only work groups ("Team activity")

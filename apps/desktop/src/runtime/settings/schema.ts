@@ -144,6 +144,7 @@ export const SECTIONS: readonly SectionDef[] = [
     ...MODEL_USES.map((use) => useKey(use)),
     choice('costMode', 'How models are chosen: economy saves, best takes the strongest', ['economy', 'balanced', 'best'], 'balanced'),
     flag('allowPaidFallback', 'Pay-per-use API keys: true = they compete with plans on every turn, false = an API key runs only when no plan or local model can', false),
+    choice('accountFallback', 'The account chosen for a chat or an agent cannot run (used up, signed out): ask = the turn stops and the chat offers another account or Automatic, switch = another account runs and the chat says so', ['ask', 'switch'], 'ask'), // AF-021
   ] },
   { key: 'providers', title: 'Providers – the API connections', optional: true, free: true, keys: [], notes: providerNotes() },
   { key: 'day', title: 'My day', keys: [

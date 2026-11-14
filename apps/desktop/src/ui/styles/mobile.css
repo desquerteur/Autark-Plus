@@ -130,7 +130,9 @@ body:has(.mobile-shell) .popover {
   box-shadow: var(--shadow-sheet), 0 0 0 100vmax var(--backdrop); /* the scrim: the page behind steps back (a tap outside still closes it) */
 }
 body:has(.mobile-shell) .popover::before { content: ''; display: block; width: 36px; height: 4px; margin: 2px auto 8px; border-radius: 2px; background: var(--field); }
-body:has(.mobile-shell) .popover :is(.menu-item, .suggestion-row, .effort) { min-height: 48px; }
+body:has(.mobile-shell) .popover :is(.menu-item, .suggestion-row) { min-height: 48px; }
+body:has(.mobile-shell) .popover .effort-track { height: 40px; } /* AF-021: the slider's touch height */
+body:has(.mobile-shell) .popover .effort-label { min-height: 36px; }
 body:has(.mobile-shell) .model-list { max-height: 45dvh; }
 
 /* dialogs slide up from the bottom; the palette takes the whole screen */

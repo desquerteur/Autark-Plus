@@ -12,6 +12,8 @@
 //   → the previous model continues unless it is weak for the work (previous.ts)
 //   → the deterministic score (score.ts: curated prior + tier fit + plan headroom − cost, work plan bonus for agents)
 //   → effort (previous.ts startEffort), clamped to the model's efforts; account: the healthy accounts of that model.
+//   → AF-021: a chosen account (chat choice → agent default) of the picked model's provider replaces that account,
+//     or stops / switches with a notice when it cannot run (account-choice.ts).
 // A split's turn (RouteRequest.split) has no agent pin and keeps an effort it names (split-route.ts).
 // Owns: that order and the user-facing reason. Never: changes state, asks a model, or exceeds the policy band
 // silently (it fails with a clear message instead).
@@ -33,6 +35,7 @@ import { marginalCost, scoreModel, strengthOf, tierRank, type CostMode } from '.
 import { NEED_TEXT, NO_FIT_TEXT, needChoice, raisedText, stepUpEffort } from './need.ts';
 import { splitPolicy } from './split-route.ts';
 import { PERSON_TEXT, personAsks, personEffort, strongestPick, topTier } from './person-turn.ts';
+import { applyAccountChoice, chosenAccount } from './account-choice.ts'; // AF-021
 
 export { NO_MODEL_MESSAGE };
 const ALTERNATIVES = 3;
@@ -47,6 +50,16 @@ export class RouterImpl implements Router {
   }
 
   async route(request: RouteRequest): Promise<RouteDecision> {
+    const decision = await this.pick(request);
+    // AF-021: the chosen account (chat choice → agent default) runs the picked model when it can (account-choice.ts).
+    const s = this.deps.services();
+    return applyAccountChoice({
+      decision, choice: chosenAccount(s, request.agent, request.conversationId), model: s.catalog.get(decision.modelId),
+      accounts: s.accounts.list(), now: s.clock.now(), exclude: new Set(request.exclude ?? []), fallback: s.settings.get().routing.accountFallback,
+    });
+  }
+
+  private async pick(request: RouteRequest): Promise<RouteDecision> {
     const s = this.deps.services();
     let models = s.catalog.list();
     if (!models.some((model) => model.available)) {
