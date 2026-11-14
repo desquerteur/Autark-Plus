@@ -54,19 +54,23 @@ Du brauchst nur drei Schritte. Den Rest macht GitHub (`.github/workflows/build-d
 | Datei | Wofür |
 | --- | --- |
 | `autark-windows-x64.exe` | der Installer (Windows, unsigniert) |
-| `autark-windows-x64.exe.blockmap` | damit Updates schneller laden |
-| `latest.yml` | sagt der App, welche Version es gibt (mit SHA-512 – die App prüft den Download damit) |
+| `autark-mac-universal.dmg` / `.zip` | die Mac-App (Intel und Apple-Chip, nicht notarisiert) |
+| `autark-linux-x64.AppImage` | die Linux-App |
+| `*.blockmap` | damit Updates schneller laden |
+| `latest.yml`, `latest-mac.yml`, `latest-linux.yml` | sagen der App, welche Version es gibt (mit SHA-512 – die App prüft den Download damit) |
 | `SHA256SUMS.txt` | Prüfsummen zum Nachprüfen von Hand |
 | `release.json` | Version, Commit und Prüfsummen als JSON |
 
-Den Fortschritt siehst du im Fork unter **Actions → Build desktop packages**. Das Release ist erst ein Entwurf und wird veröffentlicht, wenn alles gebaut ist.
+Den Fortschritt siehst du im Fork unter **Actions → Build desktop packages**. Das Release ist erst ein Entwurf und
+wird erst veröffentlicht, wenn **alle drei** (Windows, Mac, Linux) gebaut sind. Scheitert eine Plattform, bleibt es ein
+Entwurf.
 
-### Auch Mac und Linux
+### Eine Plattform neu bauen
 
-Ein Tag baut nur Windows. Für Mac und Linux: im Fork unter *Actions → Build desktop packages → Run workflow* den Tag
-eintragen und als Plattform `mac`, `linux` oder `all` wählen. Die Dateien kommen in dasselbe Release, und
-`SHA256SUMS.txt` und `release.json` werden neu berechnet. Die Android-App lädst du wie bisher vom Release-PC hoch –
-danach den Workflow einmal laufen lassen, damit die Prüfsummen auch die APK enthalten.
+Ist eine Plattform gescheitert oder willst du sie neu bauen: im Fork unter *Actions → Build desktop packages → Run
+workflow* den Tag eintragen und als Plattform `windows`, `mac`, `linux` oder `all` wählen. Die Dateien kommen in
+dasselbe Release, und `SHA256SUMS.txt` und `release.json` werden neu berechnet. Die Android-App lädst du wie bisher vom
+Release-PC hoch – danach den Workflow einmal laufen lassen, damit die Prüfsummen auch die APK enthalten.
 
 ### Testversion (Prerelease)
 

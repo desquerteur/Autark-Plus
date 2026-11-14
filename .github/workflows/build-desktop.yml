@@ -4,7 +4,8 @@
 #   Linux x64    autark-linux-x64.AppImage (+ .blockmap, latest-linux.yml)
 #   macOS        autark-mac-universal.dmg/.zip (+ .blockmap, latest-mac.yml) – ad hoc signed, not notarized
 # plus SHA256SUMS.txt (every file of the release) and release.json (version, commit, files with size and SHA-256).
-# A pushed tag vX.Y.Z (or vX.Y.Z-beta.N: a prerelease) builds Windows and publishes the release; "Run workflow"
+# A pushed tag vX.Y.Z (or vX.Y.Z-beta.N: a prerelease) builds Windows, macOS and Linux and publishes the release
+# once all three are built; "Run workflow"
 # builds the chosen platforms for an existing tag and adds them (Android stays on the release PC).
 # The version always comes from the tag (package.json is set to it on the runner).
 # Never: runs in teydra/OpenAutark (it has release-from-compiled.yml), signs or notarizes, touches another repository,
@@ -45,7 +46,7 @@ jobs:
         id: tag
         shell: bash
         env:
-          PLATFORM: ${{ inputs.platform || 'windows' }}
+          PLATFORM: ${{ inputs.platform || 'all' }}
         run: |
           [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] || { echo "Use a vX.Y.Z or vX.Y.Z-beta.N tag (got $RELEASE_TAG)"; exit 1; }
           version="${BASH_REMATCH[1]}"
