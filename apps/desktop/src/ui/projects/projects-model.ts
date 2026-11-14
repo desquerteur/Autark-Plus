@@ -65,3 +65,24 @@ export function agentsLine(project: Pick<Project, 'agents'>): string {
   if (!project.agents.length) return 'Nobody yet – your first session hires an agent from this folder.';
   return project.agents.map((agent) => agent.name).join(', ');
 }
+
+// AF-020: the project lead and the page's side chat.
+
+/** The project's agents with the lead first (the rest in the runtime's order, by name). */
+export function agentsLeadFirst(project: Pick<Project, 'agents' | 'leadId'>): Array<{ id: string; name: string }> {
+  const lead = project.agents.find((agent) => agent.id === project.leadId);
+  return lead ? [lead, ...project.agents.filter((agent) => agent !== lead)] : [...project.agents];
+}
+
+/** Whom the side chat talks to: the chosen agent while it still works in the project, else the lead, else the first agent. */
+export function chatAgentOf(project: Pick<Project, 'agents' | 'leadId'>, chosen?: string): string | undefined {
+  if (chosen && project.agents.some((agent) => agent.id === chosen)) return chosen;
+  return agentsLeadFirst(project)[0]?.id;
+}
+
+/** The session field's foot line: who runs a new session. */
+export function sessionWho(project: Pick<Project, 'agents' | 'leadId'>): string {
+  const first = agentsLeadFirst(project)[0];
+  if (!first) return 'A new agent is hired from this folder';
+  return first.id === project.leadId ? `Runs with ${first.name} (lead)` : `Runs with ${first.name}`;
+}

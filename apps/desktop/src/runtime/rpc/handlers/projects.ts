@@ -1,4 +1,5 @@
-// RPC handlers (AF-018) of the Projects tab: list, get, add, update, remove and startSession. Owner only: projects are
+// RPC handlers (AF-018) of the Projects tab: list, get, add, update, remove and startSession (AF-020: update also sets
+// the lead). Owner only: projects are
 // folders of this PC, and a session start can hire an agent for one. Owns: param checks. Never: business logic
 // (runtime/projects).
 
@@ -28,10 +29,11 @@ export function register(table: HandlerTable): void {
   }, 'owner');
   table.add('projects.update', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['id', 'name', 'pinned']);
+    onlyKeys(o, ['id', 'name', 'pinned', 'leadId']);
     const name = optText(o, 'name', { max: 80, allowEmpty: true });
     const pinned = optBool(o, 'pinned');
-    return projectsOf(ctx.services).update(text(o, 'id', { max: 64 }), { ...(name !== undefined ? { name } : {}), ...(pinned !== undefined ? { pinned } : {}) });
+    const leadId = o.leadId === '' ? '' : optId(o, 'leadId'); // AF-020: '' = no lead
+    return projectsOf(ctx.services).update(text(o, 'id', { max: 64 }), { ...(name !== undefined ? { name } : {}), ...(pinned !== undefined ? { pinned } : {}), ...(leadId !== undefined ? { leadId } : {}) });
   }, 'owner');
   table.add('projects.remove', (params, ctx) => {
     const o = input(params);

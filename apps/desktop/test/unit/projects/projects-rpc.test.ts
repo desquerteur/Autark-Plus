@@ -53,6 +53,10 @@ test('projects.add / list / update / remove over RPC, owner only', async () => {
     assert.equal(renamed.pinned, true);
     const reset = await owner.call<Project>('projects.update', { id: added.id, name: '' });
     assert.equal(reset.name, 'demo-project');
+    // AF-020: the lead is one of the project's agents; '' clears it
+    const noLead = await owner.request('projects.update', { id: added.id, leadId: 'ag_nobody' });
+    assert.ok(noLead.error, 'an agent outside the project cannot lead it');
+    assert.equal((await owner.call<Project>('projects.update', { id: added.id, leadId: '' })).leadId, undefined);
 
     assert.deepEqual(await owner.call('projects.remove', { id: added.id }), { ok: true });
     list = await owner.call<Project[]>('projects.list');

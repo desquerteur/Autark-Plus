@@ -1,10 +1,11 @@
 // AF-018: the Projects tab's actions on the one project list of the window (lib/projects.ts `projectList` – the chip,
 // the palette and this tab share it, loaded on connect and kept fresh by project.upserted / project.removed). Here:
-// add, rename, pin, remove, refresh one and start a session. The views read `projectList` and call these.
+// add, rename, pin, remove, refresh one, start a session and (AF-020) set or hire the lead. The views read `projectList` and call these.
 // Owns: these actions and the "first load answered" flag. Never: a second copy of the list, renders, reads folders.
 
 import { computed, signal } from '@preact/signals';
 import '../../shared/api/methods-projects.ts';
+import '../../shared/api/methods-folder-agents.ts'; // AF-020: hiring a lead from the folder
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import type { Project, StartSessionInput } from '../../shared/model/project.ts';
 import { projectList, watchProjects } from '../lib/projects.ts';
@@ -55,4 +56,16 @@ export async function startSession(input: StartSessionInput): Promise<{ project:
   const result = await rpc.call('projects.startSession', { ...input, prompt: input.prompt.trim() });
   put(result.project);
   return result;
+}
+
+/** AF-020: makes `leadId` the project's lead ('' = no lead). */
+export async function setProjectLead(id: string, leadId: string): Promise<Project> {
+  return put(await rpc.call('projects.update', { id, leadId }));
+}
+
+/** AF-020: hires a new agent from the project's folder (AF-014, name and role from the folder) and makes it the lead; its id. */
+export async function hireProjectLead(project: Pick<Project, 'id' | 'folder'>): Promise<string> {
+  const { agent } = await rpc.call('folderAgents.create', { folder: project.folder });
+  await setProjectLead(project.id, agent.id);
+  return agent.id;
 }

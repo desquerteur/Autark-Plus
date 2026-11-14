@@ -3,7 +3,10 @@
 // shows its git state (git-state.ts, cached up to 60 s per folder), the agents whose home it is and their chats as the
 // project's sessions. A new session is a new chat with a project agent – hired from the folder (folder-agents) when
 // the project has none – whose first message is the person's prompt, so the agent starts at once.
-// Owns: the project records, ids, the list's order and the session start. Never: writes into a project folder, and
+// AF-020: a project may have a lead – one of its agents (kept as `leadId` in the project's kv row, no migration): shown
+// first and marked on the page, the default agent of a new session, and told in its prompt that it leads (lead-prompt.ts).
+// A lead whose home moves elsewhere (or who is archived) simply stops being the lead; the row keeps the id until changed.
+// Owns: the project records, ids, the list's order, the lead and the session start. Never: writes into a project folder, and
 // "remove" never touches the folder, its agents or its chats.
 
 import { createHash } from 'node:crypto';
@@ -28,7 +31,16 @@ const MAX_SESSIONS = 30;
 const TITLE_MAX = 60;
 
 /** What the kv row keeps of a project. `added: false` – a record only for a name or pin of an agent's project; `hidden` – taken off the list. */
-export interface ProjectRecord { folder: string; name?: string; pinned?: boolean; addedAt: number; added: boolean; hidden?: boolean }
+export interface ProjectRecord { folder: string; name?: string; pinned?: boolean; addedAt: number; added: boolean; hidden?: boolean; /** AF-020: the project's lead (an agent id). */ leadId?: string }
+
+/** A project an agent leads (AF-020), with the project's other agents – what the lead's prompt names. */
+export interface LedProject { id: string; name: string; folder: string; others: Array<{ id: string; name: string }> }
+
+/** AF-020: the lead's id while it still works in the project (its home is the folder), else undefined. */
+export function currentLead(record: Pick<ProjectRecord, 'leadId'> | undefined, agents: ReadonlyArray<{ id: string }>): string | undefined {
+  const lead = record?.leadId;
+  return lead && agents.some((agent) => agent.id === lead) ? lead : undefined;
+}
 
 export type ProjectServices = Pick<RuntimeServices, 'org' | 'chats' | 'db' | 'clock' | 'bus' | 'paths' | 'log'> & Partial<Pick<RuntimeServices, 'agentCore' | 'access'>>;
 
@@ -135,6 +147,7 @@ export class ProjectService {
     const { git, about, missing } = await this.details(entry.folder, fresh);
     const sessions = this.sessions(new Set(entry.agents.map((agent) => agent.id)), chats);
     const lastActiveAt = Math.max(0, sessions[0]?.lastAt ?? 0, git?.lastCommit?.at ?? 0);
+    const leadId = currentLead(entry.record, entry.agents);
     return {
       id,
       folder: entry.folder,
@@ -146,6 +159,7 @@ export class ProjectService {
       ...(missing ? { missing: true } : {}),
       ...(git ? { git } : {}),
       agents: [...entry.agents].sort((a, b) => a.name.localeCompare(b.name)),
+      ...(leadId ? { leadId } : {}),
       sessions,
       about,
     };
@@ -184,14 +198,35 @@ export class ProjectService {
     return this.announce(id);
   }
 
-  async update(id: string, patch: { name?: string; pinned?: boolean }): Promise<Project> {
+  async update(id: string, patch: { name?: string; pinned?: boolean; leadId?: string }): Promise<Project> {
     const entry = this.entries().get(id);
     if (!entry) throw new WorkforceError('not_found', 'No such project.', { details: { id } });
     const record: ProjectRecord = entry.record ?? { folder: entry.folder, added: false, addedAt: this.s.clock.now() };
     if (patch.name !== undefined) { if (patch.name.trim()) record.name = patch.name.trim(); else delete record.name; }
     if (patch.pinned !== undefined) record.pinned = patch.pinned;
+    if (patch.leadId !== undefined) { // AF-020: '' = no lead
+      if (!patch.leadId) delete record.leadId;
+      else if (!entry.agents.some((agent) => agent.id === patch.leadId)) throw new WorkforceError('bad_request', 'leadId: an agent working in this project.');
+      else record.leadId = patch.leadId;
+    }
     this.save(id, record);
     return this.announce(id);
+  }
+
+  /** AF-020: the projects `agentId` leads (the record names it and its home is the project's folder) – for its prompt. */
+  ledBy(agentId: string): LedProject[] {
+    if (!this.records().some((record) => record.leadId === agentId)) return []; // cheap: no agent homes read for anyone else
+    const out: LedProject[] = [];
+    for (const [id, entry] of this.entries()) {
+      if (currentLead(entry.record, entry.agents) !== agentId) continue;
+      out.push({
+        id,
+        name: entry.record?.name?.trim() || path.basename(entry.folder) || entry.folder,
+        folder: entry.folder,
+        others: entry.agents.filter((agent) => agent.id !== agentId).sort((a, b) => a.name.localeCompare(b.name)),
+      });
+    }
+    return out;
   }
 
   remove(id: string): { ok: true } {
@@ -215,7 +250,7 @@ export class ProjectService {
     if (agentId) {
       if (!entry.agents.some((agent) => agent.id === agentId)) throw new WorkforceError('bad_request', 'agentId: an agent working in this project.');
     } else if (entry.agents.length) {
-      agentId = [...entry.agents].sort((a, b) => a.name.localeCompare(b.name))[0]!.id;
+      agentId = currentLead(entry.record, entry.agents) ?? [...entry.agents].sort((a, b) => a.name.localeCompare(b.name))[0]!.id; // AF-020: the lead first
     } else {
       const { agent } = createFolderAgent(this.s as Parameters<typeof createFolderAgent>[0], { folder: entry.folder, name: '', role: '' });
       agentId = agent.id;

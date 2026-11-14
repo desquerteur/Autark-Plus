@@ -71,3 +71,36 @@
   .projects-cards, .project-page { padding-left: 16px; padding-right: 16px; }
   .project-fact { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* AF-020: the page's agents (ProjectAgents.tsx: the lead first, its crown and "Lead" mark) and the side chat beside the
+   page (ProjectChat.tsx: a chat column like the chat view's, without its header); a narrow main zone stacks the chat
+   under the page. */
+.projects-view { container: projects-view / inline-size; }
+.project-split { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.project-split > .projects-scroll { flex: 1 1 auto; min-width: 0; }
+.project-chat { position: relative; display: flex; flex-direction: column; flex: none; width: clamp(360px, 46%, 560px); min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.project-chat-top { display: flex; flex: none; align-items: center; gap: 10px; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+.project-chat-who { display: grid; flex: 1 1 auto; min-width: 0; }
+.project-chat-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.project-chat-line { overflow: hidden; color: var(--muted); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.project-chat-column { flex: 1 1 auto; }
+.project-chat-empty { display: grid; flex: 1 1 auto; place-items: center; padding: 24px; text-align: center; }
+.project-lead-mark { display: inline-flex; flex: none; align-items: center; gap: 3px; padding: 0 6px; border-radius: 9px; background: color-mix(in srgb, var(--update) 16%, transparent); color: var(--update); font-size: 11px; font-weight: 600; line-height: 18px; }
+.project-agents { display: grid; gap: 8px; }
+.project-agent-list { display: grid; gap: 2px; }
+.project-agent { display: flex; align-items: center; gap: 2px; padding-right: 6px; border-radius: var(--r-sm); }
+.project-agent:hover { background: var(--hover); }
+.project-agent.active { background: var(--selected); }
+.project-agent.lead .icon-button.selected { color: var(--update); }
+.project-agent-open { display: flex; flex: 1 1 auto; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; color: var(--text); text-align: left; }
+.project-agent-open:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: var(--r-sm); }
+.project-agent-text { display: grid; min-width: 0; }
+.project-agent-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 600; line-height: 18px; }
+.project-agent-line { overflow: hidden; color: var(--muted); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.project-agents-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 13px; }
+.project-agents-hint { margin: 0; font-size: 12px; }
+@container projects-view (max-width: 759px) {
+  .project-split { flex-direction: column; }
+  .project-split > .projects-scroll { flex: 1 1 45%; }
+  .project-chat { flex: 1 1 55%; width: auto; border-left: 0; border-top: 1px solid var(--line); }
+}
