@@ -13,8 +13,7 @@ import type { FileRef } from '../../../src/shared/model/system.ts';
 import { ORIGINS } from '../../../src/shared/model/origin.ts';
 import { DICTATED } from '../../../src/runtime/context/attachments.ts';
 import { Dictation, dictated, RETRY_MS } from '../../../src/runtime/media/dictation.ts';
-import { QUICK_POST_NS } from '../../../src/runtime/tasks/quick.ts';
-import { KvRepo } from '../../../src/runtime/store/kv.ts';
+import { setQuickFiles } from '../../../src/runtime/tasks/quick.ts';
 import { MessageRepo } from '../../../src/runtime/chat/message-repo.ts';
 import { sttSetup, transcriptResponse } from './stt-fixture.ts';
 import { wav } from './fixtures.ts';
@@ -85,7 +84,7 @@ test('a quick task posted with only a recording gets its title and notes from th
   try {
     const file = await t.put(wav(1000), 'memo.wav', 'audio/wav');
     const task = t.h.tasks.create({ title: 'memo.wav', origin: ORIGINS.intake, assigneeKind: 'team', createdBy: 'human' });
-    new KvRepo(t.h.db).set(QUICK_POST_NS, task.id, { attachments: [asAttachment(file)] }, 1);
+    setQuickFiles(t.h.db, task.id, [asAttachment(file)]);
     await until(() => t.h.tasks.get(task.id)!.title !== 'memo.wav', 'the title follows the transcript');
     const renamed = t.h.tasks.get(task.id)!;
     assert.equal(renamed.title, 'Call the printer about the flyers.');

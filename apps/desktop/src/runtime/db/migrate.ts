@@ -65,12 +65,18 @@ import { sql as vectorChunks } from './migrations/088-vector-chunks.ts';
 import { sql as contextItems } from './migrations/089-context-items.ts';
 import { sql as memoryOldIds } from './migrations/090-memory-old-ids.ts';
 import { sql as messagesStreaming } from './migrations/091-messages-streaming.ts';
+import { sql as splitParentSession } from './migrations/092-split-parent-session.ts';
+import { sql as taskFiles } from './migrations/093-task-files.ts';
+import { sql as taskRouteKeys } from './migrations/094-task-route-keys.ts';
+import { sql as accountCredits } from './migrations/095-account-credits.ts';
+import { sql as splitTemperature } from './migrations/096-split-temperature.ts';
+import { sql as templateEffort } from './migrations/097-template-effort.ts';
 
 /**
  * Versions are applied in list order: keep the list in ascending version order and never edit a
  * shipped entry. Only the highest applied version is recorded (`meta.schema`), and a listed version
  * at or below a profile's recorded one is never applied there – so a new migration always takes a
- * number above the highest one used so far (91 now), never a number in a gap. The gaps in the
+ * number above the highest one used so far (97 now – 92–97 are the official 0.3.5's, AF-022), never a number in a gap. The gaps in the
  * numbering (e.g. 51–54, 56, 57, 62–64, 66, 70) were reserved by parallel packages and never used; they
  * stay unused. 83 was reserved by a parallel package (B-057 took 84 meanwhile): a later 83 would be skipped
  * on every profile already at 84, so that step takes a number above 84 instead.
@@ -146,6 +152,13 @@ const MIGRATIONS: Migration[] = [
   { version: 89, name: 'context-items', sql: contextItems }, // the context ledger, back after 087 (context/ledger)
   { version: 90, name: 'memory-old-ids', sql: memoryOldIds }, // the old-id map of a state before 0.2.9 into one meta row per id (knowledge/memory-migrate.ts)
   { version: 91, name: 'messages-streaming', sql: messagesStreaming }, // B-075: the rows of runs at work by chat (chat/message-repo.ts liveRows)
+  // 92–97: taken over unchanged from the official 0.3.5 (teydra/OpenAutark, Apache-2.0) so a profile it migrated opens here (AF-022).
+  { version: 92, name: 'split-parent-session', sql: splitParentSession }, // split_groups.parent_session
+  { version: 93, name: 'task-files', sql: taskFiles }, // tasks.files – quick tasks' files move out of kv (tasks/quick.ts quickFiles)
+  { version: 94, name: 'task-route-keys', sql: taskRouteKeys }, // next_route_task keys per (agent, task) (agents/next-route.ts)
+  { version: 95, name: 'account-credits', sql: accountCredits }, // accounts.credits
+  { version: 96, name: 'split-temperature', sql: splitTemperature }, // splits.temperature
+  { version: 97, name: 'template-effort', sql: templateEffort }, // template agents' old fixed effort goes
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
