@@ -72,6 +72,21 @@ workflow* den Tag eintragen und als Plattform `windows`, `mac`, `linux` oder `al
 dasselbe Release, und `SHA256SUMS.txt` und `release.json` werden neu berechnet. Die Android-App lädst du wie bisher vom
 Release-PC hoch – danach den Workflow einmal laufen lassen, damit die Prüfsummen auch die APK enthalten.
 
+### Achtung: Wechsel vom Original zum Fork
+
+Das Original (`teydra/OpenAutark`) macht den Wechsel zu unserem Fork im Moment **schwer**:
+
+- **Deinstallieren klappt nicht.** Der Deinstaller einer App aus dem Original bricht mit Code 2 ab („Die alten
+  Anwendungsdateien konnten nicht deinstalliert werden … : 2“), auch wenn Autark gar nicht läuft. Dann bricht auch
+  unser Installer ab. Ausweg: Autark beenden, `%LOCALAPPDATA%\Programs\Autark` umbenennen (z. B. in `Autark.old`), den
+  Eintrag unter `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` vorher exportieren und dann löschen, danach
+  unseren Installer starten.
+- **Die Daten passen nicht mehr.** Die App aus dem Original aktualisiert sich selbst aus dem Original und ändert dabei
+  die Datenbank mit Code, der nicht öffentlich ist (deren 0.3.5: Schema 97; öffentlicher Code und Fork: Schema 91).
+  Unser Fork zeigt dann „Your data is from a newer version“. **Restore** holt die Kopie von vor dem Update zurück –
+  alles danach fehlt (es liegt in `%APPDATA%\Autark\before-repair-…`). Wer diese Daten behalten will, bleibt beim
+  Original.
+
 ### Testversion (Prerelease)
 
 Ein Tag mit Bindestrich, z. B. `v0.3.6-beta.1`, wird als **Prerelease** veröffentlicht. Diese Version bekommen nur

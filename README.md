@@ -86,6 +86,20 @@ The packages are not signed by a paid publisher certificate yet, so each system 
 
 - **Windows:** SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**. Autark installs for
   your user only, without administrator rights.
+
+> **Already have Autark from the original (teydra/OpenAutark)? Read this first.** The original currently makes it hard
+> to switch to this fork:
+>
+> - **Its uninstaller can fail.** Installing this fork over an app from the original stopped with "Die alten
+>   Anwendungsdateien konnten nicht deinstalliert werden … : 2" (the old application files could not be uninstalled),
+>   and running the original's `Uninstall Autark.exe` on its own aborted with the same code 2 – with no Autark process
+>   running. Workaround: quit Autark, rename `%LOCALAPPDATA%\Programs\Autark` (e.g. to `Autark.old`), remove its entry
+>   under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` (export it first), then run this installer.
+> - **Its newer versions change your data so this fork cannot open it.** The original's app updates itself from the
+>   original and ships database changes that are not in its public source (e.g. its 0.3.5 uses data schema 97; the
+>   public source and this fork stop at 91). This fork then opens a repair screen ("Your data is from a newer
+>   version"). **Restore** goes back to the copy from before that update – everything done since is not in it (it is
+>   set aside in `%APPDATA%\Autark\before-repair-…`). To keep that data, stay on the original's app instead.
 - **Mac:** open the DMG and drag Autark into Applications. The app is ad-hoc signed, without Apple notarization: on the
   first start, right-click Autark → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**).
 - **Linux:** make the AppImage executable (`chmod +x autark-linux-x64.AppImage`) and start it. It needs FUSE 2
