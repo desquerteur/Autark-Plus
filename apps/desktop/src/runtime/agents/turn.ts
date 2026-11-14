@@ -48,6 +48,8 @@ import { noteChatOutage } from './redelivery.ts';
 import { failoverText } from './switch-line.ts';
 import { routeLines } from './route-line.ts';
 import { splitTurnFailed } from './split-turn.ts'; // B-057
+import { switchLine } from '../routing/account-choice.ts'; // AF-021
+import { readStop } from '../../shared/model/account-choice.ts'; // AF-021
 import { addCache } from '../engines/shared.ts';
 import type { AttemptResult, RoutedTurn, TurnOutcome, TurnPlan, TurnRequest } from './turn-types.ts';
 
@@ -150,6 +152,8 @@ export class TurnExecutor {
     }
     bindTurn(request, turn);
     this.announceSwitch(services, plan, request.runId, turn.route, turn.modelName);
+    const accountLine = turn.route.accountSwitch ? switchLine(services.accounts.list(), turn.route) : undefined; // AF-021: the chosen account could not run – never silent
+    if (accountLine) this.statusLine(services, plan, request.runId, 'note', accountLine, { accountSwitch: turn.route.accountSwitch, to: turn.route.accountId });
 
     let messageId = this.beginMessage(services, plan, request, turn, started?.startedAt ?? services.clock.now());
     let attempt = await runAttempt(services, plan, turn, request, messageId);
@@ -277,7 +281,8 @@ export class TurnExecutor {
     if (plan.task && isOutage(errorOutcome(error))) outageLine(services, plan.task, message, request.runId); // the pre-turn ledger decides the dedupe; B-059 #86: meta.fromRun
     else if (plan.conversationId && services.chats.members(plan.conversationId).some((item) => item.memberId === plan.agent.id && !item.leftAt)) {
       const draft = services.chats.beginAgentMessage(plan.conversationId, plan.agent.id, request.runId);
-      messageId = services.chats.finishAgentMessage(draft.id, { body: '', state: 'failed', meta: { error: message } }).id;
+      const accountChoice = readStop(error.details?.accountChoice); // AF-021: the failure offers another account / Automatic
+      messageId = services.chats.finishAgentMessage(draft.id, { body: '', state: 'failed', meta: { error: message, ...(accountChoice ? { accountChoice } : {}) } }).id;
     }
     // B-044: no model or account for a chat turn – delivered again once one becomes usable (redelivery.ts).
     if (!plan.task && plan.conversationId) noteChatOutage(services, { agentId: plan.agent.id, conversationId: plan.conversationId, runId: request.runId, cursor: plan.memberCursor, error, toolCalls: 0 });

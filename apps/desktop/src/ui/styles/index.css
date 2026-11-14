@@ -12,6 +12,7 @@
 @import "./working.css"; /* B-048 E4.5: the chat header's working popover and the live block's model slot */
 @import "./composer.css";
 @import "./queue.css"; /* AF-016: the prompt queue above the composer and the Send split */
+@import "./model-menu.css"; /* AF-021: the effort slider and the account choice */
 @import "./ask-strip.css"; /* B-078: important question above the composer */
 @import "./schedule.css"; /* B-044: the schedule dialog and the chat's Scheduled line */
 @import "./blocks.css";

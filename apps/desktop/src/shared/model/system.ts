@@ -75,6 +75,8 @@ export interface RoutingSettings {
   embeddings: string;
   costMode: 'economy' | 'balanced' | 'best';
   allowPaidFallback: boolean; // may spill over to pay-per-use API keys
+  /** AF-021: a chosen account cannot run – 'ask' stops the turn with a line in the chat, 'switch' takes another and says so. */
+  accountFallback?: 'ask' | 'switch';
 }
 
 /**

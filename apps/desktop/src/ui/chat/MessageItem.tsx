@@ -37,6 +37,7 @@ import { WorkingMessage } from './WorkingMessage.tsx';
 import { ScheduledLine } from './ScheduledLine.tsx';
 import { statusText } from './status-text.ts';
 import { AgentHiredCard } from './AgentHiredCard.tsx'; // AF-017
+import { AccountStopActions } from './AccountStopActions.tsx'; // AF-021
 import { messageModelTag } from './model-tag-view.ts';
 import { ModelTagMark } from './ModelTagMark.tsx';
 import { threadLine, threadsByAnchor } from './threads.ts';
@@ -53,6 +54,7 @@ function Failure(props: { message: Message }) {
     <div class={`message-failure state-${message.state}`} role="status">
       <Icon name={message.state === 'failed' ? 'warning-circle' : 'stop'} size={14} />
       <span>{message.meta.error ?? (message.state === 'failed' ? 'Failed' : 'Stopped')}</span>
+      <AccountStopActions message={message} />
       <button type="button" class="text-button" disabled={busy} onClick={() => void retry()}>Retry</button>
     </div>
   );

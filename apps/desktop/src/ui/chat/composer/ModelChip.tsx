@@ -4,13 +4,16 @@
 // moves when the model changes). Menu: first that routed model ("Chosen per task"), one searchable list of the chat
 // models and an effort row. A pick is the agent's model in this chat (chats.update settings.models); the first item
 // clears it and the effort (pickPatch 'auto'). A connection that may not change the chat sees a plain label.
+// AF-021: effort is a slider with stops (EffortSlider.tsx: Auto + the model's efforts; same value in settings.efforts),
+// and where the model's provider has several accounts the menu has an "Account" section (AccountSection.tsx: this
+// chat's choice in settings.accounts – chat → agent default → Automatic) and the chip names the account ("Opus 5.5 · fritz2").
 // Owns: the chip and its menu. Never: changes the agent's identity or global defaults.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ConversationSettings, ConversationSummary } from '../../../shared/model/chat.ts';
 import type { Effort, ModelInfo } from '../../../shared/model/providers.ts';
 import { Icon, Popover } from '../../lib/ui.tsx';
-import { loadModels, messagesFor, models } from '../../lib/store.ts';
+import { accounts, agents, loadModels, messagesFor, models, usage } from '../../lib/store.ts';
 import { rpc } from '../../lib/rpc.ts';
 import { can } from '../../lib/session.ts';
 import { toastError } from '../../lib/toasts.ts';
@@ -18,8 +21,12 @@ import { isChatModel } from '../../lib/model-fit.ts';
 import { modelShortName as shortName } from '../../lib/model-name.ts';
 import { PER_TASK, useRoutePreview } from '../../lib/route-preview.ts';
 import { EFFORT_LABEL } from '../live-text.ts';
+import { EffortSlider } from './EffortSlider.tsx'; // AF-021
+import { effortSteps, effortsWith, stepIndex } from './effort-slider.ts';
+import { AccountSection } from './AccountSection.tsx';
+import { accountOptions, accountsWith, chipAccount, selectedAccount } from './account-menu.ts';
 
-type Patch = Pick<ConversationSettings, 'models' | 'modelHints' | 'efforts'>;
+type Patch = Pick<ConversationSettings, 'models' | 'modelHints' | 'efforts' | 'accounts'>;
 
 async function save(chat: ConversationSummary, patch: Patch): Promise<void> {
   try {
@@ -89,14 +96,28 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
   const effort = chat.settings.efforts?.[agentId] as Effort | undefined;
   const chosenInfo = chosen ? models.value.find((model) => model.id === chosen) : undefined;
   const sub = chosen && effort ? EFFORT_LABEL[effort] : undefined;
-  const efforts: Effort[] = (chosenInfo?.efforts.length ? chosenInfo.efforts : (['low', 'medium', 'high', 'max'] as Effort[])).filter((value) => value !== 'none');
+  const steps = effortSteps(chosenInfo?.efforts);
   const pick = (id: string) => { setOpen(false); void save(chat, pickPatch(chat.settings, agentId, id)); };
-  const label = (
+  // AF-021: the accounts of the shown model's provider, what is chosen, and the one the chip names
+  const shownInfo = models.value.find((model) => model.id === (chosen ?? routed));
+  const agentDefault = agents.value.find((entry) => entry.id === agentId)?.modelPolicy?.account;
+  const options = accountOptions(accounts.value, usage.value, shownInfo?.provider, Date.now());
+  const selected = selectedAccount(chat.settings.accounts, agentDefault, agentId);
+  const named = chipAccount(options, selected.value, route?.accountId);
+  const pickAccount = (value: string) => void save(chat, { accounts: accountsWith(chat.settings.accounts, agentId, value, agentDefault) });
+  const modelText = shortName(chosen ?? routed) ?? (can('routing.preview') ? '' : PER_TASK);
+  const label = named ? (
+    <span class="chip-label split" title={`${modelText}${sub ? ` ${sub}` : ''} · ${named.name}`}>
+      <span class="chip-model">{modelText}{sub && <span class="sub">{` ${sub}`}</span>}</span>
+      <span class={`chip-account${named.trouble ? ' trouble' : ''}`}>{` · ${named.name}`}</span>
+    </span>
+  ) : (
     <span class="chip-label">
-      {shortName(chosen ?? routed) ?? (can('routing.preview') ? '' : PER_TASK)}{sub && <span class="sub">{` ${sub}`}</span>}
+      {modelText}{sub && <span class="sub">{` ${sub}`}</span>}
     </span>
   );
-  if (!can('chats.update')) return <span class="chip model-chip static">{label}</span>;
+  const chipClass = `chip model-chip${named ? ' with-account' : ''}`;
+  if (!can('chats.update')) return <span class={`${chipClass} static`}>{label}</span>;
   const q = query.trim().toLowerCase();
   // Specialists (embeddings, decision, media) are no chat models – a stored choice stays visible.
   const list = models.value.filter((model) => (isChatModel(model) || model.id === chosen)
@@ -104,7 +125,7 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
 
   return (
     <>
-      <button ref={ref} type="button" class="chip model-chip" aria-haspopup="menu" aria-expanded={open} title="Model" onClick={() => setOpen(!open)}>
+      <button ref={ref} type="button" class={chipClass} aria-haspopup="menu" aria-expanded={open} title="Model" onClick={() => setOpen(!open)}>
         {label}
         <Icon name="caret-down" size={12} class="chip-caret" />
       </button>
@@ -122,21 +143,10 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
           {list.map((model) => <ModelRow key={model.id} model={model} selected={chosen === model.id} onPick={() => pick(model.id)} />)}
           {q && !list.length && <p class="empty-state">No models</p>}
         </div>
-        <div class="menu-section effort-row" role="group" aria-label="Effort">
-          {efforts.map((value) => (
-            <button type="button" key={value} class={`effort${effort === value ? ' on' : ''}`} aria-pressed={effort === value}
-              onClick={() => void save(chat, { efforts: effort === value ? withoutEffort(chat, agentId) : { ...(chat.settings.efforts ?? {}), [agentId]: value } })}>
-              {EFFORT_LABEL[value]}
-            </button>
-          ))}
-        </div>
+        <AccountSection options={options} selected={selected} agentDefault={agentDefault} onPick={pickAccount} />
+        <EffortSlider steps={steps} index={stepIndex(steps, effort)}
+          onChange={(step) => void save(chat, { efforts: effortsWith(chat.settings.efforts, agentId, step) })} />
       </Popover>
     </>
   );
-}
-
-function withoutEffort(chat: ConversationSummary, agentId: string): Record<string, string> {
-  const efforts = { ...(chat.settings.efforts ?? {}) };
-  delete efforts[agentId];
-  return efforts;
 }

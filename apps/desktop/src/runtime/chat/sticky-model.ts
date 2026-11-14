@@ -57,6 +57,7 @@ export function cleanSettings(settings: ConversationSettings): ConversationSetti
   if (out.models && !Object.keys(out.models).length) delete out.models;
   if (out.efforts && !Object.keys(out.efforts).length) delete out.efforts;
   if (out.modelHints && !Object.keys(out.modelHints).length) delete out.modelHints;
+  if (out.accounts && !Object.keys(out.accounts).length) delete out.accounts; // AF-021
   for (const key of Object.keys(out) as Array<keyof ConversationSettings>) if (out[key] === undefined) delete out[key];
   return out;
 }

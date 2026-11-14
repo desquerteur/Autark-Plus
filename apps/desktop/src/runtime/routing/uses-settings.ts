@@ -21,6 +21,7 @@ const VALUE = /^[^\s\u0000-\u001f]{1,200}$/;
 export function validateRouting(routing: RoutingSettings, bad: Bad): void {
   if (!COST_MODES.includes(routing.costMode)) bad('routing.costMode', COST_MODES.join(' | '));
   if (typeof routing.allowPaidFallback !== 'boolean') bad('routing.allowPaidFallback', 'true or false');
+  if (routing.accountFallback !== undefined && routing.accountFallback !== 'ask' && routing.accountFallback !== 'switch') bad('routing.accountFallback', 'ask | switch'); // AF-021
   for (const use of MODEL_USES) {
     const value: unknown = routing[use];
     const expected = `"${USE_AUTO}"${OFFABLE_USES.has(use) ? `, "${USE_OFF}"` : ''} or a model "<connection>:<model>"`;

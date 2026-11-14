@@ -40,7 +40,7 @@ const EFFORTS: readonly Effort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'm
 const MAX_BODY = 100_000;
 const MAX_ATTACHMENTS = 20;
 /** Chat settings a client may send. Never 'system': only the runtime marks app-owned chats (C1). */
-const SETTINGS_KEYS = ['notifications', 'sound', 'models', 'efforts', 'mode', 'image', 'hiddenFromList', 'modelHints', 'history', 'parentId'] as const; // modelHints: SG soft model suggestion; history (F-52): what people who join later see
+const SETTINGS_KEYS = ['notifications', 'sound', 'models', 'efforts', 'mode', 'image', 'hiddenFromList', 'modelHints', 'history', 'parentId', 'accounts'] as const; // AF-021 accounts: agent id → account id; modelHints: SG soft model suggestion; history (F-52): what people who join later see
 
 /** Chat settings a phone/browser may change depend on its tier (the owner may change all). */
 function checkDeviceSettings(ctx: HandlerContext, settings: Partial<ConversationSettings> | undefined): void {
@@ -98,7 +98,7 @@ function settingsOf(value: unknown): Partial<ConversationSettings> | undefined {
   if (out.image !== undefined) text(out, 'image', { max: 120 });
   if (out.history !== undefined) optOneOf(out, 'history', ['join', 'full']);
   if (out.parentId !== undefined) id(out, 'parentId');
-  for (const key of ['models', 'efforts', 'modelHints'] as const) {
+  for (const key of ['models', 'efforts', 'modelHints', 'accounts'] as const) {
     if (out[key] === undefined) continue;
     const record = obj(out, key);
     for (const [agentId, choice] of Object.entries(record)) {

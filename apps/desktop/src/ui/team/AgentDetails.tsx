@@ -26,6 +26,7 @@ import { toastError } from '../lib/toasts.ts';
 import { skillTitle } from './agent-core-model.ts';
 import { ensureSchedules, scheduleMenu, schedules } from '../tasks/schedules.ts';
 import { AccessSection } from './AccessSection.tsx'; // AF-013
+import { AgentAccountRow } from './AgentAccountRow.tsx'; // AF-021
 
 function Section(props: { title: string; action?: ComponentChildren; children: ComponentChildren }) {
   return (
@@ -72,6 +73,7 @@ function ModelSection(props: { agent: Agent; readOnly: boolean }) {
       <Row label="Model" hint={pin ? 'Always this model' : PER_TASK}>
         <Select label="Model" value={pin} options={options} disabled={props.readOnly} onChange={(next) => void save(next)} />
       </Row>
+      <AgentAccountRow agent={props.agent} readOnly={props.readOnly} />
     </Section>
   );
 }
