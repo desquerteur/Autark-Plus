@@ -124,11 +124,13 @@ test('a stopped line stays the same line after midnight; records are kept per se
 });
 
 
-/** The real turn executor and context with one FakeEngine in a chat with Vic (and Mia). */
+/** The real turn executor and context with one FakeEngine in the person's direct chat with Vic. */
 function realTurns() {
   const f = fixture();
   const s = f.services;
-  const chat = f.chats.create({ title: 'Preview', agentIds: [f.vid.id, f.manager.id], createdBy: 'human' });
+  // This fixture manually runs Vic, not the group's responder picker. A direct chat makes each
+  // person's line genuinely his; an unaddressed group line may correctly belong to the manager.
+  const chat = f.chats.create({ title: 'Preview', agentIds: [f.vid.id], createdBy: 'human' });
   const engine = new FakeEngine();
   const calls: string[] = [];
   const acc = account('acc_fake', 'compatible');
