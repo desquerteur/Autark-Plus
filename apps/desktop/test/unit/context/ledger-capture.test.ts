@@ -1,7 +1,7 @@
 // B-048 E1 capture: one real engine attempt (agents/turn-attempt.ts with a scripted fake engine) on a real run
 // journal – the chat line the input shows becomes m<seq> first, then reasoning (r), commentary (a), an
 // engine-native call with its full tool_end.output (t, kept whole in a blob), our calls through the registry's
-// journal (t, skills.load → s, files.read → f) and the final answer (a), in the turn's order, with the attempt's
+// journal (t, knowledge.open of a skill → s, files.read → f) and the final answer (a), in the turn's order, with the attempt's
 // engine and model as origin. A run nobody attached is not captured; a finished run is let go.
 
 import { test } from 'node:test';
@@ -17,7 +17,7 @@ import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { TurnPlan } from '../../../src/runtime/agents/turn-types.ts';
 import { setup } from '../agents/fixture.ts';
 import { tempDir } from '../store/helpers.ts';
-import { keepFor, redact } from './ledger-fixture.ts';
+import { mid, keepFor, redact } from './ledger-fixture.ts';
 
 function wired() {
   const h = setup();
@@ -42,7 +42,7 @@ test('one attempt: m, r, a, native t with its full output, ours as t/s/f, the an
   try {
     const asked = h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Please check the build and the deploy skill.' });
     h.journal.start({ id: 'run_1', agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
-    const plan = { agent: h.tom, mode: GENERAL_MODE, conversationId: h.chat.id, memberCursor: 0, focus: '' } as unknown as TurnPlan;
+    const plan = { agent: h.tom, mode: GENERAL_MODE, conversationId: h.chat.id, thread: 'main', memberCursor: 0, focus: '' } as unknown as TurnPlan;
     const log = 'npm test\n' + 'ok '.repeat(3000) + '\nsk-abcdef123456 leaked';
     h.state.script = async (input) => {
       input.onEvent({ type: 'reasoning', delta: 'Checking the build first.', id: 'rs_1' });
@@ -50,7 +50,7 @@ test('one attempt: m, r, a, native t with its full output, ours as t/s/f, the an
       input.onEvent({ type: 'commentary', text: 'Running the tests now.' });
       input.onEvent({ type: 'tool_start', callId: 'c1', name: 'shell', args: { command: 'npm test' }, own: true });
       input.onEvent({ type: 'tool_end', callId: 'c1', ok: true, summary: 'exit 0', output: log });
-      ours(h, 'run_1', 'skills.load', { name: 'deploy' }, '# Skill: deploy\n' + 'step '.repeat(1200), 'c2');
+      ours(h, 'run_1', 'knowledge.open', { id: 'deploy' }, '# Skill: deploy\n' + 'step '.repeat(1200), 'c2');
       ours(h, 'run_1', 'files.read', { path: 'docs/notes.md' }, 'notes', 'c3');
       ours(h, 'run_1', 'chat.read', { limit: 5 }, 'lines', 'c4');
       return { text: 'The build passes.', stop: 'done' };
@@ -60,8 +60,8 @@ test('one attempt: m, r, a, native t with its full output, ours as t/s/f, the an
     journalAnswer(h.services, 'run_1', 'The build passes.', 'notify');
     await h.journal.settled();
 
-    const items = h.ledger.items(h.tom.id, h.chat.id);
-    assert.deepEqual(items.map((item) => item.itemId), [`m${asked.seq}`, 'r1', 'a2', 't3', 's4', 'f5', 't6', 'a7']);
+    const items = h.ledger.items(h.tom.id, 'main');
+    assert.deepEqual(items.map((item) => item.itemId), [mid(h.db, asked), 'r1', 'a2', 't3', 's4', 'f5', 't6', 'a7']);
     assert.deepEqual(items.map((item) => item.kind), ['message', 'reasoning', 'assistant', 'tool', 'skill', 'file', 'tool', 'assistant']);
     assert.ok(items.every((item) => item.runId === 'run_1'));
     assert.deepEqual(items[3].origin, { engine: 'claude', model: 'claude:claude-opus-5-5' }, 'the attempt\'s engine and model');
@@ -71,15 +71,15 @@ test('one attempt: m, r, a, native t with its full output, ours as t/s/f, the an
     assert.equal(items[5].title, 'File docs/notes.md');
     assert.ok(items[3].tokens > 2000, 'the native output counts');
 
-    const native = h.ledger.original(h.tom.id, h.chat.id, 't3')!;
+    const native = h.ledger.original(h.tom.id, 'main', 't3')!;
     assert.equal(native.pruned, false);
     assert.equal(native.text.length, redact(log).length, 'the whole engine-native output, kept in a blob');
     assert.ok(native.text.includes('secret://key') && !native.text.includes('sk-abcdef123456'), 'redacted before it is kept');
-    assert.equal(h.ledger.original(h.tom.id, h.chat.id, 's4')!.text.length, '# Skill: deploy\n'.length + 'step '.repeat(1200).length, 'our long output whole');
-    assert.equal(h.ledger.original(h.tom.id, h.chat.id, 'r1')!.text, 'Checking the build first.');
-    assert.equal(h.ledger.original(h.tom.id, h.chat.id, 'a7')!.text, 'The build passes.');
-    assert.equal(h.ledger.original(h.tom.id, h.chat.id, `m${asked.seq}`)!.text, 'Please check the build and the deploy skill.');
-    assert.equal(h.ledger.original(h.tom.id, h.chat.id, 't99'), undefined);
+    assert.equal(h.ledger.original(h.tom.id, 'main', 's4')!.text.length, '# Skill: deploy\n'.length + 'step '.repeat(1200).length, 'our long output whole');
+    assert.equal(h.ledger.original(h.tom.id, 'main', 'r1')!.text, 'Checking the build first.');
+    assert.equal(h.ledger.original(h.tom.id, 'main', 'a7')!.text, 'The build passes.');
+    assert.equal(h.ledger.original(h.tom.id, 'main', mid(h.db, asked))!.text, 'Please check the build and the deploy skill.');
+    assert.equal(h.ledger.original(h.tom.id, 'main', 't99'), undefined);
   } finally { h.cleanup(); }
 });
 
@@ -88,7 +88,7 @@ test('the agent\'s own chat message is not recorded again once its run left its 
   try {
     h.journal.start({ id: 'run_1', agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
     const first = h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'hi' });
-    h.ledger.capture({ runId: 'run_1', agentId: h.tom.id, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: first.seq });
+    h.ledger.capture({ runId: 'run_1', agentId: h.tom.id, thread: 'main', fromSeq: 0, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: first.seq });
     journalAnswer(h.services, 'run_1', 'Hello Alex', 'notify');
     const reply = h.chats.postAgentMessage(h.chat.id, h.tom.id, 'run_1', { body: 'Hello Alex' });
     h.journal.finish('run_1', { status: 'done' });
@@ -96,17 +96,17 @@ test('the agent\'s own chat message is not recorded again once its run left its 
     h.journal.item('run_1', { kind: 'note', name: 'Answer', data: { answer: true, text: 'late' }, effectStatus: 'none' });
     const next = h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'thanks' });
     h.journal.start({ id: 'run_2', agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
-    h.ledger.capture({ runId: 'run_2', agentId: h.tom.id, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: next.seq });
-    let ids = h.ledger.items(h.tom.id, h.chat.id).map((item) => item.itemId);
-    assert.deepEqual(ids, [`m${first.seq}`, 'a1', `m${next.seq}`], 'own reply skipped: its run left an a item; nothing for a run that ended');
+    h.ledger.capture({ runId: 'run_2', agentId: h.tom.id, thread: 'main', fromSeq: 0, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: next.seq });
+    let ids = h.ledger.items(h.tom.id, 'main').map((item) => item.itemId);
+    assert.deepEqual(ids, [mid(h.db, first), 'a1', mid(h.db, next)], 'own reply skipped: its run left an a item; nothing for a run that ended');
     assert.ok(reply.seq > first.seq && reply.seq < next.seq);
     for (let i = 0; i < 70; i++) h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: `line ${i}` });
     const last = h.chats.messages(h.chat.id, { limit: 1 })[0];
     h.journal.start({ id: 'run_3', agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
-    h.ledger.capture({ runId: 'run_3', agentId: h.tom.id, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: last.seq });
-    ids = h.ledger.items(h.tom.id, h.chat.id).map((item) => item.itemId);
+    h.ledger.capture({ runId: 'run_3', agentId: h.tom.id, thread: 'main', fromSeq: 0, conversationId: h.chat.id, engine: 'codex', model: 'm', seenSeq: last.seq });
+    ids = h.ledger.items(h.tom.id, 'main').map((item) => item.itemId);
     assert.equal(ids.filter((id) => id.startsWith('m')).length, 2 + 60, 'the newest 60 lines, as the delta shows them');
-    assert.equal(ids.at(-1), `m${last.seq}`);
+    assert.equal(ids.at(-1), mid(h.db, last));
   } finally { h.cleanup(); }
 });
 
@@ -117,7 +117,7 @@ test('a run nobody attached is not captured, and its long outputs add no blobs',
     h.journal.item('run_x', { kind: 'note', name: 'Answer', data: { answer: true, text: 'hello' }, effectStatus: 'none' });
     const result = h.journal.item('run_x', { kind: 'tool_result', data: { callId: 'c1', ok: true, summary: 'exit 0', output: 'x'.repeat(9_000) }, effectStatus: 'none' });
     await h.journal.settled();
-    assert.deepEqual(h.ledger.items(h.tom.id, h.chat.id), []);
+    assert.deepEqual(h.ledger.items(h.tom.id, 'main'), []);
     assert.equal(h.journal.items('run_x').find((item) => item.id === result.id)!.data.outputBlob, undefined);
     assert.equal(result.data.outputChars, 9_000, 'the row still knows the full length');
     assert.equal(h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM files')!.n, 0);

@@ -75,7 +75,7 @@ ${pageHero({
 
       <h2 id="updates">Updates</h2>
       <p>${site.name} checks GitHub Releases every minute while the window is open and every 15 minutes from the tray. A small icon appears only when an update exists. On Windows and Linux one click downloads it, verifies it against the SHA-512 in the update manifest, installs it, and the app opens again by itself. Your agents, chats and settings stay where they are.</p>
-      <p>On macOS the app replaces itself where macOS allows it, and otherwise the icon leads to the download. That path is new and has not run on a real Mac yet. The Android app shows <em>Update</em> when a new APK exists; most changes need none, because the interface comes from your PC.</p>
+      <p>On macOS the app replaces itself where macOS allows it, and otherwise the icon leads to the download. That path is new and has not run on a real Mac yet. The Android app shows a line at the top when a new APK exists; <em>Update</em> downloads it in the app with its progress, and Android installs it after you confirm. Most changes need none, because the interface comes from your PC.</p>
 
       <h2 id="links">Permanent links</h2>
       <p>Use these addresses to link to ${site.name} from anywhere: in posts, docs or from the app itself. Each one serves the newest file, even if the release channel moves. The older <code>${site.url}/download/windows</code>, <code>/mac</code> and <code>/linux</code> addresses keep working and open the platform pages.</p>

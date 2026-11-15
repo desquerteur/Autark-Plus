@@ -106,8 +106,8 @@ test('too large, binary, non-UTF-8 files keep the last good instructions with a 
     f.org.setCoreFiles(f.core);
     f.core.start();
     const cases: Array<[string | Buffer, string]> = [
-      ['x'.repeat(20_001), 'too-large'],
-      [Buffer.alloc(140 * 1024, 0x61), 'too-large'],
+      ['x'.repeat(60_001), 'too-large'], // B-083: MAX_SYSTEM_MD
+      [Buffer.alloc(250 * 1024, 0x61), 'too-large'], // past SYSTEM_MAX_BYTES: not read at all
       [Buffer.from([0x41, 0x00, 0x42]), 'not-text'],
       [Buffer.from([0xff, 0xfe, 0x41]), 'not-text'],
     ];
@@ -128,11 +128,11 @@ test('too large, binary, non-UTF-8 files keep the last good instructions with a 
     assert.equal(fixed.folder, path.join(f.data, 'agents', writer.id));
     assert.equal(f.org.get(writer.id)!.instructions, 'Fixed.');
     // The app replacing a problem file keeps it once.
-    writeFileSync(f.file(writer.id), 'y'.repeat(20_001));
+    writeFileSync(f.file(writer.id), 'y'.repeat(60_001));
     f.core.info(writer.id, false);
     f.org.update(writer.id, { instructions: 'From the app.' });
     assert.equal(read(f.file(writer.id)), 'From the app.\n');
-    assert.equal(read(path.join(f.data, 'agents', writer.id, REJECTED_FILE)), 'y'.repeat(20_001));
+    assert.equal(read(path.join(f.data, 'agents', writer.id, REJECTED_FILE)), 'y'.repeat(60_001));
     assert.equal(f.core.info(writer.id, false).notice, undefined);
   } finally { f.cleanup(); }
 });

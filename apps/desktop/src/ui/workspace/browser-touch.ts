@@ -3,10 +3,12 @@
 //   * a tap (≤ TAP_MS, ≤ TAP_SLOP_PX of movement – jitter stays a tap) is a left click at the
 //     frame point where it started; a second tap within DOUBLE_TAP_MS and DOUBLE_TAP_PX is a
 //     double click (clicks 2);
-//   * one finger dragging at 1x scrolls the page: wheel turns at the start point, the finger's
-//     movement in frame pixels (screen delta × frame width / drawn width, opposite sign – the page
-//     follows the finger); at 2x the zoom box pans natively and sends nothing (taps still click);
-//   * two or more fingers are ignored until all are lifted.
+//   * one finger dragging moves the zoomed picture (view-zoom.ts through `pan`); what goes past its
+//     edges – all of it at 1x – scrolls the page: wheel turns at the start point, in frame pixels
+//     (screen delta × frame width / drawn width, opposite sign – the page follows the finger);
+//   * B-081 T9: two fingers pinch (their distance zooms the picture around their midpoint, the
+//     midpoint's move pans it); a gesture that had two fingers never clicks, until all are lifted.
+//     The touchpad mode (browser-pad.ts) reads the two fingers the same way (`pairOf`).
 // The key proxy reads a field that always holds one zero-width SENTINEL: typed or inserted text
 // becomes {kind: 'text'}, deleting the sentinel is Backspace, Enter is Enter (down and up), and
 // Tab and arrow keys from a hardware keyboard pass as keys; the field goes back to the sentinel
@@ -24,13 +26,19 @@ export const DOUBLE_TAP_PX = 24;
 export const KEY_SENTINEL = '​';
 const MAX_DELTA = 10_000;
 
-export interface TouchMap {
+/** Two fingers (B-081 T9): the picture zooms and moves with them (view-zoom.ts pinch after pan). */
+export interface PinchMap {
+  /** The picture zooms by `ratio` around client point (x, y) after moving by (dx, dy) screen px. */
+  pinch(x: number, y: number, ratio: number, dx: number, dy: number): void;
+}
+
+export interface TouchMap extends PinchMap {
   /** A client point on the picture in frame units (undefined outside it). */
   point(clientX: number, clientY: number): FramePoint | undefined;
   /** Frame pixels per screen pixel (frame width / drawn width). */
   scale(): number;
-  /** 2: the picture is zoomed and one finger pans its box natively. */
-  zoom(): 1 | 2;
+  /** B-081 T9: moves the zoomed picture by (dx, dy) screen px; gives back what went past its edges (all of it at 1x). */
+  pan(dx: number, dy: number): { x: number; y: number };
 }
 
 interface TouchPoint { clientX: number; clientY: number }
@@ -40,14 +48,27 @@ export interface TouchLike { touches: ArrayLike<TouchPoint>; timeStamp: number }
 export interface TouchGestures {
   start(event: TouchLike): void;
   move(event: TouchLike): void;
-  /** true: handled here (a tap or a scroll) – the caller cancels the synthetic mouse events. */
+  /** true: handled here (a tap, a scroll, a pinch) – the caller cancels the synthetic mouse events. */
   end(event: TouchLike): boolean;
   cancel(): void;
 }
 
-interface Gesture { x: number; y: number; at: number; lastX: number; lastY: number; dragging: boolean; multi: boolean }
+/** The first two fingers: their midpoint (client px) and distance. */
+export interface Pair { x: number; y: number; d: number }
+export function pairOf(event: TouchLike): Pair | undefined {
+  const a = event.touches[0];
+  const b = event.touches[1];
+  return a && b ? { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2, d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) } : undefined;
+}
 
-const clamp = (value: number) => Math.max(-MAX_DELTA, Math.min(MAX_DELTA, Math.round(value)));
+/** A pair moved from `from` to `to`: the map zooms by the distance's ratio around the new midpoint after its move. */
+export function pinchBy(map: PinchMap, from: Pair, to: Pair): void {
+  map.pinch(to.x, to.y, from.d >= 1 && to.d >= 1 ? to.d / from.d : 1, to.x - from.x, to.y - from.y);
+}
+
+interface Gesture { x: number; y: number; at: number; lastX: number; lastY: number; dragging: boolean; multi: boolean; pair?: Pair }
+
+const clamp = (value: number) => Math.max(-MAX_DELTA, Math.min(MAX_DELTA, Math.round(value))) || 0; // never -0
 
 export function touchGestures(map: TouchMap, push: (input: BrowserInput) => void): TouchGestures {
   let gesture: Gesture | undefined;
@@ -56,33 +77,42 @@ export function touchGestures(map: TouchMap, push: (input: BrowserInput) => void
     start(event) {
       const touch = event.touches[0];
       if (event.touches.length !== 1 || !touch) {
-        if (gesture) gesture.multi = true;
-        else gesture = { x: 0, y: 0, at: event.timeStamp, lastX: 0, lastY: 0, dragging: false, multi: true };
+        gesture ??= { x: 0, y: 0, at: event.timeStamp, lastX: 0, lastY: 0, dragging: false, multi: true };
+        gesture.multi = true;
+        gesture.pair = pairOf(event); // a finger more or less: the pinch goes on from here
         return;
       }
       gesture = { x: touch.clientX, y: touch.clientY, at: event.timeStamp, lastX: touch.clientX, lastY: touch.clientY, dragging: false, multi: false };
     },
     move(event) {
-      if (!gesture || gesture.multi) return;
-      const touch = event.touches[0];
-      if (event.touches.length !== 1 || !touch) { gesture.multi = true; return; }
+      if (!gesture) return;
+      if (gesture.multi || event.touches.length !== 1) {
+        gesture.multi = true;
+        const pair = pairOf(event);
+        if (pair && gesture.pair) pinchBy(map, gesture.pair, pair);
+        gesture.pair = pair;
+        return;
+      }
+      const touch = event.touches[0]!;
       if (!gesture.dragging && Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) <= TAP_SLOP_PX) return;
       gesture.dragging = true;
-      if (map.zoom() === 2) return; // the zoom box pans natively
       const dx = touch.clientX - gesture.lastX;
       const dy = touch.clientY - gesture.lastY;
       gesture.lastX = touch.clientX;
       gesture.lastY = touch.clientY;
+      if (!dx && !dy) return;
+      const rest = map.pan(dx, dy); // the zoomed picture moves first; the page scrolls by what is left
       const at = map.point(gesture.x, gesture.y);
-      if (!at || (!dx && !dy)) return;
+      if (!at || (!rest.x && !rest.y)) return;
       const scale = map.scale();
-      push({ kind: 'wheel', ...at, deltaX: clamp(-dx * scale), deltaY: clamp(-dy * scale) });
+      push({ kind: 'wheel', ...at, deltaX: clamp(-rest.x * scale), deltaY: clamp(-rest.y * scale) });
     },
     end(event) {
       const done = gesture;
       if (event.touches.length === 0) gesture = undefined;
-      if (!done || done.multi) return false;
-      if (done.dragging) return map.zoom() === 1;
+      else if (done) done.pair = pairOf(event);
+      if (!done) return false;
+      if (done.multi || done.dragging) return true;
       if (event.timeStamp - done.at > TAP_MS) return true; // a long press does nothing
       const at = map.point(done.x, done.y);
       if (!at) return true;

@@ -16,7 +16,7 @@ const KINDS: FeedbackKind[] = ['bug', 'idea', 'change', 'praise'];
 
 const reportFeedback = defineTool<{ kind: FeedbackKind; text: string }>({
   name: 'feedback.report',
-  description: 'Report a problem or idea about this app/runtime (bug, idea, change, praise). The human reviews it before anything is sent. Report each problem once; at most 5 reports per day.',
+  description: 'Reports a bug, idea, change or praise about this app to its makers. The person reviews it first; up to 5 a day, each problem once.',
   inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: KINDS }, text: { type: 'string', minLength: 5, maxLength: 8000 } }, required: ['kind', 'text'], additionalProperties: false },
   category: 'think',
   describe: (args) => internal(`Feedback (${args.kind}): ${clip(args.text, 60)}`),

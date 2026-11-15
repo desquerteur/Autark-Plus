@@ -25,7 +25,7 @@ test('on a decoding host: a voice message, an M4A and a 1-minute phone video are
       attachments: [as(voice), as(memo), as(phone, { size: 120 * 1024 * 1024, durationMs: 60_000 }), as(amr)],
     });
     await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
-    const out = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0, full: false }).text;
+    const out = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 }).text;
     for (const name of ['Voice message.webm', 'memo.m4a', 'VID_20261029.mp4']) {
       assert.match(out, new RegExp(`\\[(?:Audio|Video): ${name.replace(/\./g, '\\.')}\\][^\\n]*\\n(?:[^\\n]*\\n)?Transcript:\\nHeard recording \\d`), name);
     }
@@ -57,7 +57,7 @@ test('review fix: a recording refused only because the decoder was busy is trans
     t.h.chats.send({ conversationId: t.chat.id, body: 'two takes', authorId: 'human', attachments: [as(busy), as(broken)] });
     const turn = async () => {
       await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
-      return t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0, full: false }).text;
+      return t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 }).text;
     };
     assert.match(await turn(), /\[Audio: one\.wav\][^\n]*\n\(no transcript – several recordings are being decoded already/);
     assert.match(await turn(), /no transcript – several recordings/, 'within the minute: not tried again');

@@ -1,64 +1,53 @@
-// The quiet routing lines of one turn (RT5 + SG), for agents/turn.ts announceSwitch:
-//   - a model/effort switch: "Switched to <model> · <effort> — <why>" (switch-line.ts) – the why
-//     leads with a deviation from the chat's model hint when routing did not take it
-//   - no switch (or the chat's first turn) but routing deviates from the hint: one "Kept <model> ·
-//     <effort> — <why>" ("Using …" on a first turn) – once per situation: kv 'route_line' keeps the
-//     last noted (hint → model) per agent and chat, so the same deviation is not repeated every
-//     turn; a taken hint clears it.
-// Without a hint deviation a turn only reads kv (one indexed lookup) and deletes a marker that is
-// actually there – no write on the usual turn. (B-044 removed the soft guide's notes.)
-// Owns: these lines and their de-duplication. Never: posts lines (turn.ts does), routes, or
-// writes kv for a turn without a hint deviation unless an old marker must be cleared.
+// The quiet switch line of one turn (RT5; B-083: with the agent's name and the turn's temperature), for agents/turn.ts announceSwitch.
+// 14.11.2026 (Unterbewusstsein v1 routes nearly every turn; owner: a stable UI where nothing shifts, the status in the status line): the
+// chat gets a line for a switch someone asked for – my own request (model.set, or my task's from its delegator: a route by request
+// without my subconscious's why), my own temperature, or the start model set since the chat's last turn began (ModelPolicy.pinBy.at)
+// that this turn runs on. A switch routing made – my subconscious's call before the turn, the router's rules, the return after a
+// request – leaves no line: the live bar shows what the turn runs on (ui/chat/LiveBar.tsx: model · effort · temperature) and the
+// run's route says why (the agent's log, ui/team/AgentLog.tsx).
+//   "<Agent> → <model> · <effort>[ · temperature T] – <why>" (switch-line.ts)
+// postRunLine posts one quiet line of a run in its chat (the agent's own, meta.fromRun) – turn.ts, and turn-attempt.ts for
+// a switch inside the running turn (B-083).
+// Owns: which switch gets a line and posting a run's line. Never: routes or reads state.
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
-import { KvRepo } from '../store/kv.ts';
-import { capText, switchText, switchWhy } from './switch-line.ts';
-
-const NS = 'route_line';
+import type { StatusLine } from '../../shared/model/chat.ts';
+import { PIN_TEXT } from '../routing/pins.ts';
+import { BY_REQUEST } from '../routing/previous.ts';
+import { REQUESTED_WHY, reasonParts, subconsciousWhy, switchText, switchWhy } from './switch-line.ts';
 
 export interface RouteLine { text: string; details: Record<string, unknown> }
 
-/** The deviation of a route: the hint it did not take (undefined: none). */
-export function deviation(route: Pick<RouteDecision, 'hint'>): string | undefined {
-  return route.hint && !route.hint.taken && route.hint.why ? route.hint.why : undefined;
-}
+/** What the chat's last turn ran on (turn.ts switchedFrom; B-083: with its temperature), and when it began. */
+export interface SwitchFrom { modelId: string; effort: Effort; temperature?: number; at?: number }
 
-function marker(route: RouteDecision): string {
-  return `${route.hint?.modelId ?? ''}>${route.modelId}`;
-}
+/** Whose line it is, how the turn's temperature reaches its model (sent), whether that temperature is my own request, and when my start model was set (ModelPolicy.pinBy.at). */
+export interface LineOf { agent: string; sent?: boolean; ownTemperature?: boolean; pinAt?: number }
 
-/** Lines to post for this route; `from` = what the chat's last turn ran on (turn.ts switchedFrom). */
-export function routeLines(services: Pick<RuntimeServices, 'db' | 'clock' | 'log'>, scope: { agentId: string; conversationId?: string }, route: RouteDecision, modelName: string, from: { modelId: string; effort: Effort; requested?: boolean } | undefined): RouteLine[] {
-  const switched = Boolean(from && (from.modelId !== route.modelId || from.effort !== route.effort));
-  const off = deviation(route);
-  const details = { to: route.modelId, effort: route.effort, reason: route.reason, by: route.by, ...(route.hint ? { hint: route.hint } : {}) };
-  let kv: KvRepo | undefined;
-  const key = `${scope.agentId}:${scope.conversationId ?? ''}`;
-  try { kv = scope.conversationId ? new KvRepo(services.db) : undefined; } catch { kv = undefined; }
-  let seen: string | undefined;
-  try { seen = kv?.get<string>(NS, key); } catch { seen = undefined; }
-  const remember = (value: string | undefined) => {
-    try {
-      if (!kv || value === seen) return;
-      if (value) kv.set(NS, key, value, services.clock.now());
-      else kv.delete(NS, key);
-    } catch (error) {
-      services.log.warn('route line marker failed', { error: String(error) });
-    }
+/** The line of this route when it is a switch someone asked for; `from` = what the chat's last turn ran on (none: a first turn, no switch). */
+export function routeLine(route: RouteDecision, modelName: string, from: SwitchFrom | undefined, of: LineOf): RouteLine | undefined {
+  if (!from) return undefined;
+  const moved = from.modelId !== route.modelId || from.effort !== route.effort;
+  const mine = route.by === BY_REQUEST && !subconsciousWhy(route.reason);
+  const started = of.pinAt !== undefined && from.at !== undefined && of.pinAt > from.at && reasonParts(route.reason).includes(PIN_TEXT.agent);
+  const asked = moved && (mine || started);
+  const warmth = of.ownTemperature === true && from.temperature !== route.temperature;
+  if (!asked && !warmth) return undefined;
+  const to = { modelName, effort: route.effort, temperature: route.temperature, sent: of.sent };
+  return {
+    text: switchText(of.agent, to, asked ? switchWhy(route, from) : REQUESTED_WHY),
+    details: {
+      from: from.modelId, to: route.modelId, effort: route.effort, reason: route.reason, by: route.by,
+      ...(route.temperature !== undefined ? { temperature: route.temperature, temperatureSent: of.sent === true } : {}),
+    },
   };
+}
 
-  if (switched && from) {
-    const why = switchWhy(route, from);
-    remember(off ? marker(route) : undefined);
-    return [{ text: switchText(modelName, route.effort, why), details: { from: from.modelId, ...details } }];
+/** A quiet line of a run in its chat (meta.fromRun: the UI may fold it into the run's steps); none without a chat. Never throws. */
+export function postRunLine(services: Pick<RuntimeServices, 'chats' | 'log'>, run: { agentId: string; runId: string; conversationId?: string; taskId?: string }, type: StatusLine['type'], text: string, details: Record<string, unknown>): void {
+  if (!run.conversationId) return;
+  try { services.chats.status(run.conversationId, { type, text, details }, { authorId: run.agentId, taskId: run.taskId, fromRun: run.runId }); } catch (error) {
+    services.log.warn('status line failed', { error: String(error) });
   }
-  if (!off) {
-    remember(undefined); // back inside: the next deviation is noted again
-    return [];
-  }
-  if (seen === marker(route)) return [];
-  remember(marker(route));
-  const verb = from ? 'Kept' : 'Using';
-  return [{ text: capText(`${verb} ${modelName} · ${route.effort} — ${off}`), details: { ...(from ? { from: from.modelId } : {}), ...details } }];
 }

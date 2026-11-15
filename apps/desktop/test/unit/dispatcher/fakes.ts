@@ -23,6 +23,8 @@ export class FakeExecutor {
 
   execute(request: TurnRequest): Promise<TurnOutcome> {
     if (this.throwNext) { this.throwNext = false; return Promise.reject(new Error('boom')); }
+    // Like turn.ts bindTurn: a running turn is bound to its engine – by default one that never steers (a test that steers sets its own).
+    request.control.engine ??= {} as TurnRequest['control']['engine'];
     this.running++;
     this.maxRunning = Math.max(this.maxRunning, this.running);
     return new Promise<TurnOutcome>((resolve) => {
@@ -48,7 +50,7 @@ export class FakeExecutor {
   }
 }
 
-export function setup(options: { maxConcurrent?: number } = {}) {
+export function setup() {
   const h = harness();
   const statuses: Array<{ id: string; status: AgentStatus; note?: string }> = [];
   const org = Object.assign(h.org, {
@@ -71,13 +73,11 @@ export function setup(options: { maxConcurrent?: number } = {}) {
   h.services.settings = { get: () => ({ profile: { name: 'Lena', timezone: 'UTC' } }) } as unknown as SettingsService;
   const awake = { acquired: 0, released: 0 };
   Object.assign(h.services.host, { keepAwake: () => { awake.acquired++; return () => { awake.released++; }; } });
-  const admitted: AbortSignal[] = [];
-  const supervisor = { admit: async (signal?: AbortSignal) => { if (signal) admitted.push(signal); return () => {}; } };
   const executor = new FakeExecutor();
-  const dispatcher = new DispatcherImpl({ services: () => h.services, executor, supervisor, maxConcurrent: options.maxConcurrent ?? 2 });
+  const dispatcher = new DispatcherImpl({ services: () => h.services, executor });
   h.services.dispatcher = dispatcher;
   h.scheduler.start();
-  return { ...h, org, statuses, runItems, finishedRuns, runStatus, awake, admitted, executor, dispatcher };
+  return { ...h, org, statuses, runItems, finishedRuns, runStatus, awake, executor, dispatcher };
 }
 
 /** Lets microtasks, immediates and the fake executor's promise chains settle. */

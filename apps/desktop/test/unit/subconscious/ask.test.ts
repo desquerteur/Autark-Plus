@@ -1,11 +1,12 @@
 // The main AI's own call (tools/builtin/subconscious.ts → SubconsciousImpl.ask): ask and context reach the flow, the answer
-// is the tool's output, the spec stays short; and the turn's hook points (turn-prepare: the trace goes into the turn; turn-finish:
-// the finished turn reaches the wake check); the turn's mode reaches the run's skill list through the tool, beforeTurn and afterTurn.
+// is the tool's output, the spec stays short; the tool's mode reaches the run's skill list, and the routing call before a turn
+// (v1, route-turn.ts) runs no loop.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { RESOURCES, fixture } from '../context/fixture.ts';
+import { RESOURCES, fixture, model } from '../context/fixture.ts';
+import { ROUTE_SYSTEM } from '../../../src/runtime/subconscious/route-turn.ts';
 import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
 import { SubconsciousImpl } from '../../../src/runtime/subconscious/service.ts';
 import { subconsciousTools, SUBCONSCIOUS_TOOL } from '../../../src/runtime/tools/builtin/subconscious.ts';
@@ -14,6 +15,7 @@ import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
 import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
 import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
+import { routable } from './routable.ts';
 
 type Call = Parameters<StructuredRunner>[0];
 const tool = subconsciousTools[0];
@@ -29,7 +31,7 @@ function setup(steps: Array<{ tool: string; args?: Record<string, unknown> }>) {
     const structured = { tool: next.tool, args: JSON.stringify(next.args ?? {}) };
     return { text: '', structured, by: 'fake' };
   };
-  f.services.subconscious = new SubconsciousImpl({ services: () => f.services, runner, settleMs: 0 });
+  f.services.subconscious = new SubconsciousImpl({ services: () => f.services, runner });
   const chat = f.chats.create({ agentIds: [f.vid.id], createdBy: 'human' });
   const ctx = (mode = 'general'): ToolContext => ({ agent: f.vid, runId: 'run_1', conversationId: chat.id, mode, services: f.services, signal: new AbortController().signal, status: () => {} });
   /** The mode keys the skill list of each run was built for (flow.ts skillList → skills.indexFor). */
@@ -45,7 +47,7 @@ test('the tool passes ask and the chat that goes along; the answer comes back as
   assert.equal(out.isError, undefined);
   assert.equal(textOf(out), 'Die Rechnungen gehen am 3. raus.\n\n(This answer used no tool, only the text it was given.)');
   const prompt = t.calls[0].prompt;
-  assert.ok(prompt.includes('Run: asked') && prompt.includes('The main AI asks: Wann gehen die Rechnungen raus?'), prompt);
+  assert.ok(prompt.includes('The main AI asks: Wann gehen die Rechnungen raus?'), prompt);
   assert.ok(prompt.includes('Wir reden gerade über Rechnungen.'), 'recent is the default');
 });
 
@@ -70,21 +72,20 @@ test('what it told and picked is part of the answer; with nothing it says so pla
   assert.equal(textOf(await tool.run({ ask: 'Wer bekommt die Mahnungen?' }, empty.ctx())), 'The subconscious has nothing to add.');
 });
 
-test('the turn\'s mode reaches the run: the tool\'s (a split turn\'s), before a turn and after one', async () => {
+test('the turn\'s mode reaches the run\'s card: the tool\'s (a split turn\'s); neither the run nor the routing call before a turn opens a skill list', async () => {
   const asked = setup([]);
   await tool.run({ ask: 'Welcher Schnitt passt?' }, asked.ctx('video'));
-  assert.deepEqual(asked.modes, ['video'], `the tool's mode, not the agent's own (${asked.f.vid.mode})`);
+  assert.match(asked.calls[0].system, /; it works in the mode Video\./, `the tool's mode, not the agent's own (${asked.f.vid.mode})`);
+  assert.deepEqual(asked.modes, [], 'v1: the card in place of the main AI\'s prompt builds no skill list');
 
   const impl = asked.f.services.subconscious as SubconsciousImpl;
-  asked.modes.length = 0;
-  await impl.beforeTurn({ agent: asked.f.vid, thread: asked.chat.id, conversationId: asked.chat.id, mode: 'video', said: 'Mein Steuerberater heißt Jonas Weber.' });
-  assert.deepEqual(asked.modes, ['video'], 'before a turn');
-
-  asked.modes.length = 0;
-  const message = asked.f.chats.send({ conversationId: asked.chat.id, authorId: 'human', body: 'Mein Steuerberater heißt Jonas Weber.' });
-  impl.afterTurn({ agent: asked.f.vid, conversationId: asked.chat.id, mode: 'video', fromSeq: 0, toSeq: message.seq, reply: 'Notiert.' });
-  await impl.settle();
-  assert.deepEqual(asked.modes, ['video'], 'after a turn');
+  asked.calls.length = 0;
+  routable(asked.f.services, [model('codex:luna', 'small', 'Luna')]); // one connected work model the router runs
+  await impl.beforeTurn({ agent: asked.f.vid, thread: 'main', conversationId: asked.chat.id, mode: 'video', said: 'Mein Steuerberater heißt Jonas Weber.' });
+  assert.equal(asked.calls.length, 1, 'one routing call');
+  assert.equal(asked.calls[0].system, ROUTE_SYSTEM);
+  assert.ok(asked.calls[0].prompt.includes("The person's new message:\nMein Steuerberater heißt Jonas Weber."), asked.calls[0].prompt);
+  assert.deepEqual(asked.modes, [], 'no loop: no skill list is built');
 });
 
 test('it is a core tool in every mode with a short spec', () => {
@@ -102,7 +103,7 @@ test('live 01.11.: an asked run may not end with an empty done: the brain is tol
   const prompts: string[] = [];
   const replies = [{ tool: 'done', args: '{}' }, { tool: 'done', args: '{"answer":"Nichts gefunden."}' }];
   const runner: StructuredRunner = async ({ prompt }) => { prompts.push(prompt); return { text: '', structured: replies.shift(), by: 'fake' }; };
-  const impl = new SubconsciousImpl({ services: () => f.services, runner, settleMs: 0 });
+  const impl = new SubconsciousImpl({ services: () => f.services, runner });
   assert.equal(await impl.ask({ agent: f.vid, ask: 'Was wissen wir über die Rechnungen?', context: 'none' }), 'Nichts gefunden.\n\n(This answer used no tool, only the text it was given.)');
   assert.match(prompts[1], /waits for my answer/);
 });

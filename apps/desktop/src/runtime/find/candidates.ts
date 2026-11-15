@@ -1,11 +1,10 @@
-// Candidates of one find call (FIND, wave 3) from the stores that already exist – no index of its own:
-//  * skills: the skill library (name + description) – the agent's own and the ones its mode or profile names are
-//    main skills, the rest product skills;
+// Candidates of one find call (FIND, wave 3) from the stores that already exist – skills come with the catalog (catalog.ts):
+//  * a skill is a main skill when it is the agent's own or its mode or profile names it, else a product skill;
 //  * memory notes: the knowledge search (its own rules on who sees which note) – each with the day it was saved and its age;
 //  * references: the person's references – knowledge rows of scope 'reference' (references/references.ts), opened as notes.
-// One explainable score for all of them: the share of the query's salient words a candidate's own text carries
-// (subconscious/text.ts lexicalRelevance), at least SEMANTIC_FLOOR for a match by meaning, plus an exact-ID bonus, a
-// small bonus for the underlying search's own rank and one for a main skill. Files are searched with files.search.
+// The score is the search's own (the word index's bm25 relative to its best hit, knowledge/words.ts; a match by meaning at
+// least SEMANTIC_FLOOR), plus an exact-ID bonus and one for a main skill; the `why` names how many of the query's salient
+// words a candidate's text carries (subconscious/text.ts lexicalRelevance). Files are searched with files.search.
 // Owns: the mapping, the score and its `why`. Never: copies text into the result beyond a short description, or embeds.
 
 import { createHash } from 'node:crypto';
@@ -30,11 +29,9 @@ export interface FindCaller {
   via: 'agent' | 'owner';
 }
 
-/** A candidate with what only the runtime needs (never shown): the file on disk, the keyword share. */
+/** A candidate with what only the runtime needs (never shown): the file on disk. */
 export interface Found extends FindCandidate {
   abs?: string;
-  /** The share of the query's words in its own text (0 = a match by meaning or ID only). */
-  lexical?: number;
 }
 
 export interface Gather {
@@ -46,27 +43,29 @@ export interface Gather {
   kinds: ReadonlySet<FindKind>;
   limit: number;
   signal?: AbortSignal;
+  /** Memory folders the notes come from (default the whole tree). */
+  folders?: string[];
+  /** Whose references: 'human' (default) or a person per_…. */
+  subject?: string;
 }
 
 export const MIN_SCORE = 0.25;
 export const SEMANTIC_FLOOR = 0.6;
 const EXACT_BONUS = 0.2;
-const RANK_BONUS = 0.1;
 const MAIN_BONUS = 0.05;
 export const NOTE_KINDS: KnowledgeKind[] = ['fact', 'preference', 'experience', 'procedure', 'plan', 'note'];
 
 export const shortHash = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 12);
 
-/** The score of `text` for the query, with its reason parts. */
-export function scoreOf(g: Pick<Gather, 'tokens' | 'ids'>, text: string, options: { semantic?: boolean; rank?: number } = {}): { score: number; why: string[]; lexical: number } {
+/** The score of a hit whose search scored it `base` (0..1), with its reason parts. */
+export function scoreOf(g: Pick<Gather, 'tokens' | 'ids'>, text: string, base: number, options: { semantic?: boolean } = {}): { score: number; why: string[] } {
   const why: string[] = [];
-  const lexical = lexicalRelevance(g.tokens, text);
-  let score = lexical;
-  if (score > 0) why.push(`matches ${Math.round(score * Math.min(g.tokens.length, 4))} of ${Math.min(g.tokens.length, 4)} words`);
+  const share = lexicalRelevance(g.tokens, text);
+  if (share > 0) why.push(`matches ${Math.round(share * Math.min(g.tokens.length, 4))} of ${Math.min(g.tokens.length, 4)} words`);
+  let score = base;
   if (options.semantic) { score = Math.max(score, SEMANTIC_FLOOR); why.push('similar meaning'); }
   if (g.ids.length && exactId(g.ids, text)) { score += EXACT_BONUS; why.push('exact ID'); }
-  if (options.rank !== undefined && score > 0) score += RANK_BONUS / (1 + options.rank);
-  return { score: Math.min(1, Number(score.toFixed(3))), why, lexical };
+  return { score: Math.min(1, Number(score.toFixed(3))), why };
 }
 
 /** Is this skill one of the caller's main skills (its own, or named by its profile or mode)? */
@@ -77,31 +76,19 @@ function mainSkill(info: SkillInfo, caller: FindCaller, mode: ModeInfo | undefin
 }
 
 const skillOrigin = (info: SkillInfo, main: boolean): string =>
-  info.source === 'builtin' ? 'built-in' : info.source === 'agent' ? (main ? 'your own' : 'agent skill') : 'skill library';
+  info.source === 'builtin' ? 'built-in' : info.source === 'agent' ? (main ? 'my own' : 'agent skill') : 'skill library';
 
 /** The candidate of one skill (version: its text's hash); undefined when it cannot be read. */
 export function skillFound(services: RuntimeServices, caller: FindCaller, info: SkillInfo, mode: ModeInfo | undefined, score: number, why: string[]): Found | undefined {
-  const loaded = services.skills.get(info.name);
+  const loaded = services.skills.get(info.name, caller.agent?.id);
   if (!loaded) return undefined;
   const main = mainSkill(info, caller, mode);
   return {
     id: `skill:${info.name}`, kind: main ? 'main-skill' : 'product-skill', authority: 'skill', title: info.name,
     route: `skills/${path.basename(info.path)}/SKILL.md`, abs: path.join(info.path, 'SKILL.md'), version: shortHash(loaded.body), score: Math.min(1, score + (main ? MAIN_BONUS : 0)),
-    why: [...why, ...(main ? [info.source === 'agent' ? 'your own skill' : 'named for you'] : [])].join(' · ') || 'skill', origin: skillOrigin(info, main),
+    why: [...why, ...(main ? [info.source === 'agent' ? 'my own skill' : 'named for me'] : [])].join(' · ') || 'skill', origin: skillOrigin(info, main),
     ...(info.description ? { description: info.description } : {}),
   };
-}
-
-export function skillCandidates(services: RuntimeServices, caller: FindCaller, g: Gather, mode: ModeInfo | undefined): Found[] {
-  if (!g.kinds.has('main-skill') && !g.kinds.has('product-skill')) return [];
-  const out: Found[] = [];
-  for (const info of services.skills.list()) {
-    const { score, why, lexical } = scoreOf(g, `${info.name.replace(/-/g, ' ')} ${info.description}`);
-    if (score < MIN_SCORE) continue;
-    const found = skillFound(services, caller, info, mode, score, why);
-    if (found && g.kinds.has(found.kind)) out.push({ ...found, lexical });
-  }
-  return out;
 }
 
 /** The candidate of one memory note: its place and the day it was saved (in `zone`, the person's) with its age. */
@@ -116,24 +103,24 @@ export function noteFound(item: KnowledgeItem, now: number, score: number, why: 
 
 export async function noteCandidates(services: RuntimeServices, caller: FindCaller, g: Gather): Promise<Found[]> {
   if (!g.kinds.has('note')) return [];
-  // The whole tree: the caller asked with its own words; code names no part of memory for it (owner's rule (f)).
-  const hits = await services.knowledge.search({ text: g.query, folders: [''], conversationId: caller.conversationId, kinds: NOTE_KINDS, limit: g.limit });
+  // The whole tree unless the caller named folders: code names no part of memory for it (owner's rule (f)).
+  const hits = await services.knowledge.search({ text: g.query, folders: g.folders?.length ? g.folders : [''], conversationId: caller.conversationId, kinds: NOTE_KINDS, limit: g.limit });
   const now = services.clock.now();
   const zone = profileZone(services);
-  return hits.flatMap((hit, rank) => {
-    const { score, why, lexical } = scoreOf(g, `${hit.item.title} ${hit.item.description ?? ''} ${hit.item.body}`, { semantic: hit.why.includes('similar meaning'), rank });
-    return score < MIN_SCORE ? [] : [{ ...noteFound(hit.item, now, score, why, zone), lexical }];
+  return hits.flatMap((hit) => {
+    const { score, why } = scoreOf(g, `${hit.item.title} ${hit.item.description ?? ''} ${hit.item.body}`, hit.score, { semantic: hit.why.includes('similar meaning') });
+    return score < MIN_SCORE ? [] : [noteFound(hit.item, now, score, why, zone)];
   });
 }
 
 export async function referenceCandidates(services: RuntimeServices, _caller: FindCaller, g: Gather): Promise<Found[]> {
   if (!g.kinds.has('reference')) return [];
-  const hits = await findReferences(services.knowledge, { text: g.query, limit: Math.min(5, g.limit) });
+  const hits = await findReferences(services.knowledge, { text: g.query, subject: g.subject, limit: Math.min(5, g.limit) });
   const now = services.clock.now();
   const zone = profileZone(services);
-  return hits.flatMap((hit, rank) => {
-    const { score, why, lexical } = scoreOf(g, `${hit.item.title} ${hit.item.description ?? ''} ${hit.item.body}`, { semantic: hit.why.includes('similar meaning'), rank });
+  return hits.flatMap((hit) => {
+    const { score, why } = scoreOf(g, `${hit.item.title} ${hit.item.description ?? ''} ${hit.item.body}`, hit.score, { semantic: hit.why.includes('similar meaning') });
     if (score < MIN_SCORE) return [];
-    return [{ ...noteFound(hit.item, now, score, why, zone), kind: 'reference' as const, route: 'references', origin: 'reference', lexical }];
+    return [{ ...noteFound(hit.item, now, score, why, zone), kind: 'reference' as const, route: 'references', origin: 'reference' }];
   });
 }

@@ -1,10 +1,13 @@
 // Pure account selection rules for one engine (and model).
 // Owns: engine → provider mapping; the health filter – state, cooling and used-up limit windows
 // (a window at 100 % with a future reset counts as cooling until then; model windows such as
-// weekly-opus only for matching models); the plan primary with opt-in rotation (shared rule in
-// shared/model/plan-roles.ts); ordering (priority first, then B-048 E4.1 "use it or lose it" – the
-// plan quota that resets soonest while some is left goes first, `expiring` –, then the smallest
-// remaining share of the windows that apply). Spill-over to other providers is the router's job
+// weekly-opus only for matching models); ordering (B-083: accounts that pay per use – models/pricing.ts chargeOf 'paid' –
+// behind plans, keys holding a plan's monthly API credits and free ones, whatever their priority; then the plan whose
+// current weekly reading resets first – `weeklyReset` –, then priority, then the smallest remaining share of the windows
+// that apply). Every signed-in plan of a provider takes turns (owner 09.11.2026: "Die müssen einspringen können …
+// es springt das ein, was … Reset früher hat. Auch wenn zwischendurch ein 5-Stunden-Limit erreicht ist, dann, wenn es
+// wieder frei ist, dann wird wieder das genommen." – no opt-in, no primary that holds the others back): a 5h limit only
+// pauses a plan, a used-up week until its reset. Spill-over to other providers is the router's job
 // (across plans the router compares scores). The ACP engine runs the plan CLIs Gemini CLI, Copilot CLI (PR8) and
 // Kimi Code (B-044) under the same plan rule. B-058: media-only accounts (ElevenLabs, fal.ai) have no engine
 // (engineFor → undefined); their catalog models carry MEDIA_ENGINE as a placeholder, and the candidates of
@@ -13,7 +16,8 @@
 // Never: touches the DB or the clock (callers pass `now`).
 
 import { isAcpPlan, MEDIA_ONLY_PROVIDERS, type Account, type EngineId, type LimitWindow, type ProviderId } from '../../shared/model/providers.ts';
-import { byPriority, isPlanProvider, isUsableState, planPrimary } from '../../shared/model/plan-roles.ts';
+import { isPlanProvider, isUsableState } from '../../shared/model/plan-roles.ts';
+import { chargeOf } from '../models/pricing.ts';
 import { weeklyWindow, windowApplies, windowScope } from './limits.ts';
 
 export const ENGINE_PROVIDERS: Record<EngineId, ProviderId[]> = {
@@ -84,29 +88,7 @@ export function modelOnlyLimit(account: Account, now: number, model: string): bo
     && !used.some((window) => windowScope(window.name) === undefined);
 }
 
-// ------------------------------------------------------------------ B-048 E4.1: use it or lose it
-
-const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
-/** A plan whose shortest window (5h) has less than this share left is never pushed while its weekly window has more. */
-export const FIVE_HOUR_GUARD = 10;
-/** Below this the `expiring` value is no reason to prefer an account (unknown limits count 0). */
-export const EXPIRING_MIN = 0.15;
-/** `expiring` values closer than this are a tie (the remaining share decides). */
-export const EXPIRING_TIE = 0.05;
-
-/**
- * How urgent a window's reset is, 0..1: 1 within its horizon (a weekly or longer window resets in
- * ≤ 24 h, a 5h or shorter one in ≤ 1 h); after that a weekly window decays as horizon / resetIn (2 days
- * 0.5, 6 days ≈ 0.17), a short one falls linearly to 0 one horizon later – its quota is not lost while the
- * weekly window still binds.
- */
-export function urgency(windowMinutes: number, resetIn: number): number {
-  const long = windowMinutes >= 1440;
-  const horizon = long ? DAY_MS : HOUR_MS;
-  if (resetIn <= horizon) return 1;
-  return long ? horizon / resetIn : Math.max(0, 1 - (resetIn - horizon) / horizon);
-}
+// ------------------------------------------------------------------ the plan whose week resets first
 
 /** A plan login (subscription quota that resets), not a key that pays per use or a local runtime. */
 function planQuota(account: Account): boolean {
@@ -114,52 +96,30 @@ function planQuota(account: Account): boolean {
 }
 
 /**
- * B-048 E4.1 "use it or lose it": the share of a plan's quota that is lost unless used soon –
- * remaining share (the smallest of the windows that apply to `model`) × the highest urgency of their
- * resets. 0 for accounts without plan quota or readings, and while the guard holds: a 5h window under
- * FIVE_HOUR_GUARD % is never drained further while the weekly window has more left. Deterministic.
+ * When a plan's current weekly reading resets – its quota left by then is lost, so the plan that resets first runs first
+ * (owner 09.11.2026). Infinity for keys, local runtimes and plans without a current weekly reading (never read, or the
+ * reading's reset has passed and the monitor has not read the new week yet): those rank behind, by priority.
  */
-export function expiring(account: Account, now: number, model?: string): number {
-  if (!planQuota(account)) return 0;
-  const windows = applicableWindows(account, now, model).filter((window) => window.resetsAt !== undefined);
-  if (!windows.length) return 0;
-  const left = (window: LimitWindow) => Math.max(0, 100 - window.usedPercent);
-  const short = windows.filter((window) => window.windowMinutes < 1440).map(left);
-  const long = windows.filter((window) => window.windowMinutes >= 1440).map(left);
-  if (short.length && long.length && Math.min(...short) < FIVE_HOUR_GUARD && Math.max(...long) > Math.min(...short)) return 0;
-  const share = Math.min(...windows.map(left)) / 100;
-  const urgent = Math.max(...windows.map((window) => urgency(window.windowMinutes, window.resetsAt! - now)));
-  return Math.round(share * urgent * 1000) / 1000;
-}
-
-/**
- * The `expiring` step an account ranks by: none below EXPIRING_MIN, else in steps of EXPIRING_TIE
- * (steps keep the order transitive; inside a step the remaining share decides).
- */
-export function expiringRank(account: Account, now: number, model?: string): number {
-  const value = expiring(account, now, model);
-  return value >= EXPIRING_MIN ? Math.floor(value / EXPIRING_TIE + 1e-9) : 0;
+export function weeklyReset(account: Account, now: number): number {
+  if (!planQuota(account)) return Infinity;
+  return weeklyWindow(account.limits, now)?.resetsAt ?? Infinity;
 }
 
 export function selectCandidates(accounts: Account[], engine: EngineId, now: number, model?: string): Account[] {
   const providers = [...(ENGINE_PROVIDERS[engine] ?? []), ...(engine === MEDIA_ENGINE ? MEDIA_ONLY_PROVIDERS : [])];
   const out: Account[] = [];
   for (const provider of providers) {
-    const all = accounts.filter((a) => a.provider === provider && a.enabled).sort(byPriority);
-    if (!all.length) continue;
-    // Plan-based providers: the first signed-in account is the user's primary (one that needs
-    // sign-in never shuts out the next); others join only when the user opted them into rotation
-    // (provider terms) and rank behind it by priority. Keyed/local providers have no such restriction.
-    const plan = isPlanProvider(provider) || isAcpPlan(provider);
-    const primary = plan ? planPrimary(all) : undefined;
-    const allowed = plan ? all.filter((a) => a === primary || a.rotation) : all;
-    out.push(...allowed.filter((a) => isHealthy(a, now, model)));
+    // Every enabled account that is signed in (or not checked yet) and not limited for `model` – plans included: one
+    // that needs sign-in, cools or has a used-up window steps aside and is back the moment it is free again.
+    out.push(...accounts.filter((a) => a.provider === provider && a.enabled && isHealthy(a, now, model)));
   }
   return out.sort((a, b) => {
+    const paid = Number(chargeOf(a) === 'paid') - Number(chargeOf(b) === 'paid'); // B-083: credits and plans before paying keys
+    if (paid) return paid;
+    const ra = weeklyReset(a, now); // the plan whose week resets first goes first
+    const rb = weeklyReset(b, now);
+    if (ra !== rb) return ra < rb ? -1 : 1;
     if (a.priority !== b.priority) return a.priority - b.priority;
-    const ea = expiringRank(a, now, model); // E4.1: quota that resets soon while some is left goes first
-    const eb = expiringRank(b, now, model);
-    if (ea !== eb) return eb - ea;
     const ha = headroom(a, now, model) ?? 50; // unknown ranks in the middle
     const hb = headroom(b, now, model) ?? 50;
     if (ha !== hb) return hb - ha;

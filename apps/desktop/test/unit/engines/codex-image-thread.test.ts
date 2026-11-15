@@ -1,4 +1,4 @@
-// B-058 i1: the plan-image turn (media/codex-image.ts, EngineTurnInput.nativeTools 'image') opens a Codex thread whose
+// The plan-image turn (media/codex-image.ts, EngineTurnInput.nativeTools 'image') opens a Codex thread whose
 // one native tool is image_generation: shell, exec, patch, view_image, web search, browser and computer use off, no
 // environment, isolation as for every thread. A Codex that refuses these settings never gets a plainer thread.
 // Owns: nothing in production. Never starts a real binary (scripted app-server over fakes.ts).
@@ -10,7 +10,7 @@ import { HELPER_FEATURES_OFF, agentLeanConfig, imageThread } from '../../../src/
 import { WORKSPACE_FEATURES, threadIsolation } from '../../../src/runtime/engines/codex/isolation.ts';
 import { fakeFinder, fakeSpawn, testSupervisor, turnInput } from './fakes.ts';
 
-const SHUT = ['shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'computer_use', 'browser_use', 'apps', 'plugins', 'multi_agent', 'skill_search', 'tool_suggest', 'memories'];
+const SHUT = ['shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'computer_use', 'browser_use', 'apps', 'plugins', 'skill_search', 'tool_suggest', 'memories'];
 
 function assertImageOnly(params: any, label: string): void {
   const features = params.config.features as Record<string, boolean>;

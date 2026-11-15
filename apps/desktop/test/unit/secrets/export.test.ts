@@ -247,6 +247,13 @@ test('round trip: another vault imports the export with names, descriptions, tag
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('B-080 wave 3: an imported description keeps its whole text as the catalog holds it (up to 4000) – no cut at 500', async () => {
+  const t = setup();
+  const long = `The team account. ${'x'.repeat(1200)}`;
+  await importSecrets(t.vault, `${EXPORT_COLUMNS.join(',')}\n"Long",https://long.example,ann,pw-long-1,,,login,"${long}",x,logins,,,,\n`, { now: Date.UTC(2026, 10, 9) });
+  assert.equal(t.vault.groups().find((group) => group.label === 'Long')?.description, long);
+});
+
 test('the review covers only entries without a description; several logins of one service are named by their account', async () => {
   const t = setup();
   const text = [
@@ -290,14 +297,14 @@ test('secrets.export (agent tool): the path and counts, never a value', async ()
   await filled(t.vault);
   const dir = mkdtempSync(path.join(os.tmpdir(), 'wf-export-'));
   try {
-    assert.match(tool('secrets.export').description, /secrets\.import reads it back/);
+    assert.match(tool('secrets.export').description, /It is for secrets\.import elsewhere, which deletes it after a complete import/);
     const out = await tool('secrets.export').run({ path: path.join(dir, 'all.csv'), route: 'logins' }, ctxOf(t.services));
     const data = structured(out);
     assert.deepEqual([data.file, data.count, data.skipped], [path.join(dir, 'all.csv'), 2, 0]);
     assert.match(String(data.note), /secrets\.import in the other company/);
     assert.ok(!VALUES.some((value) => JSON.stringify(out).includes(value)), 'no value in the output');
     assert.ok(readFileSync(path.join(dir, 'all.csv'), 'utf8').includes('Pw-openai-2'), 'the file holds them');
-    assert.match(tool('secrets.export').description, /opening it with Read or cat would bring every value into my context/);
+    assert.match(tool('secrets.export').description, /every value in plain text, so I hand its path on rather than read it/);
     const none = structured(await tool('secrets.export').run({ path: dir, ids: [] }, ctxOf(t.services)));
     assert.equal(none.count, 4, 'an empty ids list names nothing: every entry');
     const wrong = structured(await tool('secrets.export').run({ path: dir, ids: ['sec_nope'] }, ctxOf(t.services)));

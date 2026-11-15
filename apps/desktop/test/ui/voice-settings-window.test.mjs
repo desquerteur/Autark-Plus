@@ -146,12 +146,13 @@ test('Settings › Models: the Voice group, the voice conversation use saved, th
   const bubble = page.locator('.call-transcript');
   await bubble.locator('.message.human', { hasText: 'Hello in the call' }).waitFor({ timeout: 15_000 }); // the row itself, in full
   assert.equal(await bubble.count(), 1, 'one bubble for the call');
-  assert.match((await bubble.locator('.call-transcript-toggle').textContent()).trim(), /^Call · .+ · running$/);
+  assert.match((await bubble.getAttribute('aria-label') ?? '').trim(), /^Call · .+ · running$/, 'the card is named by the call title (B-085)');
+  assert.equal((await bubble.locator('.call-transcript-toggle').textContent()).trim(), 'Transcript');
   await until(async () => (await bubble.locator('.message.agent').count()) > 0, 'the answer is a line of the call, shown as its message');
   assert.equal(await page.locator('.message-column > .message.human', { hasText: 'Hello in the call' }).count(), 0, 'the line is folded into the call, no row of its own');
   await shot('voice-settings-07-talk-in-chat');
   await rpc.call('calls.end', { callId: line.meta.call.id });
-  await until(async () => /^Call · .+ · \d+:\d{2}$/.test((await bubble.locator('.call-transcript-toggle').textContent()).trim()), 'the ended call shows how long it ran');
+  await until(async () => /^Call · .+ · \d+:\d{2}$/.test((await bubble.getAttribute('aria-label') ?? '').trim()), 'the ended call shows how long it ran');
   await page.evaluate(() => { location.hash = '#/settings/models'; });
   await group.waitFor({ timeout: 15_000 });
 

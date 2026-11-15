@@ -1,7 +1,16 @@
 // Owns: what a client may know about feedback delivery – whether this build can send (`feedback.status`), the team
-// inbox on the one PC that holds the team's private key (B-055 Q1–Q3) and `wf feedback setup`'s answer.
+// inbox on the one PC that holds the team's private key (B-055 Q1–Q3), `wf feedback setup`'s answer and the short
+// report number both sides show (B-085).
 // Never: keys, the service account, the sealed bytes or any read API of the mailbox (it is write-only).
 import type { FeedbackKind } from './system.ts';
+
+/**
+ * The short report number of a delivered report: the first 8 letters and digits of its receipt (the mailbox
+ * document id, a UUID – the team inbox item's `id`), in capitals. Empty without a receipt.
+ */
+export function reportNumber(receiptId: string | undefined): string {
+  return (receiptId ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8).toUpperCase();
+}
 
 /** The largest sealed envelope sent to the mailbox (its Firestore rule allows < 1,000,000 bytes). */
 export const FEEDBACK_SEALED_LIMIT = 950_000;

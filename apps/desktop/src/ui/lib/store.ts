@@ -6,7 +6,7 @@
 import { batch, computed, signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import type { Agent } from '../../shared/model/org.ts';
-import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
+import type { Attachment, ConversationSummary, Message } from '../../shared/model/chat.ts';
 import type { TaskView } from '../../shared/model/tasks.ts';
 import type { Account, ModelInfo, UsageSummary } from '../../shared/model/providers.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
@@ -49,6 +49,8 @@ export const updateState = signal<UpdateState | null>(null);
 export const systemInfo = signal<SystemInfo | null>(null);
 export const drafts = signal<Record<string, string>>({});
 export const secretDrafts = signal<Record<string, string[]>>({});
+/** B-082: the saved files of each chat's draft (ui.state draftFiles) – a kept take comes back after a reload. */
+export const draftFiles = signal<Record<string, Attachment[]>>({});
 export const loaded = signal(false);
 export const loadError = signal<string | null>(null);
 
@@ -227,6 +229,7 @@ export async function loadAll(): Promise<void> {
       if (snapshot.usage) usage.value = snapshot.usage;
       drafts.value = { ...snapshot.drafts, ...drafts.value };
       secretDrafts.value = { ...snapshot.secretDrafts, ...secretDrafts.value };
+      draftFiles.value = { ...snapshot.draftFiles, ...draftFiles.value };
       loadError.value = null;
       loaded.value = true;
     });

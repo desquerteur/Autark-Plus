@@ -4,9 +4,9 @@
 // over", one muted line), and one action: Send where this build can send, else Save (delivery.ts). No categories.
 // The report carries one image: the painted one flattened, or the original re-encoded (paint.ts reportImage – never
 // the raw shot of a painted draft). The draft lives in draft.ts, so closing the menu keeps it; a created report
-// clears it. After Send/Save the form says what happened in one line; when the send was not confirmed, the
-// action cell of that line reads "Send again" (not Close) and sends the same saved report. The message slot beside
-// the action is always reserved, so nothing moves when an error comes.
+// clears it. After Send/Save the form says what happened in one line (a sent report with its short number); when
+// the send was not confirmed, the action cell of that line reads "Send again" (not Close) and sends the same saved
+// report. The message slot beside the action is always reserved (role=alert), so nothing moves when an error comes.
 // Owns: the form, uploading its image and submitting. Never: starts an app change, requests a login, opens a
 // browser or discards a failed submission.
 
@@ -68,6 +68,7 @@ export function FeedbackForm(props: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<FeedbackReport | null>(null);
+  const [tried, setTried] = useState(false); // a feedback.send went out for the done report (else it was only saved)
   const submitting = useRef(false);
   const field = useRef<HTMLTextAreaElement>(null);
   const dictation = useDictation(appendDraftText, settings.value?.profile.language);
@@ -98,6 +99,7 @@ export function FeedbackForm(props: { onClose: () => void }) {
       saved = await rpc.call('feedback.create', { kind: REPORT_KIND, text: current.text.trim(), view: where.view, conversationId: where.conversationId, ...files });
       clearDraft(); // the report holds it now; the next press takes a fresh screenshot
       if (!canSendHere) { setDone(saved); return; } // saved on the PC; nothing is sent
+      setTried(true);
       setDone(await sendReport(saved.id));
     } catch (err) {
       if (saved) setDone(saved); // saved on the PC; the line says so, the error says why it did not go
@@ -114,6 +116,7 @@ export function FeedbackForm(props: { onClose: () => void }) {
     submitting.current = true;
     setBusy(true);
     setError(null);
+    setTried(true);
     try {
       setDone(await sendReport(id));
     } catch (err) {
@@ -129,9 +132,9 @@ export function FeedbackForm(props: { onClose: () => void }) {
     const retry = canSendAgain(report.status, sending);
     return (
       <div class="feedback-panel done">
-        <p class="feedback-done">{doneText(report.status, sending !== false)}</p>
+        <p class="feedback-done">{doneText(report, tried || (sending === false ? false : undefined))}</p>
         <div class="feedback-actions">
-          <p class="feedback-message" role="status" title={error ?? undefined}>{error}</p>
+          <p class="feedback-message" role="alert" title={error ?? undefined}>{error}</p>
           {retry
             ? <button type="button" class="button primary feedback-again" disabled={busy} onClick={() => void again(report.id)}>{sendAgainLabel(busy)}</button>
             : <button type="button" class="button primary" onClick={props.onClose}>Close</button>}
@@ -168,7 +171,7 @@ export function FeedbackForm(props: { onClose: () => void }) {
       {capture && <ShotRow draft={draft} disabled={busy} />}
       <FeedbackPrivacyNote sending={sending === true} />
       <div class="feedback-actions">
-        <p class="feedback-message" role="status" title={message ?? undefined}>{message}</p>
+        <p class="feedback-message" role="alert" title={message ?? undefined}>{message}</p>
         <button type="button" class="button primary" disabled={busy || !draft.text.trim()} onClick={() => void submit()}>
           {sendLabel(sending, busy)}
         </button>

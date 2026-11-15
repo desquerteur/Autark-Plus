@@ -5,8 +5,8 @@
 // (history replay is dropped), else reported as ended (details.rebase → the executor renews it
 // with the full projection). Workforce tools reach the agent as an HTTP MCP server when it
 // supports one: a stable per-session proxy URL in front of each turn's hub lease (mcp-proxy.ts).
-// A new session gets the stable + volatile prompt as an instructions block in its first prompt
-// (ACP has no system prompt); a continued one gets the volatile context block. B-049 F3: where a CLI
+// A new session gets the stable prompt as an instructions block in its first prompt (ACP has no system prompt); every
+// turn's prompt carries the live context block (shared.ts contextText). B-049 F3: where a CLI
 // documents it, its launch replaces the CLI's own system prompt with a short pointer to that block and
 // cuts its own instructions, MCP servers and tools (providers.ts, per CLI). Turns run in the turn's folder like every
 // engine's; the process and the probe session use the neutral folder (`deps.cwd`: the empty engine folder,
@@ -28,7 +28,7 @@ import { listing, parseConfig, type SessionConfig } from './config.ts';
 import { McpProxy } from './mcp-proxy.ts';
 import { HUB } from './updates.ts';
 import { failure, runAcpTurn, type ReadFile } from './turn.ts';
-import { ERR, isRecord, str } from '../shared.ts';
+import { ERR, contextText, isRecord, str } from '../shared.ts';
 
 export type { AcpLaunch } from './process.ts';
 /** The agent to start for an account (undefined = none installed for it). */
@@ -210,9 +210,7 @@ export class AcpEngine implements Engine {
     }
     if (session.proxyKey) this.proxy.bind(session.proxyKey, input.mcp);
     const { stable, volatile } = input.system;
-    const context = fresh
-      ? [stable && `<workforce-instructions>\n${stable}\n</workforce-instructions>`, volatile && `<workforce-context>\n${volatile}\n</workforce-context>`].filter(Boolean).join('\n\n')
-      : volatile.trim() ? `<workforce-context>\n${volatile}\n</workforce-context>` : '';
+    const context = [fresh && stable && `<my-instructions>\n${stable}\n</my-instructions>`, contextText(volatile)].filter(Boolean).join('\n\n');
     try {
       return await runAcpTurn({ proc, session, input, context: context || undefined, readFile: this.deps.readFile ?? ((file) => fsp.readFile(file)), resumed: !fresh, cancelGraceMs: this.deps.cancelGraceMs });
     } finally {

@@ -10,7 +10,7 @@ export default function about(rel) {
     slug: 'about',
     rel,
     title: `Who builds ${site.name}: ${maker.company} and ${maker.founder}`,
-    description: `${site.name} is built by ${maker.company} in Salzburg, Austria, founded by software engineer ${maker.founder}. Why it exists, what the name means, and ${maker.umbrella}.`,
+    description: `${site.name} is built by ${maker.company} in Austria, founded by software engineer ${maker.founder}. Why it exists, what the name means, and ${maker.umbrella}.`,
     ld: [{
       '@type': 'AboutPage',
       '@id': `${site.url}/about/#aboutpage`,
@@ -49,7 +49,7 @@ ${pageHero({
         <dl class="kv">
           <dt>Made by</dt><dd>${ext(maker.companyUrl, maker.company)}, ${maker.location}</dd>
           <dt>Founder</dt><dd>${ext(maker.founderUrl, maker.founder)}, founder and software engineer</dd>
-          <dt>Part of</dt><dd>${ext(maker.umbrellaUrl, maker.umbrella)} · “Stay above the agents”</dd>
+          <dt>Origins</dt><dd>${maker.umbrella} · “Stay above the agents”</dd>
           <dt>Formerly</dt><dd>Proactive Agent Workforce</dd>
         </dl>
 
@@ -70,11 +70,11 @@ ${pageHero({
         <p>${site.name} is made by ${ext(maker.companyUrl, maker.company)} in ${maker.location}. ${maker.company} builds configurable AI chatbots for websites that answer with a company’s own knowledge and in its own design. ${site.name} is a different kind of product from the same lab: not an assistant on a website, but a team of agents on your own computer.</p>
 
         <h2 id="founder">The founder</h2>
-        <p>${maker.company} was founded by ${ext(maker.founderUrl, maker.founder)}, founder and software engineer in Salzburg. On his website he keeps a ${ext(maker.founderProject, `project page about ${site.name}`)}, next to his other projects, notes and press.</p>
+        <p>${maker.company} was founded by ${ext(maker.founderUrl, maker.founder)}, founder and software engineer. On his website he keeps a ${ext(maker.founderProject, `project page about ${site.name}`)}, next to his other projects, notes and press.</p>
 
         <h2 id="meta-jarvis">${maker.umbrella}</h2>
-        <p>${site.name} is part of ${ext(maker.umbrellaUrl, maker.umbrella)}, the ${maker.company} umbrella for projects around AI agents and the person who stays in charge of them. Its line is “Stay above the agents”: let agents do more of the work, and keep the human above them, not buried under them.</p>
-        <p>The first ${maker.umbrella} project is ${ext(maker.telecodingUrl, 'TeleCoding')}: programming by phone call. ${site.name} belongs to the same family.</p>
+        <p>${site.name} grew out of ${maker.umbrella}, the ${maker.company} umbrella for projects around AI agents and the person who stays in charge of them. Its line was “Stay above the agents”: let agents do more of the work, and keep the human above them, not buried under them. Autark now has its own home.</p>
+        <p>The first ${maker.umbrella} project was TeleCoding: programming by phone call.</p>
 
         <h2 id="book">The book</h2>
         <p>${maker.founder} also offers a free book in German: ${ext(maker.bookUrl, `<span lang="de">„${maker.bookTitle}“</span>`)} (“AI into your own product”). On 253 pages it explains how to bring AI into your own software.</p>
@@ -106,14 +106,12 @@ ${pageHero({
     <div>
       <span class="eyebrow" data-reveal>Elsewhere</span>
       <h2 class="h2" id="elsewhere" data-reveal style="margin-top:22px">More from <em>${maker.company}.</em></h2>
-      <p class="lead" data-reveal style="--d:1;margin-top:24px">The company, the founder, the umbrella and its first project, the book and the press page.</p>
+      <p class="lead" data-reveal style="--d:1;margin-top:24px">The company, the founder, the book and the press page.</p>
     </div>
     <nav class="links" aria-label="${maker.company} and ${maker.founder}" data-reveal style="--d:1">
       <a href="${maker.companyUrl}" rel="noopener"><b>${maker.company}</b><span>AI chatbots for websites, with your own knowledge and design</span>${icon('external')}</a>
       <a href="${maker.founderUrl}" rel="noopener"><b>${maker.founder}</b><span>The founder: projects, notes and press</span>${icon('external')}</a>
       <a href="${maker.founderProject}" rel="noopener"><b>${site.name} on ${host(maker.founderUrl)}</b><span>The founder’s project page about this app</span>${icon('external')}</a>
-      <a href="${maker.umbrellaUrl}" rel="noopener"><b>${maker.umbrella}</b><span>The umbrella: stay above the agents</span>${icon('external')}</a>
-      <a href="${maker.telecodingUrl}" rel="noopener"><b>TeleCoding</b><span>The first ${maker.umbrella} project: programming by phone call</span>${icon('external')}</a>
       <a href="${maker.bookUrl}" rel="noopener"><b>${maker.bookTitle}</b><span>A free book on AI in your own software (German, 253 pages)</span>${icon('external')}</a>
       <a href="${maker.awardUrl}" rel="noopener"><b>Austrian Innovation Forum 2026</b><span>Startup category winner, Beyond Optimization Crowd in Motion Challenge</span>${icon('external')}</a>
       <a href="${maker.pressUrl}" rel="noopener"><b>Press</b><span>The press page on ${host(maker.pressUrl)}</span>${icon('external')}</a>

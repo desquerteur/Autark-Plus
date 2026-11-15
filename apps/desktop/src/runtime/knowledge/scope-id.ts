@@ -1,7 +1,7 @@
 // The normal ids of the shared operational scopes: a website is its host (lowercase, without
 // "www." – browser/hosts.ts normalHost, the same rule the browser tools judge pages by), an app is
 // its process name (lowercase, without folder and ".exe"/".app"). KnowledgeStore.save and
-// knowledge.remember store these and recall finds them, so 'https://www.x.com/feed', 'www.x.com' and 'x.com'
+// memory.write (company/websites/<host>, company/apps/<name>) store these and knowledge.find finds them, so 'https://www.x.com/feed', 'www.x.com' and 'x.com'
 // are one site.
 // Owns: those rules, the site key form ('website:x.com' / 'app:excel') and reading a free-form
 // target. Never: touches the database or treats an id as a permission.

@@ -1,7 +1,7 @@
-// LEAN (23.10.): a Codex helper turn (no tools, no hub, no session) starts a lean thread – no environment,
-// Codex's built-in tool features off for that thread, no permission/app/collaboration/environment blocks,
-// web search disabled, no empty developer message – on top of the workspace isolation; an agent turn's thread is
-// lean too since B-049 F1 but keeps its environment, the shell and its developer instructions (codex-lean-agent.test.ts).
+// A Codex helper turn (no tools, no hub, no session) starts a lean thread – no environment, Codex's built-in tool
+// features off for that thread, no permission/app/collaboration/environment blocks, web search disabled, no empty
+// developer message – on top of the workspace isolation; an agent turn's thread is lean too but keeps its environment
+// and the shell (codex-lean-agent.test.ts). A Codex that refuses the lean thread fails the helper call.
 // warm() says whether an account's app-server is up; prewarm() starts it with one lean
 // thread and no turn (no model call), shares a running start and leaves a running server alone.
 
@@ -48,6 +48,7 @@ test('helperThread: lean config merged on top of the isolation, environments emp
   assert.equal(lean.developerInstructions, HELPER_NOTE, 'no empty developer message: only the note');
   assert.equal((lean.config.agents as { enabled: boolean }).enabled, false, 'no agents and no role text');
   assert.deepEqual(lean.config.skills, { include_instructions: false, bundled: { enabled: false } }, 'no skill list');
+  assert.deepEqual(lean.config.tools, { experimental_request_user_input: { enabled: false } }, 'no question tool');
   assert.deepEqual(lean.environments, []);
   assert.equal(lean.ephemeral, true);
   assert.deepEqual(lean.config.projects, { '/w': { trust_level: 'untrusted' } }, 'the isolation stays');
@@ -57,12 +58,12 @@ test('helperThread: lean config merged on top of the isolation, environments emp
     assert.equal(lean.config[key], false, key);
   }
   const features = lean.config.features as Record<string, boolean>;
-  for (const name of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'multi_agent', 'hooks', 'shell_snapshot']) assert.equal(features[name], false, name);
+  for (const name of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'shell_snapshot']) assert.equal(features[name], false, name);
   assert.equal(Object.keys(features).length, HELPER_FEATURES_OFF.length);
   assert.equal(helperThread({ developerInstructions: 'Now: …' }).developerInstructions, `Now: …\n\n${HELPER_NOTE}`, 'a real developer message stays');
 });
 
-test('a helper turn starts the lean thread; an agent turn keeps its environment, the shell and its developer instructions', async () => {
+test('a helper turn starts the lean thread; an agent turn keeps its environment and the shell', async () => {
   const fake = appServer();
   const engine = engineWith(fake);
   const helper = await engine.run(turnInput({ runId: 'run_h', agentId: 'system', tools: [], system: { stable: 'Decide.', volatile: '' }, outputSchema: { type: 'object' } }).input);
@@ -83,11 +84,10 @@ test('a helper turn starts the lean thread; an agent turn keeps its environment,
   const agentStart = fake.requests.filter((r) => r.method === 'thread/start')[1];
   assert.equal(agentStart.params.environments, undefined, 'an agent keeps its environment');
   assert.equal(agentStart.params.ephemeral, undefined, 'and its history');
-  // B-049 F1: lean, but the shell stays (the helper turns it off).
+  // Lean, but the shell stays (the helper turns it off).
   for (const name of ['shell_tool', 'unified_exec', 'shell_snapshot']) assert.equal(agentStart.params.config.features[name], undefined, name);
   assert.equal(agentStart.params.config.features.plugins, false);
   assert.equal(agentStart.params.config.include_permissions_instructions, false);
-  assert.equal(agentStart.params.developerInstructions, 'VOLATILE');
   assert.equal(agentStart.params.dynamicTools.length, 1);
   await engine.dispose();
 });
@@ -131,34 +131,19 @@ test('prewarm failure: Codex missing rejects, nothing stays warm', async () => {
   assert.equal(fake.calls.length, 0);
 });
 
-test('a server that refuses the lean thread (an older or stricter Codex) gets the plain ephemeral helper thread from then on', async () => {
+test('a server that refuses the lean helper thread fails the call – no plainer thread', async () => {
   const requests: any[] = [];
-  let threads = 0;
   const { spawn } = fakeSpawn(({ child }) => {
     child.onLine = (msg) => {
       if (!msg.method) return;
       requests.push(msg);
       if (msg.method === 'initialize') child.send({ id: msg.id, result: {} });
-      else if (msg.method === 'thread/start') {
-        if (msg.params.environments) child.send({ id: msg.id, error: { code: -32602, message: 'unknown field `environments`' } });
-        else child.send({ id: msg.id, result: { thread: { id: `thr_${++threads}` } } });
-      } else if (msg.method === 'thread/unsubscribe') child.send({ id: msg.id, result: {} });
-      else if (msg.method === 'turn/start') {
-        child.send({ id: msg.id, result: { turn: { id: 'turn_1' } } });
-        child.send({ method: 'item/completed', params: { threadId: msg.params.threadId, turnId: 'turn_1', item: { id: 'm1', type: 'agentMessage', text: 'ok' } } });
-        child.send({ method: 'turn/completed', params: { threadId: msg.params.threadId, turn: { id: 'turn_1', status: 'completed' } } });
-      }
+      else if (msg.method === 'thread/start') child.send({ id: msg.id, error: { code: -32602, message: 'unknown field `environments`' } });
     };
   });
   const engine = new CodexEngine({ supervisor: testSupervisor(spawn), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/engine-cwd', version: '0.2.0' });
   const first = await engine.run(turnInput({ runId: 'run_1', tools: [], system: { stable: 'Decide.', volatile: '' } }).input);
-  assert.equal(first.stop, 'done');
-  const starts = () => requests.filter((r) => r.method === 'thread/start');
-  assert.equal(starts().length, 2, 'lean refused, then the plain thread');
-  assert.equal(starts()[1].params.ephemeral, true, 'still nothing in the history');
-  assert.equal(starts()[1].params.environments, undefined);
-  await engine.run(turnInput({ runId: 'run_2', tools: [], system: { stable: 'Decide.', volatile: '' } }).input);
-  assert.equal(starts().length, 3, 'the next helper call goes straight to the plain thread');
-  assert.equal(starts()[2].params.environments, undefined);
+  assert.equal(first.stop, 'error');
+  assert.equal(requests.filter((r) => r.method === 'thread/start').length, 1);
   await engine.dispose();
 });

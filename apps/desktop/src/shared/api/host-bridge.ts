@@ -59,14 +59,37 @@ export interface HostOps {
   /**
    * B-076: someone watches side tab `tab` from another PC or a phone (main/side-driver/caster.ts): `on` wakes the page,
    * starts its screencast or renews it (it ends a minute after the last renewal), off ends it now. Frames reach the
-   * runtime as `side-view` messages.
+   * runtime as `side-view` messages. B-081: `view` – the watcher's picture box (whole CSS px); the page has it as its
+   * viewport while it is cast.
    */
-  sideCast: { args: { tab: string; on: boolean }; result: { ok: true; page?: SidePage } };
+  sideCast: { args: { tab: string; on: boolean; view?: { width: number; height: number } }; result: { ok: true; page?: SidePage } };
   /** B-076: the watcher's input in that tab – Input.dispatchMouseEvent, dispatchKeyEvent and insertText only; it counts as the person's. */
   sideInput: { args: { tab: string; commands: SideCommand[] }; result: { ok: true } };
   /** B-076: a new http(s) address, back, forward or reload in that tab, or the answer to its open dialog. */
   sideNav: { args: { tab: string; url?: string; action?: 'back' | 'forward' | 'reload'; dialog?: 'accept' | 'dismiss' }; result: { ok: true } };
+  /**
+   * Owner 07.11.2026: the person's Codex plan hears a dictation over WebRTC (runtime/voice/codex-hear.ts). Main's hidden
+   * voice window (main/voice-rtc.ts) decodes the take (blob id), feeds it into a peer connection – never a speaker – and
+   * answers with its offer once the ICE candidates are gathered.
+   */
+  'voice.rtcOffer': { args: { fileId: string; mime?: string }; result: { jobId: number; sdp: string; durationMs: number } };
+  /** The server's answer to that offer: the take is sent in real time with RTC_LIMITS' silence before and after; resolves once it is. */
+  'voice.rtcAnswer': { args: { jobId: number; sdp: string }; result: { durationMs: number } };
+  /** Ends the job: the connection closes and its window goes (also after a failure; an unknown job is fine). B-082: `sessionMs` – the voice's own meter (usage.audio_duration_ms) as the page saw it last; `windowMs` – the window's connection time (answer → close). */
+  'voice.rtcClose': { args: { jobId: number }; result: { ok: true; sessionMs?: number; windowMs?: number } };
+  /**
+   * B-080: installs an Autark build on this PC the way an update installs (main/updates-wiring.ts installFile: the same
+   * drain, the relaunch helper with this installer, quit). Main answers first and acts on the next tick, so the reply
+   * reaches the runtime before its shutdown; macOS and a build without the updater wiring refuse in main's log only.
+   */
+  'app.install': { args: { installer: string }; result: { ok: true } };
 }
+
+/**
+ * Limits of the voice.rtc* ops: the longest take sent (realtime costs plan usage per second), the silence before and
+ * after it, the wait for the page's offer, for the connection, for the answer after the offer, and an SDP's size.
+ */
+export const RTC_LIMITS = { maxMs: 10 * 60_000, leadMs: 1_000, tailMs: 2_000, offerMs: 20_000, connectMs: 15_000, answerMs: 60_000, sdpChars: 64 * 1024 } as const;
 
 /** MM4: limits of `media.analyze` – frames per call, longest image edge, one job's time, jobs waiting behind it. */
 export const KEYFRAME_LIMITS = { frames: 12, defaultFrames: 6, edge: 768, jobMs: 30_000, waiting: 3 } as const;
@@ -113,6 +136,8 @@ export const HOST_OPS: readonly HostOp[] = [
   'media.audio', 'media.image', // B-058
   'company.open', // B-072
   'sideCast', 'sideInput', 'sideNav', // B-076
+  'voice.rtcOffer', 'voice.rtcAnswer', 'voice.rtcClose', // owner 07.11.2026: dictation heard by the Codex plan
+  'app.install', // B-080
 ];
 
 export interface AppInfo {
@@ -125,6 +150,8 @@ export interface AppInfo {
   companies?: { first: string; dir: string };
   /** B-078: how this company's start was asked for (main/companies.ts startFlag of `--start=`); missing for a plain start. */
   start?: CompanyStart;
+  /** B-080: main's process id – every install ends it, so a runtime start under the same one followed no install. */
+  pid?: number;
 }
 
 // ------------------------------------------------------------------ runtime → main
@@ -176,7 +203,7 @@ export interface ShutdownMessage { type: 'shutdown'; reason: 'quit' | 'update' }
 export interface PointerMessage { type: 'pointer'; point: Omit<PointerPoint, 'at'> }
 
 /**
- * B-076: a frame or the page of a side tab someone watches (main/side-driver/caster.ts, at most one frame per 500 ms)
+ * B-076: a frame or the page of a side tab someone watches (main/side-driver/caster.ts, at most one frame per 100 ms)
  * for the runtime's side views. Like `pointer`: sent only while the runtime is up, never queued or replayed.
  */
 export interface SideViewMessage { type: 'side-view'; update: SideCastUpdate }

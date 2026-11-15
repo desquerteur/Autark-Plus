@@ -1,12 +1,15 @@
-// Running split groups (B-057 S3/S7/S11/S12/S13/S16): a group starts when its parent's turn ends (startGroup) – parts
-// without `after` are queued, the others wait; ready parts start on their own dispatcher lanes (pump →
-// dispatcher.startSplit, at most SPLIT_LIMITS.runningPerAgent per agent; 'busy' or 'refused' leaves them queued until a
-// lane frees – the dispatcher's onLaneFree calls pump again). A split is marked running (attempt counted) before
+// Running split groups (B-057 S3/S7/S11/S12/S13/S16): a group starts when its parent's turn ends (startGroup – B-080: it
+// records the session that turn ended with, fork.ts recordedParent) – parts without `after` are queued, the others wait;
+// ready parts start on their own dispatcher lanes at once (pump → dispatcher.startSplit; no global limit, at most
+// SPLIT_LIMITS.runningPerAgent per agent – B-080: a part beyond that waits with QUEUED_TEXT as its reason, one write, cleared
+// when it starts; 'busy' or 'refused' leaves them queued until a lane frees – the dispatcher's onLaneFree calls pump
+// again). A split is marked running (attempt counted) before
 // startSplit, so a lane that ends at once still finds it running; an answer other than 'started' puts it back.
 // A run's end (onRunEnd): done; put back without counting the attempt when it did not really run (reconcile.ts putBack)
 // or when no account could run it (SplitRunEnd.wait – it waits for one, holds.ts, and pump skips it until it is due);
 // queued again once for a retryable failure (SPLIT_LIMITS.attempts – after the ended attempt's lane is gone: turn-finish
-// reports from inside it, its end pumps again); else failed or stopped. Then the group advances: ready parts are
+// reports from inside it, its end pumps again); else failed or stopped – and its origin wakes for it at once (gather.ts
+// returned: each part returns on its own). Then the group advances: ready parts are
 // queued, parts building on one that did not end done are skipped (in cascade), an ended group settles (gather.ts).
 // A part that ended for good (done, failed after its last attempt, stopped) releases its native session at once – its
 // engine unloads it while the siblings still run (release.ts); the results are read from the run journal only. A part
@@ -28,12 +31,14 @@ import { SPLIT_LIMITS, type Split, type SplitGroup, type SplitStatus } from '../
 import type { Dispatcher } from '../contracts.ts';
 import type { SplitRunEnd } from '../contracts/splits.ts';
 import { BUSY_GROUPS, LIVE_SPLITS, isTerminal, type SplitCore } from './core.ts';
-import { settle } from './gather.ts';
+import { coalesceKey, returned, settle } from './gather.ts';
 import { PUT_BACK, mayPutBack, putBack, putBackByRestart } from './reconcile.ts';
 import { SplitHolds, WAIT_TEXT } from './holds.ts';
+import { recordedParent } from './fork.ts';
+import { QUEUED_TEXT } from './results.ts';
 
 export const PERSON_STOPPED = 'Stopped by the person.';
-export const SELF_STOPPED = 'Stopped by its main self.';
+export const SELF_STOPPED = 'Stopped by its agent.';
 const ENDED: Partial<Record<SplitStatus, string>> = { failed: 'failed', stopped: 'was stopped', skipped: 'was skipped' };
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -69,7 +74,11 @@ export class SplitRunner {
   startGroup(groupId: string): void {
     const group = this.core.repo.getGroup(groupId);
     if (!group || group.status !== 'pending') return;
-    this.core.repo.updateGroup(groupId, { status: 'running', startedAt: this.core.now() });
+    // B-080: what its 'fork' parts fork – the session the splitting turn ended with, whatever the parent's next turn does to it.
+    let run;
+    try { run = this.core.deps.runs.get(group.parentRunId); } catch { run = undefined; }
+    const parentSession = recordedParent(this.core.deps.db, run, group);
+    this.core.repo.updateGroup(groupId, { status: 'running', startedAt: this.core.now(), ...(parentSession ? { parentSession } : {}) });
     this.advance(groupId);
   }
 
@@ -137,16 +146,23 @@ export class SplitRunner {
       let onLane = new Set<string>(); // a retry waits until its ended attempt's lane is gone (see the header)
       try { onLane = new Set((dispatcher.splitLanes?.(agentId) ?? []).map((lane) => lane.splitId)); } catch { /* no lane listing */ }
       for (const split of list) {
-        if (running >= SPLIT_LIMITS.runningPerAgent) break;
         if (this.opening.has(split.id) || onLane.has(split.id) || this.holds.waiting(split.id)) continue;
         const group = groupOf(split.groupId);
         if (!group || group.status !== 'running') continue;
+        if (running >= SPLIT_LIMITS.runningPerAgent) { this.noteWaiting(split, changed); continue; }
         if (split.worktree && !this.folders.has(split.id)) { this.openFolder(split, group); running++; continue; }
         if (this.startOne(dispatcher, split) !== 'started') break; // busy or refused: this agent waits for a free lane
         running++;
         changed.add(split.groupId);
       }
     }
+  }
+
+  /** B-080: a ready part beyond its agent's runningPerAgent says why it waits (QUEUED_TEXT) – once; a reason already set stays. */
+  private noteWaiting(split: Split, changed: Set<string>): void {
+    if (split.error) return;
+    this.core.repo.updateSplit(split.id, { error: QUEUED_TEXT });
+    changed.add(split.groupId);
   }
 
   private startOne(dispatcher: Dispatcher, split: Split): 'started' | 'busy' | 'refused' {
@@ -227,6 +243,7 @@ export class SplitRunner {
       : { status: end.status === 'stopped' ? 'stopped' as const : 'failed' as const, error: end.error ?? (end.status === 'stopped' ? 'Stopped.' : 'The part failed.') };
     if (this.folders.has(splitId)) { this.finishThenEnd(split, outcome); return; }
     this.core.repo.updateSplit(splitId, { status: outcome.status, endedAt: now, error: 'error' in outcome ? outcome.error : undefined });
+    returned(this.core, splitId);
     this.after(split.groupId);
   }
 
@@ -246,6 +263,7 @@ export class SplitRunner {
         });
       }
       this.core.release([split]); // a report while its work was committed may have saved its session again
+      returned(this.core, split.id);
       this.after(split.groupId);
     }).catch(this.lost);
   }
@@ -303,6 +321,7 @@ export class SplitRunner {
       if ((group.status === 'pending' && (whole || ended)) || (group.status === 'running' && whole && !self)) {
         this.core.repo.updateGroup(group.id, { status: 'stopped', endedAt: this.core.now() });
         this.core.release(this.core.repo.listSplits({ groupId: group.id }));
+        try { this.core.deps.wakes.cancelKey?.(group.agentId, coalesceKey(group.id)); } catch { /* a part's return wake finds no results */ }
         changed.add(group.id);
       } else if (this.advance(group.id)) changed.add(group.id);
     }

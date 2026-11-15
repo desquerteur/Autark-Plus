@@ -1,20 +1,19 @@
-// tools.find / tools.call (B-049 F4): the two meta tools beside every core set (tools/core-sets.ts).
-// tools.find answers which other tools fit a job – name, one-line purpose and compact arguments, best first – out of
-// what the agent may use in this mode on its engine (the registry's specsFor with the calling engine's audience,
-// read from the dispatcher's live activity; unknown → tools without an audience). A full tool name answers that
-// tool's whole description and argument schema. Ranking: the name's parts, a short keyword index per tool family and
-// the description's words.
-// tools.call runs one of those tools: the registry unwraps it (registry.ts call) and runs the target through its own
-// pipeline under the target's name and this call's id, so validation, the journal
-// (real name), the ledger and the result are exactly a direct call's. A target run this way joins the agent's direct
-// offer in this chat at the next fresh session (tools/learned.ts).
-// B-075: tools.call's `company` runs the target in another company on this PC (kept apart from the target's arguments, so
-// a tool's own `company` stays its own; the registry places it: placement.ts placeCompany); companies.list
+// tools.find / tools.call: the two meta tools beside every core set (tools/core-sets.ts), and the prompt's list of the
+// tools they reach (moreToolsSection: one line per tool – name and the description's first sentence).
+// tools.find answers which tools fit a job, best first, out of what the agent may use in this mode (the registry's
+// specsFor). Its first answer carries what a call needs: the best hit's whole description and argument schema, and
+// the schema of every other hit that is small (else its compact arguments). A full tool name answers that tool's
+// description and schema. Ranking: the name's parts, a short keyword index per tool family, the description's words.
+// tools.call runs one of those tools: the registry unwraps it (registry.ts callThrough) and runs the target under its
+// own name and this call's id, so validation, journal and result are a direct call's; a target that succeeded joins
+// the agent's direct offer at its next fresh session (tools/learned.ts).
+// tools.call's `company` runs the target in another company on this PC (placement.ts placeCompany); companies.list
 // (builtin/companies.ts), which names those companies, is registered with these two.
-// Owns: their wording and argument shapes, the keyword index, the compact argument line and one-line purpose (a tool's
-// first sentence – B-049 F8: lean descriptions must open with a sentence that says what the tool does), the name normalisation (wire
-// names, the hub's mcp__workforce__ prefix), what a tools.call may run (callRefusal) and calledTool for counting.
-// Never: runs a tool itself, offers a tool the mode or engine does not allow, or nests tools.call.
+// A mail query while no mailbox is connected adds one line on where mail tools come from.
+// Owns: their wording and argument shapes, the keyword index, the compact argument line, the one-line purpose (a
+// tool's first sentence), the prompt's tool list, the name normalisation (wire names, the hub's mcp__workforce__
+// prefix), what a tools.call may run (callRefusal) and calledTool for counting.
+// Never: runs a tool itself, offers a tool the mode does not allow, or nests tools.call.
 
 import type { ModeInfo } from '../../../shared/model/knowledge.ts';
 import type { ToolContext, ToolDef, ToolSpec } from '../types.ts';
@@ -23,10 +22,15 @@ import { CALL_TOOL, FIND_TOOL, META_TOOLS, coreNames } from '../core-sets.ts';
 import { learnedTools } from '../learned.ts';
 import { COMPANY_ARG, isRecord } from '../placement.ts';
 import { companyTools } from './companies.ts';
+import { APP_TOOL_PREFIX } from '../../apps/tools-schema.ts';
 import { clip, defineTool, internal } from './util.ts';
 
 const DEFAULT_LIMIT = 6;
 const MAX_LIMIT = 12;
+/** A hit after the first shows its whole schema up to this size (else its compact arguments). */
+const SMALL_SCHEMA = 400;
+/** A line in the prompt's tool list names what the tool does in at most this many characters. */
+const BRIEF_CHARS = 100;
 const HUB_PREFIX = 'mcp__workforce__';
 
 /** A short keyword index: a family prefix ('schedules.') or a full name → words people use for that work. */
@@ -34,13 +38,14 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'schedules.': 'schedule later remind reminder recurring routine repeat daily weekly timer follow-up',
   'calendar.': 'calendar appointment meeting event free slot day block agenda move reschedule remove',
   'todos.': 'todo to-do prepare errand',
-  'agents.': 'agent colleague team hire staff org role delegate handoff',
+  'agents.': 'agent colleague team hire staff org role',
   'agents.split': 'split parallel fork worker subtask fan-out pipeline verify ultra', // B-057
   'chat.': 'chat message conversation post channel notes members invite direct dm edit delete archive reply',
   'people.': 'people person colleague employee human staff directory coworker',
-  'tasks.': 'task work assign claim inbox done finish status subscribe owner',
-  'knowledge.': 'memory remember recall note fact preference source document',
-  'skills.': 'skill procedure instructions how-to import',
+  'tasks.': 'task work give delegate handoff hand over assign ask person question wait done finish drop status owner',
+  'knowledge.': 'memory recall note fact preference source document skill procedure instructions how-to reference style example wrote person voice tone library open load',
+  'memory.': 'memory remember note fact preference pin pinned forget',
+  'skills.': 'skill procedure instructions how-to save write',
   'media.': 'image picture photo video audio sound music speech voice transcribe generate draw clip',
   'browser.': 'browser website page site click form login sign-in tab download',
   'computer.': 'screen desktop window mouse keyboard click app gui',
@@ -51,9 +56,9 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'secrets.delete': 'delete remove clear passwords logins', // B-075
   'spend.': 'money budget purchase payment receipt invoice cost',
   'files.': 'file folder read write directory path',
-  'shell.': 'terminal command run script bash powershell cmd console linked pc remote', // 04.11.2026: a linked PC's terminal for every engine
+  'files.write': 'save create append binary bytes base64 image screenshot',
+  'shell.': 'terminal command run script bash powershell cmd console linked pc remote secret env environment',
   'web.': 'web internet search url page online',
-  'references.': 'reference style example wrote person voice tone',
   'models.': 'model llm compare stronger cheaper',
   'devices.': 'pc device linked computer transfer send fetch',
   'modes.': 'mode specialist',
@@ -61,7 +66,7 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'spaces.': 'space area branch brand private', // B-075: "company" finds companies.list – a space is an area inside one company
   'companies.': 'company firm firma profile other', // B-075: the companies on this PC; tools.call with company acts in one
   decide: 'choose choice pick option decision',
-  'human.ask': 'ask person human question form confirm',
+  'chat.call': 'call ring phone talk voice speak', // B-081
   'ui.help': 'rich answer block chart table mini-app widget',
   'feedback.report': 'bug idea problem report',
 };
@@ -104,7 +109,7 @@ function modeOf(ctx: ToolContext): ModeInfo | undefined {
   try { return ctx.services.modes.get(ctx.mode); } catch { return undefined; }
 }
 
-/** The calling engine's audience (the run's live activity); undefined when unknown – then only tools without an audience. */
+/** The calling engine (the run's live activity) – its direct offer; undefined when unknown. */
 function engineOf(ctx: ToolContext): { ownTools: boolean; via: 'mcp' | 'native' } | undefined {
   try {
     const id = ctx.services.dispatcher?.activity?.().find((entry) => entry.runId === ctx.runId)?.engine;
@@ -149,8 +154,11 @@ export function compactArgs(schema: Record<string, unknown>): string {
   return parts.length ? clip(parts.join(', '), 300) : 'none';
 }
 
-/** The one-line purpose: the description's first sentence ("e.g." / "i.e." do not end it), clipped. */
-export const purpose = (description: string): string => clip(description.split(/(?<=[.!?])(?<!\b(?:e\.g|i\.e)\.)\s/)[0]?.trim() ?? '', 160);
+/** The description's first sentence ("e.g." / "i.e." do not end it). */
+const firstSentence = (description: string): string => description.split(/(?<=[.!?])(?<!\b(?:e\.g|i\.e)\.)\s/)[0]?.trim() ?? '';
+
+/** The one-line purpose: the first sentence, clipped. */
+export const purpose = (description: string): string => clip(firstSentence(description), 160);
 
 function keywordsOf(name: string): string[] {
   const family = `${name.split('.')[0]}.`;
@@ -174,9 +182,17 @@ export function rankTools(specs: readonly ToolSpec[], query: string, limit: numb
 /** The names this agent is offered directly here (its core set and learned tools). */
 function directNames(ctx: ToolContext, mode: ModeInfo): Set<string> {
   const names = coreNames(mode, engineOf(ctx));
-  try { for (const name of learnedTools(ctx.services.db, ctx.agent.id, ctx.conversationId ?? ctx.split?.parentConversationId)) names.add(name); } catch { /* core set only */ } // B-057: a split's list is its parent chat's
+  try { for (const name of learnedTools(ctx.services.db, ctx.agent.id)) names.add(name); } catch { /* core set only */ }
   return names;
 }
+
+/** B-080 (live 06.–08.11.: mail queries found chat and device tools while no mailbox was connected): a mail query names where my mail tools come from. */
+const MAIL = /\b(e-?mails?|mail|mailbox|smtp|imap|inbox|bounces?|postfach)\b/i;
+
+/** The mail line – only for a mail query and only while no app.<id>.send is usable here, so it never reads as a setup step (G1). */
+export const mailHint = (query: string, usable: readonly ToolSpec[]): string => MAIL.test(query) && !usable.some((spec) => /^app\.[^.]+\.send$/.test(spec.name))
+  ? 'My mail tools (app.<name>.send, reply, search, read) come from a mailbox in <data>/connectors/mail.json – address plus password as secret://<id>, skill connect-apps; it connects within a second, and its Sent folder then holds every mail I send.'
+  : '';
 
 function families(specs: readonly ToolSpec[]): string {
   const counts = new Map<string, number>();
@@ -184,12 +200,43 @@ function families(specs: readonly ToolSpec[]): string {
   return [...counts].map(([family, count]) => (count > 1 ? `${family}.* (${count})` : [...specs].find((spec) => spec.name.split('.')[0] === family)!.name)).join(', ');
 }
 
+/** The prompt list's line text: the description's first sentence without its asides in parentheses, cut at a word. */
+export function brief(description: string): string {
+  const sentence = firstSentence(description).replace(/\s*\([^()]*\)/g, '').replace(/[.!?]$/, '');
+  if (sentence.length <= BRIEF_CHARS) return sentence;
+  const cut = sentence.slice(0, BRIEF_CHARS);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), BRIEF_CHARS / 2)).replace(/[\s,;:–-]+$/, '')}…`;
+}
+
+export const MORE_TOOLS_HEADER = '## More tools (tools.call runs one; tools.find shows its full arguments)';
+
+/** A connected app's tool (app.<id>.<tool>): it comes and goes with the app, so the volatile apps line names it. */
+const appTool = (name: string): boolean => name.startsWith(APP_TOOL_PREFIX) && name.split('.').length > 2;
+
+/**
+ * The prompt's list of every tool `usable` holds beyond the `direct` offer: one line per tool family, each tool by
+ * name and its description's first sentence (brief), so the agent knows what exists without a search. '' where tools.call is
+ * not offered or nothing is left. Sorted, so the same tools give the same text.
+ */
+export function moreToolsSection(usable: readonly ToolSpec[], direct: ReadonlySet<string>): string {
+  if (!direct.has(CALL_TOOL)) return '';
+  const more = usable.filter((spec) => !direct.has(spec.name) && !META_TOOLS.includes(spec.name) && !appTool(spec.name))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  if (!more.length) return '';
+  const byFamily = new Map<string, string[]>();
+  for (const spec of more) {
+    const family = spec.name.split('.')[0];
+    byFamily.set(family, [...(byFamily.get(family) ?? []), `${spec.name} – ${brief(spec.description)}`]);
+  }
+  return [MORE_TOOLS_HEADER, ...[...byFamily.values()].map((tools) => tools.join(' · '))].join('\n');
+}
+
 const find = defineTool<{ query: string; limit?: number }>({
   name: FIND_TOOL,
-  description: 'Find tools beyond my list: describe the job, or give a tool name for its full arguments (* = required); run one with tools.call.',
+  description: "Gives a tool's full arguments by its name, or finds tools for a job.",
   inputSchema: {
     type: 'object',
-    properties: { query: { type: 'string', minLength: 1, maxLength: 300 }, limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT } },
+    properties: { query: { type: 'string', minLength: 1, maxLength: 300, description: 'A tool name, or the job in words.' }, limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT } },
     required: ['query'], additionalProperties: false,
   },
   category: 'read',
@@ -199,26 +246,33 @@ const find = defineTool<{ query: string; limit?: number }>({
     const usable = usableSpecs(ctx, mode);
     if (!mode || !usable) return failure('My tools cannot be listed right now.');
     const exact = usable.find((spec) => spec.name === normalizeName(args.query));
+    const direct = () => directNames(ctx, mode);
     if (exact) {
-      return text([`${exact.name} – ${exact.description}`, `Args (* = required): ${compactArgs(exact.inputSchema)}`, `Schema: ${JSON.stringify(exact.inputSchema)}`,
-        directNames(ctx, mode).has(exact.name) ? 'It is in my list: I call it directly.' : `Run it with tools.call {"name": "${exact.name}", "args": {…}}.`].join('\n'));
+      return text([`${exact.name} – ${exact.description}`, `Arguments: ${JSON.stringify(exact.inputSchema)}`,
+        direct().has(exact.name) ? 'It is in my list: I call it directly.' : `I run it with tools.call {"name": "${exact.name}", "args": {…}}.`].join('\n'));
     }
     const found = rankTools(usable, args.query, args.limit ?? DEFAULT_LIMIT);
-    if (!found.length) return text(`Nothing fits "${clip(args.query, 80)}". I can use these here: ${families(usable)}. Ask with other words or a tool name.`);
-    const direct = directNames(ctx, mode);
-    const lines = found.map((spec) => `- ${spec.name}${direct.has(spec.name) ? ' (in my list)' : ''}: ${purpose(spec.description)} Args: ${compactArgs(spec.inputSchema)}`);
-    return text([`Tools for "${clip(args.query, 80)}" – run one with tools.call {"name": …, "args": {…}}; a name as query shows its full arguments:`, ...lines].join('\n'));
+    const mail = mailHint(args.query, usable);
+    if (!found.length) return text([`Nothing fits "${clip(args.query, 80)}". I can use these here: ${families(usable)}. Ask with other words or a tool name.`, mail].filter(Boolean).join('\n'));
+    const listed = direct();
+    const lines = found.map((spec, index) => {
+      const head = `- ${spec.name}${listed.has(spec.name) ? ' (in my list)' : ''}:`;
+      const schema = JSON.stringify(spec.inputSchema);
+      if (index === 0) return `${head} ${spec.description}\n  Arguments: ${schema}`;
+      return `${head} ${purpose(spec.description)} Arguments: ${schema.length <= SMALL_SCHEMA ? schema : `${compactArgs(spec.inputSchema)} (* = required; its name as query gives the schema)`}`;
+    });
+    return text([`Tools for "${clip(args.query, 80)}", best first – tools.call {"name": …, "args": {…}} runs one:`, ...lines, mail].filter(Boolean).join('\n'));
   },
 });
 
 const call = defineTool<{ name: string; args?: Record<string, unknown>; company?: string }>({
   name: CALL_TOOL,
-  description: 'Run a tool that is not in my list: name and args as tools.find gives them. It runs just as a direct call does; with company, in that other company on this PC.',
+  description: 'Runs a tool from my More tools list, just as a direct call.',
   inputSchema: {
     type: 'object',
     properties: {
       name: { type: 'string', minLength: 1, maxLength: 120 }, args: { type: 'object' },
-      [COMPANY_ARG]: { type: 'string', minLength: 1, maxLength: 120, description: 'another company on this PC to run it in: its name or folder from companies.list' }, // B-075
+      [COMPANY_ARG]: { type: 'string', minLength: 1, maxLength: 120, description: 'Another company on this PC (companies.list).' },
     },
     required: ['name'], additionalProperties: false,
   },

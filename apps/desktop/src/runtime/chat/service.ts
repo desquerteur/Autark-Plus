@@ -14,9 +14,8 @@
 // replacing a chat picture) hands the files it held to the store's blob clean-up
 // (chat/reclaim.ts; files/cleanup.ts removes only what nothing else uses), and the start-up
 // reconcile also runs the clean-up's orphan reconcile. B-047 D4 (publishing): a run's answer is
-// finished in its streaming placeholder or posted at the end without one (chat/publish-message.ts:
-// moved to the end when no longer last, quiet unless it @mentions the person, B-050 K4 its level);
-// chat.send posts carry their run's runId. B-050: a human text message carries the addressed agent's
+// posted at the end of the chat (chat/publish-message.ts: quiet unless it @mentions the person, B-050 K4 its level);
+// an agent's <chat> block posts carry their run's runId (agents/chat-out.ts). B-050: a human text message carries the addressed agent's
 // model choice as meta.modelHint (chat/sticky-model.ts, K6), and the default 1:1 (settings.direct,
 // chat/direct.ts) never takes a title from its first message (K2). A draft change never does: the
 // composer clears its draft right before messages.send, so a file leaving the draft may be on
@@ -24,10 +23,8 @@
 // B-078 D7: a 1:1 stays two – the owner's line in two agents' 1:1 is posted without joining it (members-change.ts
 // refuses every add). B-078 sub-chats (chat/children.ts): a deleted chat takes its threads along and puts its sub-chats
 // back on top; a deleted message's thread stays as a plain sub-chat of that chat (keepThreadOf).
-// B-075: a run's row is its live status – its streamed body and meta.live are written into it (chat/streaming.ts,
-// throttled; fed by chat/live-row.ts) and the chat summaries read who works from such rows; a run whose answer is kept
-// internal gets a silent row (beginAgentMessage `silent`: a quiet seq, no text – only its work). Reads return the rows
-// as stored.
+// 13.11.2026: no run is a row in the history – who works for a chat is its live bar (chat/live.ts, the summary's `live`),
+// and what a run says reaches a chat as a plain message carrying its runId.
 // Owns: every write to conversations/members/messages/drafts and the chat events.
 // Never: decides who gets woken (DeliveryService does, after commit), never copies message
 // text into other tables (tasks reference messages by id) and never removes a file itself.
@@ -52,13 +49,12 @@ import { deleteMessage, demoteMessage, editMessage } from './message-edits.ts';
 import { pickLead } from './lead.ts';
 import { changeMembers } from './members-change.ts';
 import { mentionCandidates } from './mentions.ts';
-import { finishAgentMessage, postAgentMessage, type AnswerFinal } from './publish-message.ts';
+import { postAgentMessage, type AnswerFinal } from './publish-message.ts';
 import { canReclaim, chatFileIds, messageFileIds, queueReclaim } from './reclaim.ts';
-import { withSpeech } from './speech-meta.ts';
+import { unmarked, withSpeech } from './speech-meta.ts';
 import { addressedAgents, applyStickyModel, cleanSettings, modelTag } from './sticky-model.ts';
 import { buildSummaries, isHidden } from './summary.ts';
-import { StreamingRows } from './streaming.ts';
-import { feedLiveRows } from './live-row.ts';
+import { ChatLive } from './live.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import '../contracts/people.ts';
 
@@ -71,17 +67,15 @@ export class ChatServiceImpl implements ChatService {
   private readonly s: ChatDeps;
   private readonly convs: ConversationRepo;
   private readonly msgs: MessageRepo;
-  private readonly streams: StreamingRows;
+  private readonly live: ChatLive;
   private readonly unwatch: () => void;
-  private readonly unfeed: () => void;
 
-  /** `liveGapMs`: at most one write of a streaming row per that many ms (chat/streaming.ts; tests pass 0). */
+  /** `liveGapMs`: at most one announcement of a chat's live bar per that many ms (chat/live.ts; tests pass 0). */
   constructor(deps: ChatDeps, options: { liveGapMs?: number } = {}) {
     this.s = deps;
     this.convs = new ConversationRepo(deps.db);
     this.msgs = new MessageRepo(deps.db);
-    this.streams = new StreamingRows({ msgs: this.msgs, bus: deps.bus, written: (message) => this.emitConversation(message.conversationId) }, options.liveGapMs);
-    this.unfeed = feedLiveRows(deps.bus, this.streams, (message, error) => deps.log?.warn(message, { error: String(error) }));
+    this.live = new ChatLive(deps.bus, (id) => this.emitConversation(id), options.liveGapMs);
     this.unwatch = watchHumanTodos(this.core());
   }
 
@@ -200,7 +194,7 @@ export class ChatServiceImpl implements ChatService {
       state: 'final',
       silent: input.silent ?? input.kind === 'status',
       // SM8: a dictated/spoken human message carries the recognizer's uncertainty (validated, capped).
-      meta: authorKind === 'human' ? withSpeech(input.meta ?? {}, input.speech) : input.meta ?? {},
+      meta: authorKind === 'human' ? withSpeech(input.meta ?? {}, input.speech, input.body, input.marks) : input.meta ?? {}, // B-082: + meta.marks
       createdAt: now,
     };
     if (replyTo) message.replyTo = replyTo.id;
@@ -248,38 +242,10 @@ export class ChatServiceImpl implements ChatService {
     });
   }
 
-  /** B-075: `silent` – the row only shows the run's work (chat/live-row.ts); its finish decides what it becomes. */
-  beginAgentMessage(conversationId: string, agentId: string, runId: string, meta: MessageMeta = {}, options: { silent?: boolean } = {}): Message {
-    const conversation = this.require(conversationId);
-    const now = this.s.clock.now();
-    const message: Message = {
-      id: newId('msg', now), conversationId, seq: 0, authorId: agentId, authorKind: 'agent', kind: 'text', body: '',
-      attachments: [], mentions: [], priority: 'normal', runId, state: 'streaming', silent: options.silent === true, meta, createdAt: now,
-    };
-    this.s.db.tx(() => {
-      message.seq = this.convs.nextSeq(conversation.id, now, { quiet: message.silent }); // a silent row moves no chat up the list
-      this.msgs.insert(message);
-    });
-    this.streams.begin(message);
-    this.s.bus.emit('message.created', message);
-    this.emitConversation(conversationId);
-    return message;
-  }
-
-  appendDelta(messageId: string, text: string): void {
-    this.streams.append(messageId, text);
-  }
-
   /**
    * `files` (EngineTurnResult.files) are stored and attached before the message is announced; `silent`
-   * and `priority` set its level (chat/publish-message.ts: quiet unless it @mentions the person; moved
-   * to the end when no longer the chat's last message).
+   * and `priority` set its level, `state` a run that failed or was stopped (chat/publish-message.ts).
    */
-  finishAgentMessage(messageId: string, final: AnswerFinal & { state: Message['state'] }): Message {
-    const message = this.requireMessage(messageId);
-    return finishAgentMessage(this.core(), message, final, this.mentionsOf(message.conversationId, message.authorId, final.body));
-  }
-
   postAgentMessage(conversationId: string, agentId: string, runId: string, final: AnswerFinal): Message {
     this.require(conversationId);
     return postAgentMessage(this.core(), conversationId, agentId, runId, final, this.mentionsOf(conversationId, agentId, final.body));
@@ -292,7 +258,7 @@ export class ChatServiceImpl implements ChatService {
 
   /** C6: the person edits only their own text messages, an agent only its own (chat/message-edits.ts). */
   edit(messageId: string, body: string, by: string): Message {
-    return editMessage(this.core(), this.requireMessage(messageId), body, by);
+    return editMessage(this.core(), unmarked(this.requireMessage(messageId), body), body, by); // B-082: new words, no old marks
   }
 
   demote(messageId: string): void {
@@ -343,19 +309,18 @@ export class ChatServiceImpl implements ChatService {
 
   dispose(): void {
     this.unwatch();
-    this.unfeed();
-    this.streams.dispose();
+    this.live.dispose();
   }
 
   // ------------------------------------------------------------- internals
 
   private repos() {
-    return { conversations: this.convs, messages: this.msgs };
+    return { conversations: this.convs, messages: this.msgs, live: (id: string) => this.live.of(id) };
   }
 
   private core(): ChatCore {
     return {
-      s: this.s, convs: this.convs, msgs: this.msgs, streams: this.streams, emitConversation: (id) => this.emitConversation(id), deliver: (message) => this.deliver(message),
+      s: this.s, convs: this.convs, msgs: this.msgs, emitConversation: (id) => this.emitConversation(id), deliver: (message) => this.deliver(message),
       status: (id, line) => { this.status(id, line); }, nameOf: (id) => this.nameOf(id),
     };
   }

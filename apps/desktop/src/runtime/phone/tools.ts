@@ -17,20 +17,22 @@ import type { PhoneDriver, PhoneStepOptions, PhoneWireless } from './driver.ts';
 
 type Phone = PhoneDriver & PhoneWireless;
 
-const SERIAL = { type: 'string', maxLength: 120, description: 'device serial from phone.devices (only needed with several phones)' };
+const SERIAL = { type: 'string', maxLength: 120, description: 'Needed only with several phones (phone.devices).' };
 const VERIFY = 'Not verified – I read phone.ui_tree before the next step.';
-const ADDRESS = { type: 'string', minLength: 3, maxLength: 260, description: 'host:port shown on the phone, e.g. 192.168.1.20:37099' };
+/** After a secret went to the phone: the phone has the value; whatever I read back (ui_tree, a screenshot's text) shows it as its handle. */
+const MASKED = 'The phone got the stored value; phone.ui_tree shows it as its secret:// handle (masked), not as typed text.';
+const ADDRESS = { type: 'string', minLength: 3, maxLength: 260, description: 'host:port shown on the phone.' };
 const short = (value: unknown) => String(value ?? '').slice(0, 80);
 
 const where = (ctx: ToolContext) => ctx.deviceId ?? 'this PC';
 const phone = (summary: string, ctx: ToolContext, reversible: boolean) => ({ summary, resource: where(ctx), reversible, external: false });
 
 export function phoneTools(adb: Phone): ToolDef[] {
-  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal });
+  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal, job: ctx.runId });
 
   const devices = defineTool<Record<string, never>>({
     name: 'phone.devices',
-    description: "The Android phones I can use from this PC: the person's phone with the Autark app (phone use, no ADB – state 'phone use off' until they turn it on), phones over ADB (USB or wireless debugging) with their state, and phones nearby that offer ADB pairing.",
+    description: "Lists the Android phones I can use from this PC, with their state. The person's phone with the Autark app, phones over ADB, and phones nearby offering pairing.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('List connected phones', ctx, true),
@@ -48,10 +50,10 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const pair = defineTool<{ address: string; code: string; connect?: string }>({
     name: 'phone.pair',
-    description: "Pair an Android phone over wireless debugging: the IP address:port and 6-digit code from the phone's \"Pair device with pairing code\" dialog, then connect (connect = the address under Wireless debugging, else found nearby).",
+    description: 'Pairs an Android phone over wireless debugging with its pairing code, then connects.',
     inputSchema: {
       type: 'object',
-      properties: { address: ADDRESS, code: { type: 'string', minLength: 6, maxLength: 20, description: 'the 6-digit pairing code' }, connect: ADDRESS },
+      properties: { address: { ...ADDRESS, description: 'host:port from the pairing dialog.' }, code: { type: 'string', minLength: 6, maxLength: 20 }, connect: { ...ADDRESS, description: 'host:port under Wireless debugging; default found nearby.' } },
       required: ['address', 'code'],
       additionalProperties: false,
     },
@@ -68,7 +70,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const connect = defineTool<{ address: string }>({
     name: 'phone.connect',
-    description: 'Connect to an already paired Android phone over wireless debugging (the IP address:port shown under Wireless debugging; it changes after a restart).',
+    description: 'Connects to an already paired phone over wireless debugging. Its address under Wireless debugging changes after a restart.',
     inputSchema: { type: 'object', properties: { address: ADDRESS }, required: ['address'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Connect to the Android phone at ${short(args.address)} from ${where(ctx)}`, ctx, false), // any host:port
@@ -83,8 +85,8 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const disconnect = defineTool<{ serial: string }>({
     name: 'phone.disconnect',
-    description: 'Disconnect a phone on wireless debugging (its serial from phone.devices, e.g. 192.168.1.20:37099) – when the task on the phone is done.',
-    inputSchema: { type: 'object', properties: { serial: { ...SERIAL, minLength: 3, description: 'serial of a wireless phone from phone.devices' } }, required: ['serial'], additionalProperties: false },
+    description: 'Disconnects a phone on wireless debugging.',
+    inputSchema: { type: 'object', properties: { serial: { ...SERIAL, minLength: 3, description: 'From phone.devices.' } }, required: ['serial'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Disconnect the Android phone ${short(args.serial)} from ${where(ctx)}`, ctx, true),
     async run(args) {
@@ -98,7 +100,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const screenshot = defineTool<{ serial?: string }>({
     name: 'phone.screenshot',
-    description: 'Screenshot of the phone screen (downscaled; the text gives the factor to phone pixels). Prefer phone.ui_tree to find elements.',
+    description: 'Takes a screenshot of the phone screen; the text gives the factor to phone pixels. Elements I find with phone.ui_tree.',
     inputSchema: { type: 'object', properties: { serial: SERIAL }, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('Screenshot of the phone', ctx, true),
@@ -111,7 +113,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const uiTree = defineTool<{ serial?: string }>({
     name: 'phone.ui_tree',
-    description: 'Elements on the phone screen (uiautomator): class, text, description, id, tap/scroll ability and the centre point to tap.',
+    description: 'Lists the elements on the phone screen with the point to tap each.',
     inputSchema: { type: 'object', properties: { serial: SERIAL }, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('Read the phone screen', ctx, true),
@@ -125,7 +127,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const tap = defineTool<{ x: number; y: number; serial?: string }>({
     name: 'phone.tap',
-    description: 'Tap at phone pixel coordinates (use the @x,y of an element from phone.ui_tree).',
+    description: "Taps at phone pixel coordinates, an element's @x,y from phone.ui_tree.",
     inputSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, serial: SERIAL }, required: ['x', 'y'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Tap the phone at ${args.x},${args.y}`, ctx, false),
@@ -138,10 +140,10 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const swipe = defineTool<{ x1: number; y1: number; x2: number; y2: number; durationMs?: number; serial?: string }>({
     name: 'phone.swipe',
-    description: 'Swipe on the phone (scroll a list: from lower to upper point, 300–500 ms). Through the Autark app the path is a light curve with a little jitter, like a finger.',
+    description: 'Swipes on the phone from one point to another, e.g. upwards to scroll.',
     inputSchema: {
       type: 'object',
-      properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, durationMs: { type: 'integer', minimum: 50, maximum: 10_000 }, serial: SERIAL },
+      properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, durationMs: { type: 'integer', minimum: 50, maximum: 10_000, description: '300–500 ms scrolls a list.' }, serial: SERIAL },
       required: ['x1', 'y1', 'x2', 'y2'],
       additionalProperties: false,
     },
@@ -155,22 +157,22 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const type = defineTool<{ text: string; serial?: string }>({
     name: 'phone.type',
-    description: 'Type text into the focused field on the phone (tap the field first). Over ADB only ASCII; through the Autark app any text. Newlines press Enter.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 2000 }, serial: SERIAL }, required: ['text'], additionalProperties: false },
+    description: 'Types text into the focused field on the phone. Over ADB only ASCII, through the Autark app any text.',
+    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 2000, description: 'Newlines press Enter.' }, serial: SERIAL }, required: ['text'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Type ${args.text.length} characters on the phone`, ctx, false),
     async run(args, ctx) {
       ctx.status('typing on the phone');
       const typed = await typedText(ctx, args.text); // secret://<id> → the value, now (secrets/handles.ts)
       await adb.type(args.serial, typed.text, step(ctx));
-      return text(`Typed ${args.text.length} characters. ${VERIFY}`);
+      return text(`Typed ${args.text.length} characters.${typed.text === args.text ? '' : ` ${MASKED}`} ${VERIFY}`);
     },
   });
 
   const key = defineTool<{ key: string; serial?: string }>({
     name: 'phone.key',
-    description: 'Press a phone key: back, home, recents, enter, delete, tab, escape, up/down/left/right, page_up/page_down, wakeup.',
-    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40 }, serial: SERIAL }, required: ['key'], additionalProperties: false },
+    description: 'Presses a phone key such as back, home, recents or enter.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40, description: 'back, home, recents, enter, delete, tab, escape, arrows, page_up/page_down or wakeup.' }, serial: SERIAL }, required: ['key'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Press ${short(args.key)} on the phone`, ctx, movingKey(args.key)),
     async run(args, ctx) {
@@ -181,18 +183,20 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const open = defineTool<{ url?: string; package?: string; serial?: string }>({
     name: 'phone.open',
-    description: 'Open a link (http/https) or an installed app by package name (e.g. com.whatsapp) on the phone.',
+    description: 'Opens a link or an installed app on the phone.',
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string', maxLength: 4000 }, package: { type: 'string', maxLength: 200 }, serial: SERIAL },
+      properties: { url: { type: 'string', maxLength: 4000, description: 'A private link as its secret:// handle works.' }, package: { type: 'string', maxLength: 200, description: 'e.g. com.whatsapp.' }, serial: SERIAL },
       additionalProperties: false,
     },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Open ${short(args.url ?? args.package)} on the phone`, ctx, false), // a link can start an action in an app
     async run(args, ctx) {
       if (!args.url && !args.package) return failure('Give url or package.');
-      const opened = await adb.open(args.serial, { url: args.url, package: args.package }, step(ctx));
-      return json({ opened, note: VERIFY });
+      const link = args.url === undefined ? undefined : await typedText(ctx, args.url); // a stored private link opens by its handle
+      const opened = await adb.open(args.serial, { url: link?.text, package: args.package }, step(ctx));
+      const named = link !== undefined && link.text !== args.url;
+      return json({ opened: named ? args.url : opened, ...(named ? { masked: MASKED } : {}), note: VERIFY });
     },
   });
 

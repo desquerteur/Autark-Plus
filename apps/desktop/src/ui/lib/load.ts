@@ -20,7 +20,7 @@
 // transport itself – `call` is injected (rpc.call in the app, a fake in unit tests).
 
 import type { MethodName, ParamsOf, ResultOf } from '../../shared/api/methods.ts';
-import type { ConversationSummary } from '../../shared/model/chat.ts';
+import type { Attachment, ConversationSummary } from '../../shared/model/chat.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { Account, UsageSummary } from '../../shared/model/providers.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
@@ -47,7 +47,7 @@ export const CHAT_LIST = { includeHidden: true } as const;
 export const TODO_LIMIT = 200;
 
 /** Task statuses the shell keeps live (open work). */
-export const OPEN_STATUSES: TaskView['status'][] = ['open', 'working', 'waiting', 'needs_you', 'blocked'];
+export const OPEN_STATUSES: TaskView['status'][] = ['open', 'waiting'];
 
 export interface Snapshots {
   settings: Settings;
@@ -63,6 +63,8 @@ export interface Snapshots {
   tasks: TaskView[];
   drafts: Record<string, string>;
   secretDrafts?: Record<string, string[]>;
+  /** B-082: the saved files of a draft (a kept take), only for drafts that have some. */
+  draftFiles?: Record<string, Attachment[]>;
   /** [] when not asked for or refused; undefined when it failed otherwise (keep what is shown). */
   accounts: Account[] | undefined;
   usage: UsageSummary[] | undefined;
@@ -125,5 +127,6 @@ export async function loadSnapshots(options: LoadOptions): Promise<Snapshots> {
   const agents = listed.filter((agent) => agent.archivedAt === undefined);
   const archivedAgents = listed.filter((agent) => agent.archivedAt !== undefined);
   return { settings, chats, agents, archivedAgents, activity, todos, tasks, drafts: uiState.drafts,
-    ...(uiState.secretDrafts ? { secretDrafts: uiState.secretDrafts } : {}), accounts: listOf(accounts), usage: listOf(usage) };
+    ...(uiState.secretDrafts ? { secretDrafts: uiState.secretDrafts } : {}),
+    ...(uiState.draftFiles ? { draftFiles: uiState.draftFiles } : {}), accounts: listOf(accounts), usage: listOf(usage) };
 }

@@ -3,17 +3,19 @@
 // blocks.ts and are registered from here.
 // Owns: param checks, scope rules and the human side of these flows (messages are sent as
 // 'human' – B-050 K4 at a level: normal, important or silent, never both; K6 a `model` is the
-// addressed agent's hint, `pin: true` pins it – chat/sticky-model.ts is the one writer). Phones with
+// addressed agent's hint, `pin: true` pins it – chat/sticky-model.ts is the one writer; B-083: settings.temperatures
+// is the person's temperature suggestion per agent, 0..1). Phones with
 // 'chat' may rename/pin/mute, change members and (un)archive; hiding a chat stays on the PC, and they edit or delete
-// only messages written by the human (never a person's message). Deleting a chat stays owner-only. A human mode
-// switch (settings.mode) posts one quiet 'mode_switched' line (SES2). B-078: settings.parentId places a chat under
+// only messages written by the human (never a person's message). Deleting a chat stays owner-only. A chat has no mode
+// of its own (13.11.2026: the mode belongs to the agent) – settings.mode is not written. B-078: settings.parentId places a chat under
 // another one (null: back on top; chat/children.ts checks it) and chats.thread finds or opens the thread on a message.
+// B-085: messages.send from an agent's own wf (owner scope with agentId) posts as that agent (sendAsAgent).
 // Never: business logic – it delegates to the chat service, dispatcher, wake queue and scheduler.
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { excerpt } from '../../../shared/text/chat-names.ts';
-import type { Attachment, Conversation, ConversationSettings, SendMessageInput } from '../../../shared/model/chat.ts';
+import type { Attachment, ConversationSettings, Message, SendMessageInput } from '../../../shared/model/chat.ts';
 import type { Effort } from '../../../shared/model/providers.ts';
 import type { ScheduleSpec } from '../../../shared/model/tasks.ts';
 import { HINT_ID } from '../../../shared/model/model-guide.ts';
@@ -33,13 +35,14 @@ import { registerExternalAgents } from '../../bridges/external-rpc.ts'; // C8
 import { attachedSecrets } from '../../secrets/chat-capture.ts';
 import { callLogOf, talkerOf } from '../../calls/wiring.ts';
 import { callDevice } from './calls.ts';
+import { todos } from '../../agents/chat-out.ts';
 
 const CHAT = { capability: 'chat' } as const;
 const EFFORTS: readonly Effort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 const MAX_BODY = 100_000;
 const MAX_ATTACHMENTS = 20;
 /** Chat settings a client may send. Never 'system': only the runtime marks app-owned chats (C1). */
-const SETTINGS_KEYS = ['notifications', 'sound', 'models', 'efforts', 'mode', 'image', 'hiddenFromList', 'modelHints', 'history', 'parentId'] as const; // modelHints: SG soft model suggestion; history (F-52): what people who join later see
+const SETTINGS_KEYS = ['notifications', 'sound', 'models', 'efforts', 'mode', 'image', 'hiddenFromList', 'modelHints', 'temperatures', 'history', 'parentId'] as const; // modelHints: SG soft model suggestion; temperatures (B-083): the person's temperature suggestion per agent; history (F-52): what people who join later see
 
 /** Chat settings a phone/browser may change depend on its tier (the owner may change all). */
 function checkDeviceSettings(ctx: HandlerContext, settings: Partial<ConversationSettings> | undefined): void {
@@ -93,7 +96,7 @@ function settingsOf(value: unknown): Partial<ConversationSettings> | undefined {
   if (out.notifications !== undefined) optOneOf(out, 'notifications', ['default', 'all', 'mentions', 'off']);
   if (out.sound !== undefined) optBool(out, 'sound');
   if (out.hiddenFromList !== undefined) optBool(out, 'hiddenFromList');
-  if (out.mode !== undefined) text(out, 'mode', { max: 60 });
+  delete out.mode; // the mode is the agent's own (agents.update), never a chat's
   if (out.image !== undefined) text(out, 'image', { max: 120 });
   if (out.history !== undefined) optOneOf(out, 'history', ['join', 'full']);
   if (out.parentId !== undefined) id(out, 'parentId');
@@ -103,6 +106,11 @@ function settingsOf(value: unknown): Partial<ConversationSettings> | undefined {
     for (const [agentId, choice] of Object.entries(record)) {
       if (typeof choice !== 'string' || choice.length > 200 || agentId.length > 128) bad(`settings.${key}`, 'agent id → model/effort text');
       if (key === 'modelHints' && !HINT_ID.test(choice)) bad('settings.modelHints', 'agent id → model id'); // SG: it reaches prompts
+    }
+  }
+  if (out.temperatures !== undefined) { // B-083: agent id → 0..1 (the composer's suggestion; routing/policies.ts chatChoice)
+    for (const [agentId, value] of Object.entries(obj(out, 'temperatures'))) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1 || agentId.length > 128) bad('settings.temperatures', 'agent id → a number 0..1');
     }
   }
   return out as Partial<ConversationSettings>;
@@ -126,16 +134,6 @@ export function modelOf(o: Obj): string | undefined {
   return model;
 }
 
-/** SES2: a human mode switch is one quiet line; the agents' next turns renew their sessions. */
-function modeSwitched(services: RuntimeServices, chat: Conversation, before: string | undefined): void {
-  const to = chat.settings.mode;
-  if ((to ?? '') === (before ?? '')) return;
-  let name = to;
-  try { if (to) name = services.modes.get(to).name || to; } catch { /* unknown mode: its key */ }
-  const text = name ? `Switched to ${name} mode` : 'Mode reset to the agent default';
-  try { services.chats.status(chat.id, { type: 'mode_switched', text, details: { from: before, to, by: HUMAN_ID } }); } catch { /* cosmetic */ }
-}
-
 /** Agents to stop in a chat: running there now (dispatcher), or still streaming a message. */
 function runningIn(services: RuntimeServices, conversationId: string, agentId?: string): string[] {
   const out = new Set<string>();
@@ -147,6 +145,31 @@ function runningIn(services: RuntimeServices, conversationId: string, agentId?: 
   }
   if (agentId) out.add(agentId);
   return [...out];
+}
+
+/** What only the person's lines carry: an agent's own wf sends text, attachments, mentions, a level and replyTo. */
+const PERSON_ONLY = ['model', 'effort', 'pin', 'speech', 'secrets', 'ultra', 'marks'] as const;
+
+/**
+ * B-085: messages.send from an agent's own wf (owner scope with agentId, http/ws.ts) posts as that agent – its member
+ * rules, no self-wake – under its running main turn, else under no run; its ask blocks become to-dos (agents/chat-out.ts).
+ */
+function sendAsAgent(ctx: HandlerContext, agentId: string, conversationId: string, o: Obj): Message {
+  const { services } = ctx;
+  const agent = services.org.get(agentId);
+  if (!agent || agent.archivedAt !== undefined) throw new WorkforceError('forbidden', 'This agent is archived or gone.', { details: { agentId } });
+  for (const key of PERSON_ONLY) if (o[key] !== undefined) bad(key, "no value on an agent's line (text, attachments, mentions, priority or silent, replyTo)");
+  const body = text(o, 'body', { max: 60_000, allowEmpty: true, multiline: true });
+  if (!body.trim()) bad('body', 'text'); // files go with text
+  const attachments = attachmentsOf(services, o.attachments);
+  const mentions = optMemberIds(o, 'mentions', 20);
+  const runId = services.dispatcher.activity().find((item) => item.agentId === agentId && !item.split)?.runId;
+  const message = services.chats.send({
+    conversationId, body, authorId: agentId, authorKind: 'agent', ...levelOf(o), ...(attachments.length ? { attachments } : {}),
+    ...(mentions?.length ? { mentions } : {}), ...(optId(o, 'replyTo') ? { replyTo: optId(o, 'replyTo') } : {}), ...(runId ? { runId } : {}),
+  });
+  todos(services, message);
+  return message;
 }
 
 export function register(table: HandlerTable): void {
@@ -174,19 +197,12 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['id', 'title', 'pinned', 'settings']);
     const settings = settingsOf(o.settings);
     checkDeviceSettings(ctx, settings);
-    // An unknown mode key would switch to nothing and still post "Switched to … mode".
-    if (settings?.mode !== undefined) {
-      try { ctx.services.modes.get(settings.mode); } catch { bad('settings.mode', 'a known mode key (modes.list)'); }
-    }
     const conversationId = id(o);
-    const modeBefore = settings && 'mode' in settings ? chatOrThrow(ctx.services, conversationId).settings.mode : undefined;
     if (settings && 'parentId' in settings) { // B-078: checked and written by chat/children.ts, never as a plain setting
       setParent(ctx.services, conversationId, settings.parentId ?? null, HUMAN_ID);
       delete settings.parentId;
     }
-    const updated = ctx.services.chats.update(conversationId, { title: optText(o, 'title', { max: 120 }), pinned: optBool(o, 'pinned'), settings }, HUMAN_ID);
-    if (settings && 'mode' in settings) modeSwitched(ctx.services, updated, modeBefore);
-    return updated;
+    return ctx.services.chats.update(conversationId, { title: optText(o, 'title', { max: 120 }), pinned: optBool(o, 'pinned'), settings }, HUMAN_ID);
   }, CHAT);
   table.add('chats.thread', (params, ctx) => { // B-078: the thread on a message (found, or opened with its chat's members)
     const o = input(params);
@@ -244,9 +260,10 @@ export function register(table: HandlerTable): void {
   }, CHAT);
   table.add('messages.send', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'model', 'effort', 'pin', 'clientId', 'speech', 'secrets', 'ultra']);
+    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'model', 'effort', 'pin', 'clientId', 'speech', 'secrets', 'ultra', 'marks']);
     const conversationId = id(o, 'conversationId');
     const chat = chatOrThrow(ctx.services, conversationId);
+    if (ctx.scope.kind === 'owner' && ctx.scope.agentId) return sendAsAgent(ctx, ctx.scope.agentId, conversationId, o); // B-085: an agent's own wf
     const body = text(o, 'body', { max: MAX_BODY, allowEmpty: true, multiline: true });
     const attachments = attachmentsOf(ctx.services, o.attachments);
     const secrets = attachedSecrets(ctx.services, conversationId, o.secrets);
@@ -264,12 +281,13 @@ export function register(table: HandlerTable): void {
     const log = device ? callLogOf(ctx.services) : undefined;
     const callId = device && log ? log.start(conversationId, device, ctx.signal, typeof speech?.call === 'string' ? speech.call : undefined) : undefined;
     const talker = callId && body.trim() && !attachments.length && !secrets.length && !mentions?.length && !Object.keys(level).length && model === undefined && !ultra ? talkerOf(ctx.services) : undefined;
-    const talks = talker?.serves(conversationId) ? talker : undefined;
+    const talks = talker?.serves(conversationId, callId) ? talker : undefined; // B-081: as the agent who rang this call
     const message = ctx.services.chats.send({
       conversationId, body, attachments, mentions, ...level, ...(talks ? { silent: true } : {}),
       replyTo: optId(o, 'replyTo'), model, effort: optOneOf(o, 'effort', [...EFFORTS, 'auto']), ...(pin ? { pin } : {}),
       clientId: optText(o, 'clientId', { max: 100 }), authorId: HUMAN_ID, authorKind: 'human',
       speech: o.speech as SendMessageInput['speech'], // SM8: validated and capped by the chat service (chat/speech-meta.ts)
+      marks: o.marks as SendMessageInput['marks'], // B-082: checked against the body there too (cleanMarks)
       meta: { ...(secrets.length ? { secrets } : {}), ...(ultra ? { ultra: true as const } : {}), ...(callId && device ? { call: { id: callId, participant: `device:${device.key}`, name: device.name } } : {}) },
     });
     talks?.heard(message);
@@ -323,7 +341,7 @@ export function register(table: HandlerTable): void {
     const taskId = message.taskId ?? (message.runId ? ctx.services.runs.get(message.runId)?.taskId : undefined);
     wakes.wake({
       agentId: agent.id, reason: 'manual', conversationId: message.conversationId, taskId,
-      note: `The human asked me to try again: my answer ${why}. I continue from where it ended.`, coalesceKey: `retry:${messageId}`,
+      note: `${ctx.services.settings.get().profile.name.trim() || 'The person'} asked me to try again: my answer ${why}.`, coalesceKey: `retry:${messageId}`,
     });
     return { ok: true };
   }, CHAT);

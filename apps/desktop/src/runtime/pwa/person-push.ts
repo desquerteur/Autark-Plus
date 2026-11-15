@@ -1,8 +1,9 @@
-// The one push rule for employees (people of the organisation, 'per_…'): a new message in a chat they are a member
-// of reaches their devices (PushService.sendToPerson – only devices holding that person's live token). Not their own
-// lines, not quiet ones (status lines, silent messages), each message once – when it is final (an agent's answer
-// streams first). B-078 (D5): no phone switch gates it.
-// Owns: that rule. Never: pushes to the owner (notify/service.ts does) or to a person outside the chat.
+// The push rules for employees (people of the organisation, 'per_…'): a new message in a chat they are a member of
+// reaches their devices (PushService.sendToPerson – only devices holding that person's live token) – not their own
+// lines, not quiet ones (status lines, silent messages), each message once, when it is final (an agent's answer
+// streams first); and a task notice for them ('person.notice': work given to them, its due time, the end of work they
+// gave – runtime/tasks/give.ts tell). No phone switch gates it.
+// Owns: those rules. Never: pushes to the owner (notify/service.ts does) or to a person outside the chat.
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Message } from '../../shared/model/chat.ts';
@@ -45,5 +46,8 @@ export function pushPeopleMessages(s: Deps, push: Pick<PushService, 'sendToPerso
   };
   const offCreated = s.bus.on('message.created', onMessage);
   const offUpdated = s.bus.on('message.updated', onMessage);
-  return () => { offCreated(); offUpdated(); };
+  const offNotice = s.bus.on('person.notice', ({ personId, ...message }) => {
+    push.sendToPerson(personId, message).catch((error: unknown) => s.log.warn('push to a person failed', { personId, error: String(error) }));
+  });
+  return () => { offCreated(); offUpdated(); offNotice(); };
 }

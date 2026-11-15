@@ -1,8 +1,9 @@
-// Live setup facts (O2): manager-mode turns carry the '## Team and models (live)' part (agents, accounts, strong
-// models, the models for decisions and search by name – E1: not the app's switches, which read like a setup
-// checklist), no account secrets (email, home, base URL,
-// secret id, limits), failing sources skipped, and the app.status tool (G1: was setup.status) returning the whole '## App status (live)' text –
-// offered by the registry in the '*' modes (manager, general, secretary), hidden by specialist modes (not a core tool).
+// Live setup facts (O2): no turn carries them (E1: they read like a setup checklist) – the app.status tool (G1: was
+// setup.status) returns the whole '## App status (live)' text: agents, accounts, strong models, the models for
+// decisions and search by name, the app's switches; no account secrets (email, home, base URL, secret id, limits),
+// failing sources skipped; offered by the registry in the '*' modes (manager, general, secretary), hidden by specialist
+// modes (not a core tool).
+// B-080: an account names what holds it – its return time or cooling (09.11.2026: each one its own; every plan takes turns).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ import { RESOURCES, fixture, model, route } from './fixture.ts';
 import { GENERAL_MODE, parseMode } from '../../../src/runtime/modes/service.ts';
 import { Registry } from '../../../src/runtime/tools/registry.ts';
 import { BASE_CORE } from '../../../src/runtime/tools/core-sets.ts';
-import { APP_STATUS_HEADER, TEAM_HEADER, collectSetupFacts, renderTeamFacts, setupFactsSection } from '../../../src/runtime/context/setup-facts.ts';
+import { APP_STATUS_HEADER, collectSetupFacts, renderSetupFacts } from '../../../src/runtime/context/setup-facts.ts';
 import { appStatusTools } from '../../../src/runtime/tools/builtin/app-status.ts';
 import { builtinTools } from '../../../src/runtime/tools/builtin/index.ts';
 import { TokenService } from '../../../src/runtime/pwa/tokens.ts';
@@ -28,7 +29,7 @@ const SECRET_BITS = ['alex@example.com', '/home/alex/.codex', 'http://10.0.0.5:1
 
 function account(id: string, extra: Partial<Account> = {}): Account {
   return {
-    id, provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, rotation: true, enabled: true, detected: true, createdAt: 0, ...extra,
+    id, provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 0, ...extra,
   };
 }
 
@@ -71,12 +72,8 @@ function setup(options: { accounts?: Account[]; devices?: Device[] } = {}) {
 const promptOf = (f: ReturnType<typeof setup>, who = f.boss, conversationId: string | undefined = f.chat.id) =>
   f.context.prompt({ agent: who, conversationId, mode: GENERAL_MODE, route: route() }).volatile;
 
-function section(volatile: string): string {
-  const start = volatile.indexOf(TEAM_HEADER);
-  if (start < 0) return '';
-  const end = volatile.indexOf('\n\n', start);
-  return volatile.slice(start, end < 0 ? undefined : end);
-}
+/** What app.status says now. */
+const status = (f: ReturnType<typeof setup>): string => renderSetupFacts(collectSetupFacts(f.services));
 
 const TEAM_LINES = [
   '- Agents: 3 active – Company 2 (manager Mara) · no space 1 (manager Mia)',
@@ -94,21 +91,12 @@ const APP_LINES = [
   '- Chat bridges: Telegram on – 1 chat (1 connected)',
 ];
 
-test('manager-mode turns carry the team, accounts and strong models with the real state – not the app switches', () => {
+test('no turn carries the team or the app switches – a manager\'s neither; app.status has them', () => {
   const f = setup();
-  const facts = section(promptOf(f));
-  assert.ok(facts.startsWith(TEAM_HEADER), 'the manager gets the section');
-  for (const line of TEAM_LINES) assert.ok(facts.includes(line), `missing: ${line}\n${facts}`);
-  for (const line of APP_LINES) assert.ok(!facts.includes(line.split(':')[0]), `E1: no app switch in the prompt: ${line}\n${facts}`);
-  assert.ok(!promptOf(f).includes(APP_STATUS_HEADER), 'no app checklist in the prompt');
-
-  assert.equal(section(promptOf(f, f.vid, undefined)), '', 'a general-mode agent does not get it');
-  const vicChat = f.chats.create({ agentIds: [f.vid.id], createdBy: 'human' });
-  assert.equal(section(promptOf(f, f.vid, vicChat.id)), '');
-  f.chats.update(vicChat.id, { settings: { mode: 'manager' } }, 'human');
-  assert.ok(section(promptOf(f, f.vid, vicChat.id)), 'a chat in manager mode makes the turn a manager turn (same rule as turn planning)');
-  f.chats.update(f.chat.id, { settings: { mode: 'writing' } }, 'human');
-  assert.equal(section(promptOf(f)), '', 'a manager working in another mode does not get it');
+  const volatile = promptOf(f);
+  for (const line of [...TEAM_LINES, ...APP_LINES]) assert.ok(!volatile.includes(line), `not in the prompt: ${line}\n${volatile}`);
+  assert.ok(!volatile.includes(APP_STATUS_HEADER) && !volatile.includes('Team and models'), 'no app checklist in the prompt');
+  for (const line of TEAM_LINES) assert.ok(status(f).includes(line), `missing: ${line}\n${status(f)}`);
 });
 
 test('no account email, home, base URL, secret id or limit detail reaches the prompt or the tool', async () => {
@@ -124,18 +112,18 @@ test('no account email, home, base URL, secret id or limit detail reaches the pr
 test('the manager sees which models answer decisions and search by meaning, by name', () => {
   const f = setup();
   f.settings.routing = { ...f.settings.routing, decision: 'codex:gpt-6.1-sol', embeddings: 'off' };
-  assert.ok(section(promptOf(f)).includes('- Decisions: GPT-6.1 Sol on Codex (a chat model; no decision model connected) · Search by meaning: off (settings.json routing.decision, routing.embeddings)'), section(promptOf(f)));
+  assert.ok(status(f).includes('- Decisions: GPT-6.1 Sol on Codex (a chat model; no decision model connected) · Search by meaning: off (settings.json routing.decision, routing.embeddings)'), status(f));
   f.settings.routing = { ...f.settings.routing, decision: 'codex:gpt-6.1-mini' };
-  assert.ok(section(promptOf(f)).includes('- Decisions: Gemma on Codex (a chat model; no decision model connected; codex:gpt-6.1-mini is not available now) · '), 'a chosen model that is gone: what stands in');
-  assert.ok(!section(promptOf(f)).includes('auto'), section(promptOf(f)));
+  assert.ok(status(f).includes('- Decisions: Gemma on Codex (a chat model; no decision model connected; codex:gpt-6.1-mini is not available now) · '), 'a chosen model that is gone: what stands in');
+  assert.ok(!status(f).split('\n').find((line) => line.startsWith('- Decisions:'))!.includes('auto'), status(f));
 
   const typed = setup({ accounts: [account('acc_ts', { provider: 'decision-api', label: 'TypeSafe', auth: 'api_key' })] });
   typed.settings.routing = { ...typed.settings.routing, decision: 'acc_ts:jev-1', embeddings: 'off' };
-  assert.ok(section(promptOf(typed)).includes('- Decisions: jev-1 on TypeSafe (a decision model) · Search by meaning: off'), section(promptOf(typed)));
+  assert.ok(status(typed).includes('- Decisions: jev-1 on TypeSafe (a decision model) · Search by meaning: off'), status(typed));
 
   // A long case (labels up to 40 characters, a gone pin, a hosted search model) keeps the pointer to settings.json.
   const label = 'Codex work plan of the company team 2026';
-  const long = renderTeamFacts({ uses: {
+  const long = renderSetupFacts({ uses: {
     decision: `GPT-6 Luna on ${label} (a chat model; no decision model connected; codex:gpt-6.1-mini is not available now)`,
     embeddings: `Qwen/Qwen3-Embedding-8B on ${label}`,
   } });
@@ -143,13 +131,13 @@ test('the manager sees which models answer decisions and search by meaning, by n
 });
 
 test('G1: without any space the agents line names no "no space" group', () => {
-  assert.equal(renderTeamFacts({ agents: { active: 1, bySpace: [{ space: '', count: 1, managers: ['Manager'] }] } }), `${TEAM_HEADER}\n- Agents: 1 active (manager Manager)`);
+  assert.equal(renderSetupFacts({ agents: { active: 1, bySpace: [{ space: '', count: 1, managers: ['Manager'] }] } }), `${APP_STATUS_HEADER}\n- Agents: 1 active (manager Manager)`);
   const f = setup();
   const s = f.services as unknown as Record<string, unknown>;
   const org = s.org as { spaces: () => Space[] };
   const spaces = org.spaces.bind(org);
   org.spaces = () => spaces().filter(() => false);
-  const facts = section(promptOf(f));
+  const facts = status(f);
   assert.match(facts, /- Agents: 3 active \(managers (Mara, Mia|Mia, Mara)\)/);
   assert.ok(!facts.includes('no space'), facts);
 });
@@ -159,17 +147,17 @@ test('a throwing source is skipped; nothing readable means no section', () => {
   const s = f.services as unknown as Record<string, unknown>;
   s.accounts = { list: () => { throw new Error('accounts store locked'); } };
   s.devices = undefined;
-  const facts = section(promptOf(f));
+  const facts = status(f);
   assert.ok(facts.includes('- Agents:') && facts.includes('- Strong model:'), facts);
   assert.ok(!facts.includes('- Accounts:'));
   assert.equal(collectSetupFacts(f.services).accounts, undefined);
 
   const broken = () => { throw new Error('down'); };
   Object.assign(s, { settings: { get: broken }, org: { list: broken, spaces: broken, get: () => undefined }, catalog: { list: broken, get: () => undefined }, permissions: { settings: broken }, db: undefined });
-  assert.equal(setupFactsSection(f.services), '');
+  assert.equal(renderSetupFacts(collectSetupFacts(f.services)), '');
 });
 
-test('app.status is a read tool without role gate and returns every fact, the prompt section\'s lines among them', async () => {
+test('app.status is a read tool without role gate and returns every fact', async () => {
   const f = setup();
   const tool = appStatusTools[0];
   assert.equal(tool.name, 'app.status');
@@ -182,7 +170,6 @@ test('app.status is a read tool without role gate and returns every fact, the pr
   assert.ok(text.startsWith(APP_STATUS_HEADER));
   for (const line of [...TEAM_LINES, ...APP_LINES]) assert.ok(text.includes(line), `missing: ${line}\n${text}`);
   assert.ok(!text.includes('This desk') && !text.includes('Old'), 'this PC and revoked PCs are not linked PCs');
-  assert.equal(section(promptOf(f)), renderTeamFacts(collectSetupFacts(f.services)));
   assert.deepEqual(result.structured, collectSetupFacts(f.services));
 });
 
@@ -196,4 +183,18 @@ test('the registry offers app.status in the manager, general and secretary modes
   assert.ok(!('app.status' in BASE_CORE), 'if app.status becomes a core tool, update the app-status.ts header and this test');
   assert.deepEqual(offered, ['general', 'manager', 'secretary'], 'the modes with every tool');
   assert.equal(registry.allowed(appStatusTools[0], f.boss, modes.find((mode) => mode.key === 'research')!), false, 'specialist modes hide it, even for a manager');
+});
+
+test('B-080: the account line names what holds each account – its return time or cooling', () => {
+  const now = Date.UTC(2026, 9, 17, 9, 0, 0); // the harness clock: 11:00 in Europe/Berlin
+  const f = setup({ accounts: [
+    account('acc_c1', { provider: 'claude', label: 'Claude Code', limits: { windows: [{ name: 'weekly', windowMinutes: 10080, usedPercent: 100, resetsAt: Date.UTC(2026, 9, 19, 5, 0) }], readAt: 0 } }),
+    account('acc_c2', { provider: 'claude', label: 'Claude Code 2', priority: 1 }),
+    account('acc_x', { label: 'Codex', state: 'cooling', coolingUntil: now + 5 * 60_000 }),
+  ] });
+  assert.equal(f.clock.now(), now);
+  const line = '- Accounts: Claude Code (claude, ok, at its limit until 19 Oct 07:00); Claude Code 2 (claude, ok); Codex (codex, cooling, cooling until 11:05)';
+  assert.ok(status(f).includes(line), status(f));
+  const rotating = setup({ accounts: [account('acc_c1', { provider: 'claude', label: 'Claude Code' }), account('acc_c2', { provider: 'claude', label: 'Claude Code 2', priority: 1 })] });
+  assert.ok(status(rotating).includes('- Accounts: Claude Code (claude, ok); Claude Code 2 (claude, ok)'), 'nothing held: the line as before');
 });

@@ -11,7 +11,7 @@ const NOW = Date.UTC(2026, 9, 20, 9, 0, 0);
 function cooling(windows: LimitWindow[], patch: Partial<Account> = {}): Account {
   return {
     id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'cooling', coolingUntil: NOW + 60_000, priority: 0,
-    rotation: false, enabled: true, detected: false, createdAt: NOW, limits: { windows, readAt: NOW - 60_000 }, ...patch,
+    enabled: true, detected: false, createdAt: NOW, limits: { windows, readAt: NOW - 60_000 }, ...patch,
   };
 }
 
@@ -34,4 +34,13 @@ test('B-051 L5: a Claude Free login says it needs Pro or Max – on its chip and
   assert.equal(stateLabel({ ...free, plan: 'pro' }, NOW), 'Error', 'another error keeps its label');
   assert.equal(stateLabel({ ...free, provider: 'codex', plan: 'free' }, NOW), 'Error', 'Codex is not blocked by plan');
   assert.match(cliRowView({ provider: 'claude', path: '/bin/claude', loggedIn: true, method: 'claude.ai' }, [{ ...free, state: 'ok', plan: 'max' }]).hint, /^Signed in · claude\.ai$/);
+});
+
+test('the PC row of Codex reads the found account, which runs on a copy in a home of its own', () => {
+  const found = cooling([], { state: 'needs_login', detected: true, home: '/accounts/codex/acc_codex', coolingUntil: undefined, limits: undefined });
+  const row = cliRowView({ provider: 'codex', path: '/bin/codex', loggedIn: true, method: 'ChatGPT' }, [found]);
+  assert.equal(row.account?.id, 'acc_codex');
+  assert.match(row.hint, /^Not signed in/, 'Autark\'s copy needs a sign-in although the default home is signed in');
+  const added = { ...found, id: 'acc_codex_2', detected: false };
+  assert.equal(cliRowView({ provider: 'codex', path: '/bin/codex', loggedIn: true }, [added]).account, undefined, 'an account added in Autark is not the found login');
 });

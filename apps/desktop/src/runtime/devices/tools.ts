@@ -37,7 +37,8 @@ export interface DeviceToolDeps {
 
 export function deviceTools(deps: DeviceToolDeps): ToolDef[] {
   const computer = computerTools(deps.computer).map((tool) => watched(tool, deps.computer.activity));
-  return [...computer, ...browserTools(deps.browser), ...phoneTools(deps.phone), devicesList(deps.link), sendFile, ...(deps.link ? [devicesConnect(deps.link)] : [])];
+  // B-080: browser.open where: 'chrome' works in the person's own Chrome through this PC's computer use.
+  return [...computer, ...browserTools(deps.browser, deps.computer), ...phoneTools(deps.phone), devicesList(deps.link), sendFile, ...(deps.link ? [devicesConnect(deps.link)] : [])];
 }
 
 /** Which linked PC sent a call (set for the ctx a remote call runs with). */

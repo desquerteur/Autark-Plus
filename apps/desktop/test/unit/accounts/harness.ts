@@ -22,7 +22,7 @@ export const ACCOUNTS = path.resolve('data', 'accounts');
 export const ENV_KEY = 'sk-env-test-0123456789abcdef';
 
 /** Browser sign-ins stay open until a test exits them; sign-outs finish at once. */
-const SIGN_INS = new Set(['login', 'auth login --claudeai']);
+const SIGN_INS = new Set(['login', 'auth login --claudeai', 'login --device-auth']);
 
 export interface HarnessOptions {
   env?: NodeJS.ProcessEnv;
@@ -41,6 +41,9 @@ export interface HarnessOptions {
   signInUrlMs?: number;
   /** B-051: what an install command does (default: exits 0 and installs nothing). */
   install?: (call: SpawnCall) => void;
+  /** The accounts folder and the user's home folder (default: folders below `data` with no login in them). */
+  accounts?: string;
+  homeDir?: string;
 }
 
 export function harness(options: HarnessOptions = {}) {
@@ -91,7 +94,7 @@ export function harness(options: HarnessOptions = {}) {
   const removed: string[] = [];
   const offline = async (): Promise<Response> => { throw new Error('offline'); };
   service = new AccountServiceImpl({
-    db, bus, clock, paths: { accounts: ACCOUNTS }, env, finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0,
+    db, bus, clock, paths: { accounts: options.accounts ?? ACCOUNTS }, env, homeDir: options.homeDir ?? path.resolve('data', 'home'), finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0,
     engines: () => ({ get: engine, all: () => [], disposeIdle: async () => {} }),
     mkdir: async (dir) => { made.push(dir); }, rmdir: async (dir) => { removed.push(dir); },
     detectDeps: { fetch: options.fetch ?? offline, probeTimeoutMs: 1 },
@@ -104,5 +107,5 @@ export function harness(options: HarnessOptions = {}) {
 
 /** A stored account row (as a restore or another path could write it). */
 export function row(id: string, patch: Partial<Account> = {}): Account {
-  return { id, provider: 'openai', label: id, auth: 'api_key', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch };
+  return { id, provider: 'openai', label: id, auth: 'api_key', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch };
 }

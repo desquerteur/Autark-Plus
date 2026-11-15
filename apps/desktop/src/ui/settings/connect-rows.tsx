@@ -4,7 +4,7 @@
 // address (B-078: my own devices carry no role – the same company on both; the wire role stays 'ceo'), or "Join a company"
 // as an employee when the company menu asked for that (its one fixed line: this PC's request with the code, or why it
 // failed), and a PC or my phone (B-078) asking here with its code (Accept – an employee's PC with the person it belongs
-// to – / Decline); plus
+// to, a phone with whose phone it is: Me or one of the people (F1) – / Decline); plus
 // the live-state hooks they read.
 // Owns: these rows and hooks. Never: shows keys, or accepts without the person's click.
 
@@ -120,21 +120,32 @@ export function ConnectRow(props: { remote?: RemoteState; role: JoinRole; error:
   );
 }
 
-/** A PC or my phone asking here: its code to compare, Accept (an employee's PC with its person) / Decline; `onDecided` after the answer went in. */
+/**
+ * A PC or a phone asking here: its code to compare, Accept / Decline; `onDecided` after the answer went in. An employee's
+ * PC is accepted with its person; a phone (F1) with whose phone it is – Me (full access) first, or one of the people, whose
+ * access it then gets; the hint (two fixed lines) says which. The select is always there for a phone, so nothing moves
+ * when people load or another one is picked.
+ */
 export function IncomingRow(props: { request: RemoteIncoming; people: Person[]; onDecided?: (accepted: boolean) => void }) {
   const { request } = props;
-  const [person, setPerson] = useState(props.people[0]?.id ?? '');
+  const [picked, setPerson] = useState(''); // '' = Me for a phone, the first person for an employee's PC
   const [busy, run] = useBusy();
   const employee = request.role === 'employee';
+  const phone = request.role === 'phone';
+  const person = employee ? picked || props.people[0]?.id || '' : picked;
+  const owner = phone && person ? props.people.find((entry) => entry.id === person)?.name : undefined;
   const answer = (accept: boolean) => void run(async () => {
-    const done = await act(() => rpc.call('remote.decide', { id: request.id, accept, ...(accept && employee ? { personId: person } : {}) }), accept ? 'Could not accept' : 'Could not decline');
+    const done = await act(() => rpc.call('remote.decide', { id: request.id, accept, ...(accept && (employee || (phone && owner)) ? { personId: person } : {}) }), accept ? 'Could not accept' : 'Could not decline');
     if (done) props.onDecided?.(accept);
   });
   const words = incomingText(request);
+  const hint = phone ? `${owner ? `Becomes ${owner}'s phone with ${owner}'s access` : 'Becomes your own phone with full access'} · ${words.hint}` : words.hint;
   return (
-    <Row label={<><span class="dot pairing" aria-hidden="true" /> {words.label}</>} hint={words.hint}>
+    <Row label={<><span class="dot pairing" aria-hidden="true" /> {words.label}</>}
+      hint={phone ? <span class="set-row-hint reserved two" title={hint}>{hint}</span> : hint}>
       <span class="remote-slot-code" aria-label={`Code ${request.code.split('').join(' ')}`}>{request.code}</span>
       {employee && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This PC belongs to" />}
+      {phone && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This phone belongs to" me="Me" />}
       <Button variant="primary" class="small" disabled={busy || (employee && !person)} onClick={() => answer(true)}>Accept</Button>
       <Button variant="ghost" class="small" disabled={busy} onClick={() => answer(false)}>Decline</Button>
     </Row>

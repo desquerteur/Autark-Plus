@@ -8,9 +8,11 @@
 // the body with the row. A busy decoder is tried again a few times, further apart each time (RETRY_MS, the steps the
 // media probe uses for a missing blob, service.ts). A recording that yields no transcript (silence, a failure, speech
 // to text not ready, the last busy try) is marked meta.dictation { fileId, failed } so nothing waits for it. A quick task posted with only a recording (origin intake, titled
-// with the file's name) gets its title and notes from the transcript.
-// Owns: those transcriptions and the body/title writes. Never: transcribes when speech to text is not ready or a
-// message another PC wrote, overwrites a body or title someone already wrote, retries without end, or logs a transcript.
+// with the file's name) gets its title and notes from the transcript. B-082: the body is plain text; the hearing's unsure
+// places travel beside it as meta.marks (spans, shared/voice/marks.ts), and a failed one can be heard again on the
+// person's word (retry – RPC voice.retranscribe, rpc/handlers/voice-retry.ts).
+// Owns: those transcriptions and the body/title writes. Never: transcribes when speech to text is not ready or, on
+// arrival, a message another PC wrote (a retry pulls its bytes), overwrites a body or title someone already wrote, retries without end, or logs a transcript.
 
 import { existsSync } from 'node:fs';
 import { SYSTEM_ID } from '../../shared/ids.ts';
@@ -19,6 +21,7 @@ import { ORIGINS } from '../../shared/model/origin.ts';
 import type { TaskView } from '../../shared/model/tasks.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
 import { WorkforceError } from '../../shared/errors.ts';
+import { cleanMarks, spansFromInline, type MarkedText } from '../../shared/voice/marks.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { MessageRepo } from '../chat/message-repo.ts';
 import { needBlob } from '../devices/sync/blobs.ts';
@@ -34,10 +37,14 @@ export interface DictationDeps {
   later?: (fn: () => void, ms: number) => void;
 }
 
-interface Job { key: string; file: Attachment; write: (text: string) => void; unheard?: () => void }
+interface Job { key: string; file: Attachment; write: (heard: MarkedText) => void; unheard?: () => void; chatId?: string; once?: (heard: boolean) => void }
 
 const isRecording = (mime: string) => /^(audio|video)\//i.test(mime.split(';')[0].trim());
 const defaultLater = (fn: () => void, ms: number) => { const timer = setTimeout(fn, ms); (timer as { unref?: () => void }).unref?.(); };
+const dictations = new WeakMap<object, Dictation>();
+
+/** The runtime's dictation (RPC voice.retranscribe), or undefined (tests, headless setups). */
+export const dictationOf = (services: object): Dictation | undefined => dictations.get(services);
 
 /** Whether `fileId` was transcribed into a message's body (its text is there) – read from the synced row's meta. */
 export function dictated(db: RuntimeServices['db'], fileId: string): boolean {
@@ -65,6 +72,7 @@ export class Dictation {
   constructor(deps: DictationDeps) {
     this.deps = deps;
     const s = deps.services();
+    dictations.set(s, this);
     s.bus.on('message.created', (message) => this.onMessage(message));
     s.bus.on('task.upserted', (task) => this.onTask(task));
   }
@@ -77,7 +85,7 @@ export class Dictation {
     if (message.authorKind !== 'human' || message.kind !== 'text' || message.state !== 'final' || message.body.trim()) return;
     const file = (message.attachments ?? []).find((attachment) => isRecording(attachment.mime));
     if (file && bytesHere(this.deps.services(), file.fileId)) {
-      this.start(`m:${message.id}`, file, (text) => this.writeBody(message.id, file.fileId, text), () => this.markUnheard(message.id, file.fileId));
+      this.start(`m:${message.id}`, file, (text) => this.writeBody(message.id, file.fileId, text), () => this.markUnheard(message.id, file.fileId), message.conversationId);
     }
   }
 
@@ -91,13 +99,30 @@ export class Dictation {
     }, 0);
   }
 
+  /**
+   * The person asks to hear a sent recording again whose hearing failed (meta.dictation.failed, body still empty): one
+   * try, no busy retries; true when the text is in the body now (meta.dictation loses `failed`).
+   */
+  async retry(message: Message): Promise<boolean> {
+    const fileId = (message.meta?.dictation as { fileId?: unknown; failed?: unknown } | undefined)?.fileId;
+    const file = (message.attachments ?? []).find((attachment) => attachment.fileId === fileId && isRecording(attachment.mime));
+    const key = `m:${message.id}`;
+    if (!file || message.body.trim() || this.running.has(key)) return false;
+    this.running.add(key);
+    // Asked on a linked PC (the row came by sync), the bytes are pulled from the PC that holds them first.
+    if (!(await blobHere(this.deps.services(), file.fileId))) { this.running.delete(key); return false; }
+    return new Promise((resolve) => {
+      void this.attempt({ key, file, write: (heard) => this.writeBody(message.id, file.fileId, heard), chatId: message.conversationId, once: resolve }, RETRY_MS.length);
+    });
+  }
+
   /** Resolves when nothing is being transcribed (tests). */
   busy(): boolean { return this.running.size > 0; }
 
-  private start(key: string, file: Attachment, write: (text: string) => void, unheard?: () => void): void {
+  private start(key: string, file: Attachment, write: (heard: MarkedText) => void, unheard?: () => void, chatId?: string): void {
     if (this.running.has(key)) return;
     this.running.add(key);
-    void this.attempt({ key, file, write, unheard }, 0);
+    void this.attempt({ key, file, write, unheard, chatId }, 0);
   }
 
   /** One try; every end without a transcript (not ready, nothing heard, a failure, the last busy try) calls `unheard`. */
@@ -112,8 +137,10 @@ export class Dictation {
     let wrote = false;
     try {
       if (bytesHere(s, file.fileId)) {
-        const text = (await stt.transcript(file.fileId)).trim();
-        if (text) { write(text.length > MAX_BODY ? `${text.slice(0, MAX_BODY)}…` : text); wrote = true; }
+        // A voice message is heard as dictation: unsure places marked, its chat as a listener's context.
+        const raw = (await (job.chatId ? stt.transcript(file.fileId, { chatId: job.chatId }) : stt.transcript(file.fileId))).trim();
+        const heard = spansFromInline(raw); // B-082: plain text, the unsure places as spans beside it
+        if (heard.text.trim()) { write(heard); wrote = true; }
       }
     } catch (error) {
       again = error instanceof WorkforceError && error.code === 'conflict'; // the decoder was busy: later
@@ -125,6 +152,7 @@ export class Dictation {
 
   private finish(job: Job, wrote: boolean): void {
     this.running.delete(job.key);
+    job.once?.(wrote);
     if (wrote || !job.unheard) return;
     try { job.unheard(); } catch (error) { this.deps.services().log.debug('dictation end not marked', { error: String(error).slice(0, 120) }); }
   }
@@ -143,21 +171,28 @@ export class Dictation {
     s.bus.emit('message.updated', message);
   }
 
-  /** The transcript as the body, marked as dictation – only while the body is still empty. */
-  private writeBody(messageId: string, fileId: string, text: string): void {
+  /**
+   * The transcript as the plain body (its unsure places as meta.marks), marked as dictation (a `failed` goes) – only
+   * while the body is still empty.
+   */
+  private writeBody(messageId: string, fileId: string, heard: MarkedText): void {
     const s = this.deps.services();
     const repo = new MessageRepo(s.db);
     const message = repo.get(messageId);
     if (!message || message.body.trim()) return;
-    message.body = text;
-    message.meta = { ...message.meta, dictation: { fileId } };
+    const body = heard.text.length > MAX_BODY ? `${heard.text.slice(0, MAX_BODY)}…` : heard.text;
+    const marks = heard.marks ? cleanMarks(body, heard.marks) : undefined;
+    const { marks: _old, ...meta } = message.meta ?? {};
+    message.body = body;
+    message.meta = { ...meta, dictation: { fileId }, ...(marks ? { marks } : {}) };
     repo.update(message);
     s.bus.emit('message.updated', message);
   }
 
   /** The quick task's title and notes from the transcript – while it still carries the file's name. */
-  private writeTitle(taskId: string, name: string, text: string): void {
+  private writeTitle(taskId: string, name: string, heard: MarkedText): void {
     const s = this.deps.services();
+    const text = heard.text.trim().slice(0, MAX_BODY); // B-082: a task's text is plain
     const task = s.tasks.get(taskId);
     if (!task || task.title !== excerpt(name, 120) || task.notes) return;
     const first = text.split(/(?<=[.!?])\s|\n/)[0] ?? text;

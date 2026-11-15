@@ -14,8 +14,9 @@ function toAccount(row: Row): Account {
     home: opt<string>(row.home), baseUrl: opt<string>(row.base_url), secretId: opt<string>(row.secret_id), envVar: opt<string>(row.env_var),
     state: row.state as Account['state'], plan: opt<string>(row.plan), email: opt<string>(row.email),
     limits: json<Account['limits']>(row.limits, undefined), coolingUntil: opt<number>(row.cooling_until),
-    priority: Number(row.priority), rotation: bool(row.rotation), enabled: bool(row.enabled), detected: bool(row.detected),
+    priority: Number(row.priority), enabled: bool(row.enabled), detected: bool(row.detected),
     deviceId: opt<string>(row.device_id), createdAt: Number(row.created_at), checkedAt: opt<number>(row.checked_at),
+    ...(bool(row.credits) ? { credits: true } : {}), // B-083: holds a plan's monthly API credits
   };
 }
 
@@ -33,16 +34,16 @@ export class AccountRepo {
   }
 
   save(a: Account): Account {
-    this.db.run(`INSERT INTO accounts (id, provider, label, auth, home, base_url, secret_id, env_var, state, plan, email, limits, cooling_until, priority, rotation, enabled, detected, device_id, created_at, checked_at)
+    this.db.run(`INSERT INTO accounts (id, provider, label, auth, home, base_url, secret_id, env_var, state, plan, email, limits, cooling_until, priority, enabled, detected, device_id, created_at, checked_at, credits)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, label = excluded.label, auth = excluded.auth, home = excluded.home,
         base_url = excluded.base_url, secret_id = excluded.secret_id, env_var = excluded.env_var, state = excluded.state, plan = excluded.plan,
         email = excluded.email, limits = excluded.limits, cooling_until = excluded.cooling_until, priority = excluded.priority,
-        rotation = excluded.rotation, enabled = excluded.enabled, detected = excluded.detected, device_id = excluded.device_id,
-        checked_at = excluded.checked_at`, [
+        enabled = excluded.enabled, detected = excluded.detected, device_id = excluded.device_id,
+        checked_at = excluded.checked_at, credits = excluded.credits`, [
       a.id, a.provider, a.label, a.auth, a.home ?? null, a.baseUrl ?? null, a.secretId ?? null, a.envVar ?? null, a.state, a.plan ?? null,
-      a.email ?? null, a.limits ? toJson(a.limits) : null, a.coolingUntil ?? null, a.priority, int(a.rotation), int(a.enabled), int(a.detected),
-      a.deviceId ?? null, a.createdAt, a.checkedAt ?? null,
+      a.email ?? null, a.limits ? toJson(a.limits) : null, a.coolingUntil ?? null, a.priority, int(a.enabled), int(a.detected),
+      a.deviceId ?? null, a.createdAt, a.checkedAt ?? null, int(a.credits === true),
     ]);
     return a;
   }

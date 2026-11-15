@@ -10,7 +10,7 @@
 import type { BrowserKeyAction } from './workspace-browser.ts';
 
 export type MainKeyAction = 'reload' | 'hard-reload' | 'back' | 'forward' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'devtools' | 'stop' | 'reopen';
-export type PageKey = { main: MainKeyAction } | { app: Exclude<BrowserKeyAction, 'send-page'> } | { host: string };
+export type PageKey = { main: MainKeyAction } | { app: Exclude<BrowserKeyAction, 'send-page' | 'pick'> } | { host: string };
 
 /** The parts of a key press this needs (Electron's Input; a DOM KeyboardEvent maps to it). */
 export interface KeyInput { type: string; key: string; control: boolean; meta: boolean; shift: boolean; alt: boolean }

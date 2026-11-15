@@ -5,7 +5,8 @@
 // port, and shares it – with the box key – only between two devices that pinned each other
 // (presence). When no direct path answers, a tunnel forwards opaque binary frames (the devices'
 // own end-to-end-encrypted peer channel) as the last fallback. Devices that accept connection
-// requests are also found by their Remote ID, and sealed connect messages are passed to them
+// requests are also found by their Remote ID (B-084: also by the person code their chain proves, the chain handed out
+// with the found entry), and sealed connect messages are passed to them
 // (rate-limited per key and per client source); each carries an opaque per-source tag (HMAC of
 // the source under a per-process secret, never the address) so the target PC counts requests per
 // real source. Nothing here can accept a request – the person on the target PC does.
@@ -21,7 +22,7 @@ import type { Duplex } from 'node:stream';
 import type { WebSocket, WebSocketServer } from 'ws';
 import { Bucket, DEFAULT_LIMITS, KeyedBuckets, sourceOf, type Limits } from './limits.ts';
 import {
-  DATA_HEADER, MAX_DATA_PAYLOAD, PROTOCOL, b64url, boxText, fingerprintOf, helloText, isFingerprint, isRef, key32,
+  DATA_HEADER, MAX_DATA_PAYLOAD, PROTOCOL, b64url, boxText, chainCode, fingerprintOf, helloText, isFingerprint, isRef, key32,
   newChallenge, opaque, parseControl, peerList, remoteIdOf, signed, tunnelOf, type Frame,
 } from './protocol.ts';
 
@@ -69,7 +70,9 @@ interface Conn {
   boxSig?: string;
   peers: Set<string>;
   findable: boolean;
-  remoteId?: string;
+  /** The IDs it is found under while findable: its own Remote ID and (B-084) the person code its chain proves. */
+  ids: Set<string>;
+  code?: ReturnType<typeof chainCode>;
   tunnels: Set<number>;
   control: Bucket;
   bytes: Bucket;
@@ -133,14 +136,9 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
   }
 
   function index(conn: Conn): void {
-    if (conn.remoteId) byRemoteId.get(conn.remoteId)?.delete(conn);
-    if (conn.remoteId && !byRemoteId.get(conn.remoteId)?.size) byRemoteId.delete(conn.remoteId);
-    conn.remoteId = conn.findable && conn.fp ? remoteIdOf(conn.fp) : undefined;
-    if (conn.remoteId) {
-      const set = byRemoteId.get(conn.remoteId) ?? new Set<Conn>();
-      set.add(conn);
-      byRemoteId.set(conn.remoteId, set);
-    }
+    for (const id of conn.ids) { const set = byRemoteId.get(id); set?.delete(conn); if (set && !set.size) byRemoteId.delete(id); }
+    conn.ids = new Set(conn.findable && conn.fp ? [remoteIdOf(conn.fp), ...(conn.code ? [conn.code.code] : [])] : []);
+    for (const id of conn.ids) byRemoteId.set(id, (byRemoteId.get(id) ?? new Set<Conn>()).add(conn));
   }
 
   /** New pin list: presence changes (and cut tunnels) for every device whose mutual pin changed. */
@@ -177,7 +175,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     const fp = fingerprintOf(pub);
     const old = byFp.get(fp);
     if (old) { old.ws.close(4009, 'replaced'); drop(old); }
-    Object.assign(conn, { fp, pub: b64url(pub), box: b64url(box), boxSig: frame.boxSig as string, findable: frame.findable === true, port: portOf(frame.port), peers: new Set<string>() });
+    Object.assign(conn, { fp, pub: b64url(pub), box: b64url(box), boxSig: frame.boxSig as string, findable: frame.findable === true, port: portOf(frame.port), peers: new Set<string>(), code: chainCode(frame.chain, fp) });
     byFp.set(fp, conn);
     index(conn);
     conn.peers = peers;
@@ -209,7 +207,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     if (typeof frame.id !== 'string' || !/^\d{9}$/.test(frame.id)) return fail(conn, 'bad_request', frame.ref);
     if (!finds.takeAll(keysOf(conn))) return fail(conn, 'rate_limited', frame.ref);
     const found = [...(byRemoteId.get(frame.id) ?? [])].filter((other) => other !== conn).slice(0, 4);
-    send(conn, { t: 'found', ref: frame.ref, entries: found.map((other) => ({ pub: other.pub, box: other.box, boxSig: other.boxSig })) });
+    send(conn, { t: 'found', ref: frame.ref, entries: found.map((other) => ({ pub: other.pub, box: other.box, boxSig: other.boxSig, ...(other.code ? { chain: other.code.chain } : {}) })) });
   }
 
   function pair(conn: Conn, frame: Frame): void {
@@ -252,7 +250,11 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
         const peers = peerList(frame.peers);
         if (!peers) return fail(conn, 'bad_request');
         setPeers(conn, peers);
-        if (typeof frame.findable === 'boolean' && frame.findable !== conn.findable) { conn.findable = frame.findable; index(conn); }
+        const findable = typeof frame.findable === 'boolean' ? frame.findable : conn.findable;
+        const code = chainCode(frame.chain, conn.fp);
+        const moved = findable !== conn.findable || code?.code !== conn.code?.code;
+        Object.assign(conn, { findable, code });
+        if (moved) index(conn);
         const port = portOf(frame.port);
         if (port !== conn.port) {
           conn.port = port; // its pinned peers learn the new address
@@ -371,7 +373,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     const source = sourceOf(ip);
     if (conns.size >= limits.maxConnections || (perIp.get(source) ?? 0) >= limits.maxPerIp) { ws.close(1013, 'busy'); return; }
     const conn: Conn = {
-      ws, source, ip, port: 0, challenge: newChallenge(), peers: new Set(), findable: false, tunnels: new Set(), paused: false, waiters: new Set(), alive: true,
+      ws, source, ip, port: 0, challenge: newChallenge(), peers: new Set(), findable: false, ids: new Set(), tunnels: new Set(), paused: false, waiters: new Set(), alive: true,
       control: new Bucket(limits.controlPerSecond, limits.controlPerSecond * 3, now),
       bytes: new Bucket(limits.bytesPerSecond, limits.bytesPerSecond * 8, now),
     };

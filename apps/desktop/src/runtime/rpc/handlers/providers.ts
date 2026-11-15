@@ -4,7 +4,7 @@
 // efforts a model supports.
 // Owns: param checks and scope rules for these methods. B-078 ("alles vom Handy"): accounts.* are open to the owner's
 // phone with 'settings' on a secure transport (the app's loopback tunnel; a plain LAN browser stays without them) – plans,
-// API keys and sign-ins from the phone; a CLI sign-in a phone starts opens its page as a tab in this PC's own browser pane
+// API keys and sign-ins from the phone; a CLI sign-in a phone starts (other than Codex/Claude Code, B-091) opens its page as a tab in this PC's own browser pane
 // (global), which the phone mirrors and works in, so the provider's callback lands on this PC. Catalog refreshes stay
 // owner-only; phones with 'chat' read usage, models, recent models, efforts, policies and the
 // catalog status; 'manage' sets policies and previews routing – except the global cost mode and default model
@@ -12,9 +12,16 @@
 // accounts.useReset (a Codex reset, after the person confirmed) and accounts.test (an API endpoint's or a
 // local server's models before adding it; the key is used for that call only) are owner only.
 // accounts.add and accounts.test take `apiKey` typed or as a handle secret://<id> of the catalog (accounts/connect.ts).
-// models.uses (owner, read-only): what each model use resolves to right now (models/uses.ts).
+// models.uses (read-only, like accounts.*: the owner and the owner's phone with 'settings' on a secure transport): what
+// each model use resolves to right now (models/uses.ts).
 // B-051: accounts.try (one tiny real turn on one account, accounts/try-turn.ts – owner only) and the sign-in
-// page an `accounts.add`/`accounts.login` hands back (never logged here).
+// page an `accounts.add`/`accounts.login` hands back (never logged here). B-091: from a device both start an "away"
+// sign-in the person finishes on the phone (`code`/`paste`; nothing opens on the PC) and accounts.loginCode hands the
+// code the Claude page showed to that sign-in (never logged or echoed).
+// B-083: models.setPolicy for one agent (no chat) stores who set its start model – a changed pin `pinBy` = the person's
+// name (the profile name; devices are the owner's) and the time, an unchanged pin keeps its origin, no pin or 'auto'
+// none; a `pinBy` the caller sends (a getPolicy → setPolicy round trip) is ignored. accounts.update takes `credits` (an
+// API key holding a plan's monthly credits; the account service refuses it where no plan credits exist).
 // Never: business logic, and never echoes or logs API keys –
 // `accounts.add` hands the key straight to the account service, which stores it encrypted (an
 // environment key arrives as its variable's name only).
@@ -27,6 +34,8 @@ import { bad, id, input, notFound, obj, oneOf, onlyKeys, optBool, optId, optNum,
 import { scopeHas } from '../table.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 import { returnChoice } from '../../agents/next-route.ts';
+import { personName } from '../../agents/publishing.ts';
+import { HUMAN_ID } from '../../../shared/ids.ts';
 import { tryAccount } from '../../accounts/try-turn.ts';
 import { modelUses } from '../../models/uses.ts';
 
@@ -77,7 +86,8 @@ function baseUrlOf(o: Obj): string | undefined {
 
 /** Only known policy fields; tier bounds must be ordered. */
 export function policyOf(o: Obj): ModelPolicy {
-  onlyKeys(o, ['pin', 'effort', 'floorTier', 'ceilingTier', 'costMode', 'prefer', 'avoid'], 'policy');
+  // pinBy is the runtime's (withOrigin); a sent one is ignored
+  onlyKeys(o, ['pin', 'effort', 'floorTier', 'ceilingTier', 'costMode', 'prefer', 'avoid', 'pinBy'], 'policy');
   const policy: ModelPolicy = {};
   if (o.pin !== undefined && o.pin !== null) policy.pin = modelId(o, 'pin');
   const effort = optOneOf(o, 'effort', EFFORTS);
@@ -106,12 +116,26 @@ function policyScope(o: Obj): { agentId?: string; conversationId?: string } {
 }
 
 /**
+ * B-083: an agent's start model with its origin – a changed pin names the person now ("Stanislaus set it on my page";
+ * cleanPolicy caps the name), an unchanged one keeps its own.
+ */
+function withOrigin(ctx: HandlerContext, agentId: string, policy: ModelPolicy): ModelPolicy {
+  const agent = policy.pin && policy.pin !== 'auto' ? ctx.services.org.get(agentId) : undefined;
+  if (!agent) return policy; // no pin ('auto' is none), or no such agent (the store refuses it)
+  const before = agent.modelPolicy;
+  if (before?.pin === policy.pin) return before.pinBy ? { ...policy, pinBy: before.pinBy } : policy;
+  return { ...policy, pinBy: { name: personName(ctx.services, HUMAN_ID) ?? 'the person', at: ctx.services.clock.now() } };
+}
+
+/**
  * A sign-in a phone started: the page the CLI printed opens as a tab in this PC's own pane (global) – the phone mirrors
  * that pane and works in it, and the provider's callback reaches this PC's localhost. The owner's window opens it itself.
+ * B-091: an away Codex/Claude Code sign-in (`code` or `paste`) finishes on the phone itself – nothing opens on the PC.
  */
 async function openOnPc<T>(ctx: HandlerContext, result: T): Promise<T> {
   if (ctx.scope.kind !== 'device') return result;
-  const page = result as { url?: unknown; signInUrl?: unknown } | undefined;
+  const page = result as { url?: unknown; signInUrl?: unknown; code?: unknown; paste?: unknown } | undefined;
+  if (page?.code || page?.paste) return result;
   const url = page?.url ?? page?.signInUrl;
   const sideBrowser = ctx.services.host?.sideBrowser;
   if (typeof url !== 'string' || !/^https?:\/\//.test(url) || !sideBrowser) return result;
@@ -134,7 +158,7 @@ export function register(table: HandlerTable): void {
   table.add('accounts.detect', (params, ctx) => ctx.services.accounts.detect(optBool(input(params), 'force') ?? false), ACCOUNTS);
   table.add('accounts.add', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['provider', 'label', 'apiKey', 'baseUrl', 'rotation', 'envVar', 'detected']);
+    onlyKeys(o, ['provider', 'label', 'apiKey', 'baseUrl', 'envVar', 'detected']);
     // PR5: `envVar` names a key variable of the one table (its value never travels), `detected` = "Add again".
     const envVar = optOneOf(o, 'envVar', ENV_KEY_NAMES);
     const detected = optBool(o, 'detected');
@@ -143,27 +167,34 @@ export function register(table: HandlerTable): void {
       label: optText(o, 'label', { max: 80 }),
       apiKey: optText(o, 'apiKey', { max: 4096 }),
       baseUrl: baseUrlOf(o),
-      rotation: optBool(o, 'rotation'),
       ...(envVar ? { envVar } : {}),
       ...(detected ? { detected } : {}),
-    }).then((added) => openOnPc(ctx, added));
+    }, { away: ctx.scope.kind === 'device' }).then((added) => openOnPc(ctx, added));
   }, ACCOUNTS);
   table.add('accounts.update', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['id', 'label', 'priority', 'rotation', 'enabled']);
-    const patch: { label?: string; priority?: number; rotation?: boolean; enabled?: boolean } = {};
+    onlyKeys(o, ['id', 'label', 'priority', 'enabled', 'credits']);
+    const patch: { label?: string; priority?: number; enabled?: boolean; credits?: boolean } = {};
     const label = optText(o, 'label', { max: 80 });
     if (label !== undefined) patch.label = label;
     const priority = optNum(o, 'priority', { min: -10_000, max: 10_000 });
     if (priority !== undefined) patch.priority = priority;
-    const rotation = optBool(o, 'rotation');
-    if (rotation !== undefined) patch.rotation = rotation;
     const enabled = optBool(o, 'enabled');
     if (enabled !== undefined) patch.enabled = enabled;
+    const credits = optBool(o, 'credits'); // B-083: the key holds a plan's monthly API credits (shared/model/charge.ts)
+    if (credits !== undefined) patch.credits = credits;
     return ctx.services.accounts.update(id(o), patch);
   }, ACCOUNTS);
   // B-051 L4: the person's own UI gets the sign-in page the CLI printed (`url`; agent tools never do).
-  table.add('accounts.login', (params, ctx) => ctx.services.accounts.login(id(input(params)), { page: true }).then((started) => openOnPc(ctx, started)), ACCOUNTS);
+  // B-091: from a device (the phone) the sign-in is "away" – finished there (code/paste), the code back via accounts.loginCode.
+  table.add('accounts.login', (params, ctx) => ctx.services.accounts.login(id(input(params)), { page: true, away: ctx.scope.kind === 'device' }).then((started) => openOnPc(ctx, started)), ACCOUNTS);
+  table.add('accounts.loginCode', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['id', 'code']);
+    const code = text(o, 'code', { max: 4096 }); // never logged or echoed
+    if (/[\u0000-\u001f\u007f]/.test(code)) bad('code', 'a code without control characters');
+    return ctx.services.accounts.loginCode?.(id(o), code) ?? notFound('Sign-in codes');
+  }, ACCOUNTS);
   table.add('accounts.logout', async (params, ctx) => {
     await ctx.services.accounts.logout(id(input(params)));
     return { ok: true };
@@ -211,7 +242,7 @@ export function register(table: HandlerTable): void {
   table.add('models.uses', (params, ctx) => {
     onlyKeys(input(params), []);
     return modelUses(ctx.services);
-  });
+  }, ACCOUNTS); // B-084: the phone's Settings › Models reads it like accounts.* (it was owner-only → empty pickers)
   table.add('models.recent', (params, ctx) => ctx.services.catalog.recent(optId(input(params), 'agentId')), CHAT);
   table.add('models.getPolicy', (params, ctx) => {
     const o = input(params);
@@ -223,13 +254,15 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['agentId', 'conversationId', 'policy']);
     const scope = policyScope(o);
     const policy = policyOf(obj(o, 'policy'));
-    // The global cost mode and default model are Settings.routing.costMode / routing.work (policies.ts), a section
-    // settings.update refuses to every device: the same rule here (settings audit 23.10.). Agent/chat choices stay 'manage'.
+    // The global cost mode and default model are Settings.routing.costMode / routing.work (policies.ts): the same rule as
+    // settings.update's routing section (B-084: the owner's phone with 'settings' on a secure transport may, every other
+    // device not). Agent/chat choices stay 'manage'.
     const global = !scope.agentId && !scope.conversationId;
-    if (global && (policy.costMode || policy.pin) && ctx.scope.kind !== 'owner') {
+    const securePhone = ctx.scope.kind === 'device' && ctx.scope.secure === true && ctx.scope.capabilities.includes('settings');
+    if (global && (policy.costMode || policy.pin) && ctx.scope.kind !== 'owner' && !securePhone) {
       throw new WorkforceError('forbidden', 'The model choice for all agents can only be changed on the PC (Settings › Models).', { details: { key: policy.costMode ? 'costMode' : 'pin' } });
     }
-    ctx.extras.policies.set(scope, policy);
+    ctx.extras.policies.set(scope, scope.agentId && !scope.conversationId ? withOrigin(ctx, scope.agentId, policy) : policy);
     return { ok: true };
   }, MANAGE);
   table.add('routing.preview', (params, ctx) => {
@@ -238,16 +271,16 @@ export function register(table: HandlerTable): void {
     const agent = ctx.services.org.get(id(o, 'agentId')) ?? notFound('Agent');
     const mode = ctx.services.modes.get(optText(o, 'mode', { max: 80 }) ?? agent.mode);
     const conversationId = optId(o, 'conversationId');
-    // RT5: like a turn (agents/turn-prepare.ts), the chat's last done run is the choice the return
-    // rule keeps (a pending model.set request is not consumed by a preview). `ignorePin` = what a
-    // picker's "nothing chosen" option would run: in a chat its own model/effort choice does not
-    // answer (its runs do); without a chat the agent's own pin does not answer either.
+    // RT5: like a turn (agents/turn-prepare.ts), my last done run (any chat – one context) is the choice the return
+    // rule keeps (a pending model.set request is not consumed by a preview); a chat's model choice never routes
+    // (13.11.2026), so a chat's preview is what Auto runs. `ignorePin` = what the agent page's "nothing chosen"
+    // option would run: without a chat the agent's own pin does not answer.
     const ignorePin = optBool(o, 'ignorePin');
     const { pin: _pin, ...unpinned } = agent.modelPolicy ?? {};
-    const previous = conversationId ? returnChoice(ctx.services.runs.list(agent.id, PREVIEW_RUNS), conversationId, undefined) : undefined;
+    const previous = conversationId ? returnChoice(ctx.services.runs.list(agent.id, PREVIEW_RUNS), undefined) : undefined;
     return ctx.services.router.route({
       agent: ignorePin && !conversationId ? { ...agent, modelPolicy: unpinned } : agent,
-      conversationId: ignorePin ? undefined : conversationId,
+      conversationId,
       mode,
       text: optText(o, 'text', { max: 20_000, multiline: true, allowEmpty: true }),
       ...(previous ? { previous } : {}),

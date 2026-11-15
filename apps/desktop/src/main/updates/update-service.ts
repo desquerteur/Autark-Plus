@@ -6,6 +6,7 @@
 // operation that failed (check, download, restart; a failed open says so itself), and a failed
 // background check while a found update is offered keeps the offer (the next check retries).
 // The failed step is explicit: a background check alone never requests a global retry action.
+// B-080: the drain names the version it installs (prepareInstall(to)), so the next start says whether it landed.
 // Owns: UpdateState, check/download/install/apply/defer, the automatic-restart countdown.
 // Never: imports electron or electron-updater (updater and browser opener are injected), never
 // relaunches without prepareInstall() having drained the app.
@@ -47,8 +48,8 @@ export interface UpdateServiceOptions extends TimerHooks {
   autoDownload(): boolean;
   /** Collects the live facts for the restart gate (renderer, idle, runtime). */
   facts(): Promise<GateFacts>;
-  /** Drains the app before the installer starts; throws to abort. */
-  prepareInstall(): Promise<void>;
+  /** Drains the app before the installer starts; throws to abort. B-080: `to` – the version being installed (the next start answers it). */
+  prepareInstall(to?: string): Promise<void>;
   /** Undoes prepareInstall when the restart does not happen after all (resume agent wakes). */
   cancelInstall?(): void;
   /** Opens the manual download in the system browser (automatic install unavailable). */
@@ -181,7 +182,7 @@ export class UpdateService {
     this.timers.clear('restart');
     this.emit({ status: 'installing', percent: 100, message: undefined, failure: undefined, restartAt: undefined });
     try {
-      await this.options.prepareInstall();
+      await this.options.prepareInstall(this.value.availableVersion);
       if (automatic && !(await this.gateOpen())) {
         this.options.cancelInstall?.();
         this.emit({ status: 'downloaded' });

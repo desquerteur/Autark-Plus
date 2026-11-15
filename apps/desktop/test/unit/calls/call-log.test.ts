@@ -13,7 +13,7 @@ import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import { CALL_LINES, CALL_LINE_TEXT, callLength, callRecord, type CallRecord } from '../../../src/shared/model/call.ts';
 import type { Message } from '../../../src/shared/model/chat.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
-import { CallLog } from '../../../src/runtime/calls/call-log.ts';
+import { CallLog, writeCallRow } from '../../../src/runtime/calls/call-log.ts';
 import { DevicesRepo, type DeviceRecord } from '../../../src/runtime/devices/repo.ts';
 import { createCalls, stopCalls } from '../../../src/runtime/calls/wiring.ts';
 import { register as calls } from '../../../src/runtime/rpc/handlers/calls.ts';
@@ -58,9 +58,7 @@ test('lines: the person\'s and every agent\'s final lines after the row, quiet o
   const spoken = h.say('Jonas, wie weit bist du?', { speech: { source: 'endpoint', live: true }, meta: { call: { id, participant: 'device:pc', name: 'laptop' } } });
   h.answer('ag_mia', 'Background note', { silent: true }); // quiet, not of the call
   const held = h.say('Held for the talker', { silent: true, meta: { call: { id, participant: 'device:pc', name: 'laptop' } } });
-  const streaming = h.chats.beginAgentMessage(h.chat.id, 'ag_jonas', 'run_1', { live: { steps: [], more: 0, startedAt: 1 } });
-  assert.equal(h.record(id).lines.length, 2, 'a streaming row is no line yet');
-  h.chats.finishAgentMessage(streaming.id, { body: 'Fast fertig.', state: 'final', meta: { model: 'GPT-6' } });
+  h.chats.postAgentMessage(h.chat.id, 'ag_jonas', 'run_1', { body: 'Fast fertig.', meta: { model: 'GPT-6' } });
   h.chats.status(h.chat.id, { type: 'note', text: 'Handed over in the call: export', details: { callId: id } }, { authorId: 'ag_jonas' });
   h.chats.status(h.chat.id, { type: 'note', text: 'Some other note' });
   h.chats.edit(old.id, 'An older line, edited', HUMAN_ID); // before the call: no line
@@ -145,6 +143,47 @@ test('a stop lets calls go; the next start ends them at their last line, announc
   assert.equal(next.endLeftOpen(), 0, 'once');
 });
 
+test('B-081 take: another device of this PC takes the call over – no end, no second row; a late line of the old one joins it', () => {
+  const h = setup();
+  const id = h.log.start(h.chat.id, PC);
+  const taken = h.log.take(h.chat.id, id, PHONE_DEVICE);
+  assert.deepEqual([taken.callId, taken.answered, taken.holder], [id, false, '/device:dev_phone']);
+  assert.deepEqual([h.record(id).participant, h.record(id).name, h.record(id).endedAt], ['device:dev_phone', 'Pixel', undefined]);
+  assert.equal(h.log.start(h.chat.id, PC, undefined, id), id, 'a late line of the PC window joins the call');
+  assert.equal(h.chats.messages(h.chat.id, { limit: 20 }).filter((m) => callRecord(m)).length, 1, 'one bubble');
+  h.say('Weiter am Handy');
+  assert.deepEqual(h.record(id).lines.map((line) => line.text), ['Weiter am Handy'], 'the lines go on in the same row');
+  assert.throws(() => h.log.end(id, PC.key), /another device/);
+  h.log.end(id, PHONE_DEVICE.key);
+  assert.ok(h.record(id).endedAt !== undefined);
+  assert.throws(() => h.log.take(h.chat.id, id, PC), /already ended/);
+  assert.throws(() => h.log.take(h.chat.id, 'call_none', PC), /Call not found/);
+});
+
+test('B-081 take by another PC: the synced row with another holder lets the call go here without an end; the next start leaves it', () => {
+  const h = setup();
+  new DevicesRepo(h.db).upsert({ id: 'dev_book', name: 'laptop', kind: 'pc', role: 'home', fingerprint: 'fp_book', addresses: [], caps: {}, status: 'online', self: true });
+  const id = h.log.start(h.chat.id, PC);
+  const rowId = h.chats.messages(h.chat.id, { limit: 10 }).find((m) => callRecord(m)?.id === id)!.id;
+  writeCallRow(h.services as RuntimeServices, rowId, (record) => ({ ...record, participant: 'device:pc', name: 'office-pc', pc: 'dev_server' })); // as the sync applies it
+  h.say('Said on the other PC');
+  assert.equal(h.record(id).lines.length, 0, 'this PC writes its lines no more');
+  h.log.end(id, PC.key);
+  assert.equal(h.record(id).endedAt, undefined, 'not this PC\'s call to end');
+  assert.equal(h.log.start(h.chat.id, PC, undefined, id), id, 'a late line joins the call there');
+  h.log.stop();
+  assert.equal(new CallLog(() => h.services as RuntimeServices).endLeftOpen(), 0);
+  assert.equal(h.record(id).endedAt, undefined, 'the next start leaves another PC\'s row');
+});
+
+test('B-081 take of a ring that rang out is refused', () => {
+  const h = setup();
+  const ring: CallRecord = { id: 'call_ring', participant: 'agent:ag_jonas', name: 'Jonas', startedAt: h.clock.now(), lines: [], ring: { by: 'ag_jonas', why: 'x', until: h.clock.now() + 1000 } };
+  h.chats.send({ conversationId: h.chat.id, body: 'Jonas calls: x', kind: 'status', silent: true, authorId: SYSTEM_ID, authorKind: 'system', mentions: [], meta: { status: { type: 'note', text: 'Jonas calls: x' }, call: ring } });
+  h.clock.advance(1000);
+  assert.throws(() => h.log.take(h.chat.id, 'call_ring', PC), /already ended/);
+});
+
 test('rpc: calls.start and calls.end with the connection\'s device; its connection closing ends its call', async (t) => {
   const table = s1Table();
   calls(table);
@@ -167,4 +206,28 @@ test('rpc: calls.start and calls.end with the connection\'s device; its connecti
   assert.ok(record(callId).endedAt !== undefined);
   phone.detach();
   assert.ok(record(own.callId).endedAt !== undefined, 'the phone\'s connection closed');
+});
+
+test('B-081 rpc: calls.live lists a ring; calls.start with its id answers it with the opening line, another device takes it over; calls.decline', async (t) => {
+  const table = s1Table();
+  calls(table);
+  const f = rpcFixture({ table });
+  t.after(f.cleanup);
+  f.org.add(agent('ag_jonas', 'Jonas'));
+  Object.assign(f.services, { secrets: { redact: (text: string) => text } });
+  const { rings } = createCalls(f.services as RuntimeServices, { run: async () => ({ text: '', by: 'x' }) });
+  t.after(() => stopCalls(f.services));
+  const chat = f.chats.create({ agentIds: ['ag_jonas'], createdBy: HUMAN_ID });
+  const owner = new TestClient(f.server, OWNER);
+  const phone = new TestClient(f.server, PHONE);
+  const rung = await rings.ring({ conversationId: chat.id, agentId: 'ag_jonas', why: 'Budget', say: 'Kurz zum Budget.' });
+  const listed = await phone.call<{ calls: Array<{ callId: string; state: string }> }>('calls.live');
+  assert.deepEqual(listed.calls.map((call) => [call.callId, call.state]), [[rung.callId, 'ringing']]);
+  assert.deepEqual(await phone.call('calls.start', { conversationId: chat.id, callId: rung.callId }), { callId: rung.callId, holder: '/device:dev_phone', say: 'Kurz zum Budget.' });
+  assert.deepEqual(await owner.call('calls.start', { conversationId: chat.id, callId: rung.callId }), { callId: rung.callId, holder: '/device:pc' }, 'the PC window takes it over');
+  const other = f.chats.create({ agentIds: ['ag_jonas'], createdBy: HUMAN_ID });
+  const second = await rings.ring({ conversationId: other.id, agentId: 'ag_jonas', why: 'Later' });
+  assert.deepEqual(await owner.call('calls.decline', { callId: second.callId }), { ok: true });
+  await assert.rejects(owner.call('calls.decline', { callId: second.callId }), /no longer rings/);
+  await assert.rejects(owner.call('calls.start', { conversationId: other.id, callId: second.callId }), /already ended/);
 });

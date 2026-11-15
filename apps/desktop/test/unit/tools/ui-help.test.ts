@@ -43,7 +43,7 @@ test('ui.help is a builtin read tool offered to every engine as ui__help', () =>
   const [help] = uiTools;
   assert.equal(help.name, 'ui.help');
   assert.equal(help.category, 'read');
-  assert.equal(help.audience, undefined);
+  assert.equal('audience' in help, false); // B-080 wave 3: ToolDef has no audience any more
   assert.equal(help.requires, undefined);
   assert.equal(help.remote, undefined);
   assert.equal(toWireName(UI_HELP_TOOL), 'ui__help');

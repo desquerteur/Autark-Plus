@@ -27,7 +27,7 @@ function reach(ctx: ToolContext, id: string): Record<string, unknown> {
 
 const listPeople = defineTool<Record<string, never>>({
   name: 'people.list',
-  description: 'The people of the organisation: "human" (the person I work for) and colleagues (per_… ids) with name, title, manager, the PC they are on (online or not) and whether I reach their calendar – for chat.direct, chat.create, chat.add_members, tasks and calendar who. Read-only.',
+  description: 'Lists the people of the organisation: the person I work for and colleagues. Each with id, name, title, manager, PC, online and whether I reach their calendar.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the people of the organisation'),

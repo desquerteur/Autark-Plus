@@ -1,4 +1,4 @@
-// B-048 E1: context ledger ids – m<seq> straight from the message, t/s/r/a/f from one counter per (agent, chat),
+// B-048 E1: context ledger ids – m<n> per message, t/s/r/a/f from one counter per (agent, thread) (13.11.2026: the main thread spans chats),
 // never reused, stable for the same original; order is monotonic; items(since, kinds); the migration's schema.
 
 import { test } from 'node:test';
@@ -7,41 +7,40 @@ import { memoryDb } from '../store/helpers.ts';
 import { compactStamp, estimateTokens, kindOfId, ledgerTitle, normalizeItemId } from '../../../src/shared/model/context-ledger.ts';
 import { ledgerSetup } from './ledger-fixture.ts';
 
-test('ids: m<seq> from the message, one counter for t/s/r/a/f, monotonic order', () => {
+test('ids: messages count apart, one counter for t/s/r/a/f, monotonic order', () => {
   const t = ledgerSetup();
   try {
     const { ledger, tom, chat } = t;
-    const a = ledger.record(tom.id, chat.id, { kind: 'tool', ref: 'item:ri_a', text: 'x'.repeat(40) });
-    const b = ledger.record(tom.id, chat.id, { kind: 'reasoning', ref: 'item:ri_b', text: 'thinking' });
-    const m = ledger.record(tom.id, chat.id, { kind: 'message', seq: 7, ref: 'msg:msg_7', text: 'hello' });
-    const c = ledger.record(tom.id, chat.id, { kind: 'skill', ref: 'item:ri_c' });
-    const d = ledger.record(tom.id, chat.id, { kind: 'assistant', ref: 'item:ri_d' });
-    const e = ledger.record(tom.id, chat.id, { kind: 'file', ref: 'item:ri_e' });
-    assert.deepEqual([a, b, m, c, d, e].map((item) => item.itemId), ['t1', 'r2', 'm7', 's3', 'a4', 'f5']);
+    const a = ledger.record(tom.id, 'main', { kind: 'tool', ref: 'item:ri_a', text: 'x'.repeat(40) });
+    const b = ledger.record(tom.id, 'main', { kind: 'reasoning', ref: 'item:ri_b', text: 'thinking' });
+    const m = ledger.record(tom.id, 'main', { kind: 'message', ref: 'msg:msg_7', text: 'hello' });
+    const c = ledger.record(tom.id, 'main', { kind: 'skill', ref: 'item:ri_c' });
+    const d = ledger.record(tom.id, 'main', { kind: 'assistant', ref: 'item:ri_d' });
+    const e = ledger.record(tom.id, 'main', { kind: 'file', ref: 'item:ri_e' });
+    assert.deepEqual([a, b, m, c, d, e].map((item) => item.itemId), ['t1', 'r2', 'm1', 's3', 'a4', 'f5']);
     assert.deepEqual([a, b, m, c, d, e].map((item) => item.order), [1, 2, 3, 4, 5, 6]);
-    assert.equal(a.tokens, 10, 'about four characters per token');
+    assert.equal(a.tokens, 14, 'about three characters per token (B-080 wave 3)');
     assert.equal(a.state, 'keep');
   } finally { t.cleanup(); }
 });
 
-test('ids are stable for the same original and never reused; each agent and chat counts on its own', () => {
+test('ids are stable for the same original and never reused; each agent and thread counts on its own', () => {
   const t = ledgerSetup();
   try {
     const { ledger, tom, chat } = t;
-    const first = ledger.record(tom.id, chat.id, { kind: 'tool', ref: 'item:ri_1', title: 'shell: npm test', tokens: 100 });
-    const again = ledger.record(tom.id, chat.id, { kind: 'tool', ref: 'item:ri_1', title: 'shell: npm test', tokens: 250, bytes: 1000 });
+    const first = ledger.record(tom.id, 'main', { kind: 'tool', ref: 'item:ri_1', title: 'shell: npm test', tokens: 100 });
+    const again = ledger.record(tom.id, 'main', { kind: 'tool', ref: 'item:ri_1', title: 'shell: npm test', tokens: 250, bytes: 1000 });
     assert.equal(again.itemId, first.itemId, 'the same ref is the same item');
     assert.equal(again.order, first.order);
     assert.equal(again.tokens, 250, 'a capture seen again refreshes its estimate');
-    const message = ledger.record(tom.id, chat.id, { kind: 'message', seq: 3, ref: 'msg:msg_3' });
-    assert.equal(ledger.record(tom.id, chat.id, { kind: 'message', seq: 3 }).itemId, message.itemId);
-    ledger.mark(tom.id, chat.id, [{ itemId: first.itemId, state: 'hidden', reason: 'old log', by: 'subconscious' }]);
-    const next = ledger.record(tom.id, chat.id, { kind: 'tool', ref: 'item:ri_2' });
+    const message = ledger.record(tom.id, 'main', { kind: 'message', ref: 'msg:msg_3' });
+    assert.equal(ledger.record(tom.id, 'main', { kind: 'message', ref: 'msg:msg_3' }).itemId, message.itemId);
+    ledger.mark(tom.id, 'main', [{ itemId: first.itemId, state: 'hidden', reason: 'old log', by: 'subconscious' }]);
+    const next = ledger.record(tom.id, 'main', { kind: 'tool', ref: 'item:ri_2' });
     assert.equal(next.itemId, 't2', 'the counter goes on');
     const other = ledger.record('ag_ava', chat.id, { kind: 'tool', ref: 'item:ri_9' });
-    assert.equal(other.itemId, 't1', 'per (agent, chat)');
+    assert.equal(other.itemId, 't1', 'per (agent, thread)');
     assert.equal(other.order, 1);
-    assert.throws(() => ledger.record(tom.id, chat.id, { kind: 'message' }), /seq/);
   } finally { t.cleanup(); }
 });
 
@@ -49,12 +48,12 @@ test('items: in order, since is inclusive, kinds filter; titles are one capped l
   const t = ledgerSetup();
   try {
     const { ledger, tom, chat } = t;
-    ledger.record(tom.id, chat.id, { kind: 'message', seq: 1, ref: 'msg:a', title: 'Alex: start' });
-    ledger.record(tom.id, chat.id, { kind: 'tool', ref: 'item:x', title: `shell:\n${'long '.repeat(60)}` });
-    ledger.record(tom.id, chat.id, { kind: 'assistant', ref: 'item:y', text: 'done' });
-    assert.deepEqual(ledger.items(tom.id, chat.id, { since: 2 }).map((item) => item.itemId), ['t1', 'a2']);
-    assert.deepEqual(ledger.items(tom.id, chat.id, { kinds: ['message', 'assistant'] }).map((item) => item.itemId), ['m1', 'a2']);
-    const title = ledger.items(tom.id, chat.id, { kinds: ['tool'] })[0].title;
+    ledger.record(tom.id, 'main', { kind: 'message', ref: 'msg:a', title: 'Alex: start' });
+    ledger.record(tom.id, 'main', { kind: 'tool', ref: 'item:x', title: `shell:\n${'long '.repeat(60)}` });
+    ledger.record(tom.id, 'main', { kind: 'assistant', ref: 'item:y', text: 'done' });
+    assert.deepEqual(ledger.items(tom.id, 'main', { since: 2 }).map((item) => item.itemId), ['t1', 'a2']);
+    assert.deepEqual(ledger.items(tom.id, 'main', { kinds: ['message', 'assistant'] }).map((item) => item.itemId), ['m1', 'a2']);
+    const title = ledger.items(tom.id, 'main', { kinds: ['tool'] })[0].title;
     assert.ok(title.length <= 120 && !title.includes('\n'), title);
   } finally { t.cleanup(); }
 });

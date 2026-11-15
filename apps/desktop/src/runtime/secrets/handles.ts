@@ -1,5 +1,5 @@
 // Secret handles in more sinks (B-044 decision 11): besides a browser field (browser/secret-fill.ts) an agent may put
-// `secret://<id>` into the env of a command (shell.exec, secrets.run – tools/builtin/secret-run.ts), into a header
+// `secret://<id>` into the env of a command (shell.exec – tools/builtin/command.ts), into a header
 // value of web.fetch ("Bearer secret://<id>"), into a connector's call and its file (runtime/apps). The handle is
 // replaced by the value at the last moment – at spawn or send – through the vault (SecretService.use), so the value
 // never reaches the model.
@@ -12,9 +12,9 @@
 //   PIECE_CHARS or more characters of it (a value printed in parts), and every base64 word that decodes to text holding
 //   it (an "Authorization: Basic …" line of user:password) become its handle; a value shorter than SHORT_CHARS (a PIN,
 //   a 2FA code) that shows up at all withholds the whole text, so no line of a listing can point it out. The general
-//   leak redactor (tools/outputs.ts) runs after it. Only a value shorter than MIN_MASK_CHARS is refused in a command or
-//   header – it works in a browser field and in a sink that returns nothing (an app sign-in, `resolveHandles`).
-//   The summary says honestly what is not covered: a command can write the value elsewhere or print it changed.
+//   leak redactor (tools/outputs.ts) runs after it. A value of any length works in every sink; a short one (a CVC, a PIN,
+//   a code) that shows up withholds the whole text (B-080, live 07.11.2026: a CVC refused in a command went over the
+//   clipboard instead). The summary says honestly what is not covered: a command can write the value elsewhere or print it changed.
 // * Typing on a screen (review regress #2 – the leak guard turns a known value into its handle, so typing needs the
 //   handle too): computer.type, computer.act set_value and phone.type take secret://<id> in their text, on this PC
 //   only (`judgeTyped`/`typedText`): the summary says a screenshot can
@@ -33,7 +33,7 @@ const HANDLE = /secret:\/\/([A-Za-z0-9_-]{1,128})/g;
 /** Environment variable names a command may get (no '=' or NUL, at most 64 characters). */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 export const MAX_ENV = 32;
-/** The shortest value a command or header takes: shorter ones cannot be masked in what comes back. */
+/** Encoded forms shorter than this are not searched on their own; a value under SHORT_CHARS that shows withholds the whole text. */
 export const MIN_MASK_CHARS = 4;
 /** Pieces of a value this long or longer are masked wherever they show (a value printed in parts). */
 const PIECE_CHARS = 6;
@@ -117,7 +117,8 @@ function maskDecoded(text: string, values: ReadonlyMap<string, string>): string 
 }
 
 /** Masks every given value in `text` (see the header): withheld when a short one shows, else whole forms, base64 words, pieces. */
-export function maskValues(text: string, values: ReadonlyMap<string, string>): string {
+export function maskValues(text: string, given: ReadonlyMap<string, string>): string {
+  const values = new Map([...given].filter(([, value]) => value)); // an empty value is in every text and shows nothing
   if (!text || !values.size) return text;
   for (const value of values.values()) if (value.length < SHORT_CHARS && text.includes(value)) return WITHHELD;
   const pairs: Array<[string, string]> = [];
@@ -137,21 +138,13 @@ export interface Resolved {
   mask(text: string): string;
 }
 
-/** `values` with every handle replaced by its value, decrypted now by the vault (`host`: where it goes, for the log;
- * `anyLength`: a sink that returns nothing the agent reads also takes values shorter than MIN_MASK_CHARS). */
-export async function resolveMasked(ctx: ToolContext, values: Record<string, string>, host?: string, anyLength = false): Promise<Resolved> {
+/** `values` with every handle replaced by its value of any length, decrypted now by the vault (`host`: where it goes, for the log). */
+export async function resolveMasked(ctx: ToolContext, values: Record<string, string>, host?: string): Promise<Resolved> {
   const ids = handlesIn(Object.values(values));
   const judged = judgeHandles(ctx, ids, host);
   if ('problem' in judged) throw new WorkforceError('forbidden', judged.problem);
   const plain = new Map<string, string>();
-  for (const id of ids) {
-    const value = await ctx.services.secrets.use(id, ctx.agent.id, host);
-    if (value.length < MIN_MASK_CHARS && !anyLength) {
-      const info = judged.infos.find((entry) => entry.id === id);
-      throw new WorkforceError('forbidden', `"${quoted(info ? nameOf(info) : id)}" is shorter than ${MIN_MASK_CHARS} characters – too short to keep it out of what comes back, so it works only in a browser field (browser.act).`);
-    }
-    plain.set(id, value);
-  }
+  for (const id of ids) plain.set(id, await ctx.services.secrets.use(id, ctx.agent.id, host));
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) out[key] = value.replace(HANDLE, (_match, id: string) => plain.get(id) ?? '');
   return { values: out, mask: (text) => maskValues(text, plain) };
@@ -167,14 +160,14 @@ export function judgeTyped(ctx: ToolContext, action: ActionDescription, text: st
   return withHandles(action, judged, 'typed on screen – a screenshot can show it where the field does not hide it');
 }
 
-/** A typing step's text with its handles resolved now (any length: nothing typed is printed back) and the step's mask. */
+/** A typing step's text with its handles resolved now and the step's mask. */
 export async function typedText(ctx: ToolContext, text: string): Promise<{ text: string; mask(text: string): string }> {
   if (!handlesIn([text]).length) return { text, mask: (out) => out };
-  const resolved = await resolveMasked(ctx, { text }, undefined, true);
+  const resolved = await resolveMasked(ctx, { text });
   return { text: resolved.values.text, mask: resolved.mask };
 }
 
 /** `values` with every handle replaced by its value (a sink that returns nothing the agent reads – e.g. an app sign-in). */
 export async function resolveHandles(ctx: ToolContext, values: Record<string, string>, host?: string): Promise<Record<string, string>> {
-  return (await resolveMasked(ctx, values, host, true)).values;
+  return (await resolveMasked(ctx, values, host)).values;
 }

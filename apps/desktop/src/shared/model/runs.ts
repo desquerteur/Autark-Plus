@@ -1,7 +1,13 @@
 // Run model: what agents actually did (turns, tool calls, effects). Used for the agent
 // insight view, audit, cost accounting, recovery and routing outcome statistics.
 // B-054: a run is started by an origin (shared/model/origin.ts); it has a chat only when its origin is one.
-// Owns: shapes only. Never: invents inner thoughts – only provider-visible summaries.
+// B-083 (owner 08.11.: "was sie gerade … nimmt … und dass es wirklich auch stimmt"): a turn's temperature – the agent's own
+// request, else the person's suggestion – rides on its activity, its run's route and its chat row, with whether its engine
+// really sent it (an HTTP engine whose model samples with one) or the model samples at its own setting (the value is then
+// the agent's stance for the step); the row carries it in one shown form (shownTemperature).
+// B-089 (11.11.2026: what a run costs, written down): a run keeps its cached input and its model calls, its route where
+// its effort came from (EffortBy) – so a change to the token economy can be proven from the app's own database.
+// Owns: shapes and the shown form of a temperature. Never: invents inner thoughts – only provider-visible summaries.
 
 import type { Effort, EngineId } from './providers.ts';
 import type { Origin } from './origin.ts';
@@ -40,10 +46,16 @@ export interface Run {
   endedAt?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** B-089: the part of inputTokens the provider served from its cache, over the turn's attempts (absent: not reported). */
+  cachedTokens?: number;
+  /** B-089: how many model requests the turn made (absent: its engine gives no count – never a guess). */
+  modelCalls?: number;
   costUsd?: number;
   error?: string;
   summary?: string; // one line ("edited timeline, rendered preview")
-  route?: { reason: string; by: string; category: string };
+  /** B-083: `temperature` – the turn's (absent: none), `temperatureSent` – its engine put it on the wire.
+   *  B-089: `effortBy` – where the turn's effort came from (absent: an older run, or a route that did not say). */
+  route?: { reason: string; by: string; category: string; temperature?: number; temperatureSent?: boolean; effortBy?: EffortBy };
   origin?: Origin; // B-054: what started it (runs.source/source_label); absent on chat and task runs without one
   splitId?: string; // B-057: the split this run worked for (runs.split_id, shared/model/splits.ts); absent on every other run
 }
@@ -76,6 +88,9 @@ export interface AgentActivity {
   modelName?: string; // display name
   effort?: Effort;
   engine?: EngineId;
+  /** B-083: the turn's temperature (absent: none) and whether its engine sends it (false: the model samples at its own setting). */
+  temperature?: number;
+  temperatureSent?: boolean;
   origin?: Origin; // B-054: what started the run (the agent page shows its label when there is no task)
   /** B-057: set when the run is a split's (its lane `<agentId>#<splitId>`); the agent's main turn has none. */
   split?: { id: string; groupId: string; idx: number; of: number; parentRunId: string; title: string };
@@ -87,6 +102,19 @@ export interface AgentActivity {
  * model or effort). The return rule skips such runs, so a request holds for one step – or for
  * the turns of its task until the task is done – and routing then returns to the choice before. */
 export const ROUTE_BY_REQUEST = 'request';
+
+/**
+ * B-089 (11.11.2026): where a turn's effort came from (routing/previous.ts startEffortBy) – the agent's own request, the
+ * agent's fixed effort, the previous turn's kept effort, or the default (policy or category; an older run may hold 'chat'). Stored as runs.route.effortBy, carried on the route as RouteDecision.effortBy.
+ */
+export type EffortBy = 'request' | 'agent' | 'previous' | 'default';
+
+declare module './providers.ts' {
+  interface RouteDecision {
+    /** B-089: where `effort` came from before clamping (absent: a route built without startEffortBy). */
+    effortBy?: EffortBy;
+  }
+}
 
 /**
  * Addition (PR9, runtime/models/pricing.ts): how a run's cost was judged. Only pay-per-use
@@ -104,4 +132,25 @@ export type CostBasis = 'provider' | 'list-price' | 'prior-price' | 'unpriced' |
 export interface Run {
   costBasis?: CostBasis;
   notionalUsd?: number;
+}
+
+/** B-083: marks a temperature the model does not take – it samples at its own setting, the value is the agent's stance. */
+export const STANCE_MARK = '≈';
+
+/** B-083: a temperature as text – "0.3", "0.25", "1.0". */
+export function temperatureText(value: number): string {
+  const text = String(Math.round(value * 100) / 100);
+  return text.includes('.') ? text : `${text}.0`;
+}
+
+/** B-083: the shown form a temperature takes (MessageMeta.temperature): "0.3" where the engine sends it, else "≈0.3". */
+export function shownTemperature(value: number, sent: boolean | undefined): string {
+  return `${sent ? '' : STANCE_MARK}${temperatureText(value)}`;
+}
+
+declare module './chat.ts' {
+  interface MessageMeta {
+    /** B-083: on a run's finished row, the temperature the turn ran with, in its shown form (agents/turn-finish.ts). */
+    temperature?: string;
+  }
 }

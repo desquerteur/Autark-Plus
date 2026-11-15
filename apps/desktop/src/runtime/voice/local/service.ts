@@ -1,7 +1,7 @@
 // B-047 D14: local speech as the runtime offers it – voice.localModels (the catalog fitted to this PC's
 // memory and cores, which models are downloaded, and whether the engine loads here at all), voice.pullLocal
-// (one download per model at a time – a second call joins it; a speech-to-text model brings Silero VAD
-// along, fetched once even for two pulls at a time; progress as 'voice.pull' events; once installed it becomes settings.voice.localStt / localTts),
+// (one download per model at a time – a second call joins it; a speech-to-text model brings Silero VAD and – B-082 –
+// Smart Turn along (the conversation page's turn models, ensureTurn catches up a PC that has Silero already), fetched once even for two pulls at a time; progress as 'voice.pull' events; once installed it becomes settings.voice.localStt / localTts),
 // voice.speak (one line of the chosen local voice as PCM16) and the hearing of a stored take for
 // voice/transcribe.ts, which comes first whenever the model is downloaded and reads the take (readsTake).
 // B-058 G6: it reads WAV/PCM itself and – when the host decodes (media/hear-any.ts pcmOf: the app window's
@@ -16,7 +16,7 @@
 
 import os from 'node:os';
 import type { RuntimeServices } from '../../contracts.ts';
-import { fitLocalSpeech, localSpeechModel, SILERO_VAD, type LocalSpeechModel, type LocalSpeechModels, type LocalSpeechOffer, type LocalSpeechPull, type SpeechHardware, type SpokenAudio } from '../../../shared/model/local-speech-models.ts';
+import { fitLocalSpeech, localSpeechModel, SILERO_VAD, SMART_TURN, type LocalSpeechModel, type LocalSpeechModels, type LocalSpeechOffer, type LocalSpeechPull, type SpeechHardware, type SpokenAudio } from '../../../shared/model/local-speech-models.ts';
 import { pcm16Bytes, type MonoAudio } from '../../../shared/voice/wav.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { hearFormat, hostDecodes, pcmOf, WHOLE_BYTES } from '../../media/hear-any.ts';
@@ -96,6 +96,7 @@ export class LocalSpeech {
   private readonly pulls = new Map<string, Promise<{ ok: true }>>();
   private readonly installs = new Map<string, Promise<void>>(); // part id → its running install (the VAD is shared)
   private speaking = 0;
+  private readonly voiceTries = new Set<string>(); // B-084: chosen voices I started fetching on my own
 
   constructor(deps: LocalSpeechDeps) {
     this.deps = deps;
@@ -112,6 +113,20 @@ export class LocalSpeech {
 
   /** The chosen local voice when it is downloaded. */
   ttsModel(): LocalSpeechModel | undefined { return this.chosen('tts'); }
+
+  /**
+   * B-084: the chosen voice is not on this PC (the choice came from my other PC through the settings sync): I fetch
+   * it once in the background, so every device of the person hears this PC's voice from then on; the line asked
+   * now still falls back to the device's own voice. One try per model and run of the runtime.
+   */
+  private fetchChosenVoice(): void {
+    let id: string | undefined;
+    try { id = this.deps.services().settings.get().voice?.localTts; } catch { return; }
+    const model = localSpeechModel(id, 'tts');
+    if (!model || this.installed(model) || this.voiceTries.has(model.id)) return;
+    this.voiceTries.add(model.id);
+    this.pull(model.id, { auto: true, choose: () => false }).catch(() => undefined);
+  }
 
   /** B-058 G6: the host decodes compressed audio for local hearing (hear-any.ts pcmOf). */
   hostDecodes(): boolean {
@@ -170,7 +185,7 @@ export class LocalSpeech {
 
   private async run(model: LocalSpeechModel, auto: boolean, choose?: () => boolean): Promise<{ ok: true }> {
     const s = this.deps.services();
-    const parts = model.purpose === 'stt' && !this.installed(SILERO_VAD) ? [SILERO_VAD, model] : [model];
+    const parts = [...(model.purpose === 'stt' ? [SILERO_VAD, SMART_TURN].filter((part) => !this.installed(part)) : []), model];
     const total = parts.reduce((sum, part) => sum + part.download.bytes, 0);
     const emit = (progress: Omit<LocalSpeechPull, 'id' | 'total'>) => s.bus.emit('voice.pull', { id: model.id, total, ...progress, ...(auto ? { auto: true } : {}) });
     emit({ state: 'downloading', done: 0 });
@@ -180,6 +195,9 @@ export class LocalSpeech {
         await this.install(part, {
           dataDir: s.paths.data, fetch: this.deps.fetch,
           progress: (state, done) => { if (part === model || state === 'downloading') emit({ state, done: base + done }); },
+        }).catch((error: unknown) => { // review fix: the turn model (another host) never blocks a recognizer; ensureTurn tries again
+          if (part !== SMART_TURN) throw error;
+          s.log.warn('local speech download failed', { model: SMART_TURN.id, error: String(error) });
         });
         base += part.download.bytes;
       }
@@ -193,6 +211,16 @@ export class LocalSpeech {
     s.log.info('local speech model installed', { model: model.id, auto });
     emit({ state: 'done', done: total });
     return { ok: true };
+  }
+
+  /** B-082: Smart Turn next to an installed Silero VAD (a PC that pulled its recognizer before Smart Turn was in the catalog); quiet, one log line on failure. */
+  async ensureTurn(): Promise<void> {
+    if (!this.installed(SILERO_VAD) || this.installed(SMART_TURN)) return;
+    const s = this.deps.services();
+    try {
+      await this.install(SMART_TURN, { dataDir: s.paths.data, fetch: this.deps.fetch });
+      s.log.info('local speech model installed', { model: SMART_TURN.id, auto: true });
+    } catch (error) { s.log.warn('local speech download failed', { model: SMART_TURN.id, error: String(error) }); }
   }
 
   /**
@@ -241,7 +269,10 @@ export class LocalSpeech {
   /** voice.speak: one line in the chosen local voice (`voice`: the speaker number, '0' …); after `signal` aborted no further sentence is spoken (engine.ts synthesize). */
   async speak(input: { text: string; voice?: string; language?: string; signal?: AbortSignal }): Promise<SpokenAudio> {
     const model = this.ttsModel();
-    if (!model) throw new WorkforceError('unavailable', `No local voice is downloaded on this PC (${WHERE}).`);
+    if (!model) {
+      this.fetchChosenVoice();
+      throw new WorkforceError('unavailable', `No local voice is downloaded on this PC (${WHERE}).`);
+    }
     const text = input.text.replace(/\s+/g, ' ').trim();
     if (!text) return { audio: '', sampleRate: 0, durationMs: 0 };
     if (text.length > MAX_SPEAK_CHARS) throw new WorkforceError('bad_request', `One spoken line holds at most ${MAX_SPEAK_CHARS} characters.`);

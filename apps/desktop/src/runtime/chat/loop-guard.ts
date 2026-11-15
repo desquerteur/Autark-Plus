@@ -1,12 +1,17 @@
 // Loop and cost guard for agent-to-agent traffic in a chat (G11):
-//  * rate limit: more than N agent messages per minute in one chat pauses agent-triggered wakes;
-//  * ping-pong: two agents alternating M times with no human message or task change → pause;
+//  * rate limit: more than N agent messages per minute in one chat pause agent-triggered wakes – every agent line
+//    counts; B-080: the rate pause lifts itself once the minute has room again (no person's line needed);
+//  * ping-pong: two agents alternating M times with no person's line, task progress or work between the lines → pause;
 //  * discussion (B-050 round 4: an agent's line in a group wakes the colleagues the responder pick names, so three
-//    agents can talk in a circle that is no ping-pong): D changes of speaker among agents with no human message or
-//    task change → the same pause. One agent talking alone changes no speaker and is never paused this way.
-// A human message (or a task status change) clears the pause. Lifting a rate pause also starts
-// a fresh one-minute window (else the very next reply would pause the chat again); without a
-// pause the window keeps counting, so task lines are no way around the cost brake.
+//    agents can talk in a circle that is no ping-pong): D changes of speaker among agents with no person's line, task
+//    progress or work between the lines → the same pause. One agent talking alone changes no speaker and is never paused.
+// B-080 (live 05.–08.11.2026: 19 pauses, all in chats whose lines came from runs that wrote, booked, mailed or settled
+// tasks; @mentions between colleagues woke nobody for up to 17.9 h): a line that @mentions a colleague, or one from a
+// turn that did work (chat/worked.ts), counts for the rate, starts the back-and-forth count over and ends a
+// back-and-forth pause – it wakes as usual. Only the other lines count towards ping-pong and discussion.
+// A person's line (or a task status change) clears every pause. Lifting a rate pause that way – or a back-and-forth pause
+// while the minute is full – also starts a fresh one-minute window (else the very next reply would pause the chat again);
+// otherwise the window keeps counting, so task lines are no way around the cost brake.
 // Important brake (T10, ImportantBrake): more than 5 important messages of one author in one scope
 // within 10 minutes count as normal; the first one over the limit says so once ('braking'), the
 // rest until the window has room again stay quiet ('braked'). Scopes: a chat for important
@@ -22,7 +27,7 @@ export interface LoopGuardOptions {
 
 interface State {
   times: number[]; // agent message timestamps in the last minute
-  run: string[]; // agent authors since the last human message / task change (the newest ones)
+  run: string[]; // agent authors since the last person's line, task change, @mention or line with work (the newest ones)
   switches: number; // changes of speaker in that run
   loop?: string[]; // the agents of the loop that paused the chat
   paused?: 'rate' | 'ping_pong';
@@ -41,18 +46,29 @@ export class LoopGuard {
   }
 
   /**
-   * Records an agent message. Returns 'ok', or the reason the chat just became paused
-   * ('rate' | 'ping_pong'), or 'paused' when it already was.
+   * Records an agent message. Returns 'ok', or the reason the chat just became paused ('rate' | 'ping_pong'), or
+   * 'paused' when it already was. `addressed` (B-080): the line @mentions a colleague or carries work (see the header) –
+   * it counts for the rate, starts the back-and-forth count over and ends a 'ping_pong' pause.
    */
-  agentMessage(conversationId: string, agentId: string, at: number): 'ok' | 'rate' | 'ping_pong' | 'paused' {
+  agentMessage(conversationId: string, agentId: string, at: number, addressed = false): 'ok' | 'rate' | 'ping_pong' | 'paused' {
     const state = this.state(conversationId);
     state.times = state.times.filter(time => at - time < 60_000);
     state.times.push(at);
-    if (state.run.length && state.run[state.run.length - 1] !== agentId) state.switches++;
-    state.run.push(agentId);
-    if (state.run.length > this.pingPongTurns * 2) state.run.splice(0, state.run.length - this.pingPongTurns * 2);
+    if (state.paused === 'rate' && state.times.length <= this.maxPerMinute) state.paused = undefined; // B-080: the minute has room again
+    if (!addressed) {
+      if (state.run.length && state.run[state.run.length - 1] !== agentId) state.switches++;
+      state.run.push(agentId);
+      if (state.run.length > this.pingPongTurns * 2) state.run.splice(0, state.run.length - this.pingPongTurns * 2);
+    }
+    if (state.times.length > this.maxPerMinute) return state.paused ? 'paused' : (state.paused = 'rate'); // every line
+    if (addressed) {
+      state.run = [];
+      state.switches = 0;
+      state.loop = undefined;
+      if (state.paused === 'ping_pong') state.paused = undefined;
+      return 'ok';
+    }
     if (state.paused) return 'paused';
-    if (state.times.length > this.maxPerMinute) return (state.paused = 'rate');
     if (isPingPong(state.run, this.pingPongTurns)) { state.loop = [...new Set(state.run.slice(-2))]; return (state.paused = 'ping_pong'); }
     if (state.switches >= this.discussionTurns) { state.loop = [...new Set(state.run)]; return (state.paused = 'ping_pong'); }
     return 'ok';
@@ -62,7 +78,7 @@ export class LoopGuard {
   reset(conversationId: string): void {
     const state = this.states.get(conversationId);
     if (!state) return;
-    if (state.paused === 'rate') state.times = [];
+    if (state.paused === 'rate' || state.times.length > this.maxPerMinute) state.times = []; // B-080: also a full minute under a back-and-forth pause
     state.run = [];
     state.switches = 0;
     state.loop = undefined;

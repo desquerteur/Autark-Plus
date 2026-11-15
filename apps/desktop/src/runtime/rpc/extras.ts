@@ -11,6 +11,7 @@ import type { Device, PushConfig, PwaState } from '../../shared/model/devices.ts
 import type { ModelPolicy } from '../../shared/model/providers.ts';
 import type { FeedbackKind, FeedbackReport, FeedbackVisibility, FileRef, ResourceState, Settings, SystemInfo } from '../../shared/model/system.ts';
 import type { HeardSegment, HeardWord } from '../../shared/api/methods-app.ts';
+import type { SpanMark } from '../../shared/voice/marks.ts';
 import type { CatalogStatus } from '../models/catalog.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
@@ -75,8 +76,8 @@ export interface SystemApi {
   resources(): ResourceState;
   /** May the app restart for an update now without losing work? */
   restartReadiness(): { ready: boolean; reasons: string[] };
-  /** Pause new wakes, checkpoint runs, flush WAL (cancel resumes). */
-  prepareRestart(cancel?: boolean): Promise<void>;
+  /** Pause new wakes, checkpoint runs, flush WAL (cancel resumes). B-080: `to` – the update's version, answered at the next start. */
+  prepareRestart(cancel?: boolean, to?: string): Promise<void>;
 }
 
 export interface ComputerPreviewApi {
@@ -84,8 +85,8 @@ export interface ComputerPreviewApi {
 }
 
 export interface VoiceApi {
-  /** The text (a local model also gives segment and word times). */
-  transcribe(input: { fileId: string; language?: string }): Promise<{ text: string; segments?: HeardSegment[]; words?: HeardWord[] }>;
+  /** The plain text with its unsure places as spans (B-082; a local model also gives segment and word times). `before`: context, `live`: a conversation line. */
+  transcribe(input: { fileId: string; language?: string; chatId?: string; before?: string; live?: boolean }): Promise<{ text: string; marks?: SpanMark[]; segments?: HeardSegment[]; words?: HeardWord[] }>;
   /** Local speech (voice/local/service.ts through the Transcriber). */
   localModels(): LocalSpeechModels;
   pullLocal(id: string): Promise<{ ok: true }>;

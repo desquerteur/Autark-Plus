@@ -4,7 +4,7 @@
 // What a connection is added with (Provider list, addresses, key pages) is shared/model/providers-connect.ts.
 // Owns: labels and these display rules. Never: model lists or account state (the runtime).
 
-import { isAcpPlan, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
+import { foundHere, isAcpPlan, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
 
 export const PROVIDER_NAMES: Record<ProviderId, string> = {
   codex: 'Codex', claude: 'Claude Code', openai: 'OpenAI API', anthropic: 'Anthropic API',
@@ -117,7 +117,7 @@ export function cliRowView(cli: DetectionReport['clis'][number], accounts: reado
   const provider = cli.provider as ProviderId;
   const name = PROVIDER_NAMES[provider] ?? cli.provider;
   const installed = Boolean(cli.path);
-  const account = accounts.find((entry) => entry.provider === provider && entry.auth === 'cli' && entry.home === undefined);
+  const account = accounts.find((entry) => entry.provider === provider && foundHere(entry));
   const loggedIn = account?.state === 'needs_login' ? false : account?.state === 'ok' || account?.state === 'cooling' ? true : cli.loggedIn;
   const signIn = SIGN_IN[provider] !== undefined;
   const dismissed = cli.dismissed === true && !account && loggedIn === true && signIn; // removed by the person

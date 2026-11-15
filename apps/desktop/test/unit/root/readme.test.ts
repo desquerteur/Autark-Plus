@@ -33,7 +33,7 @@ test('the root map names every entry, the app-managed ones, the workspace and ho
   assert.match(text, /\| settings\.json \| Every setting of the app with its current value: .*Above each key a comment line names what it does, the allowed values and the default\. settings\.schema\.json beside it/);
   assert.match(text, /null or a missing key means the default\)\. An invalid value keeps its last good value.*Skill: app-settings\./);
   assert.match(text, /\| theme\.css \| The app's look/);
-  assert.ok(text.includes('rules.md (how every agent works)') && !text.includes('cannot be replaced'), 'every shipped prompt can be replaced, rules.md included');
+  assert.ok(text.includes('standard-agent.md and standard-manager.md (the standard SYSTEM.md a new agent starts from') && text.includes('the comment at its end is the team') && !text.includes('cannot be replaced'), 'every shipped prompt can be replaced, the standards included');
   assert.match(text, /runtime\.json \(port and owner token of the running app\)/);
   assert.match(text, /boot\.json .*run-state\.json, next-due\.json and launcher\.json/);
   for (const name of ['git-no-hooks/', 'window-state.json', 'before-restore-<time>/', 'restore-result.json', 'settings.v7-backup.json']) assert.ok(text.includes(name), name);

@@ -2,9 +2,10 @@
 // (so app-server's "writable sandbox trusts the cwd" never fires) with the cwd marked untrusted in
 // its session config under every spelling and as the project root (no parent layers), no AGENTS.md
 // as project instructions and the safe git env (I02) in every agent shell – on
-// thread/start and on thread/resume after a restart; each agent turn runs with full access and no approvals
-// (approvalPolicy 'never'); a tool-less helper run (decisions), a turn in the server's own folder and a reviewer
-// agent's turn (X10 readOnly) read only; the server runs in the empty engine folder (registry: never temp) with
+// thread/start and on thread/resume after a restart; each agent turn runs with full access and (B-080) approvalPolicy
+// 'on-request' – Codex's command guard asks the app, which accepts at once (codex-approvals.test.ts); a tool-less helper run
+// (decisions), a turn in the server's own folder and a reviewer agent's turn (X10 readOnly) read only with approvalPolicy
+// 'never'; a thread opens with 'never' (each turn sets its own); the server runs in the empty engine folder (registry: never temp) with
 // the account's CODEX_HOME, no widening flag, the workspace-acting features (skill MCP installs, config imports)
 // off and no parent project layers.
 // Owns: nothing in production. Never starts a real binary (scripted app-server over fakes.ts).
@@ -73,7 +74,8 @@ function assertUntrusted(params: any, label: string): void {
 
 function assertTurn(params: any, label: string, sandboxPolicy: unknown = { type: 'dangerFullAccess' }): void {
   assert.deepEqual(params.sandboxPolicy, sandboxPolicy, label);
-  assert.equal(params.approvalPolicy, 'never', label);
+  // B-080: full access runs on-request (Codex's command guard asks the app); a read turn never asks
+  assert.equal(params.approvalPolicy, (sandboxPolicy as { type: string }).type === 'dangerFullAccess' ? 'on-request' : 'never', label);
   assert.equal(params.approvalsReviewer, 'user', label);
   assert.equal(params.cwd, undefined, `${label}: the turn does not move the thread to another folder`);
 }
@@ -140,7 +142,7 @@ test('codex isolation: trustKeys covers the all-lower-case form Codex saves on W
   assert.deepEqual(trustKeys('/srv/Ws/', '/srv/Ws', 'linux'), ['/srv/Ws'], 'case-sensitive elsewhere: no lower-case form');
   assert.deepEqual(threadIsolation(['/a']), { sandbox: 'read-only', approvalsReviewer: 'user', config: { projects: { '/a': { trust_level: 'untrusted' } }, project_root_markers: [], project_doc_max_bytes: 0, shell_environment_policy: { set: {} } } });
   assert.deepEqual(threadIsolation(['/a'], { GIT_PAGER: 'cat' }).config.shell_environment_policy, { set: { GIT_PAGER: 'cat' } });
-  assert.deepEqual(turnPermissions(), { approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'dangerFullAccess' } });
+  assert.deepEqual(turnPermissions(), { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'dangerFullAccess' } });
   assert.deepEqual(turnPermissions('read'), { approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
 });
 

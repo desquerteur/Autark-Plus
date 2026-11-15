@@ -82,8 +82,7 @@ test('messages.retry re-wakes the author of a failed or stopped answer', async (
   const f = setup();
   t.after(f.cleanup);
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-  const streaming = f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1');
-  const failed = f.chats.finishAgentMessage(streaming.id, { body: 'half', state: 'failed', meta: { error: 'Rate limited' } });
+  const failed = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body: 'half', state: 'failed', meta: { error: 'Rate limited' } });
   f.db.run('DELETE FROM wakes');
   await f.phone.call('messages.retry', { messageId: failed.id });
   const wakes = f.wakeRows();
@@ -94,11 +93,11 @@ test('messages.retry re-wakes the author of a failed or stopped answer', async (
   assert.match(wakes[0].note ?? '', /failed \(Rate limited\)/);
   // A stopped answer of a task turn: the retry is a turn on that task (T03).
   f.services.runs.start({ id: 'run_task', agentId: 'ag_ava', conversationId: chat.id, taskId: 'task_x', trigger: 'task' });
-  const stopped = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_task').id, { body: 'half', state: 'stopped' });
+  const stopped = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_task', { body: 'half', state: 'stopped' });
   f.db.run('DELETE FROM wakes');
   await f.phone.call('messages.retry', { messageId: stopped.id });
   assert.deepEqual(f.wakeRows().map((wake) => [wake.reason, wake.task_id]), [['manual', 'task_x']]);
-  const fine = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_2').id, { body: 'ok', state: 'final' });
+  const fine = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_2', { body: 'ok', state: 'final' });
   assert.equal((await f.phone.request('messages.retry', { messageId: fine.id })).error?.code, 'conflict');
 });
 
@@ -120,8 +119,7 @@ test('blocks.answer answers an agent ask block: to-do done, receipt posted, auth
   t.after(f.cleanup);
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
   const body = 'Need your OK:\n```ui\n{"type":"approve","id":"pay-canva","action":"Buy Canva Pro","important":true}\n```';
-  const draft = f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1');
-  const message = f.chats.finishAgentMessage(draft.id, { body, state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body, state: 'final' });
   const [todo] = f.tasks.ingestBlocks(message, uiBlocksOf(body).map((entry) => entry.block));
   assert.equal(todo.assigneeKind, 'human');
   f.db.run('DELETE FROM wakes');
@@ -140,7 +138,7 @@ test('blocks.state stores per-block state; blocks.appHtml serves the app fence',
   t.after(f.cleanup);
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
   const body = 'Calculator:\n```app title="Calc"\n<button>1</button>\n```';
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body, state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body, state: 'final' });
   assert.deepEqual(await f.phone.call('blocks.state', { messageId: message.id, blockIndex: 0 }), { state: null });
   await f.phone.call('blocks.state', { messageId: message.id, blockIndex: 0, state: { volume: 0.4 } });
   assert.deepEqual(await f.owner.call('blocks.state', { messageId: message.id, blockIndex: 0 }), { state: { volume: 0.4 } });
@@ -154,7 +152,7 @@ test('blocks.sandboxUrl returns a 10-minute capability path for an app fence, ve
   t.after(f.cleanup);
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
   const body = 'Calculator:\n```app title="Calc"\n<button>1</button>\n```';
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body, state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body, state: 'final' });
   const result = await f.phone.call<{ url: string; expiresAt: number }>('blocks.sandboxUrl', { messageId: message.id, blockIndex: 0 });
   assert.equal(result.expiresAt, f.clock.now() + SANDBOX_URL_TTL_MS);
   const url = new URL(result.url, 'http://x');
@@ -174,7 +172,7 @@ test('blocks.event wakes the authoring agent (not consent) and is limited to 30/
   const f = setup();
   t.after(f.cleanup);
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body: '```app\n<p>x</p>\n```', state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body: '```app\n<p>x</p>\n```', state: 'final' });
   f.db.run('DELETE FROM wakes');
   await f.phone.call('blocks.event', { messageId: message.id, blockIndex: 0, name: 'volume', data: { level: 3 } });
   const [wake] = f.wakeRows();

@@ -8,6 +8,10 @@
 // B-048: a thinking block's signature (signature_delta or the full block's) rides on its reasoning_end; a
 // tool_result's full content (bounded 64k) on tool_end.output; system/init's claude_code_version is kept.
 // B-049 F6: a system/compact_boundary (the CLI compacted the session) is kept as state.compacted.
+// B-080: the CLI's own background work is kept as state.background (system/task_started with is_backgrounded adds its
+// task id – not an ambient one, a watcher the CLI counts as no activity, nor an awaited one, whose report goes into the
+// call that waits for it; system/task_updated with patch.is_backgrounded moves a task in or out; system/task_notification
+// deletes it), each change also a 'background' event; engine.ts lets the turn last while one runs.
 // Final text excludes main-thread updates before tools (emitted as commentary);
 // subagent lines (`parent_tool_use_id` set) never reach the answer, the live text or the usage.
 // Never: spawns processes or writes to stdin.
@@ -45,10 +49,12 @@ export interface ClaudeTurnState {
   version?: string;
   /** B-049 F6: a main-thread system/compact_boundary – Claude Code compacted the session's history in this turn. */
   compacted?: boolean;
+  /** B-080: the CLI's background tasks still running (backgrounded, not ambient or awaited, until their task_notification). */
+  background: Set<string>;
 }
 
 export function newClaudeState(): ClaudeTurnState {
-  return { text: '', answer: [], contextWindows: {}, done: false, isError: false, rejected: false };
+  return { text: '', answer: [], contextWindows: {}, done: false, isError: false, rejected: false, background: new Set() };
 }
 
 const HUB_PREFIX = `mcp__${HUB_SERVER}__`;
@@ -86,6 +92,7 @@ export class ClaudeStreamParser {
   private readonly tools = new Map<string, string>(); // tool_use id → name
   private readonly answered = new Set<string>(); // message id + text: a block repeated by the CLI counts once
   private hadCommentary = false;
+  private readonly quietTasks = new Set<string>(); // B-080: ambient or awaited task ids – never background work of the turn
 
   constructor(emit: (event: EngineEvent) => void, now: () => number) {
     this.emit = emit;
@@ -98,6 +105,21 @@ export class ClaudeStreamParser {
     return s.answer.join('\n\n').trim() || (s.isError ? '' : (s.finalText ?? '').trim()) || (this.hadCommentary ? '' : s.text.trim());
   }
 
+  /** B-080: a system task line – background work of this turn starts, moves to or from the background, or ends. */
+  private task(message: Record<string, unknown>, id: string): void {
+    const s = this.state;
+    if (message.subtype === 'task_started' && (message.ambient === true || message.awaited === true)) this.quietTasks.add(id);
+    const patch = isRecord(message.patch) ? message.patch : {};
+    const into = (message.subtype === 'task_started' && message.is_backgrounded === true) || (message.subtype === 'task_updated' && patch.is_backgrounded === true);
+    const out = message.subtype === 'task_notification' || (message.subtype === 'task_updated' && patch.is_backgrounded === false);
+    if (into && !this.quietTasks.has(id) && !s.background.has(id)) {
+      s.background.add(id);
+      this.emit({ type: 'background', id, running: true });
+    } else if (out && s.background.delete(id)) {
+      this.emit({ type: 'background', id, running: false });
+    }
+  }
+
   push(message: unknown): void {
     if (!isRecord(message)) return;
     const s = this.state;
@@ -107,6 +129,7 @@ export class ClaudeStreamParser {
         if (message.subtype === 'init' && str(message.session_id)) s.sessionId = message.session_id as string;
         if (message.subtype === 'init' && str(message.claude_code_version)) s.version = message.claude_code_version as string;
         if (message.subtype === 'compact_boundary' && !sub) s.compacted = true; // B-049 F6: the session's history was compacted
+        if (str(message.task_id)) this.task(message, message.task_id as string); // B-080
         break;
       case 'stream_event': {
         if (sub) break;

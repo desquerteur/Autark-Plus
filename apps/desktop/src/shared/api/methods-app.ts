@@ -5,6 +5,7 @@
 
 import type { LocalSpeechModels, LocalSpeechPull, SpokenAudio } from '../model/local-speech-models.ts';
 import type { FeedbackKind, FeedbackReport, FeedbackVisibility } from '../model/system.ts';
+import type { SpanMark } from '../voice/marks.ts';
 
 declare module '../api/methods.ts' {
   interface Methods {
@@ -20,8 +21,12 @@ declare module '../api/methods.ts' {
     'import.legacy': { params: { path?: string } | void; result: { imported: { agents: number; chats: number; messages: number } } };
 
     // ----------------------------------------------------------------- voice
-    /** Transcribes an uploaded recording (keys stay in the runtime); a local model also gives segment and word times. */
-    'voice.transcribe': { params: { fileId: string; language?: string }; result: { text: string; segments?: HeardSegment[]; words?: HeardWord[] } };
+    /**
+     * Transcribes an uploaded recording (keys stay in the runtime); a local model also gives segment and word times.
+     * B-082: `text` is plain; `marks` – the unsure places as spans in it (shared/voice/marks.ts). `before` (≤ 2000 chars):
+     * text heard earlier in the same take, as context. `live`: a spoken conversation line – heard fast, never marked.
+     */
+    'voice.transcribe': { params: { fileId: string; language?: string; chatId?: string; before?: string; live?: true }; result: { text: string; marks?: SpanMark[]; segments?: HeardSegment[]; words?: HeardWord[] } };
     /** B-047 D14: this PC's local speech models (fitted to its memory and cores) and whether the local engine runs here. */
     'voice.localModels': { params: void; result: LocalSpeechModels };
     /** B-047 D14, owner: downloads a local speech model (sha256-checked) and chooses it; progress arrives as `voice.pull`. */

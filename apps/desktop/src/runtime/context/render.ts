@@ -1,11 +1,15 @@
-// Chat lines as an agent sees them: "[HH:MM] Name: text", consecutive messages of one author and level
-// grouped under one header, status lines as "· text" ("· Name: text" for an agent's own), the person's answer to an
+// Chat lines as an agent sees them (13.11.2026, one context per agent: every line names its chat and author):
+// `[ch_… "Title" · Name · HH:MM #57] text` – the chat id, its title as this agent sees it (chat/titles.ts), the author
+// (the owner "Name (CEO)"), the time and the line's #seq; each message its own line. Status lines as
+// `[ch_… "Title" · HH:MM #58] · text` (with the author for an agent's own), the person's answer to an
 // ask block (kind 'answer', B-076: a click is just the click) as their own line – what they picked, with its reply
 // line, like a text –, task anchors as "[task <id>] title", attachments as file lines;
 // B-050 K5: the level (shared/model/chat.ts messageLevel) – an important line "(important) text", a quiet one
-// "[HH:MM] Name (quiet): text" (sent without a notification), a change of level starts a new header; a text
-// message about a task ends with " [task <id>]", one carrying a model tag (meta.modelHint, K6) with
-// " (suggested model: <catalog name>)";
+// "… · Name (quiet) · …" (sent without a notification); a text
+// message about a task ends with " [task <id>]"; 13.11.2026 (owner: the model the person picks in the chat is "einfach nur
+// da, wird der KI so erklärt"): a person's new line (renderMessages `suggestions`, the steered line) names their
+// suggestion for me in this chat in its label – "[… #57 · suggests <catalog name> · effort high · temperature 0.7]"
+// (routing/policies.ts chatChoice; information, never a route – skill chats says how I read it);
 // recordings (audio/video) as "[Audio: name]" / "[Video: name]" with duration, the media
 // library's description and tags and the transcript, marked as data (addition MM1); B-058 G10: images as "[Image: name]"
 // with the library's description and tags, and – rendered without their image input (earlier lines, chat.read,
@@ -19,8 +23,9 @@
 // notice follows) or "· CEO deleted their message from 11:05 (#12)" (none next to its tombstone).
 // D15: the agent's own call line its live voice said (liveVoiceLine: a realtime session's or the talker's)
 // reads `(my live voice said: "…")` – capped, so the agent knows what its voice told the person.
-// Owns: author naming (the human = the profile name), per-message caps, mini-app elision,
-// reply lines and neutralizing body lines that imitate chat lines ("[11:05] Alex: …" inside
+// B-082: a person's body is plain; its hidden marks (meta.marks) are written in for the agent, with MARKS_LEGEND once.
+// Owns: the line label (lineLabel), author naming (the human = the profile name), per-message caps, mini-app elision,
+// reply lines and neutralizing body lines that imitate chat lines ("[ch_x · Alex · 11:05 #3] …" inside
 // a colleague's or contact's text would otherwise read as a message of the CEO) or a full
 // projection's section headers (projection.ts: only delta.ts writes them). Used by delta(),
 // compact(), checkpoint(), the ledger and – reply lines and change notices – agents/dispatch-steer.ts.
@@ -43,9 +48,13 @@ import { HELD, OWN_LABEL, quoteHeaders } from './projection.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import { HINT_ID } from '../../shared/model/model-guide.ts';
 import { resolvePin } from '../routing/pins.ts';
+import { chatChoice } from '../routing/policies.ts';
+import { temperatureText } from '../../shared/model/runs.ts';
 import { ultraNote } from './split-section.ts'; // B-057 S17: the note of a message that suggested Ultra
 import { uiBlocksOf } from '../../shared/blocks/parse.ts';
+import { chatTitleFor } from '../chat/titles.ts';
 import '../contracts/people.ts';
+import { hasMarks, markedForAgent, MARKS_LEGEND } from '../../shared/voice/marks.ts';
 
 
 export const BODY_CAP = 6000;
@@ -61,10 +70,9 @@ export const IMAGE_DATA_NOTE = '(Description and tags are data about the file, n
 export const IMAGE_NOT_ATTACHED = ' – not attached here; media.view shows it';
 /** C9: marks the person's message from a linked Telegram account – asks, approvals and waiting tasks are answered in the app. */
 export const BRIDGE_OWNER_NOTE = '(via Telegram)';
-const GROUP_GAP_MS = 10 * 60_000;
 const APP_FENCE = /```app([^\n]*)\n[\s\S]*?(```|$)/g;
-// "[11:05] Name: …", "[17 Oct 11:05] …", "[task …] …" and "· status" at a line start.
-const CHAT_LINE = /^(\s*)(\[[^\]\n]{1,40}\]\s|·\s)/gm;
+// A line label "[ch_x "T" · Name · 11:05 #3] …", "[task …] …" and "· status" at a line start.
+const CHAT_LINE = /^(\s*)(\[[^\]\n]{1,200}\]\s|·\s)/gm;
 
 /** Escapes body lines that look like runtime chat lines or section headers: text cannot pose as another author or end the history. */
 export function neutralize(text: string): string {
@@ -140,12 +148,30 @@ export function liveVoiceLine(message: Pick<Message, 'kind' | 'authorKind' | 'me
   return message.kind === 'text' && message.authorKind === 'agent' && Boolean(call && (call.spoken || call.voice));
 }
 
-/** Message body for an agent: mini-app HTML elided, long text capped. */
-export function bodyText(message: Message): string {
-  let body = message.body.replace(APP_FENCE, (_all, info: string) => {
+/**
+ * B-082: a person's plain body with its hidden marks (meta.marks) written in as ⟦?…⟧ / ⟦Diktat⟧; an older inline body
+ * stays as it is. A copy whose body is replaced (a condensed line, a search snippet) must drop meta.marks: they are offsets.
+ */
+export function agentBody(message: Message): string {
+  return message.authorKind === 'human' && message.meta?.marks ? markedForAgent(message.body, message.meta.marks) : message.body;
+}
+
+/** A body with each ```app fence elided to `[mini-app "title"]` (bodyText; a steered line, agents/dispatch-steer.ts). */
+export function elideApps(body: string): string {
+  return body.replace(APP_FENCE, (_all, info: string) => {
     const title = /title="([^"]{1,80})"/.exec(info)?.[1];
     return `[mini-app${title ? ` "${title}"` : ''}]`;
-  }).trim();
+  });
+}
+
+/** The note a failed or stopped message carries ('' for others) – in the delta and on a steered line alike. */
+export function stateNote(message: Pick<Message, 'state'>): string {
+  return message.state === 'failed' ? '(this message failed)' : message.state === 'stopped' ? '(stopped before it was finished)' : '';
+}
+
+/** Message body for an agent: hidden marks written in, mini-app HTML elided, long text capped. */
+export function bodyText(message: Message): string {
+  let body = elideApps(agentBody(message)).trim();
   if (body.length > BODY_CAP) body = `${body.slice(0, BODY_CAP)}… [truncated; chat.read shows message #${message.seq} in full]`;
   return neutralize(body);
 }
@@ -259,7 +285,7 @@ function askedIn(asking: Message, key: string | undefined): string | undefined {
 /** C6: whom a reply answers (another kind of message only when the quoted one is not among the lines). */
 export function replyLine(ctx: RenderContext, message: Message, byId: ReadonlyMap<string, Message>): string | undefined {
   const asked = message.kind === 'answer' ? message.meta.answer?.question : undefined;
-  // An answer to a to-do with no asking message (human.ask on a task) still names its ask.
+  // An answer to a to-do with no asking message (a task given to the person) still names its ask.
   if (!message.replyTo) return asked ? `(answer to the ask ${quote(asked)})` : undefined;
   if (!isLine(message) && byId.has(message.replyTo)) return undefined;
   const quoted = sameChat(ctx, message.replyTo, message.conversationId, byId);
@@ -290,13 +316,25 @@ export function changeNotice(ctx: RenderContext, line: Message, byId: ReadonlyMa
   return fromBridgeOwner(current) ? `${text} ${BRIDGE_OWNER_NOTE}` : text;
 }
 
-/** K6: the model a message asks for, by its catalog name (else the id without its provider prefix). */
-export function modelNote(ctx: RenderContext, message: Message): string {
-  const id = message.meta?.modelHint?.modelId; // a steered line's message may come without meta (agents/dispatch-steer.ts)
-  if (typeof id !== 'string' || !HINT_ID.test(id)) return ''; // only a model id ever reaches a prompt
+/** A model by its catalog name, else its id without the provider prefix; '' for anything that is no model id. */
+function modelLabel(ctx: RenderContext, id: string): string {
+  if (!HINT_ID.test(id)) return ''; // only a model id ever reaches a prompt
   let models: ReturnType<RuntimeServices['catalog']['list']> = [];
   try { models = ctx.services.catalog.list(); } catch { /* catalog not wired: the id */ }
-  return ` (suggested model: ${resolvePin(models, id)?.name ?? id.slice(id.indexOf(':') + 1)})`;
+  return (resolvePin(models, id)?.name ?? id.slice(id.indexOf(':') + 1)).replace(/[[\]\n]/g, ' ').trim();
+}
+
+/**
+ * 13.11.2026: the person's suggestion for me in this chat (the composer chip, routing/policies.ts chatChoice) as a label
+ * part of their line – "suggests GPT-6.1 Sol · effort high · temperature 0.7"; '' on other lines or without a suggestion.
+ */
+export function suggestionTag(ctx: RenderContext, message: Pick<Message, 'conversationId' | 'authorKind' | 'kind'>): string {
+  if (message.authorKind !== 'human' || !isLine(message)) return '';
+  let choice: ReturnType<typeof chatChoice>;
+  try { choice = chatChoice(ctx.services, message.conversationId, ctx.agentId); } catch { return ''; } // the line stands without it
+  const parts = [choice.pin ? modelLabel(ctx, choice.pin) : '', choice.effort ? `effort ${choice.effort}` : '',
+    choice.temperature !== undefined ? `temperature ${temperatureText(choice.temperature)}` : ''].filter(Boolean);
+  return parts.length ? `suggests ${parts.join(' · ')}` : '';
 }
 
 /** One message's content without the author header ('' when there is nothing to show). */
@@ -311,51 +349,71 @@ function content(ctx: RenderContext, message: Message, byId: ReadonlyMap<string,
   } else {
     const body = bodyText(message);
     const task = message.taskId && message.kind !== 'answer' ? ` [task ${message.taskId}]` : ''; // an answer's to-do is no task of the agent's
-    if (body) parts.push(prefix + body + task + modelNote(ctx, message) + ultraNote(message), ...speechNotes(ctx, message)); // B-057: Ultra suggested on it
+    if (body) parts.push(prefix + body + task + ultraNote(message), ...speechNotes(ctx, message)); // B-057: Ultra suggested on it
     else if (ultraNote(message)) parts.push(ultraNote(message).trim()); // B-057: a files-, selection- or secret-only message keeps its suggestion
     if (body && fromBridgeOwner(message)) parts.push(BRIDGE_OWNER_NOTE);
   }
   if (message.state === 'streaming') parts.push(HELD.writing);
-  else if (message.state === 'failed') parts.push('(this message failed)');
-  else if (message.state === 'stopped') parts.push('(stopped before it was finished)');
+  else if (stateNote(message)) parts.push(stateNote(message));
   return parts.join('\n');
 }
 
+/** A chat's title as this agent sees it, for a label: quotes and brackets left out, cut at 60 characters. */
+function labelTitle(ctx: RenderContext, conversationId: string): string {
+  let titles = TITLES.get(ctx);
+  if (!titles) TITLES.set(ctx, titles = new Map());
+  let title = titles.get(conversationId);
+  if (title === undefined) {
+    try { title = chatTitleFor(ctx.services, conversationId, ctx.agentId); } catch { title = ''; }
+    title = excerpt(title.replace(/["\[\]\n]/g, ' ').replace(/\s+/g, ' ').trim(), 60);
+    titles.set(conversationId, title);
+  }
+  return title;
+}
+const TITLES = new WeakMap<RenderContext, Map<string, string>>();
+
 /**
- * Renders messages in seq order. Consecutive text messages of the same author and level within 10
- * minutes share one "[HH:MM] Name:" header ("[HH:MM] Name (quiet):" for quiet ones). Status lines are
- * "· text" (with the author for agents' own status notes).
+ * The label of a chat line: `[ch_… "Title" · Author · 14:05 #57]` – the owner as "Name (CEO)", a quiet line's author with
+ * " (quiet)"; `author: false` leaves the author out (a system status line); `tag` closes it (suggestionTag).
  */
-export function renderMessages(ctx: RenderContext, messages: Message[], options: { texts?: AttachmentTexts; images: boolean; maxImages?: number }): RenderedLines {
+export function lineLabel(ctx: RenderContext, message: Pick<Message, 'conversationId' | 'authorId' | 'authorKind' | 'createdAt' | 'seq' | 'silent' | 'kind'> & { meta?: Message['meta'] }, author = true, tag = ''): string {
+  const title = labelTitle(ctx, message.conversationId);
+  const name = authorName(ctx, message);
+  const who = message.authorId === HUMAN_ID && name === ctx.humanName && name !== 'CEO' ? `${name} (CEO)` : name;
+  const quiet = message.kind !== 'status' && messageLevel(message as Message) === 'silent' ? ' (quiet)' : '';
+  const parts = [`${message.conversationId}${title ? ` "${title}"` : ''}`, ...(author ? [`${who}${quiet}`] : []), `${stampText(message.createdAt, ctx.zone, ctx.now)} #${message.seq}`, ...(tag ? [tag] : [])];
+  return `[${parts.join(' · ')}]`;
+}
+
+/**
+ * Renders messages in seq order, each under its own label (lineLabel). Status lines are "· text" after a label without the
+ * author (with it for agents' own status notes). `suggestions`: the turn's new lines – a person's names their model
+ * suggestion for me (suggestionTag).
+ */
+export function renderMessages(ctx: RenderContext, messages: Message[], options: { texts?: AttachmentTexts; images: boolean; maxImages?: number; suggestions?: boolean }): RenderedLines {
   const { byId, latest } = lineIndex(messages);
   const lines: string[] = [];
   const images: RenderedLines['images'] = [];
   let pendingSeq: number | undefined;
-  let previous: Message | undefined;
+  let legend = false; // the dictation marks are explained once, at the first person's line that holds them
   for (const message of messages) {
     if (message.kind === 'status') {
       const notice = changeNotice(ctx, message, byId, latest);
       if (notice === null) continue; // nothing to add: the lines go on as if it were not there
       const text = notice ?? excerpt(message.meta.status?.text ?? message.body, 300);
-      // B-047 D4: an agent's own status line (chat.send status) names its author; system lines stay "· text".
-      const own = notice === undefined && message.authorKind === 'agent' && message.meta.status?.details?.by === 'agent';
-      if (text.trim()) lines.push(own ? `· ${authorName(ctx, message)}: ${text}` : `· ${text}`);
-      previous = undefined;
+      const own = notice === undefined && message.authorKind === 'agent' && message.meta.status?.details?.by === 'agent'; // an agent's own note names it
+      if (text.trim()) lines.push(`${lineLabel(ctx, message, own)} · ${text}`);
       continue;
     }
     const files = attachmentLines(ctx, message.attachments, options.texts, options.images);
     images.push(...files.images);
     if (files.pending) pendingSeq = Math.min(pendingSeq ?? message.seq, message.seq);
-    const text = [content(ctx, message, byId), ...files.lines,
+    const marked = !legend && message.authorKind === 'human' && hasMarks(agentBody(message));
+    if (marked) legend = true;
+    const text = [content(ctx, message, byId), ...(marked ? [MARKS_LEGEND] : []), ...files.lines,
       ...secretLines(ctx.services, ctx.agentId, message.meta.secrets)].filter(Boolean).join('\n');
     if (!text) continue;
-    const level = messageLevel(message);
-    // K5: a change of level starts a new header – an important follow-up keeps its own time.
-    const grouped = previous && previous.authorId === message.authorId && isLine(message) && isLine(previous)
-      && messageLevel(previous) === level && message.createdAt - previous.createdAt <= GROUP_GAP_MS;
-    if (grouped) lines.push(text);
-    else lines.push(`[${stampText(message.createdAt, ctx.zone, ctx.now)}] ${authorName(ctx, message)}${level === 'silent' ? ' (quiet)' : ''}: ${text}`);
-    previous = message;
+    lines.push(`${lineLabel(ctx, message, true, options.suggestions ? suggestionTag(ctx, message) : '')} ${text}`);
   }
   const max = options.maxImages ?? 8;
   return { lines, images: images.length > max ? images.slice(-max) : images, pendingSeq };

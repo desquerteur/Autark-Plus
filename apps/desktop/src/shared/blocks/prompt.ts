@@ -98,12 +98,12 @@ export function blockLine(opts: PromptOptions = {}): string {
   const rare = app ? '; rarely an ```app mini-tool' : '';
   if (opts.helpTool) {
     const examples = EXAMPLE_TYPES.filter(type => specsFor('display', tier).some(spec => spec.type === type));
-    return ['## Rich answers', `Markdown by default; ${diagrams} and \`\`\`ui blocks (${examples.join(', ')}, quick replies to the human …) only when clearly faster to grasp, max ~3 per message – ${opts.helpTool} "blocks" lists every type with its fields${app ? ' and the ```app mini-tool' : ''}.`].join('\n');
+    return ['## Rich answers', `Markdown is my default; a ${diagrams} or \`\`\`ui block (${examples.join(', ')}, quick replies to the person …) where it is faster to grasp than text – ${opts.helpTool} "blocks" lists every type with its fields${app ? ' and the ```app mini-tool' : ''}.`].join('\n');
   }
   const names = (kind: BlockSpec['kind']) => specsFor(kind, tier).map(spec => spec.type).join(', ');
   return [
     '## Rich answers',
-    `Markdown by default; a block only when clearly faster to grasp (max ~3 per message): ${diagrams} or \`\`\`ui JSON {"type":…} – display: ${names('display')}; quick replies to the human (important:true puts one on their list): ${names('ask')}${rare}.`,
+    `Markdown is my default; a block where it is faster to grasp than text: ${diagrams} or \`\`\`ui JSON {"type":…} – display: ${names('display')}; quick replies to the person (important:true puts one on their list): ${names('ask')}${rare}.`,
   ].join('\n');
 }
 

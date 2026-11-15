@@ -3,6 +3,7 @@
 // text and the attachment only says so (no second transcription); a message with words of its own stays as it is;
 // without speech to text nothing changes; a quick task posted with only a recording gets its title from the transcript;
 // a message another PC wrote (its recording's bytes not here) is left to that PC and read by its synced meta.dictation.
+// B-082: the body is plain; the hearing's unsure places travel as meta.marks and the agent's view writes them in.
 // Owns: these assertions only. Never: a network, real timers beyond setImmediate, or a real engine.
 
 import { test } from 'node:test';
@@ -13,8 +14,6 @@ import type { FileRef } from '../../../src/shared/model/system.ts';
 import { ORIGINS } from '../../../src/shared/model/origin.ts';
 import { DICTATED } from '../../../src/runtime/context/attachments.ts';
 import { Dictation, dictated, RETRY_MS } from '../../../src/runtime/media/dictation.ts';
-import { QUICK_POST_NS } from '../../../src/runtime/tasks/quick.ts';
-import { KvRepo } from '../../../src/runtime/store/kv.ts';
 import { MessageRepo } from '../../../src/runtime/chat/message-repo.ts';
 import { sttSetup, transcriptResponse } from './stt-fixture.ts';
 import { wav } from './fixtures.ts';
@@ -43,11 +42,27 @@ test('a voice message becomes its own text, marked as dictation; the agents read
     assert.equal(dictated(t.h.db, file.id), true);
     assert.ok(t.h.of('message.updated').some((event) => (event as { id: string }).id === message.id));
     await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
-    const delta = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0, full: false });
+    const delta = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 });
     assert.match(delta.text, /Please book the venue for Friday/);
     assert.ok(delta.text.includes(`(${DICTATED})`), 'the attachment only says where its words are');
     assert.equal(delta.text.match(/Please book the venue/g)?.length, 1, 'the words once');
     assert.equal(t.calls.count, 1, 'one transcription for everyone');
+  } finally { t.temp.cleanup(); }
+});
+
+test('B-082: the heard text is a plain body, its unsure places meta.marks; the agent reads them written in', async () => {
+  const t = sttSetup({ respond: () => transcriptResponse('Book ⟦?Teydra|60%|Tedra 30%⟧ for Friday.') });
+  try {
+    const file = await t.put(wav(1000), 'voice.wav', 'audio/wav');
+    const message = voice(t, file);
+    await until(() => Boolean(t.h.chats.message(message.id)?.body), 'the transcript arrives in the body');
+    const stored = t.h.chats.message(message.id)!;
+    assert.equal(stored.body, 'Book Teydra for Friday.');
+    assert.deepEqual(stored.meta.marks, { uncertain: [{ start: 5, end: 11, pct: 60, alts: [{ t: 'Tedra', pct: 30 }] }] });
+    assert.deepEqual(stored.meta.dictation, { fileId: file.id });
+    await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
+    const delta = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 });
+    assert.ok(delta.text.includes('Book ⟦?Teydra|60%|Tedra 30%⟧ for Friday.'), delta.text);
   } finally { t.temp.cleanup(); }
 });
 
@@ -84,8 +99,8 @@ test('a quick task posted with only a recording gets its title and notes from th
   const t = sttSetup({ respond: () => transcriptResponse('Call the printer about the flyers. They are late again.') });
   try {
     const file = await t.put(wav(1000), 'memo.wav', 'audio/wav');
-    const task = t.h.tasks.create({ title: 'memo.wav', origin: ORIGINS.intake, assigneeKind: 'team', createdBy: 'human' });
-    new KvRepo(t.h.db).set(QUICK_POST_NS, task.id, { attachments: [asAttachment(file)] }, 1);
+    // B-080 F5: the quick task's files are on its own row (Task.files).
+    const task = t.h.tasks.create({ title: 'memo.wav', origin: ORIGINS.intake, assigneeKind: 'human', createdBy: 'human', files: [asAttachment(file)] });
     await until(() => t.h.tasks.get(task.id)!.title !== 'memo.wav', 'the title follows the transcript');
     const renamed = t.h.tasks.get(task.id)!;
     assert.equal(renamed.title, 'Call the printer about the flyers.');
@@ -115,7 +130,7 @@ test('a message another PC wrote is transcribed there: here its synced body is r
     new MessageRepo(t.h.db).update({ ...row, body: 'Words from the other PC.', meta: { ...row.meta, dictation: { fileId: file.id } } });
     assert.equal(dictated(t.h.db, file.id), true);
     await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
-    const delta = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0, full: false });
+    const delta = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 });
     assert.match(delta.text, /Words from the other PC/);
     assert.ok(delta.text.includes(`(${DICTATED})`));
     assert.equal(t.calls.count, 0, 'no second transcription');

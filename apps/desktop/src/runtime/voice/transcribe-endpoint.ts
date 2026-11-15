@@ -130,10 +130,13 @@ export async function uploadOf(s: HearServices, ref: Pick<FileRef, 'id' | 'mime'
   };
 }
 
-/** One transcription at the endpoint. `dictation`: no words heard is '' (SM9), not a failure. */
+/**
+ * One transcription at the endpoint. `dictation`: no words heard is '' (SM9), not a failure. `model` absent: the endpoint
+ * picks its own (the plan's dictation, plan-transcribe.ts, takes only the file and a language); `headers` go along as given.
+ */
 export interface EndpointCall {
-  url: string; key?: string; model: string; language?: string; prompt?: string; dictation: boolean;
-  fetch: FetchFn; timeoutMs: number;
+  url: string; key?: string; model?: string; language?: string; prompt?: string; dictation: boolean;
+  fetch: FetchFn; timeoutMs: number; headers?: Readonly<Record<string, string>>;
 }
 
 /** The upload heard by the endpoint: one request per piece in turn, the texts joined; '' for a dictation without words (SM9). */
@@ -152,9 +155,8 @@ export async function endpointHeard(call: EndpointCall, upload: Upload): Promise
 async function ask(call: EndpointCall, piece: UploadPiece): Promise<string> {
   const body = new FormData();
   body.set('file', new Blob([new Uint8Array(piece.bytes)], { type: piece.mime }), piece.name);
-  body.set('model', call.model);
-  body.set('response_format', 'json');
-  if (call.language) body.set(LANGUAGES_FIELD.test(call.model) ? 'languages[]' : 'language', call.language);
+  if (call.model) { body.set('model', call.model); body.set('response_format', 'json'); }
+  if (call.language) body.set(call.model && LANGUAGES_FIELD.test(call.model) ? 'languages[]' : 'language', call.language);
   if (call.prompt) body.set('prompt', call.prompt);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), call.timeoutMs);
@@ -163,7 +165,7 @@ async function ask(call: EndpointCall, piece: UploadPiece): Promise<string> {
     const response = await post(call, body, controller.signal);
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      if (response.status === 401 || response.status === 403) throw new WorkforceError('unavailable', 'The transcription provider rejected the account. Reconnect it in Settings › Models.');
+      if (response.status === 401 || response.status === 403) throw new WorkforceError('unavailable', 'The transcription provider rejected the account. Reconnect it in Settings › Models.', { details: { status: response.status } });
       if (response.status === 429) throw new WorkforceError('rate_limited', 'The transcription provider limit was reached. Try again later.');
       throw new WorkforceError('bad_request', 'The transcription service did not accept the audio. Check the speech-to-text model (routing.stt in settings.json).');
     }
@@ -186,7 +188,8 @@ async function ask(call: EndpointCall, piece: UploadPiece): Promise<string> {
 /** One POST to the transcription endpoint; network failures become user-safe errors. */
 async function post(call: EndpointCall, body: FormData, signal: AbortSignal): Promise<Response> {
   try {
-    return await call.fetch(call.url, { method: 'POST', headers: call.key ? { Authorization: `Bearer ${call.key}` } : {}, body, redirect: 'error', signal });
+    const headers = { ...(call.key ? { Authorization: `Bearer ${call.key}` } : {}), ...call.headers };
+    return await call.fetch(call.url, { method: 'POST', headers, body, redirect: 'error', signal });
   } catch {
     if (signal.aborted) throw new WorkforceError('timeout', 'The transcription timed out. Try again when the connection is better.');
     throw new WorkforceError('unavailable', 'Could not reach the transcription service.');

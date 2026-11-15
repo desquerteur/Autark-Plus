@@ -5,7 +5,7 @@
 //   deleted, a phone that cannot run it), so the person can still finish it; the takes the app registered
 //   still go to the agent (X03, tasks/answer-files.ts);
 // - "Snooze" for every open to-do (the runtime snoozes any to-do, tasks/human.ts snooze);
-// - "Send to team" for the person's own top-level to-do (day.sendToTeam: Inbox → router) – not a timer, which
+// - "Send to team" for the person's own top-level to-do (tasks.give "team": Autark picks its owner) – not a timer, which
 //   stays with the person (the runtime refuses it, day/handed-off.ts).
 // And the row's check (B-041 §4.1): which to-dos a single tick finishes, and with what answer – a plain to-do,
 // a confirmation, a reminder (a repeating one then waits for its next ring) and a checklist (all items); a
@@ -25,7 +25,7 @@ export interface TodoActions {
   sendToTeam: boolean;
 }
 
-const FINISHED = new Set<TaskView['status']>(['done', 'cancelled']);
+const FINISHED = new Set<TaskView['status']>(['done', 'dropped']);
 
 export function todoActions(task: Pick<TaskView, 'assigneeKind' | 'createdBy' | 'widget' | 'status'> & Partial<Pick<TaskView, 'parentId'>>): TodoActions {
   const open = task.assigneeKind === 'human' && !FINISHED.has(task.status);
@@ -40,7 +40,7 @@ export function todoActions(task: Pick<TaskView, 'assigneeKind' | 'createdBy' | 
   };
 }
 
-/** What the row's check sends as the answer (tasks.complete); `answer` undefined = a plain "Done". */
+/** What the row's check sends as the answer (tasks.finish); `answer` undefined = a plain "Done". */
 export interface CheckAnswer { answer?: unknown }
 
 /** The answer a single tick gives this to-do, or undefined when only its widget can finish it. */

@@ -1,16 +1,17 @@
 // Opens the WebSocket to a linked PC's runtime for the device mesh (`<address>/peer`).
 // B-077: a socket this PC dialed gets the same ping keepalive as one it accepted (http/keepalive.ts), so a dead link
-// closes on this side too within 15–30 s and the mesh redials and catches up.
+// closes on this side too and the mesh redials and catches up. B-080: a socket the keepalive cuts after a minute without
+// any frame is marked silent (devices/channel.ts markSilent), so the mesh's 'peer link closed' line says code 4008.
 // Owns: http(s) → ws(s) mapping, connect timeout, frame size limit, the dialed sockets' keepalive. Never: authentication
 // (the mesh runs its own pinned-key handshake over this socket).
 
 import WebSocket from 'ws';
-import { wrapWs, type SocketLike } from '../devices/channel.ts';
-import { Keepalive } from '../http/keepalive.ts';
+import { markSilent, wrapWs, type SocketLike } from '../devices/channel.ts';
+import { Keepalive, KEEPALIVE_MS } from '../http/keepalive.ts';
 
 const CONNECT_TIMEOUT_MS = 10_000;
 /** One interval for every socket this process dialed (armed only while one is open). */
-const keepalive = new Keepalive();
+const keepalive = new Keepalive(KEEPALIVE_MS, Date.now, markSilent);
 
 export function peerUrl(address: string): string {
   const url = new URL(address);

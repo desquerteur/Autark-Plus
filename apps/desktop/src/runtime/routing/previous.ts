@@ -1,21 +1,25 @@
 // The agent's own model.set request and the return rule D1 (RT2), for router.ts.
 // - Request (RouteRequest.previous.explicit; `asked` = 'model' or 'effort', absent = both): a named
 //   model beats default pins and weak priors (never the policy band); a named effort applies to whichever
-//   model the turn gets – unless the agent policy or the chat choice sets the effort. A route the request shaped reports by 'request'
+//   model the turn gets. A route the request shaped reports by 'request'
 //   (BY_REQUEST, stored in runs.route.by); agents/next-route.ts skips such runs when it looks for
 //   the choice to return to, so a request holds for one step (or its task's turns) only.
 // - D1, same category as the run `previous` comes from (or an unknown one): the previous model
 //   continues unless its prior is weak (< WEAK), with its effort. After a change of category it
 //   continues only while it is not weak and scores within RETURN_MARGIN (0.3) of the best
 //   candidate, and its effort is not carried over.
-// - Effort: agent policy > chat choice > the agent's requested effort > the previous effort (same
-//   model kept, same category) > default policy > category default (clamped by the router).
+// - Effort: the agent's requested effort > agent policy > the previous effort (same model kept, same category) > default
+//   policy > category default (clamped by the router). 13.11.2026: the person's effort in the chat's chip is information
+//   on their line (context/render.ts) – the agent or its subconscious asks for an effort with model.set.
+//   B-089 (11.11.2026: what a run costs, written down): startEffortBy also names which of these the effort came from
+//   ('request' | 'agent' | 'previous' | 'default'); the router carries it as RouteDecision.effortBy and the finish
+//   stores it in runs.route.effortBy. startEffort keeps its two-field answer for its callers.
 // Owns: these rules and their reason texts. Never: I/O, or leaves the policy band (the router
 // passes only candidates inside it).
 
 import type { RouteRequest } from '../contracts.ts';
 import type { Effort, ModelInfo, RouteDecision } from '../../shared/model/providers.ts';
-import { ROUTE_BY_REQUEST } from '../../shared/model/runs.ts';
+import { ROUTE_BY_REQUEST, type EffortBy } from '../../shared/model/runs.ts';
 import type { EffectivePolicy } from './policies.ts';
 import { categoryLabel, defaultEffortFor } from './categories.ts';
 import { WEAK, strengthOf } from './score.ts';
@@ -49,13 +53,20 @@ export function sameCategory(previous: Previous | undefined, category: string): 
   return !previous?.category || previous.category === category;
 }
 
-/** The effort before clamping, and whether the agent's request set it. */
+/** The effort before clamping, whether the agent's request set it, and (B-089) where it came from – RouteDecision.effortBy. */
+export function startEffortBy(policy: EffectivePolicy, previous: Previous | undefined, category: string, keptPrevious: boolean): { effort: Effort; requested: boolean; by: EffortBy } {
+  // B-079 (live 07.11.: Nora's model.set xhigh, asked for by the owner, lost to her own fixed medium): the agent's own
+  // request beats its own fixed effort.
+  if (previous !== undefined && effortAsked(previous)) return { effort: previous.effort, requested: true, by: 'request' };
+  if (policy.agentEffort) return { effort: policy.agentEffort, requested: false, by: 'agent' };
+  if (previous && keptPrevious && sameCategory(previous, category)) return { effort: previous.effort, requested: false, by: 'previous' };
+  return { effort: policy.defaultEffort ?? defaultEffortFor(category), requested: false, by: 'default' };
+}
+
+/** The effort before clamping, and whether the agent's request set it (startEffortBy without the origin). */
 export function startEffort(policy: EffectivePolicy, previous: Previous | undefined, category: string, keptPrevious: boolean): { effort: Effort; requested: boolean } {
-  const chosen = policy.agentEffort ?? policy.chatEffort;
-  if (chosen) return { effort: chosen, requested: false };
-  if (previous && effortAsked(previous)) return { effort: previous.effort, requested: true };
-  if (previous && keptPrevious && sameCategory(previous, category)) return { effort: previous.effort, requested: false };
-  return { effort: policy.defaultEffort ?? defaultEffortFor(category), requested: false };
+  const { effort, requested } = startEffortBy(policy, previous, category, keptPrevious);
+  return { effort, requested };
 }
 
 /**

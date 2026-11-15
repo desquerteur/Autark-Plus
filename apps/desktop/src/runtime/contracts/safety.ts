@@ -69,7 +69,7 @@ export interface ToolRegistry {
    *  tool list changes or the app is removed). Unknown names are ignored. */
   unregister?(name: string): void;
   /** Tools offered to this agent in this mode (deterministic order for prompt caching). */
-  /** `engine` (addition): filters `audience` – 'http' tools only without own tools, 'mcp' only via the hub. */
+  /** `engine` (addition): the calling engine; B-080: every engine reaches the same tools (offerFor is where they differ). */
   specsFor(agent: Agent, mode: ModeInfo, engine?: { ownTools: boolean; via: 'mcp' | 'native' }): ToolSpec[];
   /**
    * B-049 F4 (addition; optional so simple fakes stay valid – callers then offer specsFor): what an engine is
@@ -99,6 +99,8 @@ export interface FileStore {
   putPath(path: string, mime?: string): Promise<FileRef>;
   get(id: string): FileRef | undefined;
   path(id: string): string; // absolute path of the blob
+  /** B-080: path(id) with the bytes here – fetched from another of the person's PCs first when only the row came over. */
+  local(id: string): Promise<string>;
   read(id: string): Promise<Uint8Array>;
   /** Extracted text (pdf/text), cached. */
   text(id: string, maxChars?: number): Promise<string | undefined>;
@@ -107,8 +109,12 @@ export interface FileStore {
 export interface DeviceService {
   self(): Device;
   list(): Device[];
-  /** Calls a method on a linked device's runtime (tools, engines). */
-  call(deviceId: string, method: string, params: unknown, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Calls a method on a linked device's runtime (tools, engines); a PC without a live link is dialed first. `timeoutMs`
+   * (B-080): how long the answer may take once the call is sent (the RPC default of 120 s when absent; a tools.call
+   * is bounded by its own limits).
+   */
+  call(deviceId: string, method: string, params: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<unknown>;
   online(deviceId: string): boolean;
 }
 
@@ -118,6 +124,8 @@ export interface NotificationInput {
   body: string;
   conversationId?: string;
   taskId?: string;
+  /** B-084: the in-app place a tap opens ('#/settings/devices'); only a '#/' app route counts (pwa/push.ts pushTarget). */
+  route?: string;
 }
 
 /** Extra push channel (e.g. web push); called only for notifications that passed the settings filter (here or on another

@@ -148,7 +148,7 @@ test('My day: input, row menu (snooze, remove), calendar slot and block, handed 
 
   // 4. Handed off: work the person gave an agent.
   const manager = (await rpc.call('agents.list')).find((agent) => agent.template === 'manager' || agent.mode === 'manager');
-  await rpc.call('tasks.create', { title: 'Prepare the tax papers', assigneeKind: 'agent', assigneeId: manager.id });
+  await rpc.call('tasks.create', { title: 'Prepare the tax papers', to: manager.id });
   const handedToggle = view.getByRole('button', { name: /^Handed off \d+$/ });
   await handedToggle.waitFor({ timeout: 15_000 });
   await handedToggle.click();

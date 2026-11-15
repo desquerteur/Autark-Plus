@@ -1,6 +1,6 @@
 // `file` block: a deliverable. Desktop: Open / Show in folder (by path, or the stored copy by
 // fileId). Phone/PWA: the file name and Download when the runtime stored the file (fileId) –
-// never the PC's path.
+// never the PC's path; inside the Android app Download hands the bytes to the app (pwa/phone-download.ts).
 // Owns: file row rendering and the download. Never: opens paths outside the host's own checks
 // (main decides) or shows an absolute path off the desktop.
 
@@ -11,6 +11,7 @@ import { rpc } from '../../lib/rpc.ts';
 import { toastError } from '../../lib/toasts.ts';
 import { isFileId, openPath, platform } from '../host.ts';
 import { Inline } from '../markdown.tsx';
+import { saveToPhone } from '../../pwa/phone-download.ts';
 import { s } from './util.ts';
 
 /** files.read sends at most this much in one frame (runtime READ_MAX_BYTES). */
@@ -23,7 +24,9 @@ async function download(fileId: string, name: string): Promise<void> {
   const binary = atob(dataBase64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const blob = new Blob([bytes], { type: mime });
+  if (await saveToPhone(blob, name)) return; // the Android app: into the phone's Downloads (B-084)
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = name;

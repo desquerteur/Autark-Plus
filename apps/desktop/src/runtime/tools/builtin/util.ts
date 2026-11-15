@@ -69,13 +69,14 @@ export function resolveChat(ctx: ToolContext, chatId: string | undefined, option
   const conversation = ctx.services.chats.get(id);
   if (!conversation) throw new WorkforceError('not_found', `Chat ${id} not found.`);
   if (options.mustBeMember !== false && !isMember(ctx, id)) {
-    throw new WorkforceError('forbidden', `I am not a member of chat ${id}.`);
+    // B-080 (live: a line meant for a colleague went to the wrong chat first): the refusal names the way that reaches them.
+    throw new WorkforceError('forbidden', `I am not a member of chat ${id}. I reach its members in my 1:1 with each of them (chat.direct).`);
   }
   return id;
 }
 
 /** resolveChat's error for a run in no chat (B-054): what to do instead – chat tools need a chat, work does not. */
-export const NO_CHAT_TEXT = 'This run is in no chat. Pass chatId for a chat tool. To write to someone: chat.send {to}. Tasks and to-dos need no chat.';
+export const NO_CHAT_TEXT = 'This run is in no chat. Pass chatId for a chat tool. To write to someone: a <chat> block into my 1:1 with them (chat.direct finds or opens it). Tasks and to-dos need no chat.';
 
 /**
  * B-054: the chat a task, to-do or routine is handed over in, if any. An explicit chatId goes through resolveChat
@@ -115,9 +116,9 @@ export function viewTitle(ctx: ToolContext, chat: Pick<Conversation, 'title' | '
   return displayTitle(chat, members.filter((member) => !member.leftAt), ctx.agent.id, (id) => memberName(ctx.services, id));
 }
 
-/** The member ids a chat tool names: `members`, plus the older `agentIds` and `includeHuman` (B-050 K3), once each. */
-export function memberIds(args: { members?: string[]; agentIds?: string[]; includeHuman?: boolean }): string[] {
-  return [...new Set([...(args.members ?? []), ...(args.agentIds ?? []), ...(args.includeHuman ? [HUMAN_ID] : [])].map((id) => id.trim()).filter(Boolean))];
+/** The member ids a chat tool names in `members`, trimmed, once each. */
+export function memberIds(args: { members?: string[] }): string[] {
+  return [...new Set((args.members ?? []).map((id) => id.trim()).filter(Boolean))];
 }
 
 /** Why `id` cannot be a chat member an agent adds (B-050 K3: an agent, 'human' or a person of the organisation); undefined when it can. */

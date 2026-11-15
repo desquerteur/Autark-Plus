@@ -1,10 +1,15 @@
 // Settings › Apps writes what the AI writes: one entry of <data>/connectors/mcp.json or mail.json (skill connect-apps). The
 // runtime's watcher applies the change within a second; `apps.changed` brings the rows up to date. A key or password goes into
 // the secrets catalog first and the file holds only its handle secret://<id>. Everything else in the file stays as it is.
-// Owns: the pure edits of those two files, the entries the forms make, a row's words, and the one read-edit-write through files.*.
+// A pasted Claude Desktop/Code/Cursor config goes in as it is (pastedServers); only values that hold a secret (isSecretPair, an
+// Authorization header) move into the catalog, a plain setting like NODE_ENV stays readable in the file.
+// Owns: the pure edits of those two files, the entries the forms and a paste make, which values are secrets, a row's words, and
+// the one read-edit-write through files.*.
 // Never: holds a value after handing it to secrets.save, writes a key into a file, or connects anything itself (the runtime does).
 
 import type { AppStatus, ConnectedApp, MailServer } from '../../shared/model/apps.ts';
+import { isSecretPair, kindForName } from '../../shared/model/key-values.ts';
+import type { SecretInfo } from '../../shared/model/security.ts';
 import { rpc } from '../lib/rpc.ts';
 
 export type ConnectorFile = 'mcp.json' | 'mail.json';
@@ -54,11 +59,21 @@ export function freeKey(name: string, entries: Json): string {
   for (let n = 2; ; n += 1) if (!Object.hasOwn(entries, `${name} ${n}`)) return `${name} ${n}`;
 }
 
-/** The file with a new entry `name` (made free). */
-export function withEntry(file: ConnectorFile, text: string, name: string, entry: Json): string {
-  const { root, entries } = parsed(file, text);
-  return written(file, root, { ...entries, [freeKey(name, entries)]: entry });
+/** Throws when the file is broken (the error names it), before anything is stored for it. */
+export function checkFile(file: ConnectorFile, text: string): void {
+  parsed(file, text);
 }
+
+/** The file with each server added under a free name. */
+export function withEntries(file: ConnectorFile, text: string, servers: readonly PastedServer[]): string {
+  const { root, entries } = parsed(file, text);
+  const next = { ...entries };
+  for (const server of servers) next[freeKey(server.name, next)] = server.entry;
+  return written(file, root, next);
+}
+
+/** The file with a new entry `name` (made free). */
+export const withEntry = (file: ConnectorFile, text: string, name: string, entry: Json): string => withEntries(file, text, [{ name, entry }]);
 
 /** The file without the entry `name`. */
 export function withoutEntry(file: ConnectorFile, text: string, name: string): string {
@@ -95,11 +110,19 @@ export function splitCommand(line: string): { command: string; args: string[] } 
   return { command: parts[0] ?? '', args: parts.slice(1) };
 }
 
-/** A name for an address without one: its host, or the program's name. */
-export function nameFromAddress(address: string): string {
-  const host = /^https?:\/\/([^/:?#]+)/i.exec(address)?.[1];
-  if (host) return host.replace(/^(www|mcp|api)\./, '').split('.')[0] || host;
-  return address.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1|com)$/i, '') || 'app';
+const hostOf = (address: string): string | undefined => /^https?:\/\/([^/:?#]+)/i.exec(address)?.[1];
+const hostName = (host: string): string => (/^\d+(\.\d+){3}$/.test(host) ? host : host.replace(/^(www|mcp|api)\./, '').split('.')[0] || host);
+const baseName = (path: string): string => path.split(/[\\/]/).pop()?.replace(/[@:][^@:]*$/, '').replace(/\.(exe|cmd|bat|ps1|com|m?js|py)$/i, '') ?? '';
+
+/**
+ * A name for a server without one: an address's host (an IP whole); for a command the server it runs – the host of an address
+ * among `args`, a scoped package, an argument naming "mcp" – else the program's name.
+ */
+export function nameFromAddress(address: string, args: readonly string[] = []): string {
+  const host = hostOf(address) ?? args.map(hostOf).find(Boolean);
+  if (host) return hostName(host);
+  const runs = args.find((arg) => /^@[\w.-]+\/[\w.-]/.test(arg)) ?? args.find((arg) => !arg.startsWith('-') && /mcp/i.test(arg));
+  return (runs && baseName(runs)) || baseName(address) || 'app';
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -130,17 +153,128 @@ export function mailEntry(fields: MailFields): { blocked: string; entry?: Json }
   return { blocked: '', entry: { address, imap, smtp } };
 }
 
+export interface PastedServer { name: string; entry: Json }
+
+const serverAddress = (entry: Json): string => [entry.url, entry.serverUrl, entry.command].find((value): value is string => typeof value === 'string' && value.trim() !== '') ?? '';
+
+/** An object from pasted text; a fragment like `"mcpServers": {…}` without its outer braces is read as one. */
+function pastedObject(text: string): Json | string {
+  const source = text.replace(/^﻿/, '').trim();
+  if (!source) return 'Paste an mcpServers block from Claude Desktop, Claude Code or Cursor';
+  for (const candidate of source.startsWith('{') ? [source] : [source, `{${source.replace(/,\s*$/, '')}}`]) {
+    try {
+      const value: unknown = JSON.parse(candidate);
+      return isRecord(value) ? value : 'This is JSON, but not an object of servers';
+    } catch { /* the next candidate */ }
+  }
+  try { JSON.parse(source); } catch (failure) { return `Not valid JSON: ${(failure as Error).message}`; }
+  return 'Not valid JSON';
+}
+
+/**
+ * The servers of a pasted config – {"mcpServers": {…}} (Claude Desktop, Claude Code, Cursor), {"servers": {…}} (VS Code), the bare
+ * map or one server – each as it is, without "type" and with "serverUrl" as "url". `error`: the first entry without a command or
+ * an address, or why the text is no config ('' = all of them go in).
+ */
+export function pastedServers(text: string): { servers: PastedServer[]; error: string } {
+  const root = pastedObject(text);
+  if (typeof root === 'string') return { servers: [], error: root };
+  const args = Array.isArray(root.args) ? root.args.filter((arg): arg is string => typeof arg === 'string') : [];
+  const map = isRecord(root.mcpServers) ? root.mcpServers : isRecord(root.servers) ? root.servers : serverAddress(root) ? { [nameFromAddress(serverAddress(root), args)]: root } : root;
+  const servers: PastedServer[] = [];
+  for (const [name, value] of Object.entries(map)) {
+    if (!isRecord(value) || !serverAddress(value)) return { servers: [], error: `"${name}" needs a "command" or a "url"` };
+    const { type: _type, serverUrl, ...entry } = value;
+    const hasUrl = typeof entry.url === 'string' && entry.url.trim() !== '';
+    servers.push({ name, entry: hasUrl || typeof serverUrl !== 'string' || !serverUrl.trim() ? entry : { ...entry, url: serverUrl } });
+  }
+  return servers.length ? { servers, error: '' } : { servers, error: 'No server in it' };
+}
+
+/** One value of an entry that goes into Secrets: env or headers, its key, the scheme kept in front ("Bearer "), the value itself. */
+export interface SecretSpot { field: 'env' | 'headers'; key: string; prefix: string; value: string }
+
+const SCHEME = /^(?:Bearer|Token|Basic)\s+/i;
+
+/** Whether a header (`header`) or env value goes into Secrets: any Authorization header, else what isSecretPair calls a secret. */
+export const holdsSecret = (key: string, value: string, header: boolean): boolean => (header && key.trim().toLowerCase() === 'authorization') || isSecretPair({ name: key.trim(), value });
+
+/** The values of `entry` that hold a secret (isSecretPair, any Authorization header); a handle or a ${VAR} placeholder stays as it is. */
+export function secretSpots(entry: Json): SecretSpot[] {
+  const spots: SecretSpot[] = [];
+  for (const field of ['env', 'headers'] as const) {
+    const values = entry[field];
+    if (!isRecord(values)) continue;
+    for (const [key, raw] of Object.entries(values)) {
+      if (typeof raw !== 'string' || !raw.trim() || raw.includes('secret://') || raw.includes('${')) continue;
+      if (!holdsSecret(key, raw, field === 'headers')) continue;
+      const prefix = field === 'headers' ? SCHEME.exec(raw)?.[0] ?? '' : '';
+      if (raw.slice(prefix.length).trim()) spots.push({ field, key, prefix, value: raw.slice(prefix.length).trim() });
+    }
+  }
+  return spots;
+}
+
+type Store = (label: string, kind: SecretInfo['kind'], value: string, description: string) => Promise<string>;
+
+/** `entry` with each secret value in the catalog and its handle in the file (`store` saves one and gives its id). */
+export async function movedSecrets(name: string, entry: Json, store: Store = storeKey): Promise<Json> {
+  const out: Json = { ...entry };
+  for (const spot of secretSpots(entry)) {
+    const auth = spot.key.toLowerCase() === 'authorization';
+    const id = await store(auth ? `${name} token` : `${name} ${spot.key}`, auth ? 'token' : kindForName(spot.key), spot.value, `Connects the app ${name} (Settings › Apps).`);
+    out[spot.field] = { ...(out[spot.field] as Json), [spot.key]: `${spot.prefix}secret://${id}` };
+  }
+  return out;
+}
+
+/** The paste dialog's check line for servers that parsed: their names, how many keys go into Secrets, a ${…} still to fill in. */
+export function pasteLine(servers: readonly PastedServer[]): string {
+  const keys = servers.reduce((sum, server) => sum + secretSpots(server.entry).length, 0);
+  return [
+    `Adds ${servers.map((server) => server.name).join(', ')}`,
+    keys ? `${keys} ${keys === 1 ? 'key goes' : 'keys go'} into Secrets` : '',
+    servers.some((server) => JSON.stringify(server.entry).includes('${')) ? 'fill in each ${…} first' : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/** The env (a command) or header (an address) values of the own-server form's rows; `blocked` names a row that cannot go in. */
+export function namedValues(kind: 'url' | 'command', rows: ReadonlyArray<{ name: string; value: string }>): { values: Record<string, string>; blocked: string } {
+  const values: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (!name && !row.value) continue;
+    if (!name) return { values, blocked: 'Give every value a name' };
+    if (kind === 'url' ? !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) : /[\s=]/.test(name)) return { values, blocked: `"${name}" is not ${kind === 'url' ? 'a header' : 'a variable'} name` };
+    values[name] = row.value;
+  }
+  return { values, blocked: '' };
+}
+
 /** A key into the catalog; the file gets its handle. */
-export async function storeKey(label: string, kind: 'token' | 'password', value: string, description: string): Promise<string> {
+export async function storeKey(label: string, kind: SecretInfo['kind'], value: string, description: string): Promise<string> {
   return (await rpc.call('secrets.save', { label, kind, value, description })).id;
 }
 
-/** Reads the file, applies `change` to its text and writes it back, unless someone changed it in between (a conflict the caller shows). */
-export async function editConnectors(file: ConnectorFile, change: (text: string) => string): Promise<void> {
+/**
+ * Reads the file, applies `change` to its text and writes it back, unless someone changed it in between (a conflict the caller
+ * shows). An async `change` stores its keys after it has checked the text, so a broken file leaves no key behind.
+ */
+export async function editConnectors(file: ConnectorFile, change: (text: string) => string | Promise<string>): Promise<void> {
   const root = (await rpc.call('system.root')).path;
   const slash = root.includes('\\') ? '\\' : '/';
   const path = `${root}${slash}connectors${slash}${file}`;
   const now = await rpc.call('files.readPath', { path });
   if (now.state !== 'text' && now.state !== 'missing') throw new Error(`${file} cannot be read as text.`);
-  await rpc.call('files.writePath', { path, text: change(now.text ?? ''), ...(now.stamp ? { base: now.stamp } : {}) });
+  await rpc.call('files.writePath', { path, text: await change(now.text ?? ''), ...(now.stamp ? { base: now.stamp } : {}) });
+}
+
+/** Adds servers to mcp.json: the file is checked first, then their secrets go into the catalog and the entries hold the handles. */
+export function addServers(servers: readonly PastedServer[]): Promise<void> {
+  return editConnectors('mcp.json', async (text) => {
+    checkFile('mcp.json', text);
+    const moved: PastedServer[] = [];
+    for (const server of servers) moved.push({ name: server.name, entry: await movedSecrets(server.name, server.entry) });
+    return withEntries('mcp.json', text, moved);
+  });
 }

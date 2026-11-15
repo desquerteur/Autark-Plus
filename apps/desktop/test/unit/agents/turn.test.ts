@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { tempDir } from '../store/helpers.ts';
-import { setNextRoute } from '../../../src/runtime/agents/next-route.ts';
+import { setNextRoute, takeNextRoute } from '../../../src/runtime/agents/next-route.ts';
 import { mergeAttempts, TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { Journal } from '../../../src/runtime/runs/journal.ts';
 import { buildTurn, planTurn, routeRequest } from '../../../src/runtime/agents/turn-prepare.ts';
@@ -42,7 +42,7 @@ test('spoken answers carry the call id, typed messages during a call remain norm
   assert.equal(h.chats.message(typed.messageId!)?.meta.call, undefined);
 });
 
-test('the subconscious gets the mode the turn runs in, before and after it', async () => {
+test('the subconscious gets the mode the turn runs in before it; nothing of it runs after', async () => {
   const h = setup();
   const seen: Array<[string, string | undefined]> = [];
   Object.assign(h.services, {
@@ -50,30 +50,37 @@ test('the subconscious gets the mode the turn runs in, before and after it', asy
     modes: { get: (key: string) => (key === 'video' ? { ...GENERAL_MODE, key: 'video' } : GENERAL_MODE) },
     subconscious: {
       beforeTurn: async (input: { mode?: string }) => { seen.push(['before', input.mode]); return undefined; },
-      afterTurn: (input: { mode?: string }) => { seen.push(['after', input.mode]); },
     },
   });
-  h.chats.update(h.chat.id, { settings: { mode: 'video' } }, 'human');
+  h.chats.update(h.chat.id, { settings: { mode: 'general' } }, 'human'); // a chat's old mode setting changes nothing
+  h.org.add({ ...h.org.require(h.tom.id), mode: 'video' });
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Cut the intro' });
   const outcome = await new TurnExecutor(() => h.services).execute(h.request());
   assert.equal(outcome.status, 'done');
-  assert.deepEqual(seen, [['before', 'video'], ['after', 'video']], 'the chat\'s mode (plan.mode.key), not the agent\'s general');
+  assert.deepEqual(seen, [['before', 'video']], 'the agent\'s own mode (plan.mode.key), never a chat\'s');
 });
 
 test('a model.set request reaches the router as an explicit previous choice, once', async () => {
   const h = setup();
   h.runs.push({ id: 'run_0', agentId: h.tom.id, conversationId: h.chat.id, model: 'codex:gpt-6.1-sol', effort: 'low', status: 'done' });
 
-  setNextRoute(h.db, h.tom.id, h.chat.id, { modelId: 'claude:claude-opus-5-5', effort: 'high', at: h.clock.now() });
+  setNextRoute(h.db, h.tom.id, { modelId: 'claude:claude-opus-5-5', effort: 'high', at: h.clock.now() });
   const asked = (await planTurn(h.services, h.request()))!;
-  assert.deepEqual(asked.previous, { modelId: 'claude:claude-opus-5-5', effort: 'high', explicit: true });
+  // B-083 D1: `from` – the model my newest done run in this chat ran on; the turn stays there while the named one cannot run
+  assert.deepEqual(asked.previous, { modelId: 'claude:claude-opus-5-5', effort: 'high', explicit: true, from: 'codex:gpt-6.1-sol' });
   assert.equal(routeRequest(asked).previous?.explicit, true);
 
   // Effort only: the new effort, still the agent's own choice; the model follows the usual rules (RT2).
-  setNextRoute(h.db, h.tom.id, h.chat.id, { effort: 'xhigh', at: h.clock.now() });
+  setNextRoute(h.db, h.tom.id, { effort: 'xhigh', at: h.clock.now() });
   assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'xhigh', explicit: true, asked: 'effort' });
 
-  // The request was consumed: the plain return rule is not explicit.
+  // B-080: planning leaves it (a turn that fails before its engine keeps it); taken as the engine starts, the plain
+  // return rule is not explicit.
+  const again = (await planTurn(h.services, h.request()))!;
+  assert.equal(again.previous?.explicit, true);
+  assert.equal(again.nextStepAt, h.clock.now(), 'the plan carries the at of the request it read');
+  assert.equal(takeNextRoute(h.db, h.tom.id, again.nextStepAt! - 1), undefined, 'another request (an older at) is not taken');
+  takeNextRoute(h.db, h.tom.id, again.nextStepAt);
   const plain = (await planTurn(h.services, h.request()))!;
   assert.deepEqual(plain.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'low' });
   assert.equal(routeRequest(plain).previous?.explicit, undefined);
@@ -150,7 +157,7 @@ test('attachments are extracted before the delta; a failed extraction does not s
   assert.deepEqual(h.contextCalls, []);
 });
 
-test('last-prompt.md holds what is sent: stable, volatile and the "My final text" line', async () => {
+test('last-prompt.md holds what is sent: the system prompt, then the input with the live context first', async () => {
   const h = setup();
   const temp = tempDir('wf-last-turn-');
   try {
@@ -159,9 +166,9 @@ test('last-prompt.md holds what is sent: stable, volatile and the "My final text
     const plan = (await planTurn(h.services, h.request()))!;
     const turn = await buildTurn(h.services, plan, h.request(), h.route, []);
     const written = readFileSync(path.join(temp.dir, 'agents', h.tom.id, 'last-prompt.md'), 'utf8');
-    assert.match(turn.prompt.volatile ?? '', /My final text/);
-    assert.ok(written.includes(turn.prompt.stable));
-    assert.ok(written.includes(turn.prompt.volatile ?? ''), written);
+    assert.ok(written.includes(`# System prompt\n\n${turn.prompt.stable}\n\n# Input\n\n<live>\n${turn.prompt.volatile}\n</live>`), written);
+    const text = turn.input.map((part) => (part.type === 'text' ? part.text : '')).join('');
+    assert.ok(written.includes(text), 'the turn input as it goes out');
   } finally { temp.cleanup(); }
 });
 
@@ -242,24 +249,22 @@ test('an account limit reported as an error reaches ownership as a limit, not as
   assert.deepEqual(outcomes, ['limit', 'limit', 'failed']);
 });
 
-test('engine output files reach the message; an answer that is only an image is kept, not removed', async () => {
+test('engine output files reach the message; an answer that is only an image is posted', async () => {
   const h = setup();
   const request = h.request({ runId: 'run_files' });
   const plan = (await planTurn(h.services, request))!;
-  const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
   const calls: Array<{ body: string; files?: unknown[] }> = [];
-  const real = h.services.chats.finishAgentMessage.bind(h.services.chats);
-  h.services.chats.finishAgentMessage = (id, final) => { calls.push({ body: final.body, files: final.files }); return real(id, { ...final, files: undefined }); };
+  const real = h.services.chats.postAgentMessage.bind(h.services.chats);
+  h.services.chats.postAgentMessage = (chat, agentId, runId, final) => { calls.push({ body: final.body, files: final.files }); return real(chat, agentId, runId, { ...final, files: undefined }); };
   const image = { name: 'generated-image-1.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' };
-  finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: '', stop: 'done', files: [image] }), messageId);
+  const messageId = finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: '', stop: 'done', files: [image] })).messageId;
   assert.deepEqual(calls, [{ body: '', files: [image] }], 'files are handed to the chat with the final message');
-  assert.ok(h.chats.messages(h.chat.id).some((message) => message.id === messageId), 'the message stays');
+  assert.ok(h.chats.messages(h.chat.id).some((message) => message.id === messageId), 'the message is posted');
 
-  // Without text and without files an empty answer is still removed.
+  // Without text and without files nothing is posted.
   const again = h.request({ runId: 'run_empty' });
-  const second = h.chats.beginAgentMessage(h.chat.id, h.tom.id, again.runId).id;
-  finishTurn(h.services, (await planTurn(h.services, again))!, h.routed(), again, h.attempt({ text: '', stop: 'done' }), second);
-  assert.ok(!h.chats.messages(h.chat.id).some((message) => message.id === second));
+  finishTurn(h.services, (await planTurn(h.services, again))!, h.routed(), again, h.attempt({ text: '', stop: 'done' }));
+  assert.ok(!h.chats.messages(h.chat.id).some((message) => message.runId === again.runId));
 });
 
 test('a failover after tool calls books both attempts: tools, plan, tokens and cost (regression)', async () => {
@@ -346,25 +351,3 @@ test('a failed or refused call of ours is no progress: its output decides, else 
   assert.deepEqual(ran, { tools: [['shell.exec', true], ['tasks.create', true]], progressed: true });
 });
 
-test('B-047: a bare task wake for work its owner set aside starts no turn; a note brings it back; an empty input is the app\'s note', async () => {
-  const h = setup();
-  const task = h.tasks.create({ conversationId: h.chat.id, title: 'Compare STT models', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: h.tom.id });
-  // The person said "stop": the owner set its own task to waiting while the creation's task wake was still queued.
-  h.tasks.setStatus(task.id, 'waiting', h.tom.id, 'Stopped at the person\'s request.');
-  assert.equal(await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })), undefined, 'the stale wake restarts nothing');
-  for (const status of ['blocked', 'needs_you'] as const) {
-    h.tasks.setStatus(task.id, status, h.tom.id, 'set aside');
-    assert.equal(await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })), undefined, status);
-  }
-  h.tasks.setStatus(task.id, 'waiting', h.tom.id, 'Stopped.');
-  const news = await planTurn(h.services, h.request({ taskId: task.id, reason: 'task', notes: [{ text: 'The human marked a step as done: Draft', at: h.clock.now() }] }));
-  assert.ok(news, 'a wake with news still runs');
-  h.tasks.setStatus(task.id, 'working', h.tom.id);
-  const plan = (await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })))!;
-  assert.ok(plan, 'work in progress still continues');
-  h.context.delta = () => { h.contextCalls.push('delta'); return { text: '', images: [], lastSeq: 0 }; };
-  const turn = await buildTurn(h.services, plan, h.request({ taskId: task.id, reason: 'task' }), h.route, []);
-  const text = (turn.input[0] as { text: string }).text;
-  assert.match(text, /^Note from the app – nobody wrote anything new: my task \S+ "Compare STT models" is working;/);
-  assert.doesNotMatch(text, /^Continue your task/);
-});

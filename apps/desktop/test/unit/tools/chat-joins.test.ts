@@ -103,17 +103,32 @@ test('members by name: the full name or a first name only one has, case ignored;
   const two = await h.run('chat.direct', { with: 'Anna' });
   assert.equal(two.failed, true);
   assert.equal(two.text, '"Anna" fits Anna Berg (per_anna000000), Anna Lee (ag_anna): name one by id.');
-  assert.match((await h.run('chat.add_members', { chatId: room, members: ['Zed'] })).text, /^Nobody is called "Zed": name members by id/);
-  assert.match((await h.run('chat.direct', { with: 'ag_nobody' })).text, /Unknown agent ag_nobody/, 'an id is never looked up as a name');
+  assert.match((await h.run('chat.add_members', { chatId: room, members: ['Zed'] })).text, /^Nobody is called "Zed"\. Who I can name: Ava \(ag_ava\), Ben \(ag_ben\), Finn \(ag_fin\), Anna Lee \(ag_anna\), Anna Berg \(per_anna000000\), Carl Diaz \(per_carl000000\), Sam \(human\)\./);
+  assert.match((await h.run('chat.direct', { with: 'ag_nobody' })).text, /Nobody is called "ag_nobody"\. Who I can name: Ava \(ag_ava\)/, 'B-080: an unknown id-like value names the ones who exist');
 });
 
-test('chat.remove_members takes members like chat.add_members (memberIds stays); a colleague who started a chat stays', async () => {
+test('B-080: an id-like value that is no id is an agent\'s name after its prefix – agents only', async () => {
+  const h = setup();
+  h.org.add(agent('ag_1x', 'Nora', { spaceId: 'spc_design' }));
+  const sent = await h.run('chat.direct', { with: 'ag_nora' });
+  assert.equal(sent.failed, false, sent.text);
+  assert.equal(sent.chatId, findDirect(h.services, 'ag_ava', 'ag_1x'), 'Nora\'s 1:1');
+  assert.equal((await h.run('chat.direct', { with: 'ag_Nora' })).chatId, sent.chatId, 'the name after the prefix, case ignored');
+  const zed = await h.run('chat.direct', { with: 'ag_zed' });
+  assert.equal(zed.failed, true);
+  assert.match(zed.text, /Nobody is called "ag_zed"\. Who I can name: Ava \(ag_ava\), Ben \(ag_ben\), Finn \(ag_fin\), Nora \(ag_1x\), Anna Berg \(per_anna000000\), Carl Diaz \(per_carl000000\), Sam \(human\)\.$/);
+  assert.equal((await h.run('chat.direct', { with: 'per_anna' })).failed, true, 'a person is named by the id or the name, never by a prefix');
+  assert.match((await h.run('chat.direct', { with: 'ag_anna' })).text, /Nobody is called "ag_anna"/, 'among agents only: ag_anna does not pick Anna Berg');
+});
+
+test('chat.remove_members takes members like chat.add_members; a colleague who started a chat stays', async () => {
   const h = setup();
   const tool = chatTools.find((item) => item.name === 'chat.remove_members')!;
   assert.deepEqual(validate({ chatId: 'chat_x', members: [ANNA] }, tool.inputSchema), [], 'the reviewer\'s K10-6 call');
   const room = h.chats.create({ title: 'Launch', agentIds: ['ag_ava', 'ag_ben'], people: [ANNA, CARL], humans: false, createdBy: 'ag_ava', lead: 'ag_ava' });
   assert.equal((await h.run('chat.remove_members', { chatId: room.id, members: [ANNA] })).failed, false);
-  assert.equal((await h.run('chat.remove_members', { chatId: room.id, memberIds: [CARL] })).failed, false, 'the older name');
+  assert.equal((await h.run('chat.remove_members', { chatId: room.id, members: [CARL] })).failed, false);
+  assert.match(validate({ chatId: room.id, memberIds: [ANNA] }, tool.inputSchema).join(' '), /memberIds: unknown property/, 'the old name is gone; validation names the right one');
   assert.deepEqual(h.active(room.id), ['ag_ava', 'ag_ben']);
   assert.match((await h.run('chat.remove_members', { chatId: room.id })).text, /Name the members to remove/);
 
@@ -131,10 +146,10 @@ test('chat.create with one member and no title opens the pair\'s default 1:1 (K1
   const topic = await h.run('chat.create', { members: ['ag_ben'], title: 'Q4 numbers' });
   assert.notEqual(topic.chatId, first.chatId, 'a topic makes its own chat');
   assert.notEqual((await h.run('chat.create', { members: ['ag_ben'], hidden: true })).chatId, first.chatId, 'a hidden work room is never the default');
-  const own = await h.run('chat.create', { title: 'Launch research', agentIds: ['ag_ava'] });
+  const own = await h.run('chat.create', { title: 'Launch research', members: ['ag_ava'] });
   assert.equal(own.failed, false, 'a titled work room of the agent alone, as before B-050');
   assert.deepEqual(h.active(own.chatId), ['ag_ava']);
-  assert.equal((await h.run('chat.create', { agentIds: ['ag_ava'] })).failed, true, 'without a title nothing names it');
+  assert.equal((await h.run('chat.create', { members: ['ag_ava'] })).failed, true, 'without a title nothing names it');
 
   // The owner's default 1:1 with Ava, which Ben joined before B-078 (older data – a 1:1 takes nobody now): Ava's own, not Ben's.
   const owners = findOrCreateDirect(h.services, HUMAN_ID, 'ag_ava', { createdBy: HUMAN_ID });

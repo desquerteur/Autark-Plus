@@ -1,8 +1,8 @@
 // "Keep agents running" (B-044, src/main/launcher.ts): the launch decision by source – the person's start
 // always starts; a macOS/Linux unit start ('unit') restarts after an unexpected end with one notice, stops
-// at the 3rd within 30 minutes, leaves a deliberate quit alone unless work is due within 10 minutes and an
-// update install alone, resumes a session the system ended; the Windows task ('task': sign-in, crash event,
-// due work – it cannot say which) follows the same rules, also starts from 5 minutes after the person's quit
+// at the 3rd within 30 minutes, leaves a deliberate quit alone (14.11.2026: also with work due – closing closes) and
+// an update install alone, resumes a session the system ended; the Windows task ('task': sign-in, crash event,
+// an update's due work – it cannot say which) follows the same rules, also starts from 5 minutes after the person's quit
 // or after a quit before this boot (a sign-in; a crash while closing stays quit) and 30 minutes after a cap,
 // and hands every start that goes on over (no write: the detached ordinary start decides again – same
 // result); the files (run-state.json written atomically, next-due.json read, damaged files mean "start")
@@ -15,7 +15,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import os from 'node:os';
 import path from 'node:path';
 import {
-  CAP_WINDOW_MS, DUE_WINDOW_MS, NOTICES, QUIT_SETTLE_MS, RunStateMarks, UPDATE_GRACE_MS, beginLaunch, decideLaunch, launchSource, readNextDue, readRunState,
+  CAP_WINDOW_MS, NOTICES, QUIT_SETTLE_MS, RunStateMarks, UPDATE_GRACE_MS, beginLaunch, decideLaunch, launchSource, readNextDue, readRunState,
   writeRunState, type LaunchInput,
 } from '../../../src/main/launcher.ts';
 import type { RunState } from '../../../src/shared/model/launch.ts';
@@ -27,7 +27,7 @@ const tmp = mkdtempSync(path.join(os.tmpdir(), 'wf-launcher-'));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
 function launch(previous: RunState | undefined, patch: Partial<LaunchInput> = {}) {
-  return decideLaunch({ previous, source: 'unit', nextDue: undefined, now: NOW, bootAt: BOOT, pid: 42, ...patch });
+  return decideLaunch({ previous, source: 'unit', now: NOW, bootAt: BOOT, pid: 42, ...patch });
 }
 const task = (previous: RunState | undefined, patch: Partial<LaunchInput> = {}) => launch(previous, { source: 'task', ...patch });
 const CAPPED: RunState = { state: 'quit', by: 'launcher', at: NOW - MIN, ends: [NOW - 3 * MIN, NOW - 2 * MIN, NOW - MIN], capped: NOW - MIN };
@@ -71,14 +71,10 @@ test("unit: a 'running' state from before this boot ended with the system – re
   assert.deepEqual(launch({ state: 'quit', by: 'system', at: NOW - 60 * MIN }), { start: true, reason: 'resume', write: { state: 'running', at: NOW, pid: 42 } });
 });
 
-test('unit: a deliberate quit stays quit unless work is due within 10 minutes; an update install is left alone', () => {
+test('unit: a deliberate quit stays quit, also with work due; an update install is left alone', () => {
   const quit: RunState = { state: 'quit', by: 'person', at: NOW - 30 * MIN };
   assert.deepEqual(launch(quit), { start: false, reason: 'quit' });
-  assert.deepEqual(launch(quit, { nextDue: null }), { start: false, reason: 'quit' });
-  assert.deepEqual(launch(quit, { nextDue: NOW + DUE_WINDOW_MS + MIN }), { start: false, reason: 'quit' });
-  assert.deepEqual(launch(quit, { nextDue: NOW + DUE_WINDOW_MS }), { start: true, reason: 'due', write: { state: 'running', at: NOW, pid: 42 } });
-  assert.equal(launch(quit, { nextDue: NOW - 60 * MIN }).reason, 'due', 'overdue work starts it too');
-  assert.deepEqual(launch({ state: 'quit', by: 'update', at: NOW - MIN }, { nextDue: NOW }), { start: false, reason: 'updating' }, 'the installer may still run');
+  assert.deepEqual(launch({ state: 'quit', by: 'update', at: NOW - MIN }), { start: false, reason: 'updating' }, 'the installer may still run');
   assert.equal(launch({ state: 'quit', by: 'update', at: NOW - UPDATE_GRACE_MS - MIN }).reason, 'resume', 'an update that did not relaunch the app');
 });
 
@@ -100,18 +96,17 @@ test('task: every start that goes on hands over without writing; the reason and 
   assert.equal(third.handoff, undefined);
 });
 
-test("task: the person's quit – a crash while closing stays quit, a sign-in later or due work starts", () => {
+test("task: the person's quit – a crash while closing stays quit, a sign-in later starts", () => {
   const quit = (ago: number): RunState => ({ state: 'quit', by: 'person', at: NOW - ago });
   assert.deepEqual(task(quit(MIN)), { start: false, reason: 'quit' }, "the closing app's crash event (30 s after it) changes nothing");
   assert.deepEqual(task(quit(QUIT_SETTLE_MS - 1)), { start: false, reason: 'quit' });
   assert.deepEqual(task(quit(QUIT_SETTLE_MS)), { start: true, reason: 'signin', handoff: true }, 'a sign-in: "Keep agents running"');
   assert.deepEqual(task(quit(2 * MIN), { bootAt: NOW - MIN }), { start: true, reason: 'signin', handoff: true }, 'quit, restarted the PC, signed in within 5 minutes');
   assert.deepEqual(launch(quit(2 * MIN), { bootAt: NOW - MIN }), { start: false, reason: 'quit' }, 'a unit start (the login item signs in there) stays quit');
-  assert.deepEqual(task(quit(MIN), { nextDue: NOW + MIN }), { start: true, reason: 'due', handoff: true }, 'the time trigger the quit wrote');
   assert.deepEqual(task({ state: 'quit', by: 'update', at: NOW - MIN }), { start: false, reason: 'updating' });
 });
 
-test('task: a cap holds for 30 minutes, then a task start (a later sign-in, due work) lifts it', () => {
+test('task: a cap holds for 30 minutes, then a task start (a later sign-in) lifts it', () => {
   assert.deepEqual(task(CAPPED, { now: NOW + 10 * MIN }), { start: false, reason: 'capped' });
   assert.deepEqual(task(CAPPED, { now: CAPPED.capped! + CAP_WINDOW_MS }), { start: true, reason: 'signin', handoff: true });
   const detached = launch(CAPPED, { source: 'person', now: CAPPED.capped! + CAP_WINDOW_MS });
@@ -135,13 +130,15 @@ test('files: run-state written atomically and read back; damaged or missing file
   assert.equal(readNextDue(dir), undefined);
 });
 
-test('beginLaunch reads both files, decides and writes (not for a handoff); the quit marks keep the first quit', () => {
+test('beginLaunch reads the state, decides and writes (not for a handoff); the quit marks keep the first quit', () => {
   const dir = path.join(tmp, 'begin');
   writeRunState(dir, { state: 'quit', by: 'person', at: NOW - 30 * MIN });
   writeFileSync(path.join(dir, 'next-due.json'), JSON.stringify({ at: NOW + 5 * MIN }));
   assert.equal(beginLaunch({ dataDir: dir, source: 'task', now: NOW, bootAt: BOOT, pid: 10 }).handoff, true);
   assert.deepEqual(readRunState(dir), { state: 'quit', by: 'person', at: NOW - 30 * MIN }, 'the handoff writes nothing');
-  assert.equal(beginLaunch({ dataDir: dir, source: 'unit', now: NOW, bootAt: BOOT, pid: 11 }).reason, 'due');
+  assert.equal(beginLaunch({ dataDir: dir, source: 'unit', now: NOW, bootAt: BOOT, pid: 11 }).reason, 'quit', 'work due in 5 minutes: still quit');
+  assert.deepEqual(readRunState(dir), { state: 'quit', by: 'person', at: NOW - 30 * MIN }, 'a launcher start that stays quit writes nothing');
+  assert.equal(beginLaunch({ dataDir: dir, source: 'person', now: NOW, bootAt: BOOT, pid: 11 }).reason, 'start');
   assert.deepEqual(readRunState(dir), { state: 'running', at: NOW, pid: 11 });
   const marks = new RunStateMarks(dir, undefined, () => NOW + MIN);
   assert.equal(marks.by, undefined);

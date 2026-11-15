@@ -18,7 +18,7 @@ const SEC = T0 / 1000;
 
 function rig(limits: AccountLimits) {
   const clock = new ManualClock(T0);
-  let account: Account = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: T0, checkedAt: T0, limits };
+  let account: Account = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: T0, checkedAt: T0, limits };
   const reads: Array<{ background: boolean; details: boolean }> = [];
   const monitor = new AccountMonitor({
     clock, bus: new Bus((error) => { throw error; }), schedule: () => () => {},
@@ -42,8 +42,9 @@ test('background reads skip the reset details; checkNow and refreshAll ask for t
   await h.monitor.idle();
   assert.deepEqual(h.reads, [{ background: true, details: false }], 'the startup read');
   h.clock.advance(20_000);
-  h.monitor.activity();
+  h.monitor.activity(true); // the person is back: the working cadence
   await h.monitor.idle();
+  assert.equal(h.reads.length, 2, 'the cadence read happened');
   assert.deepEqual(h.reads.at(-1), { background: true, details: false }, 'the cadence read');
   await h.monitor.checkNow('acc_codex');
   assert.deepEqual(h.reads.at(-1), { background: false, details: true }, 'after a used reset or a sign-in');

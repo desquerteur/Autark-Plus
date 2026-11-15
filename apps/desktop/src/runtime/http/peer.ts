@@ -4,20 +4,22 @@
 // The runtime HTTP server (server.ts) routes them among its other routes; PeerRoutes builds the
 // servers of the dedicated peer listener (peer-server.ts), which answer 404 to every other path.
 // Owns: the HTTP side of these routes, the Host/Origin/tailnet gate of the peer listener and the
-// peer sockets it accepted. Never: decides trust (pairing/mesh do), reads anything but the request
+// peer sockets it accepted. B-080: a peer socket the keepalive cuts after a minute without any frame is logged
+// ('peer socket silent') and marked, so the mesh's 'peer link closed' line says code 4008 (devices/channel.ts).
+// Never: decides trust (pairing/mesh do), reads anything but the request
 // body, or listens itself (peer-server.ts decides when and where).
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { wrapWs } from '../devices/channel.ts';
+import { markSilent, wrapWs } from '../devices/channel.ts';
 import type { Logger } from '../contracts.ts';
 import { HttpError, readJson, sendBodyError, sendError, sendJson } from './body.ts';
 import { closedSocket, header, rejectUpgrade, requestInfo, safePath } from './request.ts';
 import { HostGuard, RateLimiter, isSecureTransport, normalizeAddress, type InterfacesFn } from './security.ts';
 import type { MeshAccept, PairingHttp, RequestInfo } from './types.ts';
-import { Keepalive } from './ws.ts';
+import { Keepalive, KEEPALIVE_MS } from './keepalive.ts';
 
 export const PAIR_BODY_LIMIT = 64 * 1024;
 /** The peer channel allows 8 MB encrypted frames (devices/channel.ts). */
@@ -62,12 +64,13 @@ export async function servePair(req: IncomingMessage, res: ServerResponse, info:
   }
 }
 
-/** Hands an upgraded `/peer` socket to the mesh; a failed handshake closes it. */
+/** Hands an upgraded `/peer` socket to the mesh; a failed handshake closes it. 'peer connected' only for a link that stays. */
 export function acceptPeer(ws: WebSocket, deps: { mesh: MeshAccept; log: () => Logger }, remote: string): void {
   // `ws` emits 'error' for protocol violations (oversized frame …); without a listener it throws.
   ws.on('error', (error) => deps.log().debug('peer socket error', { remote, error: error.message }));
   deps.mesh.accept(wrapWs(ws)).then(
-    (deviceId) => deps.log().info('peer connected', { deviceId, remote }),
+    // B-087: a link the mesh closed at once (the other link of a race stays) is no reconnect – agents watch these lines
+    (deviceId) => { if (deviceId) deps.log().info('peer connected', { deviceId, remote }); else deps.log().debug('peer link not kept (the other link stays)', { remote }); },
     (error: unknown) => {
       deps.log().warn('peer handshake failed', { remote, error: error instanceof Error ? error.message : String(error) });
       // B-077: 4000, not the refusal 4003 – a refusal (unknown device, bad key) already closed with 4003 in devices/channel.ts;
@@ -96,7 +99,7 @@ export class PeerRoutes {
   private readonly deps: PeerRoutesDeps;
   private readonly guard: HostGuard;
   private readonly limiter = new RateLimiter(30, 60_000);
-  private readonly keepalive = new Keepalive();
+  private readonly keepalive = new Keepalive(KEEPALIVE_MS, Date.now, (ws, ms) => { markSilent(ws); this.deps.log().info('peer socket silent', { ms }); });
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: PEER_MAX_PAYLOAD, perMessageDeflate: false, clientTracking: false });
   private readonly peers = new Set<WebSocket>();
   private closed = false;

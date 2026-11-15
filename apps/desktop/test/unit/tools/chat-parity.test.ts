@@ -1,7 +1,7 @@
 // B-050 K10 (tools/builtin/chat.ts, chat-rooms.ts, chat-members.ts, chat-lines.ts): agents act in chats like a human
 // member – chat.direct finds or makes the default 1:1 with an agent, the person or a colleague (per_…), or a new
-// chat of the two about a topic; chat.create and chat.add_members take every kind of member (agentIds and
-// includeHuman stay as older names); chat.send takes a level (urgent / silent stay); chat.read and
+// chat of the two about a topic; chat.create and chat.add_members take every kind of member in members (the older
+// agentIds and includeHuman are gone); chat.send takes a level (urgent / silent stay); chat.read and
 // chat.search show the context's own lines (context/render.ts) with the #seq, persons by name; chat.list shows the
 // title the agent sees and marks the default 1:1.
 // Owns: these assertions only. Never: real engines, timers or network.
@@ -72,14 +72,14 @@ test('chat.direct: one default 1:1 per pair for an agent, the person or a collea
   assert.deepEqual(h.active(topicChat.id), ['ag_ava', ANNA].sort());
   assert.equal(topic.data!.title, 'Anna Berg · Launch video');
 
-  for (const [other, why] of [['ag_ava', /someone else/], ['ag_nobody', /Unknown agent ag_nobody/], [GONE, /not a person of the organisation/]] as const) {
+  for (const [other, why] of [['ag_ava', /someone else/], ['ag_nobody', /Nobody is called "ag_nobody"\. Who I can name: /], [GONE, /not a person of the organisation/]] as const) {
     const refused = await h.run('chat.direct', { with: other });
     assert.equal(refused.failed, true, other);
     assert.match(refused.text, why);
   }
 });
 
-test('chat.create and chat.add_members take agents, the person and colleagues alike; the older names still work', async () => {
+test('chat.create and chat.add_members take agents, the person and colleagues alike in members; the older names are gone', async () => {
   const h = setup();
   const created = await h.run('chat.create', { title: 'Launch', members: ['ag_ben', HUMAN_ID, ANNA] });
   assert.equal(created.failed, false, created.text);
@@ -88,8 +88,7 @@ test('chat.create and chat.add_members take agents, the person and colleagues al
   assert.equal(h.chats.lead(chatId), 'ag_ava');
   assert.equal(h.chats.members(chatId).find((m) => m.memberId === ANNA)!.kind, 'human');
 
-  const older = await h.run('chat.create', { agentIds: ['ag_ben'], includeHuman: true });
-  assert.deepEqual(h.active(older.data!.chatId as string), ['ag_ava', 'ag_ben', HUMAN_ID].sort());
+  assert.equal((await h.run('chat.create', { agentIds: ['ag_ben'], includeHuman: true })).failed, true, 'validation names members');
   assert.match((await h.run('chat.create', { members: [GONE] })).text, /not a person of the organisation/);
   assert.equal((await h.run('chat.create', { members: ['ag_ava'] })).failed, true, 'no member besides oneself');
 
@@ -99,28 +98,13 @@ test('chat.create and chat.add_members take agents, the person and colleagues al
   assert.ok(h.active(room).includes(ANNA));
   assert.match((await h.run('chat.add_members', { chatId: room, members: [GONE] })).text, /not a person of the organisation/);
   assert.ok(!h.active(room).includes(GONE), 'nothing changed');
-  assert.equal((await h.run('chat.add_members', { chatId: room, agentIds: ['ag_ben', ANNA] })).failed, false, 'agentIds is still taken');
+  assert.equal((await h.run('chat.add_members', { chatId: room, members: ['ag_ben', ANNA] })).failed, false, 'agents and colleagues together');
   // B-078 D7: the person is reached in my 1:1 with them or a group with them – never added to a room
   assert.match((await h.run('chat.add_members', { chatId: room, members: [HUMAN_ID] })).text, /The person is not added to rooms/);
   assert.ok(!h.active(room).includes(HUMAN_ID));
 });
 
-test('chat.send: level important / silent (urgent and silent stay), status stays plain', async () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
-  const ctx = h.ctx('ag_ava', chat.id);
-  const sent = async (args: Record<string, unknown>) => h.chats.message((await h.run('chat.send', { text: 'x', ...args }, ctx)).data!.messageId as string)!;
-  const level = (message: Message) => [message.priority, message.silent];
-  assert.deepEqual(level(await sent({ level: 'important' })), ['important', false]);
-  assert.deepEqual(level(await sent({ level: 'silent' })), ['normal', true]);
-  assert.deepEqual(level(await sent({ level: 'normal', urgent: true })), ['normal', false], 'level wins over the older flag');
-  assert.deepEqual(level(await sent({ urgent: true })), ['important', false]);
-  assert.deepEqual(level(await sent({ silent: true })), ['normal', true]);
-
-  assert.equal((await h.run('chat.send', { text: 'working', status: true, level: 'important' }, ctx)).failed, true);
-});
-
-test('chat.read and chat.search show the context\'s lines with #seq, people by name; seq brings one message in full', async () => {
+test('chat.read and chat.search show the context\'s lines (their label names chat, author and #seq), people by name; seq brings one message in full', async () => {
   const h = setup();
   const chat = h.chats.create({ agentIds: ['ag_ava'], people: [ANNA], createdBy: HUMAN_ID });
   const post = (authorId: string, body: string, extra: Record<string, unknown> = {}) => h.chats.send({ conversationId: chat.id, body, authorId, ...extra });
@@ -133,19 +117,19 @@ test('chat.read and chat.search show the context\'s lines with #seq, people by n
   const read = await h.run('chat.read', {}, ctx);
   const messages = h.chats.messages(chat.id);
   const rctx = renderContext(h.services as RuntimeServices, 'ag_ava');
-  const expected = messages.map((message) => `#${message.seq} ${renderMessages(rctx, [message], { images: false }).lines.join('\n')}`);
-  assert.equal(read.text, expected.join('\n'), 'the lines of the context, each led by its #seq');
-  assert.match(read.text, /^#1 \[[^\]]+\] Sam\b.*\(important\).*Can you draft the launch post\?$/m, 'time, author and level');
-  assert.match(read.text, /Anna Berg \(colleague, Designer\): I have the photos ready/);
+  const expected = messages.map((message) => renderMessages(rctx, [message], { images: false }).lines.join('\n'));
+  assert.equal(read.text, expected.join('\n'), 'the lines of the context');
+  assert.match(read.text, /^\[[^\]]+ · Sam \(CEO\) · \d\d:\d\d #1\] \(important\) Can you draft the launch post\?$/m, 'chat, author, time, #seq and level');
+  assert.match(read.text, / · Anna Berg \(colleague, Designer\) · [^\]]*\] I have the photos ready/);
   assert.ok(!read.text.includes(ANNA), 'a person by name, never by id');
 
   const full = await h.run('chat.read', { seq: long.seq }, ctx);
-  assert.ok(full.text.startsWith(`#${long.seq} `));
+  assert.match(full.text, new RegExp(`^\\[[^\\]]*#${long.seq}\\] `));
   assert.ok(full.text.includes(`Full text of #${long.seq}:\n${long.body}`), 'the whole body after the cut line');
   assert.match((await h.run('chat.read', { seq: 99 }, ctx)).text, /No message #99/);
 
-  const search = await h.run('chat.search', { text: 'photos' }, ctx);
-  assert.match(search.text, new RegExp(`^${chat.id} #2 \\[[^\\]]+\\] Anna Berg \\(colleague, Designer\\): .*photos`));
+  const search = await h.run('chat.search', { query: 'photos' }, ctx);
+  assert.match(search.text, new RegExp(`^\\[${chat.id} [^\\]]* · Anna Berg \\(colleague, Designer\\) · \\d\\d:\\d\\d #2\\] .*photos`));
 });
 
 test('chat.list: the title the agent sees, the default 1:1 marked, members by name', async () => {

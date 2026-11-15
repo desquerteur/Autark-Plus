@@ -248,6 +248,11 @@ export class TextDoc<P extends string = TextProblem> {
     this.own = sig;
   }
 
+  /** The signature of the app's own last write or take-over (undefined: none known). */
+  get ownSig(): string | undefined {
+    return this.own;
+  }
+
   /** Writes `text` atomically and remembers it as the app's own (a failure throws; nothing is remembered). */
   write(text: string): void {
     writeAtomic(this.file, text, this.options.writes);

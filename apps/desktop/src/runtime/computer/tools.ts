@@ -19,6 +19,9 @@
 // B-055: each call names its caller (computer/lease.ts callerOf – an agent of a linked PC too), so
 // the pointer lease, the agent's own refs and the window memory know who acts; the pointer tools take
 // `motion` (computer/tool-notes.ts), and every result ends with who else points on this screen.
+// B-080: computer.type reads back which element holds the focus after typing and what it holds (service.ts focused),
+// masked like any typed secret – a fact, not a guard. computer.ui_tree of a Chrome or Edge window without a page document
+// names that (tree.ts frameOnly), and a covered window's picture says a browser there may not draw its page (live 09.11.).
 
 import type { ToolDef, ToolOutput } from '../tools/types.ts';
 import { text } from '../tools/types.ts';
@@ -32,11 +35,13 @@ import { judgeTyped, typedText } from '../secrets/handles.ts';
 import { callerOf } from './lease.ts';
 import { lockedDesktop } from './broker.ts';
 import { MOTION_ARG, withNotes, withOthers } from './tool-notes.ts';
+import { frameOnly, TREE_DEPTH } from './tree.ts';
 import type { MotionStyle } from '../../shared/model/pointer-motion.ts';
 
 export { idWords, onThisPc, RefLabels, WindowApps } from './seen.ts';
 
-const COORDS = { type: 'string', enum: ['screen', 'screenshot'], description: "'screen' (default): physical screen pixels as in computer.ui_tree; 'screenshot': pixels of my last computer.screenshot." };
+const COORDS = { type: 'string', enum: ['screen', 'screenshot'], description: 'screen (default) or screenshot: pixels of my last computer.screenshot.' };
+const WINDOW = { type: 'integer', description: 'From computer.windows.' };
 const BUTTON = { type: 'string', enum: ['left', 'right', 'middle'] };
 const INT = { type: 'integer' };
 
@@ -65,15 +70,15 @@ export function computerTools(computer: ComputerService): ToolDef[] {
   const forgetFront = () => { apps.front = undefined; };
   const screenshot = defineTool<{ display?: number; window?: number; region?: { x: number; y: number; width: number; height: number }; ocr?: boolean; maxEdge?: number }>({
     name: 'computer.screenshot',
-    description: 'Screenshot of a screen, a window or a region (downscaled; the text says how image pixels map to screen pixels). Use when content is drawn (canvas, video, charts) – prefer computer.ui_tree for structure. ocr:true adds recognised text lines (Windows).',
+    description: 'Takes a screenshot of a screen, a window or a region. The text says how its pixels map to the screen; for drawn content it is the way, for structure computer.ui_tree.',
     inputSchema: {
       type: 'object',
       properties: {
-        display: { type: 'integer', minimum: 0, maximum: 16, description: '0 = primary screen' },
-        window: { ...INT, description: 'window id from computer.windows' },
-        region: { type: 'object', properties: { x: INT, y: INT, width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 } }, required: ['x', 'y', 'width', 'height'], additionalProperties: false },
-        ocr: { type: 'boolean' },
-        maxEdge: { type: 'integer', minimum: 320, maximum: 2400 },
+        display: { type: 'integer', minimum: 0, maximum: 16, description: '0 = primary.' },
+        window: WINDOW,
+        region: { type: 'object', properties: { x: INT, y: INT, width: { type: 'integer', minimum: 1 }, height: { type: 'integer', minimum: 1 } }, required: ['x', 'y', 'width', 'height'], additionalProperties: false, description: 'Screen pixels.' },
+        ocr: { type: 'boolean', description: 'Adds the recognised text lines (Windows).' },
+        maxEdge: { type: 'integer', minimum: 320, maximum: 2400, description: 'Longest image edge.' },
       },
       additionalProperties: false,
     },
@@ -86,6 +91,9 @@ export function computerTools(computer: ComputerService): ToolDef[] {
         `Screenshot ${shot.width}×${shot.height} (${shot.source}). Image pixel (0,0) = screen (${shot.origin.x},${shot.origin.y}); 1 image pixel = ${round(shot.scale)} screen pixels.`,
         'To click something seen here, pass its image pixel with coords:"screenshot", or use the screen coordinates from computer.ui_tree.',
       ];
+      // B-080: a window draws itself into its picture, also where a click by coordinates would hit another window; a covered
+      // browser draws no page (live 09.11.: the person's Chrome behind their app read as blank).
+      if (shot.covered) lines.push('This window is behind another one or off the screen: the picture is the window itself, and a click by coordinates lands on what is in front there – I bring it forward first with computer.act focus_window. A browser behind another window may not draw its page.');
       if (lockedDesktop()) lines.push('This is the Windows secure desktop (locked screen or UAC prompt). I reach it through the desktop broker with these same tools; on the sign-in screen "Sign-in options" leads to the password, which I type as its secret:// handle.');
       if (shot.ocr?.length) {
         lines.push('Recognised text (screen coordinates x,y width×height):');
@@ -99,7 +107,7 @@ export function computerTools(computer: ComputerService): ToolDef[] {
 
   const windows = defineTool<Record<string, never>>({
     name: 'computer.windows',
-    description: 'List the open windows (id, title, app, position, which one is in front). Start here, then read a window with computer.ui_tree.',
+    description: 'Lists the open windows with id, title, app, position and which is in front. Here I start, then read a window with computer.ui_tree.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => device('List open windows', ctx),
@@ -113,16 +121,16 @@ export function computerTools(computer: ComputerService): ToolDef[] {
 
   const uiTree = defineTool<{ window?: number; depth?: number; maxNodes?: number; name?: string; automationId?: string; role?: string }>({
     name: 'computer.ui_tree',
-    description: 'Read the UI Automation tree of a window (default: the window in front): role, name, value, state, supported actions, centre point and a ref per element. With name/automationId/role it searches the window instead. Refs are used by computer.act.',
+    description: "Reads a window's UI elements with a ref each for computer.act, or searches them. Each with role, name, value, state, actions and centre point.",
     inputSchema: {
       type: 'object',
       properties: {
-        window: { ...INT, description: 'window id from computer.windows' },
+        window: { ...WINDOW, description: 'Default the one in front.' },
         depth: { type: 'integer', minimum: 1, maximum: 40 },
         maxNodes: { type: 'integer', minimum: 20, maximum: 2000 },
-        name: { type: 'string', maxLength: 200, description: 'search: name contains (case-insensitive)' },
-        automationId: { type: 'string', maxLength: 200 },
-        role: { type: 'string', maxLength: 40, description: 'search: control type, e.g. button, edit, menuitem, listitem' },
+        name: { type: 'string', maxLength: 200, description: 'Search: name contains.' },
+        automationId: { type: 'string', maxLength: 200, description: 'Search.' },
+        role: { type: 'string', maxLength: 40, description: 'Search: control type, e.g. button.' },
       },
       additionalProperties: false,
     },
@@ -139,7 +147,9 @@ export function computerTools(computer: ComputerService): ToolDef[] {
       refLabels.learn(tree.text, tree.window.hwnd);
       if (args.window === undefined && onThisPc(ctx)) apps.front = tree.window.hwnd;
       const head = `Window ${tree.window.hwnd} "${tree.window.title}" · ${tree.count} elements${tree.truncated ? ' (truncated – raise maxNodes or search by name/role)' : ''}. Format: role "name" [ref] #automationId = value [state] (actions) @centre-x,centre-y`;
-      return withNotes({ ...text(`${head}\n${tree.text}`), structured: { window: tree.window.hwnd, app: apps.app(tree.window.hwnd) } }, tree.shared);
+      // B-080: a browser window's whole tree (not cut by maxNodes, read at least as deep as a read without a depth) without a page document says so.
+      const frame = tree.truncated || (args.depth !== undefined && args.depth < TREE_DEPTH) ? undefined : frameOnly(tree.window.title, tree.text);
+      return withNotes({ ...text(`${head}${frame ? `\n${frame}` : ''}\n${tree.text}`), structured: { window: tree.window.hwnd, app: apps.app(tree.window.hwnd) } }, tree.shared);
     },
   });
 
@@ -147,10 +157,10 @@ export function computerTools(computer: ComputerService): ToolDef[] {
 
   const click = defineTool<{ x: number; y: number; button?: 'left' | 'right' | 'middle' | 'none'; count?: number; coords?: 'screen' | 'screenshot'; motion?: MotionStyle }>({
     name: 'computer.click',
-    description: 'Click at a point (last resort – prefer computer.act on a ref). button "none" only moves the pointer (hover). count 2 = double-click. Re-observe afterwards.',
+    description: 'Clicks at a screen point; button none only moves the pointer. An element with a ref I act on with computer.act.',
     inputSchema: {
       type: 'object',
-      properties: { x: { type: 'number' }, y: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle', 'none'] }, count: { type: 'integer', minimum: 1, maximum: 3 }, coords: COORDS, motion: MOTION_ARG },
+      properties: { x: { type: 'number' }, y: { type: 'number' }, button: { type: 'string', enum: ['left', 'right', 'middle', 'none'] }, count: { type: 'integer', minimum: 1, maximum: 3, description: '2 = double-click.' }, coords: COORDS, motion: MOTION_ARG },
       required: ['x', 'y'],
       additionalProperties: false,
     },
@@ -171,8 +181,8 @@ export function computerTools(computer: ComputerService): ToolDef[] {
 
   const type = defineTool<{ text: string; ref?: string }>({
     name: 'computer.type',
-    description: 'Type text with the keyboard into the focused element (or focus ref first). Newlines press Enter. No clipboard is used. For whole field values prefer computer.act set_value.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 5000 }, ref: { type: 'string', maxLength: 20 } }, required: ['text'], additionalProperties: false },
+    description: 'Types text with the keyboard into the focused element and shows what it holds afterwards. A live app can move the focus while I type; a whole field value goes in at once with computer.act set_value.',
+    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 5000, description: 'Newlines press Enter.' }, ref: { type: 'string', maxLength: 20, description: 'An element to focus first.' } }, required: ['text'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => {
       const label = args.ref && onThisPc(ctx) ? refLabels.get(args.ref) : undefined;
@@ -181,17 +191,25 @@ export function computerTools(computer: ComputerService): ToolDef[] {
     },
     async run(args, ctx) {
       if (args.text.includes('\n')) forgetFront();
-      if (args.ref) await computer.act({ ref: args.ref, action: 'focus', signal: ctx.signal, caller: callerOf(ctx) });
+      const caller = callerOf(ctx);
+      if (args.ref) await computer.act({ ref: args.ref, action: 'focus', signal: ctx.signal, caller });
       ctx.status('typing');
       const typed = await typedText(ctx, args.text); // secret://<id> → the value, now (secrets/handles.ts)
-      const count = await computer.type({ text: typed.text, signal: ctx.signal, caller: callerOf(ctx) });
-      return text(`Typed ${count} characters. I check the field before the next step.`);
+      const count = await computer.type({ text: typed.text, signal: ctx.signal, caller });
+      // B-080 (live 06.11.: WhatsApp moved the focus mid-word into an open chat): where the text landed, read back.
+      let now: { text: string; hwnd: number } | undefined;
+      try { now = await computer.focused(caller, ctx.signal); } catch { now = undefined; }
+      if (!now) return text(`Typed ${count} characters. I check the field before the next step.`);
+      refLabels.learn(now.text, now.hwnd);
+      const lines = [`Typed ${count} characters.`, `Now: ${now.text.replace(/^\s*-\s+/, '')}`];
+      if (args.ref && !now.text.includes(`[ref=${args.ref}]`)) lines.push(`The focus is no longer on ${args.ref}.`);
+      return text(typed.mask(lines.join('\n'))); // a typed secret shows as its handle (secrets/handles.ts)
     },
   });
 
   const key = defineTool<{ keys: string; repeat?: number }>({
     name: 'computer.key',
-    description: 'Press a key or shortcut in the window in front, e.g. "enter", "esc", "tab", "ctrl+s", "alt+f4", "ctrl+shift+t", "down".',
+    description: 'Presses a key or shortcut in the window in front, e.g. "ctrl+s".',
     inputSchema: { type: 'object', properties: { keys: { type: 'string', minLength: 1, maxLength: 40 }, repeat: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['keys'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => device(`Press ${args.keys}${args.repeat && args.repeat > 1 ? ` ×${args.repeat}` : ''}`, ctx, false, inFront()),
@@ -204,10 +222,13 @@ export function computerTools(computer: ComputerService): ToolDef[] {
 
   const scroll = defineTool<{ dy?: number; dx?: number; x?: number; y?: number; coords?: 'screen' | 'screenshot'; at?: Anchor; motion?: MotionStyle }>({
     name: 'computer.scroll',
-    description: 'Scroll with the mouse wheel over an element (at: a ref from computer.ui_tree, x/y = fraction inside it), at a point, or where the pointer is: dy > 0 scrolls down, dx > 0 right; one step = one wheel notch. For lists that support it, computer.act scroll / scroll_into_view is more precise.',
+    description: 'Scrolls with the mouse wheel over an element, at a point, or where the pointer is. For lists that support it, computer.act scroll is more precise.',
     inputSchema: {
       type: 'object',
-      properties: { dy: { type: 'integer', minimum: -50, maximum: 50 }, dx: { type: 'integer', minimum: -50, maximum: 50 }, x: { type: 'number' }, y: { type: 'number' }, coords: COORDS, at: ANCHOR_SCHEMA, motion: MOTION_ARG },
+      properties: {
+        dy: { type: 'integer', minimum: -50, maximum: 50, description: 'Notches; positive is down.' }, dx: { type: 'integer', minimum: -50, maximum: 50, description: 'Notches; positive is right.' },
+        x: { type: 'number' }, y: { type: 'number' }, coords: COORDS, at: ANCHOR_SCHEMA, motion: MOTION_ARG,
+      },
       additionalProperties: false,
     },
     category: 'device', remote: true, requires: 'device',
@@ -227,7 +248,7 @@ export function computerTools(computer: ComputerService): ToolDef[] {
     : `Drag from ${args.x1},${args.y1} to ${args.x2},${args.y2}`);
   const drag = defineTool<DragArgs>({
     name: 'computer.drag',
-    description: 'Drag with a smooth motion (timelines, sliders, selections, moving items): precisely from an element to another (from/to: refs from computer.ui_tree, x/y = fraction inside the element, default its centre) or by an exact offset (from + by: dx/dy screen pixels), else between coordinates (x1,y1 → x2,y2). durationMs controls the speed. Verify the result.',
+    description: 'Drags smoothly between elements, by an offset, or between points. It suits timelines, sliders and selections; durationMs sets the speed.',
     inputSchema: {
       type: 'object',
       properties: {

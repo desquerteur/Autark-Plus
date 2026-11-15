@@ -6,8 +6,8 @@
 // models - speech to text, text to speech, image, video, music, sound effects - get -1 = "never" for every other
 // category, so the router never treats them as suitable for a chat category; B-058: the curated models of media-only
 // providers, media/providers/models.ts, by their table, with its relative price), the listing fields kept (B-058:
-// whether a model hears audio - audioIn; models the app cannot use at all are dropped, UNUSABLE_NAME), the catalog
-// order and the account fingerprint that decides when a listing is re-fetched.
+// whether a model hears audio - audioIn; models the app cannot use at all are dropped, UNUSABLE_NAME), the provider/name
+// order (B-083: the list order is models/order.ts catalogOrder) and the account fingerprint deciding listing re-fetches.
 // Never: I/O, network or clock access (callers pass everything in).
 
 import { DECISION_PROVIDER, MODEL_FUNCTIONS, type Account, type EngineId, type ModelCaps, type ModelFunction, type ModelInfo, type ModelPrice, type ProviderId } from '../../shared/model/providers.ts';
@@ -73,7 +73,7 @@ export function fingerprint(account: Account): string {
   return JSON.stringify([account.provider, account.home ?? '', account.baseUrl ?? '', account.secretId ?? '', account.plan ?? '', account.deviceId ?? '']);
 }
 
-/** Catalog order: provider, then name, then id. */
+/** Provider, then name, then id (the specialists' order and the last tie-break of models/order.ts catalogOrder). */
 export function byProviderName(a: ModelInfo, b: ModelInfo): number {
   return a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id);
 }
@@ -83,14 +83,14 @@ export function isConnected(account: Account): boolean {
   return account.enabled && (account.state === 'ok' || account.state === 'unknown' || account.state === 'cooling');
 }
 
-/** Accounts whose model list may be (re)fetched now. */
+/** Accounts whose model list may be (re)fetched now – a cooling one too: listing models costs no quota, and a provider's new model must show while a plan waits for its reset. */
 export function isListable(account: Account): boolean {
-  return account.enabled && (account.state === 'ok' || account.state === 'unknown');
+  return account.enabled && (account.state === 'ok' || account.state === 'unknown' || account.state === 'cooling');
 }
 
-/** Prior for a provider model id; OpenRouter ids ("anthropic/claude-opus-5-5") also try the bare id. */
+/** Prior for a provider model id; OpenRouter ids ("anthropic/claude-opus-5-5") also try the bare id; a newer version than any curated one takes its predecessor's. */
 export function priorFor(priors: Priors, model: string, id: string): PriorEntry | undefined {
-  return priors.forModel(model, id) ?? (model.includes('/') ? priors.forModel(model.slice(model.lastIndexOf('/') + 1)) : undefined);
+  return priors.forModel(model, id) ?? (model.includes('/') ? priors.forModel(model.slice(model.lastIndexOf('/') + 1)) : undefined) ?? priors.forNewer(model);
 }
 
 /**

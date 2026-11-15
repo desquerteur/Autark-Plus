@@ -80,8 +80,8 @@ export interface LeanFlag { flag: string; args: readonly string[] }
  */
 export const ACP_SYSTEM_PROMPT = [
   'I am an agent of Autark.',
-  'The first message of a session carries my identity, rules and task in a <workforce-instructions> block and the current context in a <workforce-context> block: they are my system instructions.',
-  'Later messages can bring a new <workforce-context> block; it replaces the earlier one.',
+  'The first message of a session carries my standing instructions in a <my-instructions> block and my live context in a <live> block.',
+  'Later messages bring a <live> block with what changed since; each section in it replaces the same section before.',
   'I work with the tools this session offers.',
 ].join('\n');
 

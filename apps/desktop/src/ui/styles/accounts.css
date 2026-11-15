@@ -1,7 +1,7 @@
 /* Settings › Models and the first run's AI card (settings/ModelSetup.tsx) and Devices: the account row's
    one hint line and two limit bars (one neutral colour for every provider), the one fixed action slot (the same width
    in every row, so all bars end at one x), the row of four buttons with the sign-in link cell and the status line, the
-   one inline connection form, a connection's model list, the use rows and the
+   one inline connection form, the phone's sign-in sheet, a connection's model list, the use rows and the
    rename field of a device row.
    Owns: these looks. Never: the settings grammar (settings.css) or the bar's colours (tokens.css). */
 
@@ -17,6 +17,8 @@
 .account-slot { display: inline-flex; flex: none; align-items: center; justify-content: flex-end; width: 112px; height: 32px; }
 /* one line at the slot's height on every width (a phone's 40 px button minimum would stand above the label's line) */
 .set-row .account-slot > .button.button { width: 100%; min-height: 0; height: 30px; padding-block: 0; white-space: nowrap; }
+/* B-083: an API key's "Plan credits" switch – its quiet name and the switch on one line, the switch at the slot's right edge */
+.account-credits { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; width: 100%; color: var(--secondary); font-size: 12px; white-space: nowrap; cursor: pointer; }
 /* the slot sits on the label's line (not centred on label, hint and bars) */
 .set-row.account-row { align-items: flex-start; }
 .set-row.account-row > .set-row-control { flex-wrap: nowrap; height: calc(14px * 1.4); }
@@ -41,6 +43,11 @@
 /* the API key's label line ends in "Get a key" (or its inert copy of the same size – the field never moves) */
 .add-key-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .add-account.inline-form > .dialog-footer { margin: 14px 0 0; padding: 0; animation: none; } /* a form's footer outside a dialog */
+/* B-091: the phone's sign-in sheet (SignInSheet.tsx) – Codex's one-time code large and selectable with one quiet hint,
+   or Claude Code's full-width "Open sign-in" above the code field */
+.sign-in-code { margin: 8px 0 6px; font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: .06em; text-align: center; user-select: all; }
+.sign-in-hint { margin: 0 0 4px; color: var(--secondary); font-size: 12px; line-height: 18px; text-align: center; text-wrap: balance; }
+.sign-in-sheet .sign-in-open { width: 100%; margin-bottom: 10px; }
 
 /* ---------------------------------------------------------------- the use rows: [label + hint] [provider] [model] [action], one width each */
 .use-row .set-row-text { flex-basis: 170px; }

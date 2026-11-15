@@ -22,7 +22,8 @@ import { ContextMenuHost } from './lib/context-menu.tsx';
 import { AccessRequest } from './pwa/AccessRequest.tsx';
 import { JoinRequest } from './pwa/JoinRequest.tsx';
 import { joining } from './pwa/join.ts';
-import { forgetThisPhone, inHostedApp } from './pwa/native.ts';
+import { forgetThisPhone, isAndroidApp, isPhoneApp } from './pwa/native.ts';
+import { showPcs } from './pwa/phone-companies.ts';
 import { hasDeviceToken, offlineSnapshot, pairingError } from './pwa/install.ts';
 import type { TodoSnapshot } from './pwa/install.ts';
 import { Shell } from './shell/Shell.tsx';
@@ -37,12 +38,14 @@ function hashToken(): boolean {
   return /(?:^#|&)token=/.test(location.hash);
 }
 
-function BootNote(props: { text: string; detail?: string }) {
+function BootNote(props: { text: string; detail?: string; repair?: boolean }) {
   return (
     <div class="boot boot-note" role="alert">
       <p>{props.text}</p>
       {props.detail && <p class="muted">{props.detail}</p>}
       {rpc.status.value === 'connecting' && <Spinner size={16} />}
+      {props.repair && isAndroidApp() && <button type="button" class="button secondary" onClick={() => showPcs()}>Choose PC</button>}
+      {props.repair && isPhoneApp() && <button type="button" class="button" onClick={forgetThisPhone}>Pair again</button>}
     </div>
   );
 }
@@ -78,7 +81,7 @@ function OfflineTodos(props: { snapshot: TodoSnapshot; accessOff?: boolean }) {
     <div class="offline-view">
       <Header class="offline-header" title="My day" twoLine
         sub={<span class="offline-badge" role="status">{props.accessOff ? 'Not paired' : 'Offline'} · {relative(snapshot.at)}</span>} />
-      {props.accessOff && <p class="offline-note">{ACCESS_OFF_DETAIL}</p>}
+      {props.accessOff && <p class="offline-note">{accessOffDetail()}</p>}
       <div class="offline-body">
         {split.now.length
           ? <ul class="offline-list">{split.now.map((task) => <OfflineRow key={task.id} task={task} />)}</ul>
@@ -97,9 +100,10 @@ function OfflineTodos(props: { snapshot: TodoSnapshot; accessOff?: boolean }) {
           </div>
         )}
       </div>
-      {inHostedApp() && (
+      {isPhoneApp() && ( // 10.11.2026: the Android app showed "Not paired" with no way back (the row was iPhone-only)
         <div class="offline-actions">
-          <button type="button" class="button secondary" onClick={forgetThisPhone}>Forget this phone</button>
+          {isAndroidApp() && <button type="button" class="button secondary" onClick={() => showPcs()}>Choose PC</button>}
+          <button type="button" class={props.accessOff ? 'button' : 'button secondary'} onClick={forgetThisPhone}>{props.accessOff ? 'Pair again' : 'Forget this phone'}</button>
         </div>
       )}
     </div>
@@ -113,7 +117,9 @@ function OfflineTodos(props: { snapshot: TodoSnapshot; accessOff?: boolean }) {
  */
 let unreachable = false;
 
-const ACCESS_OFF_DETAIL = "Pair it again with your PC's Remote ID, then accept on the PC.";
+// 10.11.2026: the Android app keeps every PC of the company – another one may still accept it, so Choose PC comes before
+// Pair again (which forgets the whole pairing).
+const accessOffDetail = (): string => `This PC no longer accepts this phone. ${isAndroidApp() ? 'Choose another PC, or tap' : 'Tap'} Pair again, enter the PC's Remote ID, then accept on the PC.`;
 
 function Root() {
   // 23.10.: the runtime runs in repair mode (broken upgrade, crash loop) – the repair screen replaces the app.
@@ -131,7 +137,7 @@ function Root() {
     if (away && platform === 'pwa' && !hasDeviceToken() && !hashToken()) return <AccessRequest />;
     if (refused === 4403) return <AccessRequest removed />;
     if (away && offlineSnapshot.value) return <OfflineTodos snapshot={offlineSnapshot.value} accessOff={refused === 4401} />;
-    if (refused === 4401) return <BootNote text="This device is no longer paired." detail={ACCESS_OFF_DETAIL} />;
+    if (refused === 4401) return <BootNote text="This device is no longer paired." detail={accessOffDetail()} repair />;
   }
   return <Shell />;
 }

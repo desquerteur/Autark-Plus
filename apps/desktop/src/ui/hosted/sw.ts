@@ -5,7 +5,8 @@
 // frames) work unchanged. Cache 'autark-pc': chunks/ and icons/ cache-first (the PC marks them immutable); main.js,
 // main.css and the other root files revalidate with their ETag (the PC answers 304) and fall back to the copy when no
 // tunnel came within 4 s, so the UI boots and shows its own "connecting" state. Without a copy and a tunnel within 10 s:
-// 503. The shell's own files are network-first in 'autark-shell'. Pushes always show a notice (sw-notify.ts, iOS).
+// 503. The shell's own files are network-first in 'autark-shell'. Pushes always show a notice (sw-notify.ts, iOS); a
+// clear shows one again only on Apple's push service (B-087: elsewhere it just closes).
 // Owns: that routing and caching. Never: holds the token or the key, caches /rpc, /files, /sandbox or anything else live.
 
 import { wireNotifications, type NotifyScope } from '../pwa/sw-notify.ts';
@@ -25,7 +26,7 @@ interface HostedScope extends Omit<NotifyScope, 'clients' | 'addEventListener'> 
   skipWaiting(): Promise<void>;
   addEventListener(type: 'install' | 'activate', fn: (event: ExtendableEvent) => void): void;
   addEventListener(type: 'fetch', fn: (event: FetchEvent) => void): void;
-  addEventListener(type: 'push' | 'notificationclick', fn: (event: never) => void): void;
+  addEventListener(type: 'push' | 'notificationclick' | 'notificationclose', fn: (event: never) => void): void;
 }
 
 const sw = self as unknown as HostedScope;

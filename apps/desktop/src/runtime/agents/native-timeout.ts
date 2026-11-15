@@ -3,7 +3,10 @@
 // real tool call and its output on a continuation, without replaying the original request; its words say that the app's time
 // limit stopped the call and nobody declined it (B-072). Not interrupted, the decisions reach
 // it at once where the engine can (engine.tell), else before its next turn: a turn that ended well is not started again. Nested
-// calls suspend their script's timer.
+// calls suspend their script's timer. B-080 (live 07.11.2026: 140 of 309 reviewed calls started while an earlier one of the
+// turn was open – Claude names every call of a message at once and runs them one after another; all 5 Read aborts waited
+// behind a shell): a call's clock starts when it runs – a call named while another top-level call is open starts unarmed,
+// and when a top-level native call ends, every other open native call not reviewed yet starts its clock then.
 // Owns: deadlines, decision delivery and native continuation. Never: guesses a command's result.
 
 import type { CacheTokens, Engine, EngineEvent, EngineTurnInput, EngineTurnResult } from '../engines/types.ts';
@@ -134,11 +137,12 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
     };
     const event = (value: EngineEvent) => {
       if (value.type === 'tool_start' && (value.own || (value.parent && calls.has(value.parent))) && value.callId && !calls.has(value.callId)) {
+        const queued = !value.parent && [...calls.values()].some((other) => !other.parent); // it runs once the call ahead of it ends
         const call: Call = { id: value.callId, tool: value.name, native: value.own, args: value.args, started: now(), seconds: value.own ? initial(value.name, value.args) : 0, notes: [], reviews: 0, children: new Set(), ...(value.parent ? { parent: value.parent } : {}) };
         calls.set(call.id, call);
         const parent = call.parent ? calls.get(call.parent) : undefined;
         if (parent) { clear(parent); parent.children.add(call.id); }
-        arm(call, call.seconds);
+        if (!queued) arm(call, call.seconds);
       } else if (value.type === 'tool_end') {
         const call = calls.get(value.callId);
         if (call) {
@@ -147,6 +151,9 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
           if (call.notes.length) deliver(note(call, value.output ?? value.summary));
           const parent = call.parent ? calls.get(call.parent) : undefined;
           if (parent) { parent.children.delete(call.id); if (!parent.children.size) arm(parent, parent.seconds); }
+          // B-080: a native call that waited behind this one in the engine's queue starts its clock now (a nested call's end
+          // leaves its script running, so what waits behind the script still waits)
+          if (call.native && !call.parent) for (const other of calls.values()) if (other.native && !other.reviews && !other.review && !other.children.size) { clear(other); other.started = now(); arm(other, other.seconds); }
         }
       }
       input.onEvent(value);

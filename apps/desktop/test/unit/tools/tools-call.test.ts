@@ -1,13 +1,15 @@
 // B-049 F4 (TOOLS-CORE) – tools.call and tools.find through the real registry pipeline (validation, run journal):
 // - tools.call runs its target under the target's name and the call's id: the same validation message, journal items
 //   and result as a direct call; a resend of that id gets the same result without a second run;
-// - it runs only what the agent may use in this mode on its engine (audience by the run's live engine), never itself;
+// - it runs only what the agent may use in this mode, never itself; B-080: every engine reaches the same tools – Codex
+//   runs files.write and, in browser mode, shell.exec with a handle in its env (the value masked in what comes back);
 // - a non-core target is noted for this agent and chat and joins the offer only at promotion (never mid-session);
 // - tools.find ranks by name, keywords and description, shows a full schema for an exact name, marks direct tools
 //   and lists the families when nothing fits; name normalisation accepts wire and hub names.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { setup, tool } from './helpers.ts';
 import { Registry } from '../../../src/runtime/tools/registry.ts';
@@ -17,6 +19,9 @@ import { Journal } from '../../../src/runtime/runs/journal.ts';
 import { ModeLibrary } from '../../../src/runtime/modes/service.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
+import { SecretVault } from '../../../src/runtime/secrets/service.ts';
+import { secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
+import { fileTools, type ShellSpawn } from '../../../src/runtime/tools/builtin/files.ts';
 
 /** A call that hangs must fail the test, never hang the run (B-050 log). */
 const BOUNDED = { timeout: 10_000 };
@@ -44,10 +49,10 @@ function rig(engine?: { ownTools: boolean; dynamicTools: boolean }) {
     description: 'Private reminder: at that time you get a turn with your own note (no chat post).',
     inputSchema: { type: 'object', properties: { at: { type: 'string' }, note: { type: 'string' }, repeat: { type: 'string', enum: ['daily', 'weekly'] } }, required: ['at', 'note'] },
   }));
-  // 'think' like the real chat.send (tools/builtin/chat.ts).
-  registry.register(tool('chat.send', 'think', { description: 'Post a message into a chat you are a member of.' }));
+  // 'think' like the real chat.read (tools/builtin/chat.ts).
+  registry.register(tool('chat.read', 'think', { description: 'Post a message into a chat you are a member of.' }));
   registry.register(tool('computer.click', 'device', { description: 'Click at a point on the screen.', requires: 'device' }));
-  registry.register(tool('files.write', 'write_local', { description: 'Create or overwrite a text file.', audience: 'http' }));
+  registry.register(tool('files.write', 'write_local', { description: 'Create or overwrite a text file.' }));
   runs.start({ id: 'run_1', agentId: 'ag_tom', conversationId: h.chat.id, trigger: 'message' });
   const base: Omit<ToolContext, 'services'> = { agent: h.org.require('ag_tom'), runId: 'run_1', conversationId: h.chat.id, mode: 'general', signal: new AbortController().signal, status: () => {} };
   const items = () => runs.items('run_1').filter((item) => item.kind === 'tool_call' || item.kind === 'tool_result').map((item) => [item.kind, item.name, (item.data as { callId?: string }).callId]);
@@ -72,38 +77,70 @@ test('tools.call runs its target as a direct call would: real name, same validat
   assert.equal(jots(), 2, 'and runs nothing twice');
 });
 
-test('tools.call runs only what this agent may use here, never itself; the engine decides audience tools', BOUNDED, async () => {
+test('tools.call runs only what this agent may use here, never itself; every engine reaches the same tools', BOUNDED, async () => {
   const { registry, base } = rig();
   assert.match(textOf(await registry.call('tools.call', { name: 'computer.click', args: {} }, base, 'r1')), /not available to me in mode "general".*tools\.find/);
   assert.match(textOf(await registry.call('tools.call', { name: 'no.such', args: {} }, base, 'r2')), /^Unknown tool "no\.such"/);
   assert.match(textOf(await registry.call('tools.call', { name: 'tools.call', args: { name: 'notes.jot' } }, base, 'r3')), /not itself/);
   assert.match(textOf(await registry.call('tools.call', { args: {} }, base, 'r4')), /needs the tool's name/);
-  assert.match(textOf(await registry.call('tools.call', { name: 'files.write', args: {} }, base, 'r5')), /not available/, 'an engine-only tool needs a known engine');
 
   const http = rig({ ownTools: false, dynamicTools: true });
   assert.ok(!(await http.registry.call('tools.call', { name: 'files.write', args: {} }, http.base, 'r6')).isError, 'an engine without own tools may write files');
   const codex = rig({ ownTools: true, dynamicTools: true });
-  assert.match(textOf(await codex.registry.call('tools.call', { name: 'files.write', args: {} }, codex.base, 'r7')), /not available/, 'Codex brings its own');
+  assert.ok(!(await codex.registry.call('tools.call', { name: 'files.write', args: {} }, codex.base, 'r7')).isError, 'Codex runs files.write through tools.call');
 });
 
-test('learned from use: a non-core target waits for the next promotion; core targets are not noted; bounded', BOUNDED, async () => {
+test('Codex in browser mode finds shell.exec by name and by "secret env", and runs it with the value masked', BOUNDED, async () => {
+  const { h, services, registry, base } = rig({ ownTools: true, dynamicTools: true });
+  const host = { encrypt: async (plain: string) => Uint8Array.from(Buffer.from(plain, 'utf8'), (byte) => byte ^ 0x5a), decrypt: async (cipher: Uint8Array) => Buffer.from(Uint8Array.from(cipher, (byte) => byte ^ 0x5a)).toString('utf8') };
+  const vault = new SecretVault({ db: h.db, host, clock: h.clock });
+  services.secrets = vault as unknown as RuntimeServices['secrets'];
+  const spawned: Array<NodeJS.ProcessEnv | undefined> = [];
+  // "print NAME" writes that env value – what a command could show.
+  const shell: ShellSpawn = (command, options) => {
+    spawned.push(options.env);
+    const stdout = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), { stdout, stderr: null, kill: () => true });
+    setImmediate(() => { stdout.emit('data', Buffer.from(`value ${String(options.env?.[command.slice(6)] ?? '')}\n`)); child.emit('close', 0); });
+    return child as unknown as ReturnType<ShellSpawn>;
+  };
+  registry.register(fileTools({ shell }).find((entry) => entry.name === 'shell.exec')!);
+  for (const entry of secretTools) registry.register(entry);
+  const browser = { ...base, mode: 'browser' };
+
+  assert.match(textOf(await registry.call('tools.find', { query: 'shell.exec' }, browser, 's1')), /^shell\.exec – Runs a shell command on this PC or a linked PC, with stored secrets/);
+  const asked = textOf(await registry.call('tools.find', { query: 'run command with secret env', limit: 1 }, browser, 's2')).split('\n');
+  assert.match(asked[1], /^- shell\.exec: /, asked.join('\n'));
+  assert.match(asked[2], /^ {2}Arguments: \{"type":"object"/, 'the best hit carries its whole schema');
+  assert.equal(asked.length, 3, 'limit 1: shell.exec alone');
+
+  const key = await vault.save({ label: 'Mail password', kind: 'password', value: 'pw-imap-0042-secret' });
+  const out = await registry.call('tools.call', { name: 'shell.exec', args: { command: 'print P', env: { P: `secret://${key.id}` } } }, browser, 's3');
+  assert.ok(!out.isError, textOf(out));
+  assert.equal(spawned.at(-1)?.P, 'pw-imap-0042-secret', 'the command gets the value');
+  assert.ok(!textOf(out).includes('pw-imap-0042-secret') && textOf(out).includes(`value secret://${key.id}`), 'what comes back has it masked');
+});
+
+test('learned from use: a non-core target that succeeded waits for the next promotion; failed and core targets are not noted; bounded', BOUNDED, async () => {
   const { h, registry, base, services } = rig();
   const chat = h.chat.id;
+  assert.ok((await registry.call('tools.call', { name: 'notes.jot', args: { text: '' } }, base, 'l0')).isError, 'invalid arguments');
+  assert.equal(promoteLearned(services, 'ag_tom'), false, 'a failed call takes no learned slot');
   await registry.call('tools.call', { name: 'notes.jot', args: { text: 'x' } }, base, 'l1');
-  await registry.call('tools.call', { name: 'chat.send', args: {} }, base, 'l2');
-  assert.deepEqual(learnedTools(h.db, 'ag_tom', chat), [], 'nothing joins mid-session');
-  const offer = () => registry.offerFor(base.agent, services.modes.get('general'), { ownTools: true, via: 'native' }, learnedTools(h.db, 'ag_tom', chat)).map((spec) => spec.name);
+  await registry.call('tools.call', { name: 'chat.read', args: {} }, base, 'l2');
+  assert.deepEqual(learnedTools(h.db, 'ag_tom'), [], 'nothing joins mid-session');
+  const offer = () => registry.offerFor(base.agent, services.modes.get('general'), { ownTools: true, via: 'native' }, learnedTools(h.db, 'ag_tom')).map((spec) => spec.name);
   const before = offer();
   assert.ok(!before.includes('notes.jot'));
-  assert.equal(promoteLearned(services, 'ag_tom', chat), true);
-  assert.deepEqual(learnedTools(h.db, 'ag_tom', chat), ['notes.jot'], 'chat.send is core: not noted');
+  assert.equal(promoteLearned(services, 'ag_tom'), true);
+  assert.deepEqual(learnedTools(h.db, 'ag_tom'), ['notes.jot'], 'chat.read is core: not noted');
   assert.deepEqual(offer(), [...before, 'notes.jot'].sort(), 'it joins the offer from the next fresh session on');
-  assert.equal(promoteLearned(services, 'ag_tom', chat), false, 'nothing new');
-  assert.deepEqual(learnedTools(h.db, 'ag_tom', 'other_chat'), [], 'per chat');
+  assert.equal(promoteLearned(services, 'ag_tom'), false, 'nothing new');
+  assert.deepEqual(learnedTools(h.db, 'ag_other'), [], 'per agent');
 
-  for (let index = 0; index < MAX_LEARNED + 3; index++) noteLearned(services, 'ag_tom', chat, `x.tool${index}`);
-  promoteLearned(services, 'ag_tom', chat);
-  const kept = learnedTools(h.db, 'ag_tom', chat);
+  for (let index = 0; index < MAX_LEARNED + 3; index++) noteLearned(services, 'ag_tom', `x.tool${index}`);
+  promoteLearned(services, 'ag_tom');
+  const kept = learnedTools(h.db, 'ag_tom');
   assert.equal(kept.length, MAX_LEARNED);
   assert.equal(kept.at(-1), `x.tool${MAX_LEARNED + 2}`, 'the newest kept');
 });
@@ -112,15 +149,18 @@ test('tools.find: best fit first, direct tools marked, full schema for a name, f
   const { registry, base } = rig();
   const remind = textOf(await registry.call('tools.find', { query: 'remind me tomorrow to call the bank' }, base, 'f1'));
   const lines = remind.split('\n');
-  assert.match(lines[1], /^- schedules\.remind: Private reminder: at that time you get a turn with your own note \(no chat post\)\. Args: at\*: string, note\*: string, repeat: daily\|weekly$/);
+  assert.equal(lines[1], '- schedules.remind: Private reminder: at that time you get a turn with your own note (no chat post).');
+  assert.match(lines[2], /^ {2}Arguments: \{"type":"object","properties":\{"at":/, 'one find is enough: the best hit with its whole schema');
+  assert.ok(lines.slice(3).every((line) => line.includes(' Arguments: ')), 'every other hit with its arguments');
   assert.ok(!remind.includes('computer.click'));
 
   const post = textOf(await registry.call('tools.find', { query: 'post a message' }, base, 'f2'));
-  assert.match(post, /- chat\.send \(in my list\): Post a message/);
+  assert.match(post, /- chat.read \(in my list\): Post a message/);
 
   const exact = textOf(await registry.call('tools.find', { query: 'schedules__remind' }, base, 'f3'));
   assert.match(exact, /^schedules\.remind – Private reminder/);
-  assert.match(exact, /Schema: \{"type":"object"/);
+  assert.match(exact, /\nArguments: \{"type":"object"/);
+  assert.equal(exact.split('"required"').length, 2, 'the arguments once');
   assert.match(exact, /tools\.call \{"name": "schedules\.remind"/);
 
   const none = textOf(await registry.call('tools.find', { query: 'zzz qqq' }, base, 'f4'));

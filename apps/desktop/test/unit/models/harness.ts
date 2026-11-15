@@ -15,12 +15,17 @@ import type { DecisionService, RuntimeServices } from '../../../src/runtime/cont
 import type { Engine, EngineCaps, EngineModel } from '../../../src/runtime/engines/types.ts';
 import type { Account, AccountLimits, EngineId, ProviderId } from '../../../src/shared/model/providers.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
-import type { Conversation, ConversationSettings, Member } from '../../../src/shared/model/chat.ts';
+import type { Conversation, ConversationSettings, Member, Message } from '../../../src/shared/model/chat.ts';
 import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
 import type { Settings, SettingsPatch } from '../../../src/shared/model/system.ts';
 import type { EventMap, EventName } from '../../../src/shared/api/events.ts';
 
 export const T0 = Date.UTC(2026, 9, 17, 9, 0, 0);
+
+/** One chat line for addChat (B-083 D2): who wrote it and its kind ('text' when left out). */
+export type ChatLine = Pick<Message, 'authorKind'> & Partial<Pick<Message, 'kind' | 'body' | 'authorId'>>;
+/** A person's new line in a chat: the agent's turn there answers it (routing/person-turn.ts). */
+export const PERSON_LINE: ChatLine[] = [{ authorKind: 'human', kind: 'text', body: 'Bitte.' }];
 
 /** Small, stable priors (the shipped file is our judgement and may change). */
 export const TEST_PRIORS = Priors.parse({
@@ -43,7 +48,7 @@ export const TEST_PRIORS = Priors.parse({
 export function account(id: string, provider: ProviderId, patch: Partial<Account> = {}): Account {
   return {
     id, provider, label: id, auth: provider === 'codex' || provider === 'claude' ? 'cli' : provider === 'ollama' ? 'local' : 'api_key',
-    state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: T0, ...patch,
+    state: 'ok', priority: 0, enabled: true, detected: false, createdAt: T0, ...patch,
   };
 }
 
@@ -141,9 +146,12 @@ export function setup(options: { decisions?: DecisionService; secrets?: Record<s
   };
   const conversations = new Map<string, Conversation>();
   const members = new Map<string, Member[]>();
+  const lines = new Map<string, Message[]>();
   const chats = {
     get: (id: string) => conversations.get(id),
     members: (id: string) => members.get(id) ?? [],
+    // B-083 D2: the lines after a read cursor (routing/person-turn.ts personAsks) – none unless addChat names some.
+    messages: (id: string, options: { afterSeq?: number } = {}) => (lines.get(id) ?? []).filter((line) => line.seq > (options.afterSeq ?? 0)),
     update(id: string, patch: { settings?: Partial<ConversationSettings> }) {
       const conversation = conversations.get(id);
       if (!conversation) throw new Error('missing chat');
@@ -152,8 +160,13 @@ export function setup(options: { decisions?: DecisionService; secrets?: Record<s
       return next;
     },
   };
-  const addChat = (id: string, agentIds: string[], chatSettings: ConversationSettings = {}) => {
-    conversations.set(id, { id, title: id, titleNamed: false, createdBy: 'human', pinned: false, settings: chatSettings, lastSeq: 0, createdAt: T0, updatedAt: T0 } as Conversation);
+  /** A chat with the person and `agentIds`; `chatLines` (seq 1, 2, …) are unread by its agents – a human 'text' line makes their turn the person's (D2). */
+  const addChat = (id: string, agentIds: string[], chatSettings: ConversationSettings = {}, chatLines: ChatLine[] = []) => {
+    lines.set(id, chatLines.map((line, index) => ({
+      id: `msg_${id}_${index + 1}`, conversationId: id, seq: index + 1, kind: 'text', body: '', createdAt: T0,
+      authorId: line.authorKind === 'human' ? 'human' : agentIds[0] ?? 'ag_x', ...line,
+    }) as Message));
+    conversations.set(id, { id, title: id, titleNamed: false, createdBy: 'human', pinned: false, settings: chatSettings, lastSeq: chatLines.length, createdAt: T0, updatedAt: T0 } as Conversation);
     members.set(id, [
       { conversationId: id, memberId: 'human', kind: 'human', role: 'owner', readSeq: 0, joinedAt: T0 },
       ...agentIds.map((memberId) => ({ conversationId: id, memberId, kind: 'agent' as const, role: 'member' as const, readSeq: 0, joinedAt: T0 })),

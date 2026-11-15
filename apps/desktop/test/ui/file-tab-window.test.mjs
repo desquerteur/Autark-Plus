@@ -1,7 +1,7 @@
 // Real Electron check of the file tab: the "+" page's Files starts at the data folder, a click opens a file in a tab of its
 // own, Up goes up; a typed text gets the dot, Ctrl+S writes it; a change on disk is followed while nothing waits and is a
-// notice with Reload under typed text; a 1 MB file stays usable; a binary and a very large file say so; the path slot takes a
-// typed path; a draft survives leaving the tab; Settings' file cell opens the tab (a right click keeps Open with system); Skills &
+// notice with Reload under typed text; a 1 MB file stays usable; a binary and a very large file say so; a path that holds
+// nothing shows the not-found page with Create; the path slot takes a typed path; a draft survives leaving the tab; Settings' file cell opens the tab (a right click keeps Open with system); Skills &
 // memory opens a skill and a memory; an agent's SYSTEM.md opens; light and dark, 640×480. A temp profile, the demo engine.
 // Owns: these user paths. Never: touches the person's profile.
 
@@ -192,9 +192,14 @@ test('the file tab: folder list, editor, changes on disk, settings and skills op
   await openPath(large);
   await noEditor.filter({ hasText: 'too large' }).waitFor();
 
-  // ---- a path that holds nothing yet is a new file; a typed folder opens as a folder
+  // ---- a path that holds nothing is the not-found page (similar paths, the nearest folder last, Create); Create makes a new file; a typed folder opens as a folder
   const fresh = path.join(elsewhere, 'sub', 'new.md');
   await openPath(fresh);
+  await page.locator('.pane-view .empty-state', { hasText: 'new.md was not found.' }).waitFor();
+  await row(path.basename(elsewhere)).waitFor();
+  await expectStable(page, ['.pane-view .new-tab'], () => page.waitForTimeout(2500)); // the look goes on, nothing moves
+  await shot('09a-not-found-light');
+  await row('Create new.md').click();
   await field.waitFor();
   await page.waitForFunction(() => /New file/.test(document.querySelector('.pane-file .pane-foot-text')?.textContent ?? ''));
   await field.click();
@@ -202,6 +207,13 @@ test('the file tab: folder list, editor, changes on disk, settings and skills op
   await page.keyboard.press('Control+s');
   await page.waitForFunction(() => !document.querySelector('.file-dot.is-dirty'));
   assert.equal(await readFile(fresh, 'utf8'), 'created');
+  assert.equal(await page.locator('.pane-file .pane-foot').getByRole('button', { name: 'Show a copy here' }).count(), 0, 'this PC\'s own file: no Show a copy here');
+  await openPath(path.join(elsewhere, 'subb')); // a mistyped folder: the real one first, a click opens it in place
+  await row('sub').click();
+  await row('new.md').waitFor();
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  assert.equal(await page.locator('.popover .menu-title', { hasText: 'Open on' }).count(), 0, 'no linked PC: no Open on');
+  await page.keyboard.press('Escape');
   await openPath(elsewhere);
   await row('note.md').waitFor();
   await row('sub').waitFor();
@@ -267,22 +279,9 @@ test('the file tab: folder list, editor, changes on disk, settings and skills op
   await page.locator('.agent-row', { hasText: 'last-prompt.md' }).getByRole('button', { name: 'Open' }).click();
   await page.waitForFunction(() => document.querySelector('.browser-strip-tab.selected .browser-strip-title')?.textContent === 'last-prompt.md');
 
-  // ---- a small window (the phone layout): the chat's area takes the body above the composer; its Files row opens the data
-  // folder there (a file itself opens in the system's app at this width – file-tabs.ts)
-  await size(640, 480);
-  await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, (await rpc.call('chats.list'))[0].id);
-  const tabsCell = page.locator('.mobile-shell [data-cell="workspace"] button');
-  await tabsCell.click();
-  const chatArea = page.locator('.chat-area');
-  await chatArea.locator('.browser-strip').waitFor();
-  await chatArea.locator('.new-tab-row', { hasText: 'Files' }).click();
-  await chatArea.locator('[aria-label="Folder"]').waitFor();
-  assert.ok(await page.locator('.mobile-shell .composer').isVisible(), 'the composer stays under the area');
-  await shot('16-640x480-light');
-  await scheme('dark'); await shot('17-640x480-dark'); await scheme('light');
-  await tabsCell.click();
-  await chatArea.waitFor({ state: 'detached' });
-  await size(1280, 800);
+  // The chat's area at phone width (its Files row above the composer) is a narrow-layout check of the mobile shell,
+  // which B-084 is rebuilding; it belongs with that shell's own window test. The Files feature itself (the not-found
+  // page, Create, Show, Save to this PC, Open on) is covered above at desktop width.
   assert.deepEqual(errors, [], 'no renderer errors');
   t.diagnostic(`screenshots: ${out}`);
 });

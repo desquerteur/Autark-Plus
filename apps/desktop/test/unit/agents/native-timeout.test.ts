@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Engine, EngineEvent, EngineTurnInput, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
-import type { ToolTimeoutDecision, ToolTimeoutInput } from '../../../src/runtime/tools/timeout.ts';
+import { initialTimeoutSeconds, type ToolTimeoutDecision, type ToolTimeoutInput } from '../../../src/runtime/tools/timeout.ts';
 import { runWithNativeTimeouts, type NativeTimeoutOptions } from '../../../src/runtime/agents/native-timeout.ts';
 
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
@@ -247,6 +247,49 @@ test('a hanging tell is bounded: the turn ends as it ended and the decision wait
   assert.equal((await running).stop, 'done');
   assert.equal(inputs.length, 1);
   assert.equal(h.pending.size, 0);
+});
+
+test('B-080: a call queued behind another starts its clock when the one ahead ends (live: Reads stopped while a shell ran)', async () => {
+  const h = setup();
+  h.options.initial = initialTimeoutSeconds;
+  const reviews: Array<{ tool: string; elapsed: number }> = [];
+  h.options.review = async (_ctx, timeout) => { reviews.push({ tool: timeout.tool, elapsed: timeout.elapsedSeconds }); return { action: 'wait', seconds: 60, reason: 'Still reading' }; };
+  let active!: EngineTurnInput;
+  const engine = { run: (input: EngineTurnInput) => {
+    active = input;
+    input.onEvent({ type: 'tool_start', callId: 'bash', name: 'Bash', args: { command: 'Start-Sleep 17', timeout: 20000 }, own: true });
+    input.onEvent({ type: 'tool_start', callId: 'read', name: 'Read', args: { file_path: 'scr3.png' }, own: true });
+    return new Promise<EngineTurnResult>((resolve) => input.signal.addEventListener('abort', () => resolve({ text: '', stop: 'interrupted' }), { once: true }));
+  } } as unknown as Engine;
+  const running = runWithNativeTimeouts(engine, h.input, h.ctx, h.options);
+  h.tick(17_000); await flush();
+  assert.equal(reviews.length, 0, 'the Read waits in the queue, its clock not running');
+  active.onEvent({ type: 'tool_end', callId: 'bash', ok: true, summary: 'done' });
+  h.tick(14_999); await flush();
+  assert.equal(reviews.length, 0, 'not reviewed before 32 s');
+  h.tick(1); await flush();
+  assert.deepEqual(reviews.map((review) => [review.tool, review.elapsed]), [['Read', 15]], 'reviewed at its own 15 s from when it ran');
+  h.stop.abort();
+  await running;
+  assert.equal(h.pending.size, 0);
+});
+
+test('B-080: a Claude Bash with its own timeout of 600,000 ms is first reviewed at 600 s', async () => {
+  const h = setup();
+  h.options.initial = initialTimeoutSeconds;
+  const reviews: number[] = [];
+  h.options.review = async (_ctx, timeout) => { reviews.push(timeout.timeoutSeconds); return { action: 'wait', seconds: 60, reason: 'Still working' }; };
+  const engine = { run: (input: EngineTurnInput) => {
+    input.onEvent({ type: 'tool_start', callId: 'bash', name: 'Bash', args: { command: 'npm run long-job', timeout: 600000 }, own: true });
+    return new Promise<EngineTurnResult>((resolve) => input.signal.addEventListener('abort', () => resolve({ text: '', stop: 'interrupted' }), { once: true }));
+  } } as unknown as Engine;
+  const running = runWithNativeTimeouts(engine, h.input, h.ctx, h.options);
+  h.tick(599_999); await flush();
+  assert.equal(reviews.length, 0);
+  h.tick(1); await flush();
+  assert.deepEqual(reviews, [600]);
+  h.stop.abort();
+  await running;
 });
 
 test('the caller aborts a hanging tell immediately without continuing the session', async () => {

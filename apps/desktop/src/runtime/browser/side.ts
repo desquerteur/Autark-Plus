@@ -2,40 +2,72 @@
 // page, place.ts): one SideBrowserCall to main
 // (host op sideBrowser, main/side-driver answers – its tabs, refs 's123', change lists, the agent's named cursor in the
 // page and the person-first rule are its own). The call names the agent and the chat it works for, so a tab it opens
-// carries both. Elements are addressed by ref (the side driver's refs from its snapshot or find); a stored secret's value is taken
-// from the vault here and typed there (the tool output passes the vault's redaction). Without the host op (no desktop
-// app here) the call fails with one sentence.
+// carries both. The side driver takes elements by ref (its refs from its snapshot or find); B-080 (live: 9 "address
+// elements by ref" refusals): a step named by its words – role and name, label, placeholder or text – is looked up here
+// first with one 'find' in that tab and goes on with the ref of the one element that matches (or the nth); several or
+// none answer with the lines found. A css selector stays my own browser's. A stored secret's value is taken from the
+// vault here and typed there (the tool output passes the vault's redaction). Without the host op (no desktop app here)
+// the call fails with one sentence.
 // Owns: that mapping. Never: talks to main except through the host.
 
 import { WorkforceError } from '../../shared/errors.ts';
 import type { SideActStep, SideBrowserCall, SideBrowserResult, SideStepAction } from '../../shared/model/side-browser.ts';
 import type { ToolContext } from '../tools/types.ts';
+import { describeTarget } from './page.ts';
 
 export const SIDE_MISSING = "The person's browser is not open here (it lives in the app window on this PC).";
 export const SECRET = /^secret:\/\/([A-Za-z0-9_-]{1,64})$/;
+export const SIDE_CSS = "A css selector works in my own browser; in the person's browser I name the element by ref or by its words.";
 
 const STEP_ACTIONS: ReadonlySet<string> = new Set<SideStepAction>([
   'click', 'double_click', 'right_click', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'scroll', 'scroll_into_view', 'back', 'forward', 'reload',
 ]);
 const PAGE_ACTIONS: ReadonlySet<string> = new Set(['press', 'scroll', 'back', 'forward', 'reload']);
+/** The most matching lines a conflict lists. */
+const LISTED = 8;
 
 /** The step arguments the browser tools share. */
 export interface StepArgs {
   action: string; ref?: string; role?: string; name?: string; label?: string; placeholder?: string; text?: string; css?: string;
-  value?: string; values?: string[]; key?: string; files?: string[]; amount?: number;
+  exact?: boolean; nth?: number; value?: string; values?: string[]; key?: string; files?: string[]; amount?: number;
 }
 
-/** One act step as the side driver takes it (a stored secret's value filled in). */
-export async function sideStep(ctx: ToolContext, args: StepArgs): Promise<SideActStep> {
+/** The tab and space of a side call (place.ts sideOn). */
+export type SideOn = Pick<SideBrowserCall, 'tab' | 'space'>;
+
+/** One act step as the side driver takes it (a stored secret's value filled in, an element named by words resolved to its ref). */
+export async function sideStep(ctx: ToolContext, on: SideOn, args: StepArgs): Promise<SideActStep> {
   if (!STEP_ACTIONS.has(args.action)) throw new WorkforceError('bad_request', `${args.action} works in my own browser, not in the person's.`);
-  const other = Boolean(args.role || args.label || args.placeholder || args.text || args.css);
-  if (!args.ref && (other || !PAGE_ACTIONS.has(args.action))) throw new WorkforceError('bad_request', "In the person's browser address elements by ref (from browser.snapshot or browser.find there).");
+  const words = Boolean(args.role || args.label || args.placeholder || args.text);
+  if (!args.ref && args.css && !words) throw new WorkforceError('bad_request', SIDE_CSS);
+  if (!args.ref && !words && !PAGE_ACTIONS.has(args.action)) {
+    throw new WorkforceError('bad_request', "This step needs an element: in the person's browser I name it by ref (browser.snapshot or browser.find there) or by its words.");
+  }
+  const ref = args.ref ?? (words ? await refByWords(ctx, on, args) : undefined);
   const secret = args.value !== undefined ? SECRET.exec(args.value)?.[1] : undefined;
   const value = secret ? await ctx.services.secrets.use(secret, ctx.agent.id) : args.value;
   return {
-    action: args.action as SideStepAction, ...(args.ref ? { ref: args.ref } : {}), ...(value !== undefined ? { value } : {}),
+    action: args.action as SideStepAction, ...(ref ? { ref } : {}), ...(value !== undefined ? { value } : {}),
     ...(args.values ? { values: args.values } : {}), ...(args.key ? { key: args.key } : {}), ...(args.amount !== undefined ? { dy: args.amount } : {}),
   };
+}
+
+/** The ref of the one element in the person's tab that matches the step's words (or its nth match). */
+async function refByWords(ctx: ToolContext, on: SideOn, args: StepArgs): Promise<string> {
+  const name = args.name ?? args.label ?? args.placeholder ?? args.text;
+  const what = describeTarget({ role: args.role, name: args.name, label: args.label, placeholder: args.placeholder, text: args.text });
+  const query = [args.role, name].filter(Boolean).join(' ');
+  const found = await sideCall(ctx, { action: 'find', query, ...on });
+  const role = args.role?.toLowerCase();
+  const lines = (found.text ?? '').split('\n').map((line) => line.trim()).filter((line) => {
+    if (!/\[ref=s\d+\]/.test(line)) return false;
+    if (role && /^-\s+(\S+)/.exec(line)?.[1]?.toLowerCase() !== role) return false;
+    return !(args.exact && name) || line.includes(`"${name}"`) || line.endsWith(`: ${name}`); // the quoted name, or a text line's text
+  });
+  const pick = args.nth !== undefined ? lines[args.nth] : lines.length === 1 ? lines[0] : undefined;
+  if (pick) return /\[ref=(s\d+)\]/.exec(pick)![1]!;
+  if (!lines.length) throw new WorkforceError('not_found', `Nothing in the person's tab matches ${what}.`);
+  throw new WorkforceError('conflict', `${lines.length} elements match ${what}: ${lines.slice(0, LISTED).join('; ')} – I take the ref of the one I mean, or nth.`);
 }
 
 /**

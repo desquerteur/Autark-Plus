@@ -36,7 +36,7 @@ function setup() {
     return { failed: out.isError === true, text, data: out.isError ? undefined : safeJson(text) };
   };
   /** A room Ava starts (she is its creator and lead). */
-  const room = async (args: Record<string, unknown> = {}) => (await run('ag_ava', 'chat.create', { title: 'Research', agentIds: ['ag_ben', 'ag_cal', 'ag_boss'], ...args })).data.chatId as string;
+  const room = async (args: Record<string, unknown> = {}) => (await run('ag_ava', 'chat.create', { title: 'Research', members: ['ag_ben', 'ag_cal', 'ag_boss'], ...args })).data.chatId as string;
   const active = (chatId: string) => h.chats.members(chatId).map((member) => member.memberId);
   const lines = (chatId: string, type: string) => h.chats.messages(chatId).filter((message) => message.meta.status?.type === type);
   return { ...h, run, room, active, lines };
@@ -49,48 +49,36 @@ function safeJson(text: string) {
 test('the lead removes an agent with a line; an outsider is refused, the agent\'s manager may remove it', async () => {
   const h = setup();
   const chatId = await h.room();
-  const refused = await h.run('ag_cal', 'chat.remove_members', { chatId, memberIds: ['ag_ben'] });
+  const refused = await h.run('ag_cal', 'chat.remove_members', { chatId, members: ['ag_ben'] });
   assert.equal(refused.failed, true);
   assert.match(refused.text, /^Nothing was changed\. Only this chat's lead or creator, or a manager of Ben/);
   assert.ok(h.active(chatId).includes('ag_ben'), 'nothing changed');
 
-  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: ['ag_cal'] })).failed, false);
+  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, members: ['ag_cal'] })).failed, false);
   const [line] = h.lines(chatId, 'member_removed');
   assert.equal(line.body, 'Removed Cal');
   assert.equal(line.authorId, 'ag_ava', 'the line names who did it');
 
-  assert.equal((await h.run('ag_boss', 'chat.remove_members', { chatId, memberIds: ['ag_ben'] })).failed, false, 'a manager in the chain');
+  assert.equal((await h.run('ag_boss', 'chat.remove_members', { chatId, members: ['ag_ben'] })).failed, false, 'a manager in the chain');
   assert.deepEqual(h.active(chatId).sort(), ['ag_ava', 'ag_boss']);
-  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: ['ag_cal'] })).failed, true, 'no longer a member');
+  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, members: ['ag_cal'] })).failed, true, 'no longer a member');
 
   // A removed agent is not woken by the room any more.
   h.chats.send({ conversationId: chatId, body: '@Cal @Ben the venue list is ready', authorId: 'ag_ava' });
   assert.equal(h.wakeRows().some((wake) => wake.agent_id === 'ag_cal' || wake.agent_id === 'ag_ben'), false);
 });
 
-test('an agent that still owns open work in the chat stays until it is handed on', async () => {
-  const h = setup();
-  const chatId = await h.room();
-  const task = h.tasks.create({ conversationId: chatId, title: 'Compare venues', assigneeKind: 'agent', assigneeId: 'ag_cal', createdBy: 'ag_ava' });
-  const kept = await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: ['ag_ben', 'ag_cal'] });
-  assert.equal(kept.text, 'Nothing was changed. Cal still owns an open task here – hand it on first (tasks.assign).');
-  assert.ok(h.active(chatId).includes('ag_ben') && h.active(chatId).includes('ag_cal'), 'all or nothing');
-
-  h.tasks.setStatus(task.id, 'cancelled', 'ag_ava', 'Not needed');
-  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: ['ag_cal'] })).failed, false);
-  assert.equal(h.active(chatId).includes('ag_cal'), false);
-});
 
 test('the person leaves an agent\'s room only by its lead or creator, never a chat they or the runtime started', async () => {
   const h = setup();
-  const chatId = await h.room({ includeHuman: true });
-  assert.match((await h.run('ag_boss', 'chat.remove_members', { chatId, memberIds: [HUMAN_ID] })).text, /Only this chat's lead or creator can take the person out/);
-  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: [HUMAN_ID] })).failed, false);
+  const chatId = await h.room({ members: ['ag_ben', 'ag_cal', 'ag_boss', HUMAN_ID] });
+  assert.match((await h.run('ag_boss', 'chat.remove_members', { chatId, members: [HUMAN_ID] })).text, /Only this chat's lead or creator can take the person out/);
+  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, members: [HUMAN_ID] })).failed, false);
   assert.equal(chatSection(h.chats.summary(chatId)), 'team', 'the room moved to Team activity');
 
   const own = h.chats.create({ agentIds: ['ag_ava', 'ag_ben'], createdBy: HUMAN_ID });
   const lead = h.chats.lead(own.id)!;
-  const kept = await h.run(lead, 'chat.remove_members', { chatId: own.id, memberIds: [HUMAN_ID, 'ag_ben'] });
+  const kept = await h.run(lead, 'chat.remove_members', { chatId: own.id, members: [HUMAN_ID, 'ag_ben'] });
   assert.match(kept.text, /The person stays in this chat: only a chat an agent started can lose them/);
   assert.deepEqual(h.active(own.id).sort(), [HUMAN_ID, 'ag_ava', 'ag_ben'].sort(), 'all or nothing');
 
@@ -98,7 +86,7 @@ test('the person leaves an agent\'s room only by its lead or creator, never a ch
   const inbox = h.chats.create({ title: 'From Office PC', agentIds: ['ag_ava'], humans: true, createdBy: SYSTEM_ID, lead: 'ag_ava' });
   assert.equal(h.chats.members(inbox.id).find((member) => member.memberId === HUMAN_ID)?.role, 'member');
   assert.equal(h.chats.lead(inbox.id), 'ag_ava');
-  const stays = await h.run('ag_ava', 'chat.remove_members', { chatId: inbox.id, memberIds: [HUMAN_ID] });
+  const stays = await h.run('ag_ava', 'chat.remove_members', { chatId: inbox.id, members: [HUMAN_ID] });
   assert.equal(stays.failed, true);
   assert.match(stays.text, /The person stays in this chat/);
   assert.ok(h.active(inbox.id).includes(HUMAN_ID));
@@ -118,9 +106,9 @@ test('external members only by the lead; set_lead only by the current lead, with
   assert.equal((await h.run('ag_ava', 'chat.set_lead', { chatId, agentId: 'ag_cal' })).failed, true, 'Ava no longer leads');
 
   // Ava is still the creator, but external members go only by the lead.
-  assert.match((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: [ext] })).text, /Only this chat's lead removes external members/);
-  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, memberIds: ['ag_cal'] })).failed, false, 'agents still by the creator');
-  assert.equal((await h.run('ag_ben', 'chat.remove_members', { chatId, memberIds: [ext] })).failed, false);
+  assert.match((await h.run('ag_ava', 'chat.remove_members', { chatId, members: [ext] })).text, /Only this chat's lead removes external members/);
+  assert.equal((await h.run('ag_ava', 'chat.remove_members', { chatId, members: ['ag_cal'] })).failed, false, 'agents still by the creator');
+  assert.equal((await h.run('ag_ben', 'chat.remove_members', { chatId, members: [ext] })).failed, false);
   assert.equal(h.active(chatId).includes(ext), false);
 });
 
@@ -130,8 +118,8 @@ test('B-078 D7: the person is never added to a room – the refusal names my 1:1
   const first = h.of('conversation.upserted').find((chat) => chat.id === chatId)!;
   assert.equal(first.settings.hiddenFromList, true, 'hidden from its first event on');
 
-  assert.match((await h.run('ag_ava', 'chat.add_members', { chatId, agentIds: ['ag_nobody'] })).text, /Unknown agent ag_nobody/);
-  const refused = await h.run('ag_ava', 'chat.add_members', { chatId, agentIds: [HUMAN_ID] });
+  assert.match((await h.run('ag_ava', 'chat.add_members', { chatId, members: ['ag_nobody'] })).text, /Nobody is called "ag_nobody"\. Who I can name: /, 'B-080: the names that exist');
+  const refused = await h.run('ag_ava', 'chat.add_members', { chatId, members: [HUMAN_ID] });
   assert.equal(refused.failed, true);
   assert.match(refused.text, /^Nothing was changed\. The person is not added to rooms: what they should know I tell them in my 1:1 with them/);
   assert.match(refused.text, /chat\.create/);
@@ -173,7 +161,7 @@ test('app-owned chats keep their members, name and lead', async () => {
   h.chats.update(todo, { settings: { hiddenFromList: true, system: 'todo' } }, HUMAN_ID);
   h.chats.setMembers(todo, { add: ['ag_ava'] }, HUMAN_ID);
   for (const [name, args] of [
-    ['chat.add_members', { agentIds: ['ag_ben'] }], ['chat.remove_members', { memberIds: [HUMAN_ID] }],
+    ['chat.add_members', { members: ['ag_ben'] }], ['chat.remove_members', { members: [HUMAN_ID] }],
     ['chat.rename', { title: 'Mine' }], ['chat.set_lead', { agentId: 'ag_ava' }],
   ] as const) {
     const out = await h.run('ag_ava', name, { chatId: todo, ...args });

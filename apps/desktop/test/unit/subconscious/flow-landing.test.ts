@@ -1,18 +1,18 @@
 // What makes a run land (subconscious/flow.ts, tools.ts, context-tools.ts, service.ts, live findings of 02.11.2026): a repeated call gets no
 // second answer, a stuck model call ends a step and the run keeps what it did, what the run noticed travels with what it shows, memory holds what
-// was said here in the language of the exchange, the person's name is no part of the look before a turn, a tidy run sees a compact
+// was said here in the language of the exchange, the person's name is no part of the routing call before a turn, a tidy run sees a compact
 // view and what it costs against what it saves, and the prompt orders no search and carries nothing of a test or one engine's files.
 // Owns: these assertions only. Never: real models or network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { RESOURCES, fixture } from '../context/fixture.ts';
+import { RESOURCES, fixture, model } from '../context/fixture.ts';
 import { ledgerSetup } from '../context/ledger-fixture.ts';
 import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
 import { SubconsciousImpl } from '../../../src/runtime/subconscious/service.ts';
-import { runFlow, type FlowBrains } from '../../../src/runtime/subconscious/flow.ts';
-import { contextTools, savableTokens, WORTH_TOKENS } from '../../../src/runtime/subconscious/context-tools.ts';
+import { runFlow } from '../../../src/runtime/subconscious/flow.ts';
+import { contextTools, WORTH_TOKENS } from '../../../src/runtime/subconscious/context-tools.ts';
 import { knownShare } from '../../../src/runtime/subconscious/text.ts';
 import { createEngineRunner } from '../../../src/runtime/decision/engine-runner.ts';
 import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
@@ -21,6 +21,7 @@ import type { RouteRequest, RuntimeServices } from '../../../src/runtime/contrac
 import type { Engine, EngineTurnInput } from '../../../src/runtime/engines/types.ts';
 import type { VectorSearchInput } from '../../../src/shared/model/vectors.ts';
 import { tmpdir } from 'node:os';
+import { routable } from './routable.ts';
 
 type Scripted = { tool: string; args?: Record<string, unknown> };
 
@@ -54,14 +55,14 @@ function world() {
   return { f, searches, written };
 }
 
-const flow = (t: ReturnType<typeof world>, brains: FlowBrains, input: Partial<Parameters<typeof runFlow>[2]> = {}) =>
-  runFlow(t.f.services, brains, { kind: 'after-turn', agent: t.f.vid, thread: 'th', ...input });
+const flow = (t: ReturnType<typeof world>, runner: StructuredRunner, input: Partial<Parameters<typeof runFlow>[2]> = {}) =>
+  runFlow(t.f.services, runner, { agent: t.f.vid, thread: 'th', ...input });
 
 test('a call repeated with nothing changed gets no second answer, and a second such call ends the run', async () => {
   const t = world();
   const search = { tool: 'vector.search', args: { query: 'Rechnungen', in: ['memory'] } };
   const decision = brain([search, search, search, search]);
-  const result = await flow(t, { decision: decision.runner });
+  const result = await flow(t, decision.runner);
   assert.equal(result.end, 'steps');
   assert.equal(decision.prompts.length, 3, 'the first answer, the note, the end');
   assert.match(decision.prompts[2], /Nothing changed since I made this same call/);
@@ -73,29 +74,28 @@ test('the same call after something changed is no repeat', async () => {
   (t.f.services.vectors as unknown as { search: () => Promise<unknown> }).search = async () => ({ hits: [], searched: { places: [], embeddedFiles: 1 }, note: `${++n} files changed.` });
   const search = { tool: 'vector.search', args: { query: 'Rechnungen', in: ['memory'] } };
   const decision = brain([search, search, { tool: 'done' }]);
-  const result = await flow(t, { decision: decision.runner });
+  const result = await flow(t, decision.runner);
   assert.equal(result.end, 'done');
   assert.doesNotMatch(decision.prompts[2], /Nothing changed/);
 });
 
-test('a stuck model call ends at the step limit: the other brain goes on and what the run did stays', async () => {
+test('a stuck model call ends at the step limit: the next step goes on and what the run did stays', async () => {
   const t = world();
-  const seen: Array<AbortSignal | undefined> = [];
-  const steps: Scripted[] = [{ tool: 'agent.tell', args: { text: 'Die Rechnung ist schon raus.' } }];
-  const stuck: StructuredRunner = ({ signal, deadlineMs }) => {
-    seen.push(signal);
+  const prompts: string[] = [];
+  const steps: Array<Scripted | 'hang'> = [{ tool: 'agent.tell', args: { text: 'Die Rechnung ist schon raus.' } }, 'hang', { tool: 'done', args: { answer: 'Ja.' } }];
+  const stuck: StructuredRunner = ({ signal, deadlineMs, prompt }) => {
+    prompts.push(prompt);
     assert.equal(deadlineMs, 20);
     const next = steps.shift();
-    if (next) { const structured = { tool: next.tool, args: JSON.stringify(next.args ?? {}) }; return Promise.resolve({ text: '', structured, by: 'fake' }); }
+    if (next && next !== 'hang') { const structured = { tool: next.tool, args: JSON.stringify(next.args ?? {}) }; return Promise.resolve({ text: '', structured, by: 'fake' }); }
     return new Promise((_, reject) => { signal!.addEventListener('abort', () => reject(new Error('The turn was stopped.'))); });
   };
-  const llm = brain([{ tool: 'done' }]);
   const started = Date.now();
-  const result = await flow(t, { decision: stuck, llm: llm.runner }, { stepMs: 20 });
+  const result = await flow(t, stuck, { stepMs: 20 });
   assert.ok(Date.now() - started < 5000);
   assert.equal(result.end, 'done');
-  assert.equal(llm.prompts.length, 1, 'the LLM took over');
-  assert.ok(llm.prompts[0].includes('agent.tell'), 'it sees what was done');
+  assert.equal(prompts.length, 3);
+  assert.ok(prompts[2].includes('agent.tell'), 'it sees what was done');
   assert.deepEqual(result.trace.calls.map((call) => call.output), ['Die Rechnung ist schon raus.']);
 });
 
@@ -107,7 +107,7 @@ test('two stuck calls end the run as failed, with what it did', async () => {
     if (next) { const structured = { tool: next.tool, args: JSON.stringify(next.args ?? {}) }; return Promise.resolve({ text: '', structured, by: 'fake' }); }
     return new Promise((_, reject) => { signal!.addEventListener('abort', () => reject(new Error('stopped'))); });
   };
-  const result = await flow(t, { decision: stuck }, { stepMs: 10 });
+  const result = await flow(t, stuck, { stepMs: 10 });
   assert.equal(result.end, 'failed');
   assert.equal(result.trace.calls.length, 1);
 });
@@ -118,33 +118,31 @@ test('a helper call that hangs inside a condensation: what is condensed so far s
     await fourTurns(t);
     let words = 0;
     const run = {
-      services: t.services, agent: t.tom, conversationId: t.chat.id, thread: t.chat.id, kind: 'after-turn', signal: new AbortController().signal, hits: new Map(), searches: [], restored: new Set<string>(),
-      word: async () => { if (++words > 1) throw new Error('structured runner: The turn was stopped.'); return 'build 1 finished in 401 seconds'; }, show: () => {}, route: () => {}, finish: () => {},
+      services: t.services, agent: t.tom, conversationId: t.chat.id, thread: 'main', signal: new AbortController().signal, hits: new Map(), searches: [],
+      word: async () => { if (++words > 1) throw new Error('structured runner: The turn was stopped.'); return 'build 1 finished in 401 seconds'; }, show: () => {}, finish: () => {},
     } as unknown as FlowRun;
     const said = String(await contextTools.find((tool) => tool.name === 'context.condense')!.run({ ids: ['t1', 't2'] }, run));
     assert.match(said, /condensed t1/);
     assert.match(said, /t2 not condensed: structured runner/);
-    assert.equal(t.ledger.items(t.tom.id, t.chat.id).find((item) => item.itemId === 't1')?.state, 'condensed');
+    assert.equal(t.ledger.items(t.tom.id, 'main').find((item) => item.itemId === 't1')?.state, 'condensed');
   } finally { t.cleanup(); }
 });
 
 test('what the run noticed travels with the hit it shows, first, so a cut keeps it', async () => {
   const t = world();
-  const hits = Array.from({ length: 8 }, (_, chunk) => ({ path: 'memory/company/billing.md', chunk, snippet: 'Rechnungen nur per Post. '.repeat(20), score: 0.9 }));
+  // past what an asked answer may cost (flow.ts ASKED_TOKENS)
+  const hits = Array.from({ length: 60 }, (_, chunk) => ({ path: 'memory/company/billing.md', chunk, snippet: 'Rechnungen nur per Post. '.repeat(20), score: 0.9 }));
   t.f.services.vectors.search = async (input: VectorSearchInput) => ({ hits, searched: { places: input.in, embeddedFiles: 1 } });
   const decision = brain([{ tool: 'vector.search', args: { query: 'Versand', in: ['memory'] } }, { tool: 'done', args: { show: hits.map((_, index) => `h${index + 1}`), note: 'Gewünscht ist E-Mail, die Regel sagt Post.' } }]);
-  const result = await flow(t, { decision: decision.runner }, { kind: 'before-turn' });
+  const result = await flow(t, decision.runner);
   assert.equal(result.trace.calls[0].tool, 'vector.search');
   assert.ok(result.trace.calls[0].output.startsWith('Noticed, to tell the person when I answer: Gewünscht ist E-Mail, die Regel sagt Post.\n'), result.trace.calls[0].output.slice(0, 120));
   assert.ok(result.trace.calls[0].output.endsWith('[cut]'));
 });
 
-test('what a run noticed goes only with what it shows: alone it reaches the main AI only when the main AI asked', async () => {
+test('what a run noticed goes with what it shows, and without a find as a note of its own', async () => {
   const t = world();
-  const noted = await flow(t, { decision: brain([{ tool: 'done', args: { note: 'Der Vertrag läuft aus.' } }]).runner });
-  assert.deepEqual(noted.trace.calls, []);
-  assert.deepEqual((await flow(t, { decision: brain([{ tool: 'done' }]).runner })).trace.calls, []);
-  const asked = await flow(t, { decision: brain([{ tool: 'done', args: { answer: 'Ja.', note: 'Der Vertrag läuft aus.' } }]).runner }, { kind: 'asked', task: 'Was ist bekannt?' });
+  const asked = await flow(t, brain([{ tool: 'done', args: { answer: 'Ja.', note: 'Der Vertrag läuft aus.' } }]).runner, { task: 'Was ist bekannt?' });
   assert.deepEqual(asked.trace.calls.map((call) => call.tool), ['subconscious']);
   assert.match(asked.answer, /Noticed, to tell the person when I answer: Der Vertrag läuft aus\./);
 });
@@ -156,26 +154,16 @@ test('memory holds what was said here: a text from elsewhere or in another langu
   const english = { tool: 'memory.write', args: { title: 'Invoice approval by Ms Berger', text: 'Large invoices above five thousand euros are always reviewed personally by Ms Berger before dispatch.' } };
   const german = { tool: 'memory.write', args: { title: 'Prüfung großer Rechnungen', text: 'Rechnungen über fünftausend Euro prüft künftig immer Frau Berger persönlich, bevor sie rausgehen.' } };
   const decision = brain([foreign, english, german]);
-  await flow(t, { decision: decision.runner }, { context });
+  await flow(t, decision.runner, { context });
   assert.deepEqual(t.written.map((item) => item.title), ['Prüfung großer Rechnungen']);
   assert.match(decision.prompts[1], /Not written: most of this text is not in what happened/);
   assert.match(decision.prompts[2], /Not written/);
 });
 
-test('the run before a turn keeps nothing', async () => {
-  const t = world();
-  const decision = brain([{ tool: 'memory.write', args: { title: 'Filiale Bonn', text: 'Frau Sommer leitet ab Januar die Filiale in Bonn.' } }]);
-  await flow(t, { decision: decision.runner }, { kind: 'before-turn', context: 'The person: Frau Sommer leitet ab Januar die Filiale in Bonn.' });
-  assert.deepEqual(t.written, []);
-  assert.match(decision.prompts[1], /Not written: this run keeps nothing/);
-});
-
-test('nothing hands an answer to the LLM by its length: the brain that holds the flow decides', async () => {
+test("a long answer is the model's own and reaches the one who asked whole", async () => {
   const t = world();
   const long = 'Die Lindner Feinmechanik will Angebote immer auf Englisch. '.repeat(8);
-  const llm = brain([{ tool: 'done', args: { answer: 'Kürzer und besser.' } }]);
-  const result = await flow(t, { decision: brain([{ tool: 'done', args: { answer: long } }]).runner, llm: llm.runner }, { kind: 'asked', task: 'Was ist bekannt?' });
-  assert.equal(llm.prompts.length, 0);
+  const result = await flow(t, brain([{ tool: 'done', args: { answer: long } }]).runner, { task: 'Was ist bekannt?' });
   assert.ok(result.answer.startsWith(long.trim()));
 });
 
@@ -187,7 +175,7 @@ test('what a tool returned counts as known, and a short text is no case for the 
     { tool: 'memory.write', args: { title: 'Abrechnung', text: 'Frankfurter Niederlassung übernimmt Abrechnung sämtlicher Lieferanten zentral.' } },
     { tool: 'memory.write', args: { title: 'Kurz', text: 'Etwas ganz anderes.' } },
   ]);
-  await flow(t, { decision: decision.runner }, { context: 'The person: Wer rechnet ab?' });
+  await flow(t, decision.runner, { context: 'The person: Wer rechnet ab?' });
   assert.equal(t.written.length, 2);
 });
 
@@ -197,18 +185,21 @@ test('the word check goes by stems, and leaves scripts without spaces alone', ()
   assert.ok(knownShare('nur etwas Deutsch hier und sonst nichts', 'Large invoices above thousand euros always reviewed') === 0);
 });
 
-test('the look before a turn sees a neutral label, no name and no place to search; a run that writes down has the name once and this chat\'s folder to write in', async () => {
+test('the routing call before a turn sees a neutral label, no name and no place to search; a run that writes down has the name once and this chat\'s folder to write in', async () => {
   const t = world();
   const chat = t.f.chats.create({ agentIds: [t.f.vid.id], createdBy: 'human' });
   t.f.chats.send({ conversationId: chat.id, authorId: 'human', authorKind: 'human', body: 'Was ist die Wurzel aus 144?' });
   const decision = brain([{ tool: 'done' }]);
-  const impl = new SubconsciousImpl({ services: () => t.f.services, runner: decision.runner, settleMs: 0, beforeWaitMs: 1000 });
+  const catalog = t.f.services.catalog;
+  routable(t.f.services, [model('codex:luna', 'small', 'Luna')]);
+  const impl = new SubconsciousImpl({ services: () => t.f.services, runner: decision.runner });
   await impl.beforeTurn({ agent: t.f.vid, thread: chat.id, conversationId: chat.id, said: 'Was ist die Wurzel aus 144?' });
+  Object.assign(t.f.services, { catalog });
   assert.ok(decision.prompts[0].includes('The person: Was ist die Wurzel aus 144?'), decision.prompts[0]);
   assert.ok(!decision.prompts[0].includes(t.f.profile.name), decision.prompts[0]);
   assert.ok(!/Memory folders|memory\/company|memory\/chats/.test(decision.prompts[0]), decision.prompts[0]);
   const after = brain([{ tool: 'done' }]);
-  await flow(t, { decision: after.runner }, { conversationId: chat.id, context: 'The person: Ja.' });
+  await flow(t, after.runner, { conversationId: chat.id, context: 'The person: Ja.' });
   assert.ok(after.prompts[0].includes(`The person: ${t.f.profile.name}`));
   assert.match(after.prompts[0], new RegExp(`Memory folders to write in: company, .*chats/${chat.id}`));
   assert.ok(!/memory\/company|memory\/chats/.test(after.prompts[0]), 'folders to write in, no place to search');
@@ -218,39 +209,28 @@ test('a tidy run: the view is compact and shows only what is left, the mark says
   const t = ledgerSetup();
   try {
     await fourTurns(t);
-    assert.ok(savableTokens(t.services, t.tom, t.chat.id) >= 2 * WORTH_TOKENS);
     t.services.prompts = new PromptTemplates(() => path.join(RESOURCES, 'prompts'));
-    const decision = brain([{ tool: 'context.condense', args: { ids: ['t1'] } }, { tool: 'context.hide', args: { ids: ['t2'] } }, { tool: 'done' }], { inputTokens: 1000, outputTokens: 50 });
+    const decision = brain([{ tool: 'context.list', args: { minTokens: WORTH_TOKENS } }, { tool: 'context.condense', args: { ids: ['t1'] } }, { tool: 'context.hide', args: { ids: ['t2'] } }, { tool: 'done', args: { answer: 'Aufgeräumt.' } }], { inputTokens: 1000, outputTokens: 50 });
     const wording: StructuredRunner = async () => ({ text: '', structured: { text: 'build 1 finished in 401 seconds' }, by: 'fake', usage: { inputTokens: 700, outputTokens: 20 } });
-    const brains: FlowBrains = { decision: async (input) => (input.schema && 'properties' in input.schema && (input.schema as { properties: Record<string, unknown> }).properties.text ? wording(input) : decision.runner(input)) };
-    const result = await runFlow(t.services, brains, { kind: 'after-turn', agent: t.tom, conversationId: t.chat.id, thread: t.chat.id, firstStep: { tool: 'context.list', args: { minTokens: WORTH_TOKENS } } });
+    const model: StructuredRunner = async (input) => (input.schema && 'properties' in input.schema && (input.schema as { properties: Record<string, unknown> }).properties.text ? wording(input) : decision.runner(input));
+    const result = await runFlow(t.services, model, { agent: t.tom, conversationId: t.chat.id, thread: 'main' });
     assert.equal(result.end, 'done');
-    assert.match(decision.prompts[0], /context\.list \{"minTokens":500\}\n\d+ older items in full/);
-    assert.match(decision.prompts[1], /condensed t1: about \d+ tokens saved at the main AI's next turn\nStill big: t2 \d+t\./);
-    assert.match(decision.prompts[2], /hidden: t2\nNothing big is left in full\./);
-    assert.equal(result.used, 3 * 1050 + 720);
+    assert.match(decision.prompts[1], /context\.list \{"minTokens":500\}\n\d+ older items in full/);
+    assert.match(decision.prompts[2], /condensed t1: about \d+ tokens saved at the main AI's next turn\nStill big: t2 \d+t, t3 \d+t\./);
+    assert.match(decision.prompts[3], /hidden: t2\nStill big: t3 \d+t\./);
+    assert.equal(result.used, 4 * 1050 + 720);
     assert.ok(result.saved > 2 * WORTH_TOKENS, String(result.saved));
-    assert.equal(savableTokens(t.services, t.tom, t.chat.id), 0);
     // q-r2c (03.11.2026): a tidy run's list holds what could still come off – with the marked items in it, the cheap model hid them all and
     // condensed the hidden ones back, turn after turn.
-    const tidy = String(await contextTools.find((tool) => tool.name === 'context.list')!.run({ minTokens: WORTH_TOKENS }, runOf(t, 'after-turn')));
+    const tidy = String(await contextTools.find((tool) => tool.name === 'context.list')!.run({ minTokens: WORTH_TOKENS }, runOf(t)));
     assert.doesNotMatch(tidy, /\nt[12] tool/, 'what takes less than minTokens now is not offered');
     // q-r1b2 (03.11.2026): marked items as bare ids – a run could not take a condensed file out on the person's word, nor bring it back.
-    const again = String(await contextTools.find((tool) => tool.name === 'context.list')!.run({}, runOf(t, 'after-turn')));
+    const again = String(await contextTools.find((tool) => tool.name === 'context.list')!.run({}, runOf(t)));
     // q-r2a: with its old size a hidden item read as big and was condensed again: a marked item says what it takes now.
-    assert.match(again, /\nt1 tool condensed \d+t \(was \d+t\) shell\.exec/, 'a marked item stands with its state, its size now and its words');
+    assert.match(again, /\nt1 tool condensed \d+t \(was \d+t\) shell\.exec/, 'a marked item stands with its state, its size now and its words – the main AI looking for what is gone sees it');
     assert.match(again, /\nt2 tool hidden \(was \d+t\) shell\.exec/);
     assert.doesNotMatch(again, /Already condensed or hidden/);
-    const asked = String(await contextTools.find((tool) => tool.name === 'context.list')!.run({}, runOf(t, 'asked')));
-    assert.match(asked, /\nt1 tool condensed \d+t/, 'the main AI looking for what is gone sees it');
-    assert.match(asked, /\nt2 tool hidden/);
   } finally { t.cleanup(); }
-});
-
-test('no chat or no ledger: nothing to take off, and the check never throws', () => {
-  const t = world();
-  assert.equal(savableTokens(t.f.services, t.f.vid, undefined), 0);
-  assert.equal(savableTokens({} as RuntimeServices, t.f.vid, 'ch_x'), 0);
 });
 
 test('an engine\'s usage reaches the flow through the runner', async () => {
@@ -271,11 +251,11 @@ test('a kept pair stands in front of the chat line of its turn, as the engine ho
   try {
     const { seq } = t.say('Schreib mir bitte den Text.');
     t.journal.start({ id: 'run_kept', agentId: t.tom.id, conversationId: t.chat.id, trigger: 'message' });
-    t.ledger.capture({ runId: 'run_kept', agentId: t.tom.id, conversationId: t.chat.id, engine: 'codex', model: 'openai:gpt-5.5', seenSeq: seq, first: () => t.ourCall('run_kept', 'vector.search', { query: 'Versand' }, 'Rechnungen nur per Post.', 'sc_run_kept_0') });
+    t.ledger.capture({ runId: 'run_kept', agentId: t.tom.id, thread: 'main', fromSeq: 0, conversationId: t.chat.id, engine: 'codex', model: 'openai:gpt-5.5', seenSeq: seq, first: () => t.ourCall('run_kept', 'vector.search', { query: 'Versand' }, 'Rechnungen nur per Post.', 'sc_run_kept_0') });
     t.ourCall('run_kept', 'files.read', { path: 'a.md' }, 'Inhalt.');
     t.done('run_kept');
     await t.journal.settled();
-    const ids = t.ledger.items(t.tom.id, t.chat.id).sort((a, b) => a.order - b.order).map((item) => item.kind);
+    const ids = t.ledger.items(t.tom.id, 'main').sort((a, b) => a.order - b.order).map((item) => item.kind);
     assert.deepEqual(ids.slice(0, 2), ['tool', 'message'], ids.join(' '));
   } finally { t.cleanup(); }
 });
@@ -284,11 +264,11 @@ test('the prompt orders no search, names no place and carries nothing of a test 
   const text = new PromptTemplates(() => path.join(RESOURCES, 'prompts')).text('subconscious');
   for (const gone of ['without looking anything up', 'a greeting', 'plain arithmetic', 'general how-to', 'AGENTS.md', 'environment line', 'So you search', 'Search all of', 'search whenever']) assert.ok(!text.includes(gone), gone);
   assert.match(text, /done\.note/);
-  assert.match(text, /LLM is the stronger model/);
-  assert.ok(text.length < 6300, String(text.length)); // 4,992 + the before-turn skill tip (B-066 wish 1) + what they want to see first (B-072) + B-078 D14: own thoughts, the one catalog, the main AI's prompt below (6,124)
+  assert.doesNotMatch(text, /LLM|two brains|route/, 'one model, no second brain');
+  assert.ok(text.length < 6800, String(text.length)); // B-083: +~330, before-turn weighs how the coming turn runs first and the short paragraph on the turn tool (the subconscious routes the coming turn, owner 08.11.; 6,719 after the live test 23:21 showed "done at once" kept it from routing); B-079: +~250, lasting vs passing as a reference (live 05.–08.11.: memory files like "Jonas's update on the build" in English) and "German when they write German"; 4,992 + the before-turn skill tip (B-066 wish 1) + what they want to see first (B-072) + B-078 D14: own thoughts, the one catalog, the main AI's prompt below (6,124)
 });
 
-/** Four finished turns, each with one long tool output: t1 and t2 are older than the newest 2 turns. */
+/** Four finished turns, each with one long tool output: t1, t2 and t3 are older than the newest turn. */
 async function fourTurns(t: ReturnType<typeof ledgerSetup>): Promise<void> {
   for (let index = 1; index <= 4; index++) {
     const run = t.turn(t.say(`Step ${index} please, with some words.`).seq);
@@ -299,6 +279,6 @@ async function fourTurns(t: ReturnType<typeof ledgerSetup>): Promise<void> {
   await t.journal.settled();
 }
 
-function runOf(t: ReturnType<typeof ledgerSetup>, kind: FlowRun['kind']): FlowRun {
-  return { services: t.services, agent: t.tom, conversationId: t.chat.id, thread: t.chat.id, kind, signal: new AbortController().signal, hits: new Map(), searches: [], show: () => {}, route: () => {}, finish: () => {} } as unknown as FlowRun;
+function runOf(t: ReturnType<typeof ledgerSetup>): FlowRun {
+  return { services: t.services, agent: t.tom, conversationId: t.chat.id, thread: 'main', signal: new AbortController().signal, hits: new Map(), searches: [], show: () => {}, finish: () => {} } as unknown as FlowRun;
 }

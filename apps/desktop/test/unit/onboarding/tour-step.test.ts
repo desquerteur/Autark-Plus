@@ -1,4 +1,5 @@
-// The feedback tour is the first-run layer's first step ('tour', before the AI and About-you cards). A new
+// B-085: step 'tour' is now the choice card (set up a new company / connect to my other PC) instead of the feedback
+// video; the id and these rules stay. The first-run layer's first step ('tour', before the AI and About-you cards). A new
 // install starts there; the settings accept it; an install that is through ('done') stays through; "Set up
 // team again" (reset) starts at the AI card, not at the tour; the UI's step order leads from the tour to the
 // AI card without a "Step n of 2".
@@ -47,7 +48,7 @@ test('UI step order: the tour leads to the AI card and shows no "Step n of 2"; t
   assert.equal(firstRunShown(at('tour'), true, false), true, 'the layer shows during the tour');
   assert.equal(firstRunShown(at('tour'), false, false), false, 'never on another window');
   assert.equal(nextStep('tour'), 'ai');
-  assert.equal(previousStep('ai'), 'ai', 'the AI card has no way back to the tour');
+  assert.equal(previousStep('ai'), 'tour', 'B-085: the AI card goes back to the choice card (step id tour)');
   assert.equal(stepText('tour'), '');
   assert.deepEqual(CARDS, ['ai', 'about']);
   assert.deepEqual([stepText('ai'), stepText('about')], ['Step 1 of 2', 'Step 2 of 2']);

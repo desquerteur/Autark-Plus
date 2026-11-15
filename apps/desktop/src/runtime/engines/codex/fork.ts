@@ -11,8 +11,7 @@
 // turn that runs meanwhile stays out; never ephemeral (a worker may outlive an idle app-server – an ephemeral thread is gone
 // with its process); never attachToSource (it would block deleting the parent: session sweep, Forget); no instruction
 // overrides (the parent's instructions and prefix stay – the worker's identity travels as its first turn's
-// <workforce-context> block, engine.ts); the thread settings a resume gets (lean config with today's fallback,
-// helper-thread.ts; read-only and untrusted, isolation.ts); the worker's model when given (another model of the account is
+// <live> block, engine.ts); the thread settings a resume gets (the lean config, helper-thread.ts; read-only and untrusted, isolation.ts); the worker's model when given (another model of the account is
 // allowed – the cache may be lost; correctness first).
 // Owns: those params and the answer check. Never: starts a turn, touches the parent thread or reads CODEX_HOME files.
 
@@ -25,7 +24,7 @@ export function forkParams(input: Pick<EngineForkInput, 'parentRef' | 'lastTurn'
   return { ...rest, threadId: input.parentRef, ...(input.lastTurn ? { lastTurnId: input.lastTurn } : {}), excludeTurns: true };
 }
 
-/** Sends `params` through `open` (engine.ts: the lean agent thread with its fallback); the new thread's id – never the parent's. */
+/** Sends `params` through `open` (engine.ts: the lean agent thread); the new thread's id – never the parent's. */
 export async function forkThread(params: Record<string, unknown>, open: (params: Record<string, unknown>) => Promise<{ thread?: { id?: string } } | undefined>): Promise<string> {
   const forked = await open(params);
   const id = str(forked?.thread?.id);

@@ -12,7 +12,7 @@
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { WorkforceError } from '../../shared/errors.ts';
-import { AGENT_CORE_DIR, CORE_MANIFEST, MAIN_SKILLS_DIR, SYSTEM_FILE, SYSTEM_MAX_BYTES, SYSTEM_MAX_CHARS } from '../../shared/model/agent-core.ts';
+import { AGENT_CORE_DIR, CORE_MANIFEST, MAIN_SKILLS_DIR, SYSTEM_FILE, MAX_SYSTEM_MD, SYSTEM_MAX_BYTES } from '../../shared/model/agent-core.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import { canonical, signature, type TextLimits, type TextRead } from '../root/text-doc.ts';
 
@@ -71,7 +71,7 @@ export function systemText(instructions: string): string {
 export type SystemRead = TextRead;
 
 /** SYSTEM.md's read limits: the instructions' character cap, larger files not read at all. */
-export const SYSTEM_LIMITS: TextLimits = { maxBytes: SYSTEM_MAX_BYTES, maxChars: SYSTEM_MAX_CHARS };
+export const SYSTEM_LIMITS: TextLimits = { maxBytes: SYSTEM_MAX_BYTES, maxChars: MAX_SYSTEM_MD };
 
 /** agent.json as it is on disk (undefined: none, a link, or unreadable) – to tell whether a rename must rewrite it. */
 export function readManifest(file: string): string | undefined {

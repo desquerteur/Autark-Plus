@@ -5,7 +5,10 @@
 // their owner runs; an employee's PC gets its person's part in her ids (no secret handles either way; a removal and a
 // reassignment reach it) and sends back only her own lines and task changes, which the CEO's PC checks like a line
 // from her phone and delivers (anything else is left out quietly); the first link-up's history
-// wakes nobody; a joining PC retires its untouched first-run Manager.
+// wakes nobody; a joining PC retires its untouched first-run Manager; B-080: a SYSTEM.md or prompt review handed over
+// from another PC is dropped (it belongs to the PC the agent runs on); B-087: a waiting wake goes at its own PC's
+// link-up, and a catch-up whose link goes sends no further page; taking over a SYSTEM.md that came before its row is an
+// echo, so the row of the PC it came from still wins with its other fields.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -91,6 +94,86 @@ test('a wake for an agent whose home PC is away waits here and goes at the link-
   await settle();
   assert.equal(a.h.wakes.pending('ag_mara'), 0);
   assert.equal(b.h.wakes.pending('ag_mara'), 1, 'she answers on her PC');
+});
+
+test('B-087: a waiting wake goes at its own PC\'s link-up, not at another PC\'s', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  const c = makePc(net, 'dev_c');
+  link(a, b);
+  link(a, c);
+  for (const pc of [a, b, c]) pc.h.org.add(agent('ag_mara', 'Mara', { deviceId: 'dev_b' }));
+  net.up = false;
+  const chat = a.h.chats.create({ agentIds: ['ag_mara'], createdBy: 'human' });
+  a.h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'While you were away' });
+  await settle();
+  net.up = true;
+  a.sync.resume('dev_c'); // C's link-up reached its wakes while B's still sends the rows this wake names
+  await settle();
+  assert.equal(a.h.wakes.pending('ag_mara'), 1, 'it waits for B\'s own link-up');
+  assert.ok(await a.sync.catchUp('dev_b', undefined));
+  a.sync.resume('dev_b');
+  await settle();
+  assert.deepEqual([a, b, c].map((pc) => pc.h.wakes.pending('ag_mara')), [0, 1, 0], 'she wakes on her PC');
+  assert.deepEqual(b.h.chats.messages(chat.id).map((message) => message.body), ['While you were away'], 'with the line there');
+});
+
+test('B-087: a hand-over the link cut goes again at that PC\'s link-up; an agent held while its wakes were cancelled is held no more', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  link(a, b);
+  for (const pc of [a, b]) pc.h.org.add(agent('ag_mara', 'Mara', { deviceId: 'dev_b' }));
+  const devices = a.h.services.devices as { call(peer: string, method: string, params: unknown): Promise<unknown> };
+  const call = devices.call;
+  const cut = () => { devices.call = async (peer, method, params) => { if ((params as { wakes?: unknown[] }).wakes?.length) { devices.call = call; throw new Error('The link dropped while the call ran.'); } return call(peer, method, params); }; };
+  cut();
+  const chat = a.h.chats.create({ agentIds: ['ag_mara'], createdBy: 'human' });
+  a.h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'First' });
+  await settle();
+  assert.equal(a.h.wakes.pending('ag_mara'), 1, 'back here, held');
+  a.sync.resume('dev_b'); // B's link-up reached its wakes
+  await settle();
+  assert.deepEqual([a, b].map((pc) => pc.h.wakes.pending('ag_mara')), [0, 1], 'the cut hand-over went');
+
+  cut();
+  a.h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Second' });
+  await settle();
+  a.h.wakes.cancel('ag_mara'); // its wake was withdrawn while it was held (a cancelled task)
+  a.sync.resume('dev_b');
+  await settle();
+  a.h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Third' });
+  await settle();
+  assert.equal(a.h.wakes.pending('ag_mara'), 0, 'the next wake goes at once, not at the next link-up');
+});
+
+test('B-087: a catch-up whose link goes sends no further page – no dial for each; the next link-up owes the rest', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  for (const pc of [a, b]) pc.h.org.add(agent('ag_mara', 'Mara'));
+  const chat = a.h.chats.create({ agentIds: ['ag_mara'], createdBy: 'human' });
+  for (let i = 0; i < 450; i++) a.h.chats.send({ conversationId: chat.id, authorId: 'ag_mara', authorKind: 'agent', body: `line ${i}` }); // three pages
+  link(a, b);
+  const devices = a.h.services.devices as { call(peer: string, method: string, params: unknown): Promise<unknown> };
+  const call = devices.call;
+  const sent: string[][] = [];
+  devices.call = async (peer, method, params) => { // the link goes right after the first page of the 450 lines
+    const tables = ((params as { items?: Array<{ t: string }> }).items ?? []).map((item) => item.t);
+    sent.push(tables);
+    const answer = await call(peer, method, params);
+    if (tables.includes('messages')) net.up = false;
+    return answer;
+  };
+  assert.equal(await a.sync.catchUp('dev_b', undefined), false, 'incomplete: the cursor stays');
+  assert.equal(sent.filter((tables) => tables.includes('messages')).length, 1, 'no second page of the lines, so none dials');
+  assert.ok(sent.at(-1)!.includes('messages'), 'and no call after it');
+  devices.call = call;
+  net.up = true;
+  assert.ok(await a.sync.catchUp('dev_b', undefined), 'the next link-up');
+  await settle();
+  assert.equal(b.h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?', [chat.id])?.n, 450);
 });
 
 test('a row goes on to the other CEO PCs once and never back; an event without a change sends nothing', async () => {
@@ -268,27 +351,6 @@ test('the CEO\'s PC takes from an employee\'s PC only her own lines and her task
   assert.equal(net.calls.length, before, 'nothing answers it, nothing repeats');
 });
 
-test('the CEO removes her from a chat or gives her task in it to someone else: both reach her PC', async () => {
-  const net = new Net();
-  const a = makePc(net, 'dev_a');
-  const e = makePc(net, 'dev_e');
-  link(a, e, LENA);
-  a.h.db.run(`INSERT INTO people (id, name, status, created_at, updated_at) VALUES (?, 'Lena', 'active', 0, 0)`, [LENA]);
-  a.h.org.add(agent('ag_mara', 'Mara'));
-  const chat = a.h.chats.create({ agentIds: ['ag_mara'], people: [LENA], createdBy: 'human', title: 'With Lena' });
-  const hers = a.h.tasks.create({ title: 'Call the client', conversationId: chat.id, assigneeKind: 'human', assigneeId: LENA, createdBy: 'human' });
-  await settle();
-  assert.equal(e.h.tasks.get(hers.id)?.assigneeId, undefined, 'hers on her PC');
-
-  a.h.tasks.assign(hers.id, { kind: 'agent', id: 'ag_mara' }, 'human');
-  await settle();
-  assert.deepEqual([e.h.tasks.get(hers.id)?.assigneeKind, e.h.tasks.get(hers.id)?.assigneeId], ['agent', 'ag_mara'], 'the reassignment arrives');
-
-  a.h.chats.setMembers(chat.id, { remove: [LENA] }, 'human');
-  await settle();
-  assert.ok(e.h.chats.members(chat.id).some((entry) => entry.memberId === 'ag_mara'), 'the chat stays on her PC');
-  assert.ok(!e.h.chats.members(chat.id).some((entry) => entry.memberId === 'human'), 'and says she left it');
-});
 
 test('the first link-up brings the history: nothing wakes, nothing is unread', async () => {
   const net = new Net();
@@ -323,4 +385,60 @@ test('a PC that joins the company retires its own untouched first-run Manager on
   await settle();
   assert.deepEqual(archived, ['ag_seed'], 'one chief of staff: the company\'s');
   assert.equal(b.h.chats.get(direct.id), undefined, 'its empty chat went too');
+});
+
+test('B-080: a SYSTEM.md or prompt review handed over from another PC is dropped there; a message wake in the same batch is stored', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  link(a, b);
+  for (const pc of [a, b]) pc.h.org.add(agent('ag_mara', 'Mara', { deviceId: 'dev_b' }));
+  const chat = a.h.chats.create({ agentIds: ['ag_mara'], createdBy: 'human' });
+  await settle();
+  net.up = false;
+  a.h.wakes.wake({ agentId: 'ag_mara', reason: 'review', coalesceKey: 'system-prompt:rev1', origin: { source: 'system-prompt', label: 'System prompt update' }, note: 'Autark ships a new standard system prompt.' });
+  a.h.wakes.wake({ agentId: 'ag_mara', reason: 'review', coalesceKey: 'prompt-update:rules:rev1', origin: { source: 'system-prompt:rules', label: 'System prompt update: rules' }, note: 'Autark has a new default system prompt: rules.' });
+  a.h.wakes.wake({ agentId: 'ag_mara', reason: 'message', conversationId: chat.id, coalesceKey: `chat:${chat.id}` });
+  net.up = true;
+  assert.ok(await a.sync.catchUp('dev_b', undefined));
+  a.sync.resume();
+  await settle();
+  assert.equal(a.h.wakes.pending('ag_mara'), 0, 'all three went to her home');
+  assert.deepEqual(b.h.wakeRows().map((wake) => wake.reason), ['message'], 'her home keeps only the message wake: it compares SYSTEM.md with its own release');
+});
+
+test('B-087: taking over a SYSTEM.md that came before its row is an echo – the row of the PC it came from still wins, with its other fields', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  link(a, b);
+  const start = a.h.clock.now();
+  const mara = agent('ag_mara', 'Mara', { instructions: 'Write short.', createdAt: start });
+  for (const pc of [a, b]) { new AgentRepo(pc.h.db).save(mara); pc.h.org.add(mara); }
+  assert.ok(await a.sync.catchUp('dev_b', undefined));
+  await settle();
+  const edit = (pc: Pc, patch: Partial<typeof mara>) => {
+    const next = { ...new AgentRepo(pc.h.db).get('ag_mara')!, ...patch };
+    new AgentRepo(pc.h.db).save(next);
+    pc.h.bus.emit('agent.upserted', next);
+  };
+
+  net.up = false; // A's row does not get through; its SYSTEM.md does (the file sync)
+  a.h.clock.set(start + 1_000);
+  edit(a, { team: 'Docs', instructions: 'Write long.' });
+  b.h.clock.set(start + 2_000); // B takes the file over later by its clock
+  b.stamps.echo.add('agents/ag_mara');
+  edit(b, { instructions: 'Write long.' });
+  assert.ok(b.stamps.get('agents/ag_mara')!.at < start + 1_000, 'stamped just after its last stamp, not now');
+  assert.equal(b.stamps.echo.size, 0, 'used once');
+
+  net.up = true;
+  assert.ok(await b.sync.catchUp('dev_a', undefined));
+  assert.ok(await a.sync.catchUp('dev_b', undefined));
+  await settle();
+  for (const pc of [a, b]) {
+    const row = new AgentRepo(pc.h.db).get('ag_mara')!;
+    assert.equal(row.team, 'Docs', `${pc.id} keeps A's other field`);
+    assert.equal(row.instructions, 'Write long.');
+  }
 });

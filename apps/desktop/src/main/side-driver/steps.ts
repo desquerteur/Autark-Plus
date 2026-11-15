@@ -17,6 +17,8 @@ export interface StepContext {
   tab: SideTab;
   agentId: string;
   style: MotionStyle;
+  /** The object group this act resolves its nodes into (its own, so a parallel act's release frees only its own). */
+  group: string;
   now(): number;
   sleep(ms: number): Promise<void>;
   /** The agent's cursor moves (overlay + pointer report) – before the mouse events run. */
@@ -24,6 +26,9 @@ export interface StepContext {
 }
 
 const GROUP = 'wf-side-step';
+let groupSeq = 0;
+/** A fresh object group for one act call, so two acts on the same tab never free each other's nodes. */
+export function newStepGroup(): string { return `${GROUP}-${(groupSeq = (groupSeq + 1) % 1e9)}`; }
 const stale = (ref: string) => new SideError(`The element ${ref} is not on the page any more – take a new snapshot.`);
 
 interface Node { objectId: string; backendNodeId: number }
@@ -32,7 +37,7 @@ async function resolve(ctx: StepContext, ref: string): Promise<Node> {
   const backendNodeId = Number(ref.slice(1));
   let objectId: string | undefined;
   try {
-    const out = await ctx.tab.cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: await ctx.tab.cdp.world(), objectGroup: GROUP }) as { object?: { objectId?: string } };
+    const out = await ctx.tab.cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: await ctx.tab.cdp.world(), objectGroup: ctx.group }) as { object?: { objectId?: string } };
     objectId = out.object?.objectId;
   } catch (error) {
     if (error instanceof SideError) throw error;
@@ -82,10 +87,14 @@ async function moveTo(ctx: StepContext, to: Point, size: number, action: Pointer
   const path = planMotion(from, to, { style: ctx.style, targetSize: Math.max(4, size) });
   ctx.moved(path, action, ref);
   const start = ctx.now();
+  // The moves go out without waiting for each answer: Chromium answers a mouseMoved only after the page handles it on
+  // its next frame, so awaiting every one made a ~25-step glide take ~25 s on a slow page (and run into the CDP/host
+  // timeouts – the B-081 glide regression). They still leave in order and at their planned times, and the press that
+  // follows is processed after them (CDP input is FIFO). A send that fails (page gone mid-glide) surfaces at the press.
   for (const step of path) {
     const wait = start + step.t - ctx.now();
     if (wait > 0) await ctx.sleep(wait);
-    await mouse(ctx, { type: 'mouseMoved', x: step.x, y: step.y, button: 'none', buttons: 0 });
+    void mouse(ctx, { type: 'mouseMoved', x: step.x, y: step.y, button: 'none', buttons: 0 }).catch(() => {});
   }
   ctx.tab.cursors.set(ctx.agentId, { x: to.x, y: to.y });
 }
@@ -263,7 +272,7 @@ export async function runStep(ctx: StepContext, step: SideActStep): Promise<void
   }
 }
 
-/** Lets go of the nodes a call resolved. */
-export function release(tab: SideTab): void {
-  void tab.cdp.send('Runtime.releaseObjectGroup', { objectGroup: GROUP }).catch(() => {});
+/** Lets go of the nodes this act resolved (its own group only – a parallel act on the tab keeps its own). */
+export function release(tab: SideTab, group: string): void {
+  void tab.cdp.send('Runtime.releaseObjectGroup', { objectGroup: group }).catch(() => {});
 }

@@ -30,10 +30,13 @@ test('migration 84 adds split_groups, splits and runs.split_id; old runs keep th
   assert.deepEqual(columns(db, 'split_groups').map((c) => c.name), [
     'id', 'agent_id', 'parent_run_id', 'conversation_id', 'task_id', 'source', 'source_label', 'thread', 'mode_key', 'cwd', 'goal',
     'ultra', 'status', 'created_at', 'started_at', 'ended_at', 'gathered_at',
+    'parent_session', // B-080: migration 92 (the parent's recorded session – migration-092.test.ts)
   ]);
   assert.deepEqual(columns(db, 'splits').map((c) => c.name), [
     'id', 'group_id', 'agent_id', 'idx', 'title', 'brief', 'returns', 'context', 'model', 'effort', 'after', 'worktree', 'fork', 'branch',
     'status', 'attempts', 'error', 'created_at', 'started_at', 'ended_at',
+    'temperature', // B-083: migration 96 (a part's temperature – migrate.ts)
+    'chat', 'gathered_at', // 13.11.2026: migration 101 (the chat a part works for; when its result reached its origin)
   ]);
   const split = Object.fromEntries(columns(db, 'splits').map((c) => [c.name, c]));
   assert.equal(split.after.dflt_value, `'[]'`);

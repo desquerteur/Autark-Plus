@@ -67,7 +67,8 @@ test('chat.delete: of the agent\'s status lines only its work updates go; the li
   const chat = h.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
   assert.equal((await h.run('ag_ava', 'chat.add_members', { chatId: chat.id, members: ['ag_ben'] })).failed, false);
   assert.equal((await h.run('ag_ava', 'chat.rename', { chatId: chat.id, title: 'Launch' })).failed, false);
-  const update = JSON.parse((await h.run('ag_ava', 'chat.send', { chatId: chat.id, text: 'Drafting the post', status: true })).text) as { messageId: string };
+  // a work update an agent posted before 13.11.2026 (chat.send status: true; still in older chats)
+  const update = { messageId: h.chats.status(chat.id, { type: 'note', text: 'Drafting the post', details: { by: 'agent' } }, { authorId: 'ag_ava' }).id };
   const lines = h.chats.messages(chat.id).filter((message) => message.kind === 'status' && message.id !== update.messageId);
   assert.deepEqual(lines.map((line) => [line.meta.status?.type, line.authorId]), [['member_added', 'ag_ava'], ['renamed', 'ag_ava']]);
   for (const line of lines) {

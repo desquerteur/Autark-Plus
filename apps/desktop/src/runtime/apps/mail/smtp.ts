@@ -85,6 +85,7 @@ function ehloName(socket: net.Socket): string {
 
 /** Sends `raw` to `to` (all recipients, Bcc included). Rejects with SmtpError, ReconnectNeeded or McpTransportError. */
 export async function sendMail(input: {
+  assertCurrent?: () => void;
   server: MailServer;
   login: { user: string; password: string };
   from: string;
@@ -95,6 +96,7 @@ export async function sendMail(input: {
 }): Promise<{ accepted: string[]; rejected: string[] }> {
   const { server } = input;
   const timeoutMs = input.timeoutMs ?? SMTP_TIMEOUT_MS;
+  input.assertCurrent?.();
   const socket = await openSocket(server, input.sockets);
   const s = new SmtpSession(socket, server, timeoutMs);
   let dataSent = false;
@@ -113,6 +115,7 @@ export async function sendMail(input: {
       ehlo = await s.send(`EHLO ${ehloName(socket)}`);
       if (ehlo.code !== 250) throw new SmtpError(ehlo.code, smtpMessage(ehlo.code, 'connect'));
     }
+    input.assertCurrent?.();
     const auth = ehlo.lines.find((l) => /^AUTH[ =]/i.test(l))?.toUpperCase().split(/[ =]/).slice(1) ?? [];
     const { user, password } = input.login;
     let authed: SmtpReply;
@@ -140,8 +143,10 @@ export async function sendMail(input: {
       await s.send('RSET').catch(() => undefined);
       throw new SmtpError(lastRefusal, smtpMessage(lastRefusal, 'rcpt', rejected.join(', ')));
     }
+    input.assertCurrent?.();
     const data = await s.send('DATA');
     if (data.code !== 354) throw new SmtpError(data.code, smtpMessage(data.code, 'data'));
+    input.assertCurrent?.();
     dataSent = true;
     await writeAll(s.socket, dotStuff(input.raw));
     const done = await s.reply();

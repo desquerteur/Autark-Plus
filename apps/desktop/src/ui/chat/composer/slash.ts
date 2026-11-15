@@ -67,7 +67,7 @@ export function parseSlash(text: string): { name: string; arg: string } | null {
   return { name: match[1], arg: (match[2] ?? '').trim() };
 }
 
-/** Turns text into a task: first line = title, "- " lines = checklist steps, rest = notes. */
+/** Turns text into a task for the one owner Autark picks: first line = title, "- " lines = its plan, rest = notes. */
 export async function createTaskFromText(conversationId: string, text: string): Promise<boolean> {
   const lines = text.split('\n');
   const title = lines[0].trim();
@@ -80,7 +80,7 @@ export async function createTaskFromText(conversationId: string, text: string): 
     else notes.push(line);
   }
   try {
-    await rpc.call('tasks.create', { conversationId, title, steps: steps.length ? steps : undefined, notes: notes.join('\n').trim() || undefined, clientId: newId('req') });
+    await rpc.call('tasks.create', { conversationId, title, to: 'team', plan: steps.length ? steps.slice(0, 20) : undefined, notes: notes.join('\n').trim() || undefined, clientId: newId('req') });
     return true;
   } catch (error) {
     toastError(error, 'Task could not be created');

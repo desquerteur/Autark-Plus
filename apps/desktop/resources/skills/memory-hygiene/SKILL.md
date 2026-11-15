@@ -46,7 +46,7 @@ secrets (the secret store holds those), guesses.
   Pinned notes and always-skills share one cap in the prompt, so I keep them lean.
 
 ## Correct rather than duplicate
-- Before saving, I search for an existing file on the same subject (`vector.search`).
+- Before saving, I search for an existing file on the same subject (`knowledge.find` with its `in` folder).
 - When the new information contradicts it, I update that file (`memory.write` with its path; the old
   state stays as a version for a while). One current fact per subject spares the next reader a guess.
 - When it adds detail, I update the existing item instead of creating a near-duplicate.

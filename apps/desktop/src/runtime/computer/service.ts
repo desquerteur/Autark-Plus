@@ -29,7 +29,7 @@ import type { HelperClient } from './helper.ts';
 import { createHelper, driverFor } from './drivers.ts';
 import { forbiddenCombo, parseCombo } from './keys.ts';
 import { helperShot, hostShot, type Screenshot } from './capture.ts';
-import { parseNodes, RefTable, renderTree, type RefCounter } from './tree.ts';
+import { parseNodes, RefTable, renderTree, TREE_DEPTH, type RefCounter } from './tree.ts'; // B-080 wave 3: the one default depth
 import { bindComputerActivity, ComputerActivity } from './activity.ts';
 import { PointerLease, type ComputerCaller } from './lease.ts';
 import { WindowMemory } from './window-memory.ts';
@@ -100,7 +100,7 @@ export class ComputerService {
     this.activity = new ComputerActivity({ now: () => this.now(), services: deps.services });
     this.windowMemory = new WindowMemory({ now: () => this.now() });
     this.lease = new PointerLease({ now: () => this.now(), titleOf: (hwnd) => this.windowMemory.titleOf(hwnd) });
-    this.pointers = new ScreenPointers({ services: deps.services });
+    this.pointers = new ScreenPointers({ services: deps.services, now: () => this.now() });
     this.input = new PointerInput({
       host: deps.host, helper: () => this.helper(), activity: this.activity, lease: this.lease, windows: this.windowMemory, pointers: this.pointers,
       now: () => this.now(), canControl: () => this.canControl(), requireControl: (feature) => this.requireWindows(feature),
@@ -108,8 +108,8 @@ export class ComputerService {
     try { const services = deps.services?.(); if (services) bindComputerActivity(services, this.activity); } catch { /* bound by registerDeviceHandlers */ }
   }
 
-  /** One line per other pointer on this screen for `caller`'s result (the person, other agents); '' when nobody else is there. */
-  othersLine(caller: ComputerCaller | undefined): string { return this.pointers.line(caller); }
+  /** One line per other pointer on this screen for `caller`'s result (the person – read once now, B-081 –, other agents); '' when nobody else is there. */
+  async othersLine(caller: ComputerCaller | undefined): Promise<string> { if (caller) await this.input.readPerson(); return this.pointers.line(caller); }
 
   get platform(): NodeJS.Platform { return this.deps.platform ?? process.platform; }
 
@@ -174,6 +174,19 @@ export class ComputerService {
     } finally { end(); }
   }
 
+  /**
+   * B-080: a step that opens a window in front of the person (browser.open where: 'chrome' starts their own Chrome) takes
+   * the keyboard focus like focusWindow, so it runs under the caller's pointer lease and the person's priority: `run`
+   * starts the window and finds it while the lease is held.
+   */
+  async inFront<T>(caller: ComputerCaller | undefined, run: () => Promise<T>): Promise<T> {
+    this.requireWindows('Opening a window in front');
+    this.lease.check(caller);
+    await this.guardHuman();
+    const end = this.lease.begin(caller);
+    try { return await run(); } finally { end(); }
+  }
+
   async uiTree(input: TreeInput = {}): Promise<UiTree> {
     const tree = await this.readTree(input, this.refsOf(input.caller));
     this.windowMemory.title(tree.window.hwnd, tree.window.title);
@@ -198,6 +211,25 @@ export class ComputerService {
     const refs = this.refsOf(input.caller);
     const lines = nodes.map((node) => renderTree([node], hwnd, refs).text);
     return { text: lines.join('\n'), count: lines.length, truncated: result?.truncated === true };
+  }
+
+  /**
+   * B-080: the element that holds the keyboard focus now, as one line with its ref (like find()), and its window –
+   * computer.type reads where its text landed. Undefined when the helper does not know this read (the Linux helper, an
+   * older helper) or nothing has the focus.
+   */
+  async focused(caller?: ComputerCaller, signal?: AbortSignal): Promise<{ text: string; hwnd: number } | undefined> {
+    if (!this.canControl()) return undefined;
+    let result: { hwnd?: number; nodes?: unknown } | undefined;
+    try {
+      result = await this.helper().call<{ hwnd?: number; nodes?: unknown }>('focused', {}, { timeoutMs: 10_000, signal });
+    } catch {
+      return undefined;
+    }
+    const node = parseNodes(result?.nodes)[0];
+    if (!node) return undefined;
+    const hwnd = windowId(result?.hwnd, undefined);
+    return { text: renderTree([{ ...node, d: 0, p: -1 }], hwnd, this.refsOf(caller)).text, hwnd };
   }
 
   // ------------------------------------------------------------------ act (semantic)
@@ -280,7 +312,7 @@ export class ComputerService {
   private async readTree(input: TreeInput, refs: RefTable): Promise<UiTree> {
     this.requireWindows('The UI Automation tree');
     const result = await this.helper().call<{ hwnd: number; title: string; nodes: unknown; truncated?: boolean }>('tree', {
-      hwnd: input.window, depth: clampInt(input.depth ?? 12, 1, 40), maxNodes: clampInt(input.maxNodes ?? 400, 20, 2000),
+      hwnd: input.window, depth: clampInt(input.depth ?? TREE_DEPTH, 1, 40), maxNodes: clampInt(input.maxNodes ?? 400, 20, 2000),
     }, { timeoutMs: 40_000, signal: input.signal });
     const hwnd = windowId(result?.hwnd, input.window);
     const rendered = renderTree(parseNodes(result?.nodes), hwnd, refs);
@@ -291,7 +323,7 @@ export class ComputerService {
     this.helperClient ??= createHelper(this.platform, {
       supervisor: this.deps.supervisor, resourcesDir: this.deps.resourcesDir, log: this.deps.log, unpacked: unpackedPath,
     });
-    this.guarded ??= this.activity.wrapHelper(this.helperClient);
+    this.guarded ??= this.input.counted(this.activity.wrapHelper(this.helperClient));
     return this.guarded;
   }
 

@@ -123,7 +123,7 @@ function madeUse(s: RuntimeServices, use: ModelUse, stored: string, thisPc: bool
 
 function embeddingsUse(s: RuntimeServices, stored: string): Resolved {
   const possible = quiet(() => new LocalEmbedder({ dataDir: s.paths.data }).possible(), false);
-  if (stored === USE_OFF) return { ...OFF, thisPc: possible };
+  if (stored === USE_OFF || stored === USE_AUTO) return { ...OFF, thisPc: possible }; // nothing chosen: finding goes by words
   const choice = quiet(() => embeddingChoice(s, possible), undefined);
   if (choice?.kind === 'local') return { kind: 'this-pc', modelId: USE_LOCAL, name: LOCAL_EMBEDDING_NAME, thisPc: possible };
   if (choice?.kind === 'http') {
@@ -131,7 +131,7 @@ function embeddingsUse(s: RuntimeServices, stored: string): Resolved {
     const modelId = `${account ? modelOwner(account, quiet(() => s.settings.get().providers, undefined)) : choice.provider}:${choice.model}`;
     return { kind: 'model', accountId: choice.accountId, modelId, name: choice.model, thisPc: possible };
   }
-  return { ...NONE, thisPc: possible, ...(stored === USE_AUTO ? {} : { gone: stored }) };
+  return { ...NONE, thisPc: possible, gone: stored };
 }
 
 const STATE_OF: Readonly<Record<UseNow['kind'], UseNow['state']>> = { model: 'ready', plan: 'ready', 'this-pc': 'ready', off: 'off', none: 'setup' };

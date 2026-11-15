@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Owns: what phone use asks Android for (phoneuse/UseService). Window changes only – the service ignores them, so it reads
      nothing until the PC asks and costs next to no battery; the tree with view ids, gestures and screenshots on request
-     (the window list only so a screenshot checks every app that is on the screen).
+     (the window list for the screen as a whole).
      Never: key filtering, touch exploration or any event stream it would read in the background. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/use_description"

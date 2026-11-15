@@ -7,11 +7,10 @@
 // The summary names every hire with its role, a changed mode and "own instructions"; B-059: a hire without a name
 // reads "a new <template> (…, gets a first name)" – the name is picked only when the hire runs.
 // B-047 (D9): a hire's name is a person's first name (a role, template or numbered label is refused per hire;
-// without a name OrgService picks a free first name), the job goes in role. Every hire starts from the team's
-// standard SYSTEM.md (org/hire.ts, prompts/agent-default.md – B-076: the team's "How I work", then the hire's role and
-// "What I have here", nothing enforces it). B-078 (D15): the creator's `instructions` are the new agent's "who you are";
-// the result returns the SYSTEM.md path and the hire's own part with one line: that part is the new agent's own from
-// here, and I start them with a first line or task. A hire from the `head` template stands beside me – it reports to
+// without a name OrgService picks a free first name), the job goes in role. Every hire starts from the team's standard
+// SYSTEM.md of its kind (org/hire.ts, org/standard.ts) and makes it its own in its first turn (skill system-prompt).
+// B-078 (D15): the creator's `instructions` are the new agent's "who you are"; the result returns the SYSTEM.md path and
+// its own part (from "## My role" on) with one line: how I start them and help them write the file. A hire from the `head` template stands beside me – it reports to
 // the person unless managerId names someone.
 // `device` gives a hire its home PC (devices.list; default this PC) – like agents.update's device.
 // Owns: those three tools. Never: hires a second secretary (the existing one is returned) or archives the last
@@ -22,12 +21,12 @@ import type { ToolContext, ToolDef } from '../types.ts';
 import { failure, json } from '../types.ts';
 import { areaKind } from '../../org/spaces.ts';
 import { personNameProblem } from '../../org/first-names.ts';
-import { ownPart } from '../../org/system-parts.ts';
-import { rulesInForce } from './agents.ts';
 import { SYSTEM_FILE } from '../../../shared/model/agent-core.ts';
 import type { Agent } from '../../../shared/model/org.ts';
 import '../../contracts/agent-core.ts';
 import { resolveDevice } from '../registry.ts';
+import { coreInstructions } from '../../agent-core/prompt.ts';
+import { ownHowIWork } from '../../org/system-parts.ts';
 import { clip, defineTool } from './util.ts';
 
 export const MAX_HIRES = 6;
@@ -42,17 +41,21 @@ const SYSTEM_TEXT_MAX = 6000;
 /** B-078: templates whose hires stand beside me and report to the person (a department head). */
 const BESIDE: ReadonlySet<string> = new Set(['head']);
 
-/** B-078: the line a hire result carries – the own part is the new agent's, and how I start them. */
+/** B-078: the line a hire result carries – the SYSTEM.md is the new agent's own, and how I start them. */
 export function startLine(name: string): string {
-  return `This is ${name}'s own part of their SYSTEM.md, with the "who you are" I gave under "## My role"; the team's standard "How I work" stands above it. From here ${name} grows it themselves. I start ${name} now: a first line in our 1:1 (chat.direct) with what I found – the colleagues, folders and accounts of the work, an earlier piece that shows what good looks like – or a first real task there (tasks.create with assignee = ${name}'s agentId and chatId = our 1:1).`;
+  return `${name} starts from the team's standard SYSTEM.md with the "who you are" I gave under "## My role" (above: that part) and makes the file their own in their first turn (skill system-prompt). I start ${name} now with the brief for it: a first line in our 1:1 (chat.direct) with who they are for the person and what I found – the colleagues, folders and accounts of the work, an earlier piece that shows what good looks like – or a first real task there (tasks.create with to = ${name} and chatId = our 1:1). Then I read what they wrote and say what I would sharpen.`;
 }
 
 const HIRE_PROPS = {
-  name: { type: 'string', maxLength: 60 }, // a person's first name: the description says so once for both levels
-  template: { type: 'string' }, role: { type: 'string', maxLength: 120 },
-  instructions: { type: 'string', maxLength: 8000 }, mode: { type: 'string' }, managerId: { type: 'string' }, spaceId: { type: 'string' },
-  device: { type: 'string', minLength: 1, maxLength: 120 },
+  name: { type: 'string', maxLength: 60, description: "A person's first name." },
+  template: { type: 'string' }, role: { type: 'string', maxLength: 120, description: 'The job.' },
+  instructions: { type: 'string', maxLength: 8000, description: 'Who they are, a few lines under "## My role"; from there they grow it.' },
+  mode: { type: 'string' }, managerId: { type: 'string', description: "'' = the person." },
+  spaceId: { type: 'string', description: "Default the template's or its manager's space; a private one only from inside it." },
+  device: { type: 'string', minLength: 1, maxLength: 120, description: 'Its home PC, where its turns, terminal and screen work run; default this one.' },
 } as const;
+/** The same fields inside "agents", said once at the top level. */
+const HIRE_ITEM = Object.fromEntries(Object.entries(HIRE_PROPS).map(([key, prop]) => { const { description: _said, ...rest } = prop as { description?: string }; return [key, rest]; }));
 
 /**
  * Where a hire lands: an explicit active space; else the template's area – the new manager's
@@ -118,7 +121,7 @@ function roleWords(ctx: ToolContext): string[] {
 function systemFile(agent: Agent, ctx: ToolContext): SystemFile {
   let folder: string | undefined;
   try { folder = ctx.services.agentCore?.folder(agent.id); } catch { folder = undefined; }
-  const own = ownPart(agent.instructions, rulesInForce(ctx)); // B-076: the hire's own part; the standard above it stays as it is
+  const own = ownHowIWork(coreInstructions(ctx.services, agent)).rest; // the standard's "# How I work" above and the comment below are the same for every hire
   const text = own.length > SYSTEM_TEXT_MAX ? `${own.slice(0, SYSTEM_TEXT_MAX - 1)}…` : own;
   return { ...(folder ? { path: path.join(folder, SYSTEM_FILE) } : {}), text, next: startLine(agent.name) };
 }
@@ -158,7 +161,7 @@ function hire(args: Hire, ctx: ToolContext): HireResult {
 
 const listTemplates = defineTool<Record<string, never>>({
   name: 'agents.templates',
-  description: 'The agent templates I can hire from, and whether a hire reports to the person instead of me.',
+  description: 'Lists the agent templates I can hire from, and who a hire reports to.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => ({ summary: 'List agent templates', reversible: true, external: false }),
@@ -172,12 +175,12 @@ const listTemplates = defineTool<Record<string, never>>({
 
 const createAgent = defineTool<CreateArgs>({
   name: 'agents.create',
-  description: 'Hire one agent (from a template or a role) or a team in "agents"; each reports to me unless managerId is given (a head from template "head" stands beside me and reports to the person; managerId "" = the person). name: a person\'s first name; the job goes in role. instructions: who they are, in a few lines – they go under "## My role" in the team\'s standard SYSTEM.md, and from there the agent grows it. Without spaceId it lands in the template\'s area or its manager\'s space; into a private space only from inside it. device: its home PC – its turns, terminal and computer use run there, and I reach it in the shared chats (devices.list; default this PC).',
+  description: 'Hires one agent or a whole team, from a template or a role. Each reports to me unless managerId says otherwise; a head from template "head" stands beside me and reports to the person.',
   inputSchema: {
     type: 'object',
     properties: {
       ...HIRE_PROPS,
-      agents: { type: 'array', items: { type: 'object', properties: HIRE_PROPS, additionalProperties: false }, minItems: 1, maxItems: MAX_HIRES },
+      agents: { type: 'array', items: { type: 'object', properties: HIRE_ITEM, additionalProperties: false }, minItems: 1, maxItems: MAX_HIRES, description: 'Several hires, each with these fields.' },
     },
     additionalProperties: false,
   },
@@ -204,7 +207,7 @@ const createAgent = defineTool<CreateArgs>({
 
 const archiveAgent = defineTool<{ agentId?: string; successorId?: string; reason: string }>({
   name: 'agents.archive',
-  description: 'Archive an agent, or myself. successorId: the colleague who takes over – its role, place in the org, reports and open tasks (hire one first if needed); without it the reports move up to the manager and the open tasks to the next manager. Give the reason.',
+  description: 'Archives an agent or myself. The successor takes over role, reports and open tasks; without one they move up to the manager.',
   inputSchema: {
     type: 'object',
     properties: { agentId: { type: 'string' }, successorId: { type: 'string' }, reason: { type: 'string', minLength: 3, maxLength: 300 } },

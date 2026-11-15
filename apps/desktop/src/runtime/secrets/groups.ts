@@ -2,7 +2,7 @@
 // each field a `secrets` row with its own handle; for a grouped row the GROUP's route, tags and source
 // count (the row's own columns stay '[]' / NULL). Here: the rows and their SecretInfo/SecretGroup shape, the checks
 // of secrets.saveGroup before anything is written (names, kinds, <= 20 fields, <= 1 2FA key, values <= 4096 characters,
-// a 2FA key that parses, a route name, <= 12 tags), the write in one transaction, the hints and what the leak redactor
+// a description <= 4000 characters like a single secret's – B-080, a 2FA key that parses, a route name, <= 12 tags), the write in one transaction, the hints and what the leak redactor
 // learns per kind. Owner 29.10.2026 (secrets as a catalog like skills, with its Nachtrag):
 // the store is a catalog like a skill with ZERO restrictions – no site binding for anything, card data included; the
 // site a value came from is its `source` (provenance only), the route its catalog area, the tags information only.
@@ -162,7 +162,7 @@ export function planGroup(db: Db, input: SecretGroupInput, now: number, createdB
   const label = (input.label ?? existing?.label ?? '').trim();
   if (!label || label.length > 120) bad('A group needs a name of at most 120 characters.');
   const description = input.description !== undefined ? input.description.trim() || null : existing?.description ?? null;
-  if (description && description.length > 500) bad('The description has at most 500 characters.');
+  if (description && description.length > 4000) bad('The description has at most 4000 characters.'); // B-080: as a single secret's (service.ts)
   const stored = existing ? fieldRows(db, existing.id) : [];
   const remove = [...new Set(input.remove ?? [])];
   if (remove.some((id) => !stored.some((row) => row.id === id))) bad('Only fields of this group can be removed.');

@@ -23,10 +23,11 @@ import { people } from '../lib/people.ts';
 import { bridge } from '../lib/platform.ts';
 import { MAX_FILES, toAttachment, uploadFile } from '../lib/files.ts';
 import { toastError } from '../lib/toasts.ts';
+import { heldKey } from '../lib/take-store.ts';
 import { ComposerAttachments } from '../chat/Attachments.tsx';
 import { clearDraft, draftFor, updateDraft } from '../chat/composer/draft.ts';
-import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, transcribing } from '../chat/composer/voice.ts';
-import { MicButton, useDictationField, waveState } from '../chat/composer/MicButton.tsx';
+import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, retryTake, transcribing } from '../chat/composer/voice.ts';
+import { MicButton, targetOf, useDictationField, waveState } from '../chat/composer/MicButton.tsx';
 import { DictationWave } from '../chat/composer/DictationWave.tsx';
 import { discardDictationItem } from '../chat/composer/PlusMenu.tsx';
 import { dataUrlToBlob, screenshotName } from '../feedback/bridge.ts';
@@ -123,6 +124,8 @@ function Body(props: { autoFocus: boolean }) {
       if (dictating.peek() === key && !(await dictateIntoDraft())) return; // a take that came back as a recording stays for a look first
       const current = draft.peek();
       if (!current.text.trim() && !current.attachments.length) return;
+      // B-082: a recording held in this page (link down) is no file yet – it goes with the task once it is uploaded.
+      if (current.attachments.some((entry) => heldKey(entry.fileId))) { toastError(new Error('A recording is still waiting for the connection.'), 'Not posted yet'); return; }
       const params = quickParams({ text: current.text, attachments: current.attachments, target: composerTarget.peek() });
       clearDraft(key); // the field is free for the next task at once
       clearDraftSpeech(key);
@@ -146,7 +149,7 @@ function Body(props: { autoFocus: boolean }) {
       onDragOver={(event) => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); setDragOver(true); } }}
       onDragLeave={() => setDragOver(false)}
       onDrop={(event) => { event.preventDefault(); setDragOver(false); const files = [...(event.dataTransfer?.files ?? [])]; if (files.length) void addFiles(files); }}>
-      <ComposerAttachments attachments={attachments} uploading={uploading}
+      <ComposerAttachments attachments={attachments} uploading={uploading} onRetry={(attachment) => retryTake(key, attachment, targetOf(fieldRef.current))}
         onRemove={(fileId) => updateDraft(key, { attachments: draft.peek().attachments.filter((entry) => entry.fileId !== fileId) })} />
       <div class="composer-field">
         <textarea ref={fieldRef} class="composer-input task-composer-input" rows={1} value={text} placeholder="New task" aria-label="New task"

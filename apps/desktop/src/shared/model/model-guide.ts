@@ -54,8 +54,13 @@ export function effectiveWorkPlan(work: string | undefined, accounts: readonly P
 
 declare module './chat.ts' {
   interface ConversationSettings {
-    /** Addition (SG): the person's soft model suggestion per member agent (agentId → model id). */
+    /** Addition (SG): the person's soft model suggestion per member agent (agentId → model id). B-083 (owner 08.11.: "nur
+     *  eine Empfehlung … ein kleiner Tipp"; 13.11.2026: information for the AI, never a route): the composer writes every
+     *  pick here; the agent reads it on the person's line. An older chat's `models` entry reads the same way (routing/policies.ts chatChoice). */
     modelHints?: Record<string, string>;
+    /** B-083: the person's suggested temperature per member agent (agentId → 0..1), like the model information for the
+     *  agent on the person's line – it reaches a model only through the agent's own model.set. */
+    temperatures?: Record<string, number>;
   }
 }
 

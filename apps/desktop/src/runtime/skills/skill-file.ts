@@ -1,6 +1,7 @@
 // SKILL.md front matter as the skill library reads and writes it: the agentskills.io fields (name,
 // description) plus `modes` (top level or under `metadata`) – the modes whose index lists the skill – and `always`
-// (name and description in every prompt, for the few skills that must not be missed).
+// (name and description in every prompt, for the few skills that must not be missed). B-085: `derived-from` – the public
+// library entries a skill was written from ("library:<id>@<rev>"), so library.find can name an upstream change.
 // Owns: reading those fields and building a SKILL.md text. Never: touches files (skills/service.ts).
 
 import { WorkforceError } from '../../shared/errors.ts';
@@ -36,9 +37,24 @@ export function oneLine(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** SKILL.md text: front matter (name, quoted description, metadata: modes, always) + body. */
-export function skillText(name: string, description: string, body: string, modes: readonly string[], always = false): string {
+/** `derived-from`: the public entries a skill draws on ("library:<id>@<rev>", older "<source>/<name>@<sha256 prefix>", or what someone wrote by hand). */
+export function derivedFromOf(data: Record<string, unknown>): string[] {
+  return [...new Set(stringList(data['derived-from']).map(oneLine).filter(Boolean))];
+}
+
+/** The key of a derived-from item: "library:<id>" or "<source>/<name>" without the content mark. */
+export const derivedKey = (item: string): string => item.replace(/@[0-9a-f]{6,64}$/i, '');
+
+/** `kept` with `added` in: an item of the same source/name is replaced, the order stays. */
+export function mergeDerived(kept: readonly string[], added: readonly string[]): string[] {
+  const keys = new Set(added.map(derivedKey));
+  return [...kept.filter((item) => !keys.has(derivedKey(item))), ...added].slice(0, 20);
+}
+
+/** SKILL.md text: front matter (name, quoted description, derived-from, metadata: modes, always) + body. */
+export function skillText(name: string, description: string, body: string, modes: readonly string[], always = false, derivedFrom: readonly string[] = []): string {
   const head = [`name: ${name}`, `description: ${JSON.stringify(description)}`];
+  if (derivedFrom.length) head.push(`derived-from: ${JSON.stringify(derivedFrom)}`);
   if (modes.length || always) head.push('metadata:');
   if (modes.length) head.push(`  modes: [${modes.join(', ')}]`);
   if (always) head.push('  always: true');

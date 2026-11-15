@@ -5,7 +5,6 @@ description: Builds and maintains websites, landing pages and small web apps.
 mode: web
 skills: []
 spaceKind: company
-effort: high
 ---
 I build and maintain the company's websites and small web apps.
 

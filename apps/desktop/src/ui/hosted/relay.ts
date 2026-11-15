@@ -1,14 +1,14 @@
 // The iPhone web app's one connection to Autark's meeting server (B-078 follow-up; services/remote-relay protocol v1), as
 // Android's relay/RelayLink.java and the PC's rendezvous/relay-client.ts: registration with the phone's own device key
 // (challenge → hello, never findable), the PCs it pins, their presence (only with a box key the PC's device key signed),
-// finding a PC by Remote ID, sealed pairing requests (PAIR_INFO) and tunnels it opens (TUNNEL_INFO, the ephemeral key
+// finding a PC by Remote ID (B-084: or a PC whose chain proves the person code), sealed pairing requests (PAIR_INFO) and tunnels it opens (TUNNEL_INFO, the ephemeral key
 // signed with the phone's key). A browser cannot see WebSocket pings, so a resume asks one `find` as a probe instead of a
 // watchdog; more than 16 MiB waiting in the socket's send buffer ends the tunnel that filled it (MAX_SEND_BUFFER).
 // Owns: this connection's frames and requests. Never: accepts tunnels, answers pairing requests, or trusts a box key its
 // PC's device key did not sign.
 
 import { b64url, fromB64url, fromUtf8, readU32, utf8, type Bytes } from './bytes.ts';
-import { CounterCipher, fingerprint, hkdf, newX25519, remoteIdOf, Serial, sign, toBox, verify, x25519, type DeviceKey } from './crypto.ts';
+import { belongs, CounterCipher, fingerprint, hkdf, newX25519, Serial, sign, toBox, verify, x25519, type DeviceKey } from './crypto.ts';
 import { Tunnel } from './tunnel.ts';
 
 export const PAIR_INFO = 'wf-relay-pair-v1';
@@ -119,7 +119,7 @@ export class RelayLink {
 
   // ---------------------------------------------------------------- requests
 
-  /** The PCs that accept connect requests under this Remote ID (key checked against the ID, box signed by that key). */
+  /** The PCs that accept connect requests under this Remote ID (key or its chain checked against the ID, box signed by that key). */
   async find(remoteId: string, timeoutMs = 10_000): Promise<Found[]> {
     const reply = await this.ask({ t: 'find', id: remoteId }, timeoutMs);
     const out: Found[] = [];
@@ -130,7 +130,7 @@ export class RelayLink {
       try { pub = fromB64url(row.pub); } catch { continue; }
       if (pub.length !== 32 || !(await boxSigned(pub, row.box, row.boxSig))) continue;
       const fp = await fingerprint(pub);
-      if ((await remoteIdOf(fp)) === remoteId) out.push({ fp, pub, box: row.box as string });
+      if (await belongs(remoteId, fp, row.chain)) out.push({ fp, pub, box: row.box as string }); // own ID, or a chain to the person code
     }
     return out;
   }

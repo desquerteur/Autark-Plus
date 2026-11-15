@@ -12,9 +12,8 @@ export * from './todo-model.ts';
 export * from './todo-time.ts';
 export * from './work-model.ts';
 
-export const STATUS_LABELS: Record<TaskStatus, string> = {
-  open: 'Open', working: 'Working', waiting: 'Waiting', needs_you: 'Needs you', blocked: 'Stuck', done: 'Done', cancelled: 'Cancelled',
-};
+/** The stored states; "Working" is a live run (TaskView.running), "Paused" a wait on the person (isPaused). An unknown state (a newer PC's) shows as it is. */
+export const STATUS_LABELS: Record<TaskStatus, string> = { open: 'Open', waiting: 'Waiting', done: 'Done', dropped: 'Dropped' };
 
 // ------------------------------------------------------------------ progress, steps
 
@@ -32,7 +31,7 @@ export function progressPercent(progress: { done: number; total: number }): numb
 
 /** A human may tick steps that are theirs (T14); agents' steps show their state only. */
 export function canToggleStep(step: Pick<Task, 'assigneeKind' | 'status'>): boolean {
-  return step.assigneeKind === 'human' && step.status !== 'cancelled';
+  return step.assigneeKind === 'human' && step.status !== 'dropped';
 }
 
 /** Steps in checklist order. */

@@ -1,11 +1,11 @@
-// Electron window check of the composer's model chip (Umbau Einfachheit: one searchable list, effort; B-072: no "Auto"
-// word – the model that answers now) with the demo engine in an isolated test profile:
-//   * before the agent's first turn the chip names the model routing.preview routes it to (ignorePin), never "Auto";
-//     its menu has the search field, that model first (checked, "Chosen per task"), the chat models and the effort row
-//     (Low · Medium · High · Max) – no routing captions, guide labels or "Always use" pins any more;
-//   * picking the demo model stores it as the agent's model in this chat (chats.get settings.models), the chip shows
-//     its short name in the same box (nothing beside it moves); an effort is stored and named on the chip; the first
-//     item clears both and the chip names the routed model again; a search that matches nothing says "No models";
+// Electron window check of the composer's model chip (Umbau Einfachheit: one searchable list, effort; B-083: "Auto"
+// first, a pick is a suggestion, a temperature row) with the demo engine in an isolated test profile:
+//   * before the agent's first turn the chip names the model routing.preview routes it to (ignorePin);
+//     its menu has the search field, "Auto" first (checked, hint "<that model> now"), the chat models, the temperature
+//     row (value "Auto") and the effort row – no routing captions, guide labels or pins;
+//   * picking the demo model stores it as the agent's suggestion in this chat (chats.get settings.modelHints), the chip
+//     shows its short name in the same box (nothing beside it moves); an effort is stored and named on the chip; Auto
+//     clears both and the chip names the routed model again; a search that matches nothing says "No models";
 //   * at 375 px (phone layout) the menu stays on screen and the page has no horizontal scroll;
 //   * screenshots light, dark and 375 px; no renderer errors.
 // Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
@@ -62,28 +62,30 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, chat.id);
   const chip = page.locator('.composer-actions .model-chip');
   await chip.waitFor({ timeout: 20_000 });
-  // Before the first turn: the model the app routes the agent to now, by name (no "Auto").
+  // Before the first turn: the model the app routes the agent to now, by name.
   const routed = await rpc.call('routing.preview', { agentId: manager.id, conversationId: chat.id, ignorePin: true });
   const routedNames = [routed.modelId, models.find((model) => model.id === routed.modelId)?.name ?? ''];
   await page.waitForFunction(() => document.querySelector('.composer-actions .model-chip .chip-label')?.textContent?.trim(), undefined, { timeout: 10_000 });
   const routedLabel = (await chip.locator('.chip-label').textContent()).trim();
   assert.doesNotMatch(routedLabel, /^Auto/);
   assert.ok(routedNames.some((name) => name.endsWith(routedLabel)), `the chip names the routed model: "${routedLabel}" for ${routedNames.join(' / ')}`);
-  const row = ['.composer', '.composer-actions', '.composer .composer-plus', '.composer .ultra-switch', '.composer .model-chip', '.composer .send-button'];
+  const row = ['.composer', '.composer-actions', '.composer .composer-plus', '.composer .model-chip', '.composer .send-button'];
 
-  // The menu: search, the routed model (checked), the chat models, the effort row.
+  // The menu: search, Auto (checked, the routed model beside it), the chat models, the temperature and effort rows.
   await chip.click();
   const menu = page.getByRole('menu', { name: 'Model' });
   await menu.waitFor({ timeout: 5_000 });
   assert.equal(await menu.getByRole('textbox', { name: 'Search models' }).count(), 1);
   const auto = menu.locator('[role="menuitemradio"]').first();
   assert.equal(await auto.getAttribute('aria-checked'), 'true');
-  assert.equal((await auto.locator('.menu-label > span').textContent()).trim(), routedLabel, 'the first item names the same model');
-  assert.equal((await auto.locator('.menu-hint').textContent()).trim(), 'Chosen per task');
-  assert.equal(await menu.getByText(/^Auto$/).count(), 0, 'no "Auto" item');
+  assert.equal((await auto.locator('.menu-label > span').textContent()).trim(), 'Auto', 'the first item is Auto');
+  assert.equal((await auto.locator('.menu-hint').textContent()).trim(), `${routedLabel} now`, 'beside it the model routing takes now');
   const choices = (await menu.locator('[role="menuitemradio"] .menu-label > span').allTextContents()).map((text) => text.trim());
-  assert.ok(choices.length >= 2, `the routed model and at least one model: ${choices.join(', ')}`);
-  assert.ok(await menu.getByRole('group', { name: 'Effort' }).locator('button').count() > 0, 'the effort row');
+  assert.ok(choices.length >= 2, `Auto and at least one model: ${choices.join(', ')}`);
+  const temperature = menu.getByRole('group', { name: 'Temperature' });
+  assert.equal(await temperature.locator('input[type="range"]').count(), 1, 'the temperature slider');
+  assert.equal((await temperature.locator('.temp-value').textContent()).trim(), 'Auto', 'no temperature suggested');
+  assert.equal(await menu.getByRole('group', { name: 'Effort' }).locator('button').count(), 5, 'the effort row: Low … Max with Very high');
   assert.equal(await menu.getByText(/Always use|Below quality floor|Above cost guide|Recommended/).count(), 0, 'no routing captions or pins');
   await shot('model-menu-01-open-light');
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -95,16 +97,17 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   await menu.getByText('No models').waitFor({ timeout: 5_000 });
   await menu.getByRole('textbox', { name: 'Search models' }).fill('');
 
-  // Pick the first model: stored for the agent in this chat; the chip keeps its box.
+  // Pick the first model: stored as the agent's suggestion in this chat (no hard pin); the chip keeps its box.
   const first = menu.locator('[role="menuitemradio"]').nth(1);
   const firstName = (await first.locator('.menu-label > span').textContent()).trim();
   await expectStable(page, row, async () => {
     await first.click();
-    await until(async () => Boolean((await settingsOf()).models?.[manager.id]), 'the model is stored');
+    await until(async () => Boolean((await settingsOf()).modelHints?.[manager.id]), 'the suggestion is stored');
     await page.waitForFunction((name) => document.querySelector('.composer-actions .model-chip .chip-label')?.textContent?.startsWith(name), firstName, { timeout: 5_000 });
   });
-  const stored = (await settingsOf()).models[manager.id];
+  const stored = (await settingsOf()).modelHints[manager.id];
   assert.ok(models.some((model) => model.id === stored), `a listed model: ${stored}`);
+  assert.equal((await settingsOf()).models?.[manager.id], undefined, 'no hard pin');
 
   // An effort for it: stored and named on the chip.
   await chip.click();
@@ -117,12 +120,12 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   await page.keyboard.press('Escape');
   await shot('model-menu-03-chosen-light');
 
-  // The first item (nothing chosen) clears both; the chip names the routed model again.
+  // Auto (nothing suggested) clears both; the chip names the routed model again.
   await chip.click();
   await menu.waitFor({ timeout: 5_000 });
   await expectStable(page, row, async () => {
     await menu.locator('[role="menuitemradio"]').first().click();
-    await until(async () => { const s = await settingsOf(); return !s.models?.[manager.id] && !s.efforts?.[manager.id]; }, 'nothing chosen clears the model and the effort');
+    await until(async () => { const s = await settingsOf(); return !s.modelHints?.[manager.id] && !s.models?.[manager.id] && !s.efforts?.[manager.id]; }, 'Auto clears the model and the effort');
     await page.waitForFunction((name) => document.querySelector('.composer-actions .model-chip .chip-label')?.textContent?.trim() === name, routedLabel, { timeout: 5_000 });
   });
 

@@ -7,13 +7,13 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { MAIN_SKILL_MAX_BYTES, SYSTEM_MAX_CHARS, type AgentCoreProblem, type MainSkillProblem } from '../../shared/model/agent-core.ts';
+import { MAIN_SKILL_MAX_BYTES, MAX_SYSTEM_MD, type AgentCoreProblem, type MainSkillProblem } from '../../shared/model/agent-core.ts';
 import type { SkillInfo } from '../../shared/model/knowledge.ts';
 import { discoverSkills } from '../skills/discover.ts';
 
 export const NOTICES: Record<AgentCoreProblem, string> = {
   missing: 'SYSTEM.md was missing. It was written again from the last saved instructions.',
-  'too-large': `SYSTEM.md is longer than ${SYSTEM_MAX_CHARS.toLocaleString('en-US')} characters. The last good instructions stay in use.`,
+  'too-large': `SYSTEM.md is longer than ${MAX_SYSTEM_MD.toLocaleString('en-US')} characters. The last good instructions stay in use.`,
   'not-text': 'SYSTEM.md is not UTF-8 text. The last good instructions stay in use.',
   unreadable: 'SYSTEM.md could not be read (or is a link instead of a file). The last good instructions stay in use.',
   unwritable: 'SYSTEM.md could not be written. The instructions saved in the app stay in use.',

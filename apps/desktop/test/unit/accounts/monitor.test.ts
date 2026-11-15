@@ -30,7 +30,7 @@ const reading = (readAt: number, used = 30, resetsAt = readAt + 3 * DAY): Accoun
 });
 
 function plan(id: string, provider: ProviderId, patch: Partial<Account> = {}): Account {
-  return { id, provider, label: id, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: T0, ...patch };
+  return { id, provider, label: id, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: T0, ...patch };
 }
 
 const monitors: AccountMonitor[] = [];
@@ -180,7 +180,7 @@ test('stale: readings older than two minutes or with a passed reset are flagged;
   h.run();
   await h.settle();
   assert.equal(h.usage.length, 0, 'nothing changed');
-  h.clock.advance(2 * MIN);
+  h.clock.advance(2 * MIN + 1); // the work's first STALE_MS judge by the quiet cadence (its reads are on the way)
   h.run();
   await h.settle();
   assert.equal(h.usage.length, 1);
@@ -228,26 +228,26 @@ test('failed checks keep the old limits and state; an error account comes back t
   // The check throws (CLI hung): nothing is stored.
   h.answers.set('acc_claude', new Error('timed out'));
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.deepEqual(h.service.get('acc_claude'), before);
   assert.equal(h.upserts.length, 0);
-  // Retried with the cadence, not on every event.
-  h.service.monitor.activity();
+  // Retried with the cadence, not on every event (activity(true): the working cadence, as with the person back).
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.checks.length, 1);
 
   // The check answers 'error' (did not answer): a background check changes nothing.
   h.answers.set('acc_claude', { state: 'error', message: 'Claude Code did not answer the account check.' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.deepEqual(h.service.get('acc_claude'), before);
 
   // Signed in but no usage reading this time: plan, e-mail and limits stay, the check time moves.
   h.answers.set('acc_claude', { state: 'ok' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   const kept = h.service.get('acc_claude')!;
   assert.deepEqual(kept.limits, old);
@@ -259,12 +259,12 @@ test('failed checks keep the old limits and state; an error account comes back t
   assert.equal(h.service.markUnavailable('acc_claude', 'error'), true);
   h.answers.set('acc_claude', { state: 'error', message: 'Claude Code is not installed.' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.service.get('acc_claude')?.state, 'error');
   h.answers.delete('acc_claude');
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.service.get('acc_claude')?.state, 'ok');
   assert.equal(h.service.get('acc_claude')?.limits?.readAt, h.clock.now());

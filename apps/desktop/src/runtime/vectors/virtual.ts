@@ -1,5 +1,5 @@
 // Virtual entries of the vector store (B-078 D12): a text with a key and no file of its own – a catalog entry
-// (knowledge/catalog.ts: a skill, a home project's instruction file, a public library entry). The store row is the same
+// (knowledge/catalog.ts: a skill or a home project's instruction file). The store row is the same
 // as a file's: path = the key ("catalog/<origin>/<id>"), mtime = a number from the text's hash (an unchanged text costs
 // one lookup), size = its length. The embedding rule lives here, one rule for all of them: a text up to CHUNK_CHARS is
 // embedded whole; a bigger entry by its title and description only (owner 06.11.2026: "wenn der Text kurz genug ist, wird

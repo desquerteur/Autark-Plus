@@ -58,8 +58,7 @@ async function fakeBroker(key: Buffer, desktop: string, proveWith = key): Promis
   return { pipe, seen, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-function helperOn(pipe: string, key: Buffer): WindowsHelper {
-  const log = new MemoryLogger();
+function helperOn(pipe: string, key: Buffer, log = new MemoryLogger()): WindowsHelper {
   return new WindowsHelper({ supervisor: { spawn: () => brokerLease({ pipe, key, log }) }, scriptPath: 'unused.ps1', log });
 }
 
@@ -86,11 +85,35 @@ test('the broker answers the helper protocol; typed text and set_value leave onl
 test('a pipe that cannot prove the installation key is not used', async () => {
   const key = randomBytes(32);
   const broker = await fakeBroker(key, 'Default', randomBytes(32));
-  const helper = helperOn(broker.pipe, key);
+  const log = new MemoryLogger();
+  const helper = helperOn(broker.pipe, key, log);
   await assert.rejects(helper.call('ping'), (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable');
   assert.equal(broker.seen.requests.length, 0);
+  assert.equal(log.entries.some((entry) => entry.message === 'desktop broker authenticated'), false);
+  assert.equal(log.entries.some((entry) => entry.message === 'desktop broker observed'), false);
   await helper.dispose();
   await broker.close();
+});
+
+test('broker telemetry correlates authenticated transport and response desktop without secrets', async () => {
+  const key = randomBytes(32);
+  const broker = await fakeBroker(key, 'Default');
+  const log = new MemoryLogger();
+  const helper = helperOn(broker.pipe, key, log);
+  try {
+    await helper.call('ping');
+    await helper.call('type', { text: 'not-for-logs' });
+    const auth = log.entries.find((entry) => entry.message === 'desktop broker authenticated')!;
+    const observed = log.entries.filter((entry) => entry.message === 'desktop broker observed');
+    assert.equal(auth.data?.via, 'broker');
+    assert.ok(Number.isSafeInteger(auth.data?.connectionId));
+    assert.deepEqual(observed.map((entry) => entry.data), [{ connectionId: auth.data?.connectionId, requestId: 1, desktop: 'Default' }]);
+    await helper.dispose();
+    assert.ok(log.entries.some((entry) => entry.message === 'desktop broker disconnected' && entry.data?.connectionId === auth.data?.connectionId && entry.data?.authenticated === true));
+    const logs = JSON.stringify(log.entries);
+    assert.ok(!logs.includes('not-for-logs') && !logs.includes(key.toString('base64')));
+    assert.ok(!logs.includes('proof') && !logs.includes('nonce'));
+  } finally { await helper.dispose(); await broker.close(); }
 });
 
 test('drivers.ts takes the broker whenever it is reachable, else the PowerShell helper', async () => {

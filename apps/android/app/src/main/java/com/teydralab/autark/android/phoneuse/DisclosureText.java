@@ -1,0 +1,48 @@
+// Owns: the wording of the one prominent disclosure that stands before phone use may be switched on (Google Play's
+// AccessibilityService policy: inside the app, what is accessed, how it is used and shared, an affirmative choice) –
+// English and German, chosen by the phone's language. Pure Java, so a host test pins the facts it must name.
+// Never: Android classes, or a claim the code does not keep (nothing is read in the background; password text is not read;
+// the content goes to the person's own PC, whose AI model may be an online service they chose there).
+package com.teydralab.autark.android.phoneuse;
+
+public final class DisclosureText {
+    private DisclosureText() {}
+
+    public static String title(boolean german) {
+        return german ? "Soll die KI dieses Handy bedienen dürfen?" : "Let the AI use this phone?";
+    }
+
+    public static String body(boolean german) {
+        return german
+                ? "Autark kann die KI Ihrer eigenen Firma dieses Handy für Sie bedienen lassen – zum Beispiel eine App öffnen, den Bildschirm lesen, tippen, wischen und schreiben. Das passiert nur, wenn Sie ihr am PC oder im Chat eine Aufgabe geben, die dieses Handy braucht.\n\n"
+                + "Dafür nutzt Autark die Bedienungshilfen-Schnittstelle von Android (AccessibilityService API). Sobald Sie sie einschalten, kann Autark auf Anfrage:\n"
+                + "• alles lesen, was auf dem Bildschirm steht: Texte, Schaltflächen und Feldnamen der offenen App (der Text von Passwortfeldern wird nicht gelesen)\n"
+                + "• die Benachrichtigungsleiste öffnen und lesen – also auch private Nachrichten, E-Mails und Bankmeldungen, die dort stehen\n"
+                + "• Bildschirmfotos aufnehmen, die alles zeigen, was gerade zu sehen ist\n"
+                + "• tippen, wischen, Text eingeben sowie Apps und Links öffnen\n\n"
+                + "Wohin die Daten gehen: Was Autark liest, geht nur über die verschlüsselte Verbindung an Ihren eigenen PC. Dort sieht es das KI-Modell, das Sie dort gewählt haben, um den nächsten Schritt zu wählen – ist das ein Online-Modell, bekommt dessen Anbieter diese Inhalte, auch private, so wie bei jeder anderen Aufgabe an diese KI. An Teydra Lab geht nichts; es gibt keine Werbung, keine Analyse und keinen Verkauf von Daten.\n\n"
+                + "Sie behalten die Kontrolle: Nichts wird im Hintergrund gelesen – zwischen zwei Anfragen tut der Dienst nichts. Eine Blase am oberen Rand zeigt, wenn die KI handelt. Berühren Sie das Handy, pausiert die KI sofort; mit „Pause“ halten Sie sie jederzeit an, mit „Weiter“ macht sie dieselbe Aufgabe weiter, und „✕“ beendet sie für diese Aufgabe. Das Einschalten gilt für alle Apps, einzeln wird nicht nachgefragt. Ausschalten können Sie jederzeit unter Einstellungen › Bedienungshilfen."
+                : "Autark can let the AI of your own company operate this phone for you – for example open an app, read the screen, tap, swipe and type. This only happens when you give it a task on the PC or in a chat that needs this phone.\n\n"
+                + "To do this, Autark uses Android's Accessibility Service API. Once you turn it on, Autark can, when asked:\n"
+                + "• read everything on the screen: texts, buttons and field names of the open app (the text of password fields is not read)\n"
+                + "• open and read the notification shade – including private messages, emails and bank alerts shown there\n"
+                + "• take screenshots that show whatever is on the screen\n"
+                + "• tap, swipe, type text, and open apps and links\n\n"
+                + "Where the data goes: What Autark reads goes only to your own PC through the encrypted connection. There, the AI model you chose on that PC sees it to choose the next step – if that is an online model, its provider receives this content, private content included, as with any other task you give that AI. Nothing goes to Teydra Lab; there is no advertising, no analytics and no sale of data.\n\n"
+                + "You stay in control: nothing is read in the background – between two requests the service does nothing. A bubble at the top shows when the AI acts. Touch the phone and the AI pauses at once; \"Pause\" stops it any time, \"Continue\" lets it go on with the same task, and \"✕\" ends it for that task. Turning it on covers every app; there is no question per app. You can turn it off any time under Settings › Accessibility.";
+    }
+
+    /** The regular way when Android greys out the switch for an app from outside the store (Android 13+, "restricted
+     *  setting"): what to allow and where – the menu names differ a little between phone makers. */
+    public static String restricted(boolean german) {
+        return german
+                ? "Ist „Use this phone“ ausgegraut oder meldet Android eine eingeschränkte Einstellung? Das ist Androids Schutz für Apps, die nicht aus dem Play Store kommen. So geben Sie es frei: Einstellungen › Apps › Autark › ⋮ (oben rechts) › Eingeschränkte Einstellungen zulassen. Danach Einstellungen › Bedienungshilfen › Use this phone einschalten. Damit darf Autark auf Anfrage den Bildschirm lesen und das Handy bedienen, wie oben beschrieben. Die Bezeichnungen können je nach Hersteller etwas abweichen."
+                : "Is \"Use this phone\" greyed out, or does Android say a setting is restricted? That is Android's protection for apps from outside the Play Store. To allow it: Settings › Apps › Autark › ⋮ (top right) › Allow restricted settings. Then turn on Settings › Accessibility › Use this phone. Autark may then read the screen and operate the phone when asked, as described above. The names can differ a little between phone makers.";
+    }
+
+    public static String agree(boolean german) { return german ? "Zustimmen und weiter" : "Agree and continue"; }
+
+    public static String decline(boolean german) { return german ? "Nicht jetzt" : "Not now"; }
+
+    public static boolean isGerman(String language) { return "de".equalsIgnoreCase(language); }
+}

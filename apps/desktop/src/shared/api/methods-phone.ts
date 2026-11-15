@@ -10,8 +10,12 @@
 // Handlers: runtime/rpc/handlers/phone-use.ts. Merged into Methods/EventMap by module augmentation.
 // Owns: these shapes and the pair link's spelling. Never: behaviour.
 
-/** The QR on the PC carries only this plus the Remote ID; Android App Links open the app for it, else the site's pair page shows the ID. */
-export const PHONE_PAIR_LINK = 'https://metajarvis.teydralab.com/autark/pair/#';
+/**
+ * The QR on the PC carries only this plus the Remote ID; Android App Links open the app for it, else the site's pair
+ * page shows the ID. B-084: the site is openautark.com; the old Meta Jarvis address forwards there (fragment kept) and
+ * the Android app still reads QR codes of older PCs.
+ */
+export const PHONE_PAIR_LINK = 'https://openautark.com/pair/#';
 
 /** The pair link of a Remote ID (9 digits). */
 export function phonePairLink(remoteId: string): string {
@@ -35,6 +39,8 @@ export interface PhoneUseRequest {
   id: string;
   op: PhoneUseOp;
   args: Record<string, unknown>;
+  /** The PC's run this step belongs to; the phone ends exactly this job on the person's ✕ (an older phone ignores it). */
+  job?: string;
 }
 
 export interface PhoneUseReply {

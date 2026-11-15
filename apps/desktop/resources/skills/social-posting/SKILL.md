@@ -27,7 +27,8 @@ metadata:
 - Facts and claims are true and sourced: an invented testimonial or number costs more than it brings.
 
 ## 2. Sensitive topics
-- Politics, legal, crisis or personal life: I show the person the exact text and media first:
+- Politics, legal, crisis or someone's private life: I check facts, tone and who it touches once more
+  before posting; when their eye would help, a review block shows the exact text and media:
 ```ui
 {"type":"review","id":"post-linkedin-1024","src":"C:/Users/me/Workforce/social/2026-10-24-linkedin.png",
  "question":"Post this on LinkedIn Thu 08:30? Text below.","options":["Post","Change","Skip"]}

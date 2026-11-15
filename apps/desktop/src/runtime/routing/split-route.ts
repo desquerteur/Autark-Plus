@@ -1,7 +1,6 @@
 // B-057 S10 – how a split's turn routes (router.ts applies it for RouteRequest.split). The split's own choice
 // (agents/split-turn.ts turns 'same' | 'cheap' | 'strong' | a model id into RouteRequest.previous and needs.tier) beats
-// the agent's pin, and – when it names an effort (or keeps the parent's: 'same') – the agent's fixed effort; a split
-// has no chat, so the chat's pin and effort never apply.
+// the agent's pin, and – when it names an effort (or keeps the parent's: 'same') – the agent's fixed effort.
 // Owns: that adjustment. Never: picks a model, changes state, or touches a route that is not a split's.
 
 import type { RouteRequest } from '../contracts.ts';
@@ -14,6 +13,6 @@ export function splitPolicy(policy: EffectivePolicy, request: Pick<RouteRequest,
   return {
     ...policy,
     pin: undefined,
-    ...(effortNamed ? { agentEffort: undefined, chatEffort: undefined } : {}),
+    ...(effortNamed ? { agentEffort: undefined } : {}),
   };
 }

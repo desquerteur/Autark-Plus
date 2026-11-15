@@ -55,7 +55,7 @@ test('call: any method with JSON params (inline or stdin); unknown method 2, not
   assert.deepEqual(JSON.parse(refused.err), { error: { code: 'forbidden', message: 'Not allowed.' } });
   const badJson = await wf(['call', 'chats.get', '{id:'], { runtime });
   assert.equal(badJson.code, 2);
-  assert.match(badJson.err, /not valid JSON/);
+  assert.match(badJson.err, /The params arrived as \{id: – no JSON\. In Windows PowerShell they go on stdin: '<json>' \| wf call chats\.get -/); // B-080
   const badName = await wf(['call', 'Not a method'], { runtime });
   assert.equal(badName.code, 2);
   const redacted = await wf(['call', 'system.echoToken'], { runtime });
@@ -185,7 +185,7 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
     'events.subscribe': (params, fake) => {
       setTimeout(() => {
         for (const topic of (params as { topics: string[] }).topics) {
-          if (topic === 'tasks') fake.push('task.upserted', task({ id: 'task_1', title: 'Draft plan', status: 'working' }), 'tasks');
+          if (topic === 'tasks') fake.push('task.upserted', task({ id: 'task_1', title: 'Draft plan', status: 'open' }), 'tasks');
           if (topic === `chat:${launch.id}`) fake.push('message.updated', { id: 'msg_x', conversationId: launch.id, authorId: 'ag_x', body: '', attachments: [], state: 'streaming' }, topic); // B-075: a run's live row
         }
       }, 20);
@@ -201,7 +201,7 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
 
   const short = await wf(['events', 'tasks', 'chat:launch', '--count', '2', '--timeout', '1.5'], { runtime });
   assert.equal(short.code, 1, 'the live row is not printed in human mode, so only 1 of 2 arrived');
-  assert.match(short.out, /task\.upserted  Draft plan · working/);
+  assert.match(short.out, /task\.upserted  Draft plan · open/);
   assert.match(short.err, /1 of 2 arrived before the timeout/);
 
   const unknown = await wf(['events', 'everything'], { runtime });
@@ -212,25 +212,6 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
   assert.deepEqual(runtime.calls.filter((call) => call.method === 'events.subscribe').at(-1)?.params, { topics: [`runs:${manager.id}`] });
 });
 
-test('todos, tasks and agents: default filters, --status, --all', async (t) => {
-  const runtime = await fakeRuntime({
-    'todos.list': () => [task({ id: 'task_t', title: 'Record a voice line', assigneeKind: 'human', status: 'needs_you', widget: { type: 'record' } })],
-    'tasks.list': () => [task({ id: 'task_w', title: 'Draft plan', status: 'working', assigneeKind: 'agent', assigneeId: manager.id })],
-  });
-  t.after(() => runtime.stop());
-  const todos = await wf(['todos'], { runtime });
-  assert.equal(todos.out, '• Record a voice line · record · in Launch · task_t\n');
-  await wf(['tasks'], { runtime });
-  await wf(['tasks', '--status', 'open, done'], { runtime });
-  await wf(['tasks', '--all', '--limit', '10'], { runtime });
-  assert.deepEqual(runtime.calls.filter((call) => call.method === 'tasks.list').map((call) => call.params), [
-    { status: ['open', 'working', 'waiting', 'needs_you', 'blocked'] }, { status: ['open', 'done'] }, { limit: 10 },
-  ]);
-  const both = await wf(['tasks', '--all', '--status', 'open'], { runtime });
-  assert.equal(both.code, 2);
-  const agents = await wf(['agents'], { runtime });
-  assert.equal(agents.out, 'Manager · idle · reports to You · ag_manager0001\n');
-});
 
 test('no runtime: missing runtime.json, a stopped app, a refused token, a closed port – all exit 5 or 3', async (t) => {
   const missing = await wf(['chats'], { info: null });

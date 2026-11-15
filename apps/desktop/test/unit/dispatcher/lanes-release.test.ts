@@ -21,7 +21,7 @@ const TURN: SplitTurn = { splitId: 'sp_1', groupId: 'sg_1', idx: 1, of: 2, title
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("a split lane that ignores the person's Stop is released after the grace: run closed, split stopped, lane free", async () => {
-  const h = setup({ maxConcurrent: 4 });
+  const h = setup();
   h.org.add(agent('ag_tom', 'Tom'));
   const ends: Array<Record<string, unknown>> = [];
   h.services.splits = {
@@ -30,7 +30,7 @@ test("a split lane that ignores the person's Stop is released after the grace: r
   } as unknown as SplitService;
   const requests: TurnRequest[] = [];
   const dispatcher = new DispatcherImpl({
-    services: () => h.services, maxConcurrent: 4, releaseMs: 20, supervisor: { admit: async () => () => {} },
+    services: () => h.services, releaseMs: 20,
     executor: {
       execute: (request) => {
         requests.push(request);
@@ -75,7 +75,7 @@ function lanes(execute: (request: TurnRequest) => Promise<TurnOutcome>) {
     splits: { onSplitRunEnd: (splitId: string, end: Record<string, unknown>) => { ends.push({ splitId, ...end }); } },
   } as unknown as RuntimeServices;
   const live = { awake() {}, status() {}, emit() {} } as unknown as LiveStatus;
-  const turns = new RunningTurns({ services: () => services, executor: { execute }, supervisor: { admit: async () => () => {} }, releaseMs: 20 }, live, (agentId, split) => { ended.push([agentId, split]); });
+  const turns = new RunningTurns({ services: () => services, executor: { execute }, releaseMs: 20 }, live, (agentId, split) => { ended.push([agentId, split]); });
   const entry = runEntry({ runId: 'run_s1', agentId: 'ag_tom', lane: laneKey('ag_tom', 'sp_1'), reason: 'split', split: TURN, wakeIds: [], attempts: 0, startedAt: 0 });
   turns.launch(services, entry, { runId: 'run_s1', agentId: 'ag_tom', reason: 'split', split: TURN, notes: [] });
   return { turns, entry, ends, ended, finished };

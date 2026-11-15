@@ -1,5 +1,5 @@
-// Owns: executable checks of the connect screen's input rules (the Remote ID typed or as the QR's pair link) and the
-// local origin, without an Android device. Never: claims WebView acceptance.
+// Owns: executable checks of the connect screen's input rules (the Remote ID typed or as the QR's pair link, and what a
+// scanned QR may carry) and the local origin, without an Android device. Never: claims WebView acceptance.
 package com.teydralab.autark.android;
 
 public final class ConnectionAddressTest {
@@ -15,6 +15,15 @@ public final class ConnectionAddressTest {
         check(ConnectionAddress.fromLink("https://evil.test/autark/pair#482913071") == null);
         check(ConnectionAddress.fromLink("https://metajarvis.teydralab.com/autark/pair#12") == null);
         check(ConnectionAddress.fromLink(null) == null);
+        equal("482913071", ConnectionAddress.scanned("https://metajarvis.teydralab.com/autark/pair/#482913071\n"));
+        equal("482913071", ConnectionAddress.fromLink("https://openautark.com/pair/#482913071"));
+        equal("482913071", ConnectionAddress.scanned("https://openautark.com/pair/#482 913 071"));
+        check(ConnectionAddress.fromLink("https://openautark.com.evil.example/pair/#482913071") == null);
+        equal("482913071", ConnectionAddress.scanned("https://metajarvis.teydralab.com/autark/pair#482913071"));
+        equal("482913071", ConnectionAddress.scanned(" 482 913 071 "));
+        equal("482913071", ConnectionAddress.scanned("482913071"));
+        for (String foreign : new String[] {"https://evil.test/autark/pair/#482913071", "https://x/pair#482913071", "WIFI:S:home;P:482913071;;",
+                "tel:482913071", "12345678", "1234567890", "", null}) check(ConnectionAddress.scanned(foreign) == null);
         for (String invalid : new String[] {"", "12345678", "1234567890", "abcdefghi", "48291307x", "https://x/pair#1234"}) rejects(() -> ConnectionAddress.remoteId(invalid));
         check(ConnectionAddress.sameOrigin("http://127.0.0.1:47920", "http://127.0.0.1:47920/#/chat/x"));
         check(ConnectionAddress.sameOrigin("http://127.0.0.1:47920", "http://127.0.0.1:47920/ws"));

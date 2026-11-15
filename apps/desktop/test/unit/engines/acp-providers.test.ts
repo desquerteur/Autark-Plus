@@ -194,7 +194,7 @@ test('acp providers: a Copilot CLI that answers a missing sign-in with another e
 
 test('acp providers: the "On this PC" row and the plan group in Settings', () => {
   const found = { provider: 'gemini-cli' as const, path: '/bin/gemini', version: '0.9.0', loggedIn: true };
-  const own: Account = { id: 'acc_g', provider: 'gemini-cli', label: 'Gemini CLI', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  const own: Account = { id: 'acc_g', provider: 'gemini-cli', label: 'Gemini CLI', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
   assert.deepEqual(cliRowView(found, [own]), { name: 'Gemini CLI', hint: 'Signed in · 0.9.0', action: undefined, account: own });
   assert.equal(cliRowView(found, [{ ...own, state: 'needs_login' }])?.action, 'sign-in', 'the account\'s live state wins over the scan');
   assert.equal(cliRowView({ ...found, dismissed: true }, [])?.action, 'add-again');

@@ -2,9 +2,12 @@
 // listening chat (marked live), the agent's reply is read aloud and the microphone listens again; nothing
 // heard asks to say it again; speech while a reply is awaited goes out at once; parallel chats (simplest
 // form): the chat started or focused last hears, replies are read one at a time with another chat's title in
-// front; talking over the reading stops it; a failed transcription ends every chat with why. Each talking chat is a
+// front; talking over the reading stops it; B-082: every line is heard live (`live: true`), a line that cannot be heard
+// goes as its recording and the call goes on. Each talking chat is a
 // call (calls.start/end, its id on every line; a page without calls talks too); the wait for a reply goes on while an
-// agent of the chat works and opens again when one starts later.
+// agent of the chat works and opens again when one starts later. B-081: a start with a callId takes that call and reads
+// every new agent line (the opening first); another holder in the call row ends the chat quietly; the speaker's name
+// goes in front when the speaker changes.
 // Owns: these assertions only. Never: a microphone, a speech output or a runtime.
 
 import { test } from 'node:test';
@@ -17,8 +20,10 @@ const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>((
 
 function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?: string } = {}) {
   const listeners = new Map<string, Array<(message: Message) => void>>();
-  const sent: Array<{ conversationId: string; body: string; live?: boolean; call?: string }> = [];
+  const sent: Array<{ conversationId: string; body: string; live?: boolean; call?: string; attachments?: string[] }> = [];
+  const transcribed: Array<Record<string, unknown>> = [];
   const ended: string[] = [];
+  const starts: Array<Record<string, unknown>> = [];
   const working = new Set<string>();
   const timers: Array<() => void> = [];
   const spoken: string[] = [];
@@ -27,15 +32,22 @@ function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?:
   let silenced = 0;
   let id = 0;
   let transcribeError: Error | undefined;
+  let sendError: Error | undefined;
   const rpc: ConversationRpc = {
     call: (async (method: string, params: Record<string, unknown>) => {
       if (method === 'chats.get') return { id: params.id, title: params.id === 'ch_b' ? 'Research' : 'Main', working: working.has(params.id as string) ? ['ag_tom'] : [] };
-      if (method === 'voice.transcribe') { if (transcribeError) throw transcribeError; return { text: heard.shift() ?? '' }; }
-      if (method === 'calls.start') { if (options.noCalls) throw new Error('forbidden'); return { callId: `call_${params.conversationId as string}` }; }
+      if (method === 'voice.transcribe') { transcribed.push(params); if (transcribeError) throw transcribeError; return { text: heard.shift() ?? '' }; }
+      if (method === 'calls.start') {
+        starts.push(params);
+        if (options.noCalls) throw new Error('forbidden');
+        return { callId: (params.callId as string | undefined) ?? `call_${params.conversationId as string}`, holder: '/device:pc' };
+      }
       if (method === 'calls.end') { ended.push(params.callId as string); return { ok: true }; }
       if (method === 'messages.send') {
+        if (sendError) throw sendError;
         const speech = params.speech as { live?: boolean; call?: string } | undefined;
-        sent.push({ conversationId: params.conversationId as string, body: params.body as string, live: speech?.live, ...(speech?.call ? { call: speech.call } : {}) });
+        const files = (params.attachments as Array<{ fileId: string }> | undefined)?.map((attachment) => attachment.fileId);
+        sent.push({ conversationId: params.conversationId as string, body: params.body as string, live: speech?.live, ...(speech?.call ? { call: speech.call } : {}), ...(files ? { attachments: files } : {}) });
         const call = speech?.call ?? options.runtimeCall; // runtimeCall: the runtime opens the device's call for a line that names none
         return { seq: ++seq, meta: call ? { call: { id: call } } : {} };
       }
@@ -55,18 +67,20 @@ function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?:
     newId: () => `id${++id}`,
     after: (_ms, fn) => { timers.push(fn); return () => { const at = timers.indexOf(fn); if (at >= 0) timers.splice(at, 1); }; },
     language: () => 'de',
+    nameOf: (agentId) => ({ ag_ava: 'Ava', ag_ben: 'Ben' } as Record<string, string>)[agentId],
   });
-  const reply = (conversationId: string, body: string, state: Message['state'] = 'final') => {
-    const message = { id: `m${++seq}`, conversationId, seq, authorKind: 'agent', kind: 'text', state, body, meta: {} } as unknown as Message;
-    for (const listener of listeners.get('message.created') ?? []) listener(message);
+  const emit = (event: 'message.created' | 'message.updated', message: Message) => { for (const listener of listeners.get(event) ?? []) listener(message); };
+  const reply = (conversationId: string, body: string, state: Message['state'] = 'final', authorId?: string) => {
+    emit('message.created', { id: `m${++seq}`, conversationId, seq, authorKind: 'agent', authorId, kind: 'text', state, body, meta: {} } as unknown as Message);
   };
   return {
-    voice, sent, spoken, states, reply, ended, working,
+    voice, sent, spoken, states, reply, emit, ended, starts, working, transcribed,
     /** The reply timers run out now. */
     elapse: async () => { for (const fn of timers.splice(0)) fn(); await tick(); },
     mic: () => voice.view(),
     silenced: () => silenced,
-    failTranscription: (error: Error) => { transcribeError = error; },
+    failTranscription: (error: Error | undefined) => { transcribeError = error; },
+    failSend: (error: Error | undefined) => { sendError = error; },
   };
 }
 
@@ -183,13 +197,75 @@ test('the wait for a reply goes on while an agent of the chat works, ends when n
   assert.notEqual(t.voice.sessions()[0].status, 'responding');
 });
 
-test('a failed transcription ends every chat with why', async () => {
-  const t = setup();
+test('B-082: lines are heard live; a line that cannot be heard goes as its recording and the call goes on', async () => {
+  const t = setup(['Und dann?']);
   const view = await t.voice.start('ch_a');
-  await t.voice.start('ch_b');
   t.failTranscription(new Error('Speech to text is not set up yet.'));
   await t.voice.utterance(view.id, 'f1');
+  await tick();
+  assert.deepEqual(t.transcribed, [{ fileId: 'f1', live: true, language: 'de' }]);
+  assert.equal(t.voice.active, true, 'the conversation goes on');
+  assert.deepEqual(t.sent, [{ conversationId: 'ch_a', body: '', live: true, call: 'call_ch_a', attachments: ['f1'] }], 'the line as its recording, a line of the call');
+  assert.equal(t.voice.sessions()[0].status, 'responding', 'the reply to it is awaited');
+  assert.deepEqual([t.ended, t.states.at(-1)?.error], [[], undefined]);
+  t.reply('ch_a', 'Verstanden.');
+  assert.deepEqual(t.spoken, ['Verstanden.']);
+  t.voice.spokenDone(view.id);
+  t.failTranscription(undefined);
+  await t.voice.utterance(view.id, 'f2');
+  assert.deepEqual(t.sent.at(-1), { conversationId: 'ch_a', body: 'Und dann?', live: true, call: 'call_ch_a' }, 'the next line is heard again');
+});
+
+test('B-082: a line neither heard nor sent asks to say it again; the conversation goes on and listens', async () => {
+  const t = setup();
+  const view = await t.voice.start('ch_a');
+  t.failTranscription(new Error('The plan is used up.'));
+  t.failSend(new Error('The connection dropped.'));
+  await t.voice.utterance(view.id, 'f1');
+  await tick();
+  assert.deepEqual([t.voice.active, t.sent, t.ended], [true, [], []]);
+  assert.deepEqual([t.mic()?.status, t.mic()?.hint], ['listening', REPEAT_HINT]);
+  assert.equal(t.voice.sessions()[0].status, 'listening', 'no reply is awaited for a line that never went out');
+});
+
+test('B-081: a start with a callId takes that call; the opening line and every new agent line are read, the name when the speaker changes', async () => {
+  const t = setup();
+  const view = await t.voice.start('ch_a', 'call_ring');
+  assert.deepEqual(t.starts, [{ conversationId: 'ch_a', callId: 'call_ring' }]);
+  t.reply('ch_a', 'Gerd, kurz zum Logo.', 'final', 'ag_ava'); // the opening line, before the person said anything
+  assert.deepEqual(t.spoken, ['Gerd, kurz zum Logo.']);
+  t.voice.spokenDone(view.id);
+  t.reply('ch_a', 'Und das Budget reicht.', 'final', 'ag_ben');
+  t.voice.spokenDone(view.id);
+  t.reply('ch_a', 'Danke, Ben.', 'final', 'ag_ava');
+  assert.deepEqual(t.spoken, ['Gerd, kurz zum Logo.', 'Ben: Und das Budget reicht.', 'Ava: Danke, Ben.']);
+});
+
+test('B-081: another device took the call (its row shows another holder) – the chat ends quietly, without calls.end', async () => {
+  const t = setup();
+  await t.voice.start('ch_a', 'call_ring');
+  const row = (participant: string) => ({ id: 'm_row', conversationId: 'ch_a', seq: 1, authorKind: 'system', kind: 'status', state: 'final', body: '', meta: { call: { id: 'call_ring', participant, name: 'x', startedAt: 1, lines: [] } } }) as unknown as Message;
+  t.emit('message.updated', row('device:pc')); // its own row: nothing happens
+  assert.equal(t.voice.active, true);
+  t.emit('message.updated', row('device:dev_phone'));
   assert.equal(t.voice.active, false);
-  assert.equal(t.states.at(-1)?.error, 'Speech to text is not set up yet.');
-  assert.deepEqual(t.ended.sort(), ['call_ch_a', 'call_ch_b'], 'every call ends with its chat');
+  assert.deepEqual(t.ended, [], 'the call goes on on the phone');
+  assert.equal(t.states.at(-1)?.error, undefined, 'no error');
+  const fails = setup(undefined, { noCalls: true });
+  await assert.rejects(fails.voice.start('ch_a', 'call_gone'), /forbidden/, 'a call that cannot be taken does not start a conversation without it');
+});
+
+test('B-081: a pin goes into a talking chat as a line of its call and its reply is read; a chat that does not talk takes none', async () => {
+  const t = setup(['und das hier']);
+  assert.equal(t.voice.add('ch_a', 'Pinned on localhost (tab web-1):'), false, 'nothing talks yet');
+  const view = await t.voice.start('ch_a');
+  assert.equal(t.voice.add('ch_b', 'Pinned on localhost (tab web-1):'), false, 'another chat does not talk');
+  assert.equal(t.voice.add('ch_a', '  '), false);
+  assert.equal(t.voice.add('ch_a', 'Pinned on localhost (tab web-1):\nbutton · button.buy'), true);
+  assert.deepEqual(t.sent, [{ conversationId: 'ch_a', body: 'Pinned on localhost (tab web-1):\nbutton · button.buy', live: true, call: 'call_ch_a' }]);
+  await t.voice.utterance(view.id, 'f1'); // said while the pin's reply is awaited: out at once, as speech is
+  await tick();
+  assert.deepEqual(t.sent.map((line) => line.body), ['Pinned on localhost (tab web-1):\nbutton · button.buy', 'und das hier']);
+  t.reply('ch_a', 'Zwei Pixel kleiner?');
+  assert.deepEqual(t.spoken, ['Zwei Pixel kleiner?']);
 });

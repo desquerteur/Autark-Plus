@@ -3,7 +3,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HttpEngineError, endpointFor, postJson, readJson, readSse, redact, retryAfter, statusError, turnError } from '../../../src/runtime/engines/http/common.ts';
+import { CREDIT_COOLDOWN_MS, HttpEngineError, endpointFor, postJson, readJson, readSse, redact, retryAfter, statusError, turnError } from '../../../src/runtime/engines/http/common.ts';
+import { accountFailure } from '../../../src/runtime/accounts/failure.ts';
 
 const enc = new TextEncoder();
 
@@ -78,6 +79,12 @@ test('statusError: fixed messages per status; turnError maps limits, aborts and 
   assert.equal(statusError(404).code, 'bad_request');
   assert.equal(statusError(529).code, 'unavailable');
   assert.equal(statusError(500).message, 'The model request failed (HTTP 500).');
+  // B-079: a used-up credit (402) is the account's limit with a long cooling, so routing moves on to another model.
+  assert.equal(statusError(402).code, 'rate_limited');
+  assert.equal(statusError(402).retryAfterMs, CREDIT_COOLDOWN_MS);
+  const credit = turnError(new HttpEngineError(statusError(402)), new AbortController().signal);
+  assert.equal(credit.stop, 'limit');
+  assert.equal(accountFailure({ stop: credit.stop, error: credit.error, text: '' } as never), 'limit');
   const live = new AbortController();
   assert.deepEqual(turnError(new HttpEngineError(statusError(429)), live.signal).stop, 'limit');
   assert.deepEqual(turnError(new Error('secret body'), live.signal), { stop: 'error', error: { code: 'internal', message: 'The model could not complete this turn.' } });

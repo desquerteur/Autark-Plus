@@ -24,7 +24,7 @@ export function targetKey(target: AskTarget): string {
 export async function submitAnswer(target: AskTarget, answer: unknown): Promise<void> {
   const clientId = newId('up');
   if (target.kind === 'task') {
-    await rpc.call('tasks.complete', { id: target.taskId, answer, clientId });
+    await rpc.call('tasks.finish', { id: target.taskId, answer, clientId });
     return;
   }
   await rpc.call('blocks.answer', { messageId: target.messageId, blockIndex: target.blockIndex, answer, clientId });

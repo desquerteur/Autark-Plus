@@ -60,14 +60,14 @@ test('messages: author and time, indented continuation lines, flags, files, stat
 });
 
 test('to-dos, tasks and agents: one line each with the id last', () => {
-  assert.deepEqual(formatTodos([task({ id: 'task_a', title: 'Record a voice line', assigneeKind: 'human', status: 'needs_you', widget: { type: 'record' } })], AT), ['• Record a voice line · record · in Launch · task_a']);
+  assert.deepEqual(formatTodos([task({ id: 'task_a', title: 'Record a voice line', assigneeKind: 'human', status: 'open', widget: { type: 'record' } })], AT), ['• Record a voice line · record · in Launch · task_a']);
   assert.deepEqual(formatTodos([], AT), ['Nothing needs you right now.']);
   assert.deepEqual(formatTasks([
-    task({ id: 'task_b', title: 'Draft plan', status: 'working', assigneeKind: 'agent', assigneeId: manager.id, progress: { done: 1, total: 3 }, running: true }),
-    task({ id: 'task_c', title: 'Buy domain', status: 'needs_you', assigneeKind: 'human', dueAt: AT }),
+    task({ id: 'task_b', title: 'Draft plan', status: 'open', assigneeKind: 'agent', assigneeId: manager.id, progress: { done: 1, total: 3 }, running: true }),
+    task({ id: 'task_c', title: 'Buy domain', status: 'open', assigneeKind: 'human', dueAt: AT }),
   ], name, AT), [
-    'working    Draft plan · Manager · Launch · 1/3 steps · running · task_b',
-    'needs_you  Buy domain · You · Launch · due 14:02 · task_c',
+    'open  Draft plan · Manager · Launch · 1/3 steps · running · task_b',
+    'open  Buy domain · You · Launch · due 14:02 · task_c',
   ]);
   assert.deepEqual(formatAgents([manager, editor, agent({ id: 'ag_old', name: 'Old', archivedAt: AT })], name), [
     'Manager · idle · reports to You · ag_manager0001',

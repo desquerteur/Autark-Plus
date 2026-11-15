@@ -1,6 +1,6 @@
 /* Settings: the pages' frame, the nav, groups and functional rows (label left, control right), controls (switch, select,
    inputs, segmented, small buttons, the reserved hint line), account state chips, masks, QR and pairing codes and
-   device dots. The same grammar is reused by the agent view and dialogs elsewhere.
+   device dots, the profile menu's quota badges and phone sheet. The same grammar is reused by the agent view and dialogs elsewhere.
    Owns: these looks. Never: other areas, colors outside tokens.css. */
 /* ---------------------------------------------------------------- page frame (header look: app.css) */
 .settings-view { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; }
@@ -178,6 +178,16 @@ select.set-input:focus { outline: none; border-color: var(--focus); }
 .profile-quota:empty { display: none; }
 .profile-quota { margin: 0 0 4px; padding: 0 6px 6px; border-bottom: 1px solid var(--line); }
 .profile-quota .usage-stack { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; max-height: none; overflow: visible; }
+/* the Android app's profile sheet (B-084, shell/ProfileMenu.tsx): photo, name, one fixed-height status line (a tap shows
+   the app's PC picker), the paired companies with a 24 px picture in the icon's place */
+.profile-head-row.phone-head { align-items: center; gap: 10px; padding: 10px 8px 8px 10px; }
+.phone-head .profile-head-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.profile-status {
+  display: block; height: 32px; max-width: 100%; padding: 0; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 12px; line-height: 32px; text-align: left;
+}
+.profile-status:hover, .profile-status:focus-visible { color: var(--text); }
+.menu-item > .company-pic { flex: none; width: 24px; height: 24px; font-size: 10px; }
 
 /* ---------------------------------------------------------------- number field, the learned words (voice-words.tsx) */
 .set-number { display: inline-flex; align-items: center; gap: 6px; }
@@ -254,4 +264,6 @@ dialog.dialog.voice-words-dialog { height: min(560px, calc(100vh - 2 * var(--dia
 .apps-tools-more { color: var(--muted); font-family: inherit; }
 .apps-mail-servers { display: grid; grid-template-columns: minmax(0, 1fr) 88px; gap: 10px; }
 .apps-mail-servers .input { width: 100%; min-width: 0; }
+.secret-band-body.apps-rows { height: 116px; } /* the own-server form's Name | Value rows: one height, a new row scrolls inside */
+.apps-paste { height: 240px; resize: none; } /* the pasted mcpServers block: one height, the check line below never moves */
 .feedback-review-text { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; user-select: text; }

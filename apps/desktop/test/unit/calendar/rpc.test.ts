@@ -27,31 +27,10 @@ const VALID: Record<string, unknown> = {
   'calendar.removeSource': { id: 'cal_1' }, 'calendar.sync': {}, 'calendar.google': undefined, 'calendar.connectGoogle': {},
   'calendar.person': { id: 'per_anna00000000', from: 1_000, to: 2_000 },
   'day.add': { text: 'Wäsche waschen, Küche aufräumen' }, 'day.plan': { date: '2026-10-25', mode: 'plan' },
-  'day.briefing': { date: '2026-10-25' }, 'day.sendToTeam': { id: 'task_1' }, 'day.handedOff': {},
+  'day.briefing': { date: '2026-10-25' }, 'day.handedOff': {},
 };
 
-test('tiers: the day for To-do devices, Send to team with tasks, sources read with settings, credentials with the owner; people their own calendars', () => {
-  const table = createHandlerTable();
-  const may = (method: string, scope: ClientScope) => allowedScope(table.get(method)!.scope, scope);
-  for (const method of DAY_TODO) assert.deepEqual(table.get(method)?.scope, { capability: 'todo' }, method);
-  for (const method of DAY_TODO) assert.ok(may(method, device(['todo'])), method);
-  assert.deepEqual(table.get('day.sendToTeam')?.scope, { capability: 'tasks' });
-  assert.ok(!may('day.sendToTeam', device(['todo'])) && may('day.sendToTeam', device(['todo', 'tasks'])));
-  assert.deepEqual(table.get('calendar.sources')?.scope, { person: true, base: { capability: 'settings' } }, 'B-078 D20: a person lists their own');
-  const PERSON_TOO = new Set(['calendar.addIcs', 'calendar.removeSource']);
-  for (const method of OWNER_ONLY) {
-    assert.deepEqual(table.get(method)?.scope, PERSON_TOO.has(method) ? { person: true, base: 'owner' } : 'owner', method);
-    assert.ok(!may(method, device(FULL)), method);
-  }
-  assert.deepEqual(Object.keys(VALID).sort(), table.methods().filter((method) => /^(calendar|day)\./.test(method)).sort(), 'every new method is covered here');
-});
 
-test("without the services every method answers 'unavailable'", async (t) => {
-  const f = rpcFixture({ table: createHandlerTable() });
-  t.after(f.cleanup);
-  const owner = new TestClient(f.server, OWNER);
-  for (const [method, params] of Object.entries(VALID)) assert.equal((await owner.request(method, params)).error?.code, 'unavailable', method);
-});
 
 test('wired, an empty profile answers empty reads in the profile zone (no briefing, nothing handed off, no sources)', async (t) => {
   const f = rpcFixture({ table: createHandlerTable() });

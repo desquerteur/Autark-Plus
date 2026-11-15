@@ -180,17 +180,20 @@ test('in a default 1:1 with more agents the voice speaks as the agent of its pai
   assert.deepEqual(h.wakeRows().map((wake) => wake.agent_id), ['ag_ava'], 'the named agent is woken');
 });
 
-test('the work line: who works and on which PC, from the rows that stream – also one synced from the agent\'s home PC', async () => {
+test('the work line: who works and on which PC, from the chats\' live bars', async () => {
   const h = setup(() => ({ say: 'Ok.', relay: 'none' }));
   const device = (id: string, name: string, extra: Partial<DeviceRecord> = {}): DeviceRecord => ({ id, name, kind: 'pc', role: 'home', fingerprint: `fp_${id}`, addresses: [], caps: {}, status: 'online', self: false, ...extra });
   new DevicesRepo(h.db).upsert(device('dev_book', 'laptop', { self: true }));
   new DevicesRepo(h.db).upsert(device('dev_server', 'office-pc'));
   h.org.add(agent('ag_ava', 'Ava', { role: 'Assistant', deviceId: 'dev_server' })); // at home on the other PC
-  h.chats.beginAgentMessage(h.solo.id, 'ag_ava', 'run_far', { live: { steps: [], more: 0, startedAt: 1, note: 'reading files' } });
-  h.chats.beginAgentMessage(h.group.id, 'ag_ben', 'run_ben', { live: { steps: [], more: 0, startedAt: 2, note: 'searching' } });
+  h.bus.emit('agent.activity', { active: [
+    { agentId: 'ag_ava', runId: 'run_far', conversationId: h.solo.id, note: 'reading files', startedAt: 1 },
+    { agentId: 'ag_ben', runId: 'run_ben', conversationId: h.group.id, note: 'searching', startedAt: 2 },
+  ] });
   const work = (chat: string) => talkerInput(h.services as RuntimeServices, 'ag_ava', chat, []).work as string;
   assert.equal(work(h.solo.id), 'My work right now: busy in this chat (reading files) on office-pc.');
   assert.equal(work(h.group.id), 'My work right now: busy in another chat (reading files) on office-pc. At work in this chat: Ben in this chat (searching) on laptop.');
+  h.bus.emit('agent.activity', { active: [] });
   // Nothing streams: at home on another PC, a run there without a chat does not show here; at home here, nothing runs.
   h.org.add(agent('ag_jonas', 'Jonas', { deviceId: 'dev_server' }));
   h.org.add(agent('ag_dan', 'Dan'));

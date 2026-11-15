@@ -182,7 +182,7 @@ const reason = (error: unknown) => (error instanceof WorkforceError ? error.mess
  */
 export async function visionImage(s: VisionServices, input: { fileId: string; mime: string; region?: ImageRegion }): Promise<ShownImage> {
   const mime = visionMime(input.mime);
-  const file = s.files.path(input.fileId);
+  const file = await s.files.local(input.fileId); // B-080: bytes whose row came from another of the person's PCs are pulled first
   const facts = await factsOf(s, file, input.fileId, mime);
   if (!facts) throw new WorkforceError('not_found', 'The stored image is missing.');
   const original = async (): Promise<ShownImage> => ({ data: await readBounded(file), mime, width: facts.width, height: facts.height, converted: false, cut: false });

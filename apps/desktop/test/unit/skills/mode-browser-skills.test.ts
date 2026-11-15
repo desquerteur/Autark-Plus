@@ -3,7 +3,8 @@
 // through the registry's own rule (device tools need a browser or computer workspace or an
 // explicit pattern), so no agent loads sign-in instructions it cannot follow (the secretary
 // delegates website work to Browser mode instead). The finance mode lists no pattern that matches
-// no tool. Owns: these assertions only. Never: writes resources.
+// no tool. B-080: every mode with browser tools offers computer.* too (the person's own Chrome is worked in with it).
+// Owns: these assertions only. Never: writes resources.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,9 +38,18 @@ test('every mode that lists or is named by browser-accounts offers browser.act',
   assert.equal(offers('secretary'), false, 'the secretary has no browser tools (she delegates website work)');
 });
 
+test("B-080: every mode with browser tools also offers computer.* – the person's own Chrome (where: 'chrome') is worked in with it", () => {
+  const registry = new Registry({ services: () => ({}) as RuntimeServices });
+  const computerClick = { ...browserAct, name: 'computer.click' } as ToolDef;
+  const withBrowser = modes.filter((mode) => registry.allowed(browserAct, agent, mode)).map((mode) => mode.key).sort();
+  assert.deepEqual(withBrowser, ['browser', 'finance', 'research', 'social', 'video', 'web']);
+  assert.deepEqual(withBrowser.filter((key) => !registry.allowed(computerClick, agent, modes.find((mode) => mode.key === key)!)), []);
+});
+
 test('the finance mode lists only tool patterns that match a built-in tool', () => {
   const finance = modes.find((mode) => mode.key === 'finance')!;
-  const names = [...builtinTools().map((tool) => tool.name), 'browser.act', 'browser.open'];
+  // Device tools are registered by devices/tools.ts; B-080: computer.* works in the person's own Chrome (where: 'chrome').
+  const names = [...builtinTools().map((tool) => tool.name), 'browser.act', 'browser.open', 'computer.act', 'computer.ui_tree'];
   const dead = (finance.tools ?? []).filter((pattern) => !pattern.startsWith('!') && !names.some((name) => matchesPatterns(name, [pattern])));
   assert.deepEqual(dead, []);
 });

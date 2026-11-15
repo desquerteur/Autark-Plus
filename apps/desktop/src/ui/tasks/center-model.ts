@@ -123,7 +123,7 @@ export function sameTarget(a: QuickTaskTarget | undefined, b: QuickTaskTarget | 
 
 type NameOf = (agentId: string) => string;
 
-/** No owner yet (its manager has not placed it, or it waits for other tasks first). */
+/** No owner yet (an older PC's row the watcher still has to give an owner). */
 export function isUnassigned(task: Pick<Task, 'assigneeKind' | 'status' | 'parentId'>): boolean {
   return !task.parentId && task.assigneeKind === 'team' && (task.status === 'open' || task.status === 'waiting');
 }
@@ -143,13 +143,15 @@ function latestReport(task: Pick<Task, 'ledger'>): string | undefined {
  * owner's latest report line. Null when there is nothing true to say.
  */
 export function progressLine(task: Pick<TaskView, 'assigneeKind' | 'assigneeId' | 'status' | 'waitingOn' | 'steps' | 'ledger' | 'running' | 'result' | 'parentId'>, context: { note?: string; nameOf: NameOf }): string | null {
-  if (task.status === 'done' || task.status === 'cancelled') return task.result?.summary ? plainPreview(task.result.summary, 90) : null;
+  if (task.status === 'done' || task.status === 'dropped') return task.result?.summary ? plainPreview(task.result.summary, 90) : null;
   const waiting = waitingLine(task, context.nameOf);
   if (waiting) return waiting;
   if (task.running && context.note?.trim()) return plainPreview(context.note, 90);
   const next = task.steps?.slice().sort((a, b) => a.sort - b.sort || a.createdAt - b.createdAt)
-    .find((step) => step.status !== 'done' && step.status !== 'cancelled');
+    .find((step) => step.status !== 'done' && step.status !== 'dropped');
   if (next) return `Next: ${plainPreview(next.title, 80)}`;
+  const line = task.ledger?.plan?.find((item) => !item.startsWith('✓'));
+  if (line) return `Next: ${plainPreview(line, 80)}`;
   const report = latestReport(task);
   return report ? plainPreview(report, 90) : null;
 }
@@ -163,7 +165,7 @@ export function progressLine(task: Pick<TaskView, 'assigneeKind' | 'assigneeId' 
  */
 export function openQuestions<T extends Pick<Task, 'assigneeKind' | 'status' | 'widget' | 'sort' | 'createdAt'>>(steps: readonly T[]): T[] {
   // A mini-app to-do's widget is stored as a UiBlock with type 'app' (shared/model/tasks.ts).
-  return steps.filter((step) => step.assigneeKind === 'human' && step.status !== 'done' && step.status !== 'cancelled'
+  return steps.filter((step) => step.assigneeKind === 'human' && step.status !== 'done' && step.status !== 'dropped'
     && !!step.widget && String(step.widget.type) !== 'app').sort((a, b) => a.sort - b.sort || a.createdAt - b.createdAt);
 }
 

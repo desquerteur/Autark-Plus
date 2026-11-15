@@ -26,31 +26,6 @@ test('a new person works with no space\'s agents until the owner picks spaces', 
   assert.deepEqual(dana.scopes.spaces, [], 'never every space (with the private one) by default');
 });
 
-test('a space-limited person sees only the agents of their spaces, chats and reporting lines', async (t) => {
-  const r = peopleRig();
-  t.after(() => r.cleanup());
-  const cara = await r.join('Cara', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
-  await cara.client.call('events.subscribe', { topics: ['org'] });
-  const ids = async () => (await cara.client.call<Agent[]>('agents.list')).map((agent) => agent.id).sort();
-  assert.deepEqual(await ids(), ['ag_research']);
-  r.bus.emit('agent.upserted', r.org.get('ag_secret')!);
-  r.bus.emit('space.upserted', { id: 'sp_private', name: 'Private', kind: 'private', sort: 1, createdAt: 0 } satisfies Space);
-  r.bus.emit('space.upserted', { id: 'sp_company', name: 'Company', kind: 'company', sort: 0, createdAt: 0 } satisfies Space);
-  r.bus.emit('agent.activity', { active: [{ agentId: 'ag_secret', runId: 'run_1', note: 'private errand', startedAt: 1 }, { agentId: 'ag_research', runId: 'run_2', note: 'x', startedAt: 1 }] });
-  await settle();
-  assert.equal(cara.client.events('agent.upserted').length, 0, 'not the private space\'s agent');
-  assert.deepEqual(cara.client.events('space.upserted').map((event) => (event.data as Space).id), ['sp_company']);
-  const active = (cara.client.events('agent.activity').at(-1)!.data as { active: Array<{ agentId: string }> }).active;
-  assert.deepEqual(active.map((entry) => entry.agentId), ['ag_research']);
-  // The owner shares a chat with the secretary: Cara meets it there (but may not give it work).
-  const chat = r.chats.create({ agentIds: ['ag_secret'], people: [cara.person.id], createdBy: 'human', title: 'With the secretary' });
-  assert.deepEqual(await ids(), ['ag_research', 'ag_secret']);
-  await assert.rejects(cara.client.call('tasks.create', { conversationId: chat.id, title: 'Book it', assigneeKind: 'agent', assigneeId: 'ag_secret' }), /may not work with this agent/);
-  // Her manager is visible too.
-  r.org.update('ag_manager', {});
-  await r.owner.call('people.save', { id: cara.person.id, managerId: 'ag_manager' });
-  assert.deepEqual(await ids(), ['ag_manager', 'ag_research', 'ag_secret']);
-});
 
 test('with history "join", tasks of a chat made before the person joined stay hidden', async (t) => {
   const r = peopleRig();

@@ -38,15 +38,22 @@ export interface Methods {
   'events.unsubscribe': { params: { topics: Topic[] }; result: { ok: true } };
   'settings.get': { params: void; result: Settings };
   'settings.update': { params: SettingsPatch; result: Settings };
-  'ui.state': { params: void; result: { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; lastConversationId?: string } };
+  'ui.state': { params: void; result: { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; draftFiles?: Record<string, Attachment[]>; lastConversationId?: string } };
   'ui.saveDraft': { params: { conversationId: string; text: string; attachments?: Attachment[]; secrets?: string[] }; result: { ok: true } };
   /** Added for the desktop updater (package B): may the app restart now without losing work? */
   'system.restartReadiness': { params: void; result: { ready: boolean; reasons: string[] } };
   /**
    * Added for the desktop updater (package B): pause new wakes, checkpoint runs, flush WAL before
-   * quitAndInstall. `cancel: true` resumes when the restart did not happen after all.
+   * quitAndInstall. `cancel: true` resumes when the restart did not happen after all. B-080: `to` – the version the
+   * update brings; the next start says whether it landed (tasks/recover-notes.ts).
    */
-  'system.prepareRestart': { params: { cancel?: boolean } | void; result: { ok: true } };
+  'system.prepareRestart': { params: { cancel?: boolean; to?: string } | void; result: { ok: true } };
+  /**
+   * B-080: installs the Autark build `installer` (the Setup .exe of `npm run package`, an AppImage on Linux) on this PC the
+   * way an update installs: every running turn ends cleanly, the installer runs, the new version starts and says at its
+   * start whether it landed. 'unavailable' headless and on macOS. Owner scope (also `npm run wf -- call system.install`).
+   */
+  'system.install': { params: { installer: string }; result: { ok: true; from: string; to?: string } };
   /** Added by R4 contracts: consistent copy of the database + blobs into `dir` (default chosen by the runtime). Owner scope. */
   'system.backup': { params: { dir?: string } | void; result: { path: string; bytes: number } };
   /** Added by R4 contracts: stages a backup; it replaces the data on the next start (applyPendingRestore). Owner scope. */
@@ -114,10 +121,14 @@ export interface Methods {
   // ----------------------------------------------------------------- tasks
   'tasks.list': { params: TaskFilter | void; result: TaskView[] };
   'tasks.get': { params: { id: string }; result: TaskView };
-  'tasks.create': { params: Omit<CreateTaskInput, 'origin' | 'spaceId'>; result: TaskView }; // B-054: no conversationId = a chat-free task; origin and space are runtime-written
-  'tasks.update': { params: { id: string; rev?: number; patch: Partial<Pick<Task, 'title' | 'notes' | 'dueAt' | 'priority' | 'doneWhen' | 'dependsOn' | 'mode' | 'assigneeKind' | 'assigneeId' | 'sort'>> }; result: TaskView };
-  'tasks.setStatus': { params: { id: string; status: TaskStatus; note?: string }; result: TaskView };
-  'tasks.complete': { params: { id: string; answer?: unknown; note?: string; clientId?: string }; result: TaskView };
+  /** `to`: an agent id, 'human', a colleague's per_… id, 'team' (Autark picks one owner now) or 'me' (default). No conversationId = a chat-free task. */
+  'tasks.create': { params: Omit<CreateTaskInput, 'origin' | 'spaceId' | 'files' | 'assigneeKind' | 'assigneeId'> & { to?: string }; result: TaskView };
+  /** `status` 'open': resume a paused task or reopen a finished one. */
+  'tasks.update': { params: { id: string; rev?: number; patch: Partial<Pick<Task, 'title' | 'notes' | 'dueAt' | 'priority' | 'doneWhen' | 'dependsOn' | 'sort'>> & { plan?: string[]; status?: 'open' } }; result: TaskView };
+  /** Gives the task to `to` (as tasks.create); the receiver hears at once, the giver hears how it ends. */
+  'tasks.give': { params: { id: string; to: string; note?: string }; result: TaskView };
+  /** Ends a task: done (default; a to-do with a widget is answered) or dropped. */
+  'tasks.finish': { params: { id: string; status?: 'done' | 'dropped'; answer?: unknown; note?: string; clientId?: string }; result: TaskView };
   'tasks.reorder': { params: { ids: string[] }; result: { ok: true } };
   'tasks.delete': { params: { id: string }; result: { ok: true } };
   /** Human to-dos: open tasks assigned to the human, across all chats. */
@@ -128,9 +139,7 @@ export interface Methods {
   /** F03: snooze a to-do (by id or its chat block) for `minutes` or until a time (epoch ms). */
   'todos.snooze': { params: { id?: string; messageId?: string; blockIndex?: number; minutes?: number; until?: number }; result: TaskView };
   'todos.stopRepeating': { params: { id: string }; result: TaskView };
-  /** "Give to me": team work becomes the person's to-do. */
-  'tasks.makeMine': { params: { id: string }; result: TaskView };
-  /** F06 "Can't do this…": the person declines a to-do (cancelled with the reason; its author is woken). Not for host approvals. */
+  /** "Can't do this…": the person declines a to-do (dropped with the reason; its author is woken). Not for host approvals. */
   'todos.decline': { params: { id: string; reason?: string; clientId?: string }; result: TaskView };
   /** F06: removes a to-do the person added (agents' to-dos are declined instead). */
   'todos.remove': { params: { id: string }; result: { ok: true } };

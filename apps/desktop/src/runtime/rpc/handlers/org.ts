@@ -10,10 +10,13 @@
 // agents.archive takes an optional successorId (org/service.ts: the successor takes over role, place, reports, tasks).
 // B-057: agents.runs lists the agent's own turns only (its splits' runs are under their groups, splits.list); runs.items
 // judges a split's run as its group's parent run – the rule of splits.list/get (people/events.ts splitPlace).
+// agents.log (shared/api/methods-log.ts): the agent's activity log – its turns, oldest first, with every journaled item
+// (runs/log.ts); 'manage' like agents.runs, since it shows every run of the agent, whichever chat or task it worked for.
 // Wave 3: agents.update `base.instructions` = the text an editor started from; instructions changed meanwhile
 // (SYSTEM.md taken over, another edit) refuse the edit as a conflict (root/text-doc.ts staleBase).
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
+import { MAX_SYSTEM_MD } from '../../../shared/model/agent-core.ts';
 import type { Agent, Space } from '../../../shared/model/org.ts';
 import type { Run } from '../../../shared/model/runs.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
@@ -22,6 +25,8 @@ import { scopeHas } from '../table.ts';
 import { splitPlace } from '../../people/events.ts';
 import { staleBase } from '../../root/text-doc.ts';
 import { clearChatRetry } from '../../agents/redelivery.ts';
+import { readAgentLog } from '../../runs/log.ts';
+import '../../../shared/api/methods-log.ts'; // agents.log (module augmentation)
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
 const TODO = { capability: 'todo' } as const;
@@ -69,7 +74,7 @@ export function register(table: HandlerTable): void {
       role: optText(o, 'role', { max: 80, allowEmpty: true }),
       managerId: optId(o, 'managerId'),
       spaceId: optId(o, 'spaceId'),
-      instructions: optText(o, 'instructions', { max: 20_000, allowEmpty: true, multiline: true }),
+      instructions: optText(o, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }),
       mode: optText(o, 'mode', { max: 60 }),
       createdBy: HUMAN_ID,
     });
@@ -82,7 +87,7 @@ export function register(table: HandlerTable): void {
     onlyKeys(patch, AGENT_PATCH, 'patch');
     const base = o.base === undefined ? undefined : input(o.base);
     if (base) onlyKeys(base, ['instructions'], 'base');
-    const baseText = base ? optText(base, 'instructions', { max: 20_000, allowEmpty: true, multiline: true }) : undefined;
+    const baseText = base ? optText(base, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }) : undefined;
     if (baseText !== undefined && typeof patch.instructions === 'string' && staleBase(ctx.services.org.require(agentId).instructions, baseText, patch.instructions)) {
       throw new WorkforceError('conflict', 'The instructions changed while you were editing (in SYSTEM.md or another edit). Load the new text and save again.');
     }
@@ -109,6 +114,14 @@ export function register(table: HandlerTable): void {
     // B-057: the agent's own turns – its splits' runs are listed under their groups (splits.list).
     const runs = ctx.services.runs.listTopLevel?.(agentId, limit) ?? ctx.services.runs.list(agentId, limit);
     return runs.filter((run) => !run.splitId); // a journal without listTopLevel
+  }, MANAGE);
+  table.add('agents.log', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['id', 'before']);
+    const agentId = id(o);
+    ctx.services.org.require(agentId);
+    const before = optNum(o, 'before', { min: 0 });
+    return readAgentLog(ctx.services.db, agentId, before === undefined ? {} : { before });
   }, MANAGE);
   table.add('runs.items', (params, ctx) => {
     const runId = id(input(params), 'runId');

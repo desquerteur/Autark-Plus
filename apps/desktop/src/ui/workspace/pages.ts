@@ -12,7 +12,8 @@
 // surface to open (the frame opens the global pane or the open chat's area). A phone has no main: its spaces are its
 // PC's (B-076, phone-tabs.ts links them) – the PC's websites are 'remote' tabs, an address typed into a blank tab opens
 // one on the PC; a phone that reads no PC's pane keeps its app tabs and chosen tab on the device, over a restart. A
-// finished download ends with a toast. Ctrl+F opens the find field (findOpen) of a shown website tab.
+// finished download ends with a toast. Ctrl+F opens the find field (findOpen) of a shown website tab. On the desktop a
+// website – this PC's or another PC's – closes through main ('close'), never by a layout, so it stays closed (B-081); a phone's close goes to its PC in its layout (tabs.set), as before.
 // Owns: the spaces, the tab lists, the shown tabs and these commands. Never: page content or agent browser sessions.
 
 import { effect, signal, type Signal } from '@preact/signals';
@@ -298,12 +299,16 @@ export function switchToTab(id: string): void {
   opener(space);
 }
 
+/** On the desktop a website of this PC or of another (B-081): main closes it (and keeps it closed), never a layout; a remote one closes on its PC too. On the phone command() does nothing and the close goes to its PC in its layout (phone-tabs.ts), as before. */
+const closesInMain = (page: TabEntry): boolean => page.kind === 'website' || page.kind === 'remote';
+
 /** Closes a tab of `space`; the shown one hands over to the next, and the last tab leaves a blank one. */
 export async function closePage(id: string, space = GLOBAL_SPACE): Promise<void> {
   const entries = tabsNow(space);
   const entry = entries.find((page) => page.id === id);
   if (!entry) return;
-  if (entry.kind === 'website') await command({ action: 'close', id });
+  if (closesInMain(entry)) await command({ action: 'close', id });
+  if (entry.kind === 'remote') void import('./RemoteWebTab.tsx').then((m) => m.forgetRemoteTab(entry.device, entry.tab), () => undefined); // its kept picture goes too (dynamic: RemoteWebTab imports this file)
   const ids = entries.map((page) => page.id);
   const next = chosenAfterClose(ids, id, shownId(ids, spaces.peek()[space]?.shown ?? ''));
   setTabs(space, tabsNow(space).filter((page) => page.id !== id));
@@ -312,7 +317,7 @@ export async function closePage(id: string, space = GLOBAL_SPACE): Promise<void>
 
 /** Closes every tab of `space` but `keep`. */
 export async function closeOthers(keep: string, space = GLOBAL_SPACE): Promise<void> {
-  for (const page of tabsNow(space)) if (page.id !== keep && page.kind === 'website') await command({ action: 'close', id: page.id });
+  for (const page of tabsNow(space)) if (page.id !== keep && closesInMain(page)) await command({ action: 'close', id: page.id });
   setTabs(space, tabsNow(space).filter((page) => page.id === keep));
   showIn(space, keep);
 }

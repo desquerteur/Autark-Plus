@@ -1,3 +1,8 @@
+import { runMailTool } from '../../../src/runtime/apps/mail/actions.ts';
+import type { Mailbox } from '../../../src/runtime/apps/mail/mailbox.ts';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 // B-053 track D: sending (runtime/apps/mail/smtp.ts and the send/reply tools) against the fake SMTP and IMAP servers
 // over plain TCP: the submission dialogue (EHLO, AUTH PLAIN, MAIL, RCPT, DATA) with dot-stuffing, STARTTLS + AUTH
 // LOGIN, a refused recipient among good ones, all refused, a refused login (ReconnectNeeded), a refused message
@@ -65,11 +70,11 @@ test('STARTTLS then AUTH LOGIN; refusals: every recipient, the login, the messag
   });
 });
 
-async function mailbox(smtpHost = '127.0.0.1', smtpOpts: FakeSmtpOptions = {}) {
+async function mailbox(smtpHost = '127.0.0.1', smtpOpts: FakeSmtpOptions = {}, contactStopFile?: string) {
   const imap = await new FakeImap({}).start();
   const smtp = await new FakeSmtp(smtpOpts).start();
   const target: MailTarget = {
-    kind: 'mail', address: 'me@example.com',
+    kind: 'mail', contactStopFile, address: 'me@example.com',
     imap: { host: '127.0.0.1', port: imap.port, tls: 'implicit' }, smtp: { host: smtpHost, port: smtp.port, tls: 'implicit' },
     login: async () => LOGIN,
   };
@@ -130,4 +135,49 @@ test('once SMTP accepted the message, a failing Sent copy is a note, not an erro
     assert.equal(textOf(result), 'Sent "S" to ann@x.org. Sent, but the copy in the Sent folder could not be saved.');
     assert.deepEqual((result.structuredContent as { notes: string[] }).notes, ['Sent, but the copy in the Sent folder could not be saved.']);
   } finally { await m.close(); }
+});
+
+
+test('contact stops: envelope recipients, derived replies, refresh and malformed file', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mail-stop-'));
+  const file = path.join(dir, 'dnc.json');
+  const set = (addresses: string[] = [], organization_domains: string[] = []) => writeFileSync(file, JSON.stringify([{status: 'DNC', addresses, organization_domains}]));
+  set(['anna@example.org'], ['blocked.org']);
+  const m = await mailbox('127.0.0.1', {}, file);
+  try {
+    for (const args of [{to:'X@SUB.BLOCKED.ORG'}, {to:'ok@safe.org',cc:'x@blocked.org'}, {to:'ok@safe.org',bcc:'x@blocked.org'}]) {
+      assert.equal((await m.conn.callTool('send', {...args,text:'t'})).isError, true);
+    }
+    m.imap.add('INBOX', readFileSync(new URL('../../fixtures/apps/mail-alternative.eml', import.meta.url), 'utf8'));
+    assert.equal((await m.conn.callTool('reply', {id:'INBOX/7000/1',text:'t'})).isError, true);
+    assert.equal(m.smtp.mails.length, 0);
+    set();
+    assert.equal((await m.conn.callTool('send', {to:'anna@example.org',text:'t'})).isError, undefined);
+    assert.equal(m.smtp.mails.length, 1);
+    set(['anna@example.org']);
+    assert.equal((await m.conn.callTool('send', {to:'ANNA@example.org',text:'t'})).isError, true);
+    writeFileSync(file, '{');
+    assert.equal((await m.conn.callTool('send', {to:'ok@safe.org',text:'t'})).isError, true);
+    assert.equal(m.smtp.mails.length, 1);
+  } finally { await m.close(); rmSync(dir, {recursive:true}); }
+});
+
+
+test('stopped send reaches neither login nor sockets; invalid and missing configuration fail closed', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mail-stop-zero-'));
+  const file = path.join(dir, 'dnc.json');
+  let effects = 0;
+  const target: MailTarget = {kind:'mail',address:'me@example.org',contactStopFile:file,
+    imap:{host:'invalid',port:993,tls:'implicit'},smtp:{host:'invalid',port:465,tls:'implicit'},
+    login:async () => {effects++; throw Error('login reached');}};
+  const sockets = {net:() => {effects++; throw Error('socket reached');},tls:() => {effects++; throw Error('socket reached');}};
+  try {
+    for (const data of ['[{"status":"DNC","addresses":["x@blocked.org"]}]', '{', '{}', '[{"status":"DNC","addresses":[42]}]']) {
+      writeFileSync(file,data);
+      assert.equal((await runMailTool({target,mailbox:{} as Mailbox,sockets},'send',{to:'x@blocked.org',text:'t'})).isError,true);
+    }
+    rmSync(file);
+    assert.equal((await runMailTool({target,mailbox:{} as Mailbox,sockets},'send',{to:'x@blocked.org',text:'t'})).isError,true);
+    assert.equal(effects,0);
+  } finally {rmSync(dir,{recursive:true});}
 });

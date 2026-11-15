@@ -1,5 +1,6 @@
 // The file tab's loop against a fake disk: what is typed, saved and followed; line ends survive the text field's LF; a change
-// under typed text is a notice and a save over it the person's answer; a tab's id and path rules.
+// under typed text is a notice and a save over it the person's answer; a tab's id and path rules. B-081: a missing file
+// is the not-found page with its similar paths until Create (or an app-own file meant to be made).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -116,10 +117,22 @@ test('a save that meets a newer file becomes the notice instead of overwriting',
   assert.equal(f.text, 'mine');
 });
 
-test('a missing file is a new one: a save creates it, also empty; a failed save keeps the text and says why', async () => {
+test('a missing file is the not-found page with its similar paths; Create makes it a new one a save creates, also empty; a failed save keeps the text and says why', async () => {
   const f = disk(null);
-  const doc = new FileDoc('p', f);
+  const near = [{ name: 'q', path: '/q', folder: false }, { name: 'a', path: '/a', folder: true }];
+  const doc = new FileDoc('p', { ...f, read: async (at, since) => { const read = await f.read(at, since); return read.state === 'missing' ? { ...read, near } : read; } });
   await doc.load();
+  assert.equal(doc.state.value.phase, 'missing');
+  assert.deepEqual(doc.state.value.near, near);
+  await doc.save();
+  assert.equal(f.writes.length, 0, 'nothing is made before Create');
+  await doc.poll();
+  assert.equal(doc.state.value.phase, 'missing', 'still nothing there');
+  const revision = doc.state.value.revision;
+  doc.create();
+  assert.equal(doc.state.value.phase, 'text');
+  assert.equal(doc.state.value.near, undefined);
+  assert.ok(doc.state.value.revision > revision, 'the field takes the empty text');
   assert.equal(doc.state.value.fresh, true);
   assert.match(fileStatus(doc.state.value, ''), /New file/);
   f.failWrite = 'The system does not allow writing p.';
@@ -129,6 +142,35 @@ test('a missing file is a new one: a save creates it, also empty; a failed save 
   await doc.save();
   assert.equal(f.text, '');
   assert.equal(doc.state.value.fresh, false);
+});
+
+test('an app-own file meant to be made opens in the editor; a file that appears is followed; one deleted under no draft is not found', async () => {
+  const f = disk(null);
+  const made = new FileDoc('p', f);
+  made.create();
+  await made.load();
+  assert.equal(made.state.value.phase, 'text', 'straight to the editor');
+  assert.equal(made.state.value.fresh, true);
+
+  const doc = new FileDoc('p', f);
+  await doc.load();
+  assert.equal(doc.state.value.phase, 'missing');
+  f.change('made by an agent');
+  await doc.poll();
+  assert.equal(doc.state.value.phase, 'text');
+  assert.equal(doc.text, 'made by an agent');
+  assert.equal(doc.state.value.followed, true);
+
+  f.text = null; f.stamp++;
+  await doc.poll();
+  assert.equal(doc.state.value.phase, 'missing', 'deleted with nothing typed');
+  f.change('back');
+  await doc.poll();
+  doc.edit('typed');
+  f.text = null; f.stamp++;
+  await doc.poll();
+  assert.equal(doc.state.value.phase, 'text', 'a draft stays');
+  assert.equal(doc.state.value.changed, true);
 });
 
 test('a look that crossed our own save is no change on disk', async () => {

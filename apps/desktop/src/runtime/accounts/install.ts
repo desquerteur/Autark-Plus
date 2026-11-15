@@ -5,12 +5,23 @@
 // CODEX_NON_INTERACTIVE=1 and redirected stdio answer every prompt "no"); `npm i -g @openai/codex` only
 // when that route failed and npm exists. A route counts once the finder sees the CLI (fresh PATH).
 // B-051 integration: demo mode (WORKFORCE_FAKE_ENGINE, e2e and window tests) never runs a real installer.
+// B-080 wave 3 (live 08.–09.11.2026: Codex's shell on Windows was Windows PowerShell 5.1, whose pipes into programs are
+// ASCII – "Nächste" reached a file as "N?chste"): PowerShell 7 for the engines' shells, the way the CLIs come –
+// Microsoft's official per-user installer (aka.ms/install-powershell.ps1, its zip into %LOCALAPPDATA%\Microsoft\powershell,
+// no admin, no PATH change: engines/wf-shim.ts withTools puts that folder on the engines' PATH). ensurePwsh runs it once
+// per start on Windows, in the background (main.ts), where no pwsh.exe is found (wf-shim.ts pwshDir).
+// B-080 wave 3 review: progress records off for the whole script (Windows PowerShell 5.1's Expand-Archive is slow with
+// them – the 100 MB zip could reach the 5-minute stop), POWERSHELL_TELEMETRY_OPTOUT=1 as for the engines, and a run that
+// leaves no pwsh.exe throws with its exit and the free space of %LOCALAPPDATA%'s drive (main.ts logs it as
+// "PowerShell 7 not installed" – a full disk shows there).
 // Owns: the fixed install commands, their order and their 5-minute timeout (per route).
 // Never: builds commands from user input (all arguments are constants), runs as admin, or installs in demo mode.
 
+import { statfs } from 'node:fs/promises';
 import type { Supervisor } from '../system/supervisor.ts';
 import type { Executable, ExecutableFinder } from './executables.ts';
 import { WorkforceError } from '../../shared/errors.ts';
+import { pwshDir } from '../engines/wf-shim.ts';
 
 const NPM_PACKAGES = { codex: '@openai/codex' } as const;
 export const INSTALL_FAILED = {
@@ -64,18 +75,52 @@ export async function installCli(provider: 'claude' | 'codex', deps: InstallDeps
   throw new WorkforceError('unavailable', INSTALL_FAILED[provider]);
 }
 
+/**
+ * B-080 wave 3: PowerShell 7 by Microsoft's official installer script with its stable release as a zip into
+ * %LOCALAPPDATA%\Microsoft\powershell (wf-shim.ts pwshUserDir) – per user, no admin, PATH untouched (no -AddToPath);
+ * progress records off, the caller's env plus POWERSHELL_TELEMETRY_OPTOUT=1 unless it sets its own.
+ */
+export function pwshInstaller(env?: NodeJS.ProcessEnv): InstallRoute {
+  const base = env ?? process.env;
+  const own = Object.keys(base).some((key) => key.toUpperCase() === 'POWERSHELL_TELEMETRY_OPTOUT');
+  return { command: 'powershell.exe', env: own ? base : { ...base, POWERSHELL_TELEMETRY_OPTOUT: '1' }, args: ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $to = Join-Path $env:LOCALAPPDATA 'Microsoft\\powershell'; & ([scriptblock]::Create((Invoke-RestMethod 'https://aka.ms/install-powershell.ps1'))) -Destination $to; if (-not (Test-Path -LiteralPath (Join-Path $to 'pwsh.exe'))) { exit 1 }"] };
+}
+
+/**
+ * B-080 wave 3: installs PowerShell 7 on Windows where no pwsh.exe is found (wf-shim.ts pwshDir: PATH, %ProgramFiles%,
+ * the per-user folder); true when it was installed now. Off Windows, in demo mode and with a pwsh found: nothing runs.
+ * A run that leaves none throws with its exit and the free space where it installs (B-080 wave 3 review).
+ */
+export async function ensurePwsh(deps: Pick<InstallDeps, 'supervisor' | 'platform' | 'env' | 'timeoutMs' | 'demo'>): Promise<boolean> {
+  const env = deps.env ?? process.env;
+  if ((deps.platform ?? process.platform) !== 'win32' || deps.demo || pwshDir(env)) return false;
+  const code = await runToEnd(pwshInstaller(deps.env), 'install:pwsh', deps);
+  if (pwshDir(env)) return true;
+  const local = env[Object.keys(env).find((key) => key.toUpperCase() === 'LOCALAPPDATA') ?? 'LOCALAPPDATA'];
+  const disk = local ? await statfs(local).catch(() => undefined) : undefined;
+  const free = disk ? `; ${(Number(disk.bavail) * Number(disk.bsize) / 1e9).toFixed(1)} GB free on the drive of ${local}` : '';
+  const end = code === 'stopped' ? 'was stopped at its time limit' : code === null ? 'could not start' : `ended with exit code ${code}`;
+  throw new Error(`PowerShell 7's installer ${end} and left no pwsh.exe${free}`);
+}
+
 /** Runs one route to its end (or the timeout); true when it exited 0 and the CLI is found now. */
 async function runRoute(route: InstallRoute, provider: 'claude' | 'codex', deps: InstallDeps): Promise<boolean> {
-  let code: number | null;
-  try {
-    const lease = deps.supervisor.spawn({ command: route.command, args: route.args, owner: `install:${provider}`, kind: 'light', env: route.env, stdio: ['ignore', 'ignore', 'ignore'] });
-    const timer = setTimeout(() => { void lease.release(); }, deps.timeoutMs ?? INSTALL_MS);
-    timer.unref?.();
-    code = await lease.exited;
-    clearTimeout(timer);
-  } catch {
-    code = null; // could not start (no PowerShell or bash)
-  }
+  const code = await runToEnd(route, `install:${provider}`, deps);
   deps.finder.clear();
   return code === 0 && Boolean(await deps.finder.find(provider, { force: true }));
+}
+
+/** One install command to its end, stopped at the timeout; its exit code ('stopped': at the timeout; null: it could not start). */
+async function runToEnd(route: InstallRoute, owner: string, deps: Pick<InstallDeps, 'supervisor' | 'timeoutMs'>): Promise<number | null | 'stopped'> {
+  try {
+    const lease = deps.supervisor.spawn({ command: route.command, args: route.args, owner, kind: 'light', env: route.env, stdio: ['ignore', 'ignore', 'ignore'] });
+    let stopped = false;
+    const timer = setTimeout(() => { stopped = true; void lease.release(); }, deps.timeoutMs ?? INSTALL_MS);
+    timer.unref?.();
+    const code = await lease.exited;
+    clearTimeout(timer);
+    return stopped ? 'stopped' : code;
+  } catch {
+    return null; // could not start (no PowerShell or bash)
+  }
 }

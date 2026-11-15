@@ -95,7 +95,7 @@ async function recorderCheck(run) {
   run.rpc = rpc;
   await rpc.call('settings.update', { onboarding: { step: 'done' } }); // B-044: past the first-run layer on Home (first-run-window covers it)
 
-  const recording = await rpc.call('tasks.create', { title: 'Record the intro video for the course', assigneeKind: 'human', widget: { type: 'record', mode: 'video', instructions: 'Record the intro video for the course' } });
+  const recording = await rpc.call('tasks.create', { title: 'Record the intro video for the course', widget: { type: 'record', mode: 'video', instructions: 'Record the intro video for the course' } });
   assert.equal(recording.widget?.type, 'record');
   assert.equal(recording.widget?.mode, 'video');
   const other = await rpc.call('todos.add', { text: 'Water the plants' });
@@ -152,7 +152,7 @@ async function recorderCheck(run) {
 
   // Five more urgent overdue to-dos sort before it; My day still shows it.
   const urgent = [];
-  for (let i = 1; i <= 5; i++) urgent.push(await rpc.call('tasks.create', { conversationId: recording.conversationId, title: `Check invoice ${i}`, assigneeKind: 'human', priority: 2, dueAt: overdue }));
+  for (let i = 1; i <= 5; i++) urgent.push(await rpc.call('tasks.create', { conversationId: recording.conversationId, title: `Check invoice ${i}`, priority: 2, dueAt: overdue }));
   await page.locator('.day-view .todo-item', { hasText: 'Check invoice 5' }).waitFor({ timeout: 15_000 });
   assert.ok(await playback.isVisible(), 'still on screen');
   await page.emulateMedia({ colorScheme: 'dark' });

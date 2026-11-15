@@ -7,6 +7,7 @@
 // Never: trusts proposal text as an instruction to the runtime.
 
 import { WorkforceError } from '../../shared/errors.ts';
+import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import { MAX_PROPOSAL_AGENTS, type ProposedAgent, type ProposedTask } from '../../shared/model/team-start.ts';
@@ -54,7 +55,7 @@ export function cleanProposal(value: unknown): ProposedAgent[] {
     const template = item.template === undefined || item.template === null ? undefined : str(item.template, `${at}.template`, 64);
     const tasks = tasksOf(item.tasks, `${at}.tasks`);
     return {
-      key, name: str(item.name, `${at}.name`, 80, true), role: str(item.role, `${at}.role`, 80), instructions: str(item.instructions, `${at}.instructions`, 20_000),
+      key, name: str(item.name, `${at}.name`, 80, true), role: str(item.role, `${at}.role`, 80), instructions: str(item.instructions, `${at}.instructions`, MAX_SYSTEM_MD),
       mode: str(item.mode ?? 'general', `${at}.mode`, 64), skills: skills as string[], include: item.include !== false,
       ...(template ? { template } : {}), ...(reportsTo ? { reportsTo } : {}), ...(companionOf ? { companionOf } : {}), ...(tasks ? { tasks } : {}),
     };

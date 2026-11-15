@@ -1,11 +1,14 @@
 // Settings › Apps › "Add an app": a search over the one-click catalog in a list box of one fixed height (typing never moves what
-// is below it; nothing found offers the AI, which also searches the MCP registry), each with Connect, and two rows that open a
-// dialog: an MCP server by address or command, and a mailbox. A token dialog serves a catalog entry that needs a key and a
-// connected app that asks for one. Each writes one entry of the connector files (apps-files.ts); the runtime connects, a server
-// that signs in opens the browser, and the Connected row shows how it went.
+// is below it; nothing found offers the AI, which also searches the MCP registry), each with Connect, and three rows that open a
+// dialog: an MCP server by address or command (with env or header Name | Value rows, a secret value masked), a pasted mcpServers block (Claude
+// Desktop, Claude Code, Cursor) in a fixed-height box with one fixed check line, and a mailbox. A token dialog serves a catalog
+// entry that needs a key and a connected app that asks for one. Each writes the connector files (apps-files.ts; secret-looking
+// values go into Secrets after the file checked out); the runtime connects, a server that signs in opens the browser, and the
+// Connected row shows how it went.
 // Owns: these rows and dialogs. Never: keeps a typed token or password after saving, writes one into a file, or logs it.
 
 import { useState } from 'preact/hooks';
+import { newId } from '../../shared/ids.ts';
 import type { ConnectedApp } from '../../shared/model/apps.ts';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { openExternal } from '../lib/platform.ts';
@@ -14,10 +17,16 @@ import { Button } from '../lib/ui.tsx';
 import { setUpWithAi } from '../team/set-up-with-ai.ts';
 import { ActionButton, Group, Row, Segmented, useBusy } from './controls.tsx';
 import { APP_CATALOG, catalogConnected, searchCatalog, type CatalogEntry } from './apps-catalog.ts';
-import { editConnectors, fileOf, mailEntry, nameFromAddress, splitCommand, storeKey, tokenHeaders, withEntry, withToken, type MailFields } from './apps-files.ts';
+import {
+  addServers, editConnectors, fileOf, holdsSecret, mailEntry, namedValues, nameFromAddress, pastedServers, pasteLine, splitCommand, storeKey, withEntry, withToken,
+  type MailFields,
+} from './apps-files.ts';
+import type { KvRow } from './secret-groups.ts';
+import { NameValueRows } from './SecretRows.tsx';
 
 const valueOf = (event: Event) => (event.currentTarget as HTMLInputElement).value;
-const addMcp = (name: string, entry: Record<string, unknown>) => editConnectors('mcp.json', (text) => withEntry('mcp.json', text, name, entry));
+const addMcp = (name: string, entry: Record<string, unknown>) => addServers([{ name, entry }]);
+const freshRow = (): KvRow => ({ id: newId('req'), name: '', value: '' });
 const storeToken = (name: string, token: string) => storeKey(`${name} token`, 'token', token, `Connects the app ${name} (Settings › Apps).`);
 
 /** What the token dialog is for: a catalog entry to connect or a connected app. */
@@ -33,9 +42,14 @@ function TokenForm(props: { target: TokenTarget; onClose: () => void }) {
   const save = () => void run(async () => {
     setError('');
     try {
-      const secretId = await storeToken(name, token.trim());
-      if (target.kind === 'catalog') await addMcp(name, { url: target.entry.url, headers: tokenHeaders(secretId) });
-      else await editConnectors(fileOf(target.app), (text) => withToken(fileOf(target.app), text, name, secretId));
+      if (target.kind === 'catalog') await addMcp(name, { url: target.entry.url, headers: { Authorization: `Bearer ${token.trim()}` } }); // addServers stores it after the file checked out
+      else {
+        const file = fileOf(target.app);
+        await editConnectors(file, async (text) => {
+          withToken(file, text, name, ''); // the file and the entry check out before the token is stored
+          return withToken(file, text, name, await storeToken(name, token.trim()));
+        });
+      }
       props.onClose();
     } catch (failure) { setError(errorText(failure)); }
   });
@@ -84,18 +98,22 @@ function ServerForm(props: { onClose: () => void }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
   const [token, setToken] = useState('');
+  const [rows, setRows] = useState<KvRow[]>(() => [freshRow()]);
   const [error, setError] = useState('');
   const [busy, run] = useBusy();
   const target = address.trim();
+  const { values, blocked: rowsBlocked } = namedValues(kind, rows);
   const blocked = !target ? (kind === 'url' ? 'Enter the MCP address the server names for AI tools' : 'Enter the command that starts the server')
-    : kind === 'url' && !/^https?:\/\/\S+$/i.test(target) ? 'Enter an address that starts with https://' : '';
+    : kind === 'url' && !/^https?:\/\/\S+$/i.test(target) ? 'Enter an address that starts with https:// (or http:// on your network)' : rowsBlocked;
   const save = () => void run(async () => {
+    if (blocked) return;
     setError('');
     try {
       const { command, args } = splitCommand(target);
-      const label = name.trim() || nameFromAddress(kind === 'url' ? target : command);
-      const headers = kind === 'url' && token.trim() ? { headers: tokenHeaders(await storeToken(label, token.trim())) } : {};
-      await addMcp(label, kind === 'url' ? { url: target, ...headers } : { command, args });
+      const label = name.trim() || (kind === 'url' ? nameFromAddress(target) : nameFromAddress(command, args));
+      const headers = { ...values, ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) };
+      const extra = (field: string, map: Record<string, string>) => (Object.keys(map).length ? { [field]: map } : {});
+      await addMcp(label, kind === 'url' ? { url: target, ...extra('headers', headers) } : { command, args, ...extra('env', values) });
       props.onClose();
     } catch (failure) { setError(errorText(failure)); }
   });
@@ -108,9 +126,39 @@ function ServerForm(props: { onClose: () => void }) {
       <input id="apps-name" class="input" autocomplete="off" maxLength={60} value={name} onInput={(event) => setName(valueOf(event))} />
       <label class="field-label" for="apps-server-token">Token (optional)</label>
       <input id="apps-server-token" class="input" type="password" autocomplete="off" spellcheck={false} disabled={kind !== 'url'} value={token} onInput={(event) => setToken(valueOf(event))} />
-      <DialogActions message={error || blocked} tone={error ? 'error' : 'muted'}>
+      <p class="field-label">{kind === 'url' ? 'Headers (optional)' : 'Environment variables (optional)'}</p>
+      <div class="secret-band-body apps-rows">
+        <NameValueRows rows={rows} onChange={setRows} onEnter={save} masked={(row) => holdsSecret(row.name, row.value, kind === 'url')} />
+      </div>
+      <DialogActions message={error || blocked || 'Keys and tokens go into Secrets; other values stay in the file'} tone={error ? 'error' : 'muted'}>
         <Button variant="secondary" onClick={props.onClose}>Cancel</Button>
         <Button variant="primary" busy={busy} disabled={Boolean(blocked)} onClick={save}>Connect</Button>
+      </DialogActions>
+    </>
+  );
+}
+
+function PasteForm(props: { onClose: () => void }) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const [busy, run] = useBusy();
+  const { servers, error: invalid } = pastedServers(text);
+  const save = () => void run(async () => {
+    setError('');
+    try {
+      await addServers(servers);
+      props.onClose();
+    } catch (failure) { setError(errorText(failure)); }
+  });
+  return (
+    <>
+      <label class="field-label" for="apps-paste">The JSON with "mcpServers", or one server</label>
+      <textarea id="apps-paste" class="set-textarea mono apps-paste" spellcheck={false} autocomplete="off"
+        placeholder={'{\n  "mcpServers": {\n    "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Docs"] }\n  }\n}'}
+        value={text} onInput={(event) => { setText((event.currentTarget as HTMLTextAreaElement).value); setError(''); }} />
+      <DialogActions message={error || invalid || pasteLine(servers)} tone={error || (invalid && text.trim()) ? 'error' : 'muted'}>
+        <Button variant="secondary" onClick={props.onClose}>Cancel</Button>
+        <Button variant="primary" busy={busy} disabled={Boolean(invalid)} onClick={save}>Add</Button>
       </DialogActions>
     </>
   );
@@ -156,11 +204,13 @@ function MailForm(props: { onClose: () => void }) {
   );
 }
 
+const FORM_TITLES = { server: 'Add by address', paste: 'Paste JSON', mail: 'Add email' } as const;
+
 /** "Add an app"; `apps`: the connected ones (a catalog entry of theirs says Connected). */
 export function AddApps(props: { apps: readonly ConnectedApp[] }) {
   const [query, setQuery] = useState('');
   const [token, setToken] = useState<TokenTarget | null>(null);
-  const [form, setForm] = useState<'server' | 'mail' | null>(null);
+  const [form, setForm] = useState<keyof typeof FORM_TITLES | null>(null);
   const hits = searchCatalog(query);
   const addresses = props.apps.map((app) => app.address);
   return (
@@ -177,12 +227,16 @@ export function AddApps(props: { apps: readonly ConnectedApp[] }) {
       <Row label="Add by address" hint="Any MCP server, by its web address or a command on this PC" reserve>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('server')} /></span>
       </Row>
+      <Row label="Paste JSON" hint="An mcpServers block from Claude Desktop, Claude Code or Cursor, as it is" reserve>
+        <span class="account-slot"><ActionButton label="Paste" onClick={() => setForm('paste')} /></span>
+      </Row>
       <Row label="Add email" hint="A mailbox agents read, sort, draft and send from; new mail wakes an agent" reserve>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('mail')} /></span>
       </Row>
       <TokenDialog target={token} onClose={() => setToken(null)} />
-      <Dialog open={form !== null} onClose={() => setForm(null)} title={form === 'mail' ? 'Add email' : 'Add by address'} width={520} class="secret-edit anchored">
+      <Dialog open={form !== null} onClose={() => setForm(null)} title={form ? FORM_TITLES[form] : undefined} width={520} class="secret-edit anchored">
         {form === 'server' && <ServerForm onClose={() => setForm(null)} />}
+        {form === 'paste' && <PasteForm onClose={() => setForm(null)} />}
         {form === 'mail' && <MailForm onClose={() => setForm(null)} />}
       </Dialog>
     </Group>

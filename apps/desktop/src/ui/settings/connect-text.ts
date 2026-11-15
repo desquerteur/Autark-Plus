@@ -1,7 +1,8 @@
 // Texts of Settings › Devices (DevicesGroup.tsx, connect-rows.tsx – also the first run's Connect card): Remote IDs in
 // groups of three, the Remote ID row's hint, what this PC's own connect request shows (the line under "Connect"), the
-// hint of each device row, a phone's dot, the hint of a browser's Notifications row and – B-078 – the "Connect a phone"
-// hint and the words of a phone's request (role 'phone').
+// hint of each device row, a phone's dot, the hint of a browser's Notifications row (B-084: inside the Android app the
+// app's own notifications) and "Forget this phone", and – B-078 – the "Connect a phone" hint and the words of a phone's
+// request (role 'phone').
 // Owns: these pure formatters (test/unit/devices/connect-text.test.ts, test/unit/ui/push-hint.test.ts). Never: RPC or rendering.
 
 import type { Device } from '../../shared/model/devices.ts';
@@ -79,13 +80,21 @@ export function incomingText(request: Pick<RemoteIncoming, 'role' | 'name' | 'co
   return { label: `${request.name} wants to connect${request.role === 'employee' ? ' as an employee' : ''}`, hint: `Accept only if ${request.name} shows the code ${request.code}` };
 }
 
+/** B-084: the Notifications row inside the Android app (the app shows them; Android's own settings turn them off). */
+export const ANDROID_APP_NOTIFY = 'The Autark app shows new messages itself · turn them off in Android’s settings for Autark';
+
+/** B-084: the "Forget this phone" row (Settings › Devices › This phone). */
+export const FORGET_HINT = 'Signs this phone out of this company · connecting again needs Accept on the PC';
+
 /**
  * The hint under "Notifications" on a phone or browser: what reaches it once on (a person of the organisation: the new
  * messages of their chats – pwa/person-push.ts; the owner's phone: to-dos and blockers, replies when it may chat), or why it
  * cannot be turned on. Undefined while off or not yet read. `iosTab`: the iPhone app opened in a Safari tab, where iOS
- * gives web pages no notifications – they work in the Home Screen app, which keeps its own pairing.
+ * gives web pages no notifications – they work in the Home Screen app, which keeps its own pairing. `androidApp`: B-084 –
+ * inside the Android app the app itself shows them (its WebView has no web push), whatever the browser status says.
  */
-export function pushHint(status: PushStatus | undefined, who: { person: boolean; chat: boolean; iosTab?: boolean }): string | undefined {
+export function pushHint(status: PushStatus | undefined, who: { person: boolean; chat: boolean; iosTab?: boolean; androidApp?: boolean }): string | undefined {
+  if (who.androidApp) return ANDROID_APP_NOTIFY;
   if (status === 'on') return who.person ? 'New messages in your chats reach this phone' : who.chat ? 'To-dos, blockers and replies reach this phone' : 'To-dos and blockers reach this phone';
   if (status === 'blocked') return 'Blocked for this site in the browser settings';
   if (status === 'unsupported' && who.iosTab) return 'On iPhone: Share › Add to Home Screen, open Autark there and connect again; notifications work in the Home Screen app';

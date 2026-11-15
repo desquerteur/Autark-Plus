@@ -57,7 +57,7 @@ test('compatible: streams text, assembles split tool_call deltas, runs a multi-s
   assert.equal(first.body.stream, true);
   assert.deepEqual(first.body.stream_options, { include_usage: true });
   assert.equal(first.body.reasoning_effort, undefined); // unknown server: no reasoning params
-  assert.deepEqual(first.body.messages, [{ role: 'system', content: 'STABLE\n\nVOLATILE' }, { role: 'user', content: 'hello' }]);
+  assert.deepEqual(first.body.messages, [{ role: 'system', content: 'STABLE' }, { role: 'user', content: '<live>\nVOLATILE\n</live>\n\nhello' }], 'the live context first in the user message');
   assert.deepEqual(first.body.tools[0], { type: 'function', function: { name: 'tasks__create', description: 'Create a task', parameters: input.tools[0].inputSchema } });
   const history = second.body.messages;
   assert.equal(history.length, 5);
@@ -94,7 +94,7 @@ test('compatible: Ollama flavour – no key, whole tool calls without index, rea
   assert.deepEqual(toolCalls, [{ name: 'tasks.create', args: { title: 'A' }, callId: 'call_1' }]);
   const [first, second] = server.hits('/v1/chat/completions');
   assert.equal(first.headers.authorization, undefined);
-  assert.equal(first.body.reasoning_effort, 'high');
+  assert.equal(first.body.reasoning_effort, undefined); // no documented per-model effort metadata: no invented levels
   assert.deepEqual(second.body.messages.slice(3), [
     { role: 'tool', tool_call_id: 'call_1', content: 'created {"title":"A"}' },
     { role: 'tool', tool_call_id: 'call_2', content: 'ERROR: Unknown tool: shell__run' },
@@ -114,7 +114,7 @@ test('compatible: LM Studio flavour – reasoning_content, image input as parts,
   assert.equal(result.error?.message, 'The model response was cut off.');
   assert.deepEqual(result.usage, { inputTokens: 9, outputTokens: 4 });
   const body = server.requests[0].body;
-  assert.deepEqual(body.messages[1].content, [{ type: 'text', text: 'see' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } }]);
+  assert.deepEqual(body.messages[1].content, [{ type: 'text', text: '<live>\nVOLATILE\n</live>' }, { type: 'text', text: 'see' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } }]);
   assert.equal(body.reasoning_effort, undefined);
 });
 
@@ -220,7 +220,10 @@ test('compatible: the temperature an agent asked for (model.set) goes as the sta
   await engine.run({ ...warm.input, temperature: 1.3 });
   const plain = turnInput({ account: acc, model: 'gpt-x', effort: 'none' });
   await engine.run(plain.input);
-  const [first, second] = server.hits('/v1/chat/completions');
+  for (const model of ['google/gemini-3-pro-preview', 'gemini-2.5-flash']) await engine.run({ ...turnInput({ account: acc, model, effort: 'none' }).input, temperature: 0.2 });
+  const [first, second, gemini3, gemini25] = server.hits('/v1/chat/completions');
   assert.equal(first.body.temperature, 1.3);
   assert.equal(second.body.temperature, undefined);
+  assert.equal(gemini3.body.temperature, undefined, 'B-083: Google keeps Gemini 3 at its default 1.0');
+  assert.equal(gemini25.body.temperature, 0.2);
 });

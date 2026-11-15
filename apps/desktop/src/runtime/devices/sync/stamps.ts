@@ -5,7 +5,10 @@
 // Last writer wins: the later `at`; at the same `at` the larger hash, except for two units nobody changed since
 // the link (at 0) – then the PC that joined takes the other one's (a fresh PC adopts the existing setup).
 // kv's updated_at is this PC's time of storing a stamp: a link-up sends what was stored after that PC's cursor
-// (ns 'sync.sent', the start of the last complete link-up with it).
+// (ns 'sync.sent', the start of the last complete link-up with it). A change that only takes over what a linked PC
+// changed (`echo`: a SYSTEM.md that came before its agents row, files.ts) is stamped half a step after the last stamp –
+// below any later change, which adds at least one –, so the row of the PC it came from still wins, also its other
+// fields (B-087).
 // Owns: these stamps, the cursors and the hash. Never: reads a synced row's content (only which keys have no stamp)
 // or writes one.
 
@@ -34,6 +37,8 @@ export class Stamps {
   private readonly db: Db;
   private readonly kv: KvRepo;
   private readonly clock: Clock;
+  /** Units whose next change here is an echo (see the header); each is used once. */
+  readonly echo = new Set<string>();
 
   constructor(db: Db, clock: Clock) {
     this.db = db;
@@ -50,6 +55,12 @@ export class Stamps {
   /** The stamp of a change made here now (never older than the last one). */
   next(old: Stamp | undefined, h: string, gone?: boolean): Stamp {
     return { at: Math.max(this.clock.now(), (old?.at ?? 0) + 1), h, ...(gone ? { gone: true as const } : {}) };
+  }
+
+  /** The stamp of a change of `key` here: next(), or for an echo half a step after the last one. */
+  change(key: string, old: Stamp | undefined, h: string, gone?: boolean): Stamp {
+    if (!this.echo.delete(key)) return this.next(old, h, gone);
+    return { at: (old?.at ?? 0) + 0.5, h, ...(gone ? { gone: true as const } : {}) };
   }
 
   /** Keys under `prefix` stored after `after` (this PC's time), oldest first. */

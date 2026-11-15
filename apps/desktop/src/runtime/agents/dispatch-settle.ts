@@ -1,15 +1,16 @@
 // How the dispatcher settles a main-lane turn that did not end the normal way (B-059), next to dispatch-runs.ts:
 // - #17 the executor threw after the run started (a database write in finish, a block parser, the lease …): the run is
-//   closed as failed (dispatch-runs.ts closeRun), this run's placeholder that still streams ends as a failed bubble
-//   (the person's Retry, as when a turn fails before its engine – turn.ts; a background run's silent row goes) and a task turn gets its normal after-turn
+//   closed as failed (dispatch-runs.ts closeRun), a failed bubble is posted in its chat
+//   (the person's Retry, as when a turn fails before its engine – turn.ts) and a task turn gets its normal after-turn
 //   handling (ownership.afterTurn 'failed': the follow-up with its pause, never a silent 'working' task) –
 //   only when the run was still open (else its own finish may have run afterTurn), never after the person's Stop or a
 //   shutdown, and not when its wakes go back to the queue anyway.
 // - #18 last-resort release: a turn that has not ended RELEASE_MS (60 s) after its abort (the person's Stop, an urgent
 //   hand-over, a shutdown) – a tool or engine that ignores its abort signal – is released: its slot frees, its run ends
 //   'interrupted' with a journal note, its calls in flight become 'unknown' in the journal (markOwnUnknown and the
-//   pending ones), its streaming bubble ends 'stopped', and after the person's Stop its task pauses ('stopped'). Accepted: the hung work
-//   may still end later (its late answer can still be posted; the dispatcher's bookkeeping ignores it).
+//   pending ones) – the chat's live bar ends with it (chat/live.ts) – and after the person's Stop its task pauses ('stopped').
+//   Accepted: the hung work may still end later (its late answer can still be posted at the chat's end, turn-finish.ts;
+//   the dispatcher's bookkeeping ignores it).
 //   B-057: a split lane is released the same way – its run closed and its cut calls marked, no bubble, groups or task –
 //   and its lane frees; the split service hears the person's Stop then (dispatch-runs.ts release → split-turn.ts
 //   turnEndedEarly), a shutdown's cut only from the hung turn's own late end (no second turn on its session meanwhile).
@@ -17,7 +18,6 @@
 // does), or decides what runs next.
 
 import type { RuntimeServices } from '../contracts.ts';
-import type { Message } from '../../shared/model/chat.ts';
 import { RunItemRepo } from '../store/runs.ts';
 import type { RunEntry } from './dispatch-runs.ts';
 
@@ -34,9 +34,9 @@ export function armRelease(entry: RunEntry, ms: number, release: () => void): vo
   }, { once: true });
 }
 
-/** #17: the executor threw – the streaming bubble fails and a task turn that was still open gets its after-turn handling. */
+/** #17: the executor threw – a failed bubble is posted in its chat and a task turn that was still open gets its after-turn handling. */
 export function settleCrash(services: RuntimeServices, entry: RunEntry, wasOpen: boolean): void {
-  endStreaming(services, entry, 'failed', CRASH_NOTE);
+  if (wasOpen) failedBubble(services, entry); // a turn whose finish ran posted its own answer
   if (!entry.taskId || !wasOpen || entry.control.stopKind || entry.settle === 'release' || entry.split) return;
   try {
     services.ownership.afterTurn({ agentId: entry.agentId, taskId: entry.taskId, runId: entry.runId, outcome: 'failed', progressed: false, note: CRASH_NOTE });
@@ -45,7 +45,7 @@ export function settleCrash(services: RuntimeServices, entry: RunEntry, wasOpen:
   }
 }
 
-/** #18: the turn did not end after its abort – close its run, name its cut calls, end its bubble; the caller frees the slot. */
+/** #18: the turn did not end after its abort – close its run, name its cut calls; the caller frees the slot. */
 export function abandonRun(services: RuntimeServices, entry: RunEntry): void {
   const stopKind = entry.control.stopKind;
   services.log.warn('turn did not stop after its abort; released', { agentId: entry.agentId, runId: entry.runId, stopKind });
@@ -60,7 +60,6 @@ export function abandonRun(services: RuntimeServices, entry: RunEntry): void {
   }
   markCut(services, entry.runId);
   if (entry.split) return; // B-057: a split lane has no bubble, groups or task – its release tells the split service (dispatch-runs.ts)
-  endStreaming(services, entry, 'stopped');
   // B-057: the groups this turn split start now – or, after the person's Stop, never (S13); its late finish finds none pending.
   try { services.splits?.afterParentTurn(entry.runId, stopKind === 'human' ? 'stopped' : 'failed'); } catch (error) { services.log.warn('splits of a released turn not settled', { runId: entry.runId, error: String(error) }); }
   if (!entry.taskId || !open || stopKind !== 'human') return; // urgent/shutdown: its wakes come back with the task
@@ -83,17 +82,12 @@ function markCut(services: RuntimeServices, runId: string): void {
   }
 }
 
-/**
- * This run's row that still streams (found among the chat's live rows, however much came after it) ends as `state`, its
- * streamed text kept; a silent one (a background run's live row) goes, as nothing was posted (chat/publish-message.ts).
- */
-function endStreaming(services: RuntimeServices, entry: RunEntry, state: Message['state'], error?: string): void {
-  if (!entry.conversationId) return;
+/** #17: the crashed turn's failed bubble with Retry at the end of its chat (13.11.2026: a run has no row there to end). */
+function failedBubble(services: RuntimeServices, entry: RunEntry): void {
+  if (!entry.conversationId || entry.split || entry.control.stopKind) return;
   try {
-    const live = services.chats.summary(entry.conversationId).live?.find((run) => run.runId === entry.runId);
-    const message = live && services.chats.message(live.messageId);
-    if (message?.state === 'streaming') services.chats.finishAgentMessage(message.id, { body: message.body, state, ...(error ? { meta: { error } } : {}) });
-  } catch (failure) {
-    services.log.warn('streaming bubble not ended', { runId: entry.runId, error: String(failure) });
+    services.chats.postAgentMessage(entry.conversationId, entry.agentId, entry.runId, { body: '', state: 'failed', meta: { error: CRASH_NOTE } });
+  } catch (error) {
+    services.log.warn('failed bubble not posted', { runId: entry.runId, error: String(error) });
   }
 }

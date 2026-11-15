@@ -1,11 +1,10 @@
 // B-055: the feedback tour as a dialog over the app (replay from Settings › Feedback "Watch how it
-// works", openTour() in open.ts). The first run shows the same player as its own first step
-// (ui/onboarding/FirstRun.tsx). A native modal dialog: Esc, the × and Continue close it (closeTour);
+// works", openTour() in open.ts; B-085 also the first run's choice card, ui/onboarding/ChoiceCard.tsx). A native modal dialog: Esc, the × and Continue close it (closeTour);
 // a click on the backdrop too. The player starts at its poster on every opening (it mounts afresh).
 // Owns: mounting the player while `tourOpen` is true. Never: the timeline or the scene.
 
 import { useLayoutEffect, useRef } from 'preact/hooks';
-import { closeTour, tourOpen } from './open.ts';
+import { closeTour, tourAutoplay, tourOpen } from './open.ts';
 import { TOUR_TITLE, TourPlayer } from './TourPlayer.tsx';
 
 export function TourDialog() {
@@ -26,7 +25,7 @@ function TourModal() {
       onCancel={(event) => { event.preventDefault(); closeTour(); }}
       onClick={(event) => { if (event.target === ref.current) closeTour(); }}
     >
-      <TourPlayer mode="dialog" onDone={closeTour} />
+      <TourPlayer onDone={closeTour} autoplay={tourAutoplay.peek()} />
     </dialog>
   );
 }

@@ -4,6 +4,8 @@
 //                   home project – the ONE place it is stored, so a disk edit counts as the person's edit
 //   SYSTEM.md       the agent's instructions: the ONE text the runtime prompt and the agent editor use
 //   skills/<name>/SKILL.md  its Main Skills (agentskills.io front matter name + description, like every skill)
+//   HUMAN.md        (owner 15.11.2026) the person's own lines to this agent, last in its system prompt; only the person
+//                   writes it (the agent page or the file) – no update, standard or agent edit touches it
 // Shapes for agents.core / agents.saveMainSkill / agents.setHome and the 'agentCore.changed' event, and the limits.
 // Owns: these shapes and constants. Never: behaviour (runtime/agent-core).
 
@@ -11,12 +13,15 @@ import type { SkillInfo } from './knowledge.ts';
 
 export const AGENT_CORE_DIR = 'agents';
 export const SYSTEM_FILE = 'SYSTEM.md';
+/** The longest SYSTEM.md, one number for hiring, agents.update and the RPC. */
+export const MAX_SYSTEM_MD = 60_000;
 export const CORE_MANIFEST = 'agent.json';
+export const HUMAN_FILE = 'HUMAN.md';
+/** The longest HUMAN.md the prompt and the agent page take (a longer one is cut in the prompt). */
+export const MAX_HUMAN_MD = 4_000;
 export const MAIN_SKILLS_DIR = 'skills';
-/** Same cap as an agent's instructions (org/patch.ts). */
-export const SYSTEM_MAX_CHARS = 20_000;
-/** Larger files are not read at all (20 000 characters are at most 80 KB in UTF-8). */
-export const SYSTEM_MAX_BYTES = 128 * 1024;
+/** Larger files are not read at all (MAX_SYSTEM_MD characters are at most four bytes each in UTF-8). */
+export const SYSTEM_MAX_BYTES = 4 * MAX_SYSTEM_MD;
 /** Main Skills listed in the agent's prompt (name + description); beyond, skills.list names them. */
 export const MAIN_SKILLS_IN_PROMPT = 40;
 /** A SKILL.md in the Main Skills folder larger than this is named as a problem (agents.saveMainSkill stays below it). */
@@ -77,6 +82,8 @@ export interface AgentCoreInfo {
   notice?: AgentCoreNotice;
   /** The agent's Main Skills, alphabetical (also ones waiting for review: `disabled`); `path` is '' outside the owner scope. */
   mainSkills: SkillInfo[];
+  /** HUMAN.md's text ('' when missing or empty) – the person's own lines, last in the agent's prompt. */
+  human?: string;
   /** SKILL.md files in its skills folder that need a fix (folder relative to skills/); absent = none. */
   skillProblems?: Array<{ folder: string; problem: MainSkillProblem }>;
 }

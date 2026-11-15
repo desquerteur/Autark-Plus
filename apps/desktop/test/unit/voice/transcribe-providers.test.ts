@@ -49,7 +49,7 @@ function services(account: Account, model: string): RuntimeServices {
   } as unknown as RuntimeServices;
 }
 
-const account = (provider: string, baseUrl?: string): Account => ({ id: `acc_${provider}`, provider, label: provider, auth: 'api_key', ...(baseUrl ? { baseUrl } : {}), state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 } as Account);
+const account = (provider: string, baseUrl?: string): Account => ({ id: `acc_${provider}`, provider, label: provider, auth: 'api_key', ...(baseUrl ? { baseUrl } : {}), state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 } as Account);
 
 test('a Groq account transcribes with whisper-large-v3-turbo: json, language', async () => {
   const groq = await server(() => ({ status: 200, body: { text: ' Hallo Gerd, wie geht es dir? ', segments: [{ text: ' Hallo Gerd,', avg_logprob: -1.4, no_speech_prob: 0.01 }, { text: ' wie geht es dir?', avg_logprob: -0.1, no_speech_prob: 0.01 }] } }));

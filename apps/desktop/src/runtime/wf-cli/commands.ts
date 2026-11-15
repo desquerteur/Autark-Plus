@@ -4,8 +4,12 @@
 // feedback setup | receive | status) in feedback.ts. Every command goes through the
 // runtime's normal RPC with owner scope – the same methods and checks as the desktop window;
 // nothing here skips a runtime rule.
+// B-080: `wf call` reads its params as JSON or in the shapes Windows shells deliver (parseParams).
+// B-085: run by an agent (discover.ts agentOf), `send` writes as that agent – the runtime's messages.send does that;
+// its --wait then skips that agent's own later lines (withoutAuthor).
 // Owns: what each command calls and prints. Never: marks chats as read, retries a call, or
-// prints params (they may hold keys the person typed).
+// prints params (they may hold keys the person typed) – B-080: params that are no JSON in any shape show their first
+// 80 characters in the error, so the caller sees what its shell delivered (run.ts redacts the owner token there too).
 
 import { randomUUID } from 'node:crypto';
 import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
@@ -58,7 +62,7 @@ export interface Command {
 }
 
 const METHOD = /^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$/;
-const ACTIVE: readonly TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked'];
+const ACTIVE: readonly TaskStatus[] = ['open', 'waiting'];
 const SEND_WAIT_MS = 300_000;
 const NO_REPLY = 'No reply arrived before the timeout.';
 
@@ -74,12 +78,42 @@ function statuses(parsed: Parsed): string[] | undefined {
   return status;
 }
 
-function parseParams(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new CliError('bad_request', 'The params are not valid JSON. Pass one JSON value, or - to read it from stdin.');
+/** B-085 review: the rpc as the reply waiter sees it, without the sending agent's own later lines (its turn may answer in that chat). */
+function withoutAuthor(rpc: Rpc, author: () => string | undefined): Rpc {
+  return {
+    call: (method, params) => rpc.call(method, params),
+    onEvent: (listener) => rpc.onEvent((event, data) => {
+      const by = author();
+      if (by === undefined || (data as Partial<Message>)?.authorId !== by) listener(event, data);
+    }),
+    lost: rpc.lost,
+    close: () => rpc.close(),
+  };
+}
+
+/** {mine:true,status:[done],limit:5} → {"mine":true,"status":["done"],"limit":5}: every bare word quoted but true, false, null and numbers. */
+function quoteBare(text: string): string {
+  return text.replace(/[^{}[\],:\s]+(?:\s+[^{}[\],:\s]+)*/g, (word) => (/^(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(word) ? word : JSON.stringify(word)));
+}
+
+/**
+ * B-080 (live 05.–07.11.2026: 48 "params are not valid JSON" – Windows PowerShell 5.1 drops the inner double quotes of a
+ * native argument, cmd keeps the outer single quotes): JSON first, then the shapes those shells deliver – one pair of
+ * outer single quotes dropped (cmd), and where no " is left, bare keys and words quoted (PowerShell 5.1:
+ * {match:tasks} → {"match":"tasks"}). B-080 review: a ',' or ':' with whitespace beside it may be prose inside a value
+ * ("Done, next: tests" would read as one more key and a cut message), so such a shape gets no repair; a ',' or ':'
+ * without spaces inside a value (a URL, a time) mostly breaks the JSON as well. Either way the error names the stdin form.
+ */
+export function parseParams(raw: string, method: string): unknown {
+  const shapes = [raw];
+  const unquoted = /^\s*'([\s\S]*)'\s*$/.exec(raw)?.[1];
+  if (unquoted !== undefined) shapes.push(unquoted);
+  for (const shape of [...shapes]) if (!shape.includes('"') && !/\s[,:]|[,:]\s/.test(shape)) shapes.push(quoteBare(shape));
+  for (const shape of shapes) {
+    try { return JSON.parse(shape); } catch { /* the next shape */ }
   }
+  const shown = raw.replace(/\s+/g, ' ').trim().slice(0, 80);
+  throw new CliError('bad_request', `The params arrived as ${shown} – no JSON. In Windows PowerShell they go on stdin: '<json>' | wf call ${method} -`);
 }
 
 const call: Command = {
@@ -91,7 +125,7 @@ const call: Command = {
   async run(ctx) {
     const [method, raw] = ctx.parsed.args;
     checkMethod(method);
-    const params = raw === undefined ? undefined : parseParams(raw === '-' ? await ctx.stdin() : raw);
+    const params = raw === undefined ? undefined : parseParams(raw === '-' ? await ctx.stdin() : raw, method);
     ctx.out.json(await ctx.rpc.call(method, params), !ctx.json);
   },
 };
@@ -129,7 +163,7 @@ const read: Command = {
 
 const send: Command = {
   usage: 'send <chat> <text… | -> [--important | --silent] [--wait [--timeout s]]',
-  summary: 'Send a message as you (@Name in the text mentions an agent). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s).',
+  summary: 'Send a message as the agent running it (from an agent\'s own shell or script), otherwise as the person who owns this PC (@Name in the text mentions an agent). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s).',
   options: ['important', 'silent', 'wait', 'timeout'],
   arity: [2, Number.POSITIVE_INFINITY],
   defaultTimeoutMs: (parsed) => (flag(parsed, 'wait') ? SEND_WAIT_MS : undefined),
@@ -145,11 +179,13 @@ const send: Command = {
     if (!body.trim()) throw new CliError('bad_request', 'Nothing to send.');
     const { chat, name } = await resolveChat(ctx.rpc, ref);
     const title = chatTitle(chat, name);
-    // Subscribe before sending, so a fast reply is not missed.
-    const waiter = flag(ctx.parsed, 'wait') ? await replyWaiter(ctx, chat.id) : undefined;
+    // Subscribe before sending, so a fast reply is not missed. Sent by an agent, its own later lines are no reply.
+    let sender: string | undefined;
+    const waiter = flag(ctx.parsed, 'wait') ? await replyWaiter({ ...ctx, rpc: withoutAuthor(ctx.rpc, () => sender) }, chat.id) : undefined;
     const message = await ctx.rpc.call('messages.send', {
       conversationId: chat.id, body, priority: flag(ctx.parsed, 'important') ? 'important' : undefined, silent: flag(ctx.parsed, 'silent') || undefined, clientId: `wf-${randomUUID()}`,
     }) as Message;
+    if (message.authorKind === 'agent') sender = message.authorId;
     if (!waiter) {
       if (ctx.json) ctx.out.json(message);
       else ctx.out.line(`Sent to ${title} (${message.id}).`);

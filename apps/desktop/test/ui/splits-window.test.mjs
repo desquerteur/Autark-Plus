@@ -17,10 +17,9 @@
 //       part's start time, live model and Stop (title menu); the worktree part's page has no Merge / Discard cell (merging is the
 //       agent's job, split_merge) and its branch holds the change; Stop keeps every fact row in place;
 //       the open part's sidebar row stays in view;
-//   (d) the composer's Ultra switch (owner 30.10.2026: suggested for the next message): on / off, every composer cell keeps
-//       its box; a sent message carries meta.ultra and shows the marker, the cell is off again, no chat setting;
+//   (d) B-083: the composer has no Ultra switch (the agent splits itself when it pays, owner 08.11.2026);
 //   (e) light and dark at 1280×800, 640×480 and 390×844: no horizontal overflow of the main containers, no overlapping
-//       or clipped text in the split elements, the composer's model chip keeps room for its words beside the Ultra cell;
+//       or clipped text in the split elements, the composer's model chip keeps room for its words;
 //       no renderer errors.
 // Run: npm run build && node --test test/ui/splits-window.test.mjs   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -280,37 +279,8 @@ test('splits: step line, live block, sidebar rows, split page, worktree merge an
   await theme('light');
   await live.locator('.split-row-head').nth(1).click();
 
-  // (d) Ultra (owner 30.10.2026): suggested for the next message – the labelled switch beside the model chip, on and
-  // off, every composer cell keeps its box; the sent message carries it (meta.ultra) and shows the marker, the switch is
-  // off again, and the chat keeps no Ultra setting.
-  const ultra = page.locator('.composer .ultra-switch');
-  const pressed = (value) => page.waitForFunction((want) => document.querySelector('.composer .ultra-switch')?.getAttribute('aria-checked') === want, value);
-  assert.equal(await ultra.getAttribute('aria-checked'), 'false');
-  assert.equal(await ultra.getAttribute('title'), 'Suggest Ultra for this message');
-  const cells = await page.locator('.composer-actions > *').count();
-  const cellIds = Array.from({ length: cells }, (_, i) => `.composer-actions > :nth-child(${i + 1})`);
-  await expectStable(page, [...fixed, ...cellIds], async () => { await ultra.click(); await pressed('true'); });
-  assert.equal(await ultra.getAttribute('title'), 'Ultra suggested for this message');
-  assert.equal((await ultra.textContent())?.trim(), 'Ultra', 'a labelled switch');
-  await shot('splits-06-ultra-on-light');
-  await theme('dark');
-  await shot('splits-07-ultra-on-dark');
-  await theme('light');
-  await expectStable(page, [...fixed, ...cellIds], async () => { await ultra.click(); await pressed('false'); });
-  await ultra.click();
-  await pressed('true');
-  const field = page.locator('.composer .composer-input');
-  await field.fill('/silent Ultra check: compare the three drafts'); // silent: no agent turn starts in the middle of this test
-  await field.press('Enter');
-  await pressed('false'); // the next message starts without it
-  const sent = (await until(() => rpc.call('messages.list', { conversationId: launch.id, limit: 30 }),
-    (list) => list.some((message) => message.body === 'Ultra check: compare the three drafts'), 'the Ultra message is sent', 10_000))
-    .find((message) => message.body === 'Ultra check: compare the three drafts');
-  assert.equal(sent.meta.ultra, true, 'the message carries the suggestion');
-  assert.equal(sent.silent, true);
-  await page.locator(`[data-message-id="${sent.id}"] .ultra-marker`).waitFor({ timeout: 10_000 });
-  assert.equal((await rpc.call('chats.get', { id: launch.id })).settings.ultra, undefined, 'no chat setting');
-  await shot('splits-06b-ultra-sent-light');
+  // (d) B-083: no Ultra switch in the composer any more (the agent splits itself when it pays, owner 08.11.2026).
+  assert.equal(await page.locator('.composer .ultra-switch').count(), 0);
 
   // (b) Team sidebar: the count in the reserved cell; the caret opens reports and split rows under the agent.
   await go(`#/team/${manager.id}`, '.team-nav .team-row');

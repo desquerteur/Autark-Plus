@@ -108,6 +108,7 @@ export function validateSettings(s: Settings): void {
   if (!validTimezone(p.timezone)) bad('profile.timezone', 'an IANA time zone');
   // B-078: the AI's note (line breaks and tabs are fine, other control characters are not)
   if (p.notes !== undefined && (typeof p.notes !== 'string' || p.notes.length > NOTES_MAX || /[\u0000-\u0008\u000b-\u001f]/.test(p.notes))) bad('profile.notes', `text up to ${NOTES_MAX} characters`);
+  if (p.pcAccess !== undefined) oneOf(p.pcAccess, 'profile.pcAccess'); // B-085: absent = whole
 
   const ui = s.preferences;
   oneOf(ui.theme, 'preferences.theme');

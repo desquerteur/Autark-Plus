@@ -5,7 +5,11 @@
 // in order; when the person talks over it ('interrupted') playback stops at once and the runtime is told
 // how much was heard. When it ends by itself the chat's voice conversation takes over (CallHeader.tsx). The
 // audio output is made inside the tap (prepareRealtimeOutput) – mobile browsers keep a context made later
-// suspended, so no answer would be heard.
+// suspended, so no answer would be heard. B-081: a callId takes that call (an agent's ring, or a call on another device);
+// when another device takes it over, the session ends with TAKEN_OVER (CallHeader.tsx then starts no fallback).
+// B-085 (call card, CallCard.tsx): Mute sends silence of the same length (mute.ts); each captured block's level and
+// each answer piece's level at its play time go to the card's meters (levels.ts); realtimePhase says connecting /
+// listening / speaking (the provider's 'speaking' and 'done'). A new session starts unmuted.
 // Owns: capture, playback and the two loops of one session. Never: provider protocol, keys, or the chat.
 
 import { signal } from '@preact/signals';
@@ -13,15 +17,19 @@ import type { RealtimeOut } from '../../../shared/model/call.ts';
 import { REALTIME_RATE } from '../../../shared/model/call.ts';
 import { openMicrophone } from '../../lib/microphone.ts';
 import type { Microphone, SampleListener } from '../../lib/microphone.ts';
-import { Pcm16Encoder, pcm16ToFloat } from '../../lib/pcm.ts';
+import { meterLevel, Pcm16Encoder, pcm16ToFloat, rms } from '../../lib/pcm.ts';
 import { bridge } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
 import { toastError } from '../../lib/toasts.ts';
+import { micMeter, playMeter } from './levels.ts';
+import { heardSamples, setCallMuted } from './mute.ts';
 
 const CHUNK_BYTES = 4800; // 100 ms of 24 kHz PCM16
 
 /** The chat whose realtime session runs on this device (null: none). */
 export const realtimeChat = signal<string | null>(null);
+/** B-085: where this device's realtime session stands (the call card's status). */
+export const realtimePhase = signal<'connecting' | 'listening' | 'speaking'>('connecting');
 
 export interface RealtimeDeps {
   call: typeof rpc.call;
@@ -48,21 +56,24 @@ export class RealtimeCall {
   private closed = false;
 
   private readonly prepared: AudioContext | null;
+  private readonly callId?: string;
 
-  /** `output`: the audio output made in the tap (else one is made when the session opened). */
-  constructor(conversationId: string, deps: RealtimeDeps, output?: AudioContext | null) {
+  /** `output`: the audio output made in the tap (else one is made when the session opened); `callId`: the call it takes. */
+  constructor(conversationId: string, deps: RealtimeDeps, output?: AudioContext | null, callId?: string) {
     this.conversationId = conversationId;
     this.deps = deps;
     this.prepared = output ?? null;
+    this.callId = callId;
   }
 
   async start(onEnd: (reason?: string) => void): Promise<void> {
     await this.deps.arm?.();
-    const opened = await this.deps.call('calls.realtimeOpen', { conversationId: this.conversationId });
+    const opened = await this.deps.call('calls.realtimeOpen', { conversationId: this.conversationId, ...(this.callId ? { callId: this.callId } : {}) });
     if (this.closed) { void this.deps.call('calls.realtimeClose', { sessionId: opened.sessionId }).catch(() => undefined); return; }
     this.sessionId = opened.sessionId;
     this.output = this.prepared ?? this.deps.newOutput();
     this.mic = await this.deps.openMicrophone((samples, rate) => this.capture(samples, rate));
+    if (!this.closed) realtimePhase.value = 'listening';
     void this.pullLoop(onEnd);
   }
 
@@ -81,7 +92,9 @@ export class RealtimeCall {
   private capture(samples: Float32Array, rate: number): void {
     if (this.closed || !this.sessionId) return;
     this.encoder ??= new Pcm16Encoder(rate, REALTIME_RATE);
-    for (const byte of this.encoder.push(samples)) this.pending.push(byte);
+    const heard = heardSamples(samples); // muted: silence of the same length, the stream goes on
+    micMeter.push(heard === samples ? meterLevel(rms(samples)) : 0, performance.now());
+    for (const byte of this.encoder.push(heard)) this.pending.push(byte);
     while (this.pending.length >= CHUNK_BYTES) {
       const chunk = Uint8Array.from(this.pending.splice(0, CHUNK_BYTES));
       void this.deps.call('calls.realtimeSend', { sessionId: this.sessionId, audio: base64(chunk) }).catch(() => undefined);
@@ -104,8 +117,9 @@ export class RealtimeCall {
 
   private handle(event: RealtimeOut): void {
     if (event.type === 'audio') this.play(unbase64(event.data));
-    else if (event.type === 'speaking') this.answerStarted = Math.max(this.output?.currentTime ?? 0, this.playAt);
-    else if (event.type === 'interrupted') this.interrupted();
+    else if (event.type === 'speaking') { this.answerStarted = Math.max(this.output?.currentTime ?? 0, this.playAt); realtimePhase.value = 'speaking'; }
+    else if (event.type === 'done') realtimePhase.value = 'listening'; // its audio may still play (the card reads playMeter)
+    else if (event.type === 'interrupted') { this.interrupted(); realtimePhase.value = 'listening'; }
     else if (event.type === 'error') toastError(new Error(event.message), 'Realtime voice');
   }
 
@@ -119,6 +133,7 @@ export class RealtimeCall {
     source.buffer = buffer;
     source.connect(output.destination);
     this.playAt = Math.max(this.playAt, output.currentTime);
+    playMeter.queue(meterLevel(rms(samples)), performance.now() + (this.playAt - output.currentTime) * 1000, buffer.duration * 1000);
     source.start(this.playAt);
     this.playAt += buffer.duration;
     this.playing.add(source);
@@ -138,6 +153,7 @@ export class RealtimeCall {
     for (const source of this.playing) { try { source.stop(); } catch { /* already stopped */ } }
     this.playing.clear();
     this.playAt = this.output?.currentTime ?? 0;
+    playMeter.clear();
   }
 }
 
@@ -164,18 +180,20 @@ export function discardRealtimeOutput(output: unknown): void {
   if (output && typeof (output as AudioContext).close === 'function') void (output as AudioContext).close().catch(() => undefined);
 }
 
-/** Starts realtime voice in `conversationId` on this device (from a tap); `onEnd` runs once it stops by itself. */
-export async function startRealtime(conversationId: string, onEnd: (reason?: string) => void, deps: RealtimeDeps = browserDeps, output?: AudioContext | null): Promise<void> {
+/** Starts realtime voice in `conversationId` on this device (from a tap); `onEnd` runs once it stops by itself; `callId`: the call it takes. */
+export async function startRealtime(conversationId: string, onEnd: (reason?: string) => void, deps: RealtimeDeps = browserDeps, output?: AudioContext | null, callId?: string): Promise<void> {
   current?.stop();
-  const call = new RealtimeCall(conversationId, deps, output);
+  const call = new RealtimeCall(conversationId, deps, output, callId);
   current = call;
   realtimeChat.value = conversationId;
-  const ended = (reason?: string) => { if (current === call) { current = null; realtimeChat.value = null; } onEnd(reason); };
+  realtimePhase.value = 'connecting';
+  setCallMuted(false);
+  const ended = (reason?: string) => { if (current === call) { current = null; realtimeChat.value = null; setCallMuted(false); } onEnd(reason); };
   try {
     await call.start(ended);
   } catch (error) {
     call.stop();
-    if (current === call) { current = null; realtimeChat.value = null; }
+    if (current === call) { current = null; realtimeChat.value = null; setCallMuted(false); }
     throw error;
   }
 }
@@ -184,5 +202,6 @@ export function stopRealtime(): void {
   const call = current;
   current = null;
   realtimeChat.value = null;
+  setCallMuted(false);
   call?.stop();
 }

@@ -8,7 +8,8 @@
 //    it is queued for the blob clean-up at once, due after TRANSCRIBE_WINDOW_MS (files/cleanup.ts keeps
 //    what something uses), so an utterance nobody transcribes does not stay on the owner's disk;
 //  * voice.transcribe transcribes only an utterance this person uploaded in the last TRANSCRIBE_WINDOW_MS,
-//    once (kept in memory per person, bounded) – never another file of the PC; the people's transcriptions
+//    once (kept in memory per person, bounded; B-082: a hearing that failed may be asked again in the window)
+//    – never another file of the PC; the people's transcriptions
 //    run one after another (one per person, a short queue), so they bill the owner's speech-to-text account
 //    once per utterance and never hold both of the transcriber's dictation slots (the owner keeps one);
 //  * models.list tells only whether speech-to-text is there: the transcription-capable models with their
@@ -139,19 +140,26 @@ export function registerPersonVoice(table: HandlerTable): void {
   table.addPerson('voice.transcribe', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
-    onlyKeys(o, ['fileId', 'language']);
+    // B-082: `before` (the take's earlier words, the person's own) and `live` (a call line) as for the owner; a
+    // `chatId` is taken and left unused – a chat's context stays the owner's.
+    onlyKeys(o, ['fileId', 'language', 'chatId', 'before', 'live']);
     const fileId = text(o, 'fileId', { max: 64 });
     if (!FILE_ID.test(fileId)) bad('fileId', 'the id of a recorded utterance');
     const language = optText(o, 'language', { max: 16 });
     if (language !== undefined && !LANGUAGE.test(language)) bad('language', 'a language code like "de" or "en-US"');
+    optText(o, 'chatId', { max: 64 });
+    const before = optText(o, 'before', { max: 2_000, multiline: true, allowEmpty: true });
+    if (o.live !== undefined && o.live !== true) bad('live', 'true or left out');
     const list = recentOf(ctx.services);
     const own = fileId.toLowerCase();
     if (!list.has(person.id, own, ctx.services.clock.now())) {
       throw new WorkforceError('forbidden', 'Only your own recording from just now can be transcribed, once.', { details: { reason: 'not_your_utterance' } });
     }
     if (list.busy(person.id)) throw new WorkforceError('conflict', 'Your last recording is still being transcribed. Try again in a moment.');
-    list.take(person.id, own, ctx.services.clock.now());
-    return list.hear(person.id, () => ctx.extras.voice.transcribe({ fileId: own, language }));
+    const takenAt = ctx.services.clock.now();
+    list.take(person.id, own, takenAt);
+    return list.hear(person.id, () => ctx.extras.voice.transcribe({ fileId: own, language, ...(before ? { before } : {}), ...(o.live === true ? { live: true as const } : {}) }))
+      .catch((error: unknown) => { list.note(person.id, own, takenAt); throw error; }); // B-082: not heard – "Transcribe again" can ask once more
   });
   table.addPerson('models.list', (_params, ctx) => {
     caller(ctx);

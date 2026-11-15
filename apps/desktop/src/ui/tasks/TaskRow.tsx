@@ -22,7 +22,7 @@ import { taskMenu } from './task-menu.ts';
 
 export function TaskRow(props: { task: TaskView; selected: boolean; onSelect: (id: string) => void }) {
   const { task } = props;
-  const finished = task.status === 'done' || task.status === 'cancelled';
+  const finished = task.status === 'done' || task.status === 'dropped';
   const known = task.conversationId && canOpenChat(task.conversationId) ? conversationMap.value.get(task.conversationId) : undefined;
   const chat = known ? chatTitle(known) : ''; // no label for the Inbox / To-do anchor chats
   const progress = progressShort(task.progress);
@@ -30,7 +30,7 @@ export function TaskRow(props: { task: TaskView; selected: boolean; onSelect: (i
   const line = finished ? null : progressLine(task, { note, nameOf: agentName });
   // the meta line's parts run as one line, shortened as a whole with one '…' (lib/kept-tail.ts FittedRun); the due time stays whole after it
   const run: RunPart[] = [
-    ...(line ? [{ key: 'line', text: line, class: `task-row-line${task.status === 'blocked' ? ' blocked' : ''}` }] : []),
+    ...(line ? [{ key: 'line', text: line, class: 'task-row-line' }] : []),
     ...(chat ? [{ key: 'chat', text: chat, class: 'task-row-chat' }] : []),
     ...(finished && task.result?.summary ? [{ key: 'result', text: plainPreview(task.result.summary, 90) }] : []),
   ];

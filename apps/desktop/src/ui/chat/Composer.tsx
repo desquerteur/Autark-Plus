@@ -1,7 +1,8 @@
 // The one composer: auto-growing field (to ~40 % of the window), Enter sends (setting), per-chat drafts,
 // attachments (Plus menu, drag/drop, paste), @mentions and /commands, dictation into the caret (the
 // waveform sits in the action row's spacer) and one primary button: Send, disabled without content.
-// Action row, fixed cells: [+] [spacer] [Ultra] [Model] [Mic] [Send] – nothing in it moves on a click.
+// Action row, fixed cells: [+] [spacer] [Model] [Mic] [Send] – nothing in it moves on a click (B-083: no Ultra cell –
+// the agent splits itself when it pays, owner 08.11.).
 // How a message goes out: /important, /silent, or the Plus menu's and the Send button's right-click menu's "Send as important",
 // "Send silently" (with nothing to send yet: the draft's level) and "Schedule…": that switches the composer into schedule
 // mode (composer/ScheduleBar.tsx above the text, the field taller, Send = Schedule; Esc or × leaves; text only – a draft
@@ -9,6 +10,9 @@
 // ChatSecretBar above the text: each row becomes a chip).
 // A reply shows its quote chip above the field (X or Esc cancels it) and goes out as `replyTo`.
 // A one-shot fill ("/task ") goes only into an empty composer – it never overwrites the person's draft.
+// B-082: unsure places of dictated text are highlighted behind the field (composer/MarkLayer.tsx); a click or tap with
+// the caret in one opens its menu (composer/MarkMenu.tsx). The text itself stays plain. A kept take's chip has
+// "Transcribe again" (composer/voice.ts retryTake: the words go in at the caret).
 // Owns: input handling and when to send (the send itself: composer/send.ts). Never: message rendering or chat settings UI.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -36,18 +40,23 @@ import { ScheduleBar } from './composer/ScheduleBar.tsx';
 import { leaveScheduleMode, openScheduleMode, scheduleDraft, scheduleModeFor } from './composer/schedule-mode.ts';
 import { scheduleSpec } from './composer/schedule-form.ts';
 import { useNextRun } from './composer/schedule-next.ts';
-import { UltraCell, ultraOffered } from './composer/UltraCell.tsx';
-import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, transcribing } from './composer/voice.ts';
-import { MicButton, useDictationField, waveState } from './composer/MicButton.tsx';
+import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, retryTake, transcribing } from './composer/voice.ts';
+import { MicButton, targetOf, useDictationField, waveState } from './composer/MicButton.tsx';
 import { DictationWave } from './composer/DictationWave.tsx';
 import { mentionsIn, targetAgent } from './composer/target.ts';
 import { composerControls } from './composer/controls.ts';
+import type { SpanMark } from '../../shared/voice/marks.ts';
+import { markAt } from './composer/draft-marks.ts';
+import { MarkLayer } from './composer/MarkLayer.tsx';
+import { MarkMenu } from './composer/MarkMenu.tsx';
 
 export function Composer(props: { chat: ConversationSummary }) {
   const { chat } = props;
   const draft = draftFor(chat.id);
-  const { text, attachments, level, replyTo, secrets = [], ultra = false } = draft.value;
+  const { text, attachments, level, replyTo, secrets = [], marks } = draft.value;
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const [openMark, setOpenMark] = useState<SpanMark | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const [caret, setCaret] = useState(0);
@@ -134,7 +143,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   };
 
   // The whole draft goes out – files, secrets, reply – also at another level (composer/send.ts).
-  const sendAs = (body: string, sentLevel: MessageLevel) => sendDraft({ conversationId: chat.id, body, level: sentLevel, mentions: (sent) => mentionsIn(sent, chat), ultraOffered: ultraOffered(chat) });
+  const sendAs = (body: string, sentLevel: MessageLevel) => sendDraft({ conversationId: chat.id, body, level: sentLevel, mentions: (sent) => mentionsIn(sent, chat) });
 
   /** `sentLevel`: the Plus menu's "Send as important" / "Send silently" (no slash command then). */
   const send = async (sentLevel?: MessageLevel) => {
@@ -170,7 +179,7 @@ export function Composer(props: { chat: ConversationSummary }) {
     try {
       if (isDictating && !(await dictateIntoDraft())) return;
       if (sentLevel) updateDraft(chat.id, { level: sentLevel });
-      await scheduleDraft(chat, draft.peek().ultra === true && ultraOffered(chat));
+      await scheduleDraft(chat);
     } finally {
       setSending(false);
       fieldRef.current?.focus();
@@ -178,6 +187,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (openMark) { setOpenMark(null); if (event.key === 'Escape') { event.preventDefault(); return; } } // typing closes the mark menu
     if (suggest.onKeyDown(event, visibleItems, accept)) { event.preventDefault(); return; }
     if (event.key === 'Escape' && scheduling) { event.preventDefault(); leaveScheduleMode(chat.id); return; }
     if (event.key === 'Escape' && draft.peek().replyTo) { event.preventDefault(); setReply(chat.id, null); return; }
@@ -222,7 +232,7 @@ export function Composer(props: { chat: ConversationSummary }) {
     scheduling,
   };
   const sendMenu = useContextMenu(() => [{ items: sendMenuItems(sendActions) }]);
-  // Schedule mode: the same round cell with a clock (a wider label would move Ultra, the model and the mic)
+  // Schedule mode: the same round cell with a clock (a wider label would move the model and the mic)
   const primary = <button type="button" class="send-button" aria-label={scheduling ? 'Schedule' : 'Send'} title={scheduling ? 'Schedule' : undefined} {...sendMenu}
     disabled={(scheduling ? !scheduleReady || transcribingHere : controls.primary === 'send-disabled') || sending || uploading.length > 0}
     onClick={() => void (scheduling ? scheduleNow() : send())}><Icon name={scheduling ? 'clock' : 'arrow-up'} size={19} /></button>;
@@ -239,8 +249,10 @@ export function Composer(props: { chat: ConversationSummary }) {
         {replyTo && <ReplyQuote conversationId={chat.id} messageId={replyTo} onCancel={() => { setReply(chat.id, null); fieldRef.current?.focus(); }} />}
         <SecretAttachments ids={secrets} onRemove={id => updateDraft(chat.id, { secrets: secrets.filter(entry => entry !== id) })} />
         <ComposerAttachments attachments={attachments} uploading={uploading}
+          onRetry={(attachment) => retryTake(chat.id, attachment, targetOf(fieldRef.current))}
           onRemove={(fileId) => updateDraft(chat.id, { attachments: draft.value.attachments.filter((entry) => entry.fileId !== fileId) })} />
         <div class="composer-field">
+          {marks?.uncertain?.length ? <MarkLayer field={fieldRef} layer={layerRef} text={text} marks={marks.uncertain} /> : null}
           <textarea
             ref={fieldRef}
             class="composer-input"
@@ -248,12 +260,18 @@ export function Composer(props: { chat: ConversationSummary }) {
             value={text}
             placeholder={placeholder}
             aria-label={placeholder}
-            onInput={(event) => { const field = event.target as HTMLTextAreaElement; setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); }}
+            onInput={(event) => { const field = event.target as HTMLTextAreaElement; setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); setOpenMark(null); }}
             onKeyDown={onKeyDown}
             onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
-            onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
+            onClick={(event) => {
+              const field = event.target as HTMLTextAreaElement;
+              setCaret(field.selectionStart);
+              const index = field.selectionStart === field.selectionEnd ? markAt(draft.peek().marks, field.selectionStart) : -1;
+              setOpenMark(index < 0 ? null : draft.peek().marks?.uncertain?.[index] ?? null);
+            }}
             onPaste={onPaste}
           />
+          {openMark && <MarkMenu key={`${openMark.start}:${openMark.end}`} conversationId={chat.id} field={fieldRef} layer={layerRef} mark={openMark} onClose={() => setOpenMark(null)} onCaret={setCaret} />}
         </div>
         <div class="composer-actions">
           <PlusMenu chat={chat} actions={{
@@ -265,7 +283,6 @@ export function Composer(props: { chat: ConversationSummary }) {
             ...sendActions,
           }} />
           <div class="composer-spacer"><DictationWave state={waveState(chat.id)} /></div>
-          <UltraCell chat={chat} on={ultra} onToggle={(next) => updateDraft(chat.id, { ultra: next || undefined })} />
           <ModelChip chat={chat} agentId={agentId} openSignal={modelSignal} />
           <MicButton draftKey={chat.id} field={fieldRef} onStop={() => void dictateIntoDraft()} />
           {primary}

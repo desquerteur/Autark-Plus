@@ -24,13 +24,13 @@ export function FeedbackPrivacyDialog() {
   return (
     <Dialog open={showing.value} onClose={close} title="Feedback privacy" width={640}>
       <div class="feedback-privacy-details">
+        <p><a href="https://openautark.com/privacy/" target="_blank" rel="noopener noreferrer">Privacy notice on openautark.com</a></p>
         <p><strong>Who receives it.</strong> Teydra Lab, operated by Meral Anna Hees,
           Ludwig-Richter-Straße 4a/Top3, 5020 Salzburg, Austria.
           Contact: <a href="mailto:official@teydralab.com">official@teydralab.com</a>.</p>
         <p><strong>What is sent.</strong> Your feedback text, the screenshot you choose to include,
           the report ID and date, app version, operating system and the current app view.
-          Reports filed by an agent are marked as such. Recent warning/error messages are included
-          only when diagnostic sharing is enabled in settings. Your chat history is not attached.
+          Reports filed by an agent are marked as such. When you send a report, recent warning and error messages are automatically included if available, after automatic redaction (up to 15 entries and 2,000 characters). Your chat history is not attached.
           A copy of the report is saved on your PC.</p>
         <p><strong>Why.</strong> We use reports to understand problems, fix bugs and improve the app.
           Processing is based on our legitimate interest in maintaining and improving the app

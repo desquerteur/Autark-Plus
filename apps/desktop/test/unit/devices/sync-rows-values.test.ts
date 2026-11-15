@@ -137,7 +137,7 @@ test('a plan login a PC found travels as metadata: its own home on the other PC,
     pc.h.services.accounts = { get: (id: string) => repo.get(id) } as unknown as AccountService;
   }
   const save = (pc: Pc, account: Account) => { new AccountRepo(pc.h.db).save(account); pc.h.bus.emit('account.upserted', account); };
-  const base = { label: 'Codex', state: 'ok', priority: 0, rotation: false, enabled: true, createdAt: 1 } as const;
+  const base = { label: 'Codex', state: 'ok', priority: 0, enabled: true, createdAt: 1 } as const;
   save(c, { ...base, id: 'acc_c', provider: 'codex', auth: 'cli', detected: true, email: 'lena@example.com' }); // C found the same login
   save(b, { ...base, id: 'acc_b', provider: 'codex', auth: 'cli', detected: true, email: 'other@example.com' });
   save(a, { ...base, id: 'acc_found', provider: 'codex', auth: 'cli', detected: true, email: 'lena@example.com' });
@@ -170,7 +170,7 @@ test('rows that never travelled reach a PC whose link has a cursor (stored files
   // From before these tables travelled: rows on A that no event ever named, so they have no stamp.
   new FileRepo(a.h.db).insert({ id: sha, name: 'logo.png', mime: 'image/png', size: 99, createdAt: 5 });
   insertItem(a.h.db, fact);
-  new AccountRepo(a.h.db).save({ id: 'acc_found', label: 'Codex', provider: 'codex', auth: 'cli', detected: true, email: 'lena@example.com', state: 'ok', priority: 0, rotation: false, enabled: true, createdAt: 1 });
+  new AccountRepo(a.h.db).save({ id: 'acc_found', label: 'Codex', provider: 'codex', auth: 'cli', detected: true, email: 'lena@example.com', state: 'ok', priority: 0, enabled: true, createdAt: 1 });
   const cursor = a.h.clock.now(); // the link's last complete link-up was after them
   a.h.clock.advance(1000);
 

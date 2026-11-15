@@ -11,9 +11,8 @@
 .task-glyph[data-status=working] { border-color: var(--secondary); background: var(--secondary); box-shadow: inset 0 0 0 3px var(--surface); }
 .task-glyph[data-status=waiting] { border-style: dashed; border-color: var(--muted); }
 .task-glyph[data-status=needs_you] { border-color: var(--warn); background: var(--warn); box-shadow: inset 0 0 0 3px var(--surface); }
-.task-glyph[data-status=blocked] { border-color: var(--danger); color: var(--danger); }
 .task-glyph[data-status=done] { border-color: var(--text); background: var(--text); color: var(--surface); }
-.task-glyph[data-status=cancelled] { border-color: var(--line); color: var(--muted); }
+.task-glyph[data-status=dropped] { border-color: var(--line); color: var(--muted); }
 .task-glyph.running { border: 0; color: var(--secondary); }
 
 
@@ -39,13 +38,17 @@
 .step-circle[data-status=working] { border-color: var(--secondary); color: var(--secondary); }
 .step-circle[data-status=waiting] { border-style: dashed; }
 .step-circle[data-status=needs_you] { border-color: var(--warn); color: var(--warn); }
-.step-circle[data-status=blocked] { border-color: var(--danger); color: var(--danger); }
 .step-number { font-weight: 600; }
 .step-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; padding-top: 1px; }
 .step-title { color: var(--text); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
 .step-row.done .step-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--field); }
-.step-row.cancelled .step-title { color: var(--muted); }
+.step-row.dropped .step-title { color: var(--muted); }
 .step-sub { color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+/* B-080: a step's text opens the step (StepList.tsx) – a pointer and an underline on hover, nothing moves; a done
+   step keeps its strike-through beside the underline */
+.step-open { cursor: pointer; text-align: left; }
+.step-open:hover .step-title { text-decoration: underline; text-underline-offset: 3px; }
+.step-row.done .step-open:hover .step-title { text-decoration-line: line-through underline; }
 
 /* ---------------------------------------------------------------- result */
 .task-result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -106,11 +109,10 @@
 .task-bubble-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-bubble-toggle { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; padding: 2px 0; color: inherit; text-align: left; }
 .task-bubble-title { min-width: 0; font-size: 14px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
-.task-bubble.status-done .task-bubble-title, .task-bubble.status-cancelled .task-bubble-title { color: var(--secondary); }
+.task-bubble.status-done .task-bubble-title, .task-bubble.status-dropped .task-bubble-title { color: var(--secondary); }
 .task-progress { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .task-progress-text { flex: none; color: var(--muted); font-size: 12px; }
 .task-waiting { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.task-waiting.blocked { color: var(--danger); }
 .task-bubble-summary { margin-top: 6px; color: var(--secondary); font-size: 13px; line-height: 1.5; }
 .task-bubble-body { margin-top: 10px; }
 .task-bubble-ask { margin-top: 10px; }
@@ -138,7 +140,7 @@
 .task-line-state { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .task-line-state::before { content: '·'; margin-right: 6px; }
 .task-line > time { flex: none; color: var(--muted); font-size: 11px; }
-.task-bubble.compact.status-cancelled .task-line-title { color: var(--secondary); }
+.task-bubble.compact.status-dropped .task-line-title { color: var(--secondary); }
 .task-bubble.compact > .task-bubble-body { margin-top: 4px; padding: 0 0 4px 22px; }
 @media (pointer: coarse) { .task-line { min-height: 36px; } }
 
@@ -284,3 +286,7 @@
 .todo-later > .todo-list { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
 .todo-later .todo-title { color: var(--secondary); }
 @media (pointer: coarse) { .todo-later-toggle { min-height: 44px; } }
+
+/* the task's plan, read-only: one line each, "✓ " before a done one */
+.task-plan { margin: 8px 0 0; padding-left: 18px; color: var(--secondary); }
+.task-plan li.done { color: var(--muted); }

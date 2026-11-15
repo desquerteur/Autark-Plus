@@ -1,12 +1,22 @@
-// Owns: the app's own update check (B-078, D18) – at most once a day, in the release build only, it reads
-// latest-android.json of the newest public release (github.com/teydra/OpenAutark: {versionCode, versionName, url,
-// sha256, bytes, signer}) and, when its versionCode is newer than the installed one, offers "Update", which opens the
-// APK's address in the browser (Android installs it over this app – same signature). Later remembers that version.
-// Never: downloads or installs by itself, or nags twice for the same version.
+// Owns: the website APK's update check (B-078, D18; Android 0.3.6) – in the release build, at start and on return at most
+// every 30 minutes (UpdateRelease.INTERVAL_MS; at once when the clock went back), it reads latest-android.json (full) or latest-android-lite.json (Lite)
+// of the newest public release (github.com/teydra/OpenAutark: {versionCode, versionName, url, sha256, bytes, signer}); a
+// newer versionCode shows the update line at the top (UpdateBar) of the screen on display when the answer arrives, until
+// it is installed. Owner 10.11.2026 ("automatisch downloaden … kein Aufwand"): once the person allowed Autark to install
+// updates, a newer release downloads and installs by itself (UpdateRelease.automatic – SelfUpdate; Android installs at once
+// where it lets an app update itself, else its one confirm dialog); otherwise the line's "Update" does it. The
+// found release is remembered, so the line is there at once on the next start, even offline; after a failed download it
+// is forgotten, and "Try again" reads the feed anew before it downloads.
+// An install from Google Play and the Play build read no feed: Play updates them itself, and a GitHub release says nothing
+// about what Play offers (UpdateRelease.source). Their line, as often as a feed check, is the neutral "Check in Google
+// Play", which opens Autark's Play page – no version, no "available".
+// Never: installs anything but through SelfUpdate's checked session, or tells a Play install or the Play build about a
+// GitHub release.
 package com.teydralab.autark.android;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
@@ -14,6 +24,8 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import com.teydralab.autark.android.relay.Json;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -24,49 +36,146 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 final class UpdateCheck {
-    static final String FEED = "https://github.com/teydra/OpenAutark/releases/latest/download/latest-android.json";
-    private static final long DAY_MS = 24 * 60 * 60_000L;
     private static final int MAX_BYTES = 16 * 1024;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static volatile boolean fetching;
+    /** "Try again" waits for the next answer: a release found downloads at once. Main thread only. */
+    private static boolean retry;
 
     private UpdateCheck() {}
 
-    /** The newer release in `json` than `installed`, else null (pure: host-testable). */
-    static Map<String, Object> newer(String json, long installed) {
-        Map<String, Object> release;
-        try { release = Json.object(json); } catch (IllegalArgumentException error) { return null; }
-        long code = Json.num(release, "versionCode", -1);
-        String url = Json.str(release, "url");
-        if (code <= installed || url == null || !url.startsWith("https://github.com/teydra/OpenAutark/")) return null;
-        return release;
+    /** At start and on return: shows a remembered newer release at once and looks for a new one when it is time. */
+    static void start(Activity activity, UpdateBar bar) {
+        if ((activity.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) return; // the preview build updates by hand
+        SharedPreferences preferences = preferences(activity);
+        if (UpdateRelease.source(installer(activity), SelfUpdate.BUILT) == UpdateRelease.Source.PLAY) {
+            if (preferences.contains("release")) preferences.edit().remove("release").apply(); // from the feed before: no news from Play
+            long now = System.currentTimeMillis();
+            if (UpdateRelease.due(preferences.getLong("playShownAt", 0), now)) { // as often as a feed check, no version claimed
+                preferences.edit().putLong("playShownAt", now).apply();
+                bar.step(UpdateRelease.PLAY_LINE, -1, UpdateRelease.PLAY_ACTION, () -> openPlay(activity));
+            }
+            return;
+        }
+        if (SelfUpdate.busy()) { SelfUpdate.attach(activity, bar::step); return; }
+        long installed = installedCode(activity);
+        boolean lite = lite(activity);
+        Map<String, Object> known = UpdateRelease.newer(preferences.getString("release", ""), installed, lite);
+        if (known != null) present(activity, bar, known);
+        else if (preferences.contains("release")) preferences.edit().remove("release").apply(); // installed now
+        if (!fetching && UpdateRelease.due(preferences.getLong("checkedAt", 0), System.currentTimeMillis())) look(activity, installed, lite);
     }
 
-    /** Starts the check in the background; a newer version shows one dialog on `activity`. */
-    static void start(Activity activity) {
-        if ((activity.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) return; // the preview build updates by hand
-        SharedPreferences preferences = activity.getSharedPreferences("update", Activity.MODE_PRIVATE);
-        long now = System.currentTimeMillis();
-        if (now - preferences.getLong("checkedAt", 0) < DAY_MS) return;
-        preferences.edit().putLong("checkedAt", now).apply();
-        long installed = installedCode(activity);
+    /** "Try again" after a failed update: the release may have moved on, so the feed is read anew, and a release found
+     * downloads at once on the screen shown then. */
+    static void again() {
+        MainActivity shown = MainActivity.shown();
+        if (shown == null || shown.isDestroyed()) return;
+        forget(shown);
+        retry = true;
+        shown.updates().step("Looking for the update…", -1, null, null);
+        if (!fetching) look(shown, installedCode(shown), lite(shown));
+    }
+
+    /** Forgets the remembered release and when the feed was read, so the next start reads it anew (a download failed). */
+    static void forget(Context context) {
+        preferences(context).edit().remove("release").remove("checkedAt").apply();
+    }
+
+    private static void look(Context context, long installed, boolean lite) {
+        SharedPreferences preferences = preferences(context);
+        fetching = true;
         new Thread(() -> {
-            Map<String, Object> release;
-            try { release = newer(fetch(), installed); } catch (IOException error) { return; }
-            if (release == null || Json.num(release, "versionCode", -1) == preferences.getLong("later", -1)) return;
-            activity.runOnUiThread(() -> {
-                if (activity.isFinishing()) return;
-                String name = Json.str(release, "versionName");
-                new AlertDialog.Builder(activity)
-                        .setMessage("Autark " + (name == null ? "" : name + " ") + "is ready for this phone.")
-                        .setNegativeButton("Later", (dialog, which) -> preferences.edit().putLong("later", Json.num(release, "versionCode", -1)).apply())
-                        .setPositiveButton("Update", (dialog, which) -> {
-                            try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(Json.str(release, "url")))); }
-                            catch (RuntimeException error) { /* no browser */ }
-                        }).show();
-            });
+            Map<String, Object> release = null;
+            String why = "No newer Autark is out.";
+            try {
+                String json = fetch(UpdateRelease.feed(lite));
+                preferences.edit().putLong("checkedAt", System.currentTimeMillis()).apply();
+                release = UpdateRelease.newer(json, installed, lite);
+                if (release != null) preferences.edit().putString("release", json).apply();
+            } catch (IOException | RuntimeException error) {
+                why = "The update could not be loaded right now."; // offline or no feed yet: the next start looks again
+            } finally {
+                fetching = false;
+            }
+            Map<String, Object> found = release;
+            String line = why;
+            MAIN.post(() -> deliver(found, line));
         }, "autark-update").start();
     }
 
-    private static long installedCode(Activity activity) {
+    /** The answer goes to the screen shown now – a recreated activity's, never the destroyed one that asked. */
+    private static void deliver(Map<String, Object> release, String why) {
+        boolean wanted = retry;
+        retry = false;
+        MainActivity shown = MainActivity.shown();
+        if (shown == null || shown.isFinishing() || shown.isDestroyed() || SelfUpdate.busy()) return; // the next start shows what is remembered
+        if (release != null && wanted && UpdateRelease.route(release) == UpdateRelease.Route.DOWNLOAD) SelfUpdate.start(shown, release, shown.updates()::step, UpdateCheck::again);
+        else if (release != null) present(shown, shown.updates(), release);
+        else if (wanted) shown.updates().step(why, -1, "Try again", UpdateCheck::again);
+    }
+
+    /** A newer release on screen: it downloads and installs by itself when it may (UpdateRelease.automatic; the try is
+     * remembered per version), else the update line offers it. */
+    private static void present(Activity activity, UpdateBar bar, Map<String, Object> release) {
+        SharedPreferences preferences = preferences(activity);
+        long now = System.currentTimeMillis();
+        if (!UpdateRelease.automatic(release, canInstall(activity), preferences.getLong("autoCode", -1), preferences.getLong("autoAt", 0), now)) {
+            offer(activity, bar, release);
+            return;
+        }
+        preferences.edit().putLong("autoCode", Json.num(release, "versionCode", -1)).putLong("autoAt", now).apply();
+        SelfUpdate.start(activity, release, bar::step, UpdateCheck::again);
+    }
+
+    /** True when Android already lets Autark install packages ("Install unknown apps" for Autark, allowed once). */
+    static boolean canInstall(Activity activity) {
+        try { return Build.VERSION.SDK_INT < 26 || activity.getPackageManager().canRequestPackageInstalls(); }
+        catch (RuntimeException error) { return false; }
+    }
+
+    /** The update line for this release: the app's own download, or the APK's address for a release without checks. */
+    private static void offer(Activity activity, UpdateBar bar, Map<String, Object> release) {
+        String name = "Autark " + (Json.str(release, "versionName") == null ? "" : Json.str(release, "versionName") + " ");
+        if (UpdateRelease.route(release) == UpdateRelease.Route.DOWNLOAD) bar.step(name + "is available", -1, "Update", () -> SelfUpdate.start(activity, release, bar::step, UpdateCheck::again));
+        else bar.step(name + "is available", -1, "Update", () -> openBrowser(activity, Json.str(release, "url")));
+    }
+
+    private static SharedPreferences preferences(Context context) {
+        return context.getApplicationContext().getSharedPreferences("update", Context.MODE_PRIVATE);
+    }
+
+    private static boolean lite(Context context) { return context.getResources().getBoolean(R.bool.lite_updates); }
+
+    private static void openBrowser(Activity activity, String url) {
+        try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (RuntimeException error) { /* no browser */ }
+    }
+
+    /** Autark's page in the Play app (there Play says whether it has an update), else in the browser. */
+    private static void openPlay(Activity activity) {
+        String id = activity.getPackageName();
+        try {
+            activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + id)).setPackage(InstallSource.PLAY_STORE));
+        } catch (ActivityNotFoundException error) {
+            try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=" + id))); }
+            catch (ActivityNotFoundException none) { /* neither Play nor a browser */ }
+        }
+    }
+
+    /** The package that installed this app (com.android.vending for Google Play), or null when unknown (adb, a file manager). */
+    static String installer(Activity activity) {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) return activity.getPackageManager().getInstallSourceInfo(activity.getPackageName()).getInstallingPackageName();
+            return legacyInstaller(activity);
+        } catch (PackageManager.NameNotFoundException | RuntimeException error) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String legacyInstaller(Activity activity) { return activity.getPackageManager().getInstallerPackageName(activity.getPackageName()); }
+
+    static long installedCode(Activity activity) {
         try {
             PackageInfo info = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0);
             return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : legacyCode(info);
@@ -75,11 +184,17 @@ final class UpdateCheck {
         }
     }
 
+    /** The installed versionName (for the web view's user agent), or "" when unknown. */
+    static String installedName(Activity activity) {
+        try { String name = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).versionName; return name == null ? "" : name; }
+        catch (PackageManager.NameNotFoundException error) { return ""; }
+    }
+
     @SuppressWarnings("deprecation")
     private static long legacyCode(PackageInfo info) { return info.versionCode; }
 
-    private static String fetch() throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(FEED).openConnection();
+    private static String fetch(String feed) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(feed).openConnection();
         connection.setConnectTimeout(10_000);
         connection.setReadTimeout(10_000);
         connection.setInstanceFollowRedirects(true);

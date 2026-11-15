@@ -1,5 +1,7 @@
 // Owns: one RFC 6455 client connection (wss via the platform's TLS with normal certificate checks, ws for local tests):
-// the upgrade, masked frames, fragments, ping/pong and close. Never: skips certificate checks or reconnects by itself.
+// the upgrade, masked frames, fragments, ping/pong and close; the time of the last frame of any kind (B-084: pings and
+// pongs too) and kill(), which ends a stuck connection at once; close() never waits for a stuck send, and a failed
+// connect leaves no socket open (B-084 review). Never: skips certificate checks or reconnects by itself.
 package com.teydralab.autark.android.relay;
 
 import java.io.ByteArrayOutputStream;
@@ -12,6 +14,8 @@ import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
@@ -31,7 +35,13 @@ public final class WebSocketClient {
     private final OutputStream out;
     private final DataInputStream in;
     private final Listener listener;
-    private volatile boolean closed;
+    /** Its own flag, not the send lock: kill() and the reader end the connection even while a send is stuck. */
+    private final AtomicBoolean closed = new AtomicBoolean();
+    /** One frame at a time; close() only tries it, so a send stuck on a dead link never holds up the caller of close(). */
+    private final ReentrantLock sending = new ReentrantLock();
+    private volatile long lastFrameAt = System.currentTimeMillis();
+    /** Frames read so far (only the reader thread counts). */
+    private volatile long frames;
 
     private WebSocketClient(Socket socket, InputStream in, Listener listener) throws IOException {
         this.socket = socket;
@@ -53,14 +63,21 @@ public final class WebSocketClient {
         String host = uri.getHost();
         int port = uri.getPort() > 0 ? uri.getPort() : (tls ? 443 : 80);
         Socket raw = new Socket();
+        try { return upgrade(raw, uri, host, port, tls, listener, headers); }
+        catch (IOException | RuntimeException error) { try { raw.close(); } catch (IOException ignored) { /* closing */ } throw error; } // a failed try leaves no socket open
+    }
+
+    private static WebSocketClient upgrade(Socket raw, URI uri, String host, int port, boolean tls, Listener listener, String headers) throws IOException {
         raw.connect(new InetSocketAddress(host, port), 10_000);
         raw.setTcpNoDelay(true);
+        raw.setSoTimeout(15_000); // the TLS handshake and the upgrade answer each get 15 s, never minutes
         Socket socket = raw;
         if (tls) {
             SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, host, port, true);
             SSLParameters parameters = ssl.getSSLParameters();
             parameters.setEndpointIdentificationAlgorithm("HTTPS"); // the server name must match its certificate
             ssl.setSSLParameters(parameters);
+            ssl.setSoTimeout(15_000); // Conscrypt's own sockets read the timeout from the TLS socket, the JDK's from the raw one
             ssl.startHandshake();
             // Android's platform verifier checks the name once more (the desktop JDK's default one is a placeholder that
             // refuses everything; there the endpoint identification above is the check).
@@ -80,7 +97,7 @@ public final class WebSocketClient {
         if (!head.startsWith("HTTP/1.1 101")) { socket.close(); throw new IOException("The server did not accept the WebSocket (" + head.split("\r\n", 2)[0] + ")"); }
         String accept = Crypto.b64urlStd(sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
         if (!head.toLowerCase(Locale.ROOT).contains("sec-websocket-accept: " + accept.toLowerCase(Locale.ROOT))) { socket.close(); throw new IOException("Bad WebSocket accept"); }
-        socket.setSoTimeout(0); // the relay pings every 30 s; RelayLink's watchdog ends a silent connection
+        socket.setSoTimeout(0); // the relay pings every 30 s; RelayLink's watchdog and probe() end a silent connection
         WebSocketClient client = new WebSocketClient(socket, input, listener);
         Thread reader = new Thread(client::readLoop, "autark-relay-reader");
         reader.setDaemon(true);
@@ -111,16 +128,38 @@ public final class WebSocketClient {
 
     public void sendBinary(byte[] data) throws IOException { send(0x2, data); }
 
-    public boolean isClosed() { return closed; }
+    /** A ping; the server's pong (or any other frame) moves lastFrameAt(). */
+    public void ping() throws IOException { send(0x9, new byte[0]); }
 
+    /** When the last frame of any kind (data, ping, pong, close) arrived – the connect time before the first one. */
+    public long lastFrameAt() { return lastFrameAt; }
+
+    /** How many frames of any kind arrived so far (a probe compares it before and after its ping). */
+    public long frames() { return frames; }
+
+    public boolean isClosed() { return closed.get(); }
+
+    /** The polite close frame when no send is under way, then the socket. On Android's main thread (a cancelled pairing,
+     *  a company switch, forget) the write is refused with NetworkOnMainThreadException – the socket then just closes. */
     public void close() {
-        if (closed) return;
-        try { send(0x8, new byte[] { 0x03, (byte) 0xe8 }); } catch (IOException ignored) { /* already gone */ }
+        if (closed.get()) return;
+        if (sending.tryLock()) {
+            try { write(0x8, new byte[] { 0x03, (byte) 0xe8 }); } catch (IOException | RuntimeException ignored) { /* already gone, or the main thread */ }
+            finally { sending.unlock(); }
+        }
         shutdown("closed");
     }
 
-    private synchronized void send(int opcode, byte[] payload) throws IOException {
-        if (closed && opcode != 0x8) throw new IOException("closed");
+    /** Ends a dead connection now: closes the socket without the send lock, so a writer stuck in a send fails at once. */
+    public void kill() { shutdown("no answer"); }
+
+    private void send(int opcode, byte[] payload) throws IOException {
+        sending.lock();
+        try { write(opcode, payload); } finally { sending.unlock(); }
+    }
+
+    private void write(int opcode, byte[] payload) throws IOException {
+        if (closed.get() && opcode != 0x8) throw new IOException("closed");
         ByteArrayOutputStream frame = new ByteArrayOutputStream(payload.length + 14);
         frame.write(0x80 | opcode);
         int length = payload.length;
@@ -141,7 +180,7 @@ public final class WebSocketClient {
         ByteArrayOutputStream message = new ByteArrayOutputStream();
         int messageType = 0;
         try {
-            while (!closed) {
+            while (!closed.get()) {
                 int first = in.readUnsignedByte();
                 int second = in.readUnsignedByte();
                 boolean fin = (first & 0x80) != 0;
@@ -153,6 +192,8 @@ public final class WebSocketClient {
                 if (length > MAX_MESSAGE || length < 0) throw new IOException("frame too large");
                 byte[] payload = new byte[(int) length];
                 in.readFully(payload);
+                lastFrameAt = System.currentTimeMillis();
+                frames++;
                 if (opcode == 0x9) { send(0xA, payload); continue; }
                 if (opcode == 0xA) continue;
                 if (opcode == 0x8) { reason = "server closed (" + (payload.length >= 2 ? ((payload[0] & 0xff) << 8 | (payload[1] & 0xff)) : 1005) + ")"; break; }
@@ -167,14 +208,13 @@ public final class WebSocketClient {
                 else listener.binary(whole);
             }
         } catch (IOException | RuntimeException error) {
-            if (!closed) reason = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            if (!closed.get()) reason = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         }
         shutdown(reason);
     }
 
     private void shutdown(String reason) {
-        boolean first;
-        synchronized (this) { first = !closed; closed = true; }
+        boolean first = closed.compareAndSet(false, true);
         try { socket.close(); } catch (IOException ignored) { /* closing */ }
         if (first) listener.closed(reason);
     }

@@ -32,7 +32,7 @@ test('a to-do block goes to the Workforce calendar and follows its moves, its ch
   const moved = w.calendar.move(block.id, vienna(DAY, '11:00'), vienna(DAY, '11:30'), block.rev, 'human');
   await until(() => google.mirrors()[0].start!.dateTime === iso(DAY, '11:00'));
   w.clock.set(vienna(DAY, '12:00'));
-  w.tasks.setStatus(task.id, 'done', 'human');
+  w.tasks.finish(task.id, { status: 'done' as const, summary: 'Done' }, 'human');
   await until(() => google.mirrors()[0].summary === '✓ Küche aufräumen');
   assert.equal(w.calendar.repo.get(moved.id)!.state, 'done');
   w.calendar.remove(moved.id, 'human');

@@ -8,6 +8,9 @@
 // the steps (human steps tickable) and the result (summary, Also handled, follow-ups). Owner, due, priority, the
 // done-condition, the goal, the created-by line and verification marks are not shown: the agents own them (tools),
 // and the person says "by Friday" in the reply; reassigning is the menu's Give to me / Send to….
+// B-080: a step's detail (a step's text opens it, StepList.tsx) names its task in the state line – " · Part of:
+// <title>", a text button back to it. Both open where this detail lies (onOpen): Work's route, or the side pane's own
+// selection (WorkIndex.tsx), so the main view stays where it is.
 // Owns: the detail frame. Never: marks agent work as verified, or acts without the person's click.
 
 import type { Origin } from '../../shared/model/origin.ts';
@@ -22,8 +25,8 @@ import { StepList } from './StepList.tsx';
 import { ResultView } from './ResultView.tsx';
 import { TitleField } from './TaskFields.tsx';
 import { useTask } from './task-cache.ts';
-import { canOpenChat, openTaskInChat } from './jump.ts';
-import { stateLine } from './waiting.ts';
+import { canOpenChat, openTaskInChat, selectTask } from './jump.ts';
+import { nextLookLine, stateLine } from './waiting.ts';
 import { TaskQuestions, TaskReply } from './TaskFollowUp.tsx';
 import { taskMenu } from './task-menu.ts';
 import { TitleMenu } from '../team/TitleMenu.tsx';
@@ -34,9 +37,12 @@ function placeName(chatName: string | undefined, chatFree: boolean, origin: Orig
   return chatFree && origin?.label ? `From: ${origin.label}` : 'Task';
 }
 
-export function TaskDetail(props: { taskId: string; onClose: () => void }) {
+/** `onOpen`: where a step's text and "Part of" open a task – the route's ?task= by default, the side pane its own selection. */
+export function TaskDetail(props: { taskId: string; onClose: () => void; onOpen?: (taskId: string) => void }) {
   const task = useTask(props.taskId);
+  const parent = useTask(task?.parentId); // B-080: a step's task, for "Part of" (a hook: before any early return)
   const close = props.onClose;
+  const open = props.onOpen ?? selectTask;
   const menu = useContextMenu(() => (task ? taskMenu(task) : []));
   const closeButton = <button type="button" class="text-button task-detail-close" onClick={close}>Close</button>;
   if (!task) {
@@ -63,10 +69,17 @@ export function TaskDetail(props: { taskId: string; onClose: () => void }) {
             <StatusGlyph status={task.status} running={task.running} size={18} />
             <span class="task-detail-status-text">
               {stateLine(task, agentName)}
+              {nextLookLine(task) && <> · {nextLookLine(task)}</>}
+              {task.parentId && <> · Part of: <button type="button" class="text-button inline" onClick={() => open(task.parentId!)}>{parent?.title ?? 'its task'}</button></>}
               {openable && <> · <button type="button" class="text-button inline" onClick={() => openTaskInChat(task)}>Open in chat</button></>}
             </span>
           </div>
           <NotesClamp text={task.notes} />
+          {(task.ledger.plan?.length ?? 0) > 0 && (
+            <ul class="task-plan" aria-label="Plan">
+              {task.ledger.plan!.map((line, index) => <li key={index} class={line.startsWith('✓') ? 'done' : undefined}>{line}</li>)}
+            </ul>
+          )}
           {task.widget && ownerOf(task).kind === 'human' && !isFinished(task.status) && (
             <div class="task-detail-widget">
               <AskBlock block={task.widget} target={askTargetOf(task)} bare />
@@ -80,7 +93,7 @@ export function TaskDetail(props: { taskId: string; onClose: () => void }) {
                 <span class="task-progress-text tabular">{progressLabel(task.progress)} completed</span>
                 <ProgressBar done={task.progress.done} total={task.progress.total} />
               </div>
-              <StepList task={task} />
+              <StepList task={task} onOpen={open} />
             </section>
           )}
           <ResultView task={task} />

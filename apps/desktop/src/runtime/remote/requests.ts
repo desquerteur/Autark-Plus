@@ -10,6 +10,7 @@
 // B-078 (D5): a phone app asks the same way with role 'phone' and its own key (its device info has role 'client'); an
 // instance takes only the roles it is made for (`roles`: PCs here, phones in rendezvous/phone-pair.ts), and what `link`
 // returns rides in the accepted answer (a phone's device token – the answer travels sealed through the meeting server).
+// B-084: a request may name my own Remote ID or my person code (remote/code.ts); the first answer carries my chain to it.
 // Owns: the request lifecycle (in memory only), limits and waiters on this side.
 // Never: links without the person's answer, or keeps nonces/keys beyond the request.
 
@@ -19,6 +20,7 @@ import { WorkforceError } from '../../shared/errors.ts';
 import { plainLabel } from '../../shared/text/device-label.ts';
 import { b64url, fingerprintOf, fromB64url } from '../devices/keys.ts';
 import { fail, mac, macOk, parseInfo, type PeerInfo, type Reply } from '../devices/pair-proof.ts';
+import { codeFor } from './code.ts';
 import { remoteIdOf } from './id.ts';
 import { bytes, commitment, matchCode, newEphemeral, newNonce, sessionKey, signedBytes, transcript, verifySide } from './sas.ts';
 
@@ -155,7 +157,10 @@ export class TargetRequests {
     const self = this.deps.self();
     if (info.id === self.id) return fail('bad_request', 'A PC cannot connect to itself.');
     const target = body.target as { remoteId?: unknown } | undefined;
-    if (typeof target?.remoteId === 'string' && target.remoteId !== remoteIdOf(fingerprintOf(fromB64url(self.pub)))) return fail('not_found', 'This is not the PC that was asked for.');
+    const selfFp = fingerprintOf(fromB64url(self.pub));
+    const code = codeFor(selfFp); // B-084: I answer for my own ID and for my person code
+    if (typeof target?.remoteId === 'string' && target.remoteId !== remoteIdOf(selfFp) && target.remoteId !== code?.code()) return fail('not_found', 'This is not the PC that was asked for.');
+    const chain = code?.chain();
     const now = this.deps.now();
     if (!this.take(address || 'unknown', now)) return fail('rate_limited', 'Too many requests from this address. Try again in a few minutes.');
     const open = [...this.bySession.values()].filter(isOpen);
@@ -170,7 +175,7 @@ export class TargetRequests {
     };
     this.bySession.set(request.session, request);
     request.timer = this.deps.timers.set(() => this.expire(request), COMMIT_TTL_MS);
-    return { ok: true, session: request.session, device: self, eph: b64url(eph.pub), commit: request.commit };
+    return { ok: true, session: request.session, device: self, eph: b64url(eph.pub), commit: request.commit, ...(chain?.links.length ? { chain } : {}) };
   }
 
   private onReveal(body: Record<string, unknown>): Reply {

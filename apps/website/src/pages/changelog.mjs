@@ -31,7 +31,7 @@ export default function changelog(rel) {
     title: 'Changelog',
     description: `Every public release of ${site.name} (formerly Proactive Agent Workforce): versions, dates, what changed and the download files. Current version ${rel.windows.version}.`,
     body: (root) => `
-${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</em>', lead: `${site.name} ships often. Each release lists what changed and how it was checked; the full verification notes live on GitHub. Older notes describe those versions: some of what they name, such as the guardian and the permission modes, has been removed since. Earlier releases carry the working name Workforce.`, actions: `<a class="btn btn--ghost btn--lg" href="${release.releasesUrl}" rel="noopener">${icon('github')}All releases on GitHub</a><a class="btn btn--ghost btn--lg" href="${root}changelog/feed.xml">RSS feed</a>` })}
+${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</em>', lead: `${site.name} ships often. Each release lists what changed and how it was checked; the full verification notes live on GitHub. The changelog starts with 0.3.3, the first release in OpenAutark.`, actions: `<a class="btn btn--ghost btn--lg" href="${release.releasesUrl}" rel="noopener">${icon('github')}All releases on GitHub</a><a class="btn btn--ghost btn--lg" href="${root}changelog/feed.xml">RSS feed</a>` })}
 <section class="section section--tight">
   <div class="wrap">
     ${list.length ? list.map((r, i) => `

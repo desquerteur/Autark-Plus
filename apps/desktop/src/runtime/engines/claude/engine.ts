@@ -2,7 +2,10 @@
 // Owns: command line (session id/resume, model, effort, system prompt, MCP hub config,
 // bypassPermissions), the stream → events mapping, interrupt/steer through stdin (a turn with
 // steered lines ends its input at the first result and waits for their answers or the CLI's end), limits,
-// the reported context window and the answer (every main-thread text block, parser.answer()). A session Claude Code cannot find any more is reported as ended
+// the reported context window and the answer (every main-thread text block, parser.answer()). B-080: while the CLI's own
+// background work runs (stream.ts state.background) a successful result ends nothing and the input stays open – the turn
+// ends at the first result after it, as in Claude Code, or at an error result (a limit, an outage); setModel (control_request set_model; no effort inside a turn); a fresh
+// --session-id is announced at its system/init ('session'). A session Claude Code cannot find any more is reported as ended
 // (details.rebase): the executor renews it (compaction + new session with the full projection).
 // Claude Code keeps a session per working folder, so a session this process ran in another folder
 // (e.g. before a task worktree) is renewed before the CLI starts, quietly (details.folder, like Codex).
@@ -12,7 +15,8 @@
 // when there is none yet); CLAUDE_MODELS when the CLI is missing or cannot list models. A 1M
 // variant's catalog id `<id>-1m` runs as `--model <id>[1m]` (cliModel).
 //
-// Agent turns run with `--permission-mode bypassPermissions`: Claude Code never asks before its own tools.
+// Agent turns run with `--permission-mode bypassPermissions`: Claude Code never asks before its own tools. B-085: an agent turn's env names its agent (AUTARK_AGENT, wf-shim.ts asAgent).
+// B-083 (owner 09.11.): Claude Code always thinks, and thinking is never turned off for a temperature – its turns send none (older Claude models take one only without thinking, the newer ones none).
 // Login guard 03.11.: a turn's CLI is never hard-killed when the turn ends or is stopped (it may be saving a refreshed
 // sign-in): its stdin closes and it ends by itself; its tree is killed only after the grace (CLAUDE_EXIT_GRACE_MS). A
 // stopped turn still returns after 3 s at the latest; what the CLI prints after the turn returned is dropped.
@@ -21,10 +25,8 @@
 // only the account's user settings (`--setting-sources user`, USER_SETTINGS_ONLY in status.ts) and
 // only our MCP config (`--strict-mcp-config` in both branches); the prompt and MCP files live in temp.
 // The CLI's own cron scheduler is off (NO_CLI_CRON: no prompts from `.claude/scheduled_tasks.json`).
-// A turn without the hub and without tools (the runtime's helper turns) passes
-// `--no-session-persistence` like the status probe (no transcript on disk) and, when it has no
-// output schema, `--tools ''`, so Claude Code's own tools – also
-// those that never prompt – are off.
+// A turn without the hub and without tools (the runtime's helper turns) passes `--no-session-persistence` like the status
+// probe (no transcript on disk); promptArgs gives it no built-in tool (`--tools ''`), so Claude Code's own tools – also those that never prompt – are off.
 //
 // Native rebuild (rebuild.ts, transcript.ts): rebuild() writes the ledger's history as a fresh transcript; the next turn resumes it by
 // its path (or by id in the app's own project folder); a first turn refused is reported as ended (details.rebuild 'failed').
@@ -33,11 +35,10 @@
 // deleteSession() deletes superseded sessions the app created: for a path ref our transcript, for an id ref the CLI's
 // transcript of that session id (rebuild.ts, found by listing folder names).
 // Agent turns ask for summarized thinking (`--thinking-display summarized`, 2.1.303 on) so reasoning can be shown.
-// B-049 F2 (lean.ts): an agent turn (hub or tools, no output schema) runs with our system prompt only
-// (`--system-prompt-file`), built-in tools cut to Bash/Read/Edit/Write/Glob/Grep (+ PowerShell on Windows),
-// no skills/slash commands, no hooks, no CLAUDE.md/auto memory/git workflow text, the hub's tools upfront;
-// a CLI that refuses those flags gets today's arguments (appended prompt) for the rest of the process.
-// Helper turns run with our system prompt only as well and without any built-in tool (helperPromptArgs; `--json-schema` keeps its answer tool).
+// B-049 F2 (lean.ts): every turn runs with our stable system prompt only (`--system-prompt-file`), no skills/slash commands,
+// no hooks, no CLAUDE.md/auto memory/git workflow text; an agent turn keeps the built-in execution core and the hub's tools
+// upfront, a helper turn no built-in tool (`--json-schema` keeps its answer tool). The live context is the first block of
+// every turn's user message (shared.ts contextText), on a new session as on a resumed one.
 // B-057 (fork.ts): fork() reserves a split's forked session; its first turn adds `--resume <parent> --fork-session
 // --session-id <new>` (a pending fork is the one piece of session state a restart loses: that turn then renews).
 // Never: reads CLAUDE_CONFIG_DIR files or tokens but the transcript of a session the app created (it writes there only a rebuilt
@@ -48,8 +49,8 @@
 
 import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
-import type { Account, EngineId } from '../../../shared/model/providers.ts';
-import type { AccountCheck, Engine, EngineCaps, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, RebuildProbe } from '../types.ts';
+import type { Account, Effort, EngineId } from '../../../shared/model/providers.ts';
+import type { AccountCheck, Engine, EngineCaps, EngineEvent, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, RebuildProbe } from '../types.ts';
 import { hasTrace } from '../../../shared/model/subconscious.ts';
 import { rebuiltTurnFailed } from '../rebuild-text.ts';
 import { traceInput } from '../trace-text.ts';
@@ -59,17 +60,21 @@ import { CLAUDE_EXIT_GRACE_MS } from '../../accounts/cli.ts';
 import { ClaudeStatus, USER_SETTINGS_ONLY } from './status.ts';
 import { ClaudeStreamParser, HUB_SERVER } from './stream.ts';
 import { claudeModels, cliModel, rememberWindows } from './models.ts';
-import { ERR, isRecord, readJsonLines, sameFolder } from '../shared.ts';
+import { ERR, contextText, isRecord, readJsonLines, sameFolder } from '../shared.ts';
 import { purgeHistories } from './purge.ts';
 import { claudeDown, providerDownMessage } from '../provider-outage.ts'; // B-059 #184
 import { ClaudeForks } from './fork.ts'; // B-057
 import { ClaudeRebuilder } from './rebuilder.ts';
-import { LEAN_ENV, LeanMemory, helperPromptArgs, hubConfig, promptArgs, promptText } from './lean.ts';
+import { LEAN_ENV, coreTools, hubConfig, promptArgs } from './lean.ts';
+import { asAgent } from '../wf-shim.ts'; // B-085
 
 export { CLAUDE_MODELS } from './models.ts';
 
-/** One CLI process of a turn (B-049 F2: a lean start may be retried today's way). */
-interface Attempt { parser: ClaudeStreamParser; broken: boolean; interrupted: boolean; quiet: boolean }
+/** One CLI process of a turn; `model`: the one it ended on (B-080 setModel). */
+interface Attempt { parser: ClaudeStreamParser; broken: boolean; interrupted: boolean; model: string; started: boolean }
+
+/** B-080: a running turn's events, its model and effort now, and its set_model requests the CLI has not answered (request id → the model before). */
+interface LiveTurn { emit(event: EngineEvent): void; model: string; effort: Effort; asked: Map<string, string> }
 
 /** Claude Code's answer to --resume with an id it no longer has (2.1.303: `errors: ["No conversation found with session ID: …"]`, verified live 23.10.). */
 const MISSING_SESSION = /no conversation found|session .*not found/i;
@@ -124,12 +129,12 @@ export class ClaudeEngine implements Engine {
   private readonly running = new Map<string, Lease>();
   /** runId → user lines steered into the running turn (17:09): the turn ends only once each was answered or the CLI ended. */
   private readonly steered = new Map<string, number>();
+  private readonly live = new Map<string, LiveTurn>(); // B-080: runId → the running turn (setModel)
   private readonly windows = new Map<string, Map<string, number>>(); // account id → model → window from modelUsage
   private readonly noEffort = new Set<string>(); // models the CLI lists without effort support (no --effort)
   private readonly folders = new Map<string, string>(); // session id → the folder its turns ran in (this process)
   /** Wave 2: account id → its running `claude purge`; a turn of that account starts only after it. */
   private readonly purging = new Map<string, Promise<unknown>>();
-  private readonly lean = new LeanMemory(); // B-049 F2: whether this process's CLI takes the lean flags (lean.ts)
   private readonly forks = new ClaudeForks({ files: () => this.rebuilds.files, uuid: () => this.uuid() }); // B-057: pending forks (fork.ts)
 
   constructor(deps: ClaudeEngineDeps) {
@@ -173,6 +178,29 @@ export class ClaudeEngine implements Engine {
     return true;
   }
 
+  /** B-080 (model.set now): the running CLI takes `model` from its next request (set_model); it sets no effort inside a turn, so another effort is false. */
+  async setModel(runId: string, model: string, effort: Effort): Promise<boolean> {
+    const turn = this.live.get(runId);
+    const stdin = this.running.get(runId)?.child.stdin;
+    if (!turn || !stdin || stdin.destroyed || stdin.writableEnded || (effort !== turn.effort && !this.noEffort.has(model))) return false;
+    const id = `set_model_${this.uuid().slice(0, 8)}`;
+    stdin.write(`${JSON.stringify({ type: 'control_request', request_id: id, request: { subtype: 'set_model', model: cliModel(model) } })}\n`);
+    turn.asked.set(id, turn.model);
+    this.switched(turn, model);
+    return true;
+  }
+
+  /** B-080: the CLI's answer to a set_model request – an error puts the turn back on the model before. */
+  private answered(runId: string, message: Record<string, unknown>): void {
+    const response = isRecord(message.response) ? message.response : {};
+    const turn = this.live.get(runId);
+    const before = turn?.asked.get(String(response.request_id));
+    if (!turn || before === undefined || !turn.asked.delete(String(response.request_id)) || response.subtype !== 'error') return;
+    this.switched(turn, before);
+  }
+
+  private switched(turn: LiveTurn, model: string): void { turn.model = model; turn.emit({ type: 'model', model, effort: turn.effort }); }
+
   async run(input: EngineTurnInput): Promise<EngineTurnResult> {
     const exe = await this.deps.finder.find('claude');
     if (!exe) return { text: '', stop: 'error', error: ERR.unavailable('Claude Code is not installed.') };
@@ -192,52 +220,33 @@ export class ClaudeEngine implements Engine {
     const target = resume ? this.forks.target(resume) : undefined;
     const { rebuilt, grownFrom } = await this.rebuilds.before(resume);
     const agentTurn = Boolean(input.mcp || input.tools.length);
-    // B-049 F2 (lean.ts): an agent turn runs with our system prompt only and the built-in execution core.
-    const lean = (agentTurn ? !input.outputSchema : Boolean(input.system.stable)) && this.lean.allowed();
     await this.files.mkdir(this.deps.tempDir);
     const base = path.join(this.deps.tempDir, `claude-${input.runId}-${this.uuid().slice(0, 8)}`);
-    const promptFile = `${base}.prompt.md`;
+    const promptFile = input.system.stable ? `${base}.prompt.md` : undefined; // none: a helper turn on Claude Code's own prompt
     const mcpFile = `${base}.mcp.json`;
-    const temp = input.mcp ? [promptFile, mcpFile] : [promptFile];
-    const argsFor = async (lean: boolean): Promise<string[]> => {
-      // Claude Code snapshots the system prompt on a conversation's first request and replays it on
-      // resume (`--system-prompt-snapshot on`, the default). So the volatile part goes into the system
-      // prompt of a new session only; on resume it travels as a context block in the user message. A rebuilt session's first
-      // turn has no snapshot yet: it starts like a new one, so the stable block stays the cached one all sessions share.
-      await this.files.writeFile(promptFile, promptText(input.system.stable, resume && !rebuilt ? undefined : input.system.volatile, lean));
+    const temp = [promptFile, input.mcp ? mcpFile : undefined].filter((file): file is string => Boolean(file));
+    let ran: Attempt;
+    try {
+      // The stable prompt only: Claude Code replays a session's first system prompt on resume, and all sessions of an agent share it in the cache.
+      if (promptFile) await this.files.writeFile(promptFile, input.system.stable);
       const args = [...exe.prefixArgs, '-p', ...USER_SETTINGS_ONLY, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-        '--model', cliModel(input.model), ...(this.noEffort.has(input.model) ? [] : ['--effort', input.effort === 'none' ? 'low' : input.effort]), ...(agentTurn ? promptArgs(promptFile, lean) : helperPromptArgs(promptFile, lean)),
+        '--model', cliModel(input.model), ...(this.noEffort.has(input.model) ? [] : ['--effort', input.effort === 'none' ? 'low' : input.effort]), ...promptArgs(promptFile, agentTurn ? coreTools() : []),
         ...(agentTurn && this.rebuilds.thinkingDisplay() ? ['--thinking-display', 'summarized'] : [])]; // B-048: reasoning text to show
       if (input.mcp) {
         // File (0600, deleted after the turn) instead of argv: argv is visible to other processes.
-        await this.files.writeFile(mcpFile, hubConfig(input.mcp, lean));
+        await this.files.writeFile(mcpFile, hubConfig(input.mcp));
         args.push('--mcp-config', mcpFile, '--strict-mcp-config', '--permission-mode', 'bypassPermissions');
       } else {
         args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--permission-prompts', 'none');
-        if (input.tools.length === 0) {
-          // A runtime helper turn (decision, verifier, compaction) never
-          // resumes, so Claude Code keeps no transcript of it (the prompt may hold outside content).
-          // Without a schema none of Claude Code's own tools run either, also those that never
-          // prompt; today's form keeps the tool list of a schema turn, the lean one has passed --tools '' above.
-          if (!resume) args.push('--no-session-persistence');
-          if (!input.outputSchema && !lean) args.push('--tools', '');
-        }
+        // A runtime helper turn (decision, verifier, compaction) never resumes, so Claude Code keeps no transcript of it (the prompt may hold outside content).
+        if (input.tools.length === 0 && !resume) args.push('--no-session-persistence');
       }
       if (input.outputSchema) args.push('--json-schema', JSON.stringify(input.outputSchema));
       args.push(...(target ? ['--resume', target.resume, ...(target.fork ? ['--fork-session', '--session-id', target.fork] : [])] : ['--session-id', sessionId]));
-      return args;
-    };
-
-    const content = await this.content(traceRefused ? { ...input, input: [traceInput(input.trace!.calls), ...input.input] } : input, resume && !rebuilt ? input.system.volatile : undefined);
-    const env = { ...this.status.envFor(input.account), ...LEAN_ENV, ...target?.env };
-    let ran: Attempt;
-    try {
-      ran = await this.attempt(exe.command, await argsFor(lean), env, input, content);
-      // B-049 F2: a CLI that refused a lean flag ended at once without a line (no model call): once more today's way.
-      if (lean && this.lean.afterLean(ran.quiet)) {
-        ran = await this.attempt(exe.command, await argsFor(false), env, input, content);
-        this.lean.afterRetry(ran.quiet);
-      }
+      const content = await this.content(traceRefused ? { ...input, input: [traceInput(input.trace!.calls), ...input.input] } : input);
+      const env = asAgent({ ...this.status.envFor(input.account), ...LEAN_ENV, ...target?.env }, agentTurn ? input.agentId : undefined); // B-085: its wf writes as the agent
+      const fresh = !resume && agentTurn ? { ref: sessionId, generation } : undefined; // B-080: announced at the CLI's system/init
+      ran = await this.attempt(exe.command, args, env, input, content, fresh);
     } finally {
       for (const file of temp) await this.files.rm(file).catch(() => {});
     }
@@ -248,7 +257,7 @@ export class ClaudeEngine implements Engine {
     this.rememberWindows(input.account.id, s.contextWindows);
     const result: EngineTurnResult = {
       text: parser.answer(), stop: 'done', usage: s.usage, contextTokens: s.contextTokens,
-      contextWindow: parser.contextWindow(cliModel(input.model)), session: { ref: await this.rebuilds.nextRef(resume, grownFrom, s.sessionId ?? sessionId, s.done && !s.isError && !broken), generation },
+      contextWindow: parser.contextWindow(cliModel(ran.model)), session: { ref: await this.rebuilds.nextRef(resume, grownFrom, s.sessionId ?? sessionId, s.done && !s.isError && !broken), generation },
     };
     if (input.outputSchema && s.structured !== undefined) result.structured = s.structured;
     if (traceRefused) result.traceAsText = traceRefused;
@@ -257,6 +266,7 @@ export class ClaudeEngine implements Engine {
     if (interrupted || input.signal.aborted) return { ...result, stop: 'interrupted', error: ERR.cancelled() };
     if (parser.limited()) return { ...result, stop: 'limit', error: ERR.limit(s.resetsAt ? Math.max(0, s.resetsAt - this.now()) : undefined) };
     if (parser.signedOut()) return { ...result, stop: 'error', error: ERR.unavailable('Claude Code is not signed in for this account.') };
+    if (!ran.started && !broken) return { ...result, stop: 'error', error: ERR.unavailable('Claude Code ended before it began the turn – this Claude Code may be older than Autark needs; updating it fixes that.') };
     if (!s.done || broken) return { ...result, stop: 'error', error: ERR.unavailable('Claude Code stopped unexpectedly.') };
     if (s.isError) {
       if (resume && MISSING_SESSION.test(s.errorText ?? '')) {
@@ -271,15 +281,18 @@ export class ClaudeEngine implements Engine {
     return result;
   }
 
-  /** One CLI process of a turn: the user message, then its stream until the result or its end (`quiet`: ended without a line). */
-  private async attempt(command: string, args: string[], env: NodeJS.ProcessEnv, input: EngineTurnInput, content: Array<Record<string, unknown>>): Promise<Attempt> {
+  /** One CLI process of a turn: the user message, then its stream until the result or its end; `fresh`: the new session it announces (B-080). */
+  private async attempt(command: string, args: string[], env: NodeJS.ProcessEnv, input: EngineTurnInput, content: Array<Record<string, unknown>>, fresh?: { ref: string; generation: number }): Promise<Attempt> {
     // Wave 2: never while this account's histories are being purged (nothing awaits between here and the spawn).
     for (let purge = this.purging.get(input.account.id); purge; purge = this.purging.get(input.account.id)) await purge.catch(() => undefined);
     // Stopped while the turn was being prepared (a look before it, a purge): no CLI and no model call after the Stop, as on Codex (codex/turn.ts).
-    if (input.signal.aborted) return { parser: new ClaudeStreamParser(() => {}, this.now), broken: false, interrupted: true, quiet: false };
+    if (input.signal.aborted) return { parser: new ClaudeStreamParser(() => {}, this.now), broken: false, interrupted: true, model: input.model, started: false };
     const lease = this.deps.supervisor.spawn({ command, args, owner: `claude:${input.runId}`, kind: 'heavy', cwd: input.cwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
     this.running.set(input.runId, lease);
-    const parser = new ClaudeStreamParser((event) => { try { input.onEvent(event); } catch { /* isolate */ } }, this.now);
+    const emit = (event: EngineEvent) => { try { input.onEvent(event); } catch { /* isolate */ } };
+    const turn: LiveTurn = { emit, model: input.model, effort: input.effort, asked: new Map() };
+    this.live.set(input.runId, turn);
+    const parser = new ClaudeStreamParser(emit, this.now);
     let broken = false;
     let lines = 0;
     let open = true; // the turn has not returned yet; afterwards the lines of a CLI ending by itself are not part of it
@@ -292,12 +305,16 @@ export class ClaudeEngine implements Engine {
         if (!open) return;
         lines++;
         lease.touch();
+        if (isRecord(message) && message.type === 'control_response') this.answered(input.runId, message); // B-080: set_model
         parser.push(message);
+        if (fresh && parser.state.sessionId) { emit({ type: 'session', ref: parser.state.sessionId, generation: fresh.generation }); fresh = undefined; } // B-080: bound at once
         if (!parser.state.done) return;
-        if (isRecord(message) && message.type === 'result') results++;
+        const result = isRecord(message) && message.type === 'result';
+        if (result) results++;
+        if (parser.state.background.size > 0 && !parser.state.isError) return; // B-080: its own background work is part of the turn (the CLI answers its notification itself); an error result ends it now
         // Steered lines (17:09) are taken into this turn or answered as their own: no more input, then each
         // answer (one result per line) or the CLI's end – a steered line is never left unanswered.
-        if (results > (this.steered.get(input.runId) ?? 0)) resolve();
+        if (results > (this.steered.get(input.runId) ?? 0)) { if (result) resolve(); }
         else if (lease.child.stdin && !lease.child.stdin.writableEnded) { try { lease.child.stdin.end(); } catch { /* gone */ } }
       }, () => { broken = true; resolve(); });
       lease.exited.then(() => resolve());
@@ -318,6 +335,7 @@ export class ClaudeEngine implements Engine {
       input.signal.removeEventListener('abort', onAbort);
       this.running.delete(input.runId);
       this.steered.delete(input.runId);
+      this.live.delete(input.runId);
       try { lease.child.stdin?.end(); } catch { /* gone */ }
       void lease.releaseAfter(this.deps.graceMs ?? CLAUDE_EXIT_GRACE_MS); // it ends by itself; its tree is killed only after the grace
     }
@@ -331,7 +349,7 @@ export class ClaudeEngine implements Engine {
       });
     }
     open = false;
-    return { parser, broken, interrupted, quiet: lines === 0 && !broken && !interrupted && !input.signal.aborted };
+    return { parser, broken, interrupted, model: turn.model, started: lines > 0 };
   }
 
   /** The ledger's history as a fresh transcript for the probed tier; the next turn resumes it (rebuilder.ts). */
@@ -367,9 +385,11 @@ export class ClaudeEngine implements Engine {
     rememberWindows(windows, reported);
   }
 
-  private async content(input: EngineTurnInput, volatile?: string): Promise<Array<Record<string, unknown>>> {
+  /** The user message: the live context block first, then the turn's input (text, images, files). */
+  private async content(input: EngineTurnInput): Promise<Array<Record<string, unknown>>> {
     const out: Array<Record<string, unknown>> = [];
-    if (volatile) out.push({ type: 'text', text: `<workforce-context>\n${volatile}\n</workforce-context>` });
+    const context = contextText(input.system.volatile);
+    if (context) out.push({ type: 'text', text: context });
     for (const item of input.input) {
       if (item.type === 'text') out.push({ type: 'text', text: item.text });
       else if (item.type === 'image') {

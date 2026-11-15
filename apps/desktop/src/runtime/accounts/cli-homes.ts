@@ -1,16 +1,16 @@
-// CLI accounts with their own home (Codex, Claude Code, Kimi Code; split from service.ts): adding one
-// creates <accounts>/<provider>/<id> (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME) and
-// starts its sign-in; a sign-in that could not start keeps the account and the error, and the next
-// add of that provider retries that account. Removing deletes a home only when it is exactly
-// <accounts>/<its provider>/<its id> – never the default CLI home, the accounts folder, a provider
-// folder or another account's home (a crafted restore could point there).
-// B-051: a missing Codex or Claude Code CLI is installed before add() runs (service.ts), so no account is
-// left behind for that cause; add() hands back the sign-in page its sign-in printed (`signInUrl`, never stored).
-// 04.11.2026 (owner: sign in once, the plan works on all his PCs): which CLIs have homes of their own, each CLI's
-// default home and the names of the files that hold its login there (devices/sync/logins.ts copies those), and
-// which plans the person signed out of here (a login from another PC stays out until one is made here).
-// Owns: creating and deleting these homes, the retry of an unstarted sign-in, those names and the sign-out marks.
-// Never: signs in itself (the service's login does), reads files in a home, or deletes anything else.
+// CLI accounts with homes of their own (Codex, Claude Code, Kimi Code): adding one creates <accounts>/<provider>/<id>
+// (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME) and starts its sign-in; a sign-in that could not start keeps the account
+// and the error, and the next add of that provider retries that account. Removing deletes a home only when it is exactly
+// <accounts>/<its provider>/<its id> – never a CLI's default home, the accounts folder, a provider folder or another
+// account's home. It also names each CLI's default home and the files that hold its login there (devices/sync/logins.ts
+// copies those between PCs), and marks the plans the person signed out of here.
+// Codex runs only in homes of its own, so nothing of the person's own Codex set-up (config.toml, AGENTS.md, skills, MCP
+// servers) reaches an agent: a Codex login found in the default home (~/.codex) becomes an account whose home gets a copy
+// of that login (found), and when that copy stops working while the default home holds a newer login of the same person,
+// it takes that one again (retake – the CLIs rotate refresh tokens, so after one side refreshed the other copy fails).
+// The default home is only ever read.
+// Owns: creating and deleting these homes, the retry of an unstarted sign-in, the login copies from the default home,
+// those names and the sign-out marks. Never: signs in itself (the service's login does) or writes into a CLI's default home.
 
 import os from 'node:os';
 import * as path from 'node:path';
@@ -20,6 +20,8 @@ import type { Db } from '../db/database.ts';
 import { KvRepo } from '../store/kv.ts';
 import { acpProvider } from '../engines/acp/providers.ts';
 import type { AccountRepo } from './repo.ts';
+import type { AwaySignIn } from '../../shared/api/methods-providers.ts';
+import { takeLogin } from './login-file.ts';
 
 const SIGNED_OUT = 'accounts.signed-out';
 
@@ -38,7 +40,7 @@ export function ownHomes(provider: ProviderId): boolean {
   return provider === 'codex' || provider === 'claude' || Boolean(acpProvider(provider)?.home);
 }
 
-/** A CLI's default home, where a login this PC found lives (an account without `home`); undefined: none known. */
+/** A CLI's default home, where a login this PC finds lives; undefined: none known. */
 export function defaultHome(provider: ProviderId, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string | undefined {
   if (provider === 'codex') return env.CODEX_HOME || path.join(home, '.codex');
   if (provider === 'claude') return env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
@@ -57,13 +59,16 @@ export function loginFiles(provider: ProviderId, platform: NodeJS.Platform = pro
 
 export interface CliHomeDeps {
   accounts: string; // the accounts folder (Paths.accounts)
+  /** The env and the user's home folder the CLIs' default homes are found by (CODEX_HOME, else <homeDir>/.codex). */
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   repo: AccountRepo;
   /** Stores and announces an account (AccountService). */
   save(account: Account): Account;
   /** A new account row with the service's defaults (label, priority, id). */
   blank(provider: ProviderId, patch: Partial<Account>): Account;
   /** The service's sign-in (it calls started() once the sign-in runs); `url`: the sign-in page it printed. */
-  login(id: string): Promise<{ started: boolean; url?: string }>;
+  login(id: string, away: boolean): Promise<{ started: boolean; url?: string } & AwaySignIn>;
   require(id: string): Account;
   mkdir?: (dir: string) => Promise<void>;
   rmdir?: (dir: string) => Promise<void>;
@@ -77,21 +82,49 @@ export class CliHomes {
   constructor(deps: CliHomeDeps) { this.deps = deps; }
 
   /** Its own home, then its sign-in; `chosenLabel` renames an account that is retried; `signInUrl`: the page the sign-in printed. */
-  async add(provider: ProviderId, chosenLabel: string | undefined, label: string, rotation: boolean): Promise<Account & { signInUrl?: string }> {
+  async add(provider: ProviderId, chosenLabel: string | undefined, label: string, away = false): Promise<Account & { signInUrl?: string } & AwaySignIn> {
     const retry = this.unstarted.get(provider);
     const pending = retry ? this.deps.repo.get(retry) : undefined;
     let account: Account;
-    if (pending?.state === 'needs_login' && pending.home) account = this.deps.save({ ...pending, label: chosenLabel ?? pending.label, rotation });
+    if (pending?.state === 'needs_login' && pending.home) account = this.deps.save({ ...pending, label: chosenLabel ?? pending.label });
     else {
-      account = this.deps.blank(provider, { auth: 'cli', label, rotation, state: 'needs_login' });
-      account.home = path.join(this.deps.accounts, provider, account.id);
-      await (this.deps.mkdir ?? ((dir) => fsp.mkdir(dir, { recursive: true }).then(() => undefined)))(account.home);
+      account = this.deps.blank(provider, { auth: 'cli', label, state: 'needs_login' });
+      account.home = this.homeFor(provider, account.id);
+      await this.mkdir(account.home);
       this.deps.save(account);
     }
-    let url: string | undefined;
-    try { url = (await this.deps.login(account.id)).url; } catch (error) { this.unstarted.set(provider, account.id); throw error; }
+    let started: Awaited<ReturnType<CliHomeDeps['login']>>;
+    try { started = await this.deps.login(account.id, away); } catch (error) { this.unstarted.set(provider, account.id); throw error; }
+    const { url, code, paste } = started;
     const added = this.deps.require(account.id);
-    return url ? { ...added, signInUrl: url } : added;
+    return url ? { ...added, signInUrl: url, ...(code ? { code } : {}), ...(paste ? { paste } : {}) } : added;
+  }
+
+  private homeFor(provider: ProviderId, id: string): string {
+    return path.join(this.deps.accounts, provider, id);
+  }
+
+  private mkdir(dir: string): Promise<void> {
+    return (this.deps.mkdir ?? ((folder) => fsp.mkdir(folder, { recursive: true }).then(() => undefined)))(dir);
+  }
+
+  /** A login found in the default home as its account: Codex in a home of its own with a copy of that login; others as given. */
+  found(account: Account): Account {
+    if (account.provider !== 'codex' || account.home) return account;
+    const home = this.homeFor('codex', account.id);
+    if (!this.take(home)) void this.mkdir(home).catch(() => undefined); // its sign-in runs there
+    return { ...account, home, detected: true };
+  }
+
+  /** A found Codex login whose copy failed: the default home's login again when it is newer and the same person's; true when taken. */
+  retake(account: Account): boolean {
+    return account.provider === 'codex' && account.detected && Boolean(account.home) && this.take(account.home!);
+  }
+
+  /** The default Codex home's login into `home` when it is newer there (login-file.ts takeLogin); false when nothing was copied. */
+  private take(home: string): boolean {
+    const from = defaultHome('codex', this.deps.env ?? process.env, this.deps.homeDir ?? os.homedir());
+    try { return from ? takeLogin('codex', loginFiles('codex'), from, home) : false; } catch { return false; }
   }
 
   /** The account's sign-in runs now: the next add makes a new home. */
@@ -99,7 +132,7 @@ export class CliHomes {
     if (this.unstarted.get(account.provider) === account.id) this.unstarted.delete(account.provider);
   }
 
-  /** Deletes the account's home if add() made it (exactly <accounts>/<provider>/<id>); anything else stays. */
+  /** Deletes the account's home when it is exactly <accounts>/<its provider>/<its id> (add, found); anything else stays. */
   async remove(account: Account): Promise<void> {
     if (!account.home) return;
     const parts = path.relative(path.resolve(this.deps.accounts), path.resolve(account.home)).split(path.sep);

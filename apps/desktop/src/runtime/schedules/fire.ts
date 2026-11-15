@@ -1,19 +1,21 @@
 // What a due schedule does, per kind:
 //  * message  → a normal chat post by the owner (as if typed then), meta.via 'schedule';
-//  * reminder → wakes the owning agent with its own first-person note (no chat post);
-//  * routine  → creates a tracked task from payload.taskTemplate (title, notes, mode and – T11 –
-//               checklist steps; payload.priority 'important' → High) and wakes an agent owner;
-//               the person's "Post as task" routines post a team task (the lead picks it up);
+//  * reminder → wakes the owning agent with its own first-person note (no chat post) – B-080 (live: 14 reminder runs
+//               in a chat its agent had left when B-078 D7 moved the task): in its task's chat while the agent is a
+//               member there, else the one it was set in;
+//  * routine  → creates a tracked task from payload.taskTemplate (title, notes and – T11 – its steps as the plan;
+//               payload.priority 'important' → High); an agent owner is woken once (under the task's key, with the
+//               schedule's note); the person's "Post as task" routines go to the one owner Autark picks (tasks/give.ts);
 //               the stored template is bounded first (post.ts boundedTemplate: no malformed or
 //               oversized steps/title from an agent's raw `task` can break or flood a run);
-//  * timer    → notifies the human (kind 'todo') and marks the linked human to-do 'needs_you' –
-//               never for a to-do that is already done or cancelled (F03: the schedule ends).
+//  * timer    → notifies the human (kind 'todo'); a linked to-do waiting for this ring is open again (it rings now) –
+//               never for a to-do that is already done or dropped (the schedule ends).
 // B-044: also the one quiet "Scheduled" chat line when a post or routine is created (announceCreated).
 // B-054: a routine without a chat creates a chat-free task; only a routine whose chat was set and is gone ends
 // (ScheduleGone). Reminder and routine wakes – and routine tasks – carry the origin schedule:<id>.
 // B-059 (overlap, Temporal-style skip): an agent's routine whose previous occurrence task is still unfinished
-// (any state but done/cancelled, isRoutineOccurrence) creates no second copy and wakes nobody – that task gets one
-// ledger fact "Skipped the HH:MM run – the previous one is still open" (the newest replaces an older one).
+// (any state but done/dropped, isRoutineOccurrence) creates no second copy and wakes nobody – that task gets one
+// fact "Skipped the HH:MM run – the previous one is still open" (the newest replaces an older one).
 // Owns: those effects. Never: computes times or touches the schedules table.
 
 import { HUMAN_ID, SYSTEM_ID } from '../../shared/ids.ts';
@@ -43,7 +45,7 @@ function openOccurrence(schedule: Schedule, s: FireDeps): TaskView | undefined {
 function noteSkip(task: TaskView, schedule: Schedule, occurrence: number, s: FireDeps): void {
   const fact = `Skipped the ${clockText(occurrence, validZone(schedule.spec.tz))} run – the previous one is still open`;
   const facts = [...(task.ledger.facts ?? []).filter((line) => !SKIPPED.test(line)), fact].slice(-20);
-  try { s.tasks.update(task.id, { ledger: { ...task.ledger, facts } }, SYSTEM_ID); } catch { /* the skip stands without its note */ }
+  try { s.tasks.update(task.id, { facts }, SYSTEM_ID); } catch { /* the skip stands without its note */ }
 }
 
 /** B-054: why a schedule's wake or task exists – 'Reminder' or 'Routine "<title>"'. */
@@ -52,10 +54,23 @@ export function scheduleOrigin(schedule: Pick<Schedule, 'id' | 'kind' | 'title'>
   return cleanOrigin({ source: scheduleSource(schedule.id), label })!;
 }
 
-export type FireDeps = Pick<RuntimeServices, 'chats' | 'tasks' | 'wakes'> & Partial<Pick<RuntimeServices, 'notifications'>>;
+export type FireDeps = Pick<RuntimeServices, 'chats' | 'tasks' | 'wakes'> & Partial<Pick<RuntimeServices, 'notifications' | 'log'>>;
 
 /** Thrown when a schedule can never fire again (its chat or owner is gone). */
 export class ScheduleGone extends Error {}
+
+/**
+ * B-080: where a reminder wakes – its task's chat now (the work moved, e.g. B-078 D7) while its owner is a member there,
+ * else the chat it was set in (a manager's reminder on a report's task stays in the manager's own chat).
+ */
+function reminderChat(schedule: Schedule, s: FireDeps): string | undefined {
+  if (!schedule.taskId) return schedule.conversationId;
+  try {
+    const chat = s.tasks.get(schedule.taskId)?.conversationId;
+    if (chat && s.chats.members(chat).some((member) => member.memberId === schedule.ownerId && !member.leftAt)) return chat;
+  } catch { /* the reminder's own chat */ }
+  return schedule.conversationId;
+}
 
 export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps): void {
   const ownerKind = schedule.ownerId === HUMAN_ID ? 'human' : 'agent';
@@ -78,7 +93,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
     case 'reminder': {
       if (ownerKind !== 'agent') throw new ScheduleGone('reminders belong to agents');
       s.wakes.wake({
-        agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: schedule.taskId,
+        agentId: schedule.ownerId, reason: 'schedule', conversationId: reminderChat(schedule, s), taskId: schedule.taskId,
         note: schedule.payload.note ?? schedule.title, coalesceKey: `sch:${schedule.id}`, origin: scheduleOrigin(schedule),
       });
       return;
@@ -90,32 +105,30 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
       const origin = scheduleOrigin(schedule);
       const open = ownerKind === 'agent' ? openOccurrence(schedule, s) : undefined;
       if (open) { noteSkip(open, schedule, occurrence, s); return; } // B-059: the last run is still open – no second copy
-      const task = s.tasks.create({
+      const fields = {
         ...(schedule.conversationId ? { conversationId: schedule.conversationId } : {}), origin,
-        title: template.title, notes: template.notes, mode: template.mode, steps: template.steps,
-        priority: schedule.payload.priority === 'important' ? 1 : undefined,
-        createdBy: schedule.ownerId,
-        assigneeKind: ownerKind === 'agent' ? 'agent' : 'team',
-        assigneeId: ownerKind === 'agent' ? schedule.ownerId : undefined,
-      });
-      if (ownerKind === 'agent') {
-        s.wakes.wake({
-          agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: task.id,
-          note: schedule.payload.note, coalesceKey: `sch:${schedule.id}`, origin,
-        });
+        title: template.title, notes: template.notes, ...(template.steps?.length ? { plan: template.steps } : {}),
+        priority: schedule.payload.priority === 'important' ? 1 as const : undefined, createdBy: schedule.ownerId,
+      };
+      if (ownerKind !== 'agent') {
+        void s.tasks.createTo(fields, 'team').catch((error: unknown) => s.log?.warn('routine task not created', { scheduleId: schedule.id, error: String(error) }));
+        return;
       }
+      const task = s.tasks.create({ ...fields, assigneeKind: 'agent', assigneeId: schedule.ownerId });
+      // one wake: the schedule's note joins the task's own (same key, tasks/give.ts tellGiven)
+      s.wakes.wake({ agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: task.id, note: schedule.payload.note, coalesceKey: `task:${task.id}`, origin });
       return;
     }
     case 'timer': {
       const linked = schedule.taskId ? s.tasks.get(schedule.taskId) : undefined;
-      if (schedule.taskId && (!linked || linked.status === 'done' || linked.status === 'cancelled')) throw new ScheduleGone('to-do finished');
+      if (schedule.taskId && (!linked || linked.status === 'done' || linked.status === 'dropped')) throw new ScheduleGone('to-do finished');
       s.notifications?.notify({
         kind: 'todo', title: schedule.title, body: schedule.payload.note && schedule.payload.note !== schedule.title ? schedule.payload.note : '',
         conversationId: schedule.conversationId, taskId: schedule.taskId,
       });
       if (schedule.taskId) {
         const task = s.tasks.get(schedule.taskId);
-        if (task && (task.status === 'open' || task.status === 'waiting')) s.tasks.setStatus(task.id, 'needs_you', SYSTEM_ID, 'Timer');
+        if (task?.status === 'waiting' && task.waitingOn?.on === 'outside') s.tasks.update(task.id, { status: 'open' }, SYSTEM_ID); // it rings now
       }
       return;
     }

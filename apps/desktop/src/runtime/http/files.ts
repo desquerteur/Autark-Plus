@@ -1,6 +1,7 @@
 // `GET /files/<sha256>`: streams a stored blob to an authenticated client (owner or device
 // token in `Authorization: Bearer` or `?token=`), with single-range support for audio/video
-// seeking, the stored MIME type and `Content-Disposition: inline`. A file whose row came from another of the
+// seeking, the stored MIME type and `Content-Disposition: inline` (`attachment` with `?download=1`: a phone's
+// "Save to phone" link, B-084). A file whose row came from another of the
 // person's PCs and whose bytes are not here yet is fetched from there first (devices/sync/blobs.ts needBlob).
 // Owns: token extraction, range responses and the protective headers of user content.
 // Never: serves without a valid token, lets stored HTML/SVG run in the app origin (CSP
@@ -44,11 +45,11 @@ export function parseRange(header: string | undefined, size: number): { start: n
   return { start, end };
 }
 
-/** `inline; filename="ascii"; filename*=UTF-8''…` (RFC 6266 / 5987). */
-export function inlineDisposition(name: string): string {
+/** `inline; filename="ascii"; filename*=UTF-8''…` (RFC 6266 / 5987); `attachment` makes the browser save it. */
+export function inlineDisposition(name: string, kind: 'inline' | 'attachment' = 'inline'): string {
   const clean = name.replace(/[\u0000-\u001f\u007f"\\]/g, '_').slice(0, 200) || 'file';
   const ascii = clean.replace(/[^\x20-\x7e]/g, '_');
-  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
 }
 
 const SAFE_MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
@@ -98,7 +99,10 @@ export async function serveFile(
     ...BASE_HEADERS,
     'Content-Type': mime,
     // F-52: a person sees the name they know the file by, never the name it was first stored under.
-    'Content-Disposition': inlineDisposition(scope.kind === 'person' ? personFileView(deps.services().db, scope.personId, ref).name : ref.name),
+    'Content-Disposition': inlineDisposition(
+      scope.kind === 'person' ? personFileView(deps.services().db, scope.personId, ref).name : ref.name,
+      info.url.searchParams.get('download') === '1' ? 'attachment' : 'inline',
+    ),
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'private, max-age=86400',
     ETag: etag,

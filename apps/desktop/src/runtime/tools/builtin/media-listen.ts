@@ -26,8 +26,8 @@ import { pcmOf } from '../../media/hear-any.ts';
 import { soundsText, soundTagger, timeText, type SoundReport } from '../../media/sounds.ts';
 import { formatMoney } from '../../spend/ledger.ts';
 import type { ActionDescription, ToolContext, ToolOutput } from '../types.ts';
-import { failure, json } from '../types.ts';
-import { MEDIA_DESCRIBE_HINT, mediaFileId, readableMedia, untilStopped, view } from './media-common.ts';
+import { FILE_ID_PROPERTY, failure, json } from '../types.ts';
+import { mediaFileId, readableMedia, untilStopped, view } from './media-common.ts';
 import { hearsHere, localHearing, soundsOf, soundsView } from './media-hearing.ts';
 import { DECODE_END_MS, LISTEN_SPAN_MS, listenPlan, listenUsd, moreAfter, type ListenPlan } from './media-listen-plan.ts';
 import { clock } from './media-look.ts';
@@ -64,7 +64,7 @@ async function prepare(ctx: ToolContext, info: MediaInfo, plan: ListenPlan): Pro
     if (tags) {
       try { sounds = (await soundsOf(ctx, await pcmOf(s, info.fileId, { maxMs: LISTEN_SPAN_MS }), 'never')).report; } catch { /* no tags: the model hears it anyway */ }
     }
-    return { audio: { path: s.files.path(info.fileId), name: info.name, mime: info.mime }, startMs: 0, sounds, cleanup: () => {} };
+    return { audio: { path: await s.files.local(info.fileId), name: info.name, mime: info.mime }, startMs: 0, sounds, cleanup: () => {} }; // B-080: bytes pulled first
   }
   const pcm = await pcmOf(s, info.fileId, { startMs: plan.startMs, maxMs: plan.maxMs });
   const samples = pcm.samples.subarray(0, Math.floor(plan.seconds * pcm.sampleRate));
@@ -157,14 +157,14 @@ function stoppedListen(ctx: ToolContext, job: Promise<Heard>, fileId: string, us
 
 export const listen = defineTool<{ fileId: string; question: string; start?: number; end?: number }>({
   name: 'media.listen',
-  description: `Listen to a stored recording or video – music, sounds, noises, voices – and get a listening model's answer to my question (genre, instruments, tempo, mood, what happens when, sound quality …). Takes every common audio and video format; a decoded part is at most ${LISTEN_SPAN_MS / 60_000} minutes – pass start/end (seconds) or a media: reference with a time span for another part. Without a connected listening model it hears on this PC instead and returns a local hearing report: which sounds occur when (tags with confidence – not a description) and the transcript. For the words of speech use media.transcribe. ${LISTEN_NOTE} ${MEDIA_DESCRIBE_HINT} fileId: the 64-character name at the end of the file's "stored at" path.`,
+  description: 'Listens to a stored recording or video and answers my question about its sound. Without a listening model this PC returns sound tags with times and the transcript; for the words alone I use media.transcribe.',
   inputSchema: {
     type: 'object',
     properties: {
-      fileId: { type: 'string', minLength: 64, maxLength: 1000 },
-      question: { type: 'string', minLength: 1, maxLength: QUESTION_CHARS, description: 'what I want to know about the recording' },
-      start: { type: 'number', minimum: 0, maximum: 86_400, description: 'where the part to hear starts, in seconds (default 0)' },
-      end: { type: 'number', minimum: 0, maximum: 86_400, description: `where it ends, in seconds (at most ${LISTEN_SPAN_MS / 60_000} minutes after start; by ${DECODE_END_MS / 1000} – the first ${DECODE_END_MS / 60_000} minutes – unless the file is a WAV)` },
+      fileId: { ...FILE_ID_PROPERTY, description: 'A stored file, or a media: reference with a time span.' },
+      question: { type: 'string', minLength: 1, maxLength: QUESTION_CHARS },
+      start: { type: 'number', minimum: 0, maximum: 86_400, description: 'Seconds; default 0.' },
+      end: { type: 'number', minimum: 0, maximum: 86_400, description: `Seconds; at most ${LISTEN_SPAN_MS / 60_000} minutes after start, within the first ${DECODE_END_MS / 60_000} minutes unless the file is a WAV.` },
     },
     required: ['fileId', 'question'], additionalProperties: false,
   },

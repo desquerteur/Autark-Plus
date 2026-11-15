@@ -10,7 +10,8 @@
 // A chat route on a connection that may not read chats (To-do-only phone) shows My day (shell/gates.ts).
 // The default route 'home' is a pure alias of 'day': the same My day (DayView, with today's briefing on top) in the same
 // zones with the same key, so going between them changes nothing on screen; while the first run is open its place on
-// 'home' shows the first-run layer (onboarding/FirstRun.tsx).
+// 'home' and on 'day' shows the first-run layer (onboarding/FirstRun.tsx; B-085: the rail's and the phone tab's My day
+// navigate to 'day' and no longer hide the setup).
 // Owns: route → view mapping, the phone's title and push rule. Never: layout chrome, header markup or view content.
 
 import { h } from 'preact';
@@ -103,13 +104,18 @@ const EMPTY_CHATS: HeaderSource = () => ({ title: '' });
 function mainView(current: Route): ZoneView {
   switch (current.view) {
     case 'chat': return chatBody(current.id);
-    case 'day': return { key: 'day', body: h(DayView, null) };
+    case 'day': return homeBody(); // B-085: the rail's My day keeps the first run in place, as Home does
     case 'chats': return { key: 'chats', body: h('div', { class: 'main-empty' }), header: EMPTY_CHATS };
     case 'tasks': return { key: 'tasks', body: h(TasksView, null) };
     case 'team': return teamBody(current);
     case 'settings': return { key: 'settings', body: h(Settings, null) };
-    default: return firstRunActive() ? { key: 'first-run', body: h(FirstRun, null) } : { key: 'day', body: h(DayView, null) };
+    default: return homeBody();
   }
+}
+
+/** Home and My day: the first-run layer while it is open, else My day. */
+function homeBody(): ZoneView {
+  return firstRunActive() ? { key: 'first-run', body: h(FirstRun, null) } : { key: 'day', body: h(DayView, null) };
 }
 
 /** The desktop frame's side and main zones for a route. */
@@ -120,7 +126,7 @@ export function desktopViews(current: Route): DesktopViews {
 /** The top row's title of a tab: the destination's name, Settings for the settings list. */
 export function tabTitle(current: Route): string {
   if (current.view === 'settings') return 'Settings';
-  if (current.view === 'home' && firstRunActive()) return FIRST_RUN_TITLE; // the computer's header says the same
+  if ((current.view === 'home' || current.view === 'day') && firstRunActive()) return FIRST_RUN_TITLE; // the computer's header says the same
   const key: NavKey = current.view === 'chat' ? 'chats' : current.view;
   return DESTINATIONS[key];
 }

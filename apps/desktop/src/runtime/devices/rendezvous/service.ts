@@ -12,6 +12,8 @@
 // PCs) are pinned the same way for as long as their device row exists; their tunnels go to the phone bridge, never into
 // the PC mesh. A phone's connect request (role 'phone') takes the same route as a PC's; the old `phone` code message of
 // 0.3.x apps gets one line asking for the app update.
+// B-084: it opens my person code (remote/code.ts – it holds my key and database) and sends my chain with my pins, so
+// the server finds me under the code as well.
 // Owns: the mesh hook, the request route, the relay client and its state.
 // Never: links a PC, or talks to a server the person did not configure.
 
@@ -22,6 +24,7 @@ import type { RelayState } from '../../../shared/model/relay.ts';
 import { relayAddress } from '../../../shared/model/relay.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { MEETING_OFF, MEETING_UNREACHABLE, type Found } from '../../remote/find.ts';
+import { openCode, watchCode, type PersonCode } from '../../remote/code.ts';
 import { remoteIdOf } from '../../remote/id.ts';
 import type { SocketLike } from '../channel.ts';
 import type { DeviceIdentity } from '../identity.ts';
@@ -82,10 +85,13 @@ export class Meeting {
   private readonly leaving = new Map<string, string>();
   /** Lookups waiting for the server connection (woken by its state changes). */
   private readonly waiters = new Set<() => void>();
+  /** My person code (B-084): the server also finds me under it while my chain proves it. */
+  private readonly code: PersonCode;
 
   constructor(deps: MeetingDeps) {
     this.deps = deps;
     this.repo = new DevicesRepo(deps.db);
+    this.code = openCode(deps.db, deps.identity, () => deps.clock.now());
     this.relay = new RelayClient({
       identity: deps.identity, log: deps.log, timers: deps.timers, socket: deps.socket,
       events: {
@@ -104,6 +110,7 @@ export class Meeting {
       tunnel: (record) => (this.relay.online(record.fingerprint) ? this.relay.open(record.fingerprint) : undefined),
     });
     this.offs.push(
+      watchCode(this.deps.identity.fingerprint, () => this.syncPeers()),
       bus.on('settings.updated', () => { this.syncPeers(); this.configure(); }),
       bus.on('device.upserted', () => this.syncPeers()),
       bus.on('device.removed', () => this.syncPeers()),
@@ -144,7 +151,7 @@ export class Meeting {
       this.boxes.set(entry.fp, entry.box);
       const who = await this.relay.request(entry.fp, entry.box, { op: 'wellKnown' }, { timeoutMs: WHO_TIMEOUT_MS, signal }).catch(() => undefined) as Record<string, unknown> | undefined;
       if (!who || who.ok !== true || who.fingerprint !== entry.fp || typeof who.deviceId !== 'string' || !/^dev_[0-9a-z]{10,40}$/.test(who.deviceId)) continue;
-      out.push({ deviceId: who.deviceId, name: typeof who.name === 'string' ? who.name.slice(0, 60) : '', fingerprint: entry.fp, addresses: [`${RELAY_PREFIX}${entry.fp}`] });
+      out.push({ deviceId: who.deviceId, name: typeof who.name === 'string' ? who.name.slice(0, 60) : '', fingerprint: entry.fp, addresses: [`${RELAY_PREFIX}${entry.fp}`], ...(entry.chain ? { chain: entry.chain } : {}) });
     }
     return out;
   }
@@ -234,7 +241,8 @@ export class Meeting {
     }
     let port: number | undefined;
     try { port = this.deps.port(); } catch { port = undefined; }
-    this.relay.setPeers(peers.slice(0, MAX_PEERS), this.findable(), port);
+    const chain = this.code.chain();
+    this.relay.setPeers(peers.slice(0, MAX_PEERS), this.findable(), port, chain.links.length ? chain : undefined);
     this.changed();
   }
 

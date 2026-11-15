@@ -5,7 +5,7 @@
 // Owns: the dismissal keys and marking them in a DetectionReport. Never: touches accounts or homes.
 
 import type { Db } from '../db/database.ts';
-import type { Account, DetectionReport, ProviderId } from '../../shared/model/providers.ts';
+import { foundHere, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
 import { KvRepo } from '../store/kv.ts';
 
 const NS = 'accounts';
@@ -16,8 +16,8 @@ export const loginKey = (provider: ProviderId | DetectionReport['clis'][number][
 export const serverKey = (provider: ProviderId, baseUrl: string): string => `${provider}:${baseUrl}`;
 
 /** The key detection would adopt this account by; undefined for accounts detection never adds. */
-export function dismissalKey(account: Pick<Account, 'provider' | 'auth' | 'home' | 'baseUrl'>): string | undefined {
-  if (account.auth === 'cli') return account.home === undefined ? loginKey(account.provider) : undefined;
+export function dismissalKey(account: Pick<Account, 'provider' | 'auth' | 'home' | 'detected' | 'baseUrl'>): string | undefined {
+  if (account.auth === 'cli') return foundHere(account) ? loginKey(account.provider) : undefined;
   return account.auth === 'local' && account.baseUrl ? serverKey(account.provider, account.baseUrl) : undefined;
 }
 

@@ -42,10 +42,10 @@ function world(vocabulary: string[] = ['Teydra'], files?: { dataDir: string; roo
   if (vocabulary.length) settings.update({ voice: { vocabulary } });
   f.services.settings = settings;
   recorded.events.length = 0;
-  /** An after-turn run whose exchange names Kling Studio, with a brain that calls `voice.words` with these words. */
+  /** A run whose exchange names Kling Studio, with a brain that calls `voice.words` with these words. */
   const run = async (words: unknown) => {
     const decision = brain([{ tool: 'voice.words', args: { words } }]);
-    const result = await runFlow(f.services, { decision: decision.runner }, { kind: 'after-turn', agent: f.vid, thread: 't', context: 'The person: Wir schneiden ab jetzt mit Kling Studio.' });
+    const result = await runFlow(f.services, decision.runner, { agent: f.vid, thread: 't', context: 'The person: Wir schneiden ab jetzt mit Kling Studio.' });
     return { result, calls: decision.calls };
   };
   return { f, settings, run, updated: () => recorded.of('settings.updated').length };

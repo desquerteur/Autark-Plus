@@ -6,7 +6,7 @@
 //     not in the list and the rail badge does not count them; opened, Later shows them with their
 //     times ("Snoozed until …");
 //   * when the 5-minute reminder rings (its timer schedule run now – the real fire path) it gets
-//     the ringing accent on its check and moves to the top of Needs you;
+//     the ringing accent on its check and moves to the top of Needs you when its time comes;
 //   * screenshots light, dark and 375 px (phone layout); no horizontal page scroll; no renderer errors.
 // Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -53,9 +53,10 @@ test('My day: ring time and countdown, a collapsed Later the badge skips, a ring
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   const info = JSON.parse(await readFile(path.join(profile, 'runtime.json'), 'utf8'));
   rpc = await connect(info.port, info.token, 'cli');
+  await rpc.call('settings.update', { onboarding: { step: 'done' } }); // past the first-run layer (B-085)
 
-  const form = await rpc.call('tasks.create', { title: 'Sign the form', assigneeKind: 'human', dueAt: Date.now() + 2 * 60_000 });
-  const stretch = await rpc.call('tasks.create', { title: 'Stretch', assigneeKind: 'human', widget: { type: 'timer', label: 'Stretch', at: new Date(Date.now() + 5 * 60_000).toISOString() } });
+  const form = await rpc.call('tasks.create', { title: 'Sign the form', dueAt: Date.now() + 2 * 60_000 });
+  const stretch = await rpc.call('tasks.create', { title: 'Stretch', widget: { type: 'timer', label: 'Stretch', at: new Date(Date.now() + 5 * 60_000).toISOString() } });
   assert.equal(stretch.widget?.type, 'timer');
 
   await page.evaluate(() => { location.hash = '#/day'; });
@@ -72,10 +73,10 @@ test('My day: ring time and countdown, a collapsed Later the badge skips, a ring
 
   // Later: a reminder three days ahead and a snoozed one.
   const far = await rpc.call('tasks.create', {
-    title: 'Water the plants', assigneeKind: 'human',
+    title: 'Water the plants',
     widget: { type: 'timer', label: 'Water the plants', at: new Date(Date.now() + 3 * DAY).toISOString() },
   });
-  const nap = await rpc.call('tasks.create', { title: 'Drink water', assigneeKind: 'human', widget: { type: 'timer', label: 'Drink water', at: new Date(Date.now() + 20 * 60_000).toISOString() } });
+  const nap = await rpc.call('tasks.create', { title: 'Drink water', widget: { type: 'timer', label: 'Drink water', at: new Date(Date.now() + 20 * 60_000).toISOString() } });
   await rpc.call('todos.snooze', { id: nap.id, minutes: 30 });
   const toggle = home.getByRole('button', { name: 'Later 2' });
   await toggle.waitFor({ timeout: 15_000 });
@@ -97,15 +98,14 @@ test('My day: ring time and countdown, a collapsed Later the badge skips, a ring
   await shot('later-03-open-dark');
   await page.emulateMedia({ colorScheme: 'light' });
 
-  // It rings: the scheduler runs the reminder's timer now (schedules/fire.ts sets needs_you).
-  const ring = (await rpc.call('schedules.list')).find((schedule) => schedule.taskId === stretch.id && schedule.kind === 'timer');
-  assert.ok(ring, 'the reminder has its ring');
-  await rpc.call('schedules.runNow', { id: ring.id });
+  // It rings when its time comes (shared/model/todo-later.ts isRinging: an open timer whose time passed) – a reminder due
+  // in seconds stands in for the five minutes.
+  const ringing = await rpc.call('tasks.create', { title: 'Stand up', widget: { type: 'timer', label: 'Stand up', at: new Date(Date.now() + 4000).toISOString() } });
   await page.waitForFunction((id) => {
     const first = document.querySelector('.day-view .todo-list[aria-label="Needs you"] > .todo-item');
     return first?.getAttribute('data-task-id') === id && !!first.querySelector('.day-check.ringing');
-  }, stretch.id, { timeout: 15_000 });
-  assert.equal(await row(stretch.id).locator('.sr-only', { hasText: 'Needs you now' }).count(), 1, 'the state is not colour alone');
+  }, ringing.id, { timeout: 15_000 });
+  assert.equal(await row(ringing.id).locator('.sr-only', { hasText: 'Needs you now' }).count(), 1, 'the state is not colour alone');
   await shot('later-04-ringing-light');
   await page.emulateMedia({ colorScheme: 'dark' });
   await shot('later-05-ringing-dark');
@@ -116,7 +116,7 @@ test('My day: ring time and countdown, a collapsed Later the badge skips, a ring
   await page.waitForTimeout(600);
   await page.evaluate(() => { location.hash = '#/day'; });
   await page.locator('.todo-later-toggle').first().waitFor({ timeout: 15_000 });
-  await page.locator(`.todo-item[data-task-id="${stretch.id}"] .day-check.ringing`).first().waitFor({ timeout: 15_000 });
+  await page.locator(`.todo-item[data-task-id="${ringing.id}"] .day-check.ringing`).first().waitFor({ timeout: 15_000 });
   assert.ok((await overflow()) <= 1, `no horizontal page scroll at 375 px (${await overflow()}px)`);
   const tabBadge = page.locator('.mobile-shell .tab-badge');
   if (before !== undefined && await tabBadge.count()) assert.equal((await tabBadge.textContent())?.trim(), before, 'the phone tab badge skips Later too');

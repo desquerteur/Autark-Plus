@@ -36,6 +36,8 @@ export interface Device {
    * own device (everything the same). An employee's PC may not run tools on this PC.
    */
   personId?: string;
+  /** B-081: this PC joined that PC – as its CEO (everything the same) or as an employee there (files stay there). */
+  joinedAs?: 'ceo' | 'employee';
 }
 
 export interface PwaState {

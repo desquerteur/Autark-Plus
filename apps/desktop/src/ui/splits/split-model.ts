@@ -13,7 +13,7 @@ import '../../shared/api/methods-splits.ts'; // the splits.* method shapes (modu
 import type { SplitGroupView, SplitView } from '../../shared/model/splits.ts';
 import { rpc } from '../lib/rpc.ts';
 import { activity, loadModels, models } from '../lib/store.ts';
-import { changedAgents, chatGroups, runGroups, sidebarGroups, splitRunKeys } from './split-text.ts';
+import { changedAgents, runGroups, sidebarGroups, splitRunKeys } from './split-text.ts';
 
 export interface SplitQuery { agentId?: string; parentRunId?: string; groupId?: string; conversationId?: string; active?: boolean; limit?: number }
 
@@ -102,11 +102,6 @@ export function agentGroups(agentId: string): SplitGroupView[] {
 /** The groups a parent run made, in order. */
 export function groupsOfRun(parentRunId: string): SplitGroupView[] {
   return runGroups(splitGroups.value.values(), parentRunId);
-}
-
-/** The running groups of a chat (one live block each), in start order. */
-export function liveGroupsOf(conversationId: string): SplitGroupView[] {
-  return chatGroups(splitGroups.value.values(), conversationId, activity.value);
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();

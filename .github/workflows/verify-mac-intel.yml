@@ -29,6 +29,7 @@ env:
 
 jobs:
   verify-mac-intel:
+    if: github.repository == 'teydra/OpenAutark' # B-085: not in forks
     runs-on: macos-15-intel
     timeout-minutes: 15
     steps:

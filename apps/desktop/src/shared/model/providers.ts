@@ -83,10 +83,12 @@ export interface Account {
   limits?: AccountLimits;
   coolingUntil?: number;
   priority: number; // lower = preferred
-  rotation: boolean; // may be used automatically when another account of the same provider is limited
   enabled: boolean;
   detected: boolean; // found from an existing login on this PC
   deviceId?: string; // which PC this account lives on (undefined = home)
+  /** B-083: an API key whose organisation holds the API credits a plan includes (Claude Max/Ultra, ChatGPT Pro/Business):
+   *  prepaid and lost at the end of each billing month, so routing uses it like a plan while they last (charge.ts). */
+  credits?: boolean;
   createdAt: number;
   checkedAt?: number;
 }
@@ -150,11 +152,16 @@ export interface ModelInfo {
   accounts: string[]; // account ids that can run it
   /** Addition (FN1): media functions this specialist serves (it is never routed for chat). */
   functions?: ModelFunction[];
+  /** B-083: the id of the newest model of the same family when this one is an older version of it (catalog order,
+   *  models/order.ts – such models stand below the current ones). Absent: this is its family's newest. */
+  newer?: string;
 }
 
 /** Agent/chat level preference. Router stays inside these bounds. */
 export interface ModelPolicy {
-  pin?: string; // fixed model id (hard pin) or undefined for auto
+  pin?: string; // B-083: the agent's start model (undefined = chosen per task); its own model.set and its subconscious change a turn's model
+  /** B-083: who set the start model last and when (the agent reads it in "## Now"; a person's choice on the agent page names that person). */
+  pinBy?: { name: string; at: number; self?: boolean };
   effort?: Effort; // fixed effort
   floorTier?: ModelInfo['tier'];
   ceilingTier?: ModelInfo['tier'];
@@ -172,6 +179,8 @@ export interface RouteDecision {
   reason: string; // short human-readable explanation ("video animation · Opus strongest prior")
   by: 'pin' | 'rules' | 'decision-model' | 'fallback' | 'previous' | 'hint'; // 'hint' (SG): the chat's model suggestion, shared/model/model-guide.ts
   alternatives: string[]; // next candidates (failover order)
+  /** B-083: the temperature this turn asks for (the agent's own request, else the person's suggestion in the chat); undefined = the model's own. */
+  temperature?: number;
 }
 
 export interface UsageSummary {
@@ -180,7 +189,7 @@ export interface UsageSummary {
   label: string;
   /** B-078 (D17): the plan's short name for the rail (shared/model/plan-names.ts: a label of the person's own, else the e-mail's local part). */
   name?: string;
-  active: boolean; // currently chosen by rotation
+  active: boolean; // the plan its provider uses first right now (accounts/candidates.ts)
   weeklyRemainingPercent?: number;
   weeklyResetsAt?: number;
   limits?: AccountLimits;
@@ -241,6 +250,11 @@ export function functionCandidates(fn: ModelFunction, setting: string | undefine
   return [...(chosen ? [{ model: chosen, source: 'settings' as const }] : []), ...rest.map((model) => ({ model, source: 'auto' as const }))];
 }
 
+/** Whether `account` is the login this PC found in its CLI's default home (a Codex one runs on a copy in its own home). */
+export function foundHere(account: Pick<Account, 'provider' | 'auth' | 'home' | 'detected'>): boolean {
+  return account.auth === 'cli' && (account.home === undefined || (account.provider === 'codex' && account.detected));
+}
+
 // ------------------------------------------------------------------ plan CLIs on the ACP engine (PR8)
 
 /** Gemini CLI, GitHub Copilot CLI and Kimi Code: plan accounts that run on the generic ACP engine (runtime/engines/acp/providers.ts). */
@@ -248,8 +262,8 @@ export const ACP_PLAN_PROVIDERS: readonly ProviderId[] = ['gemini-cli', 'copilot
 
 /**
  * An ACP plan: one sign-in per PC in the CLI's default home (Kimi Code: also isolated homes per
- * account, KIMI_CODE_HOME – B-044). Account selection applies the plan rule of plan-roles.ts to it
- * (primary, others only in opt-in rotation), but it has no limit readings, so the account monitor
+ * account, KIMI_CODE_HOME – B-044). Account selection treats it as a plan (every signed-in one takes
+ * turns, accounts/candidates.ts), but it has no limit readings, so the account monitor
  * does not keep re-checking it (isPlanProvider stays Codex/Claude Code).
  */
 export function isAcpPlan(provider: ProviderId): boolean {

@@ -2,7 +2,7 @@
 // connecting PCs, the meeting server, the peer listener, the device tools: devices/connect.ts), the people of the
 // organisation, the RPC surface (RpcExtras), the HTTP server, feedback/onboarding, the live screen preview and the
 // browser live view, the media library, agent export/backup and chat bridges (telegram.connect).
-// Owns: wiring and the small system/restart adapter. Never: business logic.
+// Owns: wiring and the small system/restart adapter (B-080: it keeps an update's version for the next start). Never: business logic.
 
 import os from 'node:os';
 import type { RuntimeServices } from '../contracts.ts';
@@ -29,7 +29,7 @@ import { registerSideView } from '../devices/side-view.ts'; // B-076
 import '../contracts/pointers.ts'; // RuntimeServices.pointers
 import { Portability } from '../portability/service.ts';
 import { Bridges } from '../bridges/service.ts';
-import { readStartNotice } from '../tasks/recover-notes.ts';
+import { dropInstall, noteUpdate, readStartNotice } from '../tasks/recover-notes.ts';
 
 export interface NetworkOptions {
   core: Core;
@@ -105,7 +105,7 @@ export function createNetwork(options: NetworkOptions): Network {
       }),
       resources: (): ResourceState => ({
         freeMemoryMb: Math.round(os.freemem() / 1048576), totalMemoryMb: Math.round(os.totalmem() / 1048576),
-        cpuCount: os.availableParallelism?.() ?? os.cpus().length, heavySlots: core.supervisor.maxHeavy(),
+        cpuCount: os.availableParallelism?.() ?? os.cpus().length, heavySlots: core.dispatcher.capacity(), // B-080: how many of its parts an agent runs at once (no global limit, no RAM slots)
         heavyInUse: core.supervisor.leases().filter((lease) => lease.kind === 'heavy').length, queued: s.wakes.pending(),
         processes: core.supervisor.leases().map((lease) => ({ kind: lease.owner.split(':')[0], pid: lease.pid ?? 0, idleMs: s.clock.now() - lease.lastActiveAt })),
         runtime: runtimeUsage(cpuMark),
@@ -118,8 +118,11 @@ export function createNetwork(options: NetworkOptions): Network {
         const reasons = [...(agents ? [`${agents} agent${agents === 1 ? ' is' : 's are'} working`] : []), ...(splits ? [`${splits} split${splits === 1 ? ' is' : 's are'} running`] : [])];
         return { ready: reasons.length === 0, reasons };
       },
-      prepareRestart: async (cancel) => {
-        if (cancel) { if (network.restartPaused) { network.restartPaused = false; core.dispatcher.start(); } return; }
+      prepareRestart: async (cancel, to) => {
+        // B-080: the update's version is kept for the next start's answer (recover-notes.ts); a cancel answers and drops
+        // the install that did not happen (the agent that started one hears it at once).
+        if (cancel) { dropInstall(s); if (network.restartPaused) { network.restartPaused = false; core.dispatcher.start(); } return; }
+        if (to) noteUpdate(s, to);
         network.restartPaused = true;
         await core.dispatcher.stop(); // interrupted turns resume after the restart (ownership loop)
         try { s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (error) { s.log.warn('wal checkpoint failed', { error: String(error) }); }
@@ -175,7 +178,7 @@ export function runtimeUsage(mark: { cpuMs: number; uptimeMs: number }, vectors:
   const memory = process.memoryUsage();
   const mb = (bytes: number) => Math.round(bytes / 104857.6) / 10;
   return {
-    pid: process.pid, rssMb: mb(memory.rss), heapUsedMb: mb(memory.heapUsed), cpuMs: Math.round(cpuMs), uptimeMs: Math.round(uptimeMs),
+    pid: process.pid, rssMb: mb(memory.rss), heapUsedMb: mb(memory.heapUsed), heapTotalMb: mb(memory.heapTotal), externalMb: mb(memory.external), cpuMs: Math.round(cpuMs), uptimeMs: Math.round(uptimeMs),
     cpuPercent: Math.round(cpuPercent * 10) / 10, vectorWorkers: vectors.workers, vectorIndexMb: mb(vectors.bytes),
   };
 }

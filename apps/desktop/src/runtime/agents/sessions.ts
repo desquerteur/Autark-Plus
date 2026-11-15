@@ -1,10 +1,11 @@
 // Native engine session bindings: (agent, thread, engine) → Codex thread / Claude session id.
-// B-054: the key's second part is the turn's thread (TurnPlan.thread, threadKey in shared/model/origin.ts) – stored in
-// the column conversation_id: a chat's id (old rows resume unchanged), `task:<id>` for a chat-free task, `src:<source>`
-// for a chat-free, task-free source (a mailbox). Rows under '' from before B-054 simply age out.
+// The key's second part is the turn's thread (TurnPlan.thread, threadKey in shared/model/origin.ts) – stored in the column
+// conversation_id: 13.11.2026 'main' for every turn of the agent (one context per agent), `split:<id>` for a part. Rows under
+// the older per-chat, task or source keys are no longer read; a new main session starts.
 // Owns: the `engine_sessions` rows (ref, generation, account, model, context size, the context
-// window the engine reported for that model, the chat seq the session has seen, and – SES2 – the
-// prompt key and mode the session was started with).
+// window the engine reported for that model, the wake chat's seq of its last input, and – SES2 – the
+// prompt key and mode the session was started with); B-080: the window an engine last reported for a model on any thread
+// (reportedWindow – the window rule of turn-prepare.ts and splits/fork.ts).
 // B-048 E2: a ref replaced by another (renewal, rebuild, account switch) or removed is recorded as superseded
 // (kv 'superseded-sessions': who, which engine/account/ref, when) – only refs of rows the app wrote, i.e. sessions
 // it created; agents/session-sweep.ts deletes them later. A newly bound ref tells the db's bind listeners.
@@ -44,13 +45,13 @@ export function onSessionBound(db: Db, listener: BindListener): () => void {
 
 export interface SessionBinding {
   agentId: string;
-  /** The thread (B-054): a chat id, `task:<id>`, `src:<source>`; '' only in rows from before B-054. */
+  /** The thread: 'main' (the agent's one context) or `split:<id>`. */
   conversationId: string;
   engine: EngineId;
   accountId?: string;
   ref: string;
   generation: number;
-  /** Highest chat seq this native session has received (its own catch-up point). */
+  /** The wake chat's seq of the session's last input (kept for the record; nothing reads it back for a catch-up). */
   cursorSeq: number;
   contextTokens?: number;
   /** Context window the engine reported for `model` (used when the catalog has none). */
@@ -119,6 +120,16 @@ export class SessionStore {
   stamp(agentId: string, thread: string | undefined, engine: EngineId, promptKey: string, mode: string): void {
     this.db.run('UPDATE engine_sessions SET prompt_key = ?, mode = ? WHERE agent_id = ? AND conversation_id = ? AND engine = ? AND prompt_key IS NULL',
       [promptKey, mode, agentId, thread ?? '', engine]);
+  }
+
+  /**
+   * B-080: the context window this engine last reported for `model` on any agent's thread – the window it really runs with
+   * (Codex runs a model with another window than its API's); undefined when it never reported one.
+   */
+  reportedWindow(engine: EngineId, model: string): number | undefined {
+    const row = this.db.get<{ context_window: number }>(
+      'SELECT context_window FROM engine_sessions WHERE engine = ? AND model = ? AND context_window IS NOT NULL ORDER BY updated_at DESC LIMIT 1', [engine, model]);
+    return row ? Number(row.context_window) : undefined;
   }
 
   /** Records the context window an engine reported for the bound session's model. */

@@ -2,7 +2,8 @@
 // to that PC and answer with its rules – a save on an old stamp stays a conflict there –, a path without another PC
 // (or this PC's own id) stays here, an offline PC says "<name> is offline." at once, a PC that is no CEO link gets
 // nothing; a media file stored there comes back with its `files` row taken here like a synced row; a save too large for
-// one mesh frame is refused before it goes, a read too large for one answers 'large'. Where a tab is
+// one mesh frame is refused before it goes, a read too large for one answers 'large'; B-081: a missing path answers
+// with that PC's similar paths, and 'root' names that PC's folders (CEO links only). Where a tab is
 // scrolled to (positions.ts) goes to the CEO PCs under the tab's shared id and arrives under the local one; a bad value
 // is refused, the oldest of too many go.
 // Owns: these assertions only. Never: network, Electron.
@@ -14,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { PathList, PathRead, PathWritten } from '../../../src/shared/api/methods-files.ts';
 import type { TabPosition } from '../../../src/shared/api/methods-tabs.ts';
-import type { FileRef } from '../../../src/shared/model/system.ts';
+import type { FileRef, RootInfo } from '../../../src/shared/model/system.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { Blobs } from '../../../src/runtime/files/store.ts';
 import { RemotePaths, remotePathsOf } from '../../../src/runtime/devices/sync/paths.ts';
@@ -91,6 +92,28 @@ test('a media file of A, opened on B, is stored on A and its row arrives on B wi
   assert.equal(a.h.services.files.get(ref.id)?.name, 'clip.mp4', 'A stored it');
   assert.equal(b.h.services.files.get(ref.id)?.name, 'clip.mp4', 'B has its row (its bytes come when shown)');
   await assert.rejects(a.handlers.get('files.path')!({ op: 'store', path: 'relative.mp4' }, b.id), code('bad_request'));
+});
+
+test('B-081: a missing path of A answers with A\'s similar paths; root names A\'s folders, for CEO links only', async (t) => {
+  const { a, b, dir, done } = pair();
+  t.after(done);
+  writeFileSync(path.join(dir, 'notes.md'), 'on A');
+  const read = await onDevice(ctxOf(b), { path: path.join(dir, 'notse.md'), device: a.id }, 'read', PATH_OPS.read) as PathRead;
+  assert.equal(read.state, 'missing');
+  assert.equal(read.near?.[0]?.path, path.join(dir, 'notes.md'), 'found on A');
+  assert.equal(read.near?.at(-1)?.path, dir, 'the nearest folder last');
+  const list = await onDevice(ctxOf(b), { path: path.join(dir, 'gone'), device: a.id }, 'list', PATH_OPS.list) as PathList;
+  assert.equal(list.missing, true);
+  assert.equal(list.near?.at(-1)?.path, dir);
+
+  a.h.services.paths = { data: path.join(dir, 'data-a'), workspace: path.join(dir, 'work-a') } as typeof a.h.services.paths;
+  const root = await onDevice(ctxOf(b), { device: a.id }, 'root', async () => { throw new Error('not here'); }) as RootInfo;
+  assert.deepEqual(root, { path: path.join(dir, 'data-a'), workspace: path.join(dir, 'work-a'), readme: path.join(dir, 'data-a', 'README.md') });
+  assert.equal(await onDevice(ctxOf(b), undefined, 'root', async () => 'here'), 'here', 'no device: this PC');
+
+  const employee = pair('pe_1');
+  t.after(employee.done);
+  await assert.rejects(employee.a.handlers.get('files.path')!({ op: 'root' }, employee.b.id), code('forbidden'), 'an employee\'s PC learns no folders');
 });
 
 test('a tab\'s view position goes to the CEO PCs under the shared id and arrives under the local one', async (t) => {

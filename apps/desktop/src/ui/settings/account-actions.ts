@@ -1,13 +1,16 @@
 // What the account rows and the model setup share: starting an official sign-in and following a terminal sign-in or
 // sign-out until it shows (re-checked whenever this window gets focus again, at most 30 min, then a toast), and what
-// fixes or removes an account. A Codex or Claude Code sign-in opens the browser itself.
+// fixes or removes an account. A Codex or Claude Code sign-in opens the browser itself; one started from the phone
+// opens the sign-in sheet instead (away-sign-in.ts).
 // Owns: these flows and texts. Never: reads or shows tokens, or decides account state (the runtime does).
 
-import type { Account, ProviderId } from '../../shared/model/providers.ts';
+import type { AwaySignIn } from '../../shared/api/methods-providers.ts';
+import { foundHere, type Account, type ProviderId } from '../../shared/model/providers.ts';
 import { openExternal } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { accounts } from '../lib/store.ts';
 import { pushToast } from '../lib/toasts.ts';
+import { openAwaySignIn } from './away-sign-in.ts';
 import { act } from './controls.tsx';
 import { SIGN_IN, signInHint } from './providers.ts';
 
@@ -25,7 +28,7 @@ export function repairText(account: Account): string {
 
 /** What removing an account does (the confirm text). */
 export function removeText(account: Account): string {
-  if (account.home) return 'Autark stops using this account and deletes its separate sign-in profile on this PC.';
+  if (account.home && !foundHere(account)) return 'Autark stops using this account and deletes its separate sign-in profile on this PC.';
   if (account.auth === 'env') return `Autark stops using the key in ${account.envVar}; the variable itself stays as it is.`;
   if (account.secretId?.startsWith('secret://')) return 'Autark stops using this connection; its key stays in Settings › Secrets.';
   if (account.auth === 'api_key') return 'Autark deletes the stored key and stops using this connection.';
@@ -60,8 +63,9 @@ export function recheckOnFocus(id: string, goal: 'in' | 'out'): void {
   window.addEventListener('focus', onFocus);
 }
 
-/** The toast after a sign-in started and, for a terminal sign-in, the re-check on focus. */
-export function signInStarted(id: string, provider: ProviderId | undefined): void {
+/** The toast after a sign-in started and, for a terminal sign-in, the re-check on focus; a phone's sign-in opens its sheet. */
+export function signInStarted(id: string, provider: ProviderId | undefined, result: { url?: string; signInUrl?: string } & AwaySignIn = {}): void {
+  if (openAwaySignIn(id, result)) return;
   pushToast({ title: 'Sign-in started', body: signInHint(provider) });
   if (inTerminal(provider)) recheckOnFocus(id, 'in');
 }
@@ -70,9 +74,9 @@ export function signInStarted(id: string, provider: ProviderId | undefined): voi
 const OPENS_OWN_BROWSER: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude']);
 
 /** Starts the official sign-in for an existing account; opens a returned URL the CLI does not open itself, and returns the result. */
-export async function startLogin(id: string, provider = findAccount(id)?.provider): Promise<{ started: boolean; url?: string } | undefined> {
+export async function startLogin(id: string, provider = findAccount(id)?.provider): Promise<({ started: boolean; url?: string } & AwaySignIn) | undefined> {
   const result = await act(() => rpc.call('accounts.login', { id }), 'Could not start sign-in');
   if (result?.url && !(provider && OPENS_OWN_BROWSER.has(provider))) openExternal(result.url);
-  if (result?.started) signInStarted(id, provider);
+  if (result?.started) signInStarted(id, provider, result);
   return result;
 }

@@ -27,7 +27,7 @@ export const LOCAL_EMBEDDING_NAME = 'MiniLM-L12 multilingual';
 
 const THREADS = 2;
 const IDLE_MS = 2 * 60_000;
-/** After this many failed downloads or loads this runtime stops offering the local model (the next option takes over). */
+/** After this many failed downloads or loads this runtime stops offering the local model (finding goes by words until the next start). */
 const MAX_FAILURES = 3;
 const REVISION = '2c4055b12046f11709e9df2c122e59ffbdc2f900';
 const REPO = `https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/${REVISION}`;
@@ -80,11 +80,6 @@ export class LocalEmbedder implements Embedder {
   /** Can serve (downloaded, or able to download). */
   possible(): boolean {
     return (this.deps.enabled ?? !process.env.WORKFORCE_TEST_DATA) && Boolean(this.files) && this.failures < MAX_FAILURES;
-  }
-
-  /** It failed too often in this runtime: whatever serves now only stands in for it until the next start. */
-  gaveUp(): boolean {
-    return this.failures >= MAX_FAILURES;
   }
 
   async embed(texts: string[], purpose: 'query' | 'document'): Promise<Float32Array[]> {

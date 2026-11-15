@@ -117,14 +117,16 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
   });
   const one = await waitLines((now) => now.length === 1 && /Launch plan · (starting|listening)/.test(now[0]), 'the first chat talks');
   assert.equal(one.length, 1);
-  // The call is one bubble in the chat, written by this PC.
-  const bubbles = page.locator('.message-scroller .call-transcript-toggle');
-  const titles = async () => (await bubbles.allTextContents()).map((text) => text.trim());
+  // The call is one bubble in the chat, written by this PC (B-085: a compact card whose accessible name is the title;
+  // its toggle reads "Transcript").
+  const bubbles = page.locator('.message-scroller .call-transcript');
+  const titles = async () => (await bubbles.evaluateAll((cards) => cards.map((card) => card.getAttribute('aria-label') ?? ''))).map((text) => text.trim());
   const waitTitles = async (check, what) => {
     for (const end = Date.now() + 15_000; Date.now() < end; await page.waitForTimeout(200)) if (check(await titles())) return;
     assert.fail(`timed out: ${what} (${JSON.stringify(await titles())})`);
   };
   await waitTitles((now) => now.length === 1 && /^Call · .+ · running$/.test(now[0]), 'the call bubble runs');
+  assert.equal((await bubbles.first().locator('.call-transcript-toggle').textContent())?.trim(), 'Transcript');
   const callRows = async () => (await rpc.call('messages.list', { conversationId: plan.id })).filter((message) => Array.isArray(message.meta?.call?.lines));
   assert.equal((await callRows())[0]?.meta.call.participant, 'device:pc');
   await shot('call-00-one');

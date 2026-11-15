@@ -59,13 +59,13 @@ test('all shipped templates parse with a known mode and instructions', () => {
   assert.equal(byKey['computer-operator'].mode, 'computer');
 });
 
-test('template parser: inline and block lists, quotes, effort, invalid files', () => {
+test('template parser: inline and block lists, quotes, an old effort line ignored (B-083), invalid files', () => {
   const parsed = parseTemplate('x', '---\nname: "Ed"\nskills:\n  - a\n  - b\neffort: high\nspaceKind: nowhere\n---\nBody\n')!;
   assert.deepEqual(parsed.skills, ['a', 'b']);
   assert.equal(parsed.name, 'Ed');
   assert.equal(parsed.role, 'Ed');
   assert.equal(parsed.mode, 'general');
-  assert.equal(parsed.effort, 'high');
+  assert.equal('effort' in parsed, false, 'a template carries no effort – the agent picks it per step');
   assert.equal(parsed.spaceKind, undefined);
   assert.equal(parsed.instructions, 'Body');
   assert.deepEqual(parseTemplate('y', '---\nname: Y\nskills: [one, "two"]\n---\n')!.skills, ['one', 'two']);
@@ -80,7 +80,7 @@ test('create from template: defaults, avatar, space by kind, unique names, event
   const secretary = org.create({ template: 'secretary', createdBy: 'human' });
   assert.equal(secretary.spaceId, privateSpace.id);
   assert.equal(secretary.mode, 'secretary');
-  assert.equal(secretary.modelPolicy.effort, 'medium');
+  assert.deepEqual(secretary.modelPolicy, {}, 'B-083: a hire starts without a fixed effort');
   assert.deepEqual(secretary.avatar, { kind: 'initials', value: secretary.name[0], color: paletteIndex(secretary.id) });
   assert.equal(secretary.role, 'Personal assistant', 'B-047: no name given – a human first name, the template role stays');
   const editor = org.create({ template: 'video-editor', createdBy: manager.id });

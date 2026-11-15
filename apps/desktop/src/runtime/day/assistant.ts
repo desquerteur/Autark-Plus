@@ -14,14 +14,17 @@ import { responsibleManager } from '../tasks/owners.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
 
 export const ASSISTANT_TEMPLATES: readonly string[] = ['secretary', 'ceo-assistant'];
-/** The wake's note, above the to-do lines. */
-export const PREPARE_NOTE = 'The person added to-dos I can help with. I prepare them with todos.prepare (opening hours, documents, links, '
-  + 'a time window) or do what I can myself:';
+/** The wake's note, above the to-do lines: the member by name ("The person" without one). */
+export function prepareNote(s: Partial<Pick<RuntimeServices, 'settings' | 'people'>>, ownerId: string): string {
+  let name: string | undefined;
+  try { name = ownerId === HUMAN_ID ? s.settings?.get().profile.name : s.people?.nameOf(ownerId); } catch { name = undefined; }
+  return `${name?.trim() || 'The person'} added to-dos I can help with:`;
+}
 /** The bundled wake's key and delay (more to-dos typed in a row join one wake). */
 const WAKE_KEY = 'assistant:todos';
 const WAKE_DELAY_MS = 60_000;
 
-export type AssistantDeps = Pick<RuntimeServices, 'org' | 'tasks' | 'wakes' | 'clock'> & Partial<Pick<RuntimeServices, 'log'>>;
+export type AssistantDeps = Pick<RuntimeServices, 'org' | 'tasks' | 'wakes' | 'clock'> & Partial<Pick<RuntimeServices, 'log' | 'settings' | 'people'>>;
 
 const isAssistant = (agent: Agent) => ASSISTANT_TEMPLATES.includes(agent.template ?? '') || ASSISTANT_TEMPLATES.includes(agent.mode);
 const isManager = (agent: Agent) => agent.mode === 'manager' || agent.template === 'manager';
@@ -63,11 +66,11 @@ export function wakeAssistant(s: AssistantDeps, ownerId: string, taskIds: string
   const lines: string[] = [];
   for (const id of new Set(taskIds)) {
     const task = s.tasks.get(id);
-    if (!task || task.private || task.status === 'done' || task.status === 'cancelled') continue;
+    if (!task || task.private || task.status === 'done' || task.status === 'dropped') continue;
     lines.push(`- ${task.id}: ${excerpt(task.title, 120)}`);
   }
   if (!lines.length) return undefined;
-  s.wakes.wake({ agentId: agent.id, reason: 'task', coalesceKey: WAKE_KEY, dueAt: s.clock.now() + WAKE_DELAY_MS, note: [PREPARE_NOTE, ...lines].join('\n'), origin: ORIGINS.news });
+  s.wakes.wake({ agentId: agent.id, reason: 'task', coalesceKey: WAKE_KEY, dueAt: s.clock.now() + WAKE_DELAY_MS, note: [prepareNote(s, ownerId), ...lines].join('\n'), origin: ORIGINS.news });
   s.log?.info('assistant told about new to-dos', { agentId: agent.id, count: lines.length, source });
   return agent.id;
 }

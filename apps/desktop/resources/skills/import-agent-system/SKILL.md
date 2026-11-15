@@ -10,6 +10,7 @@ metadata:
 # Import an existing agent system
 
 I read the files myself and hire the agents with `agents.create`. There is no import wizard.
+One project folder that should become one agent working in it (its code, CLAUDE.md or AGENTS.md, skills) I build with the skill `agent-from-folder`: the agent's home project brings the folder along.
 
 ## Where the definitions are
 - **CrewAI**: `config/agents.yaml` (per agent: `role`, `goal`, `backstory`) and `config/tasks.yaml`
@@ -27,7 +28,7 @@ I read the files myself and hire the agents with `agents.create`. There is no im
 
 ## Skills of other providers
 Folders such as `.agent`, `.agents`, `.claude`, `.codex` or a project's `skills/` often hold SKILL.md skills:
-`skills.find` with `in: "<folder>"` lists them by description, `skills.load` with `name` and `in` reads one, and
+`knowledge.find` with `in: ["<absolute folder>"]` lists them by description, `knowledge.open folder:<its folder>/<name>` reads one, and
 `skills.save` keeps a copy I adapted. Other formats (`.cursor/rules/*.mdc`, `CLAUDE.md`, a prompt file …) are plain
 text: I read them myself and rewrite what helps as a skill or into `SYSTEM.md`. On any of these, a copy is worth
 keeping when I would use it again here; what only fits their tooling stays behind.

@@ -30,7 +30,7 @@ test('team rooms persist across a restart; a to-do opens no chat', { timeout: 24
   // An agent opens a room without the human.
   await live.client.call('messages.send', {
     conversationId: first.id,
-    body: `Open a work room [[tool:chat.create {"title":"Launch research","agentIds":["${manager.id}"]}]]`,
+    body: `Open a work room [[tool:chat.create {"title":"Launch research","members":["${manager.id}"]}]]`,
   });
   const room = await live.client.waitFor('conversation.upserted', (chat) => chat.title === 'Launch research', 90_000);
   assert.equal(chatSection(room), 'team', 'agent-only from the start');

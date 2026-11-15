@@ -16,7 +16,9 @@
 # Moves and wheel steps press nothing and need no clearance.
 # B-055: 'path' replays a planned pointer path and ends in a click, a drag or wheel steps
 # (linux_path.py; it replaces 'drag'); an element click may carry `path`; 'cursor' reads the
-# pointer (X11) with the idle times.
+# pointer (X11) with the idle times. B-081: when the person's input is newer than ours, 'cursor' also names
+# `window`, the title of the window under the pointer as far as AT-SPI tells (it knows no stacking order: the
+# active window when it holds the point, else the only shown window that does).
 # Element ids: rid = the index path inside its window ("0.3.1"); an act re-resolves it and checks the
 # observed name and role first (expectName/expectRole) – a moved element is a 'conflict', nothing runs.
 # Window ids: small numbers per (pid, window index), stable while this process runs.
@@ -29,13 +31,14 @@ import os
 import sys
 import time
 
-from linux_atspi import (APP, MAX_DEPTH, SESSION, Atspi, Fail, center, do_action, foreground, gi, has, node, resolve,
-                         role_of, states, tree, walk, window_by_id, windows_list)
+from linux_atspi import (APP, MAX_DEPTH, SESSION, Atspi, Fail, center, do_action, extents, foreground, gi, has, node, resolve,
+                         role_of, states, tree, walk, window_by_id, windows_list, windows_raw)
 from linux_guard import guard_element, guard_keyboard, guard_point, idle_ms, pointer_now, pointer_zone
 import linux_path
 
 PROTOCOL = 4
 LAST_INPUT = [None]
+PERSON_MS = 300000  # the person's pointer counts this long (shared/model/pointers.ts POINTER_PERSON_TTL_MS)
 KEYSYMS = {8: 0xff08, 9: 0xff09, 13: 0xff0d, 27: 0xff1b, 32: 0x20, 33: 0xff55, 34: 0xff56, 35: 0xff57, 36: 0xff50, 37: 0xff51, 38: 0xff52,
            39: 0xff53, 40: 0xff54, 45: 0xff63, 46: 0xffff, 16: 0xffe1, 17: 0xffe3, 18: 0xffe9, 91: 0xffeb, 92: 0xffec, 93: 0xff67}
 MODIFIERS = {16, 17, 18, 91, 92}
@@ -93,6 +96,19 @@ class PathIo:
         zone = pointer_zone()
         for x, y in points:
             guard_point(int(x), int(y), zone)
+
+
+def window_at(x, y):
+    """The title of the window under (x, y): the active window when it holds the point, else the only shown one; or None."""
+    hits = []
+    for _hwnd, win, _app, _pid in windows_raw():
+        st, rect = states(win), extents(win)
+        if rect is None or has(st, Atspi.StateType.ICONIFIED) or not (rect[0] <= x < rect[0] + rect[2] and rect[1] <= y < rect[1] + rect[3]):
+            continue
+        if has(st, Atspi.StateType.ACTIVE):
+            return win.get_name() or None
+        hits.append(win)
+    return (hits[0].get_name() or None) if len(hits) == 1 else None
 
 
 def presence():
@@ -258,6 +274,11 @@ def handle(op, a):
             raise Fail('unavailable', 'Where the pointer is cannot be read here (no X11).')
         out = presence()
         out.update({'x': int(at[0]), 'y': int(at[1])})
+        idle, ours = out.get('idleMs'), out.get('injectedAgoMs')
+        if idle is not None and idle < PERSON_MS and (ours is None or idle + 150 < ours):  # the person's pointer (pointer-input.ts)
+            title = window_at(out['x'], out['y'])
+            if title:
+                out['window'] = title[:120]
         return out
     if op == 'windows':
         return windows_list()

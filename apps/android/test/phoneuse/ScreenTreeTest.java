@@ -60,6 +60,15 @@ public final class ScreenTreeTest {
         equal(2, ScreenTree.clickableAt(rows, 150, 230));
         equal(1, ScreenTree.clickableAt(rows, 500, 300));
         equal(-1, ScreenTree.clickableAt(rows, 500, 1000));
+        check(!ScreenTree.insideWeb(rows, 2));
+
+        Fake chip = new Fake("android.widget.Button", "file.apk", new int[] {100, 900, 600, 1000}, true, true, false);
+        Fake page = new Fake("android.view.View", null, new int[] {0, 0, 1080, 2400}, true, false, false, chip);
+        Fake web = new Fake("android.webkit.WebView", null, new int[] {0, 0, 1080, 2400}, true, false, false, page);
+        List<Map<String, Object>> webRows = ScreenTree.flatten(new Fake("android.widget.FrameLayout", null, new int[] {0, 0, 1080, 2400}, true, false, false, web));
+        equal(3, ScreenTree.clickableAt(webRows, 300, 950));
+        check(ScreenTree.insideWeb(webRows, 3));
+        check(!ScreenTree.insideWeb(webRows, 0));
 
         Random random = new Random(7);
         for (int run = 0; run < 50; run++) {

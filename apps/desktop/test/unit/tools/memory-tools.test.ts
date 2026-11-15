@@ -1,5 +1,5 @@
 // memory.browse / read / write / forget: one handler for every caller, the caller's own folder by default, findable by writing;
-// a file's description where the agent asked (its folder line, its read, a recall hit); on demand (not in the core set), and
+// a file's description where the agent asked (its folder line, its read, a knowledge.find hit); on demand (not in the core set), and
 // no memory search tool of its own.
 
 import { test } from 'node:test';
@@ -8,6 +8,7 @@ import path from 'node:path';
 import { ctxFor, setup } from './helpers.ts';
 import { KnowledgeStore } from '../../../src/runtime/knowledge/service.ts';
 import { memoryTools } from '../../../src/runtime/tools/builtin/memory.ts';
+import { findTools } from '../../../src/runtime/tools/builtin/find.ts';
 import { BASE_CORE } from '../../../src/runtime/tools/core-sets.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolOutput } from '../../../src/runtime/tools/types.ts';
@@ -58,7 +59,7 @@ test('memory.write names a folder or a file; memory.browse shows it; memory.forg
   assert.equal((await byName('memory.read').run({ path: '../../etc/x.md' }, ctxFor(h))).isError, true);
 });
 
-test('a description shows where it was asked for: the folder line, the read and the recall hit', async () => {
+test('a description shows where it was asked for: the folder line, the read and the find hit', async () => {
   const { h } = world();
   const out = await byName('memory.write').run({ folder: 'company/kunden', title: 'Müller', text: 'Zahlt spät.', description: 'When an invoice to Müller is due.' }, ctxFor(h));
   assert.equal(out.isError, undefined, textOf(out));
@@ -67,8 +68,8 @@ test('a description shows where it was asked for: the folder line, the read and 
   const read = textOf(await byName('memory.read').run({ path: 'company/kunden/mueller.md' }, ctxFor(h)));
   assert.equal(read.split('\n')[1], 'When an invoice to Müller is due.');
   assert.match(read, /\n\nZahlt spät\.$/);
-  const recall = textOf(await byName('knowledge.recall').run({ query: 'Müller' }, ctxFor(h)));
-  assert.match(recall, /^- \[company:kunden:mueller\.md\] Müller \(When an invoice to Müller is due\.\): Zahlt spät\. — /m);
+  const found = textOf(await findTools.find((t) => t.name === 'knowledge.find')!.run({ query: 'Müller', kinds: ['note'] }, ctxFor(h)));
+  assert.match(found, /^- \[note:company:kunden:mueller\.md\] memory note "Müller" \(When an invoice to Müller is due\.\) – /m);
 });
 
 test('the memory tools are on demand and there is no memory search tool', () => {

@@ -1,7 +1,8 @@
 // "Send page to chat" (the page's right-click menu, main/workspace-page-menu.ts, and the pane's menu): the page's address
 // goes into the open chat's message field and a picture of the visible page (main's capture) is
 // attached to it – the person sends the message. Without a picture the address goes alone. Mark a region
-// (RegionDialog.tsx) and Comment at (VideoView.tsx) put their part into the message field through the same steps.
+// (RegionDialog.tsx) and Comment at (VideoView.tsx) put their part into the message field through the same steps; a pin
+// (pin.ts) uses withLine.
 // Owns: that hand-over. Never: sends a message or reads the page beyond its picture.
 
 import { draftFor, updateDraft } from '../chat/composer/draft.ts';
@@ -36,7 +37,7 @@ export async function sendPageToChat(id: string): Promise<void> {
 }
 
 /** The draft's text with `line` added: alone, after trailing whitespace, else on a new line; the caret goes behind it. */
-function withLine(text: string, line: string): string {
+export function withLine(text: string, line: string): string {
   return text ? `${text}${/\s$/.test(text) ? '' : '\n'}${line} ` : `${line} `;
 }
 

@@ -80,7 +80,7 @@ test('handed off: the person\'s own work others own; replaced, added and dropped
   assert.equal(isHandedOff(task('t3', { assigneeKind: 'human', assigneeId: 'per_anna' })), true, 'a colleague does it');
   assert.equal(isHandedOff(task('t4', { createdBy: 'ag_mara' })), false, 'an agent\'s task');
   assert.equal(isHandedOff(task('t5', { parentId: 't1' })), false, 'steps belong to their task');
-  assert.equal(isHandedOff(task('t6', { status: 'cancelled' })), false);
+  assert.equal(isHandedOff(task('t6', { status: 'dropped' })), false);
   const start = [task('t1')];
   assert.deepEqual(handedOffWith(start, task('t1', { status: 'done' })).map((entry) => entry.status), ['done'], 'done stays (done ✓)');
   assert.deepEqual(handedOffWith(start, task('t7')).map((entry) => entry.id), ['t1', 't7']);

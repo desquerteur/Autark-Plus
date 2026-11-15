@@ -38,11 +38,12 @@ export function makePc(net: Net, id: string, flushMs = 0) {
       return target.handlers.get(method)!(copy, id);
     },
   } as unknown as DeviceService;
-  const sync = new RowSync(h.services, new Stamps(h.db, h.clock), flushMs);
+  const stamps = new Stamps(h.db, h.clock);
+  const sync = new RowSync(h.services, stamps, flushMs);
   handlers.set('sync.rows', (params, from) => sync.receive(params, from));
   sync.attach();
   h.scheduler.start();
-  const pc = { id, h, repo, sync, handlers };
+  const pc = { id, h, repo, sync, handlers, stamps };
   net.pcs.set(id, pc);
   return pc;
 }

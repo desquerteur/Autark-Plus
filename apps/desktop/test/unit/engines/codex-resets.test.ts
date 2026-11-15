@@ -3,8 +3,7 @@
 // rateLimitResetCredits (count + available credits), account/rateLimits/updated pushes do not (the
 // stored count stays), and account/rateLimitResetCredit/consume takes {idempotencyKey, creditId?}
 // and answers {outcome}; B-044 integration: a background account check asks without the credit details
-// (excludeResetCreditDetails), a check with `details` asks for them, and a Codex that refuses the parameter is
-// asked again without it (and from then on) – a read that got no answer (timeout) is no refusal.
+// (excludeResetCreditDetails), a check with `details` asks for them; a Codex that refuses the parameter reports no limits.
 // Owns: nothing in production. Never starts a real Codex.
 
 import { test } from 'node:test';
@@ -61,7 +60,7 @@ test('codex resets: the account check reads the count and the available credits,
   await engine.dispose();
 });
 
-test('codex limits read: background checks skip the reset details, a details check asks for them; an older Codex is asked plainly', async () => {
+test('codex limits read: background checks skip the reset details, a details check asks for them; an older Codex reports no limits', async () => {
   const fake = appServer();
   const engine = new CodexEngine({ supervisor: testSupervisor(fake.spawn), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0', now: () => NOW });
   await engine.checkAccount(account());
@@ -73,9 +72,9 @@ test('codex limits read: background checks skip the reset details, a details che
   old.state.refuseExclude = true;
   const legacy = new CodexEngine({ supervisor: testSupervisor(old.spawn), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0', now: () => NOW });
   const check = await legacy.checkAccount(account());
-  assert.equal(check.limits?.resets?.available, 2, 'the plain read answered');
-  await legacy.checkAccount(account());
-  assert.deepEqual(old.state.reads, [{ excludeResetCreditDetails: true }, {}, {}], 'refused once, then asked plainly');
+  assert.equal(check.state, 'ok', 'the account itself is fine');
+  assert.equal(check.limits, undefined, 'limits are optional');
+  assert.deepEqual(old.state.reads, [{ excludeResetCreditDetails: true }], 'no plainer second read');
   await legacy.dispose();
 });
 
@@ -109,13 +108,12 @@ test('codex resets: a Codex without the method refuses plainly (nothing was rede
   await engine.dispose();
 });
 
-test('codex limits read: only an error answer counts as a refusal of excludeResetCreditDetails, never a timeout', async () => {
+test('codex limits read: a background read skips the reset credits’ details, a detail read asks for them; a refusal is the read’s own', async () => {
   const sent: unknown[] = [];
-  const rpc = (fail: Error) => ({ request: async (_method: string, params: unknown) => { sent.push(params); if (sent.length === 1) throw fail; return { ok: true }; } }) as never;
-  const plain = { value: false };
-  await assert.rejects(readRateLimits(rpc(new RpcError(-32000, 'codex did not answer account/rateLimits/read')), false, plain), RpcError);
-  assert.deepEqual([sent, plain.value], [[{ excludeResetCreditDetails: true }], false], 'no second read, the parameter stays');
-  sent.length = 0;
-  assert.deepEqual(await readRateLimits(rpc(new RpcError(-32600, 'Invalid request')), false, plain), { ok: true });
-  assert.deepEqual([sent, plain.value], [[{ excludeResetCreditDetails: true }, {}], true]);
+  const rpc = (fail?: Error) => ({ request: async (_method: string, params: unknown) => { sent.push(params); if (fail) throw fail; return { ok: true }; } }) as never;
+  assert.deepEqual(await readRateLimits(rpc(), false), { ok: true });
+  assert.deepEqual(await readRateLimits(rpc(), true), { ok: true });
+  assert.deepEqual(sent, [{ excludeResetCreditDetails: true }, {}]);
+  await assert.rejects(readRateLimits(rpc(new RpcError(-32600, 'Invalid request')), false), RpcError);
+  assert.equal(sent.length, 3, 'no plainer second read');
 });

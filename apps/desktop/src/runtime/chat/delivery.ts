@@ -17,10 +17,12 @@
 //    contact – chat/mentions.ts isPersonMention) and no agent is addressed to them: it wakes no
 //    agent, also no reply-mode 'all' one (K3).
 //  * agent-authored messages pass the loop guard (two agents alternating, or a group discussion with many changes of
-//    speaker, without a person's line or task progress pause agents' wakes there – chat/loop-guard.ts); they wake the
-//    agents they mention, else the pick above – outside a two-member room an important one without any mention
-//    addresses the other agent of a two-agent room, else the lead (T10: a chat.send message). A run's final answer marked
-//    [[important]] (agents/publishing.ts) is for the person it answers: it is never urgent for an agent.
+//    speaker, without a person's line, task progress or work between the lines pause agents' wakes there –
+//    chat/loop-guard.ts; B-080: an agent's line that @mentions a colleague (an external agent's still counts as
+//    back-and-forth), or one from a turn that did work – chat/worked.ts –,
+//    wakes as usual and ends that pause; more than 20 agent lines a minute pause until the minute has room); they wake the
+//    agents they mention, else the pick above. 13.11.2026: an agent's push line (agents/chat-out.ts, priority 'important')
+//    reaches every agent of the chat at once (their running turn at its next step, else a wake).
 //  * external messages (chat bridges, R4 package E) are untrusted: they wake agents like a
 //    human group message (1:1 / mentions / lead) but pass their own rate guard, never clear the
 //    agent loop guard, never push as 'important' and never interrupt a running turn – except a
@@ -33,23 +35,27 @@
 //    message that @mentions an external agent posts 'external.mention' (no engine, no turn); one
 //    addressed only to external agents wakes no agent. Its 'member_removed' line revokes its token,
 //    a deleted chat every token of the chat (subscribed here, at construction).
-//  * priority 'important' additionally asks the dispatcher to steer/interrupt (urgent()) the woken
-//    agents; the person's important message also steers every agent already running in that chat
-//    (dispatcher.activity) – at once, also while the decision model still picks responders (T10).
-//  * a normal message of the person (not one bridged from a messenger) reaches an addressed agent that
-//    already works in this chat at its running turn's next step (dispatcher.steer, where the engine
-//    can steer – 21.10. 17:09); otherwise the queued wake answers it after that turn. Never interrupts.
-//    Lines with files, live/call lines, unsure dictation and lines naming other live chats are never
-//    folded (agents/dispatch-steer.ts heldBack): the next turn; plain dictation is folded.
+//  * priority 'important' additionally asks the dispatcher to deliver it urgently (urgent()) to the woken agents; the
+//    person's important message also reaches every agent already running in that chat (dispatcher.activity) – at once,
+//    also while the decision model still picks responders (T10). B-080: urgent() inserts the line into the running
+//    turn at its next step like a normal one ("mittendrin"), from another chat too (that chat runs next); the turn is
+//    cut at its next tool boundary only for a line it cannot take (a held live-call line or recording) or an engine
+//    that cannot steer.
+//  * a normal message reaches an addressed agent that already works at its
+//    running turn's next step (dispatcher.steer, where the engine can steer – 21.10. 17:09; B-080: a turn that has not
+//    started yet is tried again); otherwise the queued wake answers it after that turn. Never interrupts.
+//    Live/call lines and recordings still to be heard are never folded (agents/dispatch-steer.ts heldBack): the next
+//    turn; plain dictation is folded, B-080 a line with files too (each file named with its place). B-080: every
+//    un-quiet line that wakes an agent is folded so – a colleague's too (the pair, an @mention, the pick) –, and a
+//    person's line in a group reaches every member's running turn (delivery-route.ts hearAll).
 //  * important brake (T10, loop-guard.ts ImportantBrake): more than 5 important messages of one
 //    agent in one chat within 10 minutes count as normal (no steering, notified as a reply), with
 //    one quiet status line; the owner's own important messages are never braked. F-52: a person of
 //    the organisation ('per_…') is braked with the same limits, counted over all their chats together
 //    (their important lines steer and cut work of agents the owner shares – also the owner's work in
 //    other chats – so spreading them over chats must not lift the limit); they keep the composer's Important level.
-//  * a message of the person to an agent whose one task in that chat waits on them (needs_you,
-//    or waiting on the human – tasks/transitions.ts humanWaitIn) wakes it for that task, with a
-//    note, so the task can continue (T03) – never one the owner wrote in a bridged messenger (C9).
+//  * a message of the person to an agent whose one task in that chat waits on them (tasks/transitions.ts waitIn)
+//    wakes it for that task, so the task can continue – never one the owner wrote in a bridged messenger (C9).
 //  * crash safety (C3, F-44): before the decision model is asked, the lead gets a provisional
 //    durable wake (key `pick:<chat>`, due in 15 s), so a crash or quit during the decision cannot
 //    lose the message. When the decision returns, the picked agents are woken now (`chat:<chat>`)
@@ -69,11 +75,10 @@
 //    no agent reaches nobody now; a person's quiet lines are picked up, when they are done, by the
 //    agents a normal line would address (chat/quiet-pickup.ts, called by the dispatcher) – round 3: a person's
 //    quiet line that mentions nobody also tells the dispatcher (quietArrived), so an agent with no turn
-//    running picks it up a little later instead of waiting for unrelated work; live run A: so does an agent's
-//    quiet answer to the other agent's normal line in a room of two agents (quiet-pickup.ts quietAnswerPeer; round 5:
-//    in a larger room to the newest normal line that @mentioned its author) – for that asker only, counted in the loop guard (a paused chat schedules no pickup) – round 4: within
-//    seconds once that agent is free (quiet-pickup.ts QUIET_ANSWER_DELAY_MS), a person's quiet line after 2 minutes;
-//  * the human is notified only for non-silent messages in chats they are in (an @mention of the
+//    running picks it up a little later instead of waiting for unrelated work (after 2 minutes). 13.11.2026: an agent's quiet line
+//    is nobody's to pick up – it is for the record; an @mention in it still reaches that member (an agent into its
+//    running turn, the person as a push);
+//  * the human is notified for non-silent messages in chats they are in, and for an @mention of them in any (an @mention of the
 //    person – by profile name or alias, chat/mentions.ts – and priority 'important' notify as
 //    'important'); agent-only rooms and rooms an agent hid from the list (chat section 'team')
 //    never notify. The notification's title is the chat as the owner sees it (B-050 K2, chat/titles.ts):
@@ -81,7 +86,7 @@
 //    centrally in notify/service.ts.
 // Owns: those rules (the routing steps are chat/delivery-route.ts, the responder question is chat/responders.ts). Never: writes messages other
 // than guard status lines and the brake's demotion (an important line past the brake is stored as
-// normal, ChatService.demote – K4: its red badge and its push agree); never wakes for status/task/answer messages (tasks/ownership wake for
+// normal, ChatService.demote – K4: its red badge and its push agree); never wakes for status/task/answer messages (the task watcher wakes for
 // those explicitly – the person's answer line wakes the agent that asked, tasks/answer-receipt.ts; B-076: it resets the
 // agent loop guard like the person's text does).
 
@@ -96,7 +101,7 @@ import { announceMentions, mentionedExternalAgents, revokeOnChatRemoval, revokeO
 import { unansweredMessages } from './delivery-recovery.ts';
 import { DeliveryRouter, type DeliveryDeps, type RouteOptions } from './delivery-route.ts';
 import { ImportantBrake, type ImportantBrakeOptions } from './loop-guard.ts';
-import { quietAnswerPeer, quietPickupLine } from './quiet-pickup.ts';
+import { quietPickupLine } from './quiet-pickup.ts';
 import { chatTitleFor } from './titles.ts';
 import { DictationWait, type DictationWaitDeps } from './delivery-dictation.ts';
 
@@ -148,17 +153,17 @@ export class DeliveryServiceImpl implements DeliveryService {
     if (message.state === 'streaming') return;
     if (message.kind === 'answer' && message.authorKind === 'human') this.router.progress(message.conversationId); // B-076: a person's click is their line – it ends agent ping-pong
     if (notify && quietPickupLine(message)) this.quietArrived(message); // K4 round 3: wakes nobody now (no mention)
-    else if (notify && message.silent) this.quietAnswer(message); // a colleague's quiet answer to an agent's question
     if (message.silent && message.kind !== 'text') return;
     const members = this.s.chats.members(message.conversationId);
     const external = mentionedExternalAgents(message, members);
     // K4: a quiet message (any author) wakes only the agents it mentions – one that mentions none reaches nobody (no loop-guard count either).
-    if (message.silent && !external.length && !message.mentions.some(id => id !== message.authorId && members.some(m => m.memberId === id && m.kind === 'agent'))) return;
+    if (message.silent && !external.length && !message.mentions.some(id => id !== message.authorId && (id === HUMAN_ID || members.some(m => m.memberId === id && m.kind === 'agent')))) return;
     const important = this.important(message);
     // The durable wake first: a failing notification must never cost the answer. A quiet message
     // (B-047 D4) reaches the agents it mentions but never notifies the person.
     try { this.router.route(message, members, important, external); } finally {
-      if (notify) { if (!message.silent) this.notifyHuman(message, members, important); announceMentions(this.s, message, external); }
+      // 13.11.2026: an @mention of the person reaches them from a quiet line too (a push)
+      if (notify) { if (!message.silent || message.mentions.includes(HUMAN_ID)) this.notifyHuman(message, members, important); announceMentions(this.s, message, external); }
     }
   }
 
@@ -182,20 +187,6 @@ export class DeliveryServiceImpl implements DeliveryService {
       if (agents.length) this.s.dispatcher?.quietArrived?.(agents);
     } catch (error) {
       this.s.log?.warn('quiet pickup on arrival failed', { messageId: message.id, error: String(error) });
-    }
-  }
-
-  /**
-   * Live run A: an agent's quiet answer to the other agent's normal line in a room of two (round 5: to an agent's normal
-   * @question in a larger room) – that asker picks it up when free (quietAnswerPeer), through the loop guard; round 4: QUIET_ANSWER_DELAY_MS after it arrived (quiet-pickup.ts), not 2 minutes.
-   */
-  private quietAnswer(message: Message): void {
-    try {
-      const peer = quietAnswerPeer(this.s.chats, message);
-      if (!peer || !this.router.agentLine(message)) return;
-      this.s.dispatcher?.quietArrived?.([peer]);
-    } catch (error) {
-      this.s.log?.warn('quiet answer pickup failed', { messageId: message.id, error: String(error) });
     }
   }
 

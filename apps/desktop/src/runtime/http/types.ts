@@ -37,9 +37,9 @@ export interface PairingHttp {
   handle(body: unknown, remote: { address?: string }): Promise<unknown>;
 }
 
-/** Server side of the encrypted peer channel (`GET /peer` upgrade). */
+/** Server side of the encrypted peer channel (`GET /peer` upgrade); undefined: the link was not kept (B-087: a race's other link stays). */
 export interface MeshAccept {
-  accept(socket: SocketLike): Promise<string>;
+  accept(socket: SocketLike): Promise<string | undefined>;
 }
 
 export interface HttpServerDeps {

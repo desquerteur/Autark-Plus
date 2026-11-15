@@ -137,7 +137,7 @@ function PlainDone(props: { task: TaskView; onAnswered?: () => void }) {
   const done = async () => {
     setBusy(true);
     try {
-      putTask(await rpc.call('tasks.complete', { id: props.task.id, clientId: newId('up') }));
+      putTask(await rpc.call('tasks.finish', { id: props.task.id, clientId: newId('up') }));
       props.onAnswered?.();
     } catch (error) {
       toastError(error, 'Could not complete');
@@ -187,7 +187,7 @@ export function HumanItem(props: HumanItemProps) {
   const app = appWidgetOf(task.widget);
   const browser = useBrowserTodo(task);
   const now = props.now ?? Date.now();
-  const ringing = isRinging(task) && !leaving;
+  const ringing = isRinging(task, Date.now()) && !leaving;
   const snoozed = isSnoozed(task);
   const until = useSnoozeEnd(task, snoozed);
   const timed = snoozed || task.dueAt !== undefined || timerAt(task) !== undefined;
@@ -203,7 +203,7 @@ export function HumanItem(props: HumanItemProps) {
     setTicking(false);
   };
   const markDone = async () => {
-    try { settled(await rpc.call('tasks.complete', { id: task.id, answer: MARKED_DONE_ANSWER, clientId: newId('up') }), task); answered(); } catch (error) { toastError(error, 'Could not complete'); }
+    try { settled(await rpc.call('tasks.finish', { id: task.id, answer: MARKED_DONE_ANSWER, clientId: newId('up') }), task); answered(); } catch (error) { toastError(error, 'Could not complete'); }
   };
   const remove = async () => {
     if (!(await mayDropTake(task)) || !(await removeTodo(task))) return;

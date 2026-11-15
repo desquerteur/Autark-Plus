@@ -1,0 +1,96 @@
+/* B-085: how a call looks. The floating call card (ui/chat/call/CallCard.tsx) and a call's row in the chat
+   (ui/chat/call/CallTranscript.tsx). The card is one fixed-size overlay inside the chat column: over the top of the
+   messages, left (the status lines sit right, header.css .status-host), under the chat's open area when there is one
+   (the message scroller's anchor --status-top); in a column too narrow for both (the phone too) at the foot of the
+   messages, and over the foot of the area's page while the area takes the column. It never takes room from anything, so
+   nothing moves when it comes or goes, and its contents keep their slots (a reserved Mute slot, a two-line caption).
+   Its palette is a fixed dark one in both themes (the --call-* tokens in tokens.css) – a call reads as a call, not as a
+   notice.
+   Owns: the card and the call row. Never: colour values (tokens.css) or the event-line styles of other rows (chat.css). */
+
+/* ---------------------------------------------------------------- the floating card */
+.call-card {
+  position: absolute; z-index: 7; top: calc(anchor(--status-top top, 0px) + 8px); left: 12px;
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; grid-template-rows: 44px 36px; column-gap: 12px; row-gap: 8px;
+  box-sizing: border-box; width: min(320px, calc(100% - 24px)); height: 110px; padding: 12px 12px 10px;
+  border-radius: 18px; background: var(--call-bg); color: var(--call-fg); box-shadow: inset 0 0 0 1px var(--call-edge), var(--call-shadow);
+  animation: call-in .18s ease-out;
+}
+.mobile-shell .call-card { right: 12px; width: auto; }
+/* where the status lines (right-aligned, up to 480 px) would reach the card's controls – the phone and narrow chat
+   columns – it lies at the foot of the messages, right above the ask strip / composer, away from them */
+@container chat-column (max-width: 640px) {
+  .call-card { top: auto; bottom: calc(anchor(--status-top bottom, 120px) + 12px); }
+}
+/* when the chat's area takes the column (full view; on the phone whenever it is open) the messages are hidden: the
+   card lies over the foot of the area's page, never over its tabs */
+.chat-column > .chat-area { anchor-name: --call-area; }
+.chat-column.area-full > .call-card, .mobile-shell .chat-area ~ .call-card { top: auto; bottom: calc(anchor(--call-area bottom, 120px) + 12px); }
+
+.call-face { --call-ring: 1; position: relative; display: grid; place-items: center; width: 44px; height: 44px; } /* levels.ts sets --call-ring live */
+.call-face::before { /* the speaking ring: its scale follows the level (--call-ring), its colour the side heard */
+  content: ''; position: absolute; inset: 0; border: 2px solid var(--call-quiet); border-radius: 50%; pointer-events: none;
+  transform: scale(var(--call-ring, 1)); transition: transform 90ms linear, border-color .15s;
+}
+.call-card[data-speaker=agent] .call-face::before { border-color: var(--call-agent); }
+.call-card[data-speaker=person] .call-face::before { border-color: var(--call-person); }
+.call-card.phase-connecting .call-face::before { animation: call-ringing 1.4s ease-in-out infinite; }
+.call-card:not(.metered)[data-speaker=agent] .call-face::before { animation: call-speaking 1.2s ease-in-out infinite; }
+
+.call-who { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.call-name, .call-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-name { font-size: 14px; font-weight: 600; line-height: 20px; }
+.call-status { color: var(--call-muted); font-size: 12px; line-height: 16px; }
+.call-card.phase-speaking .call-status { color: var(--call-agent); }
+.call-muted { color: var(--call-fg); }
+
+.call-controls { display: flex; align-items: center; gap: 8px; }
+.call-control {
+  position: relative; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--call-control); color: var(--call-fg); cursor: pointer;
+}
+.call-control:hover { background: var(--call-control-hover); }
+.call-control:focus-visible { outline: 2px solid var(--call-fg); outline-offset: 2px; }
+.call-control[aria-pressed=true] { background: var(--call-fg); color: var(--call-bg); } /* pressed: white with a dark icon */
+.call-control::after { /* the slash over the microphone, drawn only while muted (its box is the same in every state) */
+  content: ''; position: absolute; width: 22px; height: 2px; border-radius: 1px; background: currentColor; transform: rotate(-45deg);
+  box-shadow: 0 0 0 1.5px var(--call-fg); opacity: 0;
+}
+.call-control[aria-pressed=true]::after { opacity: 1; }
+.call-control.hang-up { background: var(--call-danger); color: var(--call-fg); }
+.call-control.hang-up:hover { background: var(--call-danger-hover); }
+.call-caption { /* the newest line of the call; two lines reserved, the card never grows */
+  grid-column: 1 / -1; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  margin: 0; font-size: 13px; line-height: 18px; overflow-wrap: anywhere;
+}
+.call-caption > strong { font-weight: 600; }
+.call-caption[data-side=agent] > strong { color: var(--call-agent); }
+.call-caption[data-side=person] > strong { color: var(--call-person); }
+
+@keyframes call-in { from { opacity: 0; transform: scale(.985); } }
+@keyframes call-ringing { 50% { transform: scale(1.12); opacity: .55; } }
+@keyframes call-speaking { 50% { transform: scale(1.1); } }
+@media (prefers-reduced-motion: reduce) {
+  .call-card, .call-card .call-face::before { animation: none; transition: none; }
+  .call-card .call-face::before { transform: none; } /* the ring shows who is heard by its colour only */
+}
+
+/* ---------------------------------------------------------------- a call's row in the chat */
+/* the card: a round mark, "Call with Ava" over "21:24 · 3 lines", the state or length right, the Transcript caret under
+   it (indented to the words); the transcript opens below the card, in the column's full width */
+.call-transcript { min-width: 0; margin: 0 0 12px; }
+.call-row-card {
+  box-sizing: border-box; max-width: 440px; padding: 12px 14px 8px;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+}
+.call-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; min-height: 36px; }
+.call-row-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--hover); color: var(--muted); }
+.call-row-mark.live { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.call-row-words { display: flex; flex-direction: column; min-width: 0; }
+.call-row-title, .call-row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-row-title { color: var(--text); font-size: 14px; font-weight: 600; line-height: 20px; }
+.call-row-meta { color: var(--muted); font-size: 12px; line-height: 16px; }
+.call-row-end { color: var(--text); font-size: 14px; font-weight: 600; }
+.call-row-end.live { color: var(--success); }
+.call-row-card > .call-transcript-toggle { margin: 4px 0 0 44px; }
+.call-transcript > .call-transcript-body { margin-top: 8px; }

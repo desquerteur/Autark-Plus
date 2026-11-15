@@ -5,6 +5,8 @@
 // Owns: the migration list, the `meta.schema` version and that runner flag. Never: data imports (see import-v7.ts).
 
 import type { Db } from './database.ts';
+import { sql as runMailOrigin } from './migrations/099-run-mail-origin.ts';
+import { sql as wakeMailOrigin } from './migrations/098-wake-mail-origin.ts';
 import { sql as initial } from './migrations/001-initial.ts';
 import { sql as media } from './migrations/002-media.ts';
 import { sql as agentBasedOn } from './migrations/003-agent-based-on.ts';
@@ -65,12 +67,21 @@ import { sql as vectorChunks } from './migrations/088-vector-chunks.ts';
 import { sql as contextItems } from './migrations/089-context-items.ts';
 import { sql as memoryOldIds } from './migrations/090-memory-old-ids.ts';
 import { sql as messagesStreaming } from './migrations/091-messages-streaming.ts';
+import { sql as splitParentSession } from './migrations/092-split-parent-session.ts';
+import { sql as taskFiles } from './migrations/093-task-files.ts';
+import { sql as taskRouteKeys } from './migrations/094-task-route-keys.ts';
+import { sql as accountCredits } from './migrations/095-account-credits.ts';
+import { sql as splitTemperature } from './migrations/096-split-temperature.ts';
+import { sql as templateEffort } from './migrations/097-template-effort.ts';
+import { sql as runUsage } from './migrations/100-run-usage.ts'; // B-089 (11.11.2026: a run's cached tokens and model calls)
+import { sql as splitChat } from './migrations/101-split-chat.ts';
+import { sql as taskNext } from './migrations/102-task-next.ts';
 
 /**
  * Versions are applied in list order: keep the list in ascending version order and never edit a
  * shipped entry. Only the highest applied version is recorded (`meta.schema`), and a listed version
  * at or below a profile's recorded one is never applied there – so a new migration always takes a
- * number above the highest one used so far (91 now), never a number in a gap. The gaps in the
+ * number above the highest one used so far (102 now), never a number in a gap. The gaps in the
  * numbering (e.g. 51–54, 56, 57, 62–64, 66, 70) were reserved by parallel packages and never used; they
  * stay unused. 83 was reserved by a parallel package (B-057 took 84 meanwhile): a later 83 would be skipped
  * on every profile already at 84, so that step takes a number above 84 instead.
@@ -146,6 +157,17 @@ const MIGRATIONS: Migration[] = [
   { version: 89, name: 'context-items', sql: contextItems }, // the context ledger, back after 087 (context/ledger)
   { version: 90, name: 'memory-old-ids', sql: memoryOldIds }, // the old-id map of a state before 0.2.9 into one meta row per id (knowledge/memory-migrate.ts)
   { version: 91, name: 'messages-streaming', sql: messagesStreaming }, // B-075: the rows of runs at work by chat (chat/message-repo.ts liveRows)
+  { version: 92, name: 'split-parent-session', sql: splitParentSession }, // B-080: the session a split group's parent turn ended with (splits/fork.ts – the native fork's source)
+  { version: 93, name: 'task-files', sql: taskFiles }, // B-080 F5: a task's own files (a quick task's), copied from the per-PC kv namespace
+  { version: 94, name: 'task-route-keys', sql: taskRouteKeys }, // B-080: a task's model request is keyed by agent and task, not by chat
+  { version: 95, name: 'account-credits', sql: accountCredits }, // B-083: an API key holding a plan's monthly API credits counts as a plan
+  { version: 96, name: 'split-temperature', sql: splitTemperature }, // B-083: a part's temperature (Split.temperature)
+  { version: 97, name: 'template-effort', sql: templateEffort }, // B-083: the fixed effort a hire copied from its template goes (templates carry none now)
+  { version: 98, name: 'wake-mail-origin', sql: wakeMailOrigin },
+  { version: 99, name: 'run-mail-origin', sql: runMailOrigin },
+  { version: 100, name: 'run-usage', sql: runUsage }, // B-089: runs.cached_tokens (a part of input_tokens) and runs.model_calls
+  { version: 101, name: 'split-chat', sql: splitChat }, // 13.11.2026: the chat a split part's work is for (Split.chat)
+  { version: 102, name: 'task-next', sql: taskNext }, // 13.11.2026: a task's one planned look (tasks.next_at)
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

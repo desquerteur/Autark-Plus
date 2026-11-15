@@ -9,7 +9,7 @@
 
 import type { ToolContext } from '../types.ts';
 import type { ModelInfo } from '../../../shared/model/providers.ts';
-import { resolvePin } from '../../routing/pins.ts';
+import { modelMatches } from '../../routing/pins.ts';
 import { sourceOf, specialistKinds } from '../../routing/model-facts.ts';
 import { clip } from './util.ts';
 
@@ -35,11 +35,9 @@ export async function pinFor(ctx: ToolContext, value: string): Promise<{ pin?: s
 
 /** The catalog models a pin value names, the copy to pin first (specialists last, then unavailable, then API key). */
 function pinMatches(ctx: ToolContext, wanted: string): Array<{ model: ModelInfo; source: string }> {
-  const models = ctx.services.catalog.list();
-  const exact = models.find((model) => model.id === wanted);
-  const bare = !exact && resolvePin(models, wanted) !== undefined; // a provider-qualified id never moves provider
-  const name = wanted.toLowerCase();
-  const found = exact ? [exact] : models.filter((model) => (bare && model.model === wanted) || model.name.trim().toLowerCase() === name);
+  // B-083 D5: the one model lookup (routing/pins.ts modelMatches) – "GPT-6 Luna" = "GPT-6-Luna", id before name, a
+  // provider-qualified id never moves provider.
+  const found = modelMatches(ctx.services.catalog.list(), wanted);
   return found
     .map((model) => {
       const accounts = model.accounts.map((id) => ctx.services.accounts.get(id)).filter((account) => account !== undefined);

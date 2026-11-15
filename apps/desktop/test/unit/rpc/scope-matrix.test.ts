@@ -33,6 +33,7 @@ const PC_LOCAL: Record<string, string> = {
   'secrets.openFolder': 'opens the secrets folder of this PC (B-044)',
   'system.restoreStatus': 'backup paths on this PC (MM7)',
   'system.restartRuntime': 'restarts the runtime on this PC (MM7)',
+  'system.install': 'installs a build of Autark on this PC and restarts it (B-080)',
   'bridges.linkOwner': 'messenger bridges hold bot tokens (C9)',
   'bridges.unlinkOwner': 'messenger bridges hold bot tokens (C9)',
   'media.uses': 'stored files are deleted only on this PC (MM6)',
@@ -48,8 +49,6 @@ const PC_LOCAL: Record<string, string> = {
   'pointers.list': "the named pointers of a surface on this PC (B-055)",
   // F-52: managing people of the organisation and admitting their devices stays with the owner on the PC.
   'people.save': 'people administration (F-52)',
-  'people.invite': 'people administration (F-52)',
-  'people.closeInvite': 'people administration (F-52)',
   'people.revoke': 'people administration (F-52)',
   'people.removeDevice': 'people administration (F-52)',
   'people.audit': 'people administration (F-52)',
@@ -57,17 +56,7 @@ const PC_LOCAL: Record<string, string> = {
   'people.directChat': 'the owner’s 1:1 chat with a person (F-52)',
   'people.join': 'tokenless join of a person’s device (F-52, rpc/tokenless.ts)',
   'people.awaitJoin': 'tokenless join of a person’s device (F-52, rpc/tokenless.ts)',
-  'models.uses': 'which provider account of this PC serves each model use',
   'catalog.refresh': 'provider and catalog fetches from this PC',
-  'devices.list': 'device mesh administration',
-  'devices.rename': 'device mesh administration',
-  'devices.revoke': 'device mesh administration',
-  'remote.state': 'Remote: device mesh administration',
-  'remote.connect': 'Remote: device mesh administration',
-  'remote.cancel': 'Remote: device mesh administration',
-  'remote.decide': 'Remote: device mesh administration (CEO or employee)',
-  'remote.relay': 'Remote: the meeting server state (device mesh administration)',
-  'remote.nearby': 'Remote: PCs found in this PC\'s network (device mesh administration, B-044)',
   'pwa.state': 'phone access administration',
   'pwa.enable': 'phone access administration',
   'pwa.link': 'phone access administration',
@@ -78,9 +67,7 @@ const PC_LOCAL: Record<string, string> = {
   'chats.delete': 'destructive: desktop only',
   'chats.export': 'writes chat folders and their files to a folder of this PC (B-050 K8)',
   'skills.delete': 'destructive: desktop only',
-  'secrets.delete': 'destructive: desktop only',
   'modes.save': "the person's own modes – only on the PC (CTX8)",
-  'secrets.deleteGroup': 'destructive: desktop only (X05)',
   'secrets.export': 'writes every chosen value in plain text into a file on this PC (04.11.2026)',
   'modes.delete': "the person's own modes – only on the PC (CTX8)",
   'modes.openFolder': "opens the folder of the person's own modes in this PC's file manager (B-044)",
@@ -106,34 +93,35 @@ const PC_LOCAL: Record<string, string> = {
   'calendar.person': 'a person\'s calendar for the owner\'s person page, asked on their linked PC (B-078)',
   'secrets.fillChoices': 'the logins listed in this PC\'s own browser page menu (B-078)',
   'secrets.fillLogin': 'a login\'s values typed into this PC\'s own browser (B-078)',
-  'voice.pullLocal': 'downloads a local speech model to this PC and chooses it (B-047 D14)',
   // Connectors: a sign-in opens in this PC's browser (apps.list is 'settings').
   'apps.reconnect': 'opens an app\'s sign-in in this PC\'s browser (B-052)',
   // B-072: several companies on one PC, each with a data folder of its own.
   'companies.list': 'the data folders of the companies on this PC (B-072)',
   'companies.open': 'opens a company window on this PC (B-072)',
   'companies.tool': 'runs an agent tool for another company of this PC, over loopback with its owner token (B-075)',
-  'phone.pairLink': 'this PC\'s Remote ID and the QR of its pair link (B-078)',
 };
 
 /** The spec's tier lists (DEV2). */
 const CHAT = ['chats.update', 'chats.members', 'chats.archive', 'chats.direct' /* B-050 */, 'messages.edit', 'messages.delete', 'models.list', 'models.recent', 'efforts.forModel',
   'usage.list', 'modes.list', 'spaces.list', 'agents.templates', 'knowledge.search', 'knowledge.list', 'knowledge.history', 'knowledge.save',
   'knowledge.expire', 'skills.list', 'skills.get', 'media.describe', 'feedback.create', 'feedback.list', 'feedback.send', 'feedback.dismiss',
-  'voice.transcribe', 'runs.items' /* C5: chat devices read run details */,
+  'voice.transcribe', 'voice.retranscribe' /* B-082: my own failed recording heard again */, 'runs.items' /* C5: chat devices read run details */,
   'voice.localModels', 'voice.speak' /* B-047 D14: a phone reads answers in the PC's local voice */,
   'splits.list', 'splits.get' /* B-057: an agent's splits, with the runs.items rule through the group's parent run */];
 const MANAGE = ['agents.create', 'agents.update', 'agents.archive', 'agents.export', 'spaces.save', 'spaces.archive',
-  'schedules.update', 'schedules.delete', 'schedules.runNow', 'models.setPolicy', 'routing.preview', 'skills.save', 'agents.runs', 'runs.cancel',
+  'schedules.update', 'schedules.delete', 'schedules.runNow', 'models.setPolicy', 'routing.preview', 'skills.save', 'agents.runs', 'agents.log' /* the agent's activity log */, 'runs.cancel',
   'splits.stop' /* B-057: the rights of runs.cancel */,
   // B-076: the phone's side pane is its PC's – its tabs and their view positions.
   'tabs.get', 'tabs.set', 'tabs.position', 'tabs.positions'];
 /** B-076: the file tabs' paths (read, write, list, media) – the whole disk – for 'manage' only on a secure transport. */
 const MANAGE_SECURE = ['files.readPath', 'files.writePath', 'files.listPath', 'files.uploadPath'];
 /** B-078 ("alles vom Handy"): plans, keys and sign-ins from the owner's phone app – its loopback tunnel is secure. */
-const SETTINGS_SECURE = ['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.logout', 'accounts.remove',
-  'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try'];
-const PERMISSIONS = ['secrets.list', 'secrets.save', 'spend.list',
+const SETTINGS_SECURE = ['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode' /* B-091 */, 'accounts.logout', 'accounts.remove',
+  'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try',
+  /* B-084 (D6): Settings › Devices and Models from the owner's phone app */
+  'models.uses', 'devices.list', 'devices.rename', 'devices.revoke', 'remote.state', 'remote.connect', 'remote.cancel', 'remote.decide',
+  'remote.relay', 'remote.nearby', 'phone.pairLink', 'people.invite', 'people.closeInvite', 'voice.pullLocal'];
+const PERMISSIONS = ['secrets.list', 'secrets.save', 'secrets.delete', 'secrets.deleteGroup', 'spend.list',
   'secrets.groups', 'secrets.saveGroup' /* X05 */, 'secrets.folder' /* B-044 */, 'secrets.import' /* 29.10.2026 password import */];
 
 const FULL: DeviceCapability[] = ['todo', 'chat', 'tasks', 'settings', 'manage'];
@@ -167,7 +155,7 @@ test('tiers: a todo link, a full link, and the permissions opt-in on secure vs L
   const table = createHandlerTable();
   const may = (method: string, scope: ClientScope) => allowedScope(table.get(method)!.scope, scope);
   const todo = device(['todo']);
-  assert.ok(may('todos.list', todo) && may('tasks.complete', todo));
+  assert.ok(may('todos.list', todo) && may('tasks.finish', todo));
   for (const method of ['chats.list', 'messages.send', 'tasks.list', 'agents.create', 'settings.update', 'modes.list']) assert.ok(!may(method, todo), method);
   const full = device(FULL, false); // plain LAN http
   for (const method of [...CHAT, ...MANAGE, 'settings.update', 'tasks.create', 'todos.list']) assert.ok(may(method, full), method);

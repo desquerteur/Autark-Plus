@@ -18,7 +18,16 @@
 # wheel steps; an element click ('act' with `path`) bends the path onto the element's clickable
 # point. The person moving the mouse (the pointer is no longer where our last step left it) or
 # holding a button stops it: 'human_active' before anything was pressed; a drag already held is let
-# go at once and reported as 'conflict'. 'cursor' also reports the idle times (like 'presence').
+# go at once and reported as 'conflict'. 'cursor' also reports the idle times (like 'presence') and, B-081, `window`:
+# the title of the top-level window under the pointer (at most 120 characters, none when it has no title).
+# B-080 (additive, protocol 4 stays): 'focused' answers the element that holds the keyboard focus and its window;
+# 'act' takes `expect` and then re-reads every 100 ms until that state shows, at most 2 s (answering `waitedMs`), and
+# counts a closed window or a dead node as gone; window_* acts on the window id alone; toggle on/off waits for each
+# change (at most 1 s) before the next; a window screenshot is the window drawing itself (PrintWindow), also behind
+# another window or off the screen; focus_window brings a window that lies off every screen onto the primary one, and
+# where Windows' foreground lock leaves another window in front, it attaches to that window's input thread for
+# BringWindowToTop/SetForegroundWindow and lets go (no key presses); an unsupported pattern names the element's
+# computer.act actions.
 # Owns: SendInput (Unicode typing, keys, mouse; 'release' lets go of mouse buttons and
 # Ctrl/Shift/Alt/Win keys Windows still reports held after a Stop killed the helper mid-drag or
 # mid-chord – it never presses anything), window list/focus, the UI Automation tree with a
@@ -347,6 +356,9 @@ namespace WorkforceHelper
         [DllImport("kernel32.dll")] public static extern uint GetTickCount();
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool doAttach);
+        [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
         [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
@@ -371,6 +383,9 @@ namespace WorkforceHelper
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint period);
         [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint period);
+        [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint param, ref RECT value, uint winIni);
 
         /// Per-monitor DPI awareness: UIA rectangles, GDI capture and SendInput then all use
         /// physical pixels of the virtual desktop. When the process awareness is already fixed,
@@ -490,7 +505,7 @@ namespace WorkforceHelper
             uint sent = Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
             LastInjectTick = Native.GetTickCount();
             if (sent != inputs.Length)
-                throw new HelperException("forbidden", "Windows blocked the input (the target may run as administrator, or the screen is locked).");
+                throw new HelperException("forbidden", "Windows blocked the input: an administrator window or the secure desktop (lock screen, UAC prompt) is in front, which the desktop broker reaches.");
         }
 
         static Native.INPUT Mouse(uint flags, int dx, int dy, uint data)
@@ -968,21 +983,30 @@ namespace WorkforceHelper
             return new SD.Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
         }
 
+        /// The window a capture draws (a window id without a region), or Zero.
+        static IntPtr ShotWindow(Dictionary<string, object> a)
+        {
+            return Args.Obj(a, "region") == null && Args.Has(a, "hwnd") ? Uia.Hwnd(a, false) : IntPtr.Zero;
+        }
+
         /// The physical rectangle to capture: region, window, screen index ("all" = every screen).
+        /// B-080: a window keeps its whole rectangle, also off the screen - it draws itself (Grab).
         public static SD.Rectangle Bounds(Dictionary<string, object> a)
         {
             SD.Rectangle vs = Native.VirtualScreen();
             SD.Rectangle rect;
             Dictionary<string, object> region = Args.Obj(a, "region");
+            IntPtr window = ShotWindow(a);
             if (region != null)
             {
                 rect = new SD.Rectangle(Args.ReqInt(region, "x"), Args.ReqInt(region, "y"), Args.ReqInt(region, "width"), Args.ReqInt(region, "height"));
             }
-            else if (Args.Has(a, "hwnd"))
+            else if (window != IntPtr.Zero)
             {
-                IntPtr hwnd = Uia.Hwnd(a, false);
-                if (Native.IsIconic(hwnd)) throw new HelperException("conflict", "The window is minimised; restore it (focus_window) before capturing it.");
-                rect = WindowRect(hwnd);
+                if (Native.IsIconic(window)) throw new HelperException("conflict", "The window is minimised; restore it (focus_window) before capturing it.");
+                rect = WindowRect(window);
+                if (rect.Width <= 0 || rect.Height <= 0) throw new HelperException("conflict", "The window has no area to capture.");
+                return rect;
             }
             else if (Args.Get(a, "screen") is string && (string)Args.Get(a, "screen") == "all")
             {
@@ -1041,9 +1065,62 @@ namespace WorkforceHelper
             }
         }
 
-        public static byte[] CapturePng(SD.Rectangle rect)
+        /// B-080: a window draws itself (PrintWindow with PW_RENDERFULLCONTENT) into a bitmap of its rectangle - its own
+        /// content also behind another window or off the screen. Where it cannot, the screen copy of its rectangle.
+        static SD.Bitmap CaptureWindow(IntPtr hwnd, SD.Rectangle rect)
         {
-            using (SD.Bitmap bmp = Capture(rect)) { return Encode(bmp, "png", 0); }
+            Native.RECT outer;
+            if (Native.GetWindowRect(hwnd, out outer) && outer.Right > outer.Left && outer.Bottom > outer.Top)
+            {
+                int w = outer.Right - outer.Left, h = outer.Bottom - outer.Top;
+                // PrintWindow draws the whole window rectangle; the capture is its visible frame inside it.
+                SD.Rectangle inner = new SD.Rectangle(rect.X - outer.Left, rect.Y - outer.Top, rect.Width, rect.Height);
+                inner.Intersect(new SD.Rectangle(0, 0, w, h));
+                using (SD.Bitmap whole = new SD.Bitmap(w, h, SDI.PixelFormat.Format24bppRgb))
+                {
+                    bool drawn;
+                    using (SD.Graphics g = SD.Graphics.FromImage(whole))
+                    {
+                        IntPtr hdc = g.GetHdc();
+                        try { drawn = Native.PrintWindow(hwnd, hdc, 2); } finally { g.ReleaseHdc(hdc); }
+                    }
+                    if (drawn && inner.Size == rect.Size)
+                    {
+                        SD.Bitmap bmp = new SD.Bitmap(rect.Width, rect.Height, SDI.PixelFormat.Format24bppRgb);
+                        using (SD.Graphics g = SD.Graphics.FromImage(bmp))
+                            g.DrawImage(whole, new SD.Rectangle(0, 0, rect.Width, rect.Height), inner, SD.GraphicsUnit.Pixel);
+                        return bmp;
+                    }
+                }
+            }
+            SD.Rectangle visible = rect;
+            visible.Intersect(Native.VirtualScreen());
+            if (visible.Width <= 0 || visible.Height <= 0)
+                throw new HelperException("unavailable", "The window does not draw itself and lies outside the screen; focus_window brings it onto the screen.");
+            return Capture(rect);
+        }
+
+        /// The picture of Bounds(a): a window drawn by itself, else the screen.
+        public static SD.Bitmap Grab(Dictionary<string, object> a, SD.Rectangle rect)
+        {
+            IntPtr window = ShotWindow(a);
+            return window != IntPtr.Zero ? CaptureWindow(window, rect) : Capture(rect);
+        }
+
+        public static byte[] GrabPng(Dictionary<string, object> a, SD.Rectangle rect)
+        {
+            using (SD.Bitmap bmp = Grab(a, rect)) { return Encode(bmp, "png", 0); }
+        }
+
+        /// B-080: a window that is not the one in front at its centre - behind another one, or off the screen. Its picture
+        /// shows the window itself (CaptureWindow), while a click by coordinates hits what is in front at that point.
+        static bool Covered(IntPtr window, SD.Rectangle rect)
+        {
+            Native.POINT p = new Native.POINT();
+            p.X = rect.X + rect.Width / 2;
+            p.Y = rect.Y + rect.Height / 2;
+            if (!Native.VirtualScreen().Contains(p.X, p.Y)) return true;
+            return Native.GetAncestor(Native.WindowFromPoint(p), 2) != Native.GetAncestor(window, 2); // GA_ROOT
         }
 
         public static Dictionary<string, object> Shot(Dictionary<string, object> a)
@@ -1055,7 +1132,7 @@ namespace WorkforceHelper
             byte[] bytes;
             int width;
             int height;
-            using (SD.Bitmap full = Capture(rect))
+            using (SD.Bitmap full = Grab(a, rect))
             {
                 double scale = Math.Min(1.0, (double)maxEdge / Math.Max(rect.Width, rect.Height));
                 width = Math.Max(1, (int)Math.Round(rect.Width * scale));
@@ -1087,6 +1164,8 @@ namespace WorkforceHelper
             d["y"] = rect.Y;
             d["srcWidth"] = rect.Width;
             d["srcHeight"] = rect.Height;
+            IntPtr window = ShotWindow(a);
+            if (window != IntPtr.Zero && Covered(window, rect)) d["covered"] = true;
             return d;
         }
     }
@@ -1143,8 +1222,36 @@ namespace WorkforceHelper
         public static Dictionary<string, object> Focus(IntPtr hwnd)
         {
             if (Native.IsIconic(hwnd)) Native.ShowWindow(hwnd, 9); // SW_RESTORE
+            // B-080: a window off every screen (an off-screen browser at -32000,-32000) comes onto the primary work
+            // area (left+40, top+40, its size kept), so pointer steps reach it.
+            if (!Screens.WindowRect(hwnd).IntersectsWith(Native.VirtualScreen()))
+            {
+                Native.RECT work = new Native.RECT();
+                if (!Native.SystemParametersInfo(0x0030, 0, ref work, 0)) { work.Left = 0; work.Top = 0; } // SPI_GETWORKAREA
+                Native.SetWindowPos(hwnd, IntPtr.Zero, work.Left + 40, work.Top + 40, 0, 0, 0x0001 | 0x0004 | 0x0010); // NOSIZE | NOZORDER | NOACTIVATE
+            }
             Native.SetForegroundWindow(hwnd);
             Thread.Sleep(100);
+            // B-080 (live: focus_window answered focused:false 5 of 8 times): Windows' foreground lock keeps a window behind
+            // the one in front when a background process asks. Attached to the input thread of the window in front, this
+            // thread brings the window up (no key presses), then it lets go.
+            IntPtr front = Native.GetForegroundWindow();
+            if (front != hwnd)
+            {
+                uint frontPid;
+                uint frontThread = Native.GetWindowThreadProcessId(front, out frontPid);
+                uint ownThread = Native.GetCurrentThreadId();
+                bool attached = frontThread != 0 && frontThread != ownThread && Native.AttachThreadInput(ownThread, frontThread, true);
+                try
+                {
+                    Native.BringWindowToTop(hwnd);
+                    Native.SetForegroundWindow(hwnd);
+                }
+                finally
+                {
+                    if (attached) Native.AttachThreadInput(ownThread, frontThread, false);
+                }
+            }
             if (Native.GetForegroundWindow() != hwnd)
             {
                 try { AutomationElement.FromHandle(hwnd).SetFocus(); } catch (Exception) { }
@@ -1395,6 +1502,29 @@ namespace WorkforceHelper
             return d;
         }
 
+        /// B-080: the element that holds the keyboard focus now (one node, the same cached properties as a tree; a
+        /// password value stays "********") and the top-level window it is in - computer.type reads where its text landed.
+        public static Dictionary<string, object> Focused()
+        {
+            CacheRequest request = Request();
+            AutomationElement focused;
+            using (request.Activate()) { focused = AutomationElement.FocusedElement; }
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            List<object> nodes = new List<object>();
+            IntPtr own = IntPtr.Zero;
+            if (focused != null)
+            {
+                nodes.Add(Node(focused, 0, -1));
+                try { own = new IntPtr(focused.Current.NativeWindowHandle); } catch (Exception) { own = IntPtr.Zero; }
+            }
+            if (own == IntPtr.Zero) own = Native.GetForegroundWindow();
+            IntPtr top = own == IntPtr.Zero ? IntPtr.Zero : Native.GetAncestor(own, 2); // GA_ROOT
+            if (top == IntPtr.Zero) top = own;
+            d["hwnd"] = top.ToInt64();
+            d["nodes"] = nodes;
+            return d;
+        }
+
         static AutomationElement ByRid(IntPtr hwnd, string rid)
         {
             int[] wanted = ParseRid(rid);
@@ -1425,7 +1555,9 @@ namespace WorkforceHelper
             string name = Args.Str(a, "name", null);
             string aid = Args.Str(a, "aid", null);
             string role = Args.Str(a, "role", null);
-            if (name == null && aid == null) throw new HelperException("bad_request", "Give a ref, a name or an automation id.");
+            // B-080: a window step with only the window id acts on the window itself.
+            if (name == null && aid == null && Args.Str(a, "action", "").StartsWith("window_")) return AutomationElement.FromHandle(hwnd);
+            if (name == null && aid == null) throw new HelperException("bad_request", "This step needs a ref, a name or an automation id.");
             bool truncated = false;
             List<AutomationElement> found = Search(hwnd, name, aid, role, true, 3, ref truncated);
             if (found.Count == 0) found = Search(hwnd, name, aid, role, false, 3, ref truncated);
@@ -1433,13 +1565,42 @@ namespace WorkforceHelper
             return found.Count == 1 ? found[0] : null;
         }
 
+        // B-080 (live: "Try action 'click'" for scroll on a ScrollItem element): an unsupported pattern answers with
+        // the computer.act actions the element takes - one per pattern it supports, and click where it has a point to click.
+        static readonly Dictionary<string, string> PatternActions = new Dictionary<string, string>
+        {
+            { "Invoke", "invoke" }, { "Toggle", "toggle" }, { "SelectionItem", "select" }, { "ExpandCollapse", "expand, collapse" },
+            { "Value", "set_value" }, { "RangeValue", "set_value" }, { "ScrollItem", "scroll_into_view" }, { "Scroll", "scroll" },
+        };
+
         static object Pattern(AutomationElement el, AutomationPattern pattern, string label)
         {
             object p;
             if (el.TryGetCurrentPattern(pattern, out p)) return p;
             List<string> names = new List<string>();
-            foreach (AutomationPattern supported in el.GetSupportedPatterns()) names.Add(supported.ProgrammaticName.Replace("PatternIdentifiers.Pattern", ""));
-            throw new HelperException("bad_request", "The element does not support " + label + " (supports: " + (names.Count > 0 ? string.Join(", ", names.ToArray()) : "nothing") + "). Try action 'click'.");
+            List<string> actions = new List<string>();
+            foreach (AutomationPattern supported in el.GetSupportedPatterns())
+            {
+                string name = supported.ProgrammaticName.Replace("PatternIdentifiers.Pattern", "");
+                names.Add(name);
+                string action;
+                if (PatternActions.TryGetValue(name, out action) && !actions.Contains(action)) actions.Add(action);
+            }
+            if (Clickable(el)) actions.Add("click");
+            throw new HelperException("bad_request", "The element does not support " + label + " (supports: " + (names.Count > 0 ? string.Join(", ", names.ToArray()) : "nothing") + ")."
+                + (actions.Count > 0 ? " I reach it with computer.act " + string.Join(", ", actions.ToArray()) + "." : ""));
+        }
+
+        /// <summary>A point a click step reaches (its clickable point, else the centre of its rectangle) on the screen.</summary>
+        static bool Clickable(AutomationElement el)
+        {
+            try
+            {
+                if (el.Current.IsOffscreen) return false;
+                System.Windows.Point point;
+                return el.TryGetClickablePoint(out point) || !el.Current.BoundingRectangle.IsEmpty;
+            }
+            catch (Exception) { return false; }
         }
 
         public static Dictionary<string, object> Act(Dictionary<string, object> a)
@@ -1488,7 +1649,14 @@ namespace WorkforceHelper
                     TogglePattern toggle = (TogglePattern)Pattern(el, TogglePattern.Pattern, "toggle");
                     if (value == "on" || value == "off")
                     {
-                        for (int i = 0; i < 3 && toggle.Current.ToggleState.ToString().ToLowerInvariant() != value; i++) toggle.Toggle();
+                        // B-080: one toggle at a time - an async app (Chromium, WebView2) shows the new state later, so the
+                        // next one (at most 3, for tri-state) waits until the state changed, at most 1 s.
+                        for (int i = 0; i < 3 && ToggleOf(toggle) != value; i++)
+                        {
+                            string was = ToggleOf(toggle);
+                            toggle.Toggle();
+                            Until(1000, delegate () { return ToggleOf(toggle) != was; });
+                        }
                     }
                     else toggle.Toggle();
                     break;
@@ -1553,19 +1721,86 @@ namespace WorkforceHelper
                 default:
                     throw new HelperException("bad_request", "Unknown action " + action + ".");
             }
-            Thread.Sleep(Args.Clamp(Args.Int(a, "settleMs", 250), 0, 3000));
             Dictionary<string, object> d = new Dictionary<string, object>();
-            try
+            Dictionary<string, object> expect = Args.Obj(a, "expect");
+            if (expect == null)
             {
-                AutomationElement updated = el.GetUpdatedCache(Request());
-                d["element"] = Node(updated, 0, -1);
-                d["exists"] = true;
+                Thread.Sleep(Args.Clamp(Args.Int(a, "settleMs", 250), 0, 3000));
+                ReadBack(el, hwnd, action, d);
             }
-            catch (ElementNotAvailableException) { d["exists"] = false; }
+            else
+            {
+                // B-080: re-read every 100 ms until the expected state shows, at most 2 s (the runtime's VERIFY_MS).
+                System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+                Until(2000, delegate () { ReadBack(el, hwnd, action, d); return Settled(expect, d); });
+                d["waitedMs"] = clock.ElapsedMilliseconds;
+            }
             IntPtr foreground = Native.GetForegroundWindow();
             if (foreground != IntPtr.Zero) d["foreground"] = Windows.Describe(foreground, foreground, null);
             if (clickedAt != null) d["at"] = clickedAt;
             return d;
+        }
+
+        static string ToggleOf(TogglePattern toggle)
+        {
+            return toggle.Current.ToggleState.ToString().ToLowerInvariant();
+        }
+
+        /// Reads every 100 ms until `shows` holds, at most `ms`; true when it showed.
+        static bool Until(int ms, Func<bool> shows)
+        {
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!shows())
+            {
+                if (clock.ElapsedMilliseconds >= ms) return false;
+                Thread.Sleep(100);
+            }
+            return true;
+        }
+
+        /// The element's state after a step, into d ("element", "exists"). B-080: gone is a window no longer there (after
+        /// window_close also a hidden one), an element no longer available, or the dead node UI Automation hands back for a
+        /// removed element (no control type, no name).
+        static void ReadBack(AutomationElement el, IntPtr hwnd, string action, Dictionary<string, object> d)
+        {
+            d.Remove("element");
+            d["exists"] = false;
+            if (!Native.IsWindow(hwnd) || (action == "window_close" && !Native.IsWindowVisible(hwnd))) return;
+            try
+            {
+                Dictionary<string, object> node = Node(el.GetUpdatedCache(Request()), 0, -1);
+                if ((string)node["role"] == "unknown" && !node.ContainsKey("name")) return;
+                d["element"] = node;
+                d["exists"] = true;
+            }
+            catch (ElementNotAvailableException) { }
+        }
+
+        /// Does the read-back show what `expect` names (value, toggle, expanded, selected, gone)? A gone element ends the
+        /// re-reading too: nothing about it changes any more. The expected window the runtime looks for itself.
+        static bool Settled(Dictionary<string, object> expect, Dictionary<string, object> d)
+        {
+            if (!(bool)d["exists"]) return true;
+            Dictionary<string, object> node = (Dictionary<string, object>)d["element"];
+            object gone = Args.Get(expect, "gone");
+            if (gone is bool && (bool)gone) return false;
+            string value = Args.Str(expect, "value", null);
+            if (value != null && ValueText(node) != value) return false;
+            string toggle = Args.Str(expect, "toggle", null);
+            if (toggle != null && !string.Equals(node.ContainsKey("toggle") ? node["toggle"] as string : null, toggle)) return false;
+            object expanded = Args.Get(expect, "expanded");
+            if (expanded is bool && (node.ContainsKey("expand") && (node["expand"] as string) == "expanded") != (bool)expanded) return false;
+            object selected = Args.Get(expect, "selected");
+            if (selected is bool && node.ContainsKey("selected") != (bool)selected) return false;
+            return true;
+        }
+
+        static string ValueText(Dictionary<string, object> node)
+        {
+            object v;
+            if (!node.TryGetValue("value", out v) || v == null) return "";
+            if (v is double) return ((double)v).ToString(CultureInfo.InvariantCulture);
+            return v as string ?? "";
         }
     }
 
@@ -1667,6 +1902,8 @@ namespace WorkforceHelper
                     return Uia.Tree(a);
                 case "find":
                     return Uia.Find(a);
+                case "focused":
+                    return Uia.Focused();
                 case "act":
                     return Uia.Act(a);
                 case "click":
@@ -1699,6 +1936,14 @@ namespace WorkforceHelper
                     Dictionary<string, object> c = Presence.Read(); // the idle times tell whether the person moved it last
                     c["x"] = p.X;
                     c["y"] = p.Y;
+                    IntPtr under = Native.GetAncestor(Native.WindowFromPoint(p), 2); // GA_ROOT: B-081, the window the pointer rests on
+                    int length = under == IntPtr.Zero ? 0 : Native.GetWindowTextLength(under);
+                    if (length > 0)
+                    {
+                        StringBuilder name = new StringBuilder(Math.Min(512, length + 1));
+                        Native.GetWindowText(under, name, name.Capacity);
+                        if (name.Length > 0) c["window"] = Args.Clip(name.ToString(), 120);
+                    }
                     return c;
                 default:
                     throw new HelperException("bad_request", "Unknown op " + op + ".");
@@ -1744,7 +1989,7 @@ function Wait-WinRt($operation, [Type]$resultType) {
 function Invoke-Ocr($opArgs) {
   try { Initialize-Ocr } catch { throw (New-Object WorkforceHelper.HelperException('unavailable', 'Windows text recognition is not available on this PC.')) }
   $rect = [WorkforceHelper.Screens]::Bounds($opArgs)
-  $png = [WorkforceHelper.Screens]::CapturePng($rect)
+  $png = [WorkforceHelper.Screens]::GrabPng($opArgs, $rect)
   $memory = New-Object System.IO.MemoryStream(, $png)
   $stream = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($memory)
   $decoder = Wait-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])

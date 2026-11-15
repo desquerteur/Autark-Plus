@@ -1,14 +1,13 @@
 // Composition root, part 1: builds every RuntimeServices member and wires late bindings.
 // Owns: construction order and the few adapters between modules (secret port for accounts,
-// MCP base URL, the media hook on the file store and its fetch of another PC's bytes, the theme and connector file watchers). Never:
-// business logic – each module owns its behaviour.
+// MCP base URL, the media hook on the file store and its fetch of another PC's bytes – B-080: their arrival reaches the
+// media library's probe –, the theme and connector file watchers). Never: business logic – each module owns its behaviour.
 // A notification that pushes here also reaches the phones of the owner's other PCs (devices/sync/notify.ts, 'notify.relay').
 //
 // Late binding: modules receive `services: () => RuntimeServices` (or the shared record `s`
 // itself, which is filled progressively), so construction order only matters for start-up
 // side effects, never for references.
 
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DetectionReport } from '../../shared/model/providers.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
@@ -25,14 +24,14 @@ import { watchTheme } from '../root/theme.ts';
 import { watchPages } from '../root/pages.ts';
 import { SecretVault } from '../secrets/service.ts';
 import { Blobs } from '../files/store.ts';
-import { needBlob } from '../devices/sync/blobs.ts';
+import { needBlob, onArrival } from '../devices/sync/blobs.ts';
 import { RELAY_METHOD, receiveNotification, relayNotification } from '../devices/sync/notify.ts';
 import { extractPdfText } from '../files/pdf.ts';
 import { Org } from '../org/service.ts';
 import { ChatServiceImpl } from '../chat/service.ts';
 import { DeliveryServiceImpl } from '../chat/delivery.ts';
 import { TaskServiceImpl } from '../tasks/service.ts';
-import { OwnershipServiceImpl } from '../tasks/ownership.ts';
+import { TaskWatcher } from '../tasks/watch.ts';
 import { ChatRedelivery } from '../agents/redelivery.ts';
 import { WakeQueueImpl } from '../wakes/queue.ts';
 import { SchedulerImpl } from '../schedules/scheduler.ts';
@@ -48,10 +47,11 @@ import '../contracts/root.ts';
 import '../contracts/secret-files.ts';
 import { SecretFiles } from '../secrets/files.ts'; // B-044: <data>/secrets/<id>.md
 import '../contracts/open-fs.ts'; // B-044: s.prompts, s.rootMaps
-import { PromptTemplates, renderTemplate, standardRuleValues } from '../context/templates.ts';
+import { PromptTemplates } from '../context/templates.ts';
 import { RootMaps } from '../root/readme.ts';
 import { createChatMirror } from './chat-files.ts'; // B-050 K8: <data>/chats
-import { standingRuleValues } from '../org/hire.ts';
+import { systemMdValues } from '../org/hire.ts';
+import { standardName, type StandardKind } from '../org/standard.ts';
 import { ModeLibrary } from '../modes/service.ts';
 import { Notifications } from '../notify/service.ts';
 import { AccountServiceImpl } from '../accounts/service.ts';
@@ -59,6 +59,7 @@ import type { AccountMonitor } from '../accounts/monitor.ts';
 import { ExecutableFinder } from '../accounts/executables.ts';
 import { claudeTranscriptsDir, createEngineRegistry, type EngineRegistry } from '../engines/registry.ts';
 import { Priors } from '../models/priors.ts';
+import { useStoredCopy } from '../models/priors-feed.ts'; // 14.11.: the global model rating's last good copy
 import { Catalog } from '../models/catalog.ts';
 import { RouterImpl } from '../routing/router.ts';
 import { Spend } from '../spend/ledger.ts';
@@ -160,16 +161,18 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   const blobs = new Blobs({ db, blobs: paths.blobs, clock, log, pdfText: extractPdfText, missing: (id) => needBlob(s, id) });
   const keepBlob = blobs.put.bind(blobs); // long tool outputs kept for the context ledger stay out of the media library
   s.files = withMediaHook(blobs, (file) => media.onFileStored(file), log);
+  onArrival(s.files, (id) => media.arrived(id)); // B-080 F4: bytes a pull brought later are probed then
 
   const supervisor = new Supervisor({ log });
   const finder = new ExecutableFinder();
-  // B-044: one prompt set for the runtime – the shipped prompts and the person's own versions in <data>/prompts (any prompt, rules.md included).
+  // One prompt set for the runtime – the shipped prompts and the person's own versions in <data>/prompts (any prompt).
   const prompts = new PromptTemplates(() => path.join(paths.resources, 'prompts'), () => log, { data: () => paths.data });
   if (s.rootWatcher) prompts.watch(s.rootWatcher);
   s.prompts = prompts;
-  // B-044: every hire starts with the standing rules (prompts/agent-default.md – org/hire.ts); B-076: the team's rules inside.
-  const standingRules = (values?: Readonly<Record<string, string>>) => renderTemplate(prompts.standardTemplate(), { ...standardRuleValues(standingRuleValues(settings.get())), ...values }); // B-047: + creator, role
-  const org = new Org({ db, bus, clock, templatesDir: path.join(paths.resources, 'agents'), standingRules, standingTemplate: () => prompts.standardTemplate(), log, companyName: () => settings.get().profile.company });
+  // Every hire starts from the standard SYSTEM.md of its kind (prompts/standard-agent.md or standard-manager.md – org/hire.ts,
+  // org/standard.ts), rendered with the person's name and its role.
+  const systemMd = (values: Readonly<Record<string, string>>, kind: StandardKind) => prompts.renderText(standardName(kind), { ...systemMdValues(settings.get()), ...values });
+  const org = new Org({ db, bus, clock, templatesDir: path.join(paths.resources, 'agents'), systemMd, companyName: () => settings.get().profile.company });
   s.org = org;
   s.wakes = new WakeQueueImpl({ db, clock });
   s.runs = new Journal({
@@ -185,7 +188,7 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   s.delivery = new DeliveryServiceImpl(s);
   // B-050 K4: the quiet pickup of a person's silent lines (chat/quiet-pickup.ts) runs from the dispatcher's idle moment (agents/dispatcher.ts).
   s.tasks = new TaskServiceImpl(s);
-  s.ownership = new OwnershipServiceImpl(s);
+  s.ownership = new TaskWatcher(s);
   const scheduler = new SchedulerImpl(s, { nextDue: new NextDueFile(paths.data, { log }) }); // settled at the scheduler's stop
   s.scheduler = scheduler;
 
@@ -244,8 +247,11 @@ export async function createCore(options: CoreOptions): Promise<Core> {
     try { return await accounts.detect(force); } catch (error) { log.warn('detection failed', { error: String(error) }); return undefined; }
   };
 
-  // B-078: e2e and demo runs (fake engine) make no openrouter.ai price request
-  const catalog = new Catalog({ services, priors: loadPriors(paths.resources, log), ...(options.fakeEngine ? { priceFeed: false as const } : {}) });
+  // B-078: e2e and demo runs (fake engine) make no openrouter.ai price request (14.11.: nor the openautark.com model rating).
+  // One priors object for the catalog, routing and turn pricing; the last good global copy goes into it when newer.
+  const priors = Priors.shipped(paths.resources, (error) => log.warn('model priors not loaded', { error: String(error) }));
+  useStoredCopy(db, priors);
+  const catalog = new Catalog({ services, priors, ...(options.fakeEngine ? { priceFeed: false as const } : {}) });
   s.catalog = catalog;
   s.router = new RouterImpl({ services });
   s.decisions = createDecisionHub(services);
@@ -285,7 +291,7 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   mesh.register(RELAY_METHOD, (params, from) => receiveNotification(s, notifications, params, from));
   createChatMirror(s); // B-050 K8 (a): the derived chat folders <data>/chats (chat-files/mirror.ts; after the mesh: chat.json names this PC); stop step 'chat mirror'
 
-  const dispatcher = new DispatcherImpl({ services, executor: new TurnExecutor(services), supervisor });
+  const dispatcher = new DispatcherImpl({ services, executor: new TurnExecutor(services) });
   s.dispatcher = dispatcher;
   org.setActivitySource(() => dispatcher.activity());
   createSplits(s); // B-057: services.splits on the dispatcher's lanes (compose/splits.ts)
@@ -295,9 +301,9 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   workStop.restore();
   createCalls(s); // realtime voice and the call talker in chats (stop: compose/lifecycle.ts 'calls')
   createCalendar(s); // B-041 My day (compose/calendar.ts; stopCalendar at shutdown)
-  // Outages end with an event (T04): an account that becomes usable or a model that becomes
-  // available re-wakes tasks whose last turn found no model or account (accounts and catalog exist now).
-  if (s.ownership instanceof OwnershipServiceImpl) s.ownership.watchOutages();
+  // The task watcher: hourly, at each planned look, on rows that change or arrive, and when an account or model comes
+  // back (accounts and catalog exist now).
+  if (s.ownership instanceof TaskWatcher) s.ownership.start();
   new ChatRedelivery({ services }).watch(); // B-044: a chat turn that met an outage is delivered again once (agents/redelivery.ts)
   // B-047 D10: a plan found signed out becomes a sign-in task (or the person's to-do), closed when the account works again.
   const relogin = new Relogin({ services });
@@ -305,13 +311,4 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   relogin.watch();
 
   return { services: s, supervisor, finder, engines, catalog, dispatcher, scheduler, mcp, mesh, identity, secrets, knowledge, org, chats, media, refreshDetection, accountMonitor: accounts.monitor };
-}
-
-function loadPriors(resources: string, log: Logger): Priors {
-  try {
-    return Priors.parse(JSON.parse(readFileSync(path.join(resources, 'model-priors.json'), 'utf8')));
-  } catch (error) {
-    log.warn('model priors not loaded', { error: String(error) });
-    return Priors.empty();
-  }
 }

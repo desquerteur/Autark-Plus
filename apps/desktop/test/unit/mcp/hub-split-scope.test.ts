@@ -31,8 +31,8 @@ test('a split\'s lease lists its parent chat\'s learned tools, like the parent\'
       offerFor: (_agent: unknown, _mode: unknown, _engine: unknown, learned: readonly string[] = []) => ALL.filter((name) => CORE.includes(name) || learned.includes(name)).map(spec),
     },
   } as unknown as RuntimeServices;
-  noteLearned(services, AGENT.id, 'ch_1', 'agents.split'); // used through tools.call in ch_1 …
-  assert.equal(promoteLearned(services, AGENT.id, 'ch_1'), true); // … and direct there from the next fresh session
+  noteLearned(services, AGENT.id, 'agents.split'); // used through tools.call …
+  assert.equal(promoteLearned(services, AGENT.id), true); // … and direct from the next fresh session
   const hub = new Mcp({ services: () => services, baseUrl: () => 'http://127.0.0.1:4000/' });
   const list = async (token: string) => {
     const reply = await hub.handle(token, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, {});
@@ -43,5 +43,5 @@ test('a split\'s lease lists its parent chat\'s learned tools, like the parent\'
   const other = hub.lease({ agent: AGENT, runId: 'run_o', conversationId: 'ch_2', mode: 'general' });
   assert.deepEqual(await list(parent.token), ALL);
   assert.deepEqual(await list(split.token), await list(parent.token), 'the fork gets the parent\'s exact list');
-  assert.deepEqual(await list(other.token), CORE, 'another chat has not learned it');
+  assert.deepEqual(await list(other.token), ALL, 'learned for the agent: the same in every chat (one context)');
 });

@@ -1,7 +1,7 @@
 // PwaService access rules: a phone/browser device token works exactly while its accepted device row and token
 // exist (B-078 D5, no switch), a pairing link is one-time; push config and subscriptions are
-// bound to the calling device (DEV5A). The PC is served by `tailscale serve` here (SERVED, a fake status): B-075 refuses a
-// link a phone cannot reach (pwa/phone-reach.test.ts).
+// bound to the calling device (DEV5A); B-087: one held from another of my PCs counts as on. The PC is served
+// by `tailscale serve` here (SERVED, a fake status): B-075 refuses a link a phone cannot reach (pwa/phone-reach.test.ts).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import { PushService } from '../../../src/runtime/pwa/push.ts';
 import { PwaService } from '../../../src/runtime/pwa/service.ts';
 import { closeAccessTurnedOff } from '../../../src/runtime/pwa/access-off.ts';
 import { VapidKeys } from '../../../src/runtime/pwa/vapid.ts';
+import { keepSubs } from '../../../src/runtime/devices/sync/held-push.ts';
 import type { PwaState } from '../../../src/shared/model/devices.ts';
 import { ManualClock, fakeHost, memoryDb, recordingBus, silentLog } from '../devices/fakes.ts';
 
@@ -121,4 +122,30 @@ test('pushConfig (DEV5A): the VAPID key for any paired device, "subscribed" only
 
   settings.pwa.enabled = false;
   assert.equal((await pwa.pushConfig(undefined)).pushReady, true, 'B-078: the old switch does not stop push');
+});
+
+test('B-087: a phone subscribed at another of my PCs is "on" here too (held through the roster), under this PC\'s own key', async () => {
+  const db = memoryDb();
+  const clock = new ManualClock();
+  const host = fakeHost();
+  const settings = { pwa: { enabled: true, bind: 'localhost' as const } };
+  const push = new PushService({ db, clock, log: silentLog, vapid: () => VapidKeys.load({ db, host, clock }) });
+  const pwa = new PwaService({
+    db, clock, bus: recordingBus().bus, log: silentLog, push, port: () => 47811, qr: async () => 'data:image/png;base64,', interfaces: () => ({}), serveStatus: SERVED,
+    settings: { get: () => settings, update: () => settings } as unknown as SettingsService,
+  });
+  const phone = pwa.exchange(secretOf((await pwa.link({ name: 'iPhone' })).url), { kind: 'phone' });
+  const other = pwa.exchange(secretOf((await pwa.link({ name: 'Tablet' })).url), { kind: 'browser' });
+  const endpoint = 'https://web.push.apple.com/QA_iphone';
+  // PC A made it under its own key; the roster brought it here (devices/sync/roster.ts).
+  keepSubs(db, [{ endpoint, data: { endpoint, keys: { p256dh: 'p', auth: 'a' } }, deviceId: phone.deviceId, key: 'BKeyOfPcA' }], clock.now());
+
+  const config = await pwa.pushConfig(pwa.authenticate(phone.token), endpoint);
+  assert.equal(config.subscribed, true, 'the phone sees "on" here, so it has no reason to subscribe again under this PC\'s key');
+  assert.equal(config.vapidPublicKey, (await VapidKeys.load({ db, host, clock })).publicKey, 'the key stays this PC\'s own');
+  assert.equal((await pwa.pushConfig(pwa.authenticate(other.token), endpoint)).subscribed, false, 'not for another device');
+  assert.equal((await pwa.pushConfig(pwa.authenticate(phone.token), 'https://web.push.apple.com/QA_other')).subscribed, false, 'not for another endpoint');
+  assert.equal(push.count(), 0, 'nothing is stored in this PC\'s own subscriptions');
+  const state = await pwa.state();
+  assert.deepEqual(state.devices.map((device) => [device.name, device.notifications]).sort(), [['Tablet', false], ['iPhone', true]]);
 });

@@ -84,9 +84,8 @@ async function finish(input: { account: Account; modelId: string; catalog?: Mode
   runs.start({ id: request.runId, agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
   input.before?.(runs);
   const plan = (await planTurn(h.services, request))!;
-  const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
   const routed = { ...h.routed(), account: input.account, route: { ...h.route, modelId: input.modelId, accountId: input.account.id } };
-  finishTurn(h.services, plan, routed, request, h.attempt(input.result, { usage: input.usage, ...(input.lastUsage ? { lastUsage: input.lastUsage } : {}) }), messageId);
+  finishTurn(h.services, plan, routed, request, h.attempt(input.result, { usage: input.usage, ...(input.lastUsage ? { lastUsage: input.lastUsage } : {}) }));
   return { run: runs.get(request.runId)!, cost: new RunCostRepo(h.db).get(request.runId), spends };
 }
 

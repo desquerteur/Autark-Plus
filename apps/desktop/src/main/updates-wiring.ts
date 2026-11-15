@@ -5,11 +5,14 @@
 // relaunch helper (updates/install-helper.ts); a while after a start settleAfterStart tidies up after a move
 // or a Mac self-update.
 // Drain order: renderer saves drafts (prepareRestart ack) → runtime pauses wakes and checkpoints
-// (system.prepareRestart) → runtime exits ('update').
+// (system.prepareRestart, B-080: with the version it installs) → runtime exits ('update').
+// B-080: installFile – a build from a file (app.install / system.install through main's host op) installs the same way:
+// the same drain, then the relaunch helper with that installer, then quit.
 // Owns: that order and the "drained" flag, binding electron to the updater wrapper. Never: talks to
 // electron-updater's download or install directly (the Updater is injected) or relaunches without the drain.
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { UpdateState } from '../shared/model/system.ts';
@@ -21,7 +24,7 @@ import { appBundleOf, macSelfUpdater, settleMacUpdate, type FeedFile } from './u
 import { UpdateService } from './updates/update-service.ts';
 import type { Updater } from './updates/update-service.ts';
 import { allowInstallerRetry } from './updates/install-retry.ts';
-import { HELPER_LOG, installWithHelper, spawnHelper } from './updates/install-helper.ts';
+import { HELPER_LOG, installWithHelper, linuxHelper, spawnHelper, windowsHelper } from './updates/install-helper.ts';
 
 export interface DesktopUpdatesDeps {
   updater: Updater;
@@ -36,10 +39,13 @@ export interface DesktopUpdatesDeps {
   idleSeconds(): number;
   runtime: {
     readiness(): Promise<{ ready: boolean }>;
-    prepareRestart(cancel: boolean): Promise<void>;
+    /** system.prepareRestart; B-080: `to` – the version being installed. */
+    prepareRestart(cancel: boolean, to?: string): Promise<void>;
     stop(reason: 'update'): Promise<void>;
     start(): void;
   };
+  /** B-080 (installFile): this app's process, executable, AppImage (Linux) and logs folder, and its quit; absent: no install from a file. */
+  install?: { pid: number; exe: string; appImage?: string; logs: string; quit(): void; spawn?: typeof spawnHelper; exists?(file: string): boolean };
   publish(state: UpdateState): void;
   /** The system browser for the manual download (desktop.ts passes electron's shell; default: loaded on first use). Only https reaches it. */
   openExternal?(url: string): Promise<void>;
@@ -215,7 +221,7 @@ export class DesktopUpdates {
       version: deps.version,
       autoDownload: deps.autoDownload,
       facts: () => this.facts(),
-      prepareInstall: () => this.prepareInstall(),
+      prepareInstall: (to) => this.prepareInstall(to),
       cancelInstall: () => this.cancelInstall(),
       openExternal: url => openHttps(url, deps.openExternal),
       changed: state => deps.publish(state),
@@ -267,12 +273,42 @@ export class DesktopUpdates {
     return { ...base, runtimeReady: (await this.deps.runtime.readiness()).ready };
   }
 
-  private async prepareInstall(): Promise<void> {
+  /**
+   * B-080 (host op app.install – app.install / system.install): a build from a file installs the way an update does – the
+   * file must exist, then the same drain, then the relaunch helper with this installer (Windows: its Setup .exe; Linux:
+   * the AppImage moved over $APPIMAGE) and quit. macOS refuses. A helper that cannot start resumes the app; any refusal
+   * before it tells the runtime (system.prepareRestart {cancel}), which answers the install record it kept (tasks/recover-notes.ts).
+   */
+  async installFile(installer: string): Promise<void> {
+    const own = this.deps.install;
+    try {
+      if (!own || this.deps.platform === 'darwin') throw new WorkforceError('unavailable', 'This app cannot install a build from a file here.');
+      if (!(own.exists ?? existsSync)(installer)) throw new WorkforceError('not_found', 'The installer file does not exist.');
+      const logFile = path.join(own.logs, HELPER_LOG);
+      const launch = this.deps.platform === 'win32' ? windowsHelper({ pid: own.pid, installer, exe: own.exe, logFile })
+        : own.appImage ? linuxHelper({ pid: own.pid, downloaded: installer, appImage: own.appImage, logFile }) : undefined;
+      if (!launch) throw new WorkforceError('unavailable', 'This app was not started from an AppImage, so it cannot replace itself.');
+      await this.prepareInstall();
+      this.deps.log?.('installing a build from a file');
+      (own.spawn ?? spawnHelper)(launch, own.logs, {
+        started: () => own.quit(),
+        failed: () => { this.deps.log?.('install helper did not start; resuming'); this.cancelInstall(); },
+        ended: () => {},
+      });
+    } catch (error) {
+      const held = this.drained || this.paused; // cancelInstall tells such a runtime itself
+      this.cancelInstall();
+      if (!held) void this.deps.runtime.prepareRestart(true).catch(() => {}); // B-080: it answers the install record it kept
+      throw error;
+    }
+  }
+
+  private async prepareInstall(to?: string): Promise<void> {
     if (!(await this.deps.renderer.prepareRestart(DRAFT_FLUSH_TIMEOUT_MS))) {
       throw new Error('The window did not confirm that its drafts are saved.');
     }
     try {
-      await this.deps.runtime.prepareRestart(false);
+      await this.deps.runtime.prepareRestart(false, to);
       this.paused = true;
     } catch (error) {
       // A runtime that is not running has nothing to pause; anything else aborts the update.
@@ -284,7 +320,10 @@ export class DesktopUpdates {
     this.deps.log?.('drained for update install');
   }
 
-  /** The restart did not happen after all: bring everything back. */
+  /**
+   * The restart did not happen after all: bring everything back. B-080: a paused runtime hears the cancel and answers the
+   * install record it kept; a drained one starts again and answers it at its start (the same app process: no install).
+   */
   private cancelInstall(): void {
     if (this.drained) {
       this.drained = false;

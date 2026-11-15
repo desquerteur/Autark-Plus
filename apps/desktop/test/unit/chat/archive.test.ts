@@ -20,6 +20,7 @@ import { chatTools } from '../../../src/runtime/tools/builtin/chat.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { setup as turnSetup } from '../agents/fixture.ts';
 import { OWNER, TODO_ONLY, TestClient, rpcFixture } from '../rpc/s1-helpers.ts';
+import { ChatOutbox } from '../../../src/runtime/agents/chat-out.ts';
 import { agent, harness, tick } from './harness.ts';
 
 function setup() {
@@ -45,7 +46,9 @@ test('an archived chat keeps working: its task plans a turn, members post and ch
     services: h.services as RuntimeServices, signal: new AbortController().signal, status: () => {},
   } as ToolContext;
   const tool = (name: string) => chatTools.find((item) => item.name === name)!;
-  assert.equal((await tool('chat.send').run({ text: 'Plan drafted.' }, ctx)).isError, undefined);
+  const out = new ChatOutbox(h.services as RuntimeServices, { agentId: h.tom.id, runId: 'run_send' });
+  out.segment(`<chat to="${h.chat.id}">Plan drafted.</chat>`, true);
+  await out.done();
   assert.ok(h.chats.messages(h.chat.id).some((message) => message.body === 'Plan drafted.'));
   assert.ok(h.chats.get(h.chat.id)?.archivedAt, 'an ordinary reply leaves it archived');
   const listed = JSON.parse(((await tool('chat.list').run({}, ctx)).content[0] as { text: string }).text) as Array<{ id: string; archived?: boolean }>;
@@ -85,8 +88,7 @@ test('an agent\'s important message or @mention of the person brings it back wit
   assert.equal(h.chats.summary(h.chat.id).unread, 1, 'only the important message is unread (the person wrote after the draft), not the line');
 
   h.archive();
-  const answer = h.chats.beginAgentMessage(h.chat.id, 'ag_ava', 'run_1');
-  h.chats.finishAgentMessage(answer.id, { body: '@Human please sign the offer', state: 'final' });
+  const answer = h.chats.postAgentMessage(h.chat.id, 'ag_ava', 'run_1', { body: '@Human please sign the offer', state: 'final' });
   assert.equal(h.archived(), false);
   assert.deepEqual(h.lines(), ['Unarchived: important message from Ava', 'Unarchived: Ava mentioned you']);
   assert.ok(h.notified.some((item) => item.kind === 'important' && item.conversationId === h.chat.id), 'the person is told as before');
@@ -107,22 +109,6 @@ test('agents\' urgent messages in an agent-only or hidden room leave it archived
   assert.equal(h.notified.some((item) => item.conversationId === agentsOnly.id || item.conversationId === hidden.id), false, 'nobody is told either');
 });
 
-test('a new to-do or approval for the person brings it back; their own and older to-dos do not', () => {
-  const h = setup();
-  const older = h.tasks.create({ conversationId: h.chat.id, title: 'Pick a venue', assigneeKind: 'human', humanReason: 'taste', createdBy: 'ag_ava' });
-  h.archive();
-  h.tasks.update(older.id, { notes: 'Two options left' }, HUMAN_ID);
-  h.tasks.create({ conversationId: h.chat.id, title: 'Buy stamps', assigneeKind: 'human', humanReason: 'physical', createdBy: HUMAN_ID });
-  h.tasks.create({ conversationId: h.chat.id, title: 'Book the hall', assigneeKind: 'agent', assigneeId: 'ag_ava', createdBy: 'ag_ava' });
-  assert.equal(h.archived(), true, 'an older to-do, the person\'s own and agent work keep it archived');
-
-  h.tasks.create({ conversationId: h.chat.id, title: 'Sign the contract', assigneeKind: 'human', humanReason: 'identity', createdBy: 'ag_ava' });
-  assert.equal(h.archived(), false);
-  h.archive();
-  h.tasks.create({ conversationId: h.chat.id, title: 'Run the deploy', assigneeKind: 'human', humanReason: 'approval', createdBy: 'system' });
-  assert.equal(h.archived(), false);
-  assert.deepEqual(h.lines(), ['Unarchived: a to-do for you', 'Unarchived: an approval for you']);
-});
 
 test('chats.unarchive is on the chat tier', async (t) => {
   const f = rpcFixture({ table: createHandlerTable() });
@@ -147,7 +133,7 @@ test('deleting a message cancels its open mini-app to-do', () => {
   const [todo] = h.tasks.todos();
   assert.equal(todo?.title, 'Voice take');
   h.chats.removeMessage(message.id, HUMAN_ID);
-  assert.equal(h.tasks.get(todo.id)?.status, 'cancelled');
+  assert.equal(h.tasks.get(todo.id)?.status, 'dropped');
 });
 
 test('a deleted message or chat takes its saved mini-app state with it', () => {
@@ -179,8 +165,7 @@ test('engine files stored for an answer deleted meanwhile go to the blob clean-u
       reclaim: (ids: string[]) => { reclaimed.push(...ids); }, reconcileOrphans: () => {}, remove: () => {},
     },
   });
-  const answer = h.chats.beginAgentMessage(h.chat.id, 'ag_ava', 'run_1');
-  h.chats.finishAgentMessage(answer.id, { body: 'Here is the chart', state: 'final', files: [{ name: 'chart.png', dataBase64: 'AAAA' }] });
+  const answer = h.chats.postAgentMessage(h.chat.id, 'ag_ava', 'run_1', { body: 'Here is the chart', state: 'final', files: [{ name: 'chart.png', dataBase64: 'AAAA' }] });
   h.chats.removeMessage(answer.id, HUMAN_ID);
   release();
   await tick();

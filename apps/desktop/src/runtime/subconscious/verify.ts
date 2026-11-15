@@ -5,10 +5,13 @@
 // 'Steps: x/y done; open: …' (tasks/open-steps.ts), so the verdict covers the steps too.
 // B-047 D11: first the deterministic evidence checks (services.evidence, subconscious/verify-evidence.ts – a named
 // file exists and is not empty, a named link answers): one that confidently fails rejects the result with what
-// failed (checked=true), whatever else holds; the lines of the checks that ran go into the predicate's context as
-// facts checked by the runtime. A result without a done-condition is never "checked": it stays unverified
-// (checked=false, reason 'no done-condition'), also when its evidence held.
-// Owns: the verdict rules. A result without summary and evidence fails; no done-condition or
+// failed (checked=true, fact=true: a runtime fact, which wakes the assignee – tasks/verification.ts), whatever else holds;
+// the lines of the checks that ran go into the predicate's context as facts checked by the runtime. A result without a
+// done-condition is never "checked": it stays unverified (checked=false, reason 'no done-condition'), also when its
+// evidence held. B-080 (live 05.–08.11.2026: 27 of 30 tasks a model's "no" rejected ran again, 75 runs, with more proof
+// each time): a model's "no" is no fact – it names what the result does not show and stays the task's note; the predicate
+// reads the whole summary (the decision hub bounds its context).
+// Owns: the verdict rules. A result without summary and evidence fails (a fact too); no done-condition or
 // no decision model passes with a reason that says so and checked=false; an unsure "no" does
 // not reopen work.
 // Never: trusts the agent's own claim of verification or runs tools.
@@ -21,13 +24,14 @@ import { excerpt } from '../../shared/text/chat-names.ts';
 const MIN_CONFIDENCE = 0.5;
 
 function rubric(services: RuntimeServices, task: Task): string | undefined {
-  if (!task.mode) return undefined;
-  try { return services.modes.get(task.mode).verifier; } catch { return undefined; }
+  const mode = task.assigneeKind === 'agent' && task.assigneeId ? services.org?.get(task.assigneeId)?.mode : undefined; // the owner's own mode
+  if (!mode) return undefined;
+  try { return services.modes.get(mode).verifier; } catch { return undefined; }
 }
 
-/** 'Steps: 3/5 done; open: "…", "…"' over the steps that were not cancelled; undefined without steps. */
+/** 'Steps: 3/5 done; open: "…", "…"' over the pieces that were not dropped; undefined without pieces. */
 export function stepsLine(steps: readonly Pick<Task, 'title' | 'status'>[]): string | undefined {
-  const counted = steps.filter((step) => step.status !== 'cancelled');
+  const counted = steps.filter((step) => step.status !== 'dropped');
   if (!counted.length) return undefined;
   const open = counted.filter((step) => step.status !== 'done').map((step) => `"${excerpt(step.title, 80)}"`);
   const shown = open.length > 5 ? `${open.slice(0, 5).join(', ')} +${open.length - 5} more` : open.join(', ');
@@ -61,7 +65,7 @@ export function checkedLines(checks: readonly EvidenceCheck[]): string | undefin
 export function resultContext(task: Task, result: TaskResult, verifier?: string, branch?: string, steps?: string, checked?: string): string {
   const lines = [`Task: ${task.title}`, `Done when: ${task.doneWhen ?? '(not set)'}`];
   if (verifier) lines.push(`Quality rubric: ${verifier}`);
-  lines.push(`Result: ${excerpt(result.summary ?? '', 1500)}`);
+  lines.push(`Result: ${result.summary ?? ''}`);
   if (result.alsoHandled?.length) lines.push(`Also handled: ${result.alsoHandled.map((item) => excerpt(item, 160)).join('; ')}`);
   const evidence = result.evidence ?? [];
   lines.push(evidence.length ? `Evidence:\n${evidence.slice(0, 20).map((item) => `- ${item.kind}: ${excerpt(item.label, 200)}${item.ref ? ` (${excerpt(item.ref, 160)})` : ''}`).join('\n')}` : 'Evidence: none');
@@ -71,15 +75,18 @@ export function resultContext(task: Task, result: TaskResult, verifier?: string,
   return lines.join('\n');
 }
 
-export async function verifyResult(services: RuntimeServices, task: Task, result: TaskResult): Promise<{ ok: boolean; reason: string; checked: boolean }> {
+/** The verdict; `fact`: a runtime check failed (an empty result, a missing file, a dead link) – not a model's view. */
+export interface Verdict { ok: boolean; reason: string; checked: boolean; fact?: boolean }
+
+export async function verifyResult(services: RuntimeServices, task: Task, result: TaskResult): Promise<Verdict> {
   const summary = result?.summary?.trim() ?? '';
   const evidence = result?.evidence ?? [];
-  if (!summary && !evidence.length) return { ok: false, reason: 'The result has no summary and no evidence.', checked: true };
+  if (!summary && !evidence.length) return { ok: false, reason: 'The result has no summary and no evidence.', checked: true, fact: true };
   // B-047 D11: deterministic checks first – evidence that confidently does not hold rejects the result.
   const checks = await evidenceChecks(services, result);
   const failed = checks.filter((check) => check.ok === false);
   if (failed.length) {
-    return { ok: false, reason: `The evidence does not hold: ${failed.map((check) => check.line).join('; ')}. Fix it or give evidence that exists.`, checked: true };
+    return { ok: false, reason: `The evidence does not hold: ${failed.map((check) => check.line).join('; ')}.`, checked: true, fact: true };
   }
   if (!task.doneWhen?.trim()) return { ok: true, reason: 'no done-condition', checked: false }; // unverified, never "checked"
   if (!services.decisions?.available()) return { ok: true, reason: 'no verifier available; result accepted as claimed', checked: false };
@@ -91,7 +98,7 @@ export async function verifyResult(services: RuntimeServices, task: Task, result
     });
     if (verdict.value === true && verdict.confidence >= MIN_CONFIDENCE) return { ok: true, reason: `done-condition met (checked by ${verdict.by})`, checked: true };
     if (verdict.value === false && verdict.confidence >= MIN_CONFIDENCE) {
-      return { ok: false, reason: `The result does not show that this is met: ${excerpt(task.doneWhen, 200)}. Add the missing work or evidence.`, checked: true };
+      return { ok: false, reason: `The result does not show: ${excerpt(task.doneWhen, 200)}`, checked: true };
     }
     return { ok: true, reason: 'verifier unsure; result accepted as claimed', checked: false };
   } catch (error) {

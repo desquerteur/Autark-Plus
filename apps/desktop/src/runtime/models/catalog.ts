@@ -6,8 +6,10 @@
 // (ElevenLabs, fal.ai) list their curated models (catalog-media.ts). B-066: a connection of settings.json's providers names
 // its models "<id>:<model>" and what the file says joins its listing (catalog-named.ts); an older "<provider>:<model>" still finds them.
 // B-078 (D16): a started catalog's full refresh also asks for the daily keyless price list (price-feed.ts) – it prices only
-// models the curated priors leave unpriced.
-// Never: proves entitlement (only a completed turn does), throws from refresh (per-account errors are logged) or polls.
+// models the curated priors leave unpriced – and, since 14.11., for the daily global model rating (priors-feed.ts).
+// Every 30 min a started catalog lists all accounts again (cooling ones too), so a model a provider adds while the app
+// runs is in the catalog, the menu and the routing without a restart.
+// Never: proves entitlement (only a completed turn does) or throws from refresh (per-account errors are logged).
 
 import type { ModelCatalog, RuntimeServices } from '../contracts.ts';
 import type { Account, EngineId, ModelInfo } from '../../shared/model/providers.ts';
@@ -19,17 +21,21 @@ import { mediaEngineOf, rebuildListings } from './catalog-media.ts'; // B-058: m
 import { withNamedModels } from './catalog-named.ts'; // B-066: what settings.json names joins the listings
 import { modelOwner } from '../../shared/model/provider-entries.ts';
 import { refreshFeed, storedFeed, type FeedDeps, type FeedPrices } from './price-feed.ts'; // B-078: prices the priors do not have
+import { refreshPriorsFeed } from './priors-feed.ts'; // 14.11.: the daily global model rating
 import {
-  buildModel, byProviderName, fingerprint, fromRow, isConnected, isListable, listingsFromRows, sanitizeListing, toRowParams,
+  buildModel, fingerprint, fromRow, isConnected, isListable, listingsFromRows, sanitizeListing, toRowParams,
   type Listing, type ModelRow,
 } from './catalog-merge.ts';
+import { catalogOrder } from './order.ts'; // B-083: newest version of each family on top, older versions below
 
 export interface CatalogDeps {
   services: () => RuntimeServices;
   priors: Priors;
   /** Debounce for account events (default 1500 ms). */
   debounceMs?: number;
-  /** B-078: the daily keyless price list (price-feed.ts) of a started catalog – false: never (tests); a function: its GET. */
+  /** How often a started catalog lists every account again (default 30 min). */
+  relistMs?: number;
+  /** B-078: the daily keyless price list (price-feed.ts) of a started catalog – false: never (tests; nor the global model rating, priors-feed.ts); a function: its GET. */
   priceFeed?: false | FeedDeps['fetch'];
 }
 
@@ -43,6 +49,8 @@ export interface CatalogStatus {
 
 const NS = 'catalog';
 const REFRESH_INTERVAL_MS = 10 * 60_000;
+/** How often a started catalog lists every account again: a provider's new model shows within this time. */
+const RELIST_EVERY_MS = 30 * 60_000;
 const CLI_LIST_TIMEOUT_MS = 45_000; // CLI engines may have to start their server first
 const HTTP_LIST_TIMEOUT_MS = 15_000;
 const MAX_MODELS_PER_ACCOUNT = 500;
@@ -83,6 +91,7 @@ export class Catalog implements ModelCatalog {
   private readonly pendingAccounts = new Set<string>();
   private pendingRebuild = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private relist: ReturnType<typeof setInterval> | undefined;
   private debounced: { accounts: Set<string>; rebuild: boolean } = { accounts: new Set(), rebuild: false };
   private readonly seen = new Map<string, { print: string; connected: boolean; listable: boolean; enabled: boolean }>();
   /** Last failed listing per account: usage/limits churn must not re-run a failing CLI listing every turn. */
@@ -112,7 +121,7 @@ export class Catalog implements ModelCatalog {
   private load(): { list: ModelInfo[]; byId: Map<string, ModelInfo> } {
     if (!this.cache) {
       const feed = this.prices();
-      const list = this.s.db.all<ModelRow>('SELECT * FROM models').map((row) => fromRow(row, this.deps.priors, feed)).sort(byProviderName);
+      const list = catalogOrder(this.s.db.all<ModelRow>('SELECT * FROM models').map((row) => fromRow(row, this.deps.priors, feed)));
       this.cache = { list, byId: indexOf(list) };
     }
     return this.cache;
@@ -218,7 +227,10 @@ export class Catalog implements ModelCatalog {
     return this.feed;
   }
 
-  /** B-078: a started catalog asks for the daily price list in the background; new prices rebuild the catalog. */
+  /**
+   * B-078: a started catalog asks for the daily price list in the background; new prices rebuild the catalog.
+   * 14.11.: the same for the daily global model rating (priors-feed.ts): a newer copy goes into the priors, then a rebuild.
+   */
   private refreshPrices(): void {
     if (this.deps.priceFeed === false || !this.unsubscribe.length || this.feeding) return;
     this.feeding = true;
@@ -231,6 +243,9 @@ export class Catalog implements ModelCatalog {
       })
       .catch((error: unknown) => s.log.warn('model list prices skipped', { error: String(error) }))
       .finally(() => { this.feeding = false; });
+    void refreshPriorsFeed({ db: s.db, clock: s.clock, log: s.log, priors: this.deps.priors })
+      .then((changed) => { if (changed && this.unsubscribe.length) this.rebuild(); })
+      .catch((error: unknown) => s.log.warn('model priors skipped', { error: String(error) }));
   }
 
   private async listAccount(account: Account): Promise<void> {
@@ -304,7 +319,7 @@ export class Catalog implements ModelCatalog {
       }
     }
     const before = this.load().list;
-    const list = [...next.values()].sort(byProviderName);
+    const list = catalogOrder([...next.values()]);
     if (JSON.stringify(before) === JSON.stringify(list)) return;
     s.db.tx(() => {
       const keep = new Set(list.map((info) => info.id));
@@ -331,6 +346,8 @@ export class Catalog implements ModelCatalog {
         if (now !== said) { said = now; this.schedule({ rebuild: true }); }
       }),
     );
+    this.relist = setInterval(() => void this.refresh(), this.deps.relistMs ?? RELIST_EVERY_MS);
+    this.relist.unref?.();
     // A connection the file added while the app was closed: listed and in the catalog without waiting for the next refresh.
     const fresh = s.accounts.list().filter((account) => this.named().providers?.[account.id]);
     if (fresh.length) this.schedule({ accounts: fresh.filter((account) => isListable(account) && !this.loadListings().has(account.id)).map((account) => account.id), rebuild: true });
@@ -339,7 +356,9 @@ export class Catalog implements ModelCatalog {
   stop(): void {
     for (const off of this.unsubscribe.splice(0)) off();
     if (this.timer) clearTimeout(this.timer);
+    if (this.relist) clearInterval(this.relist);
     this.timer = undefined;
+    this.relist = undefined;
     this.debounced = { accounts: new Set(), rebuild: false };
   }
 

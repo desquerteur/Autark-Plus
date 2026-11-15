@@ -72,6 +72,6 @@ test('the tool texts speak as the agent and say what each chat kind is for', () 
     assert.doesNotMatch(description, /\b(may|allowed|only if|must)\b/i, `${name}: no permission language`);
   }
   const create = TOOLS.find((item) => item.name === 'chat.create')!.description;
-  assert.match(create, /internal room of us agents/);
-  assert.match(TOOLS.find((item) => item.name === 'chat.direct')!.description, /It stays two/);
+  assert.match(create, /a room of us agents the person can look into/);
+  assert.match(TOOLS.find((item) => item.name === 'chat.direct')!.description, /it stays two/);
 });

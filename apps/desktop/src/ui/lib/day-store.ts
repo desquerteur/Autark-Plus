@@ -101,9 +101,9 @@ export function nextDayChange(events: readonly CalendarEvent[], now: number, tz:
   return next;
 }
 
-/** Work the caller created that someone else (an agent, the team, a colleague) owns – not their own to-do (Work's owner rule). */
+/** Work the caller gave that someone else (an agent, a colleague) owns – not their own to-do (Work's owner rule). */
 export function isHandedOff(task: TaskView): boolean {
-  return task.createdBy === HUMAN_ID && !task.parentId && task.status !== 'cancelled' && ownerOf(task).kind !== 'human';
+  return (task.assignedBy ?? task.createdBy) === HUMAN_ID && !task.parentId && task.status !== 'dropped' && ownerOf(task).kind !== 'human';
 }
 
 /** The handed-off list after a task.upserted: replaced while it still is handed off, added when it became so, else left out. */

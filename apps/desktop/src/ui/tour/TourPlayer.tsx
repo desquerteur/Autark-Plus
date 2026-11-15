@@ -3,13 +3,12 @@
 // requestAnimationFrame only while playing – nothing runs while paused, ended or hidden (a hidden window
 // pauses it and resumes it when shown again). Controls in one fixed bar that never shifts: play/pause,
 // back/forward 5 s, the time, a scrubber with chapter ticks (click or drag to seek; the scene follows
-// live), keys Space/K, ←/→, Home/End; "Skip" (first run, with the caller's "Connect to my other device" beside it) or ×
-// (dialog) top right, and at the end a card
-// with "Continue" and "Watch again". The scene keeps its aspect and is scaled to fit its box (CSS
-// transform), at every window size from 640×480 to phone width.
-// Used by the first run's 'tour' step (onboarding/FirstRun.tsx) and by the replay dialog (TourDialog.tsx). The
-// first run's player keeps its place when the layer mounts again (the window crossing the phone layout); the
-// dialog starts at its poster on every opening.
+// live), keys Space/K, ←/→, Home/End; × top right, and at the end a card with "Continue" and "Watch again".
+// The scene keeps its aspect and is scaled to fit its box (CSS transform), at every window size from 640×480
+// to phone width.
+// Used by the replay dialog only (TourDialog.tsx), opened from the palette, Settings › Feedback and the first
+// run's choice card ("Watch how it works"); it starts at its poster on every opening – B-090: playing at once when
+// opened by "Set up a new company" (`autoplay`).
 // Owns: playback state, the controls and the scene's fit. Never: the story (timeline.ts), the drawing
 // (Scene.tsx) or what Continue leads to (the caller's onDone).
 
@@ -24,15 +23,10 @@ export const END_TEXT = 'Only the Teydra team can read your feedback – it is e
 
 const percent = (t: number) => `${((t / DURATION) * 100).toFixed(3)}%`;
 
-/** Where the first run's player was when it unmounted (the layer mounts again on a layout change). */
-const kept = { t: 0, started: false, playing: false };
-
-/** `onConnect` (first run): the text button "Connect to my other device" beside Skip. */
-export function TourPlayer(props: { mode: 'page' | 'dialog'; onDone: () => void; onConnect?: () => void }) {
-  const page = props.mode === 'page';
-  const [t, setT] = useState(() => (page ? kept.t : 0));
-  const [playing, setPlaying] = useState(() => page && kept.playing);
-  const [started, setStarted] = useState(() => page && kept.started);
+export function TourPlayer(props: { onDone: () => void; autoplay?: boolean }) {
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(Boolean(props.autoplay));
+  const [started, setStarted] = useState(Boolean(props.autoplay));
   const [scale, setScale] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -42,11 +36,8 @@ export function TourPlayer(props: { mode: 'page' | 'dialog'; onDone: () => void;
   const live = useRef(false);
   const resume = useRef(false); // hidden while playing: play again once shown
   const scrub = useRef<{ resume: boolean } | null>(null);
-  const begun = useRef(started);
-  const finished = useRef(false);
   time.current = t;
   live.current = playing;
-  begun.current = started;
   const state = stateAt(t);
 
   // Frames only while playing; a long gap (hidden, busy) advances at most one short step. The effect's cleanup
@@ -93,10 +84,7 @@ export function TourPlayer(props: { mode: 'page' | 'dialog'; onDone: () => void;
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    (playButton.current ?? root.current)?.focus({ preventScroll: true });
-    return () => { if (page && !finished.current) Object.assign(kept, { t: time.current, started: begun.current, playing: live.current }); };
-  }, []);
+  useEffect(() => { (playButton.current ?? root.current)?.focus({ preventScroll: true }); }, []);
   // The end card reached by playing takes the focus (Enter continues).
   const endOn = state.end.on;
   useEffect(() => { if (endOn && live.current) continueButton.current?.focus({ preventScroll: true }); }, [endOn]);
@@ -105,7 +93,7 @@ export function TourPlayer(props: { mode: 'page' | 'dialog'; onDone: () => void;
   const play = () => { if (time.current >= DURATION) seek(0); setStarted(true); setPlaying(true); };
   const toggle = () => { if (live.current) stop(); else play(); };
   const again = () => { seek(0); setPlaying(true); };
-  const done = () => { finished.current = true; Object.assign(kept, { t: 0, started: false, playing: false }); props.onDone(); };
+  const done = () => props.onDone();
   const seekAt = (x: number, element: HTMLElement) => { const rect = element.getBoundingClientRect(); seek(timeAt(x, rect.left, rect.width, DURATION)); };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -121,17 +109,10 @@ export function TourPlayer(props: { mode: 'page' | 'dialog'; onDone: () => void;
   const chapter = CHAPTERS[state.chapter]!;
   return (
     // tabIndex -1: a click on the scene focuses the player, so the keys keep working after it
-    <div ref={root} class={`tour-player ${props.mode}`} tabIndex={-1} data-phase={phase} data-time={Math.round(t)} onKeyDown={onKeyDown}>
+    <div ref={root} class="tour-player" tabIndex={-1} data-phase={phase} data-time={Math.round(t)} onKeyDown={onKeyDown}>
       <div class="tour-top">
         <span class="tour-title">{TOUR_TITLE}</span>
-        {props.mode === 'page'
-          ? (
-            <span class="tour-top-actions">
-              {props.onConnect && <button type="button" class="button ghost tour-connect" onClick={props.onConnect}>Connect to my other device</button>}
-              <button type="button" class="button ghost tour-skip" onClick={done}>Skip</button>
-            </span>
-          )
-          : <button type="button" class="icon-button tour-close" aria-label="Close" onClick={done}><TourIcon name="x" size={18} /></button>}
+        <button type="button" class="icon-button tour-close" aria-label="Close" onClick={done}><TourIcon name="x" size={18} /></button>
       </div>
       <div class="tour-stage-room">
         <div class="tour-stage-box" ref={box} onClick={() => { if (!state.end.on) toggle(); }}>

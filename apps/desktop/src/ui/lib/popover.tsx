@@ -106,6 +106,8 @@ export function Popover(props: PopoverProps) {
 export interface MenuItem {
   label: string;
   icon?: IconName;
+  /** Drawn in the icon's place (a company's picture in the phone's profile sheet); wins over `icon`. */
+  lead?: ComponentChildren;
   hint?: string; // small grey text right/below
   description?: string; // one line under the label
   checked?: boolean;
@@ -154,7 +156,7 @@ export function Menu(props: Omit<PopoverProps, 'children'> & { sections: MenuSec
                 key={`${sectionIndex}:${index}`} // by place, not label: two rows can read the same (two companies of one name)
                 onClick={() => { props.onClose(); item.onSelect(); }}
               >
-                {item.icon && <Icon name={item.icon} size={18} />}
+                {item.lead ?? (item.icon && <Icon name={item.icon} size={18} />)}
                 <span class="menu-label">
                   <span>{item.label}</span>
                   {item.description && <small>{item.description}</small>}

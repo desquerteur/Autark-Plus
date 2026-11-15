@@ -154,32 +154,12 @@
   .chat-live::after { content: attr(data-names); }
 }
 
-/* Live work and calls use the chat's existing disclosure pattern. */
+/* The working popover's task line (WorkingPopover.tsx). */
 .working-task { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin: 6px 0; font-size: 12px; }
 .working-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.working-update { display: flex; align-items: baseline; gap: 7px; width: 100%; text-align: left; color: var(--secondary); line-height: 1.5; }
-.working-update > .icon { flex-shrink: 0; }
-.working-update > span { min-width: 0; overflow-wrap: anywhere; }
-.working-message.stopped .working-update { color: var(--muted); } /* the person stopped it: the block stays, quieter */
-.working-history { padding: 6px 0 0 19px; overflow-wrap: anywhere; white-space: pre-wrap; }
-/* D5 live block (WorkingMessage.tsx): the step lines right under the byline (no rail; the icons start at
-   the byline's x), an update clamped to two lines, then the live line in a fixed one-line slot that
-   shimmers like a working caption – the block grows only by whole 24 px step lines. */
-.working-message > .run-items.live-steps { margin: 0 0 0 -4px; padding: 0; border: 0; }
-.working-message > .run-items.live-steps .run-item.commentary .run-item-text {
-  display: -webkit-box; margin: 2px 0 2px 4px; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--secondary);
-}
-.working-update.live { align-items: center; min-height: 24px; font-size: 13px; }
-.working-update.live > .working-text {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal;
-  background: var(--shimmer-text) 0 0 / 250% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent; animation: wf-shimmer 2.2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) { .working-update.live > .working-text { animation: none; background: none; color: var(--secondary); } }
-@media (pointer: coarse) { .message :is(.live-steps, .run-disclosure) .run-item-head { min-height: 32px; } }
-/* a call in the log is an event line like .status-line.toggle (size, colour, caret column, hover) */
-.call-transcript { min-width: 0; margin: 0 0 12px; }
-.call-transcript-toggle { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; min-height: 24px; margin-left: -2px; padding: 0 6px 0 2px; border-radius: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: left; }
+/* a call in the log is an event line like .status-line.toggle (size, colour, caret column, hover); call.css owns the
+   call row itself (.call-transcript, the card and the toggle's place in it) */
+.call-transcript-toggle { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; min-height: 24px; padding: 0 6px 0 2px; border-radius: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: left; }
 .call-transcript-toggle:hover { background: var(--hover); color: var(--secondary); }
 .call-transcript-toggle > span { min-width: 0; overflow-wrap: anywhere; }
 .call-transcript-toggle > time { flex: none; opacity: .8; font-size: 11px; }
@@ -256,6 +236,8 @@ button.author-name:hover { text-decoration: underline; text-underline-offset: 2p
 .status-line time { flex: none; opacity: .8; font-size: 11px; }
 .status-line.toggle { width: fit-content; padding: 0 6px 0 2px; margin-left: -2px; border-radius: 6px; }
 .status-line.toggle:hover { background: var(--hover); color: var(--secondary); }
+/* B-080: a task's line opens the task (MessageItem.tsx StatusLineRow) – only an underline on hover, nothing moves */
+.status-line.open:hover > span:not(.status-count) { text-decoration: underline; text-underline-offset: 3px; }
 .status-count { flex: none; margin-left: -4px; font-size: 11px; } /* "+4" belongs to the line's text: closer to it than to the time */
 /* a single line without a caret marks the caret's column with a quiet dot (where a caret's point is), so
    every event line starts at the column's edge and its text at the same x */
@@ -312,20 +294,6 @@ button.author-name:hover { text-decoration: underline; text-underline-offset: 2p
 /* zero-height sticky dock at the end of the column: the pill floats at the bottom of the visible part */
 .new-pill-dock { position: sticky; bottom: 12px; z-index: 2; display: flex; align-items: flex-end; justify-content: center; height: 0; pointer-events: none; }
 .new-pill { pointer-events: auto; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-popover); font-weight: 500; }
-
-/* ---------------------------------------------------------------- run disclosure (C5, D5)
-   the quiet "Worked 2 min · 6 steps" line ABOVE an agent answer, under its byline (RunDisclosure.tsx);
-   it opens the run's step lines of team.css in place. The anchor has no height until the line exists. */
-.run-disclosure { min-width: 0; }
-.run-disclosure-toggle {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 24px; margin: 0 0 4px -2px; padding: 0 6px 0 2px;
-  border-radius: 6px; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: left;
-}
-.run-disclosure-toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-disclosure-toggle:hover { background: var(--hover); color: var(--secondary); }
-.run-disclosure-toggle[aria-expanded=true] { color: var(--secondary); }
-.run-disclosure > .run-items { margin: 0 0 8px 7px; padding-left: 10px; }
-@media (pointer: coarse) { .run-disclosure-toggle { min-height: 36px; } }
 
 /* ---------------------------------------------------------------- reply and edit
    the quote line above a reply and, with its cancel button, above the composer field (ReplyQuote.tsx);

@@ -12,13 +12,18 @@
 // or the workspace – except a CLI that is itself an agent (Copilot CLI): it can run commands and write
 // files, so each of its windows starts in a new empty folder below `agentRoot`, and nothing it leaves
 // becomes project config for the processes that start in `cwd`.
-// B-051 L4: the headless sign-ins (Codex, Claude Code) pipe stdout and stderr (stdin stays closed); the
+// B-051 L4: the headless sign-ins (Codex, Claude Code) pipe stdout and stderr (stdin stays closed, except B-091's away Claude Code); the
 // sign-in page URL they print (sign-in-url.ts: the first https URL on a known sign-in host) is kept in
 // memory with the running process – gone when it exits – and login() waits up to URL_WAIT_MS for it, so
 // the person can open the page when the CLI could not open a browser. Every other byte is dropped unread.
+// B-091: an "away" sign-in (the person is on their phone, not at this PC) of Codex or Claude Code finishes on the
+// phone: Codex runs `login --device-auth` and hands back the page and its one-time code; Claude Code runs as usual
+// with stdin piped and BROWSER set to a harmless no-op (nothing opens on the PC) and hands back the page with
+// `paste` – the code the page shows the person comes back through code(), written to the CLI's stdin. Away
+// sign-ins live up to AWAY_MS (device codes expire after 15 min), the others LOGIN_MS.
 // Owns: running sign-in processes, their sign-in page while they run, and the open terminal sign-ins.
 // Never: reads tokens, files in the account home or what the person types in the terminal; never logs or
-// stores the sign-in URL (it only goes back to the caller of login()).
+// stores the sign-in URL, the one-time code or a pasted code (they only go back to the caller / into the CLI).
 
 import os from 'node:os';
 import * as path from 'node:path';
@@ -33,26 +38,39 @@ import { childEnv } from '../engines/codex/server.ts';
 import { acpHomeEnv, acpProvider } from '../engines/acp/providers.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 
-/** `agent`: the CLI is itself an agent, so each window starts in a new empty folder (SignIns.agentFolder). */
-interface Flow { login: string[]; logout?: string[]; terminal?: true; agent?: true }
+/**
+ * `agent`: the CLI is itself an agent, so each window starts in a new empty folder (SignIns.agentFolder).
+ * `away` (B-091): the sign-in finished on another device – its args, and `paste` when the page's code comes back by code().
+ */
+interface Flow { login: string[]; logout?: string[]; terminal?: true; agent?: true; away?: { args: string[]; paste?: true } }
 type Action = 'login' | 'logout';
 
 const FLOWS: Partial<Record<ProviderId, Flow>> = {
-  codex: { login: ['login'], logout: ['logout'] },
-  claude: { login: ['auth', 'login', '--claudeai'], logout: ['auth', 'logout'] },
+  codex: { login: ['login'], logout: ['logout'], away: { args: ['login', '--device-auth'] } },
+  claude: { login: ['auth', 'login', '--claudeai'], logout: ['auth', 'logout'], away: { args: ['auth', 'login', '--claudeai'], paste: true } },
   copilot: { login: [], terminal: true, agent: true },
   'kimi-cli': { login: ['login'], terminal: true },
 };
 /** The executable of a provider's CLI (Kimi Code's is `kimi`). */
 const cliOf = (provider: ProviderId): CliId => acpProvider(provider)?.cli ?? provider as CliId;
 const LOGIN_MS = 5 * 60_000;
+export const AWAY_MS = 15 * 60_000;
+/** How long code() waits for the CLI to take the pasted code and end. */
+export const CODE_WAIT_MS = 60_000;
 const LOGOUT_MS = 15_000;
 export const RECHECK_MS = 30 * 60_000;
 /** How long login() waits for the sign-in page URL a headless sign-in prints (B-051 L4). */
 export const URL_WAIT_MS = 4_000;
+/** BROWSER for an away sign-in: a program that opens nothing (where.exe without arguments only prints an error). */
+const noBrowser = (env: NodeJS.ProcessEnv): string => process.platform === 'win32' ? path.win32.join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe') : '/usr/bin/true';
 
-/** A running sign-in or sign-out process; `url`/`printed`: a headless sign-in's page and when it printed it (or ended). */
-interface Running { lease: Lease; action: Action; url?: string; printed?: Promise<void> }
+/**
+ * A running sign-in or sign-out process; `url`/`printed`: a headless sign-in's page and when it printed it (or ended);
+ * `away`/`code`/`paste` (B-091): a sign-in finished on another device, its one-time code, its page's code goes to stdin;
+ * `ended`: the process ended and its account check is done.
+ */
+interface Running { lease: Lease; action: Action; url?: string; printed?: Promise<void>; away?: boolean; code?: string; paste?: true; ended?: Promise<void> }
+export type SignInStart = { started: boolean; url?: string; code?: string; paste?: true };
 
 /** The variables that point a CLI at the account's own home (none for the default CLI home; Kimi Code's KIMI_CODE_HOME from the ACP table). */
 export function homeEnv(account: Pick<Account, 'provider' | 'home'>): Record<string, string> {
@@ -94,33 +112,57 @@ export class SignIns {
 
   constructor(deps: SignInDeps) { this.deps = deps; }
 
-  /** `url` (with `page`): the sign-in page a headless sign-in printed within URL_WAIT_MS (also for one that already runs). */
-  async login(account: Account, page = true): Promise<{ started: boolean; url?: string }> {
+  /**
+   * `url` (with `page`): the sign-in page a headless sign-in printed within URL_WAIT_MS (also for one that already runs).
+   * `away` (B-091, Codex and Claude Code): the person finishes it on another device – with `code` or `paste` (see the header);
+   * a running sign-in of the other kind is replaced – only by the person's own call (`page`): an agent's never ends theirs.
+   */
+  async login(account: Account, page = true, away = false): Promise<SignInStart> {
     const flow = FLOWS[account.provider];
     if (!flow) return { started: false };
-    if (this.running.get(account.id)?.action === 'login') return page ? this.started(account.id) : { started: true };
+    const far = away && flow.away !== undefined;
+    const running = this.running.get(account.id);
+    if (running?.action === 'login' && (Boolean(running.away) === far || !page)) return page ? this.started(account.id) : { started: true };
     const exe = await this.deps.finder.find(cliOf(account.provider));
     if (!exe) throw new WorkforceError('unavailable', `${this.deps.label(account.provider)} is not installed.`);
-    const lease = await this.start(account, flow, 'login', exe);
+    const lease = await this.start(account, flow, 'login', exe, far);
     if (!flow.terminal) {
-      const timer = setTimeout(() => { void lease.release(); }, LOGIN_MS);
+      const timer = setTimeout(() => { void lease.release(); }, far ? AWAY_MS : LOGIN_MS);
       timer.unref?.();
       void lease.exited.then(() => clearTimeout(timer));
     }
     return page ? this.started(account.id) : { started: true };
   }
 
+  /**
+   * B-091: the code the sign-in page showed the person, written to the running away Claude Code sign-in; resolves once
+   * it ended and its account was checked (at most CODE_WAIT_MS) – ok: the account works now. The code is never kept.
+   */
+  async code(id: string, code: string): Promise<{ ok: boolean }> {
+    const entry = this.running.get(id);
+    const stdin = entry?.paste ? entry.lease.child.stdin : null;
+    if (!entry?.ended || !stdin) throw new WorkforceError('not_found', 'The sign-in ended – start it again.');
+    stdin.write(`${code.trim()}\n`);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([entry.ended, new Promise<void>((resolve) => { timer = setTimeout(resolve, CODE_WAIT_MS); timer.unref?.(); })]);
+    clearTimeout(timer);
+    const state = this.deps.state(id);
+    return { ok: state === 'ok' || state === 'cooling' };
+  }
+
   /** The running sign-in's page, waiting at most urlWaitMs for it to be printed (none once the process ended). */
-  private async started(id: string): Promise<{ started: true; url?: string }> {
+  private async started(id: string): Promise<SignInStart> {
     const entry = this.running.get(id);
     const wait = this.deps.urlWaitMs ?? URL_WAIT_MS;
-    if (entry?.printed && entry.url === undefined && wait > 0) {
+    const missing = () => entry?.url === undefined || (entry.away === true && !entry.paste && entry.code === undefined);
+    if (entry?.printed && missing() && wait > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([entry.printed, new Promise<void>((resolve) => { timer = setTimeout(resolve, wait); timer.unref?.(); })]);
       clearTimeout(timer);
     }
     const url = this.running.get(id) === entry ? entry?.url : undefined;
-    return url ? { started: true, url } : { started: true };
+    if (!url) return { started: true };
+    return { started: true, url, ...(entry?.code ? { code: entry.code } : {}), ...(entry?.paste ? { paste: true as const } : {}) };
   }
 
   /** 'window': a sign-out that continues in a terminal (checked like a sign-in); 'done': signed out or no CLI. */
@@ -158,28 +200,33 @@ export class SignIns {
     await Promise.all(leases.map((lease) => lease.release()));
   }
 
-  private async start(account: Account, flow: Flow, action: Action, exe: Executable): Promise<Lease> {
+  private async start(account: Account, flow: Flow, action: Action, exe: Executable, away = false): Promise<Lease> {
     await this.running.get(account.id)?.lease.release(); // a sign-in replaces an open sign-out window and vice versa
     const extra = homeEnv(account);
-    const env = childEnv(this.deps.env ?? process.env, extra);
+    const paste = away ? flow.away?.paste : undefined;
+    const base = this.deps.env ?? process.env;
+    const env = childEnv(base, paste ? { ...extra, BROWSER: noBrowser(base) } : extra);
     const owner = `${action}:${account.id}`;
     const title = `${this.deps.label(account.provider)} ${action === 'login' ? 'sign-in' : 'sign-out'}`;
     const cwd = flow.agent ? await this.agentFolder() : this.deps.cwd ?? os.tmpdir();
-    const args = flow[action] ?? [];
+    const args = (away ? flow.away?.args : undefined) ?? flow[action] ?? [];
     const page = action === 'login' && !flow.terminal; // B-051 L4: a headless sign-in prints its page
     const lease = flow.terminal
       ? await openTerminal({ supervisor: this.deps.supervisor, ...this.deps.terminal }, { exe, args, env, extra, title, cwd }, owner)
-      : this.deps.supervisor.spawn({ command: exe.command, args: [...exe.prefixArgs, ...args], owner, kind: 'light', cwd, env, stdio: page ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'] });
-    const entry: Running = { lease, action };
+      : this.deps.supervisor.spawn({ command: exe.command, args: [...exe.prefixArgs, ...args], owner, kind: 'light', cwd, env, stdio: page ? [paste ? 'pipe' : 'ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'] });
+    if (paste) lease.child.stdin?.on('error', () => undefined); // a code written after the CLI closed its stdin (EPIPE)
+    const entry: Running = { lease, action, ...(away ? { away } : {}), ...(paste ? { paste } : {}) };
     if (page) {
       let printed: () => void = () => {};
       entry.printed = new Promise<void>((resolve) => { printed = resolve; });
-      watchSignInUrl([lease.child.stdout, lease.child.stderr], (url) => { entry.url = url; printed(); });
-      void lease.exited.then(() => { entry.url = undefined; printed(); }); // gone with the process
+      const wantCode = away && !paste; // Codex device sign-in: the page and its one-time code
+      const shown = () => { if (entry.url && (!wantCode || entry.code)) printed(); };
+      watchSignInUrl([lease.child.stdout, lease.child.stderr], (url) => { entry.url = url; shown(); }, wantCode ? (code) => { entry.code = code; shown(); } : undefined);
+      void lease.exited.then(() => { entry.url = undefined; entry.code = undefined; printed(); }); // gone with the process
     }
     this.running.set(account.id, entry);
     if (flow.terminal) this.open.set(account.id, { since: this.deps.now(), action });
-    void lease.exited.then(async () => {
+    entry.ended = lease.exited.then(async () => {
       if (this.running.get(account.id)?.lease === lease) this.running.delete(account.id);
       if (!this.disposed && (action === 'login' || flow.terminal)) await this.settle(account.id);
     });

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { after } from 'node:test';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { ProtocolHandlers, PRIVILEGED_SCHEMES, registerProtocolHandlers } from '../../../src/main/protocols/handlers.ts';
-import { APP_CSP, SANDBOX_CSP, routeAppUrl, routeSandboxUrl } from '../../../src/main/protocols/rules.ts';
+import { APP_CSP, SANDBOX_CSP, ortDirOf, routeAppUrl, routeSandboxUrl, turnFilePath } from '../../../src/main/protocols/rules.ts';
 
 const root = mkdtempSync(path.join(os.tmpdir(), 'wf-protocols-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -118,4 +118,30 @@ test('scheme registration covers all three protocols', () => {
   const registered: string[] = [];
   registerProtocolHandlers({ handle: scheme => { registered.push(scheme); } }, handlers);
   assert.deepEqual(registered, ['app', 'wf-sandbox', 'wf-file']);
+});
+
+test('B-082: app://app/turn/<name> streams the ort files and a downloaded turn model by fixed name only', async () => {
+  const dist = path.join(root, 'node_modules', 'onnxruntime-web', 'dist');
+  mkdirSync(dist, { recursive: true });
+  mkdirSync(path.join(root, 'data', 'models', 'speech', 'smart-turn-v3.2-cpu'), { recursive: true });
+  writeFileSync(path.join(dist, 'ort-wasm-simd-threaded.wasm'), new Uint8Array([0, 0x61, 0x73, 0x6d]));
+  writeFileSync(path.join(dist, 'ort.node.min.js'), 'not served');
+  writeFileSync(path.join(root, 'data', 'models', 'speech', 'smart-turn-v3.2-cpu', 'smart-turn-v3.2-cpu.onnx'), 'turn');
+  assert.deepEqual(routeAppUrl('app://app/turn/silero_vad.onnx'), { kind: 'turn', name: 'silero_vad.onnx' });
+  const wasm = await handlers.app(get('app://app/turn/ort-wasm-simd-threaded.wasm'));
+  assert.equal(wasm.status, 200);
+  assert.equal(wasm.headers.get('content-type'), 'application/wasm');
+  assert.equal(wasm.headers.get('content-security-policy'), null);
+  assert.equal((await wasm.arrayBuffer()).byteLength, 4);
+  const turn = await handlers.app(get('app://app/turn/smart-turn-v3.2-cpu.onnx'));
+  assert.equal(await turn.text(), 'turn');
+  assert.equal((await handlers.app(get('app://app/turn/smart-turn-v3.2-cpu.onnx', { method: 'HEAD' }))).headers.get('content-length'), '4');
+  for (const url of ['app://app/turn/silero_vad.onnx', 'app://app/turn/ort.node.min.js', 'app://app/turn/main.js', 'app://app/turn/..%2f..%2fdata%2fsecret.txt', 'app://app/turn/']) {
+    const response = await handlers.app(get(url));
+    assert.equal(response.status, 404, url);
+  }
+  assert.equal(turnFilePath('x/../silero_vad.onnx', { ortDir: 'o', speechDir: 's' }), null);
+  assert.equal(turnFilePath('silero_vad.onnx', { ortDir: 'o', speechDir: 's' }), path.join('s', 'silero-vad', 'silero_vad.onnx'));
+  assert.equal(ortDirOf(path.join('C:', 'Autark', 'resources', 'app.asar')), path.join('C:', 'Autark', 'resources', 'app.asar.unpacked', 'node_modules', 'onnxruntime-web', 'dist'));
+  assert.match(APP_CSP, /script-src 'self' 'wasm-unsafe-eval';/);
 });

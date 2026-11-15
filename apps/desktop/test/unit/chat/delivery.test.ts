@@ -14,7 +14,6 @@ import type { DecisionRequest, DecisionResult, DecisionService } from '../../../
 import { Notifications } from '../../../src/runtime/notify/service.ts';
 import { SettingsStore } from '../../../src/runtime/settings/service.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
-import { HUMAN_WROTE_NOTE } from '../../../src/runtime/tasks/transitions.ts';
 import { setReplyMode } from '../../../src/runtime/chat/reply-modes.ts';
 import { NOBODY, PICKED_NOTE } from '../../../src/runtime/chat/responders.ts';
 import { agent, harness, tick } from './harness.ts';
@@ -148,19 +147,18 @@ test('priority important asks the dispatcher to interrupt the woken agents – a
 test('a message to an agent whose task waits on the person wakes it for that task with a note', () => {
   const t = team();
   const task = t.tasks.create({ conversationId: t.chat.id, title: 'Book the venue', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: HUMAN_ID });
-  t.tasks.setStatus(task.id, 'needs_you', 'ag_mara', 'Which date?');
+  t.tasks.update(task.id, { status: 'waiting' as const, waitingOn: { on: 'who' as const, who: 'human', why: 'Which date?' } }, 'ag_mara');
   t.clear();
   t.say('@Mara Friday works');
-  assert.deepEqual(t.wakeRows().map((row) => [row.agent_id, row.task_id, row.note]), [['ag_mara', task.id, HUMAN_WROTE_NOTE]]);
+  assert.deepEqual(t.wakeRows().map((row) => [row.agent_id, row.task_id, row.note]), [['ag_mara', task.id, null]]);
 });
 
-test('status lines, answers, silent and streaming messages wake nobody', () => {
+test('status lines, answers and silent messages wake nobody', () => {
   const t = team();
   t.clear();
   t.chats.status(t.chat.id, { type: 'note', text: 'Switched model' });
   t.say('quiet', { silent: true });
   t.say('my answer', { kind: 'answer' });
-  t.chats.beginAgentMessage(t.chat.id, 'ag_tom', 'run_1');
   assert.deepEqual(t.woken(), []);
 });
 

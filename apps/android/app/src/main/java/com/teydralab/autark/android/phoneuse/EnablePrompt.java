@@ -1,7 +1,8 @@
-// Owns: the one notification that asks the person to turn phone use on – "Let the AI use this phone": one tap opens
-// Android's Accessibility settings (Autark › Use this phone). A sideloaded app on Android 13+ first needs App info › ⋮ ›
-// Allow restricted settings – the notification says so and has App info as its second button. At most once in 10 minutes.
-// Never: turns anything on itself.
+// Owns: the one notification that asks the person to turn phone use on – "Let the AI use this phone": one tap opens the
+// in-app disclosure (UseDisclosure) first and, once the person agreed, Android's Accessibility settings (Autark › Use this
+// phone). A sideloaded app on Android 13+ first needs Settings › Apps › Autark › ⋮ › Allow restricted settings – the notification says so
+// and has App info as its second button (not for an install from Google Play). At most once in 10 minutes; not at all in the
+// build without phone use. Never: turns anything on itself, or sends the person to the settings before the disclosure.
 package com.teydralab.autark.android.phoneuse;
 
 import android.app.Notification;
@@ -25,11 +26,12 @@ public final class EnablePrompt {
     /** The text of the prompt (also shown in the app when it is open). */
     public static String text() {
         return Build.VERSION.SDK_INT >= 33
-                ? "Tap, then Autark › Use this phone. Greyed out? First App info › ⋮ › Allow restricted settings."
-                : "Tap, then Autark › Use this phone.";
+                ? "Tap to read what this does, then Accessibility › Use this phone. Greyed out or \"restricted setting\"? First Settings › Apps › Autark › ⋮ › Allow restricted settings (names can differ by phone maker)."
+                : "Tap to read what this does, then Autark › Use this phone.";
     }
 
     public static void show(Context context) {
+        if (!UseConsent.available(context)) return;
         long now = System.currentTimeMillis();
         if (now - shownAt < AGAIN_MS) return;
         shownAt = now;
@@ -37,7 +39,8 @@ public final class EnablePrompt {
         if (manager == null) return;
         if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(new NotificationChannel(CHANNEL, "Phone use", NotificationManager.IMPORTANCE_DEFAULT));
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
-        PendingIntent settings = PendingIntent.getActivity(context, 1, new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags);
+        // The disclosure comes first; once agreed it passes on to the settings itself.
+        PendingIntent settings = PendingIntent.getActivity(context, 1, new Intent(context, UseDisclosure.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags);
         PendingIntent appInfo = PendingIntent.getActivity(context, 2, new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.fromParts("package", context.getPackageName(), null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);

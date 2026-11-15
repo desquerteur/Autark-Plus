@@ -147,3 +147,21 @@ test('chats.direct: the owner\'s default 1:1 as a summary, for the owner and cha
   assert.equal((await owner.request('chats.direct', { memberId: 'ag_nobody' })).error?.code, 'not_found');
   assert.equal((await phone.request('chats.export', { conversationIds: [summary.id] })).error?.code, 'forbidden'); // track F built it: owner only
 });
+
+test('chats.create with one member and no title: a new untitled chat beside the default 1:1, never the 1:1 itself (regression 12.11.2026)', async (t) => {
+  const f = rpcFixture({ table: createHandlerTable() });
+  t.after(f.cleanup);
+  f.org.add(agent('ag_tom', 'Tom'));
+  const owner = new TestClient(f.server, OWNER);
+  const direct = await owner.call<ConversationSummary>('chats.direct', { memberId: 'ag_tom' });
+  const first = await owner.call<{ id: string }>('chats.create', { agentIds: ['ag_tom'] }); // what the new-chat dialog sends without a topic
+  const second = await owner.call<{ id: string }>('chats.create', { agentIds: ['ag_tom'] });
+  assert.equal(new Set([direct.id, first.id, second.id]).size, 3, 'each "Start chat" makes its own chat');
+  for (const id of [first.id, second.id]) {
+    const chat = f.chats.get(id)!;
+    assert.equal(chat.title, '', 'untitled: each viewer sees the other member\'s name until the first message names it');
+    assert.equal(isDirect(chat), false, 'not marked as the default 1:1');
+    assert.deepEqual(f.chats.members(id).map((m) => m.memberId).sort(), ['ag_tom', 'human']);
+  }
+  assert.equal((await owner.call<ConversationSummary>('chats.direct', { memberId: 'ag_tom' })).id, direct.id, '"Message" still opens the same 1:1');
+});

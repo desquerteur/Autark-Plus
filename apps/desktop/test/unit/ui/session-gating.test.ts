@@ -91,8 +91,12 @@ test('a phone: the org, chats and tasks on the phone; PC-local controls are not 
   assert.equal(can('usage.list'), true, 'quota badges have data on the phone');
   assert.equal(blockedNote('secrets.list'), undefined, 'B-078: a paired phone holds permissions (secure transport)');
   assert.equal(can('accounts.login'), true);
+  assert.equal(can('accounts.loginCode'), true, 'B-091: the Claude page\'s code from the phone');
   assert.equal(blockedNote('agents.create'), undefined);
-  for (const method of ['pwa.state', 'secrets.delete'] as MethodName[]) assert.equal(can(method), false, method);
+  // 12.11.2026 (mobile settings, owner "Einstellungen am Handy vollständig"): a secure owner phone edits and deletes catalog
+  // entries; the plaintext export stays on the PC.
+  for (const method of ['pwa.state', 'secrets.export'] as MethodName[]) assert.equal(can(method), false, method);
+  assert.equal(can('secrets.delete'), true, 'secrets.delete');
 });
 
 test('full-access phone with the permissions tier on a secure transport: permissions, secrets (create) and spend', () => {
@@ -101,7 +105,8 @@ test('full-access phone with the permissions tier on a secure transport: permiss
     assert.equal(can(method), true, method);
     assert.equal(blockedNote(method), undefined, method);
   }
-  assert.equal(can('secrets.delete'), false, 'deleting a secret stays on the PC');
+  assert.equal(can('secrets.delete'), true, 'deleting a catalog entry from the secure owner phone');
+  assert.equal(can('secrets.export'), false, 'the plaintext export stays on the PC');
 });
 
 test('phone on plain LAN http: sensitive controls say to open the HTTPS address; the rest works', () => {
@@ -112,6 +117,7 @@ test('phone on plain LAN http: sensitive controls say to open the HTTPS address;
     assert.equal(can(method), false, method);
     assert.equal(blockedNote(method), HTTPS_NOTE, method);
   }
+  assert.equal(can('secrets.delete'), false, 'no deleting secrets over plain LAN http');
   assert.equal(can('agents.create'), true, 'only the sensitive set needs a secure transport');
   assert.equal(blockedNote('pwa.state'), PC_NOTE, 'PC-local controls keep the PC note');
   // Without the tier, plain http changes nothing about the note: the tier is missing first.

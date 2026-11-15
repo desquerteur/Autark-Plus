@@ -36,7 +36,7 @@ export function looksLikeCard(value: string): boolean {
   return sum % 10 === 0;
 }
 
-interface SaveArgs { ref: string; label: string; purpose: string; kind?: (typeof KINDS)[number]; route?: string; tags?: string[]; tab?: string }
+interface SaveArgs { ref: string; name: string; description: string; kind?: (typeof KINDS)[number]; route?: string; tags?: string[]; tab?: string }
 
 async function saveSecret(browser: BrowserService, args: SaveArgs, ctx: ToolContext): Promise<ToolOutput> {
   if (args.tab?.startsWith('web-') || !browser.isOpen(ctx.agent.id)) return failure(OWN_ONLY);
@@ -50,16 +50,16 @@ async function saveSecret(browser: BrowserService, args: SaveArgs, ctx: ToolCont
   const same = held.length ? secrets.list().find((entry) => entry.id === held[0]) : undefined;
   if (same) return json({ ok: true, id: same.id, handle: `secret://${same.id}`, name: same.label, note: 'That value is already stored; use this handle.' });
   const source = registrableDomain(page.host);
-  const own = secrets.list().find((info) => !info.group && info.createdBy === ctx.agent.id && info.kind !== 'totp' && sameName(info.label, args.label));
+  const own = secrets.list().find((info) => !info.group && info.createdBy === ctx.agent.id && info.kind !== 'totp' && sameName(info.label, args.name));
   const kind = args.kind ?? (looksLikeCard(value) ? 'card' : page.password ? 'password' : 'api_key');
   const saved = await secrets.save({
-    ...(own ? { id: own.id, label: own.label, kind: own.kind } : { label: args.label, kind, createdBy: ctx.agent.id }),
-    value, description: args.purpose, ...(source ? { source } : {}), ...(args.route ? { route: args.route } : {}), ...(args.tags ? { tags: args.tags } : {}),
+    ...(own ? { id: own.id, label: own.label, kind: own.kind } : { label: args.name, kind, createdBy: ctx.agent.id }),
+    value, description: args.description, ...(source ? { source } : {}), ...(args.route ? { route: args.route } : {}), ...(args.tags ? { tags: args.tags } : {}),
   });
   return json({ ok: true, id: saved.id, handle: `secret://${saved.id}`, name: saved.label, kind: saved.kind, note: own ? 'My secret of that name took the new value; the handle is the same.' : 'Stored in the secrets catalog: use it by handle anywhere (browser.act value, a command\'s env, a web.fetch header).' });
 }
 
-async function saveTotp(browser: BrowserService, args: { tab?: string; group?: string; label?: string }, ctx: ToolContext): Promise<ToolOutput> {
+async function saveTotp(browser: BrowserService, args: { tab?: string; group?: string; name?: string }, ctx: ToolContext): Promise<ToolOutput> {
   if (args.tab?.startsWith('web-') || !browser.isOpen(ctx.agent.id)) return failure(OWN_ONLY);
   ctx.status('saving a 2FA key');
   const page = await browser.setupKeys(ctx.agent.id, { tab: args.tab, use: useOf(ctx) });
@@ -81,7 +81,7 @@ async function saveTotp(browser: BrowserService, args: { tab?: string; group?: s
   const totp = { ...(old ? { id: old.id } : {}), field: old?.field ?? 'totp', kind: 'totp' as const, value: toOtpauth(page.keys[0]!) };
   const saved = group
     ? await secrets.saveGroup({ id: group.id, fields: [totp] })
-    : await secrets.saveGroup({ label: args.label?.trim() || `${ctx.agent.name} · ${domain}`, kind: 'login', source: domain, tags: [`for the web at ${domain}`], fields: [totp] }, { createdBy: ctx.agent.id });
+    : await secrets.saveGroup({ label: args.name?.trim() || `${ctx.agent.name} · ${domain}`, kind: 'login', source: domain, tags: [`for the web at ${domain}`], fields: [totp] }, { createdBy: ctx.agent.id });
   const field = saved.fields.find((info) => info.kind === 'totp')!;
   const { digits, period } = page.keys[0]!;
   return json({ ok: true, group: saved.group.id, label: saved.group.label, handle: `secret://${field.id}`, digits, period, note: 'Fill the code field with this handle (browser.act value "secret://<id>"); every fill types the current code.' });
@@ -90,33 +90,33 @@ async function saveTotp(browser: BrowserService, args: { tab?: string; group?: s
 export function secretTools(browser: BrowserService): ToolDef[] {
   const save = defineTool<SaveArgs>({
     name: 'browser.save_secret',
-    description: 'Store a value shown in my own browser in the secrets catalog without seeing it – a key, token, password or card field. Give its ref, a name and a description. Only the handle comes back; it works everywhere. The same value is never saved twice; my own secret of that name takes the new value.',
+    description: 'Stores a value shown in my own browser in the secrets catalog without my seeing it. Only the handle comes back; the same value is never saved twice.',
     inputSchema: {
       type: 'object',
       properties: {
-        ref: { type: 'string', minLength: 1, maxLength: 24, description: 'the field or element from browser.snapshot, e.g. "e12"' },
-        label: { type: 'string', minLength: 1, maxLength: 120, description: 'its name, e.g. "Stripe – live secret key"' },
-        purpose: { type: 'string', minLength: 1, maxLength: 4000, description: 'what it opens or is for and when to use it' },
-        kind: { type: 'string', enum: [...KINDS], description: 'default: card for a card number, password for a password field, else api_key' },
-        route: { type: 'string', maxLength: 40, description: 'the catalog route (logins, payment, keys, servers, notes or my own); default: chosen for me' },
+        ref: { type: 'string', minLength: 1, maxLength: 24, description: 'The field, e.g. "e12".' },
+        name: { type: 'string', minLength: 1, maxLength: 120 },
+        description: { type: 'string', minLength: 1, maxLength: 4000, description: 'What it opens and when it is used.' },
+        kind: { type: 'string', enum: [...KINDS], description: 'Default from the field.' },
+        route: { type: 'string', maxLength: 40 },
         tags: { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 12 },
         tab: TAB_PROP,
       },
-      required: ['ref', 'label', 'purpose'], additionalProperties: false,
+      required: ['ref', 'name', 'description'], additionalProperties: false,
     },
     category: 'write_local', requires: 'device',
-    describe: (args) => ({ summary: `Save the value of element ${clip(args.ref, 24)} as the secret "${clip(args.label.replace(/["\s]+/g, ' '), 60)}"`, reversible: true, external: false }),
+    describe: (args) => ({ summary: `Save the value of element ${clip(args.ref, 24)} as the secret "${clip(args.name.replace(/["\s]+/g, ' '), 60)}"`, reversible: true, external: false }),
     run: (args, ctx) => saveSecret(browser, args, ctx),
   });
-  const totp = defineTool<{ tab?: string; group?: string; label?: string }>({
+  const totp = defineTool<{ tab?: string; group?: string; name?: string }>({
     name: 'browser.save_totp',
-    description: 'Turn on authenticator 2FA for an account: on the site\'s 2FA setup page in my own browser (choose the authenticator app, then "enter key manually"), store the shown key in my login for this site without seeing it. Returns the handle that fills the current code (browser.act value "secret://<id>").',
+    description: 'Turns on authenticator 2FA for an account and stores its key without my seeing it. It works on the 2FA setup page in my own browser with "enter key manually" open; the handle it returns fills the current code.',
     inputSchema: {
       type: 'object',
       properties: {
         tab: TAB_PROP,
-        group: { type: 'string', maxLength: 64, description: 'a stored login (secrets.list); default: my login for this site, else a new one' },
-        label: { type: 'string', minLength: 1, maxLength: 120, description: 'name of a new login, e.g. "Example – support account"' },
+        group: { type: 'string', maxLength: 64, description: 'A stored login; default my login for this site, else a new one.' },
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'Name of a new login.' },
       },
       additionalProperties: false,
     },

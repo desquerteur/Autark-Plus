@@ -30,7 +30,7 @@ function setup() {
   Object.assign(f.services, { secrets: vault });
   const ask = () => {
     const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-    const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body: `Please log me in:\n${FORM}`, state: 'final' });
+    const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body: `Please log me in:\n${FORM}`, state: 'final' });
     const [todo] = f.tasks.ingestBlocks(message, uiBlocksOf(message.body).map((entry) => entry.block));
     return { chat, message, todo };
   };
@@ -75,7 +75,7 @@ test('plain LAN http is refused before anything is stored; the owner may answer 
   await f.client(TODO_ONLY).call('blocks.answer', { messageId: other.message.id, blockIndex: 0, answer: { values: { user: 'ada' } } });
   assert.equal(f.tasks.get(other.todo.id)?.status, 'done');
 
-  await f.client(OWNER).call('tasks.complete', { id: todo.id, answer: { values: { user: 'ada', password: 'pw-from-desk' } } });
+  await f.client(OWNER).call('tasks.finish', { id: todo.id, answer: { values: { user: 'ada', password: 'pw-from-desk' } } });
   assert.equal(f.tasks.get(todo.id)?.status, 'done');
   const [stored] = f.vault.list();
   assert.ok(!f.everything().includes('pw-from-desk'));
@@ -110,7 +110,7 @@ test('retries never pile up copies: an answered to-do stores nothing, a repeat r
   // The reply was lost: Send again (new clientId), then once more from the PC's For-you list.
   const again = await phone.call<{ taskId?: string }>('blocks.answer', { messageId: message.id, blockIndex: 0, answer: { values: { user: 'ada', password: 'second-pw-2' } }, clientId: 'up_2' });
   assert.equal(again.taskId, todo.id, 'the answered to-do comes back');
-  await f.client(OWNER).call('tasks.complete', { id: todo.id, answer: { values: { password: 'third-pw-3' } } });
+  await f.client(OWNER).call('tasks.finish', { id: todo.id, answer: { values: { password: 'third-pw-3' } } });
   assert.deepEqual(f.vault.list().map((info) => info.id).sort(), stored, 'no extra copies');
   const passwordId = f.vault.list().find((info) => info.kind === 'password')!.id;
   assert.equal(await f.vault.use(passwordId, 'ag_ava', 'login.shop.example'), 'first-pw-1', 'the first answer stands');
@@ -118,7 +118,7 @@ test('retries never pile up copies: an answered to-do stores nothing, a repeat r
 
   // A form without a to-do behind it (never ingested): a repeat replaces the value under the same id.
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-  const loose = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_2').id, { body: FORM, state: 'final' });
+  const loose = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_2', { body: FORM, state: 'final' });
   const ref = { messageId: loose.id, blockIndex: 0 };
   const one = await captureSecrets(f.services, ref, { values: { password: 'loose-1' } }, { secure: true }) as { values: { password: string } };
   const two = await captureSecrets(f.services, ref, { values: { password: 'loose-2' } }, { secure: true }) as { values: { password: string } };
@@ -142,7 +142,7 @@ test('a failing answer removes the secrets it added; a finished to-do\'s chat bl
 
   const owner = f.client(OWNER);
   assert.deepEqual(await owner.call('blocks.state', ref), { state: null }, 'open while the to-do is open');
-  await owner.call('tasks.complete', { id: todo.id, answer: { values: { user: 'ada', password: 'kept-pw' } } });
+  await owner.call('tasks.finish', { id: todo.id, answer: { values: { user: 'ada', password: 'kept-pw' } } });
   const { state } = await owner.call<{ state: { answered?: boolean; summary?: string } }>('blocks.state', ref);
   assert.equal(state.answered, true, 'answered in the For-you list: the chat form does not invite a second entry');
   assert.ok(state.summary);

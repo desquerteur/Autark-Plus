@@ -101,6 +101,8 @@ export const SECTIONS: readonly SectionDef[] = [
     text('language', 'The language the agents speak with you (starts as this PC\'s; the AI sets it when you speak another)', 'a language code such as "en" or "de"', { pattern: PATTERNS.language, default: fromPc('language') }),
     text('timezone', 'Your time zone', 'an IANA time zone such as "Europe/Berlin"', { maxLength: 64, default: fromPc('timezone') }),
     text('notes', 'How you want to be spoken to, kept by the AI (a language per topic, a form of address) – every agent reads it', `text up to ${NOTES_MAX} characters`, { maxLength: NOTES_MAX, default: '' }),
+    // B-085: chosen on the first run's About card; absent = whole. New hires read it into their SYSTEM.md; nothing enforces it.
+    { key: 'pcAccess', about: 'How far the team goes on its own on this PC: whole = anywhere, careful = freely in its own folders and checks with you before changes elsewhere (null: whole)', type: 'string', options: ['whole', 'careful'] },
   ] },
   { key: 'preferences', title: 'Window and app', keys: [
     choice('theme', 'Colour scheme of the window', ['system', 'light', 'dark'], 'system'),
@@ -169,8 +171,8 @@ export const SECTIONS: readonly SectionDef[] = [
   { key: 'feedback', title: 'Feedback reports', keys: [
     flag('includeDiagnostics', 'Unused since B-078: every report carries the end of the app\'s log, redacted', true),
   ] },
-  { key: 'library', title: 'Public skill library (library/ in github.com/teydra/OpenAutark)', keys: [
-    flag('publish', 'Skills worth sharing go to the public library as a pull request with your own GitHub sign-in, after the secret check finds nothing', true),
+  { key: 'library', title: 'Public skill library (library.openautark.com)', keys: [
+    flag('publish', 'Skills and notes worth sharing go to the public library (free for everyone, no sign-in), after the checks find nothing internal or secret', true),
   ] },
   { key: 'onboarding', title: 'First run', keys: [
     flag('completed', 'Whether the first run is finished', false),

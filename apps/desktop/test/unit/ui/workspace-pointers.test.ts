@@ -1,14 +1,15 @@
 // B-055 Q8: named cursors over a live view (ui/workspace/pointer-overlay.ts) – the surface of a
 // chat's browser and of an agent's own, which pointers a view draws (its surface's, live, never the
 // person's own), a page point mapped onto the letterboxed picture, a move replayed along the motion
-// model's path (shared/model/pointer-motion.ts planMotion), and the person's own pointer throttled to about 8 reports a second (the newest position wins).
+// model's path (shared/model/pointer-motion.ts planMotion) with the AI cursor's lean, an agent's jump drawn as a glide
+// from where its cursor is (B-081), and the person's own pointer throttled to about 8 reports a second (the newest position wins).
 // Owns: these assertions. Never: a DOM, a runtime or a real timer.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planMotion } from '../../../src/shared/model/pointer-motion.ts';
 import { POINTER_TTL_MS, type PointerPoint } from '../../../src/shared/model/pointers.ts';
-import { createPointerReporter, pagePointInView, pathMs, positionAt, shownPointers, viewSurface } from '../../../src/ui/workspace/pointer-overlay.ts';
+import { createPointerReporter, drawnAt, drawnPath, pagePointInView, pathMs, positionAt, shownPointers, viewSurface } from '../../../src/ui/workspace/pointer-overlay.ts';
 
 const at = (actor: PointerPoint['actor'], x: number, y: number, when: number, surface = 'chat:c1/t1'): PointerPoint => ({ surface, actor, x, y, at: when });
 
@@ -41,15 +42,36 @@ test('a page point lies on the letterboxed picture (CSS px of the page → px in
 test('a move is replayed along the path the agent\'s mouse took', () => {
   const path = planMotion({ x: 0, y: 0 }, { x: 400, y: 100 }, { style: 'glide', seed: 3 });
   const total = pathMs(path);
-  assert.ok(total > 0 && total <= 420, 'a glide is short');
-  assert.deepEqual(positionAt(path, -5), { x: path[0]!.x, y: path[0]!.y }, 'before the start: its first point');
-  assert.deepEqual(positionAt(path, total + 50), { x: 400, y: 100 }, 'after it: the target');
+  assert.ok(total > 0 && total <= 300, 'a glide is short');
+  assert.deepEqual(positionAt(path, -5), { x: path[0]!.x, y: path[0]!.y, r: 0 }, 'before the start: its first point');
+  assert.deepEqual(positionAt(path, total + 50), { x: 400, y: 100, r: 0 }, 'after it: the target');
   const middle = positionAt(path, total / 2)!;
   assert.ok(middle.x > 0 && middle.x < 400, 'under way');
   const steps = [{ x: 0, y: 0, t: 0 }, { x: 10, y: 20, t: 100 }];
-  assert.deepEqual(positionAt(steps, 50), { x: 5, y: 10 }, 'between two steps: in between');
+  assert.deepEqual(positionAt(steps, 50), { x: 5, y: 10, r: 0 }, 'between two steps: in between (no lean without one)');
+  assert.deepEqual(positionAt([{ x: 0, y: 0, t: 0, r: 10 }, { x: 10, y: 0, t: 100, r: 0 }], 25), { x: 2.5, y: 0, r: 7.5 }, 'the lean in between too');
   assert.equal(positionAt([], 10), undefined);
   assert.equal(pathMs(undefined), 0);
+});
+
+test('B-081: an agent\'s jump glides from where its cursor is drawn and leans; a person\'s pointer stays as it came', () => {
+  const ada = { kind: 'agent' as const, id: 'ag_ada', name: 'Ada' };
+  const jump: PointerPoint = { ...at(ada, 500, 300, 1), path: [{ x: 500, y: 300, t: 0 }] };
+  const glide = drawnPath(jump, { x: 100, y: 280 })!;
+  assert.ok(glide.length > 5 && pathMs(glide) > 150 && pathMs(glide) <= 300, `a short glide (${glide.length} steps, ${pathMs(glide)} ms)`);
+  assert.deepEqual(glide.at(-1), { x: 500, y: 300, t: pathMs(glide), r: 0 }, 'ending exactly at the point, upright');
+  assert.ok(glide.some((step) => (step.r ?? 0) > 5), 'leaning while it moves right');
+  assert.deepEqual(drawnPath({ ...jump, path: undefined }, { x: 500, y: 300 }), [{ x: 500, y: 300, t: 0, r: 0 }], 'already there: nothing to travel');
+  assert.deepEqual(drawnPath(jump), [{ x: 500, y: 300, t: 0, r: 0 }], 'nothing drawn before: it appears at its point');
+  const travelled: PointerPoint = { ...at(ada, 400, 100, 2), path: planMotion({ x: 0, y: 0 }, { x: 400, y: 100 }, { style: 'glide' }) };
+  const own = drawnPath(travelled, { x: 900, y: 900 })!;
+  assert.deepEqual(own.map(({ x, y, t }) => ({ x, y, t })), travelled.path, 'a real path is drawn as it came, with the lean added');
+  const mara = { ...at({ kind: 'person', id: 'p_mara', name: 'Mara' }, 50, 50, 3), path: [{ x: 50, y: 50, t: 0 }] };
+  assert.equal(drawnPath(mara, { x: 0, y: 0 }), mara.path, 'a person never glides or leans');
+  assert.deepEqual(drawnAt({ x: 1, y: 2 }, glide, pathMs(glide) + 1), { x: 1, y: 2, r: 0 }, 'arrived: at its point, upright');
+  assert.deepEqual(drawnAt({ x: 1, y: 2 }, undefined, 0), { x: 1, y: 2, r: 0 });
+  const mid = drawnAt({ x: 500, y: 300 }, glide, pathMs(glide) / 2);
+  assert.ok(mid.x > 100 && mid.x < 500 && mid.r > 0, 'under way: between, leaning');
 });
 
 test("the person's pointer: the first move at once, then at most one report per 125 ms, the newest wins", () => {

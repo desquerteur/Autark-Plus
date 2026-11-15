@@ -11,6 +11,8 @@
 // that fails says so on screen (no endless spinner, one reload at most for the worker); the code screen keeps the
 // screen awake and the wait survives a lock; Forget removes this phone on the PC first (phone.forget, ≤ 3 s); a PC that
 // refuses the token shows "This phone was removed", PCs that stop answering add Forget to the waiting screen.
+// B-087: a new channel tells the PC UI at once (window.autarkResume → lib/rpc.ts checkAlive), as the Android app's
+// 'resume' does, so its socket does not wait out rpc's backoff after the PC came back.
 // Owns: the start order and the autarkHosted object. Never: logs or shows the token, or runs the PC UI before the marker
 // check passed once.
 
@@ -176,7 +178,7 @@ async function run(screens: Screens, store: HostedStore, saved: Saved): Promise<
   };
   const connection = new Connection({
     saved,
-    status: (text) => screens.status(text),
+    status: (text, connected) => { screens.status(text); if (connected) (window as { autarkResume?: () => void }).autarkResume?.(); },
     pcsChanged: (pcs) => void store.savePcs(pcs),
     refused: () => { gone = true; connection.stop(); screens.removed(() => void clearHere()); },
     unanswered: (on) => screens.offerForget(on),

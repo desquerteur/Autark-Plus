@@ -27,7 +27,7 @@ export async function checkTodo(task: TaskView): Promise<boolean> {
   const check = checkAnswer(task);
   if (!check) return false;
   try {
-    applyTodo(await rpc.call('tasks.complete', { id: task.id, clientId: newId('up'), ...(check.answer === undefined ? {} : { answer: check.answer }) }));
+    applyTodo(await rpc.call('tasks.finish', { id: task.id, clientId: newId('up'), ...(check.answer === undefined ? {} : { answer: check.answer }) }));
     return true;
   } catch (error) {
     toastError(error, 'Could not complete');
@@ -56,12 +56,13 @@ export async function removeTodo(task: TaskView): Promise<boolean> {
   }
 }
 
+/** An own to-do goes to the one owner Autark picks now (tasks.give "team"). */
 export async function sendToTeam(task: TaskView): Promise<void> {
   try {
-    applyTodo(await rpc.call('day.sendToTeam', { id: task.id }));
-    pushToast({ title: 'Sent to the team' }, 3000);
+    applyTodo(await rpc.call('tasks.give', { id: task.id, to: 'team' }));
+    pushToast({ title: 'Given on – Autark picked its owner' }, 3000);
   } catch (error) {
-    toastError(error, 'Could not send it to the team');
+    toastError(error, 'Could not give it on');
   }
 }
 

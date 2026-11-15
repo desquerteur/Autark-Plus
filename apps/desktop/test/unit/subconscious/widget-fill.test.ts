@@ -15,7 +15,6 @@ import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
 import { SubconsciousImpl } from '../../../src/runtime/subconscious/service.ts';
 import { WIDGET_DECISION_MS, chooseWidget } from '../../../src/runtime/subconscious/widget.ts';
 import { dueFromText, fillFromText, fillSchema, fillWithModel, gapsOf, keywordWidget, textWidget } from '../../../src/runtime/subconscious/widget-fill.ts';
-import { humanReasonFor } from '../../../src/runtime/tasks/widgets.ts';
 import { fakeDecisions } from '../context/fixture.ts';
 
 const NOW = new Date(2026, 9, 20, 9, 0).getTime(); // a Tuesday, 9:00 local time
@@ -125,7 +124,6 @@ test('model-made form fields keep a fill kind: secret kinds are dropped, a selec
     { name: 'phone', label: 'Phone', kind: 'text' },
     { name: 'branch', label: 'Branch', kind: 'text' },
   ]);
-  assert.equal(humanReasonFor(filled), 'taste', 'no secret field, so no credential to-do');
 });
 
 test('the schema follows the PropSpec: enums keep their values, lists are string arrays, every prop is nullable', () => {

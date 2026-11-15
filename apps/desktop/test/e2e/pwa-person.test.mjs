@@ -42,7 +42,7 @@ test('a person joins from an invite link in a phone browser and works in her own
   const anna = await owner.call('people.save', { name: 'Anna Berg', title: 'Designer', scopes: { spaces: 'all', startChats: true, assignAgents: true } });
   const chat = await owner.call('chats.create', { title: 'Launch plan', agentIds: [agent.id], people: [anna.id] });
   await owner.call('chats.create', { title: 'Owner only room', agentIds: [agent.id] });
-  await owner.call('tasks.create', { conversationId: chat.id, title: 'Pick the colours', assigneeKind: 'human', assigneeId: anna.id });
+  await owner.call('tasks.create', { conversationId: chat.id, title: 'Pick the colours', to: anna.id });
   const invite = await owner.call('people.invite', { id: anna.id });
 
   const browser = await chromium.launch({ channel, headless: true });
@@ -54,7 +54,7 @@ test('a person joins from an invite link in a phone browser and works in her own
   await phone.locator('.access-request', { hasText: 'Waiting to be let in' }).waitFor({ timeout: 30_000 });
   assert.ok(!(await phone.evaluate(() => location.hash)).includes('join='), 'the ticket left the address bar');
   const todo = await until(async () => (await owner.call('todos.list')).find((entry) => entry.title.startsWith('Let ') && entry.title.endsWith('join as Anna Berg · Designer?')), 'the owner\'s decision to-do');
-  await owner.call('tasks.complete', { id: todo.id, answer: { choice: 'Allow' } });
+  await owner.call('tasks.finish', { id: todo.id, answer: { choice: 'Allow' } });
   await phone.locator('.mobile-shell').waitFor({ timeout: 60_000 });
   await phone.locator('text=Pick the colours').first().waitFor({ timeout: 30_000 });
   assert.ok(!(await owner.call('todos.list')).some((entry) => entry.title === 'Pick the colours'), 'not on the owner\'s For you');

@@ -88,7 +88,7 @@ function ScheduleRow(props: { schedule: Schedule }) {
         <span class="details-schedule-meta tabular">
           {schedule.active
             ? schedule.nextAt ? <time dateTime={new Date(schedule.nextAt).toISOString()} title={fullDate(schedule.nextAt)}>Next {whenText(schedule.nextAt)}</time> : 'No next run'
-            : 'Paused'}
+            : schedule.pausedBy ? 'Paused' : 'Ended' /* B-080: a stopped schedule nobody paused has used up its runs */}
           {schedule.payload.silent ? ' · Silent' : schedule.payload.priority === 'important' && ' · Important'}
           {owner && ` · ${owner}`}
         </span>

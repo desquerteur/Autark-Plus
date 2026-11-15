@@ -24,7 +24,6 @@ import { can } from '../lib/session.ts';
 import { activity, agentName, conversations, isMobile, settings, todoClock, todos } from '../lib/store.ts';
 import { useAsync } from '../settings/controls.tsx';
 import { chatRouteAllowed } from '../shell/gates.ts';
-import { liveGroupsOf } from '../splits/split-model.ts';
 import { doneTasks, ensureDone } from '../tasks/done-store.ts';
 import { jumpToMessage, openTask, useWorkClock } from '../tasks/jump.ts';
 import { WorkReport } from '../tasks/WorkRegions.tsx';
@@ -122,10 +121,8 @@ function WorkBlock(props: { now: number; since: number }) {
   );
 }
 
-/** Who works in a chat, named as its header does: its live rows, then its running split groups (a split run has no row). */
-const workingOf = (chat: Pick<ConversationSummary, 'id' | 'working' | 'live'>) => workingIds(chat, [
-  ...liveRuns(chat), ...liveGroupsOf(chat.id).map((group) => ({ agentId: group.agentId, conversationId: chat.id, note: '' })),
-]);
+/** Who works in a chat, named as its header does (its live bar, split parts folded into their group). */
+const workingOf = (chat: Pick<ConversationSummary, 'id' | 'working' | 'live'>) => workingIds(chat, liveRuns(chat));
 
 export function DayOverview(props: { calendar?: boolean }) {
   const workNow = useWorkClock();

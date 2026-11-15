@@ -14,13 +14,13 @@ export function spendRef(args: { what: string; receipt?: string; renewal?: strin
 
 const note = defineTool<{ amount: number; currency: string; what: string; kind?: (typeof KINDS)[number]; receipt?: string; renewal?: string }>({
   name: 'spend.note',
-  description: 'Book money I spent, so anyone can trace it: the amount, what it was and why, where the receipt is (file id, path or order number) and when a subscription renews.',
+  description: 'Books money I spent, so anyone can trace it.',
   inputSchema: {
     type: 'object',
     properties: {
-      amount: { type: 'number', minimum: 0 }, currency: { type: 'string', description: 'ISO code such as EUR' },
-      what: { type: 'string', minLength: 1, maxLength: 120 }, kind: { type: 'string', enum: [...KINDS] },
-      receipt: { type: 'string', maxLength: 120 }, renewal: { type: 'string', maxLength: 20 },
+      amount: { type: 'number', minimum: 0 }, currency: { type: 'string', description: 'ISO code.' },
+      what: { type: 'string', minLength: 1, maxLength: 120, description: 'What and why.' }, kind: { type: 'string', enum: [...KINDS] },
+      receipt: { type: 'string', maxLength: 120, description: 'File id, path or order number.' }, renewal: { type: 'string', maxLength: 20, description: 'When a subscription renews.' },
     },
     required: ['amount', 'currency', 'what'], additionalProperties: false,
   },

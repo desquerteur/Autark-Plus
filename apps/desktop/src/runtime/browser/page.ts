@@ -159,7 +159,10 @@ export function translateError(error: unknown, target: BrowserTarget | undefined
   if (/Timeout \d+ms exceeded|TimeoutError/i.test(message)) {
     const reasons = ['not visible', 'not enabled', 'not editable', 'not stable', 'intercepts pointer events', 'detached', 'waiting for locator', 'waiting for navigation']
       .filter((reason) => message.includes(reason));
-    const why = reasons.includes('intercepts pointer events') ? 'something else covers it (a dialog or banner?)'
+    // Playwright names the element on top ("<div class="cookie">…</div> … intercepts pointer events") – say it, so the
+    // agent knows what to dismiss or click first, instead of guessing a dialog or banner.
+    const cover = /(<[a-zA-Z][^\n>]{0,200}?>)[^\n]{0,200}?intercepts pointer events/.exec(message);
+    const why = reasons.includes('intercepts pointer events') ? (cover ? `${cover[1].slice(0, 160)} lies over it` : 'something else covers it')
       : reasons.includes('not visible') ? 'it is not visible'
         : reasons.includes('not enabled') ? 'it is disabled'
           : reasons.includes('not editable') ? 'it is not editable'

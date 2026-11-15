@@ -14,7 +14,7 @@ import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { ChatServiceImpl } from '../../../src/runtime/chat/service.ts';
 import { DeliveryServiceImpl } from '../../../src/runtime/chat/delivery.ts';
 import { TaskServiceImpl } from '../../../src/runtime/tasks/service.ts';
-import { OwnershipServiceImpl } from '../../../src/runtime/tasks/ownership.ts';
+import { TaskWatcher } from '../../../src/runtime/tasks/watch.ts';
 import { WakeQueueImpl } from '../../../src/runtime/wakes/queue.ts';
 import { SchedulerImpl } from '../../../src/runtime/schedules/scheduler.ts';
 import { Journal } from '../../../src/runtime/runs/journal.ts';
@@ -25,7 +25,6 @@ import { outputText } from '../../../src/runtime/engines/shared.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import { taskTools } from '../../../src/runtime/tools/builtin/tasks.ts';
 import { scheduleTools } from '../../../src/runtime/tools/builtin/schedule.ts';
-import { humanTools } from '../../../src/runtime/tools/builtin/human.ts';
 import { verifyResult } from '../../../src/runtime/subconscious/verify.ts';
 import type { NotificationService, RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { EngineTurnInput } from '../../../src/runtime/engines/types.ts';
@@ -64,7 +63,7 @@ class LiveOrg extends FakeOrg {
   }
 }
 
-const TOOLS = new Map<string, ToolDef>([...taskTools, ...scheduleTools, ...humanTools].map((tool) => [tool.name, tool]));
+const TOOLS = new Map<string, ToolDef>([...taskTools, ...scheduleTools].map((tool) => [tool.name, tool]));
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
 export function boot(options: { agents: Agent[]; db?: Db; clock?: ManualClock; brain: Brain }) {
@@ -89,7 +88,7 @@ export function boot(options: { agents: Agent[]; db?: Db; clock?: ManualClock; b
   services.chats = new ChatServiceImpl(services);
   services.delivery = new DeliveryServiceImpl(services);
   services.tasks = new TaskServiceImpl(services);
-  services.ownership = new OwnershipServiceImpl(services);
+  services.ownership = new TaskWatcher(services, { set: () => 0, clear: () => {} });
   services.scheduler = new SchedulerImpl(services, { timers });
   services.runs = new Journal({ db, bus, clock });
 
@@ -153,7 +152,7 @@ export function boot(options: { agents: Agent[]; db?: Db; clock?: ManualClock; b
       },
     },
   });
-  const dispatcher = new DispatcherImpl({ services: () => services, executor: new TurnExecutor(() => services), supervisor: { admit: async () => () => {} }, maxConcurrent: 2 });
+  const dispatcher = new DispatcherImpl({ services: () => services, executor: new TurnExecutor(() => services) });
   services.dispatcher = dispatcher;
 
   /** Lets turns, microtasks and immediates run until nothing is running or due (bounded). */

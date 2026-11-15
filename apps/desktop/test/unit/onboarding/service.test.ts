@@ -1,7 +1,7 @@
 // First run, runtime side (runtime/onboarding/service.ts, brief.ts): start() ends the layer – step 'done'
-// and completed, the Manager's first chat (made when there is none) and the app's start text there as the person's
-// line (the shipped resources/prompts/onboarding.md, or the fallback), which wakes the Manager as an ordinary
-// message; reset() opens the layer again at 'ai'. The line's own cases: start-line.test.ts.
+// and completed, the Manager's first chat (made when there is none) and B-090 the Manager's first message there (the
+// shipped resources/prompts/onboarding.md, or the fallback), which wakes nobody – the person's answer is the first
+// turn; reset() opens the layer again at 'ai'. The line's own cases: start-line.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,17 +28,17 @@ function setup(options: { prompts?: boolean } = {}) {
   return { ...h, services, settings, make };
 }
 
-/** Passive or holding-back wording the start text must never carry. */
+/** Passive or holding-back wording the first message must never carry. */
 const PASSIVE = /facts only|no steps|not ahead of it|never change|approval|permission mode/i;
-/** The person's lines in a chat. */
-const ownLines = (h: ReturnType<typeof setup>, conversationId: string) => h.chats.messages(conversationId).filter((message) => message.authorId === HUMAN_ID);
+/** The Manager's lines in a chat. */
+const managerLines = (h: ReturnType<typeof setup>, conversationId: string, managerId: string) => h.chats.messages(conversationId).filter((message) => message.authorId === managerId);
 
-test('start(): step done and completed, the Manager\'s first chat, the start text as the person\'s line and one message wake – also when asked twice', () => {
+test('start(): step done and completed, the Manager\'s first chat and its first message there; nobody wakes – also when asked twice', () => {
   const h = setup({ prompts: true });
   const onboarding = h.make();
   assert.equal(h.settings.get().onboarding.step, 'tour', 'a new install starts with the feedback tour');
   const manager = h.org.add(agent('ag_boss', 'Manager', { mode: 'manager', template: 'manager', createdAt: 1 }));
-  h.settings.update({ profile: { name: 'Lena Hess', company: '' } });
+  h.settings.update({ profile: { name: 'Lena Hess', company: '', language: 'en' } });
 
   const { conversationId } = onboarding.start();
   const chat = h.chats.list().find((entry) => entry.id === conversationId);
@@ -46,26 +46,22 @@ test('start(): step done and completed, the Manager\'s first chat, the start tex
   assert.deepEqual(chat.members.filter((member) => member.kind === 'agent').map((member) => member.memberId), [manager.id]);
   assert.deepEqual(h.settings.get().onboarding, { completed: true, step: 'done' }, 'the first run completes the onboarding itself');
 
-  assert.equal(h.wakeRows().filter((row) => row.reason === 'setup').length, 0, 'no setup wake');
-  const rows = h.wakeRows().filter((row) => row.reason === 'message');
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].agent_id, manager.id);
-  assert.equal(rows[0].conversation_id, conversationId);
-  const [line] = ownLines(h, conversationId);
-  assert.match(line.body, /^Automatic message from the app, not typed by me: I just installed Autark, entered Lena Hess and clicked Start\./, 'an empty company leaves no gap');
-  assert.match(line.body, /How you go about it is your call\./, 'B-076: the way is the agent\'s');
-  assert.match(line.body, /Please set this up for me – you are my personal manager, my right hand\. Get to know me first: talk with me/, 'B-078: the personal manager starts with the person');
-  assert.match(line.body, /a head for each area my work really has[^.]*\. For parallel work you split yourself \(Ultra\) instead of hiring many agents\./);
-  assert.match(line.body, /the passwords saved in my browsers belong in the secrets catalog \(exported and imported unread\)/);
-  assert.match(line.body, /the models you run on now – for the work, for decisions, for search by meaning – can likely be better/);
-  assert.doesNotMatch(line.body, /First ask me|before you start|how far you go|belongs in your memory|Write to me in|German|English/, 'B-076: no "ask me first", nothing to store as a permission, no language order');
-  assert.equal(line.body.split('\n').length, 1, 'one line');
+  assert.equal(h.wakeRows().length, 0, 'B-090: no wake until the person answers');
+  assert.equal(h.chats.messages(conversationId).filter((message) => message.authorId === HUMAN_ID).length, 0, 'nothing in the person\'s name');
+  const [line] = managerLines(h, conversationId, manager.id);
+  assert.match(line.body, /^Hi Lena Hess, I'm your Manager – your right hand in Autark\./);
+  assert.match(line.body, /whatever stays open I decide myself/, 'every question is optional');
+  assert.match(line.body, /I build a head set up like me and working beside me; I stay your direct contact, and for parallel work I split myself \(Ultra\)/, 'B-078 structure');
+  assert.match(line.body, /The passwords saved in your browsers I move unread into the secrets catalog/);
+  assert.match(line.body, /which AI models carry us better – for the work, for decisions and for search by meaning/);
+  assert.match(line.body, /I keep your answers as agreements for the whole team\./);
+  assert.match(line.body, /If I should wait, just say so/);
   assert.equal(PASSIVE.test(line.body), false, `no passive or holding-back line: ${line.body}`);
   assert.equal(/\{\{|<!--/.test(line.body), false, 'no placeholder or maintainer note left');
 
   assert.deepEqual(onboarding.start(), { conversationId }, 'the same chat again');
-  assert.equal(ownLines(h, conversationId).length, 1, 'not posted twice');
-  assert.equal(h.wakeRows().filter((row) => row.reason === 'message').length, 1, 'no second wake while one waits');
+  assert.equal(managerLines(h, conversationId, manager.id).length, 1, 'not posted twice');
+  assert.equal(h.wakeRows().length, 0);
 });
 
 test('start() uses the Manager\'s existing first chat and refuses without a Manager; without the prompt templates the fallback text', () => {
@@ -75,8 +71,8 @@ test('start() uses the Manager\'s existing first chat and refuses without a Mana
   const manager = h.org.add(agent('ag_boss', 'Manager', { mode: 'manager', createdAt: 1 }));
   const first = h.chats.create({ title: 'Manager', agentIds: [manager.id], createdBy: 'human' });
   assert.equal(onboarding.start().conversationId, first.id);
-  const [line] = ownLines(h, first.id);
-  assert.match(line.body, /^Automatic message from the app, .* entered no name and clicked Start\./, 'without the prompt templates the fallback text');
+  const [line] = managerLines(h, first.id, manager.id);
+  assert.match(line.body, /^Hi, I'm your Manager/, 'without the prompt templates the fallback text');
   assert.equal(PASSIVE.test(line.body), false, line.body);
 });
 

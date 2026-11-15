@@ -1,9 +1,8 @@
 // RPC handlers: the spend journal and stored secrets.
 // Owns: param checks and scope rules. Phones reach secrets metadata and spend only with the opt-in
-// 'permissions' capability on a secure transport; from a phone a secret can only be created, never
-// overwritten or deleted. X05: grouped secrets (logins, cards) – secrets.groups and secrets.saveGroup on
-// the same tier (a phone only creates: no group or field ids, no removal), secrets.deleteGroup on the PC
-// only. Every secret is for every agent (no access lists); secrets.save carries the purpose (`description`);
+// 'permissions' capability on a secure transport. Secure owner devices also edit/remove catalog
+// entries, including grouped fields; colleague sessions have no such variant. Plaintext export stays
+// on the PC. Every secret is for every agent (no access lists); secrets.save carries the purpose (`description`);
 // secrets.folder (same tier) names the metadata files without a value and their quiet notices;
 // secrets.openFolder opens <data>/secrets on the PC (secrets/files.ts). Owner 04.11.2026: secrets.export (PC only, like
 // secrets.delete) writes the chosen entries with their values into one CSV file (secrets/export.ts) – only its path and
@@ -112,9 +111,6 @@ export function register(table: HandlerTable): void {
   table.add('secrets.save', async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id', 'label', 'kind', 'value', 'hint', 'route', 'tags', 'description']); // nobody restricts a secret to sites or agents
-    if (ctx.scope.kind === 'device' && o.id !== undefined && o.id !== null) {
-      throw new WorkforceError('forbidden', 'Stored secrets can only be changed on the PC.', { details: { param: 'id' } });
-    }
     const saved = await ctx.services.secrets.save({
       id: optId(o, 'id'),
       label: text(o, 'label', { max: 120 }),
@@ -152,7 +148,7 @@ export function register(table: HandlerTable): void {
   table.add('secrets.delete', (params, ctx) => {
     ctx.services.secrets.remove(id(input(params)));
     return { ok: true };
-  });
+  }, PERMISSIONS);
   table.add('secrets.export', async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['ids']);
@@ -166,9 +162,6 @@ export function register(table: HandlerTable): void {
     const o = input(params);
     onlyKeys(o, ['id', 'label', 'kind', 'description', 'route', 'tags', 'fields', 'remove']);
     const fields = groupFields(o);
-    if (ctx.scope.kind === 'device' && (o.id !== undefined && o.id !== null || o.remove !== undefined || fields?.some((field) => field.id !== undefined))) {
-      throw new WorkforceError('forbidden', 'Stored secrets can only be changed on the PC.', { details: { param: o.id !== undefined ? 'id' : o.remove !== undefined ? 'remove' : 'fields' } });
-    }
     const saved = await ctx.services.secrets.saveGroup({
       id: optId(o, 'id'), label: optText(o, 'label', { max: 120 }), kind: optOneOf(o, 'kind', GROUP_KINDS),
       description: optText(o, 'description', { max: 500, multiline: true, allowEmpty: true }),
@@ -180,7 +173,7 @@ export function register(table: HandlerTable): void {
   table.add('secrets.deleteGroup', (params, ctx) => {
     ctx.services.secrets.removeGroup(id(input(params)));
     return { ok: true };
-  });
+  }, PERMISSIONS);
 
   // ---------------------------------------------------------------- B-078 (D20): Fill login in the person's browser
   table.add('secrets.fillChoices', (params, ctx) => {

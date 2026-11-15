@@ -3,13 +3,17 @@
 // CEO or employee), the meeting server (rendezvous/service.ts), the peer listener other PCs dial
 // (http/peer-server.ts, with the router's port mapping – http/portmap.ts), the read-clear of phone notices
 // (pwa/read-clear.ts), and the device tools with their peer handlers (computer, browser, phone, devices.connect).
+// B-080: the agent's own browser also reads one page for web.fetch when a site turns the direct fetch away as a bot
+// (services.browserRead, browser/read-page.ts).
 // B-078: the owner's phone pairs like a PC (rendezvous/phone-pair.ts: Remote ID, the same code, Accept); phone.* tools
 // drive ADB phones and the Android app's phone use (phone/drivers.ts, phone/app-driver.ts) alike.
+// B-084: host 'online' nudges the meeting server too; a connect request's notice opens Settings › Devices (connect-signals.ts).
 // Settings read here (all in settings.json, changed by the AI – skill app-settings): devices.peer,
 // devices.peerPort, devices.findable, devices.relay (the meeting server), pwa.bind.
 // Owns: this wiring. Never: business logic.
 
 import type { RuntimeServices } from '../contracts.ts';
+import { connectNotice, nudgesMeeting } from './connect-signals.ts';
 import type { RemoteIncoming } from '../../shared/model/remote.ts';
 import type { PairingHttp } from '../http/types.ts';
 import { PeerServer, hasLinkedPc, rememberedPeerPort, type PeerMode } from '../http/peer-server.ts';
@@ -24,6 +28,7 @@ import { qrDataUrl } from '../pwa/qr.ts';
 import { REMOTE_KINDS, type RemoteService } from '../remote/service.ts';
 import type { ComputerService } from '../computer/service.ts';
 import type { BrowserService } from '../browser/service.ts';
+import { browserReader } from '../browser/read-page.ts';
 import { AdbPhone, adbOverride, type AdbDeps } from '../phone/adb.ts';
 import { AppPhones } from '../phone/app-driver.ts';
 import { mergedPhones } from '../phone/drivers.ts';
@@ -118,13 +123,7 @@ export function createDevices(input: DevicesInput): Devices {
   let peer: PeerServer | undefined;
   const post = (address: string, body: unknown, options: { timeoutMs: number; signal?: AbortSignal }) =>
     address.startsWith(RELAY_PREFIX) && meeting ? meeting.post(address, body, options) : postJson(address, body, options);
-  const notify = (view: RemoteIncoming) => {
-    const phone = view.role === 'phone';
-    s.notifications.notify({
-      kind: 'important', title: phone ? `Phone ${view.name} asks to connect · code ${view.code}` : `${view.name} wants to connect · code ${view.code}`,
-      body: `${view.role === 'employee' ? 'As an employee. ' : ''}Accept in Settings › Devices if ${phone ? 'the phone' : view.name} shows the same code.`,
-    });
-  };
+  const notify = (view: RemoteIncoming) => s.notifications.notify(connectNotice(view));
   const remote = new RemoteWithPhones({
     identity, clock: s.clock, bus: s.bus, log: s.log, mesh, findable, post, responder, notify, wellKnownAt,
     pair: (phone) => pwa.pairPhone(phone),
@@ -163,7 +162,7 @@ export function createDevices(input: DevicesInput): Devices {
   meeting = meet;
   listener.onChange((state) => { mesh.updateSelf({ addresses: state.addresses }); remote.refresh(); meet.portChanged(); });
   const offSettings = s.bus.on('settings.updated', () => remote.refresh());
-  const offPower = s.host.onPower((event) => { if (event === 'resume' || event === 'unlock') meet.nudge(); });
+  const offPower = s.host.onPower((event) => { if (nudgesMeeting(event)) meet.nudge(); });
   meet.start();
   remote.refresh();
 
@@ -172,6 +171,7 @@ export function createDevices(input: DevicesInput): Devices {
   const phone = mergedPhones(new AdbPhone({ ...input.adb, log: s.log, ...adbOverride() }), appPhones);
   for (const tool of deviceTools({ computer: input.computer, browser: input.browser, phone, link: { remote, meeting: meet } })) s.tools.register(tool);
   registerDeviceHandlers(mesh, { services: () => s, computer: input.computer });
+  s.browserRead = browserReader(input.browser); // B-080: web.fetch's way past a bot check, in every mode
 
   return {
     pwa, push, remote, meeting: meet, peer: listener, http,

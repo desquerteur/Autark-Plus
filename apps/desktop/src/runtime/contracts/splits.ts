@@ -13,7 +13,7 @@ export type { SeedArgs, SeedResult, SeedRoute } from '../splits/fork.ts';
 
 /** Where an agents.split call came from (the calling turn's facts – runtime-set, never the agent's text). */
 export interface SplitCreateContext { agentId: string; runId: string; conversationId?: string; taskId?: string; origin?: Origin;
-  thread: string; modeKey?: string; cwd?: string; split?: SplitTurn /* set when the caller is itself a split → refused */ }
+  thread: string; modeKey?: string; cwd?: string; split?: SplitTurn /* set when the caller is itself a part – B-083: its new parts join its own group */ }
 
 /**
  * How a split's run ended (turn-finish of a split turn). `retryable`: a limit, an outage or an engine error before effects.
@@ -27,11 +27,15 @@ export interface SplitRunEnd { runId: string; status: 'done' | 'failed' | 'stopp
 /** A running split lane of the dispatcher. */
 export interface SplitLane { agentId: string; splitId: string; runId: string }
 
-/** How far a group still at work is (SplitService.activeOn): its parts in total, done, running and ended otherwise (failed, stopped, skipped). */
-export interface SplitProgress { id: string; goal: string; status: 'pending' | 'running'; parts: number; done: number; running: number; ended: number }
+/**
+ * How far a group still at work is (SplitService.activeOn): its parts in total, done, running, waiting (B-080: not started
+ * yet – pending or queued) and ended otherwise (failed, stopped, skipped). B-080: `thread` and `conversationId` say where
+ * it was split, so a turn elsewhere names that chat.
+ */
+export interface SplitProgress { id: string; goal: string; thread: string; conversationId?: string; status: 'pending' | 'running'; parts: number; done: number; running: number; waiting: number; ended: number }
 
 export interface SplitService {
-  /** Validates and stores a group with its parts (status pending); they start when the calling turn ends. Throws WorkforceError (clear English message). */
+  /** Validates and stores a group with its parts (status pending); they start when the calling turn ends – B-083: a part's call adds parts to its own group, which start at once. Throws WorkforceError (clear English message). */
   create(ctx: SplitCreateContext, input: { goal: string; parts: SplitPartInput[] }): SplitGroupView;
   /** Turn-finish of every NON-split turn: pending groups of that run start ('done'/'failed') or are stopped ('stopped' by the person). */
   afterParentTurn(runId: string, status: 'done' | 'failed' | 'stopped'): void;
@@ -41,11 +45,11 @@ export interface SplitService {
   turnFor(splitId: string): SplitTurn | undefined;
   /** The worker's input notes: its brief and the results of the parts it depends on. */
   inputFor(splitId: string): Array<{ text: string; at: number }>;
-  /** The parent's "Split results" input block for its next turn on that thread (settled, not yet gathered groups). */
-  pendingResults(agentId: string, thread: string): { groupIds: string[]; text: string } | undefined;
-  /** The parent turn that got that block ended 'done': the groups are gathered. */
-  markGathered(runId: string, groupIds: string[]): void;
-  /** agents.split_results: the full results text of a group, one part, or the thread's newest group. */
+  /** The origin's "Split results" input block for its next turn on that thread: its parts there that ended and did not reach it yet. */
+  pendingResults(agentId: string, thread: string): { splitIds: string[]; text: string } | undefined;
+  /** The origin's turn that got that block ended 'done': those parts are gathered. */
+  markGathered(runId: string, splitIds: string[]): void;
+  /** agents.split_results: the full results text of one of the agent's groups (B-080: from any thread), one part, or its newest group (this thread's first). */
   results(agentId: string, q: { groupId?: string; idx?: number; thread?: string }): string;
   /**
    * Stops splits (running: aborted; waiting: stopped); returns how many. `by`: who stopped them. `taskId`: exactly the
@@ -54,7 +58,7 @@ export interface SplitService {
   stop(q: { splitId?: string; groupId?: string; agentId?: string; conversationId?: string; taskId?: string }, by: string): number;
   list(q: { agentId?: string; parentRunId?: string; groupId?: string; conversationId?: string; active?: boolean; limit?: number }): SplitGroupView[];
   get(splitId: string): { split: SplitView; group: SplitGroupView } | undefined;
-  /** Starts ready splits while lanes are free (event-driven: after create / afterParentTurn / a lane's end, onLaneFree). */
+  /** Starts ready splits up to the agent's runningPerAgent (event-driven: after create / afterParentTurn / a lane's end, onLaneFree). */
   pump(): void;
   /** Boot recovery: running splits queued again or failed, pending groups started or stopped, then pump. */
   reconcile(): void;
@@ -62,7 +66,7 @@ export interface SplitService {
   markBranch?(splitId: string, branch: NonNullable<SplitView['branch']>): void;
   /** B-057 S4: how the split's session was seeded (splits/fork.ts SeedResult → Split.fork), recorded by the turn pipeline at its first start. Optional for fakes. */
   markFork?(splitId: string, fork: NonNullable<SplitView['fork']>): void;
-  /** B-057 R1-4: the agent's groups still at work on `thread` (pending or running, newest first, at most `limit`) – the 'splits' line of its own turns there. Optional for fakes. */
+  /** B-057 R1-4: the agent's groups still at work (pending or running; B-080: from every thread, `thread`'s first, then newest first, at most `limit`) – the 'splits' line of its own turns. Optional for fakes. */
   activeOn?(agentId: string, thread: string, limit?: number): SplitProgress[];
 }
 
@@ -72,13 +76,13 @@ declare module '../contracts.ts' {
     splits?: SplitService;
   }
   interface Dispatcher {
-    /** B-057: start a split turn on its own lane `<agentId>#<splitId>`; 'busy' = no global slot / per-agent cap now (retry on onLaneFree). */
+    /** B-057: start a split turn on its own lane `<agentId>#<splitId>` at once; 'busy' = the agent's runningPerAgent reached, its lane still ending, or turns may not start now (retry on onLaneFree). */
     startSplit?(input: { agentId: string; splitId: string }): 'started' | 'busy' | 'refused';
     /** B-057: running split lanes of an agent (all when omitted). */
     splitLanes?(agentId?: string): SplitLane[];
     /** B-057: abort a running split lane (stop). */
     stopSplit?(splitId: string, why: 'human' | 'shutdown'): boolean;
-    /** B-057: `listener` runs whenever a lane or a global slot frees (the split service pumps then); returns its removal. */
+    /** B-057: `listener` runs whenever a lane frees or turns may start again (the split service pumps then); returns its removal. */
     onLaneFree?(listener: () => void): () => void;
   }
 }

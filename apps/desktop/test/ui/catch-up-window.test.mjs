@@ -72,14 +72,14 @@ test('Catch-up: 40 new messages show the divider and "↓ N new"', { timeout: 60
   const mia = await rpc.call('agents.create', { template: 'video-editor', name: 'Mia', managerId: manager.id });
   const chat = await rpc.call('chats.create', { title: 'Course launch', agentIds: [manager.id] });
   await rpc.call('events.subscribe', { topics: ['chats', 'tasks', `chat:${chat.id}`] });
-  const todo = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Write the launch post', assigneeKind: 'human' });
+  const todo = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Write the launch post' });
 
   const posts = Array.from({ length: TOOL_POSTS }, (_, i) => `[[tool:chat.send {"text":"Launch update ${i + 1}: edit pass ${i + 1} is finished"}]]`).join('\n');
   const ask = `[[ui:${JSON.stringify({ type: 'choice', question: 'Which thumbnail?', options: ['Bright', 'Dark'] })}]]`;
   const sent = await rpc.call('messages.send', { conversationId: chat.id, body: `Post the launch updates\n${posts}\n${ask}` });
   await rpc.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id
     && message.state === 'final' && message.seq > sent.seq && message.body.includes('chat.send'), 120_000);
-  await rpc.call('tasks.complete', { id: todo.id });
+  await rpc.call('tasks.finish', { id: todo.id });
   await rpc.call('chats.members', { id: chat.id, add: [mia.id] });
   const before = await rpc.call('chats.get', { id: chat.id });
   assert.ok(before.unread >= 40, `40 new messages are unread (${before.unread})`);

@@ -12,7 +12,7 @@ import { WorkforceError } from '../../../src/shared/errors.ts';
 const FILE_ID = 'c'.repeat(64);
 
 function account(patch: Partial<Account> = {}): Account {
-  return { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/openai/v1/', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch } as Account;
+  return { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/openai/v1/', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch } as Account;
 }
 
 /** Catalog entry of a speech-to-text specialist served by the account. */

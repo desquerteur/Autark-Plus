@@ -1,6 +1,6 @@
 // B-049 F6 – volatile deltas: a resumed native session gets only the volatile sections that changed since its last
-// finished turn (agents/volatile-delta.ts), with one line naming the unchanged ones and one the sections no longer
-// current; a new, renewed or rebuilt session gets them all. Unit cases on volatileDelta and its kv state, then the real
+// finished turn (agents/volatile-delta.ts), with one line naming the sections no longer current; a new, renewed or
+// rebuilt session gets them all. Unit cases on volatileDelta and its kv state, then the real
 // turn path (TurnExecutor, the real context service, a recording Codex-like engine with sessions): new session full,
 // resumed + unchanged, resumed + changed, a failed turn records nothing, a renewed session full again.
 // Owns: these assertions only. Never: real engines.
@@ -11,6 +11,7 @@ import { fixture, model } from '../context/fixture.ts';
 import { account } from '../models/harness.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
+import { journalAnswer } from '../../../src/runtime/agents/publishing.ts';
 import { forgetSent, recordSent, sectionTitle, sentTo, volatileDelta, type VolatileSection } from '../../../src/runtime/agents/volatile-delta.ts';
 import type { Engine, EngineCaps, EngineTurnInput, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
@@ -32,26 +33,26 @@ test('volatileDelta: a new session gets every section', () => {
   assert.equal(sectionTitle(s('x', 'no header')), 'no header');
 });
 
-test('volatileDelta: resumed – only changed sections in full, one line for the unchanged, one for the ones no longer current', () => {
+test('volatileDelta: resumed – only changed sections in full, one line for the ones no longer current', () => {
   const first = volatileDelta([NOW_1, PERMS, CHAT, TASK], undefined);
   const unchanged = volatileDelta([NOW_2, PERMS, CHAT, TASK], first.sections);
-  assert.equal(unchanged.text, `${NOW_2.text}\n\nUnchanged since my last turn: Permissions, This chat, Current task.`);
+  assert.equal(unchanged.text, NOW_2.text, 'nothing is said about what did not change');
   const changedPerms = s('permissions', '## Permissions\nFull autonomy: this PC belongs to the AI team.');
   const changed = volatileDelta([NOW_2, changedPerms, CHAT, PINNED], unchanged.sections);
-  assert.equal(changed.text, [changedPerms.text, PINNED.text, 'Unchanged since my last turn: Now, This chat.\nNo longer current: Current task.'].join('\n\n'));
+  assert.equal(changed.text, [changedPerms.text, PINNED.text, 'No longer current: Current task.'].join('\n\n'));
   assert.ok(!changed.text.includes('Standard: internal'), 'the old permissions are not repeated');
   assert.deepEqual(Object.keys(changed.sections), ['now', 'permissions', 'chat', 'pinned']);
   const again = volatileDelta([NOW_2, changedPerms, CHAT, PINNED], changed.sections);
-  assert.equal(again.text, 'Unchanged since my last turn: Now, Permissions, This chat, Pinned memory.');
+  assert.equal(again.text, '', 'nothing changed: nothing to send');
 });
 
 test('volatileDelta: a section whose builder threw keeps its last record – not "no longer current", not shown', () => {
   const first = volatileDelta([NOW_1, PERMS, PINNED], undefined);
   const broken = volatileDelta([NOW_2, PERMS, { name: 'pinned', text: '', failed: true }], first.sections);
-  assert.equal(broken.text, `${NOW_2.text}\n\nUnchanged since my last turn: Permissions.`);
+  assert.equal(broken.text, NOW_2.text);
   assert.deepEqual(broken.sections.pinned, first.sections.pinned, 'the session still holds the pinned memory it got');
   const back = volatileDelta([NOW_2, PERMS, PINNED], broken.sections);
-  assert.ok(back.text.includes('Unchanged since my last turn: Now, Permissions, Pinned memory.'));
+  assert.equal(back.text, '', 'back as it was: nothing to send');
   const fresh = volatileDelta([NOW_1, { name: 'pinned', text: '', failed: true }], undefined);
   assert.equal(fresh.text, NOW_1.text, 'a new session gets no empty failed section');
   assert.deepEqual(Object.keys(fresh.sections), ['now']);
@@ -121,8 +122,7 @@ test('turn path: new session full; resumed only what changed; a failed turn reco
   assert.equal((await h.turn()).status, 'done');
   const first = volatileOf(h.calls[0]);
   assert.equal(h.calls[0].session, undefined);
-  for (const header of ['## Now', '## This chat']) assert.ok(first.includes(header), `new session: ${header}`);
-  assert.ok(!first.includes('Unchanged since my last turn'));
+  for (const header of ['## Now', '## My chats']) assert.ok(first.includes(header), `new session: ${header}`);
 
   h.clock.advance(5 * 60_000);
   h.send('Next');
@@ -130,9 +130,7 @@ test('turn path: new session full; resumed only what changed; a failed turn reco
   const resumed = volatileOf(h.calls[1]);
   assert.equal(h.calls[1].session?.ref, 'codex-s1');
   assert.ok(resumed.includes('## Now'), 'the time changed');
-  assert.ok(!resumed.includes('## This chat'), resumed);
-  assert.match(resumed, /Unchanged since my last turn: [^\n]*This chat/);
-  assert.ok(resumed.includes('My final text'), 'the publishing line goes every turn');
+  assert.ok(!resumed.includes('## My chats'), 'stable chat lines: a new line in the waking chat is no news mark');
   assert.ok(resumed.length < first.length);
 
   h.tasks.create({ conversationId: h.chat.id, title: 'Cut the launch video', assigneeKind: 'agent', assigneeId: h.vic.id, createdBy: 'human' });
@@ -140,23 +138,21 @@ test('turn path: new session full; resumed only what changed; a failed turn reco
   h.send('And?');
   await h.turn();
   const failed = volatileOf(h.calls[2]);
-  assert.match(failed, /## My open tasks and promises\n- [^\n]*Cut the launch video/, 'a changed section goes in full');
+  assert.match(failed, /## My tasks\n- [^\n]*Cut the launch video/, 'a changed section goes in full');
   h.state.fail = false;
   h.send('Again');
   await h.turn();
-  assert.match(volatileOf(h.calls[3]), /## My open tasks and promises/, 'the failed turn recorded nothing: sent again');
+  assert.match(volatileOf(h.calls[3]), /## My tasks/, 'the failed turn recorded nothing: sent again');
   h.send('Once more');
   await h.turn();
-  assert.ok(!volatileOf(h.calls[4]).includes('## My open tasks and promises'), 'held after a finished turn');
-  assert.match(volatileOf(h.calls[4]), /Unchanged since my last turn: [^\n]*My open tasks and promises/);
+  assert.ok(!volatileOf(h.calls[4]).includes('## My tasks'), 'held after a finished turn');
 
-  h.chats.update(h.chat.id, { settings: { mode: 'computer' } }, 'human');
+  h.org.add({ ...h.org.require(h.vic.id), mode: 'computer' }); // the agent's own mode
   h.send('Take a screenshot');
   await h.turn();
   const renewed = h.calls[5];
   assert.equal(renewed.session, undefined, 'a renewed (new) session');
-  for (const header of ['## Now', '## This chat', '## My open tasks and promises']) assert.ok(volatileOf(renewed).includes(header), `renewed: ${header}`);
-  assert.ok(!volatileOf(renewed).includes('Unchanged since my last turn'));
+  for (const header of ['## Now', '## My chats', '## My tasks']) assert.ok(volatileOf(renewed).includes(header), `renewed: ${header}`);
 });
 
 test('turn path: after the engine compacted the session (result.compacted) the next turn gets every section again', async () => {
@@ -165,22 +161,21 @@ test('turn path: after the engine compacted the session (result.compacted) the n
   await h.turn();
   h.send('Next');
   await h.turn();
-  assert.match(volatileOf(h.calls[1]), /Unchanged since my last turn: [^\n]*This chat/, 'resumed: a delta');
+  assert.ok(!volatileOf(h.calls[1]).includes('## My chats'), 'resumed: a delta');
 
   h.state.compact = true; // a long turn: the engine compacted its history, the earlier context blocks may be gone
   h.send('A long job');
   assert.equal((await h.turn()).status, 'done');
-  assert.equal(sentTo(h.db, { agentId: h.vic.id, conversationId: h.chat.id, engine: 'codex' }, 'codex-s1'), undefined, 'nothing recorded after a compaction');
+  assert.equal(sentTo(h.db, { agentId: h.vic.id, conversationId: 'main', engine: 'codex' }, 'codex-s1'), undefined, 'nothing recorded after a compaction');
   h.state.compact = false;
   h.send('And now?');
   await h.turn();
   const after = h.calls[3];
   assert.equal(after.session?.ref, 'codex-s1', 'the same session resumes');
-  for (const header of ['## Now', '## This chat']) assert.ok(volatileOf(after).includes(header), `after compaction: ${header}`);
-  assert.ok(!volatileOf(after).includes('Unchanged since my last turn'), volatileOf(after));
+  for (const header of ['## Now', '## My chats']) assert.ok(volatileOf(after).includes(header), `after compaction: ${header}`);
   h.send('Then');
   await h.turn();
-  assert.match(volatileOf(h.calls[4]), /Unchanged since my last turn: [^\n]*This chat/, 'recorded again after a finished turn: deltas resume');
+  assert.ok(!volatileOf(h.calls[4]).includes('## My chats'), 'recorded again after a finished turn: deltas resume');
 });
 
 test('forgetSent: drops the record of that key only', () => {
@@ -192,4 +187,19 @@ test('forgetSent: drops the record of that key only', () => {
   forgetSent(f.db, key);
   assert.equal(sentTo(f.db, key, 'thr_1'), undefined);
   assert.deepEqual(sentTo(f.db, other, 'thr_2'), { now: { hash: 'b', title: 'Now' } });
+});
+
+test('turn path: a new session gets my latest answers from the run log right after the <live> block, not inside it', async () => {
+  const h = setup();
+  h.send('Hello');
+  await h.turn();
+  journalAnswer(h.services, 'run_1', 'Die Liste ist geprüft, drei Punkte offen.', 'internal');
+  h.org.add({ ...h.org.require(h.vic.id), mode: 'computer' }); // a new session
+  h.send('And?');
+  await h.turn();
+  const renewed = h.calls[1];
+  assert.equal(renewed.session, undefined);
+  assert.ok(!volatileOf(renewed).includes('Die Liste ist geprüft'), 'not in the live part');
+  const text = renewed.input.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
+  assert.match(text, /^My latest answers[^\n]*\n- [^\n]*Die Liste ist geprüft, drei Punkte offen\./, text);
 });

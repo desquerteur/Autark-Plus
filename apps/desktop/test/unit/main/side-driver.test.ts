@@ -4,6 +4,7 @@
 // press; the person's own input refuses steps for 2 s (the agent's echoed input does not); human-check
 // pages are never touched; the change list after an act; waits on page events; console and network
 // with redaction; page dialogs; tabs, open with the agent and chat as opener, close; a debugger the DevTools hold.
+// The AI cursor's colour and lean, and that the person's browser never jumps (B-081): side-driver-cursor.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,7 +46,7 @@ test('click by ref: the mouse glides there in real mouseMoved steps, then presse
   assert.deepEqual([moves.at(-1)!.params.x, moves.at(-1)!.params.y], [140, 116], 'it ends at the button’s center');
   for (let n = 1; n < moves.length; n += 1) assert.ok(moves[n]!.at >= moves[n - 1]!.at, 'moves run at their times');
   const span = moves.at(-1)!.at - moves[0]!.at;
-  assert.ok(span > 150 && span <= 420, `a glide takes ≤ 420 ms (${span})`);
+  assert.ok(span > 150 && span <= 300, `a glide takes ≤ 300 ms (${span})`);
   const [press, release] = mouse.filter((call) => call.params.type !== 'mouseMoved');
   assert.deepEqual([press!.params.type, press!.params.button, press!.params.clickCount, press!.params.x], ['mousePressed', 'left', 1, 140]);
   assert.equal(release!.params.type, 'mouseReleased');
@@ -57,11 +58,6 @@ test('click by ref: the mouse glides there in real mouseMoved steps, then presse
   assert.deepEqual({ surface: point.surface, actor: point.actor, x: point.x, y: point.y, action: point.action, target: point.target },
     { surface: 'side:web-1', actor: { kind: 'agent', id: 'ag_ada', name: 'Ada' }, x: 140, y: 116, action: 'click', target: { role: 'button', name: 'Pay', ref: 's24' } });
   assert.ok(point.path.length <= 40 && point.path.length > 1);
-
-  // instant: one jump, no hold
-  dbg.calls = [];
-  await driver.call({ action: 'act', agent, motion: 'instant', steps: [{ action: 'click', ref: 's22' }] });
-  assert.deepEqual(dbg.named('Input.dispatchMouseEvent').map((call) => call.params.type), ['mouseMoved', 'mousePressed', 'mouseReleased']);
 });
 
 test('a batch stops at the first failing step; a stale ref asks for a new snapshot', async () => {
@@ -294,4 +290,28 @@ test('a debugger the DevTools hold gives a clear sentence; a closed tab lets go 
   assert.deepEqual(out, { ok: false, error: DEVTOOLS_BUSY });
   driver.tab('web-1', null);
   contents.debugger.report({ k: 'in', e: 'move', x: 1, y: 1 }); // nobody listens any more
+});
+
+test('a slow page never stalls a click: the in-between moves are not awaited, press and release still go out (B-081 glide regression)', async () => {
+  const { driver, dbg } = setup();
+  await driver.call({ action: 'snapshot', agent });
+  dbg.handlers['Input.dispatchMouseEvent'] = (p) => (p.type === 'mouseMoved' ? new Promise(() => {}) : {}); // moves never answer, as on a ~1 Hz page
+  const out = await driver.call({ action: 'act', agent, steps: [{ action: 'click', ref: 's24' }] });
+  assert.deepEqual([out.ok, out.done], [true, 1], 'the click finished without waiting for the moves');
+  const mouse = dbg.named('Input.dispatchMouseEvent');
+  assert.ok(mouse.some((call) => call.params.type === 'mouseMoved'), 'the moves were still sent');
+  assert.deepEqual(mouse.filter((call) => call.params.type !== 'mouseMoved').map((call) => call.params.type), ['mousePressed', 'mouseReleased'], 'press and release followed');
+});
+
+test('two acts on one tab use their own object group, so one act\'s release never frees the other\'s nodes (B-081)', async () => {
+  const { driver, dbg } = setup();
+  await driver.call({ action: 'snapshot', agent });
+  await driver.call({ action: 'act', agent, steps: [{ action: 'click', ref: 's24' }] });
+  await driver.call({ action: 'act', agent, steps: [{ action: 'click', ref: 's24' }] });
+  const released = dbg.named('Runtime.releaseObjectGroup').map((call) => call.params.objectGroup);
+  assert.equal(released.length, 2);
+  assert.notEqual(released[0], released[1], 'each act frees only its own group');
+  for (const group of released) assert.match(group, /^wf-side-step-\d+$/);
+  const resolved = dbg.named('DOM.resolveNode').map((call) => call.params.objectGroup);
+  assert.ok(released.every((group) => resolved.includes(group)), 'each act resolved its nodes into its own group');
 });

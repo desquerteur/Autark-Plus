@@ -23,7 +23,7 @@ import { activePerson } from '../people/repo.ts';
 export interface MemberChange { add?: string[]; remove?: string[]; lead?: string }
 
 /** B-078 D7: the refusal when someone would join a 1:1 – in the voice of the one who tried. */
-export const DIRECT_STAYS_TWO = 'This 1:1 stays between the two of us. For more people I start a group with chat.create; a colleague I talk to in my own 1:1 with them (chat.send to).';
+export const DIRECT_STAYS_TWO = 'This 1:1 stays between the two of us. For more people I start a group with chat.create; a colleague I talk to in my own 1:1 with them (chat.direct).';
 /** The same for a person (the owner's or a colleague's client): the words of the window, no tool names. */
 export const DIRECT_STAYS_TWO_PERSON = 'A 1:1 stays two. For more people, start a group with them.';
 

@@ -1,11 +1,8 @@
-// B-076: the agent's own part of SYSTEM.md (from the role heading on) brought to today's form once, when the app renews
-// an untouched standard above it (org/prompt-updates.ts). The heading "## Your role" becomes "## My role"; a role text
-// that is exactly one a template shipped before ("You are the person's chief of staff …", second person; B-078 the
-// first-person chief of staff before the personal manager) becomes that template's text of today – compared without
-// its "## What I have here" part, which stays as the agent keeps it; a missing one gets the standard's
-// (org/system-parts.ts). Anything the person or the agent wrote themselves stays word for word.
-// Owns: recognising the old shipped role texts (resources/agents/previous-bodies.json). Never: touches a role text that
-// differs from a shipped one in any character, or the standard part above the role heading.
+// An agent's own part of SYSTEM.md (from the role heading on) brought to today's form once: the heading "## Your role"
+// becomes "## My role"; a role text that is exactly one a template shipped before (resources/agents/previous-bodies.json)
+// becomes that template's text of today – compared without its "## What I have here" part, which stays as the agent keeps
+// it; a missing one gets the template's. Used only by bridge/kontext-1311.ts and deleted with it (with previous-bodies.json).
+// Owns: recognising the old shipped role texts. Never: touches a role text that differs from a shipped one in any character.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

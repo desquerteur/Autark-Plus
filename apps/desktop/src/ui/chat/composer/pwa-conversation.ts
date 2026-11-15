@@ -5,6 +5,8 @@
 // of the first chat; later chats just join the loop. While a reply is spoken (and its tail) nothing is taken (echo
 // guard), unless the person talks over it (barge-in). The screen stays on (wake lock); on a phone every conversation
 // ends when the page is hidden (app switched, screen locked) – a phone never keeps listening in the background.
+// B-081: start with a callId takes that call (an agent's ring or a call on another device); agents' names for the
+// reading voice come from the org store.
 // Owns: the page side (capture, speaking, wake lock, hide, the chat topics it holds). Never: audio processing beyond
 // the capture, API keys (the runtime transcribes), or messages the loop did not send.
 
@@ -16,7 +18,7 @@ import type { ConversationRpc, VoiceSessionEntry, VoiceSessionView } from '../..
 import { recordingProblem } from '../../lib/dictation.ts';
 import { platform } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
-import { activeConversationId, settings } from '../../lib/store.ts';
+import { activeConversationId, agentMap, settings } from '../../lib/store.ts';
 import { browserCapture, browserSpeech, ConversationCapture } from './conversation-audio.ts';
 import type { CaptureDeps, SpeechOutput } from './conversation-audio.ts';
 
@@ -35,6 +37,8 @@ export interface PageConversationDeps {
   microphoneProblem(): string | undefined;
   /** The transcription's language hint: the profile language ("de", "en-US"). */
   language?(): string | undefined;
+  /** An agent's name for the reading voice (B-081: said when the speaker changes). */
+  nameOf?(agentId: string): string | undefined;
   publish(mic: VoiceSessionView | null, error: string | undefined, chats: VoiceSessionEntry[]): void;
   after(ms: number, fn: () => void): () => void;
   newId(): string;
@@ -67,6 +71,7 @@ export class PageConversation {
       newId: deps.newId,
       after: deps.after,
       language: () => deps.language?.(),
+      nameOf: (agentId) => deps.nameOf?.(agentId),
     });
   }
 
@@ -75,19 +80,22 @@ export class PageConversation {
   /** The chats talking now, the listening one first. */
   chats(): VoiceSessionEntry[] { return this.sessions.sessions(); }
 
-  /** Talks in `conversationId` (call from the tap: the first chat opens the microphone); a running chat listens now. */
-  async start(conversationId: string): Promise<VoiceSessionView> {
+  /** Talks in `conversationId` (call from the tap: the first chat opens the microphone); a running chat listens now; `callId` takes that call. */
+  async start(conversationId: string, callId?: string): Promise<VoiceSessionView> {
     const stops = this.stops;
     if (!this.capture) this.opening = this.openCapture().finally(() => { this.opening = null; });
     if (this.opening) await this.opening;
     if (stops !== this.stops) throw new ConversationCancelled();
     try {
-      return await this.sessions.start(conversationId);
+      return await this.sessions.start(conversationId, callId);
     } catch (error) {
       if (!this.sessions.active) this.teardown();
       throw stops !== this.stops ? new ConversationCancelled() : error;
     }
   }
+
+  /** B-081: a pin as a line of the call in `conversationId`; false when that chat does not talk here. */
+  add(conversationId: string, text: string): boolean { return this.sessions.add(conversationId, text); }
 
   /** Ends the chat's conversation (without one: the listening chat's). */
   stop(conversationId?: string): void {
@@ -199,6 +207,7 @@ export function createBrowserConversation(publish: PageConversationDeps['publish
     onHide: onPageHidden,
     microphoneProblem: () => recordingProblem() ?? (typeof MediaRecorder === 'undefined' ? 'This browser cannot record audio.' : undefined),
     language: () => settings.value?.profile.language,
+    nameOf: (agentId) => agentMap.peek().get(agentId)?.name,
     publish,
     after: (ms, fn) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
     newId: () => newId('req'),

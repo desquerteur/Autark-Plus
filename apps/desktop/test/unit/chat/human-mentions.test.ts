@@ -33,8 +33,7 @@ test('a quiet agent message that mentions the person by profile name is loud, me
   Object.assign(h.services, { settings: profile('Gerd') });
   const tom = h.org.add(agent('ag_tom', 'Tom'));
   const chat = h.chats.create({ agentIds: [tom.id], createdBy: HUMAN_ID });
-  const begun = h.chats.beginAgentMessage(chat.id, tom.id, 'run_1');
-  const done = h.chats.finishAgentMessage(begun.id, { body: '@Gerd the upload needs your login code', state: 'final', silent: true });
+  const done = h.chats.postAgentMessage(chat.id, tom.id, 'run_1', { body: '@Gerd the upload needs your login code', state: 'final', silent: true });
   assert.deepEqual(done.mentions, [HUMAN_ID]);
   assert.equal(done.silent, false);
   assert.equal(h.notified.at(-1)?.kind, 'important');
@@ -46,8 +45,7 @@ test('"@CEO" without a profile name, and chat.send by an agent, mention the pers
   const tom = h.org.add(agent('ag_tom', 'Tom'));
   const mara = h.org.add(agent('ag_mara', 'Mara'));
   const chat = h.chats.create({ agentIds: [tom.id, mara.id], createdBy: HUMAN_ID });
-  const begun = h.chats.beginAgentMessage(chat.id, tom.id, 'run_1');
-  assert.deepEqual(h.chats.finishAgentMessage(begun.id, { body: 'Done. @CEO please review.', state: 'final', silent: true }).mentions, [HUMAN_ID]);
+  assert.deepEqual(h.chats.postAgentMessage(chat.id, tom.id, 'run_1', { body: 'Done. @CEO please review.', state: 'final', silent: true }).mentions, [HUMAN_ID]);
   const sent = h.chats.send({ conversationId: chat.id, authorId: mara.id, body: '@Human and @Tom: the draft is in the folder.' });
   assert.deepEqual(new Set(sent.mentions), new Set([HUMAN_ID, tom.id]));
   assert.deepEqual(h.chats.send({ conversationId: chat.id, authorId: HUMAN_ID, body: '@You is me, @Mara go' }).mentions, [mara.id]);
@@ -68,19 +66,3 @@ test('an agent named like the person loses the tie; a longer agent name still wi
   assert.deepEqual(chatTitleFor(h.services, chat.id, HUMAN_ID).split(', ').sort(), ['Gerd', 'Gerd Miller', 'Tom'], 'titles still use member names (B-050 K2: per viewer)');
 });
 
-test('quiet turns: a retry turn that writes "@Gerd …" reaches the person', async () => {
-  const h = setup();
-  Object.assign(h.services, { settings: profile('Gerd'), router: { route: async () => h.route } });
-  Object.assign(h.services.accounts, { list: () => [], markUnavailable: () => false, markLimited: () => {} });
-  Object.assign(h.services.catalog, { list: () => [] });
-  const task = h.tasks.create({ conversationId: h.chat.id, title: 'Upload the cut', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: 'human' });
-  h.tasks.claim(task.id, h.tom.id);
-  h.state.script = async () => ({ text: '@Gerd the upload needs your login code', stop: 'done' });
-  const before = h.notified.length;
-  await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_retry', taskId: task.id, reason: 'retry' }));
-  const last = h.chats.messages(h.chat.id).filter((message) => message.authorId === h.tom.id && message.kind === 'text').at(-1)!;
-  assert.equal(last.body, '@Gerd the upload needs your login code');
-  assert.equal(last.silent, false, 'a mention of the person always reaches');
-  assert.ok(last.mentions.includes(HUMAN_ID));
-  assert.equal(h.notified.slice(before).at(-1)?.kind, 'important');
-});

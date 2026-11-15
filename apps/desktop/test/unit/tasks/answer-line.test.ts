@@ -51,7 +51,7 @@ test('a click on a choice: the person\'s line in full as a reply, no "Done:" lin
 
   const seen = h.render(message.seq);
   // Review fix: the line names the ask it answers (two asks in one message stay apart).
-  assert.match(seen, /^\[[^\]]+\] Alex: \(answer to my ask "Wie weit darf ich auf diesem PC gehen\?"\)\nVoller Zugriff: ich öffne, installiere und richte auf diesem PC alles ein, was die Arbeit braucht$/);
+  assert.match(seen, /^\[[^\]]+ · Alex \(CEO\) · [^\]]+\] \(answer to my ask "Wie weit darf ich auf diesem PC gehen\?"\)\nVoller Zugriff: ich öffne, installiere und richte auf diesem PC alles ein, was die Arbeit braucht$/);
   assert.doesNotMatch(seen, /ui-answer|Chose|\[task |Done:/);
 });
 

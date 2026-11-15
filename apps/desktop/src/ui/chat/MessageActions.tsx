@@ -1,6 +1,6 @@
-// Message actions: the message's right-click (long-press) menu – Reply, Start thread (B-078: or Open thread), Copy, Edit,
-// Remember why…, Delete, each only where
-// it applies – and the inline editor. Reply sets the composer's reply (draft.ts setReply) for a finished
+// Message actions: the message's right-click (long-press) menu – B-080: first, for each attachment, "Open <name>" and
+// (desktop) "Show <name> in folder"; then Reply, Start thread (B-078: or Open thread), Copy, Edit, Remember why…, Delete,
+// each only where it applies – and the inline editor. Reply sets the composer's reply (draft.ts setReply) for a finished
 // text message; Edit and Delete are offered for the caller's own text messages only, where this connection
 // may call them. Edit opens the inline editor in place (Esc cancels, Ctrl+Enter or Save saves; the message
 // then shows "edited"); Remember why… (own text messages) opens its one-field dialog (RememberWhy.tsx); Delete asks
@@ -22,6 +22,8 @@ import { offersRemember } from './remember.ts';
 import { rememberTarget } from './RememberWhy.tsx';
 import { isThread, startThread, threadsByAnchor } from './threads.ts';
 import { conversationMap } from '../lib/store.ts';
+import { platform } from '../lib/platform.ts';
+import { openAttachment, showAttachment } from './Attachments.tsx';
 
 /** The caller's own finished text message ('human' is the caller on every device) – the runtime's rule (chat/message-edits.ts). */
 const own = (message: Message) => personalText(message) && message.authorId === HUMAN_ID && message.state === 'final';
@@ -42,8 +44,18 @@ async function copy(text: string): Promise<void> {
   try { await navigator.clipboard.writeText(text); pushToast({ title: 'Copied', tone: 'info' }, 1500); } catch (error) { toastError(error, 'Copy failed'); }
 }
 
-/** The message's menu: Reply, Copy, Edit, Remember why…, Delete – each only where it applies. */
+/** B-080: a message's files as menu entries – Open <name>, and on the desktop Show <name> in folder. */
+function fileItems(message: Message): MenuItem[] {
+  const reveal = platform === 'desktop' && can('files.open');
+  return (message.attachments ?? []).flatMap((attachment) => [
+    { label: `Open ${attachment.name}`, onSelect: () => openAttachment(attachment, message.conversationId) },
+    ...(reveal ? [{ label: `Show ${attachment.name} in folder`, onSelect: () => showAttachment(attachment) }] : []),
+  ]);
+}
+
+/** The message's menu: its files first (B-080), then Reply, Copy, Edit, Remember why…, Delete – each only where it applies. */
 export function messageMenu(message: Message, onEdit: () => void): MenuSection[] {
+  const files = fileItems(message);
   const items: MenuItem[] = [];
   if (canReply(message)) items.push({ label: 'Reply', onSelect: () => setReply(message.conversationId, message.id) });
   // B-078: a thread on this message – never inside a thread (the thread itself answers it)
@@ -55,7 +67,7 @@ export function messageMenu(message: Message, onEdit: () => void): MenuSection[]
   if (canEdit(message)) items.push({ label: 'Edit', onSelect: onEdit });
   if (can('references.remember') && offersRemember(message, HUMAN_ID)) items.push({ label: 'Remember why…', onSelect: () => { rememberTarget.value = message; } });
   if (canDelete(message)) items.push({ label: 'Delete', danger: true, onSelect: () => void remove(message) });
-  return [{ items }];
+  return files.length ? [{ items: files }, { items }] : [{ items }];
 }
 
 /** The person's own message edited in place: Esc cancels, Ctrl+Enter (⌘+Enter) or Save saves. */

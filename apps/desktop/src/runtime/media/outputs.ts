@@ -1,14 +1,21 @@
 // Agent outputs into the blob store and the chat (P12/P23): local files named in the ```ui
 // blocks of an agent message (media.src and media.items[].src, file.path, cards[].image) are
 // stored and the block gets their fileId, so phones, the PWA and the media library can show
-// them; chat.send `files` and engine files (Codex image generation) become attachments.
+// them; a <chat> block's `files` (agents/chat-out.ts) and engine files (Codex image generation) become attachments.
 // Owns: the output confinement (inside the workspace after realpath, never an account home,
 // ≤ 4 GiB), the fence rewrite (adds fileId, keeps the path – a relative file.path becomes
 // absolute for desktop Open – and keeps every block index), notes for files that are missing
-// or outside the workspace, and the check that a fileId an agent wrote is one it may see.
+// or outside the workspace, and the check that a fileId an agent wrote is one it may see. B-080 (live: a colleague read
+// `versand-2026-11-07/…` from its own folder and missed): a relative path in an agent message's text – a markdown link
+// target, an inline code span with a folder separator, both outside ``` fences – that exists under the workspace becomes
+// its absolute path (absolutePaths, resolved like files.read; one that leads out of it with `..` stays as written), so
+// every reader gets one openable path. B-080 (live: chat.send files with the "stored at" path of a file I had seen was
+// refused as outside the workspace): a stored file's own path (<blobs>/ab/cd/<id>, files.path – storedId, the same rule
+// as media.view's) counts as that file id, in chat.send files and in a block's src/path, under the same visibility check.
 // Never: reads outside the workspace, follows a symlink out of it, throws for one bad file
-// (it becomes a note), or touches blocks other than media, file, cards and tabs.
+// (it becomes a note), touches blocks other than media, file, cards and tabs, or rewrites a path that does not exist.
 
+import { existsSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +30,7 @@ import type { FileStore, Paths } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
 import type { EngineFile } from '../engines/types.ts';
 import { kindOf } from './probe.ts';
+import { MAIN_THREAD } from '../../shared/model/origin.ts';
 import { MediaRepo } from './repo.ts';
 
 export const OUTPUT_LIMITS = { bytes: 4 * 1024 ** 3, files: 10, inlineBytes: 50 * 1024 * 1024, notes: 8 } as const;
@@ -30,7 +38,7 @@ export const OUTPUT_LIMITS = { bytes: 4 * 1024 ** 3, files: 10, inlineBytes: 50 
 export interface OutputServices {
   db: Db;
   files: FileStore;
-  paths: Pick<Paths, 'workspace' | 'accounts'>;
+  paths: Pick<Paths, 'workspace' | 'accounts' | 'blobs'>;
 }
 
 type Refusal = 'missing' | 'outside' | 'large' | 'not_file';
@@ -62,6 +70,12 @@ export function localPathOf(value: unknown): string | undefined {
 function inside(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** B-080: the file id when `value` is a stored file's own path (<blobs>/ab/cd/<64-hex id>); undefined otherwise. */
+export function storedId(paths: Partial<Pick<Paths, 'blobs'>>, value: string): string | undefined {
+  const id = path.basename(value).toLowerCase();
+  return paths.blobs && path.isAbsolute(value) && FILE_ID.test(id) && inside(path.resolve(paths.blobs), path.resolve(value)) ? id : undefined;
 }
 
 async function real(value: string): Promise<string> {
@@ -206,6 +220,10 @@ async function settle(state: ImportState, ref: Ref, index: number): Promise<void
   }
   const local = localPathOf(source);
   if (!key || !local) return;
+  const known = storedId(state.s.paths, local); // B-080: a stored file's own path is that file
+  const seen = known && (state.own.has(known) || state.canSee(known)) ? state.s.files.get(known) : undefined;
+  if (known && !seen) { state.notes.push(note(index, `file ${known.slice(0, 12)}… is not available to me`, 'I use a file from this chat or a workspace path.')); return; }
+  if (seen) { linkFile(holder, ref, key, seen); state.changes++; return; }
   const resolved = await resolveOutput(state.s.paths, local);
   if ('refused' in resolved) {
     state.notes.push(note(index, `"${clip(local)}" ${REFUSED[resolved.refused].text}`, REFUSED[resolved.refused].hint));
@@ -220,12 +238,17 @@ async function settle(state: ImportState, ref: Ref, index: number): Promise<void
     state.stored.set(resolved.path, file);
     state.own.add(file.id);
   }
-  if (idKey) holder[idKey] = file.id;
-  else holder[key] = file.id; // cards: the image becomes the stored file
+  linkFile(holder, ref, key, file);
   if (ref.absolute && !path.isAbsolute(local)) holder[key] = resolved.absolute;
+  state.changes++;
+}
+
+/** The block spot names the stored file: its fileId (a card's image becomes the file itself) and, for media, its kind. */
+function linkFile(holder: Obj, ref: Ref, key: string, file: FileRef): void {
+  if (ref.idKey) holder[ref.idKey] = file.id;
+  else holder[key] = file.id; // cards: the image becomes the stored file
   const kind = kindOf(file.mime);
   if (ref.kind && holder.kind === undefined && (kind === 'image' || kind === 'audio' || kind === 'video')) holder.kind = kind;
-  state.changes++;
 }
 
 /**
@@ -256,6 +279,91 @@ export async function importOutputs(s: OutputServices, input: { body: string; ag
   return { body: lines.join('\n'), notes: state.notes, files: [...state.stored.values()] };
 }
 
+// ---------------------------------------------------------------- relative paths in the text (B-080)
+
+/** A markdown link target `](…)` (an optional "title" after it) and an inline code span. */
+const LINK_TARGET = /\]\(\s*(<[^>\n]+>|[^)\s]+)((?:\s+"[^"\n]*")?\s*)\)/g;
+const CODE_SPAN = /(^|[^`])`([^`\n]+)`(?!`)/g;
+/** Pattern, variable and quote characters: no plain path. */
+const NOT_A_PATH = /[*?{}<>|"$%\r\n]/;
+
+/** True when `text` can be a relative path: no URL, anchor, home or absolute path, no pattern; a code span holds a separator. */
+function relativePath(text: string, span: boolean): boolean {
+  if (!text || text.length > 1024 || NOT_A_PATH.test(text) || text.trim() !== text) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(text) || text.startsWith('#') || text.startsWith('~') || path.win32.isAbsolute(text) || path.posix.isAbsolute(text)) return false;
+  return !span || text.includes('/') || text.includes('\\');
+}
+
+/** A link target without its <> and #fragment: the path part and what follows it. */
+function linkPath(target: string): { value: string; rest: string } {
+  const bare = target.startsWith('<') ? target.slice(1, -1) : target;
+  const cut = bare.indexOf('#');
+  return cut < 0 ? { value: bare, rest: '' } : { value: bare.slice(0, cut), rest: bare.slice(cut) };
+}
+
+/** Calls `visit` for every line outside ``` / ~~~ fences (the fence rule of shared/blocks/parse.ts). */
+function outsideFences(lines: string[], visit: (line: string, index: number) => void): void {
+  let marker: string | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    if (marker) {
+      const candidate = lines[i].trim();
+      if (candidate.length >= marker.length && candidate[0] === marker[0] && /^(`+|~+)$/.test(candidate)) marker = undefined;
+      continue;
+    }
+    const open = FENCE_OPEN.exec(lines[i]);
+    if (open) { marker = open[1]; continue; }
+    visit(lines[i], i);
+  }
+}
+
+/** The relative path candidates of a message text (link targets and code spans outside fences). */
+function pathCandidates(body: string): string[] {
+  const found = new Set<string>();
+  outsideFences(body.split('\n'), (line) => {
+    for (const match of line.matchAll(LINK_TARGET)) { const { value } = linkPath(match[1]); if (relativePath(value, false)) found.add(value); }
+    for (const match of line.matchAll(CODE_SPAN)) if (relativePath(match[2], true)) found.add(match[2]);
+  });
+  return [...found];
+}
+
+/** True when an agent message's text names a relative path absolutePaths may rewrite (cheap pre-check, no file access). */
+export function hasRelativePaths(body: string): boolean {
+  if (!body.includes('](') && !body.includes('`')) return false;
+  return pathCandidates(body).length > 0;
+}
+
+/**
+ * The text with each relative path that exists under `workspace` made absolute (see the header); unchanged otherwise.
+ * Synchronous (one existence check per candidate): the line is rewritten before anyone reads it, so its delivery – and
+ * chat.send's "who is woken" – stay immediate.
+ */
+export function absolutePaths(workspace: string, body: string): string {
+  const root = path.resolve(workspace);
+  const found = new Map<string, string>();
+  for (const value of pathCandidates(body)) {
+    const absolute = path.resolve(root, value);
+    if (!inside(root, absolute)) continue; // `../x` stays as written – nothing outside the workspace is looked at
+    if (existsSync(absolute)) found.set(value, absolute);
+  }
+  if (!found.size) return body;
+  const lines = body.split('\n');
+  outsideFences(lines, (line, index) => {
+    lines[index] = line
+      .replace(LINK_TARGET, (all: string, target: string, title: string) => {
+        const { value, rest } = linkPath(target);
+        const absolute = found.get(value);
+        if (!absolute) return all;
+        const next = `${absolute}${rest}`;
+        return `](${/[\s()]/.test(next) ? `<${next}>` : next}${title})`;
+      })
+      .replace(CODE_SPAN, (all: string, before: string, text: string) => {
+        const absolute = found.get(text);
+        return absolute ? `${before}\`${absolute}\`` : all;
+      });
+  });
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------- attachments
 
 export function toAttachment(file: FileRef): Attachment {
@@ -266,15 +374,15 @@ export function toAttachment(file: FileRef): Attachment {
   return out;
 }
 
-/** chat.send `files`: workspace paths are stored, 64-hex ids must be files the agent may see – and, with `toChat`,
- *  files the agent may see. */
+/** A <chat> block's `files`: workspace paths are stored; a 64-hex id or (B-080) a stored file's own path must be a file the
+ *  agent may see. */
 export async function importFiles(s: OutputServices, agentId: string, entries: readonly string[], toChat?: string): Promise<{ attachments: Attachment[]; errors: string[] }> {
   const repo = new MediaRepo(s.db);
   const attachments = new Map<string, Attachment>();
   const errors: string[] = [];
   for (const raw of entries.slice(0, OUTPUT_LIMITS.files)) {
     const entry = String(raw).trim();
-    const id = entry.toLowerCase();
+    const id = storedId(s.paths, entry) ?? entry.toLowerCase(); // B-080: the "stored at" path names that file
     if (FILE_ID.test(id)) {
       const file = s.files.get(id);
       if (file && repo.visibleTo(id, agentId)) attachments.set(id, toAttachment(file));
@@ -322,10 +430,10 @@ export async function storeEngineFiles(s: OutputServices, files: readonly Engine
   return { attachments: [...attachments.values()], errors };
 }
 
-/** Adds notes to the repair notes the agent's next turn in this chat receives (agents/turn-finish.ts). */
-export function saveOutputNotes(db: Db, now: number, agentId: string, conversationId: string, notes: readonly string[]): void {
+/** Adds notes to the repair notes the agent's next turn receives (agents/turn-finish.ts; 13.11.2026: its one main thread). */
+export function saveOutputNotes(db: Db, now: number, agentId: string, notes: readonly string[]): void {
   if (!notes.length) return;
-  const key = `${agentId}:${conversationId}`;
+  const key = `${agentId}:${MAIN_THREAD}`;
   const row = db.get<{ value: string }>('SELECT value FROM kv WHERE ns = ? AND key = ?', [REPAIR_NS, key]);
   let current: string[] = [];
   try {

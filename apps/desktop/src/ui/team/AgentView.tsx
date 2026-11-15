@@ -1,6 +1,6 @@
 // Agent page (#/team/<agentId>, the avatar click target): identity and live status, a link to its work, its
-// model, folder and skills, its schedules and its runs with tool calls and provider-visible reasoning
-// summaries. The header (lib/header.tsx) has no icon cells: the agent's NAME is the dropdown, with the same
+// model, folder and skills, its schedules and its activity log – everything it did in time order, tool calls, provider-visible
+// reasoning summaries, updates, answers and the runtime's own notes (AgentLog.tsx). The header (lib/header.tsx) has no icon cells: the agent's NAME is the dropdown, with the same
 // menu as a right click on the agent anywhere (menus.ts agentMenu: Message · Browser · Connect Telegram… ·
 // Duplicate · Change reports-to… · Export · Archive). "Browser" shows the live view of the agent's own browser and its own area (agent:<id>,
 // AgentBrowser.tsx) instead of the profile, "Profile" brings it back. An archived agent is read-only with "Restore" in that menu. On the
@@ -18,7 +18,7 @@ import { RpcError, rpc } from '../lib/rpc.ts';
 import { back, go } from '../lib/router.ts';
 import { AgentProfile } from './AgentProfile.tsx';
 import { AgentDetails } from './AgentDetails.tsx';
-import { AgentRuns } from './AgentRuns.tsx';
+import { AgentLog } from './AgentLog.tsx';
 import { AgentBrowser } from './AgentBrowser.tsx';
 import { TitleMenu } from './TitleMenu.tsx';
 import { agentBrowser, agentMenu } from './menus.ts';
@@ -71,9 +71,9 @@ export function AgentView(props: { agentId: string }) {
           <AgentProfile agent={agent} readOnly={archived} />
           <button type="button" class="text-button agent-work-link" onClick={() => go.tasks(undefined, agent.id)}>Show work</button>
           <AgentDetails agent={agent} />
-          <section class="agent-runs" aria-label="Runs">
-            <h3 class="agent-section-title">Runs</h3>
-            <AgentRuns agentId={agent.id} />
+          <section class="agent-log" aria-label="Activity log">
+            <h3 class="agent-section-title">Activity log</h3>
+            <AgentLog agentId={agent.id} />
           </section>
         </div>
       </div>}

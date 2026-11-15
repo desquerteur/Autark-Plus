@@ -48,7 +48,7 @@ const NOTE = 'A tool runs in another of these companies through tools.call with 
 
 const list = defineTool<Record<string, never>>({
   name: 'companies.list',
-  description: 'List the companies on this PC – this one and the person\'s others: name, folder, the person\'s role there (owner or employee), whether it runs and its linked PCs. Act in one with tools.call and company.',
+  description: "Lists the companies on this PC: this one and the person's others. Each with the person's role there and its linked PCs; I act in one with tools.call and company.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the companies on this PC'),

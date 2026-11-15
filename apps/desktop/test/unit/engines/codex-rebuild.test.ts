@@ -1,13 +1,15 @@
 // B-048 E2 (TRANSFER) – Codex native rebuild over a scripted app-server: the translation of every ledger item
 // kind to raw Responses items, chunked thread/inject_items, the items/list check (a mismatch deletes the thread
-// and throws), the rebuilt thread's first turn (no context block; a refused turn reports the session ended with
-// rebuild 'failed'), the model-free probe ('count' / 'accepted' / refused) with the version from initialize, and
-// the native tool output capture (command output, file diffs, bounded).
+// and throws), the rebuilt thread's first turn (the live context block as on every turn; a refused turn reports the session
+// ended with rebuild 'failed'), the model-free probe ('count' / 'accepted' / refused) with the version from initialize, and
+// the native tool output capture (command output, file diffs, bounded). B-080: each inject_items chunk waits THREAD_OPEN_MS.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexEngine } from '../../../src/runtime/engines/codex/engine.ts';
-import { chunks, responseItems } from '../../../src/runtime/engines/codex/rebuild.ts';
+import { chunks, injectHistory, responseItems, startRebuiltThread } from '../../../src/runtime/engines/codex/rebuild.ts';
+import { THREAD_OPEN_MS } from '../../../src/runtime/engines/codex/helper-thread.ts';
+import type { RpcClient } from '../../../src/runtime/engines/codex/rpc.ts';
 import { nativeOutput } from '../../../src/runtime/engines/codex/turn.ts';
 import { boundOutput, modelFamily } from '../../../src/runtime/engines/rebuild-text.ts';
 import { OUTPUT_CAP } from '../../../src/runtime/engines/output.ts';
@@ -124,7 +126,7 @@ test('codex rebuild: thread/start with the turn settings and dynamic tools, inje
   assert.deepEqual(result, { ref: 'thr_1', generation: 3, items: 45 });
   const start = fake.state.requests.find((r) => r.method === 'thread/start');
   assert.equal(start.params.baseInstructions, 'STABLE');
-  assert.equal(start.params.developerInstructions, 'VOLATILE');
+  assert.equal(start.params.developerInstructions, undefined, 'the live context goes with the first turn, never in the instructions');
   assert.equal(start.params.cwd, '/work');
   assert.deepEqual(start.params.dynamicTools.map((tool: any) => tool.name), ['tasks__create']);
   const injects = fake.state.requests.filter((r) => r.method === 'thread/inject_items');
@@ -160,7 +162,7 @@ test('codex rebuild: an items/list mismatch or a refused chunk deletes the new t
   await assert.rejects(engine(appServer().spawn).rebuild({ ...base, items: [] }), /nothing to rebuild/);
 });
 
-test('codex rebuild: the first turn sends no context block; a refused first turn reports the session ended (rebuild failed); later turns get the block', async () => {
+test('codex rebuild: the first turn sends the context block like every turn; a refused first turn reports the session ended (rebuild failed)', async () => {
   let status = 'failed';
   const fake = appServer({
     listed: 'unsupported',
@@ -172,7 +174,7 @@ test('codex rebuild: the first turn sends no context block; a refused first turn
   const built = await e.rebuild({ ...base, items: ITEMS.slice(0, 2) });
   const first = await e.run(turnInput({ session: { ref: built.ref, generation: 2 } }).input);
   const starts = () => fake.state.requests.filter((r) => r.method === 'turn/start');
-  assert.equal(starts()[0].params.input.some((part: any) => /workforce-context/.test(part.text ?? '')), false, 'no context block on the rebuilt thread\'s first turn');
+  assert.equal(starts()[0].params.input[0].text, '<live>\nVOLATILE\n</live>', 'the rebuilt thread\'s first turn carries the live context');
   assert.equal(fake.state.requests.some((r) => r.method === 'thread/resume'), false, 'the rebuilt thread is loaded');
   assert.equal(first.stop, 'error');
   assert.equal(first.error?.details?.rebase, true);
@@ -182,7 +184,7 @@ test('codex rebuild: the first turn sends no context block; a refused first turn
   status = 'completed';
   const second = await e.run(turnInput({ session: { ref: built.ref, generation: 2 } }).input);
   assert.equal(second.stop, 'done');
-  assert.equal(starts()[1].params.input[0].text, '<workforce-context>\nVOLATILE\n</workforce-context>', 'later turns carry the volatile block again');
+  assert.equal(starts()[1].params.input[0].text, '<live>\nVOLATILE\n</live>', 'later turns carry the volatile block again');
 });
 
 test('codex rebuild probe: model-free (no turn), the version from initialize, verify by what items/list shows, the thread deleted', async () => {
@@ -234,4 +236,15 @@ test('codex turn: a completed command item emits tool_end with its aggregated ou
   const { input, events } = turnInput();
   await engine(fake.spawn).run(input);
   assert.deepEqual(events.filter((event: any) => event.type === 'tool_end'), [{ type: 'tool_end', callId: 'c1', ok: true, summary: 'exit 0', output: '12 passing' }]);
+});
+
+test('B-080: every inject_items chunk of a rebuild waits THREAD_OPEN_MS (the thread still opens on the account\'s shared app-server)', async () => {
+  const limits: Array<[string, number | undefined]> = [];
+  const rpc = { request: async (method: string, _params: unknown, timeoutMs?: number) => { limits.push([method, timeoutMs]); return method === 'thread/start' ? { thread: { id: 'thr_r' } } : {}; } } as unknown as RpcClient;
+  const items = Array.from({ length: 45 }, (_, i) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `line ${i}` }] }));
+  await injectHistory(rpc, 'thr_1', items, 'accepted');
+  assert.deepEqual(limits, [['thread/inject_items', THREAD_OPEN_MS], ['thread/inject_items', THREAD_OPEN_MS]]);
+  limits.length = 0;
+  assert.equal(await startRebuiltThread(rpc, { cwd: '/work' }, items.slice(0, 2), 'accepted'), 'thr_r');
+  assert.deepEqual(limits, [['thread/start', THREAD_OPEN_MS], ['thread/inject_items', THREAD_OPEN_MS]]);
 });

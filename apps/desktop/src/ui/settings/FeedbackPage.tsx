@@ -1,7 +1,8 @@
 // Settings › Feedback: the person's own reports ("Reports"), the reports agents filed ("From agents", unverified, with Dismiss),
 // on the one PC that holds the team's key the "Inbox" (ui/feedback/FeedbackInbox.tsx: what people sent, fetched when it opens).
 // B-078: no "Include recent warnings" switch – the redacted lines always go with Send. A report opens in full in Review, which also sends it;
-// "New report" opens the feedback menu under the header cell, "Watch how it works" the tour. The group hint is always there, so
+// "New report" opens the feedback menu under the header cell, "Watch how it works" the tour video, B-085 "Show the tour" the
+// spotlight tour again over the Manager's chat (opened first; ui/tour/Spotlight.tsx). The group hint is always there, so
 // the answer of feedback.status moves nothing.
 // Owns: these lists and the review dialog. Never: sends without the person's click, or claims more than the mailbox confirmed.
 
@@ -15,14 +16,23 @@ import { plainPreview } from '../lib/format.ts';
 import { bridge, openExternal } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
-import { agentName } from '../lib/store.ts';
+import { go } from '../lib/router.ts';
+import { agentName, agents, conversations } from '../lib/store.ts';
 import { Button } from '../lib/ui.tsx';
+import { managerAgent, managerFirstChat } from '../onboarding/manager.ts';
 import { openTour } from '../tour/open.ts';
+import { startSpotlight } from '../tour/Spotlight.tsx';
 import { act, ActionButton, Group, Row, useAsync, useBusy } from './controls.tsx';
 import { reportLine, reportsHint, sendable } from './feedback-text.ts';
 
 /** Where the reports live: "this PC" in the desktop window, "your PC" on a phone. */
 const pc = (): string => (bridge ? 'this PC' : 'your PC');
+
+/** The Manager's chat, where the spotlight tour points (none yet: the button rests). */
+function managerChatId(): string | undefined {
+  const manager = managerAgent(agents.value);
+  return manager && managerFirstChat(conversations.value, manager.id)?.id;
+}
 
 function ReportRow(props: { report: FeedbackReport; onReview: () => void; onDismiss?: () => void }) {
   const { report } = props;
@@ -67,12 +77,14 @@ export function FeedbackPage() {
   const mine = visible.filter((report) => report.author === 'human');
   const fromAgents = visible.filter((report) => report.author !== 'human');
   const agentsFiled = (list.data ?? []).some((report) => report.author !== 'human'); // dismissed ones too: the group keeps its place
+  const tourChat = managerChatId();
   const dismiss = (id: string) => void act(async () => { await rpc.call('feedback.dismiss', { id }); await list.reload(); }, 'Could not dismiss');
   return (
     <>
       <Group title="Reports" id="settings-feedback" hint={reportsHint(sending, pc())} actions={(
         <>
           <button type="button" class="button ghost small" onClick={() => openTour()}>Watch how it works</button>
+          <button type="button" class="button ghost small" disabled={!tourChat} onClick={() => { if (tourChat) { go.chat(tourChat); startSpotlight(); } }}>Show the tour</button>
           {can('feedback.create') && <button type="button" class="button ghost small" onClick={() => openFeedback()}>New report</button>}
         </>
       )}>

@@ -108,7 +108,7 @@ export function readConnectors(dataDir: string): { connectors: Connector[]; prob
       const smtp = server(raw.smtp);
       connectors.push({
         id: freeId(name, taken), name, transport: 'mail', enabled: raw.disabled !== true && raw.enabled !== false, fingerprint: fingerprint(raw),
-        mail: { address, password, ...(text(raw.user) ? { user: text(raw.user) } : {}), ...(imap ? { imap } : {}), ...(smtp ? { smtp } : {}), ...(text(raw.agent) ? { agent: text(raw.agent) } : {}) },
+        mail: { address, password, ...(raw.contactStopFile !== undefined ? { contactStopFile: typeof raw.contactStopFile === 'string' ? raw.contactStopFile : '' } : {}), ...(text(raw.user) ? { user: text(raw.user) } : {}), ...(imap ? { imap } : {}), ...(smtp ? { smtp } : {}), ...(text(raw.agent) ? { agent: text(raw.agent) } : {}) },
       });
     }
   }

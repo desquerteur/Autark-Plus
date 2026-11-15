@@ -26,7 +26,7 @@ export const answer = (text: string, extra: Record<string, unknown> = {}) => (re
   sendSse(res, [chunk({ role: 'assistant', content: '' }), chunk({ content: text }), chunk({}, 'stop'), usage(900, 12, extra), '[DONE]']);
 
 export function account(id: string, provider: Account['provider'], auth: Account['auth'], baseUrl: string): Account {
-  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
 }
 
 /** A catalog entry "<provider>:<model>" on one account (engine as the catalog assigns it). */

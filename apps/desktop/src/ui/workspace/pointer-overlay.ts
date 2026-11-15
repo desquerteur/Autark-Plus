@@ -3,13 +3,19 @@
 // shared/model/pointers.ts), which pointers it draws (this surface's, not the person's own, not older
 // than POINTER_TTL_MS), where a point of the page (CSS px of its viewport) lies on the drawn picture
 // (letterboxed: object-fit contain), where a moving pointer is along its path (the motion model's
-// steps, shared/model/pointer-motion.ts – the same path the agent's mouse took) and the throttle for the person's own pointer (at most one report per interval, the last
+// steps, shared/model/pointer-motion.ts – the same path the agent's mouse took – with the AI cursor's lean,
+// shared/model/agent-cursor.ts), the path a view draws for a new point (B-081: an agent's jump glides from where
+// its cursor is drawn, UI only) and the throttle for the person's own pointer (at most one report per interval, the last
 // position wins – one trailing timer, no loop).
 // Owns: these helpers. Never: renders, subscribes or sends (PointerLayer.tsx does).
 
-import type { MotionStep } from '../../shared/model/pointer-motion.ts';
+import { tilted } from '../../shared/model/agent-cursor.ts';
+import { planMotion, type MotionStep, type Point } from '../../shared/model/pointer-motion.ts';
 import { POINTER_TTL_MS, surfaceKey, type PointerPoint } from '../../shared/model/pointers.ts';
 import { drawnArea, type Box } from './browser-input.ts';
+
+/** A drawn path's step: a motion step, with its lean when an agent's (degrees). */
+export type DrawnStep = MotionStep & { r?: number };
 
 /** The pointer surface of a live view's tab (a chat's browser key is chat:<chatId>). */
 export function viewSurface(agentId: string, tab: string): string {
@@ -34,25 +40,42 @@ export function pagePointInView(x: number, y: number, frame: { width: number; he
   return { left: area.left - view.left + (x / frame.width) * area.width, top: area.top - view.top + (y / frame.height) * area.height };
 }
 
-/** The position `elapsed` ms into a path (its steps' t from the move's start); the last step after it ended. */
-export function positionAt(path: readonly MotionStep[], elapsed: number): { x: number; y: number } | undefined {
+/** The position and lean `elapsed` ms into a path (its steps' t from the move's start); the last step after it ended. r is 0 where steps have none. */
+export function positionAt(path: readonly DrawnStep[], elapsed: number): { x: number; y: number; r: number } | undefined {
   if (!path.length) return undefined;
-  if (elapsed <= path[0]!.t) return { x: path[0]!.x, y: path[0]!.y };
+  if (elapsed <= path[0]!.t) return { x: path[0]!.x, y: path[0]!.y, r: path[0]!.r ?? 0 };
   for (let index = 1; index < path.length; index++) {
     const step = path[index]!;
     if (elapsed > step.t) continue;
     const before = path[index - 1]!;
     const span = step.t - before.t;
     const f = span > 0 ? (elapsed - before.t) / span : 1;
-    return { x: before.x + (step.x - before.x) * f, y: before.y + (step.y - before.y) * f };
+    const r0 = before.r ?? 0, r1 = step.r ?? 0;
+    return { x: before.x + (step.x - before.x) * f, y: before.y + (step.y - before.y) * f, r: r0 + (r1 - r0) * f };
   }
   const last = path[path.length - 1]!;
-  return { x: last.x, y: last.y };
+  return { x: last.x, y: last.y, r: last.r ?? 0 };
 }
 
 /** How long a path takes (its last step's t). */
 export function pathMs(path: readonly MotionStep[] | undefined): number {
   return path?.length ? Math.max(0, path[path.length - 1]!.t) : 0;
+}
+
+/** Where a drawn pointer is `elapsed` ms after it arrived: along its path while it moves, else at its point, upright. */
+export function drawnAt(point: Point, path: readonly DrawnStep[] | undefined, elapsed: number): { x: number; y: number; r: number } {
+  return path?.length && elapsed < pathMs(path) ? positionAt(path, elapsed)! : { x: point.x, y: point.y, r: 0 };
+}
+
+/**
+ * The path a view draws for a new point. An agent's move that came as one point (a jump, a batch's last step) glides
+ * from `from`, where the view draws its cursor now – the view only, the agent was not slowed; every agent path leans.
+ * A person's pointer stays as it came (no glide, no lean).
+ */
+export function drawnPath(next: PointerPoint, from?: Point): readonly DrawnStep[] | undefined {
+  if (next.actor.kind === 'person') return next.path;
+  const path = next.path && next.path.length > 1 ? next.path : from ? planMotion(from, next, { style: 'glide' }) : next.path;
+  return path ? tilted(path) : undefined;
 }
 
 export interface ReporterDeps {

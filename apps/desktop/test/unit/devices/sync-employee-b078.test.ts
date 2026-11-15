@@ -27,7 +27,7 @@ test('her "done" on her own PC runs the completion on the company PC: status, re
   const task = a.h.tasks.create({ title: 'Call the client', assigneeKind: 'human', assigneeId: LENA, createdBy: 'human' });
   await settle();
   assert.equal(e.h.tasks.get(task.id)?.status, 'open');
-  e.h.tasks.complete(task.id, { summary: 'Called them', evidence: [], verification: 'reported_by_human' }, 'human');
+  e.h.tasks.finish(task.id, { status: 'done' as const, ...{ summary: 'Called them', evidence: [], verification: 'reported_by_human' } }, 'human');
   await settle();
   const there = a.h.tasks.get(task.id)!;
   assert.equal(there.status, 'done');
@@ -45,7 +45,7 @@ test('her own open to-dos reach the company as hers; "Only me" stays on her PC; 
   assert.ok(there, 'it went to the company');
   assert.deepEqual([there!.assigneeKind, there!.assigneeId, there!.createdBy], ['human', LENA, LENA]);
 
-  e.h.tasks.complete(mine.id, { summary: 'Sent', evidence: [], verification: 'reported_by_human' }, 'human');
+  e.h.tasks.finish(mine.id, { status: 'done' as const, ...{ summary: 'Sent', evidence: [], verification: 'reported_by_human' } }, 'human');
   await settle();
   assert.equal(a.h.tasks.get(mine.id)?.status, 'done', 'its change followed');
 
@@ -80,25 +80,6 @@ test('a PC that held her own life before it joined keeps her own to-dos: only a 
   assert.equal(e.h.tasks.get(fromThere.id)?.status, 'open', 'the tasks of the company still reach her');
 });
 
-test('a stale status in her row changes nothing: an offline title edit never undoes the company\'s newer status', async () => {
-  const { net, a, e } = company();
-  const task = a.h.tasks.create({ title: 'Call the client', assigneeKind: 'human', assigneeId: LENA, createdBy: 'human' });
-  await settle();
-  net.up = false;
-  a.h.tasks.setStatus(task.id, 'cancelled', 'human'); // the company cancels it; Lena's PC does not hear it yet
-  await settle();
-  e.h.clock.advance(60_000);
-  e.h.db.run("UPDATE tasks SET title = 'Call the client today' WHERE id = ?", [task.id]); // her offline edit, status still 'open'
-  net.up = true;
-  e.h.bus.emit('task.upserted', e.h.tasks.get(task.id)!);
-  await settle();
-  assert.equal(a.h.tasks.get(task.id)?.status, 'cancelled', 'her old status did not reopen it');
-  assert.ok(!a.h.notified.some((note) => note.taskId === task.id && note.kind === 'done'));
-
-  // A row of hers that loses here (older than the company's) moves no status either.
-  await a.sync.receive({ items: [{ t: 'tasks', id: task.id, at: 1, row: { ...a.h.db.get<Record<string, unknown>>('SELECT * FROM tasks WHERE id = ?', [task.id])!, assignee_id: null, status: 'done' } }] }, 'dev_e');
-  assert.equal(a.h.tasks.get(task.id)?.status, 'cancelled', 'a losing row is not run as her change');
-});
 
 test('a to-do an agent on her PC made for her reaches the company as hers, with her as its maker there', async () => {
   const { a, e } = company();

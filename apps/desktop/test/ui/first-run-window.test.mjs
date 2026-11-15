@@ -1,10 +1,11 @@
-// Electron window check of the first run (Umbau Einfachheit: tour → AI → About you) with the demo engine in an
+// Electron window check of the first run (B-085: choice → AI → About you) with the demo engine in an
 // isolated test profile:
-//   * a new profile opens on Home's place (My day) with the first-run layer (.first-run-view) at the feedback tour
-//     (its poster; tour-window.test.mjs covers the player) – Skip leads to the AI card ("Step 1 of 2"), the sidebar
-//     and the frame's header row where they always are;
-//   * beside Skip, "Connect to my other device" opens the Connect card (this PC's Remote ID with "only this network", the
-//     "Connect a PC" row of Settings › Devices) without writing a step; the frame does not move; Back returns to the tour;
+//   * a new profile opens on Home's place (My day) with the first-run layer (.first-run-view) at the choice card (step
+//     'tour', no step line; the feedback video also behind its "Watch how it works" link, tour-window.test.mjs covers the
+//     player) – "Set up a new company" plays the video at once (B-090) and leads to the AI card ("Step 1 of 2"), whose Back returns to the choice; the
+//     sidebar and the frame's header row stay where they always are;
+//   * "Connect to my other PC" opens the Connect card (this PC's Remote ID with "only this network", the
+//     "Connect a PC" row of Settings › Devices) without writing a step; the frame does not move; Back returns to the choice;
 //   * the AI card is the model setup (settings/ModelSetup.tsx): the rows Claude Code and Codex, the four fixed buttons
 //     Claude plan · Codex plan · API key · Local server, the reserved "Open sign-in page" cell and one status line;
 //     the scan only fills the rows (nothing moves); API key opens its form inline under the buttons (they stay);
@@ -15,9 +16,9 @@
 //     no accounts.try or accounts.login call is sent, even with an existing account. A failed
 //     Claude Code install says why in the same line; busy shows on the pressed button only; nothing moves; the flow
 //     survives the remount across the phone layout; Continue is disabled while no model can answer (no Skip);
-//   * About you: name and company only (typing moves nothing); Start saves the profile, creates nobody, completes the
-//     onboarding and opens the Manager's chat with the app's start text as the person's own line (once, before the
-//     Manager's answer);
+//   * About you: name, company and the "Your PC" radio rows (Whole PC checked; typing moves nothing); Start saves the
+//     profile, creates nobody, completes the onboarding and opens the Manager's chat with the app's start text as the
+//     person's own line (once, before the Manager's answer); the spotlight tour then opens over that chat (Skip ends it);
 //   * My day after the first run while no model can answer: the status line says so with Connect → Settings › Models,
 //     which shows the same four buttons; the line goes as soon as a model can answer;
 //   * screenshots light, dark, 640×480 and phone width; no horizontal scroll; no renderer errors.
@@ -67,7 +68,7 @@ const PLAN_FAKE = `(() => {
   };
 })();`;
 
-test('first run: tour → AI (model setup, plan flow) → About you → the start text and the Manager answers', { timeout: 300_000 }, async (t) => {
+test('first run: choice → AI (model setup, plan flow) → About you → the start text and the Manager answers', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-first-run-'));
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
@@ -103,18 +104,24 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   const settings = () => rpc.call('settings.get');
   const manager = (await rpc.call('agents.list')).find((agent) => agent.template === 'manager' && !agent.archivedAt);
   assert.ok(manager, 'a fresh profile has the seed Manager');
-  assert.deepEqual((await settings()).onboarding, { completed: false, step: 'tour' }, 'the tour first');
+  assert.deepEqual((await settings()).onboarding, { completed: false, step: 'tour' }, 'the choice first (its step id is still tour)');
   const agentsBefore = (await rpc.call('agents.list')).filter((agent) => !agent.archivedAt).length;
 
   // The layer in Home's place, inside the frame.
   const layer = page.locator('.first-run-view');
   await layer.waitFor({ timeout: 20_000 });
   assert.ok(await page.locator('.sidebar').isVisible(), 'the frame stays');
-  await layer.locator('.tour-player[data-phase="poster"]').waitFor({ timeout: 10_000 });
+  const choice = layer.locator('.first-run-card[data-card="first-run-choice"]');
+  await choice.waitFor({ timeout: 10_000 });
+  assert.equal((await page.locator('.first-run-step').textContent())?.trim(), '', 'no step line on the choice card');
+  assert.equal(await layer.locator('.tour-player').count(), 0, 'no feedback video in the first run');
+  const setUpButton = choice.locator('button.first-run-choice', { hasText: 'Set up a new company' });
+  assert.ok(await setUpButton.isVisible(), 'the first choice');
+  assert.ok(await choice.getByRole('button', { name: 'Watch how it works' }).isVisible(), 'the video link');
 
-  // "Connect to my other device" beside Skip: the Connect card in the cards' column; Back returns to the tour.
-  const connectButton = layer.locator('.tour-top').getByRole('button', { name: 'Connect to my other device' });
-  assert.ok(await connectButton.isVisible(), 'the text button beside Skip');
+  // "Connect to my other PC": the Connect card in the cards' column; Back returns to the choice.
+  const connectButton = choice.locator('button.first-run-choice', { hasText: 'Connect to my other PC' });
+  assert.ok(await connectButton.isVisible(), 'the second choice');
   const connectCard = page.locator('.first-run-card[data-card="first-run-connect"]');
   await expectStable(page, ['.first-run-view > .frame-header', '.sidebar'], async () => {
     await connectButton.click();
@@ -139,11 +146,27 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await size(1280, 820);
   await page.waitForTimeout(400);
   await connectCard.getByRole('button', { name: 'Back' }).click();
-  await layer.locator('.tour-player[data-phase="poster"]').waitFor({ timeout: 10_000 });
-  await layer.getByRole('button', { name: 'Skip' }).click();
-  await layer.locator('.first-run-step').waitFor({ timeout: 10_000 });
-  assert.equal((await settings()).onboarding.step, 'ai');
-  assert.equal((await page.locator('.first-run-step').textContent())?.trim(), 'Step 1 of 2');
+  await choice.waitFor({ timeout: 10_000 });
+  assert.equal((await settings()).onboarding.step, 'tour', 'Back writes no step');
+
+  // "Set up a new company" → the AI card ("Step 1 of 2"); its Back returns to the choice, and on again.
+  const toAi = async () => {
+    await setUpButton.click();
+    // B-090: the video opens and plays at once over the AI card; Esc closes it.
+    const video = page.locator('dialog.tour-dialog[open]');
+    await video.waitFor({ timeout: 10_000 });
+    assert.equal(await video.locator('.tour-poster').count(), 0, 'already playing, no poster');
+    await page.keyboard.press('Escape');
+    await video.waitFor({ state: 'detached', timeout: 5_000 });
+    await page.locator('.first-run-card[data-card="first-run-ai"]').waitFor({ timeout: 15_000 });
+    assert.equal((await settings()).onboarding.step, 'ai');
+    assert.equal((await page.locator('.first-run-step').textContent())?.trim(), 'Step 1 of 2');
+  };
+  await toAi();
+  await page.locator('.first-run-card[data-card="first-run-ai"]').getByRole('button', { name: 'Back' }).click();
+  await choice.waitFor({ timeout: 10_000 });
+  assert.equal((await settings()).onboarding.step, 'tour', "the AI card's Back returns to the choice");
+  await toAi();
 
   // AI card: the model setup – rows, the four buttons, the reserved link cell and the status line; the scan fills the
   // rows without moving anything.
@@ -202,7 +225,7 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await waitHeld('accounts.install');
   await expectStable(page, plansFrame, async () => { await release('accounts.install', { result: { ok: true } }); await waitHeld('accounts.add'); await waitStatus(/^Finish signing in in your browser…$/); });
   assert.equal(await ai.locator('button.first-run-link').count(), 0, 'no page yet: the inert placeholder holds the cell');
-  const fakeAccount = { id: 'acc_fake_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'needs_login', priority: 0, rotation: false, enabled: true, detected: false, createdAt: Date.now() };
+  const fakeAccount = { id: 'acc_fake_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'needs_login', priority: 0, enabled: true, detected: false, createdAt: Date.now() };
   await expectStable(page, plansFrame, async () => {
     await release('accounts.add', { result: { ...fakeAccount, signInUrl: 'https://auth.openai.com/oauth/authorize?test=1' } });
     await ai.locator('button.first-run-link').waitFor({ timeout: 5_000 });
@@ -291,6 +314,11 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
     await about.getByLabel('Company').fill('Test GmbH');
   });
   assert.equal(await about.locator('textarea').count(), 0, 'no first-request field');
+  // "Your PC": two radio rows, Whole PC checked by default.
+  const access = about.locator('fieldset.first-run-access');
+  assert.equal(await access.getByRole('radio').count(), 2, 'Whole PC and Careful');
+  assert.equal(await access.getByRole('radio', { name: /^Full access/ }).isChecked(), true, 'Whole PC is the default');
+  assert.equal(await access.getByRole('radio', { name: /^Careful/ }).isChecked(), false);
   t.diagnostic(`card heights: AI ${aiHeight}px, About ${await cardHeight()}px`);
   await shot('first-run-05-about-light');
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -305,22 +333,38 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await size(1280, 820);
   await page.waitForTimeout(400);
 
-  // Start: the profile is saved, nobody is created, the Manager's chat opens with the start text and it answers.
+  // Start: the profile is saved, nobody is created, the Manager's chat opens with its first message (B-090: written by
+  // the app, no turn) and the Manager answers the person's reply.
   await about.getByRole('button', { name: 'Start' }).click();
   await page.waitForFunction(() => location.hash.startsWith('#/chat/'), undefined, { timeout: 20_000 });
   const chatId = await page.evaluate(() => decodeURIComponent(location.hash.slice('#/chat/'.length)));
   const done = await settings();
   assert.deepEqual([done.profile.name, done.profile.company], ['Test Person', 'Test GmbH']);
   assert.deepEqual(done.onboarding, { completed: true, step: 'done' });
+  assert.notEqual(done.profile.pcAccess, 'careful', 'Whole PC kept (absent = whole)');
+  // The spotlight tour opens over the Manager's chat once; Skip ends it (it is a modal dialog over the window).
+  const spotlight = page.locator('dialog.spotlight');
+  await spotlight.waitFor({ timeout: 15_000 });
+  await spotlight.getByRole('button', { name: 'Skip' }).click();
+  await spotlight.waitFor({ state: 'detached', timeout: 5_000 });
   assert.equal((await rpc.call('agents.list')).filter((agent) => !agent.archivedAt).length, agentsBefore, 'only the Manager: nobody was created');
-  await page.locator('article.message.agent').first().waitFor({ timeout: 90_000 }); // the Manager's turn
-  const messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
+  await page.locator('article.message.agent').first().waitFor({ timeout: 20_000 }); // the Manager's first message
+  let messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
+  assert.equal(messages.filter((message) => message.authorKind === 'human').length, 0, "nothing in the person's name");
+  const welcome = messages.filter((message) => message.authorId === manager.id);
+  assert.equal(welcome.length, 1, "the Manager's first message, once");
+  assert.match(welcome[0].body, /^(Hi|Hallo|Bonjour|Hola) Test Person, .*\n1\. \*\*/s, 'in the PC language, with the numbered questions');
+  await shot('first-run-08-manager-welcome-light');
+  const composer = page.locator('textarea').first();
+  await composer.fill('English with me and inside the team. Start right away.');
+  await page.locator('button.send-button').first().click();
+  await page.waitForFunction(() => document.querySelectorAll('article.message.agent').length >= 2, undefined, { timeout: 90_000 }); // the Manager's turn
+  messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
   const own = messages.filter((message) => message.authorKind === 'human');
-  assert.equal(own.length, 1, "the start text is the person's own line, once");
-  assert.match(own[0].body, /^Automatic message from the app, not typed by me: I just installed Autark, entered Test Person and Test GmbH and clicked Start\. .*my personal manager/);
-  const answer = messages.find((message) => message.authorId === manager.id);
-  assert.ok(answer, 'the Manager answered');
-  assert.ok(own[0].createdAt <= answer.createdAt, 'the start text came before the answer');
+  assert.equal(own.length, 1, "the person's answer");
+  const answer = messages.filter((message) => message.authorId === manager.id).at(-1);
+  assert.ok(answer && answer.id !== welcome[0].id, 'the Manager answered');
+  assert.ok(own[0].createdAt <= answer.createdAt, 'the answer came after the reply');
   await shot('first-run-08-manager-chat-light');
 
   // My day (Home) after the first run while no model can answer – the status line says so with Connect (the signals

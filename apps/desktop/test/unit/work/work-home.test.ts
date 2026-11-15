@@ -8,7 +8,7 @@ import { REPORT_DAYS, nextWorkChange } from '../../../src/ui/tasks/work-model.ts
 import { DAY, HOUR, NOW, task } from './fixture.ts';
 
 test('nextWorkChange: the earliest finished task leaving the report – none when nothing is ahead', () => {
-  const waiting = task({ status: 'waiting', waitingOn: { kind: 'external', reason: 'Printer', since: NOW - DAY } });
+  const waiting = task({ status: 'waiting', waitingOn: { on: 'outside', why: 'Printer', since: NOW - DAY } });
   const finished = task({ status: 'done', completedAt: NOW - 2 * DAY });
   const newer = task({ status: 'done', completedAt: NOW - HOUR });
   assert.equal(nextWorkChange([waiting], [], NOW), undefined, 'a wait changes nothing by time');

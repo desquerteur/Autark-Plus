@@ -1,19 +1,27 @@
-// The brains' hold on the main AI's transcript (owner 28.10./01.11.2026): items by short ids (context ledger), one line each.
+// The subconscious's hold on the main AI's transcript (owner 28.10./01.11.2026): items by short ids (context ledger), one line each.
 // context.list pages the older items, the condensed and hidden ones with their state (never all originals; q-r1b2, 03.11.2026: listed as bare
 // ids, a run could neither take a condensed file out on the person's word nor bring it back), context.read shows one original, context.condense puts a short text
-// in its place, worded by the brain that holds the flow from the whole original in one call (the main AI then sees that text with the JSON stamp under it,
-// context/ledger/view.ts), context.hide takes it out, context.restore brings either back: when the main AI asked, it gets the originals
-// as a real call; in any other run they reach it only when done.show names them, and the undoing pins nothing. What stays out of reach: the newest 2
-// turns, the person's newest message and, behind a bare "ja bitte", the newest one with content (the work may still be on it, however
-// many turns it took), calls made inside a script and – for a run after a turn – pinned items (a run on the person's or the main AI's word may
-// take them out); a condensed text may not name a value the original lacks. An id given as its bare number (33) is the one item that carries it
+// in its place, worded by the run's model from the whole original in one call (the main AI then sees that text with the JSON stamp under it,
+// context/ledger/view.ts), context.hide takes it out, context.restore brings either back: the main AI gets the originals as a real call.
+// What stays out of reach: the newest turn (B-080; the newest 2 until then – the turn before that held the biggest outputs while nothing could
+// touch them, live 05.–08.11.2026), the person's newest message and, behind a bare "ja bitte", the newest one with content (the work may still
+// be on it, however many turns it took) and calls made inside a script. A pinned item (one the main AI brought back) is listed as such and
+// stays markable: since v1 (14.11.2026) every run is the main AI's own call, on its word, and its own hold does not stop what it asked
+// for (q-r2d s15). A condensed text may not name a value the original lacks. An id given as its bare number (33) is the one item that carries it
 // (n2 c1 #88, 04.11.2026: {"ids":[33,38]} twice answered "needs ids." and the run ended); when two do, the answer names both forms. WHAT to keep is the
-// brain's judgment (resources/prompts/subconscious.md), not code. Marks that take something off apply at the agent's next turn (agents/rebuild.ts).
-// Owns: these handlers, their checks and the "newest 2 turns" rule. Never: rewrites an original, or marks another agent's items.
+// run's judgment (resources/prompts/subconscious.md), not code. Marks that take something off apply at the agent's next turn (agents/rebuild.ts).
+// 13.11.2026 evening (owner: "der Kontext geht nie verloren"): the transcript a run sees is the agent's whole record – a renewal no
+// longer cuts it (agents/history-text.ts). The owner's commands: hide by ids or everything before an id but what I keep
+// (context.hide {before, keep}), and a text of my own in an item's place (context.condense {texts}), marked condensed with its
+// stamp for the main AI. B-080 wave 3: what a condensed text costs is counted in window.ts tokensOf, the unit the engines' own
+// counts use.
+// Owns: these handlers, their checks and the "newest turn" rule. Never: rewrites an original, or marks another agent's items.
 
 import type { RuntimeServices } from '../contracts.ts';
+import { tokensOf } from '../context/ledger/window.ts';
 import type { Message } from '../../shared/model/chat.ts';
 import type { Run } from '../../shared/model/runs.ts';
+import { isSplitThread } from '../../shared/model/splits.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { KIND_PREFIX, normalizeItemId, type LedgerItem } from '../../shared/model/context-ledger.ts';
 import { MAX_RESTORE_IDS, restoreItems } from '../context/ledger/restore.ts';
@@ -37,7 +45,9 @@ const CONDENSE_IDS = 8;
 const WORD_CHARS = 48_000;
 const NO_CHAT = 'This run has no chat: there is no transcript to manage.';
 const NO_LEDGER = 'The transcript is not available here.';
-const PROTECTED: Record<string, string> = { latest: 'in the newest 2 turns', pinned: 'pinned', nested: 'never in the context', open: "the person's newest message or instruction" };
+const PROTECTED: Record<string, string> = { latest: 'in the newest turn', nested: 'never in the context', open: "the person's newest message or instruction" };
+/** What a mark of a run says to the ledger: the main AI asked for it, on its word – its own pin does not stop it (context/ledger/service.ts). */
+const MARK = { reason: 'asked run', by: 'subconscious' } as const;
 
 /**
  * An item a run gets listed. Wording one costs its own tokens plus about 2,900 on the cheap model (live 02.11.2026: 4,501 input tokens for 6,562
@@ -89,13 +99,14 @@ export function condensedProblem(original: string, condensed: string): string | 
   return aboutSomethingElse(original, condensed) ? 'it is about something else: most of its words are not in the original' : undefined;
 }
 
-/** Where the newest 2 turns begin: the two newest runs here and what came after the third ended; none: nothing is older. */
-export function latestTurns(services: Pick<RuntimeServices, 'runs'>, agentId: string, conversationId: string): { runIds: Set<string>; after: number } | undefined {
+/** Where the newest turn begins: the newest run here and what came after the one before it ended; none: nothing is older. */
+export function latestTurns(services: Pick<RuntimeServices, 'runs'>, agentId: string, thread: string): { runIds: Set<string>; after: number } | undefined {
   let runs: Run[];
-  try { runs = services.runs.list(agentId, 200).filter((run) => run.conversationId === conversationId); } catch { return undefined; }
-  if (runs.length < 3) return undefined;
-  const third = runs[2];
-  return { runIds: new Set([runs[0].id, runs[1].id]), after: third.endedAt ?? third.startedAt ?? 0 };
+  // the thread's runs: a part's own (split:<id>), else the agent's own turns (no part's)
+  try { runs = services.runs.list(agentId, 200).filter((run) => (isSplitThread(thread) ? `split:${run.splitId}` === thread : !run.splitId)); } catch { return undefined; }
+  if (runs.length < 2) return undefined;
+  const before = runs[1];
+  return { runIds: new Set([runs[0].id]), after: before.endedAt ?? before.startedAt ?? 0 };
 }
 
 /** The model's condensation of one original, asked again once with the reason when it cannot be used. */
@@ -115,21 +126,19 @@ async function worded(run: FlowRun, item: LedgerItem, source: string): Promise<{
 }
 
 /**
- * Why an item may not be touched, or undefined. A pin is the main AI's hold against the subconscious's own tidying: a run on someone's word – the
- * person's message before a turn, the main AI's own call – may take a pinned item out (q-r2d s15, 03.11.2026: the file the main AI had brought back
- * was left out of the list, the asked run hid other items and the person heard that the file was gone).
+ * Why an item may not be touched, or undefined. A pinned item is no reason: the main AI asked (q-r2d s15, 03.11.2026: the file it had brought
+ * back was left out of the list, the asked run hid other items and the person heard that the file was gone).
  */
-function protectedBy(item: LedgerItem, scope: Pick<Scope, 'turns' | 'open' | 'onWord'>): string | undefined {
+function protectedBy(item: LedgerItem, scope: Pick<Scope, 'turns' | 'open'>): string | undefined {
   if (item.nested) return PROTECTED.nested;
-  if (item.pinnedUntil !== undefined && !scope.onWord) return PROTECTED.pinned;
   const { turns } = scope;
   if (!turns || (item.runId && turns.runIds.has(item.runId)) || item.createdAt > turns.after) return PROTECTED.latest;
   return scope.open.has(item.itemId) ? PROTECTED.open : undefined;
 }
 
-interface Scope { conversationId: string; items: Map<string, LedgerItem>; turns: ReturnType<typeof latestTurns>; open: ReadonlySet<string>; ledger: NonNullable<RuntimeServices['ledger']>; onWord: boolean }
+interface Scope { thread: string; items: Map<string, LedgerItem>; turns: ReturnType<typeof latestTurns>; open: ReadonlySet<string>; ledger: NonNullable<RuntimeServices['ledger']> }
 
-type RunPlace = Pick<FlowRun, 'services' | 'agent' | 'conversationId'> & Partial<Pick<FlowRun, 'kind'>>;
+type RunPlace = Pick<FlowRun, 'services' | 'agent' | 'thread'>;
 
 /** The ids of the person's still open words: the newest message, and the newest with content when that one is a bare go-ahead. */
 function openWords(run: RunPlace, items: readonly LedgerItem[]): Set<string> {
@@ -145,13 +154,13 @@ function openWords(run: RunPlace, items: readonly LedgerItem[]): Set<string> {
 
 /** The run's transcript, or the text saying why there is none. */
 function scopeOf(run: RunPlace): Scope | string {
-  if (!run.conversationId) return NO_CHAT;
+  if (!run.thread) return NO_CHAT;
   const ledger = run.services.ledger;
   if (!ledger) return NO_LEDGER;
-  const items = ledger.items(run.agent.id, run.conversationId);
+  const items = ledger.items(run.agent.id, run.thread);
   return {
-    conversationId: run.conversationId, ledger, turns: latestTurns(run.services, run.agent.id, run.conversationId),
-    open: openWords(run, items), items: new Map(items.map((item) => [item.itemId, item])), onWord: run.kind === 'before-turn' || run.kind === 'asked',
+    thread: run.thread, ledger, turns: latestTurns(run.services, run.agent.id, run.thread),
+    open: openWords(run, items), items: new Map(items.map((item) => [item.itemId, item])),
   };
 }
 
@@ -160,7 +169,7 @@ function messageOf(run: Pick<FlowRun, 'services'>, item: LedgerItem): Message | 
   try { return run.services.chats.message(item.ref.slice(4)); } catch { return undefined; }
 }
 
-/** The items a bare number (33 or "33") may mean: messages (m<seq>) and the other kinds count apart, so two can carry it; undefined for any other id. */
+/** The items a bare number (33 or "33") may mean: messages and the other kinds count apart, so two can carry it; undefined for any other id. */
 function numbered(value: string | number, scope: Scope): string[] | undefined {
   const text = String(value).trim();
   if (!/^\d+$/.test(text)) return undefined;
@@ -168,7 +177,7 @@ function numbered(value: string | number, scope: Scope): string[] | undefined {
   return Object.values(KIND_PREFIX).map((letter) => `${letter}${n}`).filter((id) => scope.items.has(id));
 }
 
-/** An id as a brain gave it, a bare number as the one item that carries it; undefined when it is no id at all. */
+/** An id as the run gave it, a bare number as the one item that carries it; undefined when it is no id at all. */
 function idOf(value: unknown, scope: Scope): string | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
   const found = numbered(value, scope);
@@ -190,7 +199,7 @@ function noItem(raw: string, scope: Scope): string {
 }
 
 /** What an item takes in the main AI's context now, in tokens. */
-const nowTokens = (item: LedgerItem): number => (item.state === 'hidden' ? 0 : item.state === 'condensed' ? Math.ceil((item.condensed?.length ?? 0) / 4) : item.tokens);
+const nowTokens = (item: LedgerItem): number => (item.state === 'hidden' ? 0 : item.state === 'condensed' ? tokensOf(item.condensed?.length ?? 0) : item.tokens);
 
 /** One item: a marked one with what it takes now and was (q-r2a, 03.11.2026: listed with its old size, hidden items were condensed again as if big). */
 const listLine = (item: LedgerItem): string => {
@@ -200,16 +209,6 @@ const listLine = (item: LedgerItem): string => {
 
 /** What a tidy run could still take off, in the scope's present state. */
 const worthItems = (scope: Scope): LedgerItem[] => [...scope.items.values()].filter((item) => item.state === 'keep' && item.tokens >= WORTH_TOKENS && !protectedBy(item, scope));
-
-/** What a run could take off this chat's transcript now, in tokens: 0 without a chat or a ledger. For the wake check: no model. Never throws. */
-export function savableTokens(services: RuntimeServices, agent: FlowRun['agent'], conversationId: string | undefined): number {
-  try {
-    const scope = scopeOf({ services, agent, conversationId });
-    return typeof scope === 'string' ? 0 : worthItems(scope).reduce((sum, item) => sum + item.tokens, 0);
-  } catch {
-    return 0;
-  }
-}
 
 /** What a mark's output ends with: what is still big, so that nothing has to be listed again to know whether the run is through. */
 function leftLine(run: FlowRun): string {
@@ -226,7 +225,7 @@ async function condenseOne(scope: Scope, run: FlowRun, raw: string, given: strin
   if (!id || !item) return noItem(raw, scope);
   const why = protectedBy(item, scope);
   if (why) return `${id} stays as it is: ${why}.`;
-  const original = scope.ledger.original(run.agent.id, scope.conversationId, id);
+  const original = scope.ledger.original(run.agent.id, scope.thread, id);
   if (!original || original.pruned) return `${id} cannot be condensed: its original is gone.`;
   if (given === undefined && item.state === 'condensed') return `${id} is condensed already.`;
   const source = original.args ? `${original.args}\n${original.text}` : original.text;
@@ -235,11 +234,18 @@ async function condenseOne(scope: Scope, run: FlowRun, raw: string, given: strin
   const message = messageOf(run, item);
   // A model never words what the person told or approved: their condensed line says it is keywords.
   const person = message?.authorId === HUMAN_ID && message.authorKind === 'human';
-  const condensed = run.services.secrets ? run.services.secrets.redact(result.text) : result.text;
-  scope.ledger.mark(run.agent.id, scope.conversationId, [{ itemId: id, state: 'condensed', condensed: person ? `Keywords (not the person's words): ${condensed}` : condensed, reason: `${run.kind} run`, by: 'subconscious', onWord: scope.onWord }]);
-  const saved = nowTokens(item) - Math.ceil(result.text.length / 4); // a hidden item comes back: it costs
+  const redacted = run.services.secrets ? run.services.secrets.redact(result.text) : result.text;
+  const condensed = person ? `Keywords (not the person's words): ${redacted}` : redacted;
+  scope.ledger.mark(run.agent.id, scope.thread, [{ itemId: id, state: 'condensed', condensed, ...MARK }]);
+  // B-080 wave 3: counted on the text stored (prefix and redaction included), as nowTokens counts it; a hidden item comes
+  // back: it costs; so does a longer text in place of a shorter one
+  const saved = nowTokens(item) - tokensOf(condensed.length);
   if (run.tally) run.tally.saved += saved;
-  return saved >= 0 ? `condensed ${id}: about ${saved} tokens saved at the main AI's next turn` : `condensed ${id}: it was hidden, so it comes back with about ${-saved} tokens at the main AI's next turn`;
+  if (saved >= 0) return `condensed ${id}: about ${saved} tokens saved at the main AI's next turn`;
+  // B-080 wave 3: the sentence follows the item's state – a condensed item given a longer text was never hidden
+  return item.state === 'hidden'
+    ? `condensed ${id}: it was hidden, so it comes back with about ${-saved} tokens at the main AI's next turn`
+    : `condensed ${id}: the new text is longer, so it costs about ${-saved} tokens more at the main AI's next turn`;
 }
 
 function givenText(source: string, given: string): { text: string } | { problem: string } {
@@ -248,18 +254,11 @@ function givenText(source: string, given: string): { text: string } | { problem:
   return problem ? { problem } : { text };
 }
 
-/** done.show: what this run brought back goes to the main AI as a real call, and stays for it like its own restore. */
-export function showRestored(run: FlowRun, refs: readonly string[]): void {
-  const ids = refs.map((ref) => normalizeItemId(ref)).filter((id): id is string => Boolean(id && run.restored?.has(id)));
-  if (!ids.length || !run.conversationId) return;
-  run.show({ tool: 'context.restore', args: { ids }, output: restoreItems(run.services, run.agent.id, run.conversationId, { ids }) });
-}
-
 export const contextTools: FlowTool[] = [
   {
     name: 'context.list',
     args: '{after?: id, minTokens?}',
-    line: `The older items of the main AI's transcript, oldest first, ${PAGE_ITEMS} per page: id, kind, tokens, condensed or hidden when marked, first words (m<seq> message, t tool call with output, s skill, r reasoning, a its own text, f file). minTokens: only items that take at least that many tokens now. after: the last id of the page before.`,
+    line: `The older items of the main AI's transcript, oldest first, ${PAGE_ITEMS} per page: id, kind, tokens, condensed or hidden when marked, first words (m message, t tool call with output, s skill, r reasoning, a its own text, f file). minTokens: only items that take at least that many tokens now. after: the last id of the page before.`,
     run(args, run) {
       const scope = scopeOf(run);
       if (typeof scope === 'string') return scope;
@@ -270,7 +269,7 @@ export const contextTools: FlowTool[] = [
       // minTokens counts what an item takes now: a tidy run's list is what could still come off (q-r2c: with every marked item in it, the
       // cheap model hid all of them and condensed the hidden ones back, turn after turn); without it a run sees them all, with their state.
       const fitting = older.filter((item) => item.order > after && nowTokens(item) >= minTokens);
-      // Whether an output's result is known shows in what the main AI said after it (a brain that saw only titles left everything alone, live 02.11.2026).
+      // Whether an output's result is known shows in what the main AI said after it (a run that saw only titles left everything alone, live 02.11.2026).
       const all = [...scope.items.values()].sort((a, b) => a.order - b.order);
       const saidAfter = (item: LedgerItem) => (item.kind === 'assistant' ? undefined : all.find((other) => other.order > item.order && other.kind === 'assistant')?.title);
       const lines: string[] = [];
@@ -298,7 +297,7 @@ export const contextTools: FlowTool[] = [
       const id = normalizeItemId(raw);
       const item = id ? scope.items.get(id) : undefined;
       if (!id || !item) return noItem(raw, scope);
-      const original = scope.ledger.original(run.agent.id, scope.conversationId, id);
+      const original = scope.ledger.original(run.agent.id, scope.thread, id);
       if (!original) return `No such item: ${id}.`;
       const from = Math.max(0, Math.trunc(Number(args.from)) || 0);
       const rest = original.text.length - from - READ_CHARS;
@@ -308,18 +307,23 @@ export const contextTools: FlowTool[] = [
   },
   {
     name: 'context.condense',
-    args: '{ids}',
-    line: `Puts a short text in each item's place (up to ${CONDENSE_IDS} per call), worded from the whole original: nothing to read first. The main AI sees it with a stamp to get the original back.`,
+    args: '{ids} | {texts: {id: text}}',
+    line: `A short text in each item's place (up to ${CONDENSE_IDS} per call): ids – worded from the whole original; texts – the content itself, shorter, every value that matters kept (not a description of it). The main AI sees it marked condensed, with a stamp back to the original.`,
     async run(args, run) {
       const scope = scopeOf(run);
       if (typeof scope === 'string') return scope;
-      const ids = idsOf(args.ids ?? args.id, scope).slice(0, CONDENSE_IDS);
-      if (!ids.length) return 'context.condense needs ids.';
+      const own = args.texts && typeof args.texts === 'object' && !Array.isArray(args.texts) ? args.texts as Record<string, unknown> : {};
+      const ids = [...idsOf(Object.keys(own), scope), ...idsOf(args.ids ?? args.id ?? [], scope)].slice(0, CONDENSE_IDS);
+      if (!ids.length) return 'context.condense needs ids or texts.';
+      const given = (raw: string) => {
+        const text = own[raw] ?? Object.entries(own).find(([key]) => idOf(key, scope) === raw)?.[1];
+        return typeof text === 'string' ? text : typeof args.text === 'string' && ids.length === 1 ? args.text : undefined;
+      };
       const out: string[] = [];
       for (const raw of ids) {
         try {
-          out.push(await condenseOne(scope, run, raw, typeof args.text === 'string' && ids.length === 1 ? args.text : undefined));
-        } catch (error) { // a stuck or failing model: what is condensed so far stays, and the brain hears it
+          out.push(await condenseOne(scope, run, raw, given(raw)));
+        } catch (error) { // a stuck or failing model: what is condensed so far stays, and the run hears it
           out.push(`${raw} not condensed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
@@ -328,13 +332,24 @@ export const contextTools: FlowTool[] = [
   },
   {
     name: 'context.hide',
-    args: '{ids}',
-    line: 'Takes items out of the main AI\'s view completely (it can still get them back). For what no longer matters: superseded output, a resolved detour, noise.',
+    args: '{ids} | {before: id, keep?: ids}',
+    line: 'Takes items out of the main AI\'s view (it can get them back): superseded output, a resolved detour, noise. before: every item older than that id but those in keep.',
     run(args, run) {
       const scope = scopeOf(run);
       if (typeof scope === 'string') return scope;
       const hidden: string[] = [];
       const refused: string[] = [];
+      if (args.before !== undefined) { // everything older than that id, but what I keep and what stays out of reach
+        const raw = idOf(args.before, scope) ?? '';
+        const edge = scope.items.get(normalizeItemId(raw) ?? '');
+        if (!edge) return noItem(raw, scope);
+        const keep = new Set(idsOf(args.keep ?? [], scope).map((id) => normalizeItemId(id)));
+        const older = [...scope.items.values()].filter((item) => item.order < edge.order && item.state !== 'hidden' && !keep.has(item.itemId) && !protectedBy(item, scope)).sort((a, b) => a.order - b.order);
+        if (older.length) scope.ledger.mark(run.agent.id, scope.thread, older.map((item) => ({ itemId: item.itemId, state: 'hidden' as const, ...MARK })));
+        if (run.tally) for (const item of older) run.tally.saved += nowTokens(item);
+        const kept = keep.size ? `, kept ${[...keep].filter(Boolean).join(', ')}` : '';
+        return `${older.length ? `hidden ${older.length} items before ${edge.itemId} (${older[0].itemId}…${older.at(-1)!.itemId})${kept}` : `nothing to hide before ${edge.itemId}`}\n${leftLine(run)}`.trim();
+      }
       for (const raw of idsOf(args.ids, scope).slice(0, HIDE_IDS)) {
         const id = normalizeItemId(raw);
         const item = id ? scope.items.get(id) : undefined;
@@ -342,7 +357,7 @@ export const contextTools: FlowTool[] = [
         if (id && item && !why) hidden.push(id);
         else refused.push(`${raw} (${why})`);
       }
-      if (hidden.length) scope.ledger.mark(run.agent.id, scope.conversationId, hidden.map((itemId) => ({ itemId, state: 'hidden', reason: `${run.kind} run`, by: 'subconscious', onWord: scope.onWord })));
+      if (hidden.length) scope.ledger.mark(run.agent.id, scope.thread, hidden.map((itemId) => ({ itemId, state: 'hidden' as const, ...MARK })));
       if (run.tally) for (const id of hidden) run.tally.saved += nowTokens(scope.items.get(id)!);
       const said = [hidden.length ? `hidden: ${hidden.join(', ')}` : '', refused.length ? `left as they are: ${refused.join(', ')}` : ''].filter(Boolean).join('; ');
       return said ? `${said}\n${leftLine(run)}`.trim() : 'context.hide needs ids.';
@@ -351,19 +366,13 @@ export const contextTools: FlowTool[] = [
   {
     name: 'context.restore',
     args: '{ids}',
-    line: 'Brings condensed or hidden items back to full. The main AI gets the originals only when it asked me or done.show names the ids. Not needed to condense: context.condense also takes a hidden item.',
+    line: 'Brings condensed or hidden items back to full; the main AI gets the originals with my answer. Not needed to condense: context.condense also takes a hidden item.',
     run(args, run) {
       const scope = scopeOf(run);
       if (typeof scope === 'string') return scope;
       const ids = idsOf(args.ids, scope).slice(0, MAX_RESTORE_IDS);
       if (!ids.length) return 'context.restore needs ids.';
-      if (run.kind !== 'asked') {
-        const back = ids.map((id) => normalizeItemId(id)).filter((id): id is string => Boolean(id && scope.items.has(id) && scope.items.get(id)!.state !== 'keep'));
-        scope.ledger.mark(run.agent.id, scope.conversationId, back.map((itemId) => ({ itemId, state: 'keep', reason: `${run.kind} run`, by: 'subconscious' })));
-        for (const id of back) run.restored?.add(id);
-        return back.length ? `back in full: ${back.join(', ')}` : 'Nothing to bring back.';
-      }
-      const output = restoreItems(run.services, run.agent.id, scope.conversationId, { ids });
+      const output = restoreItems(run.services, run.agent.id, scope.thread, { ids });
       run.show({ tool: 'context.restore', args: { ids }, output });
       return output.split('\n')[0];
     },

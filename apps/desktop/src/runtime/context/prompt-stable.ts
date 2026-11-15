@@ -1,25 +1,21 @@
-// The STABLE system-prompt section, in a fixed order: (1) identity + org placement (facts only),
-// (2) B-076: the agent's SYSTEM.md as the main part – the team's "How I work", its role and what it has here, in one voice
-// (agent-core/prompt.ts coreInstructions); an older or own SYSTEM.md without "# How I work" gets the rules live above it
-// under "## My instructions" until its prompt update; (3) the rich-answer line from the block catalog (tier by model; it
-// names the ui.help guide by its exposed name `ui__help` when the agent's mode offers it, F08; B-049 F5: one line,
-// the quick reference is ui.help "blocks"),
-// (4) the mode, (6) B-044: its folder and the system map (agent-core/prompt.ts "My folder"),
-// (7) B-047 D6: "My environment" (context/environment.ts: this PC, the workspace, how to search the web, screen tools),
-// (8) its Main Skills (names + descriptions, agent-core/prompt.ts), (9) B-049 F5: one skills fact line (skills.find /
-// skills.load) instead of the index itself – B-059: without the number, so a new or retired skill (or lesson) never
-// changes the stable text and renews the agent's native sessions; only an empty ↔ non-empty index does. B-078 D12: the
-// always-visible skills joined the pinned notes in one always set with one cap (knowledge/always.ts, volatile).
-// The identity/rules values carry the has_<tool> flags of the turn's tool offer (environment.ts toolFlags), so a
-// principle that names a tool renders only where it is offered.
-// Owns: the placeholder values and section order. Deterministic: the same agent, mode, model
-// tier and settings give byte-identical text, so providers can cache the prefix.
-// Never: timestamps, task state, memory or anything else that changes per turn (volatile).
+// The STABLE system prompt, in reading order: (1) "# Who I am" (identity.md: facts of me and my place); (2) "# My SYSTEM.md"
+// (one line on its folder, then the file without its comments: my whole standing text – how I work, my role, what I have
+// here; org/standard.ts keeps the team's standard as a comment at its end); (3) "## My environment" (environment.ts);
+// (4) "## Skills" (skills.md and my main skills); (5) "## More tools": every tool my mode offers beyond the engine's
+// direct ones, one line each (tools-meta.ts moreToolsSection); (6) "## Rich answers" (shared/blocks/prompt.ts); (7) the
+// mode; (8) last, "## From <the person>": the agent's HUMAN.md (agent-core/human.ts – owner 15.11.2026: the person's own
+// lines, "unten angehängt"; nothing but the person changes it). The mode is always the agent's own (agents/turn-prepare.ts).
+// Nothing here moves by itself: it changes only with the agent's or the person's own act (SYSTEM.md, settings, org,
+// mode, skills index empty ↔ not, a learned tool at a fresh session) or with this PC or app version.
+// Owns: the placeholder values and section order. Deterministic: the same agent, mode, engine, model tier and settings
+// give byte-identical text.
+// Never: timestamps, task state, memory or anything else that changes per turn (the live part, prompt-volatile.ts).
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
 import type { RouteDecision } from '../../shared/model/providers.ts';
+import type { EngineCaps } from '../engines/types.ts';
 import { blockLine } from '../../shared/blocks/prompt.ts';
 import type { PromptOptions } from '../../shared/blocks/prompt.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
@@ -27,9 +23,10 @@ import { toWireName } from '../engines/shared.ts';
 import { UI_HELP_TOOL } from '../tools/builtin/ui.ts';
 import type { PromptTemplates } from './templates.ts';
 import '../contracts/people.ts';
-import { coreFolderSection, coreInstructions, mainSkillsSection } from '../agent-core/prompt.ts';
-import { environmentSection, languageName, offeredTools, toolFlags } from './environment.ts';
-import { hasWorkStandard } from '../org/system-parts.ts';
+import { coreInstructions, mainSkillsSection, systemMdSection } from '../agent-core/prompt.ts';
+import { environmentSection, languageName, offeredTools } from './environment.ts';
+import { moreToolsSection } from '../tools/builtin/tools-meta.ts';
+import { offeredTools as engineTools } from '../agents/session-key.ts';
 
 const MAX_REPORTS = 15;
 const SKILL_DESCRIPTION_CHARS = 300;
@@ -40,7 +37,7 @@ function safe<T>(fn: () => T, fallback: T): T {
   try { return fn(); } catch { return fallback; }
 }
 
-/** Placeholder values for the identity/rules templates. */
+/** Placeholder values for the identity template. */
 export function identityValues(services: RuntimeServices, agent: Agent): Record<string, string> {
   const profile = safe(() => services.settings.get().profile, undefined);
   const name = profile?.name?.trim() ?? '';
@@ -61,7 +58,7 @@ export function identityValues(services: RuntimeServices, agent: Agent): Record<
     manager_name: manager ? (manager.role ? `${manager.name} (${manager.role})` : manager.name) : '',
     reports: reportText,
     user_given: name ? 'yes' : '',
-    user_name: name || 'the CEO',
+    user_name: name || 'the person',
     user_label: name || 'CEO',
     company: profile?.company?.trim() ?? '',
     language: languageName(profile?.language),
@@ -99,38 +96,47 @@ export function modeSection(mode: ModeInfo): string {
 }
 
 /**
- * B-049 F5: one fact line – the tools that find and load the mode's skills (each named only when `offered` has it);
- * B-059: the default text names no count. `skills` and `count` stay for an own skills.md that renders them.
- * B-066: `always` – the few `metadata.always` skills by name and description, so "read this before spending money"
- * really reaches the main AI; only a change to one of those changes this text.
+ * "## Skills": the fact line of skills.md (naming knowledge.find / knowledge.open only where `offered` has them) and my main
+ * skills by name and description. '' when I have neither (an empty index and no main skill).
  */
 export function skillsSection(services: RuntimeServices, templates: PromptTemplates, agent: Agent, mode: ModeInfo, offered: ReadonlySet<string> = offeredTools(services, agent, mode)): string {
   const skills = safe(() => services.skills.indexFor(agent, mode), []);
-  if (!skills.length) return '';
   const line = (skill: SkillInfo) => `- ${skill.name} – ${excerpt(skill.description, SKILL_DESCRIPTION_CHARS)}`;
   const has = (name: string) => (offered.has(name) ? 'yes' : '');
-  // B-078 D12: the always-skills moved into the one always set (knowledge/always.ts, the volatile "pinned" section); {{always}} stays '' for an own skills.md
-  return templates.render('skills', { skills: skills.map(line).join('\n'), always: '', count: String(skills.length), has_skills_find: has('skills.find'), has_skills_load: has('skills.load') });
+  const fact = skills.length ? templates.render('skills', { skills: skills.map(line).join('\n'), count: String(skills.length), has_knowledge_find: has('knowledge.find'), has_knowledge_open: has('knowledge.open') }) : '';
+  const main = mainSkillsSection(services, agent);
+  if (!main) return fact;
+  return [fact || '## Skills', main].join('\n');
+}
+
+/** "## More tools": what the mode offers beyond this engine's direct tools – the turn's own offer (agents/session-key.ts). */
+export function moreToolsFor(services: RuntimeServices, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): string {
+  const usable = safe(() => services.tools.specsFor(input.agent, input.mode), []);
+  const caps = safe<Pick<EngineCaps, 'dynamicTools' | 'mcp' | 'ownTools'>>(() => services.engines.get(input.route.engine).caps, { dynamicTools: false, mcp: true, ownTools: true }); // unknown: a CLI engine over the hub
+  const direct = safe(() => new Set(engineTools(services, input, caps).names), new Set<string>());
+  return moreToolsSection(usable, direct);
+}
+
+/** "## From <name>": the agent's HUMAN.md ('' when it has none or it is empty). */
+export function humanSection(services: RuntimeServices, agent: Agent, name: string): string {
+  const text = safe(() => services.agentCore?.human(agent.id) ?? '', '');
+  if (!text) return '';
+  return [`## From ${name}`, safe(() => services.secrets.redact(text), text)].join('\n');
 }
 
 export function buildStable(services: RuntimeServices, templates: PromptTemplates, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): string {
   const { agent, mode, route } = input;
-  const offered = offeredTools(services, agent, mode); // one offer for the flags and the environment (the turn's own rule)
-  const values = { ...identityValues(services, agent), ...toolFlags(offered) };
-  const sections = [templates.render('identity', values)];
-  const own = coreInstructions(services, agent)?.trim();
-  const redacted = own ? safe(() => services.secrets.redact(own), own) : '';
-  if (own && hasWorkStandard(own, templates.get('rules'))) {
-    sections.push(redacted); // B-076: SYSTEM.md is the main part – the team's "How I work", my role, what I have here
-  } else {
-    sections.push(templates.render('rules', values)); // an older or own SYSTEM.md without the standard: the rules live
-    if (own) sections.push(`## My instructions\n${redacted}`);
-  }
-  sections.push(blockLine(blockOptions(services, { agent, mode, route }))); // B-049 F5: one line; the quick reference is ui.help "blocks"
-  sections.push(modeSection(mode));
-  sections.push(coreFolderSection(services, agent, mode)); // B-044: its folder, that it keeps it current, the home project
-  sections.push(environmentSection(services, { agent, mode, route }, offered)); // B-047 D6: this PC, workspace, web, screen
-  sections.push(mainSkillsSection(services, agent));
-  sections.push(skillsSection(services, templates, agent, mode, offered));
-  return sections.filter((section) => section.trim()).join('\n\n');
+  const offered = offeredTools(services, agent, mode); // one offer for the skills line and the environment (the turn's own rule)
+  const values = identityValues(services, agent);
+  const file = coreInstructions(services, agent);
+  return [
+    templates.render('identity', values),
+    systemMdSection(services, agent, file ? safe(() => services.secrets.redact(file), file) : ''),
+    environmentSection(services, { agent, mode, route }, offered), // this PC, workspace, web, screen
+    skillsSection(services, templates, agent, mode, offered),
+    moreToolsFor(services, { agent, mode, route }),
+    blockLine(blockOptions(services, { agent, mode, route })), // one line; the quick reference is ui.help "blocks"
+    modeSection(mode),
+    humanSection(services, agent, values.user_name), // owner 15.11.2026: the person's own lines stand last
+  ].filter((section) => section.trim()).join('\n\n');
 }

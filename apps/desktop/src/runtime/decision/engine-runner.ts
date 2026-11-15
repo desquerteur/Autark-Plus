@@ -1,8 +1,8 @@
 // StructuredRunner over the real engines: routes a clean-context, tool-less turn to the
 // cheapest suitable model (category 'cheap-chat', economy) and returns its (structured) answer.
 // Up to 'strong' first; when nothing in that band is usable (e.g. only frontier models are
-// connected, or all their accounts are limited) the economy pick of any tier. Used by the LLM
-// decision fallback, the verifier and compaction.
+// connected, or all their accounts are limited) the economy pick of any tier. Used by the subconscious, the LLM
+// decision fallback, the verifier and widget fills.
 // The model is the Decisions use (settings.json routing.decision; "auto" = the helper default below) – the router's
 // Settings use pin (routing/pins.ts), falling back to the cheap pick with a reason when it is not usable.
 // MM10: createListener – the same one-shot turn with one recording (media.listen) on a model
@@ -28,6 +28,11 @@
 // One time limit (`timeoutMs`) covers both attempts and the caller's signal cuts both; the account's
 // limits the engine reports during a call are kept (updateLimits).
 // A caller's deadline (`deadlineMs`) is part of the call's time limit: the call ends when it passes.
+// B-089 (11.11.2026: live 09.–10.11. 177 decisions ended "The turn was stopped" – the 90 s default cut tool-timeout
+// reviews that had 120 s; on 07.11. a 402 went over to a second connection with the same key and got 402 again):
+// a caller's deadline is the call's time limit (the 90 s default holds only without one; an explicit `timeoutMs`
+// still caps it); a failed account's consequence also lands on every connection with the same key and address
+// (one account at the provider), the failover skips them all, and `log` says which way answered.
 // What a call used goes to `onUsage` and with its answer as the engine reported it: all input, the cached part of it, the output.
 // B-078 D14: a caller's `temperature` goes with the engine turn; an engine that takes one honours it, the others ignore it.
 // Owns: the synthetic runtime agent, the one-shot engine call, its one failover and which models can listen.
@@ -38,7 +43,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Agent } from '../../shared/model/org.ts';
 import type { Account, Effort, EngineId, ModelInfo, RouteDecision } from '../../shared/model/providers.ts';
-import type { AccountService, Clock, EngineRegistry, ModelCatalog, NotificationService, Paths, RouteRequest, Router, SettingsService } from '../contracts.ts';
+import type { AccountService, Clock, EngineRegistry, Logger, ModelCatalog, NotificationService, Paths, RouteRequest, Router, SettingsService } from '../contracts.ts';
 import type { EngineEvent, EngineTurnResult, TurnInputItem } from '../engines/types.ts';
 import { accountFailure, recordAccountFailure } from '../accounts/failure.ts';
 import { chargeOf } from '../models/pricing.ts';
@@ -79,7 +84,7 @@ export interface EngineRunnerDeps {
   engines: EngineRegistry;
   router: Router;
   /** markLimited/markUnavailable: a failed attempt's account consequence; updateLimits: limits reported during a call. */
-  accounts: Pick<AccountService, 'get' | 'markLimited' | 'markUnavailable' | 'updateLimits'>;
+  accounts: Pick<AccountService, 'get' | 'markLimited' | 'markUnavailable' | 'updateLimits'> & Partial<Pick<AccountService, 'list'>>;
   catalog: Pick<ModelCatalog, 'get'>;
   paths: Pick<Paths, 'temp'>;
   clock: Clock;
@@ -89,14 +94,33 @@ export interface EngineRunnerDeps {
   notifications?: Pick<NotificationService, 'notify'>;
   /** What an attempt used, for who books it (the subconscious's runs: the spend journal). */
   onUsage?: (entry: { account: Account; route: RouteDecision; usage: NonNullable<EngineTurnResult['usage']> }) => void;
+  /** B-089: the line that says which way answered after a failover. */
+  log?: Pick<Logger, 'info'>;
+}
+
+/** B-089: the connections that are the same account at the provider as `account` (same key and address), itself excluded. */
+function sameKey(deps: Pick<EngineRunnerDeps, 'accounts'>, account: Account): Account[] {
+  if (!account.secretId) return [];
+  let all: Account[] = [];
+  try { all = deps.accounts.list?.() ?? []; } catch { return []; }
+  // without an address of its own a connection's address is its provider's: the same key then means the same account only there
+  return all.filter((other) => other.id !== account.id && other.secretId === account.secretId && (other.baseUrl ?? '') === (account.baseUrl ?? '')
+    && (account.baseUrl ? true : other.provider === account.provider));
+}
+
+/** B-089: the call's time limit – the caller's deadline when it names one (an explicit `timeoutMs` still caps it), else `timeoutMs` or 90 s. */
+export function callLimitMs(deps: Pick<EngineRunnerDeps, 'timeoutMs'>, deadlineMs?: number): number {
+  const deadline = deadlineMs !== undefined && Number.isFinite(deadlineMs) && deadlineMs > 0 ? deadlineMs : undefined;
+  if (deadline === undefined) return deps.timeoutMs ?? 90_000;
+  return Math.min(deps.timeoutMs ?? Infinity, deadline);
 }
 
 /** The folder below temp that helper turns work in (never the temp root). */
 export const HELPER_DIR = 'helper';
 
-/** The signal of one helper call: its time limit (`timeoutMs`, default 90 s, or the caller's shorter `deadlineMs`) and the caller's own signal. */
+/** The signal of one helper call: its time limit (callLimitMs) and the caller's own signal. */
 function callSignal(deps: Pick<EngineRunnerDeps, 'timeoutMs'>, signal: AbortSignal | undefined, deadlineMs?: number): AbortSignal {
-  const limit = Math.min(deps.timeoutMs ?? 90_000, deadlineMs !== undefined && deadlineMs > 0 ? deadlineMs : Infinity);
+  const limit = callLimitMs(deps, deadlineMs);
   const timeout = AbortSignal.timeout(Math.max(1, Math.round(limit)));
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
@@ -143,18 +167,29 @@ export function createEngineRunner(deps: EngineRunnerDeps): StructuredRunner {
       const result = await runOnce(deps, route.engine, { account, model: model.model, effort: route.effort }, { system, input: [{ type: 'text', text: prompt }], schema, signal: cut, onEvent, temperature });
       // What the attempt says about its account counts like an agent turn's, so the router skips that account next.
       if (result.usage) { try { deps.onUsage?.({ account, route, usage: result.usage }); } catch { /* bookkeeping only */ } }
-      const failed = accountFailure(result) !== undefined;
-      if (failed) { try { recordAccountFailure(deps, account, model.model, result); } catch { /* bookkeeping only: the call's own error still reaches the caller */ } }
-      return { route, model, result, failed };
+      const failure = accountFailure(result);
+      const twins = failure ? sameKey(deps, account) : [];
+      if (failure) {
+        // B-089: the same key at the same address is one account at the provider – its credit, limit or rejection is theirs too.
+        for (const one of [account, ...twins]) { try { recordAccountFailure(deps, one, model.model, result); } catch { /* bookkeeping only: the call's own error still reaches the caller */ } }
+      }
+      return { route, model, result, failure, twins };
     };
     let done = await attempt(await routeHelper(deps, purpose, { needs }, effort));
     // One failover like an agent turn's: a used-up or unreachable account goes once to another one, within the same time limit.
-    if (done.failed && !cut.aborted) {
-      const other = await routeHelper(deps, purpose, { needs, exclude: [done.route.accountId] }, effort).catch(() => undefined);
-      if (other && other.accountId !== done.route.accountId && !cut.aborted) done = await attempt(other);
+    if (done.failure && !cut.aborted) {
+      const first = done;
+      const away = [first.route.accountId, ...first.twins.map((one) => one.id)];
+      const other = await routeHelper(deps, purpose, { needs, exclude: away }, effort).catch(() => undefined);
+      if (other && !away.includes(other.accountId) && !cut.aborted) {
+        done = await attempt(other);
+        if (!done.failure && done.result.stop === 'done') {
+          try { deps.log?.info('helper call answered by another way', { purpose, failed: `${first.route.modelId} (${first.failure})`, by: other.modelId }); } catch { /* log only */ }
+        }
+      }
     }
     const { route, model, result } = done;
-    if (result.stop !== 'done') throw new Error(`structured runner: ${result.error?.message ?? result.stop}`);
+    if (result.stop !== 'done') throw new Error(`structured runner: ${result.error?.message ?? result.stop} (${route.modelId})`); // B-089: the log names the way that failed
     return { text: result.text, structured: result.structured, by: route.modelId, effort: route.effort, efforts: model.efforts, ...(result.usage ? { usage: result.usage } : {}) };
   };
 }

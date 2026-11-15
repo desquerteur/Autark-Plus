@@ -3,7 +3,8 @@
 // Owns: param checks, size caps, the per-runtime chunk-upload sessions, path confinement for
 // files.openPath (workspace or data dir, never the CLI account homes; `anywhere`, from the file tab: the whole PC) and named copies of
 // blobs for files.open (blobs have no extension, so the OS could not pick an app; bytes still on another of the
-// person's PCs are pulled first, and a type without an app here, like an .apk, is shown in its folder instead).
+// person's PCs are pulled first; an .apk is shown in its folder: it goes to a phone). B-080: an open that fails is that
+// failure – no second open in the folder (live 07.11.: an editor that started after 29 s came with an Explorer window).
 // Never: opens paths outside those roots unasked, opens executables directly (only "show in folder"),
 // or reads big files into memory for a client.
 
@@ -211,14 +212,8 @@ export function register(table: HandlerTable): void {
     // Both names are checked: the OS acts on the copy's name, which safeFileName may have changed.
     refuseExecutable(file.name, reveal);
     refuseExecutable(name, reveal);
-    const copy = await namedCopy(ctx.services, file, name);
-    try {
-      await ctx.services.host.openPath(copy, reveal);
-    } catch (error) {
-      // No app for this type here (an .apk on Windows): the file in its folder, ready to copy or send on.
-      if (reveal) throw error;
-      await ctx.services.host.openPath(copy, true);
-    }
+    // B-080: one open; showing it in its folder is the client's own choice (reveal: the message menu's "Show … in folder").
+    await ctx.services.host.openPath(await namedCopy(ctx.services, file, name), reveal);
     return { ok: true };
   });
 

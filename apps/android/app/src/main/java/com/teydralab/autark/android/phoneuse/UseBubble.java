@@ -1,8 +1,9 @@
 // Owns: the small bubble at the screen's top edge while the AI uses the phone (an accessibility overlay: no extra
-// permission, shown above every app) – "Autark is using this phone · Tap to stop": a tap cancels the step now and pauses
-// phone use for 30 s – and the one-time question "Use <App>?" with Allow / Not now when the AI reaches an app for the
-// first time. The bubble takes no touches outside itself, so the AI's own taps reach the app. Never: stays after the work
-// ended (it hides 2 s after the last step), or answers the question itself.
+// permission, shown above every app). It shows UseState: active – "Autark is using this phone" with Pause and ✕;
+// paused – "Paused · the phone is yours" with Continue and ✕. Its window watches touches outside itself
+// (FLAG_WATCH_OUTSIDE_TOUCH) without taking them: they reach the app as before, and the service hears that the person
+// touched the screen (UseState tells the AI's own gestures apart). Never: stays after the work ended (it hides
+// HIDE_AFTER_MS after the last step while active, and at once after ✕), or hides while paused.
 package com.teydralab.autark.android.phoneuse;
 
 import android.accessibilityservice.AccessibilityService;
@@ -12,99 +13,113 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.View;
+import android.view.MotionEvent;
 import android.view.WindowManager;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import java.util.Locale;
 
 final class UseBubble {
-    interface Answer { void answered(boolean allowed); }
+    /** What the person did with the bubble or the screen (called on the main thread). */
+    interface Person {
+        void pause();
+        void resume();
+        void end();
+        void touched();
+    }
 
-    private static final long HIDE_AFTER_MS = 2_000;
+    private static final long HIDE_AFTER_MS = 60_000;
     private final AccessibilityService service;
     private final WindowManager windows;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final Runnable stopped;
+    private final Person person;
+    private final boolean german = "de".equals(Locale.getDefault().getLanguage());
     private LinearLayout view;
     private TextView line;
-    private LinearLayout buttons;
+    private TextView primary;
+    private TextView close;
+    private boolean paused;
     private final Runnable hide = this::remove;
 
-    /** `stopped`: the person tapped the bubble (cancel and pause). */
-    UseBubble(AccessibilityService service, Runnable stopped) {
+    UseBubble(AccessibilityService service, Person person) {
         this.service = service;
         this.windows = (WindowManager) service.getSystemService(AccessibilityService.WINDOW_SERVICE);
-        this.stopped = stopped;
+        this.person = person;
     }
 
-    /** Shows "using this phone" while a step runs. */
-    void working() {
+    /** A step runs or just ran: active, visible; it goes HIDE_AFTER_MS after the last step. */
+    void active() {
         main.post(() -> {
+            paused = false;
             ensure();
-            main.removeCallbacks(hide);
             if (view == null) return;
-            line.setText("Autark is using this phone · Tap to stop");
-            buttons.setVisibility(View.GONE);
-        });
-    }
-
-    /** The step ended: the bubble goes after a moment, unless the next step comes. */
-    void idle() { main.post(() -> { main.removeCallbacks(hide); main.postDelayed(hide, HIDE_AFTER_MS); }); }
-
-    /** "Use <App>?" with Allow / Not now; `answer` hears the tap (or nothing, when the person does not tap). */
-    void ask(String app, Answer answer) {
-        main.post(() -> {
-            ensure();
+            line.setText(german ? "Autark bedient dieses Handy" : "Autark is using this phone");
+            primary.setText(german ? "Pause" : "Pause");
             main.removeCallbacks(hide);
-            if (view == null) { answer.answered(false); return; }
-            line.setText("Let the AI use " + app + "?");
-            buttons.removeAllViews();
-            buttons.addView(button("Allow", () -> { buttons.setVisibility(View.GONE); answer.answered(true); }));
-            buttons.addView(button("Not now", () -> { buttons.setVisibility(View.GONE); answer.answered(false); }));
-            buttons.setVisibility(View.VISIBLE);
+            main.postDelayed(hide, HIDE_AFTER_MS);
         });
     }
 
-    void close() { main.post(this::remove); }
+    /** The person has the phone: stays until Continue or ✕. */
+    void paused() {
+        main.post(() -> {
+            paused = true;
+            ensure();
+            if (view == null) return;
+            line.setText(german ? "Pausiert · das Handy gehört dir" : "Paused · the phone is yours");
+            primary.setText(german ? "Weiter" : "Continue");
+            main.removeCallbacks(hide);
+        });
+    }
+
+    void close() { main.post(() -> { main.removeCallbacks(hide); remove(); }); }
 
     private void ensure() {
         if (view != null) return;
         float density = service.getResources().getDisplayMetrics().density;
-        view = new LinearLayout(service);
-        view.setOrientation(LinearLayout.VERTICAL);
-        view.setGravity(Gravity.CENTER_HORIZONTAL);
         int pad = Math.round(10 * density);
-        view.setPadding(pad * 2, pad, pad * 2, pad);
+        view = new LinearLayout(service);
+        view.setOrientation(LinearLayout.HORIZONTAL);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        view.setPadding(pad * 2, pad / 2, pad / 2, pad / 2);
         GradientDrawable background = new GradientDrawable();
         background.setColor(Color.argb(235, 32, 36, 34));
         background.setCornerRadius(24 * density);
         view.setBackground(background);
-        line = new TextView(service);
-        line.setTextColor(Color.WHITE);
-        line.setTextSize(14);
+        line = text(14, false);
         view.addView(line);
-        buttons = new LinearLayout(service);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.setVisibility(View.GONE);
-        view.addView(buttons);
-        view.setOnClickListener((tap) -> { if (buttons.getVisibility() != View.VISIBLE) stopped.run(); });
+        primary = text(14, true);
+        primary.setPadding(pad * 2, pad, pad, pad);
+        primary.setOnClickListener((tap) -> { if (paused) person.resume(); else person.pause(); });
+        view.addView(primary);
+        close = text(16, true);
+        close.setText("✕");
+        close.setContentDescription(german ? "Beenden" : "End");
+        close.setPadding(pad, pad, pad * 2, pad);
+        close.setOnClickListener((tap) -> person.end());
+        view.addView(close);
+        // Touches outside the bubble arrive as ACTION_OUTSIDE (no position for other apps' windows) and go on to the app.
+        view.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) person.touched();
+            return false;
+        });
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         params.y = Math.round(36 * density);
         try { windows.addView(view, params); } catch (RuntimeException error) { view = null; }
     }
 
-    private Button button(String label, Runnable action) {
-        Button button = new Button(service);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setOnClickListener((tap) -> action.run());
-        return button;
+    private TextView text(int size, boolean bold) {
+        TextView text = new TextView(service);
+        text.setTextColor(Color.WHITE);
+        text.setTextSize(size);
+        if (bold) text.setTypeface(text.getTypeface(), android.graphics.Typeface.BOLD);
+        return text;
     }
 
     private void remove() {

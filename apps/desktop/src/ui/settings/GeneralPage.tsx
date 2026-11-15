@@ -3,8 +3,9 @@
 // messages always arrive, notify/service.ts) and behaviour (start at login and keep running when closed – desktop window
 // only –, keep the screen on while agents work, Enter sends). Language and time zone come from the PC; the AI notices the
 // language the person speaks and keeps profile.language and profile.notes itself (skill app-settings). The removed rows'
-// keys stay in settings.json for the AI. Every row is a view on settings.json. A phone changes appearance and
-// notifications only (its profile is read-only); the rows about the PC's window show only in the desktop window.
+// keys stay in settings.json for the AI. Every row is a view on settings.json. A securely paired owner phone
+// also edits profile and day, and (owner 12.11.2026) the PC's own behaviour rows – start at login, keep running when
+// closed, automatic update download – each marked as changing the PC; colleagues and plain-LAN devices do not.
 // Owns: these rows and their mapping onto Settings fields. Never: invents options without effect.
 
 import type { DaySettings } from '../../shared/model/day-settings.ts';
@@ -14,7 +15,7 @@ import { HumanAvatar } from '../lib/avatar.tsx';
 import { uploadFile } from '../lib/files.ts';
 import { isPersonSession } from '../lib/people.ts';
 import { bridge, os } from '../lib/platform.ts';
-import { isOwner, PC_NOTE } from '../lib/session.ts';
+import { canEditOwnerSettings, canUploadOwnerPhoto, HTTPS_NOTE, PC_NOTE, session } from '../lib/session.ts';
 import { settings, systemInfo, updateSettings } from '../lib/store.ts';
 import { act, CLEAR, Group, Row, Segmented, TextField, Toggle } from './controls.tsx';
 
@@ -32,12 +33,18 @@ export function GeneralPage() {
   const setPrefs = (patch: Partial<Preferences>) => act(() => updateSettings({ preferences: patch }), 'Could not save');
   const setNotes = (patch: Partial<NotificationSettings>) => act(() => updateSettings({ notifications: patch }), 'Could not save');
   const setDay = (patch: Partial<DaySettings>) => act(() => updateSettings({ day: patch }), 'Could not save');
-  const locked = !isOwner();
+  const locked = !canEditOwnerSettings();
+  const photoUpload = canUploadOwnerPhoto();
+  const lockNote = session.value?.kind === 'device' && session.value.capabilities.includes('settings') && !session.value.secure ? HTTPS_NOTE : PC_NOTE;
   const person = isPersonSession();
   const installed = systemInfo.value?.packaged === true; // the launcher registers only in the installed app
-  const start = os === 'windows' ? 'Start with Windows' : 'Start at login';
+  const pcOs = bridge ? os : systemInfo.value?.platform === 'win32' ? 'windows' : 'other'; // the PC's, not this phone's
+  const start = pcOs === 'windows' ? 'Start with Windows' : 'Start at login';
+  const remote = !bridge && !locked; // my secure phone changes the PC's behaviour from here
+  const onPc = (hint: string) => (remote ? `On your PC: ${hint}` : hint);
 
   const pickPhoto = () => {
+    if (!canUploadOwnerPhoto()) return;
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -50,11 +57,11 @@ export function GeneralPage() {
 
   return (
     <>
-      <Group title="Profile" hint={locked ? (person ? 'Your name and title are set by the owner of the organisation' : PC_NOTE) : undefined}>
-        <Row label="Photo">
+      <Group title="Profile" hint={locked ? (person ? 'Your name and title are set by the owner of the organisation' : lockNote) : undefined}>
+        <Row label="Photo" hint={!locked && !photoUpload ? 'Uploading a photo needs file access on this device' : undefined}>
           <div class="set-inline">
             <HumanAvatar size={36} />
-            {!locked && <button type="button" class="button secondary small" onClick={pickPhoto}>Change</button>}
+            {photoUpload && <button type="button" class="button secondary small" onClick={pickPhoto}>Change</button>}
             {!locked && <button type="button" class="button ghost small" disabled={!profile.avatarFileId} onClick={() => void setProfile({ avatarFileId: CLEAR })}>Remove</button>}
           </div>
         </Row>
@@ -75,17 +82,22 @@ export function GeneralPage() {
       </Group>
 
       <Group title="Behavior">
-        {bridge && (
+        {(bridge || remote) && (
           <>
-            <Row label={start} hint={installed ? START_HINT : `${START_HINT} – in the installed app`} disabled={!installed}>
+            <Row label={start} hint={onPc(installed ? START_HINT : `${START_HINT} – in the installed app`)} disabled={!installed}>
               <Toggle label={start} checked={prefs.openAtLogin} disabled={!installed} onChange={(openAtLogin) => void setPrefs({ openAtLogin })} />
             </Row>
-            <Row label="Keep running when the window is closed" hint="Agents and schedules continue in the tray">
+            <Row label="Keep running when the window is closed" hint={onPc('Agents and schedules continue in the tray')}>
               <Toggle label="Keep running when closed" checked={prefs.closeToTray} onChange={(closeToTray) => void setPrefs({ closeToTray })} />
             </Row>
+            {remote && (
+              <Row label="Download updates automatically" hint={onPc('Restarts only when you are idle')} disabled={!installed}>
+                <Toggle label="Download updates automatically" checked={prefs.autoDownloadUpdates} disabled={!installed} onChange={(autoDownloadUpdates) => void setPrefs({ autoDownloadUpdates })} />
+              </Row>
+            )}
           </>
         )}
-        <Row label="Keep the screen on while agents work" hint={locked ? PC_NOTE : 'Also keeps this PC awake for agent work at night'}>
+        <Row label="Keep the screen on while agents work" hint={locked ? lockNote : 'Also keeps this PC awake for agent work at night'}>
           <Toggle label="Keep the screen on while agents work" checked={day.keepAwake} disabled={locked} onChange={(keepAwake) => void setDay({ keepAwake })} />
         </Row>
         <Row label="Enter sends" hint={prefs.enterSends ? 'Shift+Enter for a new line' : 'Ctrl+Enter sends'}>

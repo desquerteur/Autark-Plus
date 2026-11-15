@@ -7,8 +7,8 @@
 // while open, a dot while an agent's new tab waits there – workspace/attention.ts), so nothing moves when the title, the
 // live line, the area or a panel changes; the open details panel's name and its X sit in the row above that panel (no
 // second header inside it). Phone: Back as the lead and the cells [call][chat tabs] at the row's end (the details sheet
-// keeps its own top line). B-075: who works and what comes from the chat's rows (the summary's live runs, live-text.ts
-// liveRuns) – the same line on every device –, a running split group as one entry (B-057, splits/split-model.ts).
+// keeps its own top line). Who works and what comes from the chat's live bar (the summary's live runs, live-text.ts
+// liveRuns) – the same line on every device –, a running split group as one entry (B-057).
 // Owns: the chat header's data and title markup. Never: shows provider logos or invented titles.
 
 import type { ConversationSummary } from '../../shared/model/chat.ts';
@@ -24,8 +24,6 @@ import { LiveLine } from './LiveLine.tsx';
 import { WorkingPopover, useWorkingPanel } from './WorkingPopover.tsx';
 import { clock12 } from '../lib/format.ts';
 import { liveNames, liveRuns, liveShort, liveStatus, type LiveEntry } from './live-text.ts';
-import { liveGroupsOf } from '../splits/split-model.ts';
-import { groupWorking } from '../splits/split-text.ts';
 import { useCallCell } from './call/CallHeader.tsx';
 import { chatMenu } from './chat-actions.ts';
 import { chatAttention } from '../workspace/attention.ts';
@@ -41,7 +39,7 @@ function ChatTitle(props: { chat: ConversationSummary }) {
   const { chat } = props;
   const partner = chatPartner(chat);
   const solo = partner?.kind === 'agent' ? partner.memberId : undefined; // a 1:1 names only what its agent does
-  const entries: LiveEntry[] = [...liveRuns(chat), ...liveGroupsOf(chat.id).map((group) => ({ agentId: group.agentId, conversationId: chat.id, note: groupWorking(group) }))];
+  const entries: LiveEntry[] = liveRuns(chat);
   const live = chat.working.length > 0 || entries.length > 0;
   const nameOf = (id: string) => knownAgentMap.value.get(id)?.name;
   const status = live ? liveStatus(chat, solo, entries, nameOf) : '';

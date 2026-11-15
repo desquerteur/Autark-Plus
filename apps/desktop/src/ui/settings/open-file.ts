@@ -1,6 +1,7 @@
 // Opens a file or folder behind a Settings page, so it is one click away: in the pane's file tab (openInTab), or with the
 // system's own app (openInData, files.openPath; also where a narrow window has no pane beside the page). A folder that does
-// not exist yet opens the nearest one that does; a file that does not exist yet opens as a new file in the tab.
+// not exist yet opens the nearest one that does; a file that does not exist yet opens as a new file in the tab, straight
+// in the editor (openFileTab `create` – B-081: elsewhere a missing path shows the not-found page).
 // Owns: joining the path and that fallback. Never: reads or writes the file.
 
 import { isMobile } from '../lib/platform.ts';
@@ -25,7 +26,7 @@ export function openInTab(relative: string, base: 'data' | 'workspace' = 'data')
   return act(async () => {
     const info = await rpc.call('system.root');
     const root = base === 'workspace' ? info.workspace : info.path;
-    if (/\.[^/]+$/.test(relative)) { openFileTab(joined(root, relative)); return; }
+    if (/\.[^/]+$/.test(relative)) { openFileTab(joined(root, relative), undefined, undefined, undefined, { create: true }); return; }
     for (const candidate of openCandidates(root, relative)) {
       if ((await rpc.call('files.listPath', { path: candidate })).missing) continue;
       openFolderTab(candidate);

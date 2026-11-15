@@ -1,7 +1,8 @@
 // Quiet in-window toasts (attention items and action errors). Max 3 at once (the oldest goes first); they expire,
 // except one pushed with ttl 0 – a to-do, a blocker or an important message – which stays until Open or Dismiss,
 // or until the person reaches where Open leads or the to-do is finished another way (lib/store-events.ts).
-// They show as lines of the status line (shell/StatusLine.tsx).
+// They show as lines of the status line (shell/StatusLine.tsx). B-082: a toast may carry one `action` (its button, e.g.
+// a kept recording's "Transcribe again"); such a toast is the last one a newer toast pushes out.
 // Owns: the toast queue. Never: OS notifications (main process), their look or persistent state.
 
 import { signal } from '@preact/signals';
@@ -15,6 +16,8 @@ export interface Toast {
   /** The to-do the attention item is about (Open goes to My day). */
   taskId?: string;
   tone?: 'info' | 'error';
+  /** B-082: the toast's own button (it closes the toast). */
+  action?: { label: string; run: () => void };
 }
 
 export const toasts = signal<Toast[]>([]);
@@ -23,7 +26,9 @@ let nextId = 1;
 /** A toast; `ttlMs` 0 keeps it until Open or Dismiss (0, never Infinity: so long a timer fires at once). */
 export function pushToast(toast: Omit<Toast, 'id'>, ttlMs = 6000): void {
   const id = nextId++;
-  toasts.value = [...toasts.value.slice(-2), { ...toast, id }];
+  const list = [...toasts.value, { ...toast, id }];
+  while (list.length > 3) { const plain = list.findIndex((entry) => !entry.action); list.splice(plain >= 0 ? plain : 0, 1); }
+  toasts.value = list;
   if (ttlMs > 0) setTimeout(() => dismissToast(id), ttlMs);
 }
 

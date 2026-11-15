@@ -93,12 +93,12 @@ test('the structured runner hands the engine\'s cached figure to its answer and 
 test('the flow tally: used stays input + output of every call, cached is the cached part of their input', async () => {
   const f = fixture();
   f.services.prompts = new PromptTemplates(() => path.join(RESOURCES, 'prompts'));
-  const script = [{ tool: 'agent.tell', args: { text: 'Notiz.' } }, { tool: 'done', args: {} }];
+  const script = [{ tool: 'agent.tell', args: { text: 'Notiz.' } }, { tool: 'done', args: { answer: 'x' } }];
   const decision: StructuredRunner = async () => {
     const next = script.shift()!;
     return { text: '', structured: { tool: next.tool, args: JSON.stringify(next.args) }, by: 'fake', usage: { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 640 } };
   };
-  const result = await runFlow(f.services, { decision }, { kind: 'after-turn', agent: f.vid, thread: 'th' });
+  const result = await runFlow(f.services, decision, { agent: f.vid, thread: 'th' });
   assert.equal(result.end, 'done');
   assert.deepEqual([result.used, result.cached], [2 * 1050, 2 * 640]);
 });

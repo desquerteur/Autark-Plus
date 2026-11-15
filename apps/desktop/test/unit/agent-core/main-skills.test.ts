@@ -66,8 +66,7 @@ test('the prompt lists an agent\'s Main Skills apart from its index; other agent
     const writerNow = f.org.get(writer.id)!;
     const section = mainSkillsSection(services, writerNow);
     assert.equal(section, [
-      '## My main skills',
-      'My own core skills, kept in my agent folder. Before one of these kinds of work I load the skill\'s full text with skills.load (argument: the skill name).',
+      'My main skills (in my folder, knowledge.open by name):',
       '- checklist – Final checklist before sending a text.',
       '- house-style – Our house style for every text.',
     ].join('\n'));

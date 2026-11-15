@@ -1,6 +1,7 @@
 // RPC handlers: people of the organisation (F-52, runtime/people). The owner manages people
 // (list, add/edit, invite, revoke, devices, audit, a person's chats as metadata; the owner's own phones
-// may read the list to name people);
+// may read the list to name people and – B-084 (D6), on a secure transport ('settings' + secure) – open and close a
+// person's invite for "Connect a phone": the same person-scoped invite as on the PC);
 // a person's device joins with the tokenless people.join / people.awaitJoin (rpc/tokenless.ts) and
 // then reaches only the person variants (runtime/people/rpc-*.ts, table.addPerson).
 // Owns: param checks, scope rules and the registration of the person variants.
@@ -24,6 +25,9 @@ import type { PeopleService } from '../../people/service.ts';
 import { currentCaller } from '../caller.ts';
 import { id, input, onlyKeys, optNum, optObj, optText } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
+
+/** B-084 (D6): device administration for my phone on a secure transport, like the PC. */
+const DEVICE_ADMIN = { capability: 'settings', secure: true } as const;
 
 export function peopleOf(services: RuntimeServices): PeopleService {
   if (!services.people) throw new WorkforceError('unavailable', 'People are not available on this PC.');
@@ -63,8 +67,8 @@ export function register(table: HandlerTable): void {
       scopes: optObj(o, 'scopes') as PersonScopes | undefined, // cleaned by the service (people/repo.ts cleanScopes)
     });
   });
-  table.add('people.invite', (params, ctx) => peopleOf(ctx.services).invite(id(input(params))));
-  table.add('people.closeInvite', (params, ctx) => { peopleOf(ctx.services).closeInvite(id(input(params))); return { ok: true }; });
+  table.add('people.invite', (params, ctx) => peopleOf(ctx.services).invite(id(input(params))), DEVICE_ADMIN);
+  table.add('people.closeInvite', (params, ctx) => { peopleOf(ctx.services).closeInvite(id(input(params))); return { ok: true }; }, DEVICE_ADMIN);
   table.add('people.revoke', (params, ctx) => peopleOf(ctx.services).revoke(id(input(params))));
   table.add('people.removeDevice', (params, ctx) => {
     const o = input(params);

@@ -45,7 +45,7 @@ function todo(conversationId: string, patch: Partial<TaskView> = {}): TaskView {
   seq++;
   return {
     id: `task_${seq}`, conversationId, title: `Ask ${seq}`, notes: '', status: 'open', assigneeKind: 'human', createdBy: MARA, priority: 0,
-    dependsOn: [], ledger: {}, attempts: 0, sort: seq, rev: 1, createdAt: NOW - seq * M, updatedAt: NOW, steps: [], progress: { done: 0, total: 0 },
+    dependsOn: [], ledger: {}, sort: seq, rev: 1, createdAt: NOW - seq * M, updatedAt: NOW, steps: [], progress: { done: 0, total: 0 },
     conversationTitle: 'Chat', running: false, ...patch,
   };
 }
@@ -87,22 +87,6 @@ test('reasons: the waiting to-do (the oldest of several), the working agent; unr
   assert.equal(working.get(team.id)!.reason, 'Tom and 1 more are working');
 });
 
-test('what does not wait on the person: their own to-dos, snoozed ones, timers that have not rung, due on a later day', () => {
-  const own = chat();
-  const snoozed = chat();
-  const timer = chat();
-  const rang = chat();
-  const later = chat();
-  const todos = [
-    todo(own.id, { createdBy: HUMAN_ID }),
-    todo(snoozed.id, { status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Snoozed', since: NOW - H, until: NOW + H } }),
-    todo(timer.id, { createdBy: SYSTEM_ID, widget: { type: 'timer', label: 'Tea', at: new Date(NOW + 10 * M).toISOString() } }),
-    todo(rang.id, { createdBy: SYSTEM_ID, status: 'needs_you', widget: { type: 'timer', label: 'Tea', at: new Date(NOW - M).toISOString() } }),
-    todo(later.id, { dueAt: NOW + 30 * H }),
-  ];
-  const rows = importantChats([own, snoozed, timer, rang, later], { todos, now: NOW, dayEnd: NOW + 15 * H, nameOf: () => 'Agent' });
-  assert.deepEqual(ids(rows), [rang.id], 'only the timer that rang waits on the person');
-});
 
 test('never listed: app chats, agent-only rooms, archived chats, people\'s own chats; a muted chat\'s unread does not count', () => {
   const todoChat = chat({ unread: 4, settings: { system: 'todo' } });

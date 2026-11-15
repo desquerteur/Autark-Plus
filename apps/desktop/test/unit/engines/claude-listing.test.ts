@@ -31,7 +31,8 @@ function rpc(catalogIds: string[]) {
   const set: unknown[] = [];
   const table = new HandlerTable();
   registerProviders(table);
-  const services = { catalog: { get: (id: string) => (catalogIds.includes(id) ? { efforts: ['low', 'high'] } : undefined) } } as unknown as RuntimeServices;
+  // no agent in the org: setPolicy stores the policy as sent (B-083 pinBy needs a known agent)
+  const services = { catalog: { get: (id: string) => (catalogIds.includes(id) ? { efforts: ['low', 'high'] } : undefined) }, org: { get: () => undefined } } as unknown as RuntimeServices;
   const extras = { policies: { set: (scope: unknown, policy: unknown) => { set.push([scope, policy]); } } } as unknown as RpcExtras;
   const call = async (method: string, params: unknown): Promise<any> => {
     const entry = table.get(method)!;

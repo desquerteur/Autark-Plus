@@ -1,0 +1,44 @@
+import { page } from '../layout.mjs';
+// Restores Nora's existing feedback notice as a build-discovered page; no sending or collection.
+export default function privacy(rel) {
+ return page({slug: 'privacy', rel, title: 'Privacy and app feedback', description: 'How Autark handles voluntary encrypted app feedback and this website.', body: () => `
+
+<section class="phero"><div class="wrap">
+  <nav class="phero__crumbs" aria-label="Breadcrumb"><a href="/">Autark</a><span>/</span><span>Privacy</span></nav>
+  <h1 data-reveal>Privacy and <em>app feedback.</em></h1>
+  <p class="lead" data-reveal style="--d:1">Autark runs on your computer. This page says what leaves it when you choose to send feedback from the app, and what this website itself collects.</p>
+</div></section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="layout-doc">
+      <nav class="toc" aria-label="On this page">
+        <b>On this page</b>
+        <a href="#controller">Who is responsible</a>
+        <a href="#feedback">App feedback</a>
+        <a href="#website">This website</a>
+        <a href="#rights">Your rights</a>
+      </nav>
+      <div class="prose">
+        <h2 id="controller">Who is responsible</h2>
+        <p>Teydra Lab, operated by Meral Anna Hees, Ludwig-Richter-Straße 4a/Top3, 5026 Salzburg, Austria. Contact for privacy requests: <a href="mailto:official@teydralab.com">official@teydralab.com</a>. The legal notice is at <a href="https://teydralab.com/impressum/" rel="noopener">teydralab.com/impressum</a>.</p>
+
+        <h2 id="feedback">App feedback</h2>
+        <p>Feedback is voluntary. Save keeps a report on your computer only; nothing is sent. Send uploads it.</p>
+        <p><strong>What is sent.</strong> Your feedback text, the screenshot you choose to include, the report ID and date, app version, operating system and the current app view. Reports filed by an agent are marked as such. When you send a report, recent warning and error messages are automatically included if available, after automatic redaction (up to 15 entries and 2,000 characters). Your chat history is not attached. Please remove personal information you do not want to share, including information about other people, and paint over private parts of a screenshot.</p>
+        <p><strong>Why.</strong> To understand problems, fix bugs and improve the app. The legal basis is our legitimate interest in maintaining and improving the app (Article 6(1)(f) GDPR). Feedback is not used for automated decisions about you.</p>
+        <p><strong>Encryption and transport.</strong> Text and screenshot are encrypted on your computer with the team's public key before upload. The mailbox is a Google Cloud Firestore database in Frankfurt (europe-west3) that accepts new encrypted letters only; nobody can read, change or delete them through the app. Only the team's computer holds the private key that opens them. Google also processes connection data, such as your IP address and request time, to provide and secure the service.</p>
+        <p><strong>Processor.</strong> Google provides Firestore under its <a href="https://cloud.google.com/terms/data-processing-addendum" rel="noopener">Cloud Data Processing Addendum</a>. An EU database location does not exclude international processing of service or support data; Google's terms describe subprocessors and safeguards for transfers.</p>
+        <p><strong>Storage.</strong> The encrypted report stays in the mailbox until the team's computer retrieves and saves it, then it is deleted from the mailbox. The received copy is kept on the team's computer while needed to handle the feedback and deleted when no longer needed. There is no fixed automatic deletion period. Copies on your own computer follow your local data and backup management. Reports are not published.</p>
+
+        <h2 id="website">This website</h2>
+        <p>openautark.com is a static website served through Cloudflare. It sets no cookies and loads no advertising or analytics scripts. Like every web host, Cloudflare processes technical connection data (such as IP address and request time) to deliver and protect the site, and keeps server logs for operation and security. Downloads are served from GitHub releases, which process your connection data under GitHub's own terms.</p>
+
+        <h2 id="rights">Your rights</h2>
+        <p>You can request access, correction, deletion or restriction, and object to processing based on legitimate interests. Write to <a href="mailto:official@teydralab.com">official@teydralab.com</a> with the date and details of your report so we can find it; we do not require a sender account. You can complain to your supervisory authority, including the <a href="https://dsb.gv.at/" rel="noopener">Austrian Data Protection Authority</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+`});
+}

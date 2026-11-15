@@ -1,6 +1,6 @@
 // Continuation across engines (PR3, context/recent-actions.ts): the tool calls of unfinished runs
-// since the agent's last done run in this chat reach a turn as "Previous attempt (not visible in
-// the chat)" only when its engine cannot know them (another engine or account, a new session, a
+// since the agent's last done run in this chat reach a turn as "What it already did:"
+// inside the cut-off note only when its engine cannot know them (another engine or account, a new session, a
 // stateless engine); unknown effects say "I verify before repeating"; summaries are redacted and
 // bounded; a turn fails over once after tool calls only when every effect is known – and the
 // continuation on the other account gets the recap.
@@ -118,7 +118,7 @@ test('buildTurn adds the recap on another engine or a new session, not to the se
   h.past('run_0', 'failed', 'claude', h.account.id, [['browser.act', 'click Pay (shop.example)', 'unknown']]);
   h.runs.start({ id: 'run_1', agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
   const sessions = new SessionStore(h.db);
-  sessions.save({ agentId: h.tom.id, conversationId: h.chat.id, engine: 'claude', accountId: h.account.id, ref: 'thread_1', generation: 1, cursorSeq: 0, updatedAt: h.clock.now() });
+  sessions.save({ agentId: h.tom.id, conversationId: 'main', engine: 'claude', accountId: h.account.id, ref: 'thread_1', generation: 1, cursorSeq: 0, updatedAt: h.clock.now() });
   const inputOf = async () => {
     const plan = (await planTurn(h.services, h.request()))!;
     const turn = await buildTurn(h.services, plan, h.request(), h.route, []);
@@ -133,7 +133,7 @@ test('buildTurn adds the recap on another engine or a new session, not to the se
   assert.ok(h.runs.items('run_1').some((item) => item.kind === 'note' && item.data.previousAttempt === 1), 'journaled');
 
   h.runs.finish('run_0', { status: 'failed', engine: 'claude' as never, accountId: h.account.id });
-  sessions.remove(h.tom.id, h.chat.id, 'claude');
+  sessions.remove(h.tom.id, 'main', 'claude');
   assert.ok((await inputOf()).includes(RECAP_TITLE), 'a new session does not know it either');
 });
 
@@ -148,17 +148,17 @@ test('a limit after tool calls fails over once when every effect is known – th
       h.call(input.runId, 'tasks.create', 'Create task "Draft the post"', effect.status); // what the registry journals
       return LIMIT;
     }
-    return LIMIT; // the second account is used up too: no second failover
+    return LIMIT; // the second account is used up too and routing has no third: the chain ends (B-083, agents/turn.ts)
   };
   Object.assign(h.services, {
     accounts: { get: (id: string) => ({ ...h.account, id }), updateLimits: () => {}, markLimited: () => {}, candidates: () => [] },
-    router: { route: async (request: RouteRequest) => ({ ...h.route, accountId: request.exclude?.includes('acc_1') ? (request.exclude.includes('acc_2') ? 'acc_3' : 'acc_2') : 'acc_1' }) },
+    router: { route: async (request: RouteRequest) => ({ ...h.route, accountId: request.exclude?.includes('acc_1') ? 'acc_2' : 'acc_1' }) },
   });
   const failovers = (runId: string) => h.runs.items(runId).filter((item) => item.kind === 'note' && item.data.failover).map((item) => item.data.failover);
 
   await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_known' }));
   assert.deepEqual(Object.keys(inputs), ['acc_1', 'acc_2'], 'one failover, not two');
-  assert.match(inputs.acc_2[0], /Previous attempt \(not visible in the chat\):\n- \d\d:\d\d tasks\.create: Create task "Draft the post" → done/);
+  assert.match(inputs.acc_2[0], /What it already did:\n- \d\d:\d\d tasks\.create: Create task "Draft the post" → done/);
   assert.deepEqual(failovers('run_known'), [{ from: h.route.modelId, fromAccount: 'acc_1', to: h.route.modelId, toAccount: 'acc_2', reason: 'limit', afterTools: 1 }]);
 
   effect.status = 'unknown';

@@ -26,6 +26,8 @@ export interface AppWindowHit { window?: number; point?: { x: number; y: number 
 export type HelperOp =
   | 'ping' | 'config' | 'presence' | 'screens' | 'screenshot' | 'windows' | 'focus_window'
   | 'tree' | 'find' | 'act' | 'click' | 'move' | 'path' | 'scroll' | 'type' | 'key' | 'cursor' | 'ocr'
+  // B-080: the element that holds the keyboard focus now and its window (computer.type reads where its text landed).
+  | 'focused'
   // Lets go of mouse buttons and Ctrl/Shift/Alt/Win keys Windows reports held (after a Stop); never presses anything.
   | 'release';
 

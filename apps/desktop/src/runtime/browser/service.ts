@@ -4,7 +4,8 @@
 // (takeover.ts: while that flag is on, every agent step answers that the person has it).
 // Owns: through sessions.ts the browsers' lifetime; act-and-verify (steps answer with a change list against the
 // agent's last snapshot of the tab, diff.ts), screenshots, page text, tabs, and the runtime-only reads for the vault
-// (one field's value, the 2FA setup keys a page shows). Password field values never show in a snapshot.
+// (one field's value, the 2FA setup keys a page shows). Password field values never show in a snapshot. B-081: a batch
+// glides to each pointed step unless the caller passes another motion (motion.ts).
 // Never: touches the person's own browser profile or opens non-http(s) pages.
 
 import type { Logger, Paths } from '../contracts.ts';
@@ -18,7 +19,7 @@ import { workspaceFile } from './downloads.ts';
 import { activePage, BrowserSessions, openPages, type BrowserChange, type Session, type ViewSession } from './sessions.ts';
 import { PERSON_USING, Takeovers, type UseContext } from './takeover.ts';
 import { snapshotChanges } from './diff.ts';
-import { isHumanCheck } from './human-check.ts';
+import { isChallengeAnswer, isHumanCheck } from './human-check.ts';
 import { runSteps, type BatchStep } from './batch.ts';
 import type { BatchOutcome, Mark, PageState, Reviewed, TabInfo } from './states.ts';
 
@@ -70,15 +71,19 @@ export class BrowserService {
       : input.tab ? this.pool.page(session, input.tab) : activePage(session) ?? await session.context.newPage();
     this.pool.track(session, page);
     session.active = page;
+    let response: unknown;
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     } catch (error) {
       throw translateError(error, undefined);
     } finally {
       this.pool.changed(agentId);
     }
     await this.settle(page);
-    return this.state(session, page);
+    const state = await this.state(session, page);
+    // B-080: Cloudflare's challenge answer header says so in every page language.
+    if (isChallengeAnswer(response)) state.humanCheck = true;
+    return state;
   }
 
   async snapshot(agentId: string, input: { tab?: string; use?: UseContext } = {}): Promise<PageState> {
@@ -99,7 +104,7 @@ export class BrowserService {
     const { session, page, tab } = await this.tabOf(agentId, input.tab, input.use);
     const before = this.mark(session, page);
     const run = await runSteps(page, input.steps, {
-      tab, motion: input.motion ?? 'instant', timeoutMs: this.timeout(), file: (file) => workspaceFile(this.deps.paths.workspace, file), secret: input.secret,
+      tab, motion: input.motion ?? 'glide', timeoutMs: this.timeout(), file: (file) => workspaceFile(this.deps.paths.workspace, file), secret: input.secret,
       stop: () => (this.takeovers.active(agentId) ? PERSON_USING : undefined),
     });
     return { ...await this.review(session, page, before, input.full), ...run, total: input.steps.length };
@@ -121,7 +126,18 @@ export class BrowserService {
     session.active = next;
     this.pool.changed(session.agentId);
     if (next !== page) await this.settle(next);
-    const state = await this.state(session, next);
+    let state: PageState;
+    try {
+      state = await this.state(session, next);
+    } catch {
+      // The steps ran; only reading the page back failed – it is mid-navigation. Answer with the url and tab (no snapshot),
+      // so a submit that went through is not reported as failed. The agent reads it with browser.snapshot once it is there.
+      const url = next.url();
+      return { tab: this.pool.idOf(session, next), url, title: '', snapshot: '', truncated: false,
+        changed: true, urlChanged: url !== (before.look?.url ?? before.url),
+        changes: { text: 'The page is still loading – browser.snapshot reads it once it is there.', full: false, added: 0, removed: 0 },
+        ...(next === page ? {} : { newTab: true as const }) };
+    }
     const same = next === page;
     const changes = snapshotChanges({
       before: same ? before.text : undefined, after: state.snapshot, urlBefore: before.look?.url ?? before.url, url: state.url, titleBefore: before.look?.title, title: state.title, full,

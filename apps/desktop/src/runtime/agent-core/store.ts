@@ -7,6 +7,7 @@
 // as found on disk – and keeping its `home`, B-044).
 // Owns: this state and these file operations. Never: edits agents, reads other folders, or polls.
 
+import { utimesSync } from 'node:fs';
 import type { Bus } from '../bus.ts';
 import type { Clock, Logger } from '../contracts.ts';
 import type { AgentCoreNotice, AgentCoreProblem } from '../../shared/model/agent-core.ts';
@@ -35,6 +36,8 @@ export interface FolderStoreDeps {
   log: Logger;
   /** The data folder watcher, told about every write (absent: nobody is told). */
   writes?: OwnWrites;
+  /** B-087: the app's own last write or take-over of each SYSTEM.md, kept across a restart (absent: while running). */
+  own?: { get(agentId: string): string | undefined; set(agentId: string, sig: string | undefined): void };
 }
 
 export class FolderStore {
@@ -58,6 +61,7 @@ export class FolderStore {
     this.states.delete(agentId);
     this.docs.delete(agentId);
     this.loose.delete(agentId);
+    this.keep(agentId, undefined);
   }
 
   /** SYSTEM.md now: one stat, the file read again only when its signature changed. */
@@ -77,18 +81,27 @@ export class FolderStore {
 
   /** An outside edit was taken over: the file with `sig` counts as known. */
   adopt(agentId: string, sig: string): void {
-    this.doc(agentId).adopt(sig);
+    const doc = this.doc(agentId);
+    if (doc.ownSig === sig) return;
+    doc.adopt(sig);
+    this.keep(agentId, sig);
   }
 
   write(agentId: string, text: string): void {
-    this.doc(agentId).write(text);
+    const doc = this.doc(agentId);
+    doc.write(text);
+    this.keep(agentId, doc.ownSig);
   }
 
-  /** agent.json + SYSTEM.md from the cache; false (and a notice) when the folder cannot be written. */
-  writeFolder(agent: Agent): boolean {
+  /**
+   * agent.json + SYSTEM.md from the cache; false (and a notice) when the folder cannot be written. `aged`: written
+   * because they were missing – dated before the agent existed, so a linked PC's real files are newer (devices/sync/files.ts).
+   */
+  writeFolder(agent: Agent, aged = false): boolean {
     try {
       this.writeManifest(agent);
       this.write(agent.id, systemText(agent.instructions));
+      if (aged) this.age(agent, [manifestFile(this.deps.dataDir, agent.id), systemFile(this.deps.dataDir, agent.id)]);
       return true;
     } catch (error) {
       this.deps.log.warn('agent folder not written', { agentId: agent.id, error: String(error) });
@@ -112,8 +125,12 @@ export class FolderStore {
     return state.manifest;
   }
 
-  tryManifest(agent: Agent): void {
-    try { this.writeManifest(agent); } catch (error) { this.deps.log.debug('agent.json not updated', { agentId: agent.id, error: String(error) }); }
+  /** `aged`: written because it was missing (see writeFolder). */
+  tryManifest(agent: Agent, aged = false): void {
+    try {
+      this.writeManifest(agent);
+      if (aged) this.age(agent, [manifestFile(this.deps.dataDir, agent.id)]);
+    } catch (error) { this.deps.log.debug('agent.json not updated', { agentId: agent.id, error: String(error) }); }
   }
 
   /** agent.json follows a rename (status updates change nothing in it; a folder not reconciled yet is left to reconcile). */
@@ -139,9 +156,30 @@ export class FolderStore {
         file: systemFile(this.deps.dataDir, agentId), limits: SYSTEM_LIMITS, clock: this.deps.clock, writes: this.deps.writes,
         onNotice: (notice) => this.noticed(agentId, notice),
       });
+      const kept = this.ownOf(agentId);
+      if (kept) doc.adopt(kept); // after a restart: the file the app wrote last is still its own
       this.docs.set(agentId, doc);
     }
     return doc;
+  }
+
+  private ownOf(agentId: string): string | undefined {
+    try { return this.deps.own?.get(agentId); } catch { return undefined; }
+  }
+
+  private keep(agentId: string, sig: string | undefined): void {
+    try { this.deps.own?.set(agentId, sig); } catch (error) { this.deps.log.debug('own SYSTEM.md not kept', { agentId, error: String(error) }); }
+  }
+
+  /** Dates `files` one second before `agent` was created; a dated SYSTEM.md stays the app's own with its new signature. */
+  private age(agent: Agent, files: string[]): void {
+    const at = new Date(Math.max(0, agent.createdAt - 1000));
+    for (const file of files) {
+      try { utimesSync(file, at, at); } catch (error) { this.deps.log.debug('agent file not dated', { agentId: agent.id, error: String(error) }); }
+    }
+    if (!files.includes(systemFile(this.deps.dataDir, agent.id))) return; // agent.json alone: SYSTEM.md is as it was
+    const read = this.doc(agent.id).safeCheck();
+    if (read.kind === 'ok') this.adopt(agent.id, read.sig);
   }
 
   private quiet(agentId: string): QuietNotice<AgentCoreProblem> {

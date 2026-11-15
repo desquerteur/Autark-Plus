@@ -3,7 +3,8 @@
 // not 'done' and a card change writes the step together with the card's own choice; the removed setup-chip
 // and setup-notice files stay removed. About you asks only the name and the company (kept in the card's draft over
 // a remount), there is no permission question, and Start calls onboarding.start without params. The AI card's
-// Continue waits until a model can answer: there is no Skip.
+// Continue waits until a model can answer: there is no Skip; B-085: it has Back (to the choice), and the About card's
+// PC access rows are checked in first-run.test.ts and pc-access.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -119,6 +120,6 @@ test('About you asks only the name and the company – kept in the draft over a 
 test('the AI card has no Skip: Continue waits until a model can answer', () => {
   const card = readFileSync(path.join(root, 'src/ui/onboarding/AiCard.tsx'), 'utf8');
   assert.match(card, /const silent = noUsableModel\(models\.value, accounts\.value\)/);
-  assert.match(card, /disabled=\{silent\}/);
+  assert.match(card, /disabled=\{silent \|\| busy !== null\}/);
   assert.doesNotMatch(card, /Skip/);
 });

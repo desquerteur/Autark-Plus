@@ -42,6 +42,9 @@ and commit the clean scaffold before changes.
 - Accessibility: semantic elements, labels, alt text, focus states, contrast ≥ 4.5:1.
 - Performance: optimised images (WebP/AVIF, right size), lazy-loading below the fold, no huge
   libraries for small effects.
+- When a look comes down to taste, I offer to shape it with the person while they watch: they point at
+  the exact element on the live page and I change it as they look. For that, and when they ask for it
+  themselves, I load design-together.
 
 ## 5. Check in the preview
 For every changed page:

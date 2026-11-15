@@ -21,6 +21,7 @@ import type { ClientScope } from '../../shared/api/protocol.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { Logger } from '../contracts.ts';
 import { externalAgentSockets } from '../bridges/external-agents.ts';
+import { markSilent } from '../devices/channel.ts';
 import { sendError, sendJson } from './body.ts';
 import { serveFile } from './files.ts';
 import { listenWithFallback, relisten } from './listen.ts';
@@ -34,7 +35,8 @@ import { SandboxRoute } from './sandbox.ts';
 import { HostGuard, RateLimiter, bindAllows, isLoopback, isSecureTransport, normalizeAddress, tokensEqual } from './security.ts';
 import { StaticFiles } from './static.ts';
 import type { HttpServerDeps, RequestInfo } from './types.ts';
-import { CLIENT_MAX_PAYLOAD, CLOSE, ClientSockets, Keepalive, type ExternalSocketAuth } from './ws.ts';
+import { Keepalive, KEEPALIVE_MS } from './keepalive.ts';
+import { CLIENT_MAX_PAYLOAD, CLOSE, ClientSockets, type ExternalSocketAuth } from './ws.ts';
 
 const MCP_PATH = /^\/mcp(?:\/([A-Za-z0-9_-]{16,256}))?\/?$/;
 const FILE_PATH = /^\/files\/([0-9a-fA-F]{64})$/;
@@ -51,7 +53,8 @@ export class HttpServer {
   private readonly guard: HostGuard;
   private readonly files: StaticFiles;
   private readonly sandbox: SandboxRoute;
-  private readonly keepalive = new Keepalive();
+  /** B-087: a peer socket cut here for silence is marked and logged like on the peer listener (http/peer.ts), so it says 4008. */
+  private readonly keepalive = new Keepalive(KEEPALIVE_MS, Date.now, (ws, ms) => { if (this.peers.has(ws)) { markSilent(ws); this.log().info('peer socket silent', { ms }); } });
   private readonly clients: ClientSockets;
   private readonly external: ExternalSocketAuth;
   private readonly streams: EventStreams;
@@ -75,7 +78,7 @@ export class HttpServer {
   constructor(deps: HttpServerOptions) {
     this.deps = deps;
     this.guard = new HostGuard({ extra: deps.allowedHosts });
-    this.files = new StaticFiles(deps.staticDir);
+    this.files = new StaticFiles(deps.staticDir, () => deps.services().paths.data); // B-082: /turn/ models
     this.sandbox = new SandboxRoute({ services: deps.services, staticDir: deps.staticDir, log: () => this.log() });
     this.external = externalAgentSockets(deps.services); // C8: external agents' tokens (and their transport rule)
     this.clients = new ClientSockets({
@@ -83,6 +86,8 @@ export class HttpServer {
       authenticate: (token, loopback, secure) => this.authenticate(token, loopback, secure),
       revoked: (token) => this.deps.pwa.revoked?.(token) === true || this.personRevoked(token),
       external: this.external,
+      // B-085: an agent's own wf (Hello `agent`) opens only for an agent that exists and is not archived.
+      agentLive: (agentId) => { const agent = deps.services().org.get(agentId); return Boolean(agent && agent.archivedAt === undefined); },
       // B-050 K8 (d): other programs' sockets get message events with author, chat and level.
       view: (connection, scope, client) => (scope.kind === 'external' || client === 'external' ? withMessageViews(connection, deps.services, scope) : connection),
       keepalive: this.keepalive,

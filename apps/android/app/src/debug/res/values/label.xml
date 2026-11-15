@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: the preview build's launcher name (package ...preview); release and Play builds are called "Autark" (styles.xml). -->
+<resources>
+    <string name="app_label" translatable="false">Autark Preview</string>
+</resources>

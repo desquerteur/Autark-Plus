@@ -1,5 +1,6 @@
-// vector.search: grep over meaning. Embeds only the query and compares it with what is already embedded under the places;
-// B-078: `hops` (vectors/hops.ts) and the "catalog" place (the knowledge catalog's virtual entries).
+// vector.search: grep over meaning in embedded files and folders. Embeds only the query and compares it with what is
+// already embedded under the places; `hops` (vectors/hops.ts) let the best hits search on. Notes and the knowledge catalog
+// are knowledge.find's. Both vector tools are offered only while a chosen embedding model can serve (requires 'embeddings').
 // Owns: the tool's wording, argument shape and result text. Never: embeds files itself (a model does, with vector.embed).
 
 import path from 'node:path';
@@ -17,28 +18,29 @@ function line(hit: VectorHit): string {
   return `${hit.score.toFixed(2)} ${where}${hit.via ? ` (via ${hit.via})` : ''}\n  ${clip(hit.snippet.replace(/\s+/g, ' ').trim(), 240)}`;
 }
 
-export const vectorSearch: ToolDef = defineTool<{ query: string; in: string[]; k?: number; hops?: number }>({
+export const vectorSearch: ToolDef = defineTool<{ query: string; in: string[]; limit?: number; hops?: number }>({
   name: 'vector.search',
-  description: 'Searches by meaning, like grep for ideas, in what is embedded under `in` (files, folders, "memory/<folder>", "catalog": skills, home project, public library). The words a matching text holds find it; a question blurs it. hops 1–2: my best hits search on, so what lies close to them comes too. Exact words: files.search.',
+  description: 'Searches embedded files and folders by meaning, like grep for ideas. The words a matching text holds find it best, a question blurs it; exact words are files.search.',
   inputSchema: {
     type: 'object',
     properties: {
       query: { type: 'string', minLength: 1, maxLength: 2000 },
-      in: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1024 } },
-      k: { type: 'integer', minimum: 1, maximum: MAX_K },
-      hops: { type: 'integer', minimum: 0, maximum: MAX_HOPS },
+      in: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 1024 }, description: 'Files and folders.' },
+      limit: { type: 'integer', minimum: 1, maximum: MAX_K },
+      hops: { type: 'integer', minimum: 0, maximum: MAX_HOPS, description: '1–2: the best hits search on.' },
     },
     required: ['query', 'in'], additionalProperties: false,
   },
   category: 'read',
   anyMode: true,
+  requires: 'embeddings',
   describe: (args) => ({ summary: `Search by meaning for "${clip(args.query, 80)}" in ${clip(args.in.join(', '), 80)}`, resource: args.in[0], reversible: true, external: false }),
   async run(args, ctx) {
     if (ctx.fromPc !== undefined) return failure('vector.search runs only for agents of this PC.');
     const query = args.query.trim();
     if (!query) return failure('Say what to search for.');
     const places = await Promise.all(args.in.map((given) => placePath(ctx, given)));
-    const result = await ctx.services.vectors.search({ query, in: places, ...(args.k ? { k: args.k } : {}), ...(args.hops ? { hops: args.hops } : {}) });
+    const result = await ctx.services.vectors.search({ query, in: places, ...(args.limit ? { k: args.limit } : {}), ...(args.hops ? { hops: args.hops } : {}) });
     const lines: string[] = [];
     if (result.note) lines.push(result.note);
     lines.push(`${result.hits.length} hits.`);

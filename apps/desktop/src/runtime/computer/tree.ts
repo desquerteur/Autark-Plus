@@ -3,6 +3,10 @@
 // Owns: node shape from the helper, wrapper collapsing, line format and ref bookkeeping.
 // Refs are keyed by window + UIA RuntimeId (identity of the live element, not its position in
 // the tree), so a ref stays the same across observations while the element exists.
+// B-080 (live 09.11.: all 12 windows opened in the person's own Chrome first read without their page – 11 behind the
+// person's app, the one in front right at its open, 20 s later with its page): frameOnly names a Chrome or Edge window
+// whose tree holds no page document, with the cause – Chrome puts the page into its tree once it has loaded in a window
+// that is not covered.
 // Never: talks to the helper or acts on elements.
 
 export interface UiNode {
@@ -134,6 +138,23 @@ export function renderTree(nodes: UiNode[], hwnd: number, refs: RefTable): { tex
     lines.push(`${'  '.repeat(Math.max(0, level[index]))}${nodeLine(node, ref)}`);
   });
   return { text: lines.join('\n'), count: lines.length };
+}
+
+/** The depth a tree read takes when it names none (ComputerService.readTree); a read this deep counts as the whole tree. */
+export const TREE_DEPTH = 12;
+
+/** A Chrome or Edge window's title: "… - Google Chrome", "… - Microsoft Edge" (Edge writes a zero-width space after "Microsoft"). */
+const BROWSER_TITLE = /(Google Chrome|Microsoft\W*Edge)\s*$/;
+
+/**
+ * B-080: the fact line for a whole tree (not truncated, read at least TREE_DEPTH deep) of a Chrome or Edge window that
+ * holds no `- document` line – the page is not in it yet, and why; undefined for any other window or a tree with a document.
+ */
+export function frameOnly(title: string, text: string): string | undefined {
+  const browser = BROWSER_TITLE.exec(title)?.[1];
+  if (!browser || /^\s*- document /m.test(text)) return undefined;
+  const name = browser === 'Google Chrome' ? 'Chrome' : 'Edge';
+  return `This ${name} window's UI tree holds its frame only: ${name} puts the page document into it once the page has loaded in a window that is not covered.`;
 }
 
 /** Plain-data parse of the helper's node list (drops malformed entries). */

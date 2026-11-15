@@ -1,5 +1,5 @@
 // RPC handler of the references: references.remember – "Remember why…" on the caller's own message (the
-// owner's window and phones). The rest is the agents' (references.find / capture tools) and the AI's.
+// owner's window and phones). The rest is the agents' (knowledge.find, memory.write into references/) and the AI's.
 // Owns: param checks. Never: storage rules (references/references.ts).
 
 import { HUMAN_ID } from '../../../shared/ids.ts';

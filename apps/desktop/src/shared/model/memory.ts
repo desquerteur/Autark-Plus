@@ -2,7 +2,7 @@
 // agents/<agent>/, references/<subject>/ and free topic subfolders, each folder optionally described by _folder.md; a file
 // in a pinned/ subfolder is always in its readers' prompt (small, hard-capped).
 // Owns: the shapes of one memory file and of the memory.* calls, and how much of a file's description is shown. Never: a
-// list or index that goes into an agent's context (searching is vector.search with in: "memory/…").
+// list or index that goes into an agent's context (searching is knowledge.find with in: "memory/…").
 
 export type MemoryKind = 'fact' | 'preference' | 'experience' | 'procedure' | 'plan' | 'observation' | 'note' | 'reference';
 
@@ -33,7 +33,7 @@ export interface MemoryFolder {
   description?: string;
   folders: Array<{ path: string; description?: string }>;
   files: Array<{ path: string; title: string; description?: string; kind?: MemoryKind; updated: number }>;
-  /** More files than shown (browse is capped – search with vector.search). */
+  /** More files than shown (browse is capped – search with knowledge.find). */
   more?: boolean;
 }
 
@@ -51,6 +51,8 @@ export interface MemoryWriteInput {
   source?: string;
   validFrom?: number;
   validTo?: number;
+  /** 0–1, how sure the writer is (default 0.7). */
+  confidence?: number;
 }
 
 export interface MemoryWriteResult {

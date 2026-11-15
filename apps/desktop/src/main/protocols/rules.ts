@@ -1,14 +1,15 @@
 // Pure rules for the custom protocols app://, wf-sandbox:// and wf-file://.
-// Owns: CSP strings, URL → file mapping with traversal protection, blob id validation,
+// Owns: CSP strings, URL → file mapping with traversal protection, the turn detector's fixed files (B-082), blob id validation,
 // MIME guessing, HTTP Range parsing and the sandbox document wrapper of ```app blocks.
 // Never: touches Electron or the filesystem (handlers.ts does that), so it is unit-tested.
 
 import path from 'node:path';
+import { TURN_ROUTE, turnFile } from '../../shared/model/local-speech-models.ts';
 
 /** CSP of the app shell (desktop window). Generative UI never relaxes it; it lives in wf-sandbox frames. */
 export const APP_CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'", // B-082: the conversation's turn models (onnxruntime-web); WebAssembly only, never eval
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: wf-file:",
   "media-src 'self' blob: wf-file:",
@@ -77,14 +78,30 @@ export function resolveUnder(root: string, pathname: string, index = 'index.html
   return full;
 }
 
-export type AppRoute = { kind: 'ui'; pathname: string };
+export type AppRoute = { kind: 'ui'; pathname: string } | { kind: 'turn'; name: string };
 
-/** app://app/<path> → the shipped UI. */
+/** app://app/<path> → the shipped UI; app://app/turn/<name> → one of the turn detector's fixed files (B-082, turnFile). */
 export function routeAppUrl(url: string): AppRoute | null {
   let parsed: URL;
   try { parsed = new URL(url); } catch { return null; }
   if (parsed.protocol !== 'app:' || parsed.host !== 'app') return null;
+  if (parsed.pathname.startsWith(TURN_ROUTE)) return { kind: 'turn', name: parsed.pathname.slice(TURN_ROUTE.length) };
   return { kind: 'ui', pathname: parsed.pathname };
+}
+
+/**
+ * B-082: the file behind one fixed turn name – onnxruntime-web's wasm or loader in `ortDir`, a model in
+ * <speechDir>/<id>/<file> (runtime/voice/local/store.ts layout); null for every other name (no path from the page).
+ */
+export function turnFilePath(name: string, dirs: { ortDir: string; speechDir: string }): string | null {
+  const source = turnFile(name);
+  if (!source) return null;
+  return 'ort' in source ? path.join(dirs.ortDir, source.ort) : path.join(dirs.speechDir, source.model.id, source.model.files[0]);
+}
+
+/** Where the shipped onnxruntime-web files are: next to the app's package.json, outside the asar (they are unpacked). */
+export function ortDirOf(appRoot: string): string {
+  return path.join(appRoot, 'node_modules', 'onnxruntime-web', 'dist').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 }
 
 export type SandboxRoute =
@@ -102,7 +119,7 @@ export function routeSandboxUrl(url: string): SandboxRoute | null {
     return /^[a-z0-9_-]+\.js$/.test(file) ? { kind: 'lib', file } : null;
   }
   if (parsed.host === 'app') {
-    const match = /^\/([a-z]{2,4}_[0-9a-z]{10,40})\/(\d{1,4})\/?$/.exec(parsed.pathname);
+    const match = /^\/([a-z]{2,4}_[0-9a-z]{8,40})\/(\d{1,4})\/?$/.exec(parsed.pathname);
     if (!match) return null;
     return { kind: 'app', messageId: match[1], blockIndex: Number(match[2]) };
   }

@@ -4,7 +4,8 @@
 // "API Error: 5xx / Connection error / Request timed out / overloaded" and assistant error 'server_error' too (claudeDown,
 // applied in engines/claude/engine.ts); Codex's and ACP's signals are classified here for their engines' owners. A 4xx, a
 // step limit with a number in it, a setup error and every other failure stay as they are; the outage text never reads as
-// signed out or not installed (accounts/failure.ts), so it gives a short cooling and failover.
+// signed out or not installed (accounts/failure.ts), so it gives a short cooling and failover. B-080: an engine 'timeout'
+// is our own engine process (details.local) – failover once, but no account cools.
 // Owns: these assertions only. Never: real CLIs or network.
 
 import { test } from 'node:test';
@@ -12,8 +13,9 @@ import assert from 'node:assert/strict';
 import { acpDown, claudeDown, codexDown, providerDownMessage, providerOutage } from '../../../src/runtime/engines/provider-outage.ts';
 import { ERR } from '../../../src/runtime/engines/shared.ts';
 import { statusError } from '../../../src/runtime/engines/http/common.ts';
-import { accountFailure } from '../../../src/runtime/accounts/failure.ts';
+import { accountFailure, recordAccountFailure } from '../../../src/runtime/accounts/failure.ts';
 import { errorOutcome } from '../../../src/runtime/agents/turn-finish.ts';
+import { canFailover } from '../../../src/runtime/agents/turn-attempt.ts';
 import type { EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { WorkforceErrorData } from '../../../src/shared/errors.ts';
 import { turnInput } from './fakes.ts';
@@ -22,13 +24,26 @@ import { claudeAccount, claudeSetup } from './claude-fixture.ts';
 const failed = (error: WorkforceErrorData): EngineTurnResult => ({ text: '', stop: 'error', error });
 const cloud = { provider: 'openai' } as const;
 
-test('providerOutage: an engine timeout and a cloud HTTP 500/502/504 become an outage (text kept) – cooling and failover, no stall', () => {
+/** Whether recordAccountFailure cools the account for `result`. */
+function cools(result: EngineTurnResult): boolean {
+  let cooled = false;
+  const accounts = { get: () => undefined, markLimited: () => { cooled = true; }, markUnavailable: () => { cooled = true; return true; } };
+  recordAccountFailure({ accounts: accounts as never, clock: { now: () => 0 } as never }, claudeAccount(), 'claude-opus-5-5', result);
+  return cooled;
+}
+const attempt = (result: EngineTurnResult) => ({ result, streamed: '', reasoning: '', toolCalls: 0, usage: { inputTokens: 0, outputTokens: 0 }, ms: 1 });
+
+test('providerOutage: an engine timeout and a cloud HTTP 500/502/504 become an outage (text kept) – one failover, no stall; B-080: only the provider\'s cools', () => {
   for (const error of [ERR.timeout(), statusError(500), statusError(502), statusError(504)]) {
     const result = providerOutage(failed(error), cloud);
     assert.equal(result.error?.code, 'unavailable', error.message);
     assert.equal(result.error?.message, error.message, 'the provider\'s own words stay');
-    assert.equal(accountFailure(result), 'overload', 'a short cooling and one failover');
+    assert.equal(accountFailure(result), 'overload', 'one failover');
+    assert.equal(canFailover(attempt(result), new AbortController().signal), true);
     assert.equal(errorOutcome(result.error), 'unavailable', 'a task: no stall');
+    const local = error.code === 'timeout'; // our own engine process did not answer
+    assert.equal(result.error?.details?.local, local ? true : undefined, error.message);
+    assert.equal(cools(result), !local, local ? 'an engine timeout cools no account' : 'a provider 5xx cools the account');
   }
 });
 
@@ -63,8 +78,11 @@ test('providerOutage: a local runtime\'s HTTP 500 stays a failure (too little me
   assert.equal(providerOutage(failed(statusError(500)), { provider: 'compatible', baseUrl: 'not a url' }).error?.code, 'unavailable');
 });
 
-test('the outage text reads neither as signed out nor as not installed', () => {
-  for (const who of ['Anthropic', 'OpenAI', 'Gemini CLI']) assert.equal(accountFailure(failed(ERR.unavailable(providerDownMessage(who)))), 'overload');
+test('the outage text reads neither as signed out nor as not installed; what a provider said (claudeDown, codexDown, acpDown) still cools', () => {
+  for (const who of ['Anthropic', 'OpenAI', 'Gemini CLI']) {
+    assert.equal(accountFailure(failed(ERR.unavailable(providerDownMessage(who)))), 'overload');
+    assert.equal(cools(failed(ERR.unavailable(providerDownMessage(who)))), true, who);
+  }
 });
 
 test('claudeDown: server_error and the API\'s 5xx, connection and timeout errors – never a 400 or a step limit', () => {

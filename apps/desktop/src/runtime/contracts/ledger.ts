@@ -9,12 +9,17 @@ import type { LedgerItem, LedgerKind, LedgerMark, LedgerView, NewLedgerItem } fr
 export interface LedgerRun {
   runId: string;
   agentId: string;
+  /** The ledger key: the turn's thread (13.11.2026: the agent's main thread). */
+  thread: string;
+  /** The chat whose lines the turn's input shows (its wake's chat; '' without one). */
   conversationId: string;
   engine: string;
   /** Catalog model id of the attempt. */
   model: string;
-  /** The newest chat message the turn's input shows (RoutedTurn.lastSeq): messages up to it become m items first. */
+  /** The newest chat message the turn's input shows (RoutedTurn.lastSeq): messages after `fromSeq` up to it become m items first. */
   seenSeq: number;
+  /** Where the input's lines start (the agent's cursor there; 0 for a new session's full projection). */
+  fromSeq: number;
   /** What the attempt journals in front of those messages (the subconscious's calls, which the engine's session holds before the input). */
   first?: () => void;
 }
@@ -43,8 +48,8 @@ export interface ContextLedger {
   view(agentId: string, conversationId: string): LedgerView;
   /** Addition: the newest `limit` of the subconscious's calls in view form, in order (a stateless engine's next history, context/ledger/marks.ts). */
   traceView?(agentId: string, conversationId: string, limit: number): LedgerView;
-  /** Marks the native session does not hold yet; undefined when it holds what the ledger says. */
-  needsRebuild(agentId: string, conversationId: string): RebuildNeed | undefined;
+  /** Marks the native session does not hold yet; undefined when it holds what the ledger says. `from` (B-080): only items from this order on – the part the session holds (window.ts). */
+  needsRebuild(agentId: string, conversationId: string, from?: number): RebuildNeed | undefined;
   /** A rebuild applied the marks of every item up to order `upTo`. */
   rebuilt(agentId: string, conversationId: string, upTo: number): void;
   /** Addition: a turn attempt starts – messages the turn shows become m items, the run's journal items become ledger items. Never throws. */

@@ -72,7 +72,7 @@ function answeredState(services: RuntimeServices, message: Message, blockIndex: 
   const block = uiBlocksOf(message.body).find((item) => item.index === blockIndex)?.block;
   if (!block || !isAskBlock(block)) return undefined;
   const todo = blockTodo(services, message.id, blockIndex);
-  if (todo?.status === 'cancelled') return { answered: true, summary: 'Cancelled' };
+  if (todo?.status === 'dropped') return { answered: true, summary: 'Dropped' };
   return todo?.status === 'done' ? { answered: true, summary: todo.result?.summary || 'Done' } : undefined;
 }
 

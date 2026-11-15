@@ -9,9 +9,10 @@
 // The tool descriptions are the prompt fragment that asks agents to describe media they
 // inspect – there is no automatic description; vision-capable agents write it when they look.
 // Owns: argument handling of search, describe and transcribe, and the list of media tools.
-// Never: shows, describes or transcribes media of chats the agent is not a member of (or
-// unshared global media), or presents names/descriptions/transcripts as instructions (they are
-// data from file contents).
+// B-080: a file without a chat is shown, described or transcribed by its exact id (my own screenshots and outputs);
+// media.search lists such a file only once it is described or tagged (media/repo.ts AGENT_SCOPE).
+// Never: shows, describes or transcribes media of chats the agent is not a member of, or presents
+// names/descriptions/transcripts as instructions (they are data from file contents).
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { MediaKind } from '../../../shared/model/media.ts';
@@ -27,28 +28,29 @@ import { look } from './media-look.ts';
 import { mediaView } from './media-view.ts'; // B-058 G10 (T4): media.view – see a stored or workspace image
 import { mediaSegmentTools } from './media-segments.ts'; // media.segments: marked parts of a file, in a memory note
 import { clip, defineTool, internal, readChat, resolveChat } from './util.ts';
+import { FILE_ID_PROPERTY } from '../types.ts';
 
 export { MEDIA_DESCRIBE_HINT, mediaFileId } from './media-common.ts';
 
 const KINDS: MediaKind[] = ['image', 'audio', 'video', 'document', 'other'];
 const TRANSCRIPT_CHARS = 20_000;
-const search = defineTool<{ text?: string; kind?: MediaKind; chatId?: string; limit?: number }>({
+const search = defineTool<{ query?: string; kind?: MediaKind; chatId?: string; limit?: number }>({
   name: 'media.search',
-  description: `Find stored images, recordings, videos and documents in my chats (and media the person shared) by name, description or tags; filter by kind or chat. ${MEDIA_DESCRIBE_HINT}`,
+  description: 'Finds stored images, recordings, videos and documents by name, description or tags.',
   inputSchema: {
     type: 'object',
     properties: {
-      text: { type: 'string', maxLength: 200 }, kind: { type: 'string', enum: KINDS }, chatId: { type: 'string' },
+      query: { type: 'string', maxLength: 200 }, kind: { type: 'string', enum: KINDS }, chatId: { type: 'string', description: 'One chat; default all of mine.' },
       limit: { type: 'integer', minimum: 1, maximum: 50 },
     },
     additionalProperties: false,
   },
   category: 'read',
-  describe: (args) => internal(`Search media${args.text ? ` "${clip(args.text, 60)}"` : ''}`, args.chatId),
+  describe: (args) => internal(`Search media${args.query ? ` "${clip(args.query, 60)}"` : ''}`, args.chatId),
   async run(args, ctx) {
     const conversationId = args.chatId ? resolveChat(ctx, args.chatId, { read: true }) : undefined;
     const items = new MediaLibrary(ctx.services).list(
-      { text: args.text?.trim() || undefined, kind: args.kind, conversationId, limit: args.limit ?? 20 },
+      { text: args.query?.trim() || undefined, kind: args.kind, conversationId, limit: args.limit ?? 20 },
       { kind: 'agent', agentId: ctx.agent.id });
     return json({ note: DATA_NOTE, count: items.length, items: items.map(view) });
   },
@@ -56,12 +58,12 @@ const search = defineTool<{ text?: string; kind?: MediaKind; chatId?: string; li
 
 const describeMedia = defineTool<{ fileId: string; description: string; tags?: string[] }>({
   name: 'media.describe',
-  description: `Save a precise description (what it shows, visible text, style, purpose; people by role) and tags for a stored file so it can be found later. ${MEDIA_DESCRIBE_HINT} fileId: the 64-character name at the end of the file's "stored at" path.`,
+  description: 'Saves a description and tags for a stored file. What I describe when I see it – a picture, a screenshot, a recording – media.search finds later.',
   inputSchema: {
     type: 'object',
     properties: {
-      fileId: { type: 'string', minLength: 64, maxLength: 1000 },
-      description: { type: 'string', minLength: 1, maxLength: MEDIA_LIMITS.description },
+      fileId: FILE_ID_PROPERTY,
+      description: { type: 'string', minLength: 1, maxLength: MEDIA_LIMITS.description, description: 'What it shows, visible text, style, purpose; people by role.' },
       tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: MEDIA_LIMITS.tag }, maxItems: MEDIA_LIMITS.tags },
     },
     required: ['fileId', 'description'], additionalProperties: false,
@@ -79,10 +81,10 @@ const describeMedia = defineTool<{ fileId: string; description: string; tags?: s
 
 const transcribe = defineTool<{ fileId: string }>({
   name: 'media.transcribe',
-  description: `Transcript (speech to text) of a stored recording or video in any common format: the saved one, or one transcription now. New attachments already arrive with their transcript – use this for older recordings and media.search hits. ${TRANSCRIPT_NOTE} ${MEDIA_DESCRIBE_HINT} fileId: the 64-character name at the end of the file's "stored at" path.`,
+  description: 'Returns the transcript of a stored recording or video, made now if none is saved. New attachments arrive with theirs already.',
   inputSchema: {
     type: 'object',
-    properties: { fileId: { type: 'string', minLength: 64, maxLength: 1000 } },
+    properties: { fileId: FILE_ID_PROPERTY },
     required: ['fileId'], additionalProperties: false,
   },
   category: 'read',

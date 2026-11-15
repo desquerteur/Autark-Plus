@@ -42,8 +42,8 @@ const facts = {
     lead: `Your company in your pocket. The app joins your whole company, not one PC: the same chats, tasks and notifications as every PC you linked. Agents and data stay on your PCs.`,
     needs: ['Android 8 or newer.', `${site.name} running on at least one of your PCs. The phone finds it by its Remote ID, in any network.`],
     check: `sha256sum ${files.android}`,
-    update: 'When a new version exists, the app shows Update and opens the new APK; Android installs it over the old one. Most changes need no new APK at all, because the interface comes from your PC.',
-    note: 'This is a preview, signed with our own key and installed from outside the Play Store. Tell us what breaks on your phone.',
+    update: 'When a new version exists, a line at the top of the app says so. Update downloads it in the app with its progress, checks it against the published SHA-256, and Android installs it over the old one after you confirm. Most changes need no new APK at all, because the interface comes from your PC.',
+    note: 'This is a preview, signed with our own key and installed from outside the Play Store, without phone use by agents (Play Protect blocks that outside the Play Store). Tell us what breaks on your phone.',
   },
   iphone: {
     title: `${site.name} on iPhone`,
@@ -91,6 +91,7 @@ function platformPage(p, rel) {
     slug, rel, title: f.title, description, ld, trail: [['Download', 'download']],
     body: (root) => `
 ${pageHero({ root, crumb: p.os, trail: [['Download', 'download']], title: f.h1, lead: f.lead, actions: bigButton(p, rel) })}
+${p.id === 'windows' ? `<aside class="wrap" aria-label="Windows security notice"><p><strong>Windows security notice:</strong> This installer is not code-signed yet. Edge may warn that it is not commonly downloaded. Open Downloads (Ctrl+J) to inspect the warning; repeated downloads will not resolve it. Before deciding whether to continue, verify the source and <a href="#verify">compare the SHA-256 with the release checksums</a>. A matching hash confirms the published file, not its safety. Do not disable Windows protection. If installation is blocked, stop and <a href="https://teydralab.com/kontakt">contact us</a>.</p></aside>` : ''}
 <section class="section section--tight">
   <div class="wrap">
     ${fileFacts(p, rel)}

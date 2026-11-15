@@ -85,7 +85,7 @@
 .mobile-main .chat-row { min-height: calc(var(--row-h) + 6px); padding-inline: 16px; }
 .mobile-main .search-hits > .search-hit { padding-right: 16px; } /* a message hit's time ends where a chat row's does */
 .mobile-shell .chat-view { background: var(--surface); }
-.mobile-shell .message-scroller { padding: 12px 12px 16px; scrollbar-gutter: auto; }
+.mobile-shell .message-scroller { padding: 12px 12px 16px; } /* B-080: chat.css's both-edges gutter stays – the text centred over the composer in a desktop window */
 .mobile-shell .message-column { width: auto; max-width: var(--message-max); margin: 0 auto; } /* panels are sheets here: centred */
 .mobile-shell .message.human .message-content { max-width: 85%; }
 .mobile-shell .composer-area { width: auto; max-width: none; margin: 0 10px calc(10px + env(safe-area-inset-bottom)); } /* as far from the bottom as from the sides */
@@ -174,8 +174,8 @@ body:has(.mobile-shell) .palette-row { min-height: 48px; }
 .mobile-shell :is(.w-option, .nav-row, .segmented button, .b-segmented button) { min-height: 44px; }
 .mobile-shell .w-checklist li > button { min-height: 44px; }
 /* small controls keep their look; an invisible ring grows the hit area to 44 × 44 */
-:where(.mobile-shell, body:has(.mobile-shell) .popover, body:has(.mobile-shell) dialog) :where(.icon-button, .chip, .send-button, .ask-why-toggle, .status-action, .ultra-switch) { position: relative; }
-:is(.mobile-shell, body:has(.mobile-shell) .popover, body:has(.mobile-shell) dialog) :is(.icon-button, .chip, .send-button, .ask-why-toggle, .status-action, .ultra-switch)::after {
+:where(.mobile-shell, body:has(.mobile-shell) .popover, body:has(.mobile-shell) dialog) :where(.icon-button, .chip, .send-button, .ask-why-toggle, .status-action) { position: relative; }
+:is(.mobile-shell, body:has(.mobile-shell) .popover, body:has(.mobile-shell) dialog) :is(.icon-button, .chip, .send-button, .ask-why-toggle, .status-action)::after {
   content: ''; position: absolute; inset: min(0px, calc((100% - 44px) / 2));
 }
 /* the reply chip's cancel X sits at the chip's edge: a real 44 px square (as with a coarse

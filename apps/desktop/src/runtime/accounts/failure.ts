@@ -9,11 +9,16 @@
 //     when the caller can send one. The service comes from the deps or, for callers whose deps do not carry it
 //     (the helper calls of decision/engine-runner.ts, which often meet a sign-out first), from the account
 //     service it is attached to (attachRelogin, by Relogin.watch – keyed by that instance, so runtimes never mix);
+//     B-091: the account service's own check reports a sign-out it finds the same way (reportSignedOut);
 //   CLI confirmed missing ("… is not installed.") → error;
 //   anything else unavailable (overload, connection, a CLI that could not start, a rejected or missing
 //     API key – 401/403 may concern one model only; B-059: a provider overloaded or unreachable,
 //     engines/provider-outage.ts) → a short cooling;
 //   a timeout is the turn's own (B-075: a cold Codex app-server that did not open the thread in time) → nothing.
+// B-080: a failure of our own engine process (the local app-server not answering in time or its connection closing while a turn
+// opened or started – details.local –, a stall – details.stalled)
+// changes nothing about the account: it still counts as an overload, so the turn fails over once and keeps its outage
+// handling, but no account cools. Only what a provider said (a limit, signed out, overloaded or unreachable) cools one.
 // B-059: whether any account that can run an agent turn is usable now (turnAccountUsable) – the outage holds wait
 // for it (agents/redelivery.ts, tasks/outages.ts holdWakes); a media-only account (B-058) never counts.
 // Owns: this classification and these consequences. Never: failover or routing (the callers decide),
@@ -71,15 +76,7 @@ export function recordAccountFailure(deps: FailureDeps, account: Account, model:
   const signIn = failure === 'signed_out' && account.auth === 'cli' && isPlanProvider(account.provider);
   if (signIn || failure === 'missing') {
     const changed = deps.accounts.markUnavailable(account.id, signIn ? 'needs_login' : 'error');
-    const relogin = deps.relogin ?? attached.get(deps.accounts);
-    if (changed && signIn && relogin) {
-      relogin.signedOut(deps.accounts.get(account.id) ?? { ...account, state: 'needs_login' });
-    } else if (changed && signIn) {
-      deps.notifications?.notify({
-        kind: 'todo', title: `Sign in to ${account.label}`,
-        body: `Agents cannot use ${account.label} until you sign in again in Settings › Models.`,
-      });
-    }
+    if (changed && signIn) reportSignedOut(deps, account);
     return failure;
   }
   const now = deps.clock.now();
@@ -87,9 +84,23 @@ export function recordAccountFailure(deps: FailureDeps, account: Account, model:
     const fresh = deps.accounts.get(account.id);
     if (fresh && modelOnlyLimit(fresh, now, model)) return failure;
   }
+  if (result.error?.details?.local === true || result.error?.details?.stalled === true) return failure; // B-080: our own engine process
   const wait = result.error?.retryAfterMs ?? (failure === 'limit' ? LIMIT_COOLDOWN_MS : OVERLOAD_COOLDOWN_MS);
   deps.accounts.markLimited(account.id, now + Math.max(MIN_COOLDOWN_MS, wait));
   return failure;
+}
+
+/**
+ * A Codex/Claude Code plan just found signed out (once per sign-out): its sign-in work (accounts/relogin.ts), else one
+ * notification when the caller can send one. Also the account service's own background check (B-091, service.ts check).
+ */
+export function reportSignedOut(deps: { accounts: Pick<AccountService, 'get'> } & Pick<FailureDeps, 'notifications' | 'relogin'>, account: Account): void {
+  const relogin = deps.relogin ?? attached.get(deps.accounts);
+  if (relogin) relogin.signedOut(deps.accounts.get(account.id) ?? { ...account, state: 'needs_login' });
+  else deps.notifications?.notify({
+    kind: 'todo', title: `Sign in to ${account.label}`,
+    body: `Agents cannot use ${account.label} until you sign in again in Settings › Models.`,
+  });
 }
 
 /** B-059: the enabled accounts that can run an agent turn (an engine, never a media-only one). */

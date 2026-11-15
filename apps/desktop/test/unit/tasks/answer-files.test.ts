@@ -23,7 +23,7 @@ const UNKNOWN = 'f'.repeat(64);
 /** An agent message with one ask block that became a to-do. */
 function askedBy(f: { chats: ReturnType<typeof rpcFixture>['chats']; tasks: ReturnType<typeof rpcFixture>['tasks'] }, chatId: string, agentId: string, block: string) {
   const body = `Please:\n\`\`\`ui\n${block}\n\`\`\``;
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chatId, agentId, `run_${Math.random().toString(36).slice(2)}`).id, { body, state: 'final' });
+  const message = f.chats.postAgentMessage(chatId, agentId, `run_${Math.random().toString(36).slice(2)}`, { body, state: 'final' });
   const blocks = uiBlocksOf(body);
   const [todo] = f.tasks.ingestBlocks(message, blocks.map((item) => item.block), blocks.map((item) => item.index));
   assert.ok(todo, 'the ask block is a to-do');
@@ -41,7 +41,7 @@ test('a record answer: the person\'s line carries the recording, the context say
   f.db.run('DELETE FROM wakes');
 
   const phone = new TestClient(f.server, TODO_ONLY); // a To-do-only link answers like the PC
-  await phone.call('tasks.complete', { id: todo.id, answer: { file: file.id, seconds: 3, mime: 'audio/webm' }, clientId: 'take-1' });
+  await phone.call('tasks.finish', { id: todo.id, answer: { file: file.id, seconds: 3, mime: 'audio/webm' }, clientId: 'take-1' });
 
   const done = f.tasks.get(todo.id)!;
   assert.equal(done.status, 'done');
@@ -59,7 +59,7 @@ test('a record answer: the person\'s line carries the recording, the context say
 
   const rendered = renderMessages({ services: f.services, agentId: 'ag_ava', humanName: 'CEO', zone: 'UTC', now: f.clock.now() }, receipts, { images: false });
   const text = rendered.lines.join('\n');
-  assert.match(text, /^\[[^\]]+\] CEO: \(answer to my ask "[^"\n]+"\)\nRecorded 0:03\n/); // review fix: names the ask it answers
+  assert.match(text, /^\[[^\]]+ · CEO · [^\]]+\] \(answer to my ask "[^"\n]+"\)\nRecorded 0:03\n/); // review fix: names the ask it answers
   assert.doesNotMatch(text, /ui-answer|\[task /);
   assert.ok(text.includes(`stored at ${where}`), text);
 });
@@ -103,7 +103,7 @@ test('an answered recording joins the chat\'s media, so the agent finds it there
   const m = mediaSetup();
   t.after(() => m.temp.cleanup());
   const { h, chat } = m;
-  const asked: Message = h.chats.finishAgentMessage(h.chats.beginAgentMessage(chat.id, 'ag_ada', 'run_1').id, {
+  const asked: Message = h.chats.postAgentMessage(chat.id, 'ag_ada', 'run_1', {
     body: 'Your take:\n```ui\n{"type":"record","important":true,"mode":"audio"}\n```', state: 'final',
   });
   const blocks = uiBlocksOf(asked.body);

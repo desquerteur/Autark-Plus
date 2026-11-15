@@ -8,21 +8,29 @@
 // B-078 (D5): no switch gates phones any more – a phone or browser gets in exactly while its accepted device row and
 // token exist (Remove ends both); pwa.enabled stays a settings.json key that this file only ever writes true, pwa.bind says who
 // reaches the PC's HTTP port (LAN/Tailscale browsers; the phone app comes through the meeting server to the loopback).
-// pairPhone stores a phone paired by Remote ID and code (rendezvous/phone-pair.ts) and issues its token.
-// Never: starts the HTTP server itself or exposes owner scope.
+// pairPhone stores a phone paired by Remote ID and code (rendezvous/phone-pair.ts) and issues its token – mine, or with a
+// personId an employee's person token (people/tokens.ts).
+// B-087: a phone's subscription made at another of my PCs and held here through the roster (devices/sync/held-push.ts)
+// counts as on here too – this PC pushes to it – so the iPhone web app, which reaches whichever of my PCs is online, shows
+// "on" at each of them and never re-subscribes under this PC's key (that would cut off the PC where it was made).
+// Never: starts the HTTP server itself or exposes owner scope (an employee's phone never gets a device token).
 
 import type { Bus } from '../bus.ts';
 import type { Clock, Logger, SettingsService } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { newId } from '../../shared/ids.ts';
+import { HUMAN_ID, newId } from '../../shared/ids.ts';
+import type { Person } from '../../shared/model/people.ts';
 import { isPhoneRoute } from '../../shared/api/phone-route.ts';
 import type { ClientScope } from '../../shared/api/protocol.ts';
 import type { PushConfig, PwaState } from '../../shared/model/devices.ts';
 import type { Settings } from '../../shared/model/system.ts';
 import { DevicesRepo, publicDevice } from '../devices/repo.ts';
 import { fingerprintOf, fromB64url, sha256 } from '../devices/keys.ts';
+import { heldSubs } from '../devices/sync/held-push.ts';
 import { PERSON_SUBSCRIPTIONS_PER_DEVICE, isPushServiceEndpoint, parseSubscription, type PushMessage, type PushService } from './push.ts';
+import { PeopleRepo } from '../people/repo.ts';
+import { PersonTokens } from '../people/tokens.ts';
 import { PairCodes } from './pair-code.ts';
 import { TokenService, hashToken } from './tokens.ts';
 import { readServeStatus, reachableUrls, serveUrls, type InterfacesFn } from './urls.ts';
@@ -101,6 +109,7 @@ export class PwaService {
     const secure = urls[0]?.startsWith('https://') ?? false;
     const names = new Map(this.devices.list({ kinds: ['phone', 'browser'] }).map((device) => [device.id, device.name]));
     const subscribed = this.deps.push.subscribedDevices();
+    for (const sub of heldSubs(this.deps.db)) if (sub.deviceId) subscribed.add(sub.deviceId); // B-087: held from my other PCs
     const key = await this.vapidKey();
     return {
       enabled: true, // D5: no switch; kept in the shape for 0.3.x readers
@@ -118,12 +127,14 @@ export class PwaService {
   /**
    * DEV5A: what the calling phone/browser needs to turn notifications on. `endpoint` (its current
    * PushManager subscription, when it has one) answers "is it stored here?" for exactly that
-   * browser; without it a device asks whether the PC holds any subscription of its own.
+   * browser; without it a device asks whether the PC holds any subscription of its own. B-087: that endpoint held here
+   * from another of my PCs for the same caller is on as well; the key stays this PC's own (a held one signs only there).
    */
   async pushConfig(scope: ClientScope | undefined, endpoint?: string): Promise<PushConfig> {
     const key = await this.vapidKey();
     const deviceId = callerDevice(scope);
-    return { pushReady: key.ready, vapidPublicKey: key.publicKey, subscribed: this.deps.push.isSubscribed(deviceId, endpoint), reason: key.reason };
+    const held = Boolean(endpoint) && heldSubs(this.deps.db).some((sub) => sub.endpoint === endpoint && sub.deviceId === deviceId);
+    return { pushReady: key.ready, vapidPublicKey: key.publicKey, subscribed: this.deps.push.isSubscribed(deviceId, endpoint) || held, reason: key.reason };
   }
 
   /** The VAPID key, or why push cannot work right now (the key unavailable). */
@@ -185,22 +196,46 @@ export class PwaService {
     return { token: issued.token, deviceId };
   }
 
-  /** A phone accepted here by Remote ID and code: stored as a phone with its key (pinned at the meeting server), its token. */
-  pairPhone(input: { id: string; name: string; publicKey: string }): { token: string; deviceId: string } {
+  /**
+   * A phone accepted here by Remote ID and code: stored as a phone with its key (pinned at the meeting server), its token.
+   * F1: with `personId` (an employee's phone, picked on Accept) it gets that person's token – the one a person's join
+   * issues (people/tokens.ts) – under its own device id, and its row carries the person; without one it is my own phone.
+   * An earlier pairing of the same key here ends, so one phone never holds two accesses.
+   */
+  pairPhone(input: { id: string; name: string; publicKey: string; personId?: string }): { token: string; deviceId: string; person?: string } {
     const key = fromB64url(input.publicKey);
     if (key.length !== 32) throw new WorkforceError('bad_request', 'Not a device key.');
+    const fingerprint = fingerprintOf(key);
+    const person = input.personId ? this.employee(input.personId) : undefined;
     const known = this.devices.get(input.id);
-    if (known && !known.revokedAt && known.fingerprint !== fingerprintOf(key)) throw new WorkforceError('conflict', 'Another device already uses this id.');
+    if (!person && known && !known.revokedAt && known.fingerprint !== fingerprint) throw new WorkforceError('conflict', 'Another device already uses this id.');
     const now = this.deps.clock.now();
     const name = input.name.slice(0, 60) || 'Phone';
+    const issued = person ? new PersonTokens(this.deps.db, this.deps.clock).issue(person.id, name) : undefined;
+    const id = issued?.deviceId ?? input.id;
+    const earlier = this.devices.byFingerprint(fingerprint);
+    if (earlier && earlier.kind === 'phone' && earlier.id !== id) void this.revoke(earlier.id);
     const record = this.devices.upsert({
-      id: input.id, name, kind: 'phone', role: 'client', fingerprint: fingerprintOf(key), publicKey: input.publicKey,
-      addresses: [], caps: {}, status: 'online', self: false, pairedAt: now, lastSeenAt: now,
+      id, name, kind: 'phone', role: 'client', fingerprint, publicKey: input.publicKey,
+      addresses: [], caps: {}, status: 'online', self: false, pairedAt: now, lastSeenAt: now, ...(person ? { personId: person.id } : {}),
     });
-    const token = this.tokens.issueDevice(input.id, name);
+    if (person) { // as people/service.ts admit: the person is in now
+      const people = new PeopleRepo(this.deps.db);
+      people.save({ ...person, status: 'active', joinedAt: person.joinedAt ?? now, updatedAt: now });
+      people.audit(person.id, now, HUMAN_ID, 'joined', { deviceId: id, device: name });
+    }
+    const token = issued?.token ?? this.tokens.issueDevice(id, name);
     this.deps.bus.emit('device.upserted', publicDevice(record));
     void this.emit();
-    return { token, deviceId: input.id };
+    return { token, deviceId: id, ...(person ? { person: person.name } : {}) };
+  }
+
+  /** The employee a phone is accepted for; undefined for me (the owner); refused when that person has no access. */
+  private employee(personId: string): Person | undefined {
+    if (personId === HUMAN_ID) return undefined;
+    const person = new PeopleRepo(this.deps.db).get(personId);
+    if (!person || person.status === 'revoked') throw new WorkforceError('forbidden', 'This person no longer has access.');
+    return person.owner ? undefined : person;
   }
 
   /**

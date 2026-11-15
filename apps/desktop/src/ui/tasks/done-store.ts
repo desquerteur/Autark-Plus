@@ -55,7 +55,7 @@ function wire(): void {
 }
 
 async function fetchWindow(since: number, conversationId?: string): Promise<TaskView[]> {
-  const base: TaskFilter = { status: ['done', 'cancelled'], ...(conversationId ? { conversationId } : {}) };
+  const base: TaskFilter = { status: ['done', 'dropped'], ...(conversationId ? { conversationId } : {}) };
   if (windowFilter) {
     try {
       return await rpc.call('tasks.list', { ...base, completedSince: since, limit: FALLBACK_LIMIT });

@@ -6,7 +6,7 @@
 //     the instructions never touches the file; a file changed outside and not taken over yet is a
 //     conflict (an editor's stale draft is refused before that: agents.update `base`, root/text-doc.ts staleBase);
 //   - a change on disk (an editor, a script) reaches the cache as an edit by the person with the reason
-//     EXTERNAL_REASON (an agent revision with undo) – picked up through the data folder watcher (watch.ts →
+//     EXTERNAL_REASON – picked up through the data folder watcher (watch.ts →
 //     runtime/root/watcher.ts, the owner of <data>/agents), at start
 //     (reconcileAll – also the one-time migration: every agent without a folder gets one from its cached
 //     instructions, idempotent), when agents.core is read, and by a stat at each prompt (instructions():
@@ -14,12 +14,20 @@
 //     debounced take-over – it may be an editor's save in progress);
 //   - a missing SYSTEM.md is written again from the cache (deleting it never drops instructions; an empty
 //     file means none); a too large, non-UTF-8, unreadable or linked one leaves the cache in use with a
-//     quiet notice (store.ts); an id that cannot name a folder keeps its instructions in the app only.
+//     quiet notice (store.ts); an id that cannot name a folder keeps its instructions in the app only;
+//   - a file that is still the app's own last write or take-over is no change: when the row moved without it (a
+//     linked PC's agents row, devices/sync – that PC's SYSTEM.md follows through the file sync), the row stands, the
+//     prompt uses it and a save writes over the file (B-087, review 10.11.2026: a turn in the second before the synced
+//     file landed took the old file over and set the row back on both PCs). Which file is the app's own is kept across
+//     a restart (`own`); a SYSTEM.md the file sync put in place is reconciled at once (arrived); files written from the
+//     cache into a folder that had none are dated before the agent existed, so a linked PC's real ones win.
 // Main Skills (<folder>/skills) belong to the skill library (skills/service.ts mainRoots); a change on disk
 // invalidates it, then 'skills.changed' tells every listener. discardOrphans removes the folders of hires a
 // rolled-back transaction took back. A watcher an error stopped is armed again on the next use (RootWatcher.ensure).
 // B-044: the agent's home project (home.ts – `home` in agent.json): read, judged, set or cleared here (an edit on
 // disk too: 'agentCore.changed'); its skills are listed from the home folder (untrusted, bounded, cached).
+// Owner 15.11.2026: HUMAN.md (human.ts) – a hire gets it with the default line in the app's language, the person writes it
+// (setHuman, or on disk: 'agentCore.changed'), the prompt reads it (human); no edit of the instructions touches it.
 // Owns: these rules. Never: stores instructions anywhere else, treats file text as a permission, or polls.
 
 import { mkdirSync, rmSync } from 'node:fs';
@@ -37,6 +45,7 @@ import { nudgeCore, watchCoreFolders, type CoreChange } from './watch.ts';
 import { mainSkillProblems } from './info.ts';
 import { FolderStore } from './store.ts';
 import { AgentHomes, type HomePaths } from './home.ts';
+import { readHuman, seedHuman, writeHuman } from './human.ts';
 
 export { REJECTED_FILE } from './store.ts';
 export const EXTERNAL_REASON = 'Changed in SYSTEM.md outside the app.';
@@ -54,6 +63,10 @@ export interface AgentCoreDeps {
   /** Runs a follow-up after the current work when there is no watcher (default setImmediate). */
   defer?: (run: () => void) => void;
   paths?: HomePaths; // B-044: the folders homes are resolved against (no paths = no home projects: fakes)
+  /** B-087: where the app's own last write or take-over of each SYSTEM.md is kept across a restart (compose: kv; absent: while running). */
+  own?: { get(agentId: string): string | undefined; set(agentId: string, sig: string | undefined): void };
+  /** The app's language (settings profile.language) – a hire's HUMAN.md starts with the default line in it. */
+  language?: () => string | undefined;
 }
 
 export type ReconcileOutcome = 'created' | 'updated' | 'same' | 'problem' | 'skipped' | 'unknown';
@@ -116,19 +129,21 @@ export class AgentCore {
     const manifest = this.store.knownManifest(agentId);
     const read = this.store.safeCheck(agentId);
     if (read.kind === 'missing') {
-      // A folder without agent.json is new (the one-time migration, an agent the old store imported): silent;
-      // with it, SYSTEM.md was removed: written again and named once.
-      if (!this.store.writeFolder(agent)) return 'problem';
+      // A folder without agent.json is new (the one-time migration, an agent the old store imported, a linked PC's
+      // agent whose files are on their way – dated older, so they win): silent; with it, SYSTEM.md was removed:
+      // written again and named once.
+      if (!this.store.writeFolder(agent, true)) return 'problem';
       this.store.setNotice(agentId, manifest !== undefined ? 'missing' : undefined);
       return 'created';
     }
-    if (manifest === undefined) this.store.tryManifest(agent);
+    if (manifest === undefined) this.store.tryManifest(agent, true);
     if (read.kind === 'problem') {
       this.store.setNotice(agentId, read.problem);
       return 'problem';
     }
     const outside = this.store.isOutside(agentId, read);
     if (read.text !== canonical(agent.instructions)) {
+      if (!outside) return 'same'; // still the app's own file: the row moved without it (a linked PC's row) and stands
       try {
         this.deps.org().update(agentId, { instructions: read.text }, { by: HUMAN_ID, reason: EXTERNAL_REASON });
       } catch (error) {
@@ -141,7 +156,28 @@ export class AgentCore {
       return 'updated';
     }
     if (outside || state.notice?.problem !== 'missing') this.store.setNotice(agentId, undefined);
+    this.store.adopt(agentId, read.sig); // the file says what the row says: the app's own from now on (a synced one too)
     return 'same';
+  }
+
+  /** Whether the row brought instructions the app's own SYSTEM.md does not have yet (a linked PC's row came first). */
+  rowAhead(agentId: string): boolean {
+    if (!isCoreFolderName(agentId)) return false;
+    const agent = this.deps.org().get(agentId);
+    const read = this.store.safeCheck(agentId);
+    return agent !== undefined && read.kind === 'ok' && !this.store.isOutside(agentId, read) && read.text !== canonical(agent.instructions);
+  }
+
+  /**
+   * devices/sync/files.ts put a linked PC's SYSTEM.md in place: reconciled at once, so taking it over is the echo of
+   * that PC's change (sync/stamps.ts). `keep`: the row was ahead of the app's own file – it stands, the pulled file is the app's own.
+   */
+  arrived(agentId: string, keep = false): void {
+    try {
+      if (!keep) { this.reconcile(agentId); return; }
+      const read = this.store.safeCheck(agentId);
+      if (read.kind === 'ok') this.store.adopt(agentId, read.sig);
+    } catch (error) { this.deps.log.warn('agent folder not reconciled', { agentId, error: String(error) }); }
   }
 
   /**
@@ -152,8 +188,10 @@ export class AgentCore {
     const wanted = canonical(next.instructions);
     if (canonical(before.instructions) === wanted || !isCoreFolderName(next.id)) return; // no folder: the row only
     const read = this.store.safeCheck(next.id);
-    if (read.kind === 'ok' && read.text === wanted) return; // already the file's text (taking over an outside edit)
-    if (read.kind === 'ok' && read.text !== canonical(before.instructions)) {
+    // Already the file's text: taking over an outside edit. The app's own file that already says it is written again –
+    // the row had moved past it (a linked PC's row), so this save back is a new version the file sync carries.
+    if (read.kind === 'ok' && read.text === wanted && this.store.isOutside(next.id, read)) return;
+    if (read.kind === 'ok' && read.text !== canonical(before.instructions) && this.store.isOutside(next.id, read)) {
       this.later(next.id);
       throw new WorkforceError('conflict', 'SYSTEM.md was changed outside the app. Its text is being loaded – check it and save again.');
     }
@@ -173,7 +211,27 @@ export class AgentCore {
   created(agent: Agent): void {
     if (!isCoreFolderName(agent.id)) return;
     this.hired.add(agent.id);
-    this.store.writeFolder(agent);
+    if (!this.store.writeFolder(agent)) return;
+    let language: string | undefined;
+    try { language = this.deps.language?.(); } catch { language = undefined; }
+    seedHuman(this.deps.dataDir, agent.id, language);
+  }
+
+  /** HUMAN.md's text for the prompt ('' without one). */
+  human(agentId: string): string {
+    return isCoreFolderName(agentId) ? readHuman(this.deps.dataDir, agentId) : '';
+  }
+
+  /** The person's edit of HUMAN.md (agents.setHuman). */
+  setHuman(agentId: string, text: string): string {
+    this.deps.org().require(agentId);
+    if (!isCoreFolderName(agentId)) throw new WorkforceError('conflict', 'This agent has no agent folder, so it cannot have a HUMAN.md.');
+    try { writeHuman(this.deps.dataDir, agentId, text, this.deps.root); } catch (error) {
+      this.deps.log.warn('HUMAN.md not written', { agentId, error: String(error) });
+      throw new WorkforceError('unavailable', 'The text could not be saved: HUMAN.md in the agent folder cannot be written.');
+    }
+    this.deps.bus.emit('agentCore.changed', { agentId });
+    return this.human(agentId);
   }
 
   /** After a rolled-back hire (import, derive, team proposal): removes the folders of agents this run hired that no longer exist. */
@@ -204,6 +262,7 @@ export class AgentCore {
     if (read.kind === 'ok') {
       const cached = canonical(agent.instructions);
       if (read.text === cached) return read.text;
+      if (!this.store.isOutside(agent.id, read)) return agent.instructions; // the row moved ahead of the app's own file (a linked PC's row)
       this.later(agent.id);
       // An emptied file may be an editor's save in progress: the last good text until the debounced take-over confirms it.
       return read.text === '' && cached !== '' ? agent.instructions : read.text;
@@ -238,6 +297,7 @@ export class AgentCore {
       ...(home ? { home: withFolder ? home : { ...home, path: '' } } : {}),
       inUse: read.kind === 'ok',
       ...notice,
+      human: readHuman(this.deps.dataDir, agentId),
       mainSkills,
       ...(skillProblems.length ? { skillProblems } : {}),
     };
@@ -286,6 +346,7 @@ export class AgentCore {
     for (const id of ids) {
       if (change.system || change.all) this.reconcile(id);
       if ((change.manifest || change.all) && isCoreFolderName(id) && this.homes.reread(id)) this.deps.bus.emit('agentCore.changed', { agentId: id });
+      if (change.human) this.deps.bus.emit('agentCore.changed', { agentId: id }); // HUMAN.md edited on disk: the agent page reloads it
       if (!(change.skills || change.all) || !isCoreFolderName(id)) continue;
       const sig = mainSkillsSignature(this.deps.dataDir, id);
       const state = this.store.state(id);

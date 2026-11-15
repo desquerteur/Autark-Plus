@@ -35,7 +35,7 @@ export const SHUTDOWN_CUT = 'The runtime stopped while the split ran.';
  * The input note of the attempt after a restart put the part back (service.inputFor): live test L7 – with only the
  * generic recap of the cut attempt's calls, a part once would not repeat its harmless command and reported it unverified.
  */
-export const RESTART_NOTE = 'The app restarted while I worked on this part, so the earlier attempt was cut. I do the part again from the start and run its commands again to get real outputs; repeating reads and checks is safe.';
+export const RESTART_NOTE = 'The app restarted while I worked on this part; its earlier attempt is gone, and reads and checks are safe to repeat.';
 
 /** Did a restart put this part back (the text its put-back left on it – boot: RESTART_AGAIN; a graceful stop: SHUTDOWN_CUT)? */
 export function putBackByRestart(error: string | undefined): boolean {

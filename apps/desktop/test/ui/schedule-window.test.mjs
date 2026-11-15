@@ -124,7 +124,7 @@ test('Schedule mode: settings above the text, Once and Repeat, Edit from the lis
   await composer.fill('');
 
   // ---- entering the mode: grows from the bottom up, nothing else moves
-  const cells =['.composer-actions', '.composer-plus', '.ultra-switch', '.model-chip', '.send-button', '.chat-header'];
+  const cells =['.composer-actions', '.composer-plus', '.model-chip', '.send-button', '.chat-header'];
   const [frameBefore, inputBefore] = await measureBoxes(page, ['.composer', '.composer-input']);
   assert.equal(await send.getAttribute('aria-label'), 'Send');
   await expectStable(page, cells, openFromPlus);
@@ -306,7 +306,6 @@ test('Schedule mode: settings above the text, Once and Repeat, Edit from the lis
   assert.equal(await dayButton('Tuesday').getAttribute('aria-pressed'), 'false');
   assert.equal(await bar.getByLabel('Time', { exact: true }).inputValue(), '09:00');
   await lineIs(/^Editing · Sends every Monday at 09:00, next: /);
-  assert.equal(await page.locator('.ultra-switch').getAttribute('aria-hidden'), 'true', 'an edit cannot change the Ultra hint: the cell is inert');
   await shot('schedule-09-edit-light');
   await composer.fill('Weekly status ping (edited)');
   await bar.getByLabel('Time', { exact: true }).fill('10:00');

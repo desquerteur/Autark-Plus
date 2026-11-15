@@ -14,7 +14,7 @@ import type { AccountCheck, EngineModel } from '../types.ts';
 import type { RpcClient } from './rpc.ts';
 import { isRecord, normalizeEffort, str } from '../shared.ts';
 import { normalizeCodexLimits } from '../../accounts/limits.ts';
-import { readRateLimits, type PlainReads } from './limits-read.ts';
+import { readRateLimits } from './limits-read.ts';
 
 /** Codex models the last listings reported with audio input (model ids are the same on every account). */
 const HEARING = new Set<string>();
@@ -65,7 +65,7 @@ export async function listCodexModels(rpc: Pick<RpcClient, 'request'>, efforts: 
  * (`details`: the reset credits' details too; `seen` gets the raw rate limits for later retry hints).
  * Limits are optional – a failed limits read leaves them out; no answer at all is 'error'.
  */
-export async function readCodexAccount(rpc: Pick<RpcClient, 'request'>, input: { details: boolean; plain: PlainReads; now: () => number; seen: (rateLimits: unknown) => void }): Promise<AccountCheck> {
+export async function readCodexAccount(rpc: Pick<RpcClient, 'request'>, input: { details: boolean; now: () => number; seen: (rateLimits: unknown) => void }): Promise<AccountCheck> {
   try {
     const read = await rpc.request<{ account?: unknown; requiresOpenaiAuth?: boolean }>('account/read', { refreshToken: false });
     const info = isRecord(read?.account) ? read.account : undefined;
@@ -73,7 +73,7 @@ export async function readCodexAccount(rpc: Pick<RpcClient, 'request'>, input: {
     const check: AccountCheck = { state: 'ok', plan: info.type === 'chatgpt' ? str(info.planType) : info.type === 'apiKey' ? 'api' : str(info.type), email: str(info.email) };
     if (info.type === 'chatgpt') {
       try {
-        const limits = await readRateLimits(rpc, input.details, input.plain);
+        const limits = await readRateLimits(rpc, input.details);
         check.limits = normalizeCodexLimits(limits, input.now());
         if (isRecord(limits)) input.seen(limits.rateLimits);
       } catch { /* limits are optional */ }

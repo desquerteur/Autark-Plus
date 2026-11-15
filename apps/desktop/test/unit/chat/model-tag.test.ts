@@ -92,8 +92,7 @@ test('K2: the default 1:1 keeps its empty title after the first message; another
 test('K4: an answer finished or posted with priority important is stored and announced so; default normal', () => {
   const h = setup();
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
-  const streaming = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_1');
-  const finished = h.chats.finishAgentMessage(streaming.id, { body: 'The server is down', state: 'final', priority: 'important' });
+  const finished = h.chats.postAgentMessage(chat.id, 'ag_tom', 'run_1', { body: 'The server is down', state: 'final', priority: 'important' });
   assert.equal(finished.priority, 'important');
   assert.equal(h.chats.message(finished.id)!.priority, 'important');
   const posted = h.chats.postAgentMessage(chat.id, 'ag_tom', 'run_2', { body: 'Back up', priority: 'important' });

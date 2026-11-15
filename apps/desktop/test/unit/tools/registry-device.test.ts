@@ -2,12 +2,22 @@
 // tools/list shows it for remote tools only); the registry resolves it against devices.list,
 // strips it, forwards the call to that PC and names the PC in the summary; unknown, revoked,
 // ambiguous and non-PC devices are clear errors; agents.update sets the PC an agent works on.
+// B-080: files.read and files.list are remote tools (forwarded like shell.exec, run there by runRemoteTool), a call from
+// a linked PC reads by the same path rule (an absolute path anywhere on that PC), and devices.list pings before it answers
+// (each ping waits at most PROBE_MS); without device, a home this PC does not forward to leaves the call on this PC.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Registry } from '../../../src/runtime/tools/registry.ts';
+import { fileTools } from '../../../src/runtime/tools/builtin/files.ts';
+import { sendFile } from '../../../src/runtime/devices/send-file.ts';
+import { WorkforceError } from '../../../src/shared/errors.ts';
 import { DEVICE_PROPERTY, type ToolContext, type ToolDef } from '../../../src/runtime/tools/types.ts';
 import { deviceTools, runRemoteTool } from '../../../src/runtime/devices/tools.ts';
+import { PROBE_MS } from '../../../src/runtime/devices/mesh.ts';
 import { agentTools } from '../../../src/runtime/tools/builtin/agents.ts';
 import { toMcpTool } from '../../../src/runtime/mcp/convert.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
@@ -33,16 +43,26 @@ const DEVICES: Device[] = [
   pc('dev_twin2', 'Twin', { status: 'offline' }),
 ];
 
+/** A devices row as DevicesRepo reads it (only `allow` carries joinedAs). */
+const ROW = { name: 'Tower', kind: 'pc', role: 'home', fingerprint: 'fp_dev_tower', public_key: '', addresses: '[]', caps: '{}', status: 'online', self: 0, paired_at: null, last_seen_at: null, revoked_at: null, allow: '{}' };
+
 const MODE = { key: 'computer', name: 'Computer', workspace: 'computer', tools: ['computer.*', 'browser.*', 'phone.*', 'devices.*', 'agents.*', 'screen.*'] } as unknown as ModeInfo;
 
 interface Forwarded { deviceId: string; method: string; params: { name: string; args: Record<string, unknown> } }
 
-function fakeDevices(forwarded: Forwarded[]): RuntimeServices['devices'] {
+/** `pinged`: the PCs devices.list pinged (only Tower answers); `waits`: how long each ping may wait for its answer. */
+function fakeDevices(forwarded: Forwarded[], pinged: string[] = [], waits: Array<number | undefined> = []): RuntimeServices['devices'] {
   return {
     self: () => DEVICES[0],
     list: () => DEVICES,
     online: (id: string) => id === 'dev_self' || id === 'dev_tower',
-    call: async (deviceId: string, method: string, params: unknown) => {
+    call: async (deviceId: string, method: string, params: unknown, _signal?: AbortSignal, timeoutMs?: number) => {
+      if (method === 'ping') {
+        pinged.push(deviceId);
+        waits.push(timeoutMs);
+        if (deviceId !== 'dev_tower') throw new WorkforceError('unavailable', 'not reachable', { details: { deviceId, reachable: false } });
+        return { ok: true };
+      }
       forwarded.push({ deviceId, method, params: params as Forwarded['params'] });
       return { content: [{ type: 'text', text: `ran on ${deviceId}` }] };
     },
@@ -63,10 +83,12 @@ const deviceDefs = () => deviceTools({ computer: {} as ComputerService, browser:
 
 function rig() {
   const forwarded: Forwarded[] = [];
+  const pinged: string[] = [];
+  const waits: Array<number | undefined> = [];
   const items: Array<{ kind: string; data?: Record<string, unknown> }> = [];
   const runs: Array<{ args: Record<string, unknown>; deviceId?: string }> = [];
   const services = {
-    devices: fakeDevices(forwarded),
+    devices: fakeDevices(forwarded, pinged, waits),
     modes: { get: () => MODE },
     runs: { item: (_runId: string, item: { kind: string; data?: Record<string, unknown> }) => { items.push(item); return { id: `ri_${items.length}` }; }, updateItem: () => undefined },
     db: { get: () => undefined },
@@ -82,7 +104,7 @@ function rig() {
   const base = (extra: Partial<ToolContext> = {}) => ({ agent: mira, runId: 'run_1', mode: 'computer', signal: new AbortController().signal, status: () => {}, ...extra });
   /** The summaries the journal kept, in call order. */
   const summaries = () => items.filter((item) => item.kind === 'tool_call').map((item) => String(item.data?.summary));
-  return { registry, services, defs, forwarded, summaries, items, runs, mira, base };
+  return { registry, services, defs, forwarded, pinged, waits, summaries, items, runs, mira, base };
 }
 
 const textOf = (out: { content: Array<{ type: string; text?: string }> }) => out.content.map((part) => part.text ?? '').join('\n');
@@ -99,7 +121,7 @@ test('MCP tools/list: remote tools get the optional device argument, other tools
       assert.deepEqual(device, DEVICE_PROPERTY, tool.title);
       assert.ok(!((tool.inputSchema.required as string[] | undefined) ?? []).includes('device'), `${tool.title}: device is optional`);
     } else if (tool.title === 'agents.update') {
-      assert.equal(device?.description, undefined, 'agents.update keeps its own device field');
+      assert.equal(device?.description, 'The PC its computer, browser and phone tools use.', 'agents.update keeps its own device field');
     } else {
       assert.equal(device, undefined, `${tool.title} runs here and takes no device`);
     }
@@ -107,7 +129,7 @@ test('MCP tools/list: remote tools get the optional device argument, other tools
   const windows = listed.find((tool) => tool.title === 'computer.windows')!;
   assert.equal(windows.inputSchema.additionalProperties, false, 'the schema stays strict');
   assert.equal(props(defs.find((tool) => tool.name === 'computer.windows')!.inputSchema).device, undefined, 'the definition itself is not changed');
-  assert.match(registry.get('devices.list')!.description, /name or id/);
+  assert.match(registry.get('devices.list')!.description, /Tools with a device argument run on any of them/);
   assert.throws(() => registry.register({ ...recorder([]), name: 'screen.own', inputSchema: { type: 'object', properties: { device: { type: 'string' } } } }), /must not define its own "device"/);
 });
 
@@ -154,16 +176,31 @@ test('unknown, revoked, ambiguous and non-PC devices are clear errors and nothin
   await fails({ device: 'Pixel' }, /^"Pixel" is a phone, not a PC/);
   await fails({ device: 'Twin' }, /^Several linked PCs are called "Twin"\. Pass the device id/);
   await fails({ device: '' }, /device: too short/);
-  await fails({}, /^Attic, my home device, was removed\. Pass device: "this"/, base({ deviceId: 'dev_old' }), 'screen.peek');
   await fails({ device: 'Tower' }, /^devices\.list always runs on this PC, so it takes no "device"\.$/, base(), 'devices.list');
   assert.deepEqual([forwarded.length, summaries().length, runs.length], [0, 0, 0], 'nothing journaled, forwarded or run');
   const twin = await registry.call('computer.windows', { device: 'dev_twin2' }, base(), 'call_twin');
   assert.equal(textOf(twin), 'ran on dev_twin2', 'the id picks one of two PCs with the same name');
 });
 
-test('devices.list names this PC, the PC the agent works on and the linked PCs (no role, phones or revoked PCs)', async () => {
-  const { registry, base, mira } = rig();
+test('B-080: without device, a home this PC does not forward to – removed, half-paired, unknown, or a PC this PC joined as an employee – leaves the call here', async () => {
+  const { registry, services, forwarded, summaries, runs, base } = rig();
+  const joined = new Set(['dev_tower']);
+  (services as { db: unknown }).db = { get: (_sql: string, params: string[]) => (joined.has(params[0]) ? { ...ROW, id: params[0], allow: '{"joinedAs":"employee"}' } : undefined) };
+  for (const home of ['dev_old', 'dev_pending', 'dev_gone', 'dev_tower']) {
+    const out = await registry.call('screen.peek', { x: 1 }, base({ deviceId: home }), `call_${home}`);
+    assert.equal(textOf(out), 'peeked here', home);
+  }
+  assert.deepEqual(runs.map((run) => run.deviceId), ['dev_self', 'dev_self', 'dev_self', 'dev_self'], 'it ran on this PC, as this PC');
+  assert.deepEqual([forwarded.length, summaries()], [0, ['Peek at the screen', 'Peek at the screen', 'Peek at the screen', 'Peek at the screen']]);
+  joined.clear(); // Tower is one of my own PCs again: its calls go there
+  assert.equal(textOf(await registry.call('screen.peek', { x: 2 }, base({ deviceId: 'dev_tower' }), 'call_own')), 'ran on dev_tower');
+});
+
+test('devices.list names this PC, the PC the agent works on and the linked PCs (no role, phones or revoked PCs); online = answered a ping just now', async () => {
+  const { registry, base, mira, pinged, waits } = rig();
   const out = await registry.call('devices.list', {}, base({ agent: { ...mira, deviceId: 'dev_tower' } }), 'call_1');
+  assert.deepEqual(pinged.sort(), ['dev_pending', 'dev_tower', 'dev_twin1', 'dev_twin2'], 'every linked PC once, never this PC, a phone or a removed PC');
+  assert.deepEqual(waits, [PROBE_MS, PROBE_MS, PROBE_MS, PROBE_MS], "B-080: each ping waits at most the mesh's probe time, not the 120 s RPC default");
   const listed = out.structured as { youAreOn: string; homeDevice?: string; note?: string; devices: Array<Record<string, unknown>> };
   assert.equal(listed.youAreOn, 'Laptop');
   assert.equal(listed.homeDevice, 'Tower');
@@ -173,6 +210,7 @@ test('devices.list names this PC, the PC the agent works on and the linked PCs (
   assert.deepEqual(listed.devices[0], { id: 'dev_self', name: 'Laptop', thisPc: true, online: true, caps: { computerUse: true } });
   assert.deepEqual(listed.devices[1], { id: 'dev_tower', name: 'Tower', online: true, caps: { computerUse: true }, lastSeen: '2026-10-20T08:00:00.000Z' });
   assert.equal(listed.devices[2].status, 'pairing');
+  assert.deepEqual([listed.devices[3].online, listed.devices[3].status], [false, 'offline'], 'no answer: not online');
   const plain = (await registry.call('devices.list', {}, base(), 'call_2')).structured as { homeDevice?: string };
   assert.equal(plain.homeDevice, undefined, 'no home device while the agent works on this PC');
 });
@@ -193,6 +231,51 @@ test('a call received from a linked PC never travels on: runRemoteTool drops a d
   const out = await runRemoteTool(services, { name: 'screen.peek', args: { device: 'Laptop', x: 4 }, agentId: 'ag_1', runId: 'run_1' }, 'dev_self', new AbortController().signal);
   assert.equal(textOf(out), 'peeked here');
   assert.deepEqual(runs, [{ args: { x: 4 }, deviceId: 'dev_tower' }]);
+});
+
+test('B-080: files.read and files.list with device go to that PC as tools.call, without the device argument', async () => {
+  const { registry, services, forwarded, summaries, base } = rig();
+  Object.assign(services, { modes: { get: () => ({ ...MODE, tools: [...(MODE.tools ?? []), 'files.*'] }) }, paths: { workspace: os.tmpdir() } });
+  for (const tool of fileTools()) registry.register(tool);
+  assert.deepEqual(props(registry.get('files.read')!.inputSchema).device, DEVICE_PROPERTY, 'the shared device argument of remote tools');
+  const log = 'C:/Users/ann/AppData/Roaming/Autark/logs/runtime.log';
+  assert.equal(textOf(await registry.call('files.read', { path: log, device: 'Tower' }, base(), 'call_1')), 'ran on dev_tower');
+  assert.equal(textOf(await registry.call('files.list', { path: 'C:/Users/ann/Downloads', device: 'tower' }, base(), 'call_2')), 'ran on dev_tower');
+  assert.deepEqual(forwarded.map((call) => [call.deviceId, call.method, call.params.name, call.params.args]), [
+    ['dev_tower', 'tools.call', 'files.read', { path: log }],
+    ['dev_tower', 'tools.call', 'files.list', { path: 'C:/Users/ann/Downloads' }],
+  ]);
+  assert.deepEqual(summaries(), [`Read ${log} on Tower`, 'List C:/Users/ann/Downloads on Tower']);
+});
+
+test('B-080: on the PC that receives it, files.read, files.list and devices.send_file read an absolute path anywhere there', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'wf-remote-read-'));
+  try {
+    const workspace = path.join(root, 'workspace');
+    const outside = path.join(root, 'Downloads', 'note.txt');
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(path.dirname(outside), { recursive: true });
+    writeFileSync(outside, 'from the notebook');
+    const forwarded: Forwarded[] = [];
+    const registry = new Registry({ services: () => services });
+    const services = {
+      tools: registry, paths: { workspace },
+      // This is Tower: the call comes from Laptop.
+      devices: { ...fakeDevices(forwarded), self: () => ({ ...DEVICES[1], self: true }), list: () => DEVICES.map((device) => ({ ...device, self: device.id === 'dev_tower' })) },
+      secrets: { redact: (text: string) => text },
+      org: { get: () => undefined },
+      log: { debug() {}, info() {}, warn() {}, error() {} },
+    } as unknown as RuntimeServices;
+    for (const tool of [...fileTools(), sendFile]) registry.register(tool);
+    const call = (name: string, args: Record<string, unknown>) => runRemoteTool(services, { name, args, agentId: 'ag_1', runId: 'run_1' }, 'dev_self', new AbortController().signal);
+    assert.equal(textOf(await call('files.read', { path: outside })), 'from the notebook', 'read, not refused – and outside the workspace');
+    assert.equal(textOf(await call('files.list', { path: path.dirname(outside) })), 'file note.txt');
+    const sent = await call('devices.send_file', { to: 'Laptop', path: outside });
+    assert.equal(sent.isError, undefined, textOf(sent));
+    assert.deepEqual(forwarded.map((item) => [item.deviceId, item.method]), [['dev_self', 'files.put']]);
+    const piece = forwarded[0].params as unknown as { name: string; dataBase64: string; last: boolean };
+    assert.deepEqual([piece.name, Buffer.from(piece.dataBase64, 'base64').toString(), piece.last], ['note.txt', 'from the notebook', true]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('agents.update sets the PC an agent works on (any agent); its next device call runs there', async () => {

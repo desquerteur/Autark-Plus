@@ -57,7 +57,7 @@ function buildEntries(): Entry[] {
     ? [{ id: 'a:setup', group: 'Actions', label: 'Set up team again', icon: 'users-three', run: () => { void startSetupAgain(); } }]
     : [];
   // B-055: the feedback tour's replay (ui/tour/TourDialog.tsx), also on Settings › Feedback
-  const tour: Entry = { id: 'a:tour', group: 'Actions', label: 'Watch how it works', icon: 'play', run: openTour };
+  const tour: Entry = { id: 'a:tour', group: 'Actions', label: 'Watch how it works', icon: 'play', run: () => openTour() };
   const actions: Entry[] = [
     ...own.filter((entry) => allowed.has(entry.id)),
     ...setup,

@@ -18,10 +18,19 @@ const home = (await import('../src/pages/home.mjs')).default;
 const download = (await import('../src/pages/download.mjs')).default;
 
 const rel = { ...structuredClone(release.fallback), history: [] };
+test('About keeps historical names without old Meta Jarvis links', async () => {
+  const about = (await import('../src/pages/about.mjs')).default;
+  const html = about(rel);
+  assert.ok(html.includes('Meta Jarvis'));
+  assert.ok(!html.includes('metajarvis.teydralab.com'));
+  assert.ok(!html.includes('href="undefined"'));
+  assert.equal(maker.umbrellaUrl, undefined);
+  assert.equal(maker.telecodingUrl, undefined);
+});
 const ldOf = (html) => [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
 
-test('base path follows SITE_URL: /autark/ by default, / for an own domain', () => {
-  if (!process.env.SITE_URL) assert.equal(BASE, '/autark/');
+test('base path follows SITE_URL: / by default (openautark.com, B-084), a sub path for a shared host', () => {
+  if (!process.env.SITE_URL) assert.equal(BASE, '/');
   const probe = `import('${pathToFileURL(join(root, 'src/layout.mjs')).href}').then((m) => process.stdout.write(m.BASE + ' ' + m.abs('download')))`;
   const run = (url) => execFileSync(process.execPath, ['--input-type=module', '-e', probe], { env: { ...process.env, SITE_URL: url } }).toString();
   assert.equal(run('https://autark.example.com/'), '/ https://autark.example.com/download/');
@@ -38,9 +47,9 @@ test('file links live on OpenAutark under /get/, the old checksums link keeps an
   assert.equal(release.repo, 'teydra/OpenAutark');
   const byId = Object.fromEntries(downloads.map((d) => [d.id, d]));
   for (const id of ['windows', 'mac', 'mac-zip', 'linux', 'android', 'checksums']) assert.equal(byId[id].path, `get/${id}`);
-  assert.equal(release.asset(byId.android.file), 'https://github.com/teydra/OpenAutark/releases/latest/download/autark-android.apk');
+  assert.equal(release.asset(byId.android.file), 'https://github.com/teydra/OpenAutark/releases/latest/download/autark-android-lite.apk');
   assert.deepEqual(legacyFileLinks, [{ path: 'download/checksums', id: 'checksums' }]);
-  assert.ok(release.historyApis.some((u) => u.includes('proactive-agent-workforce-releases')), 'old releases stay in the changelog');
+  assert.deepEqual(release.historyApis, ['https://api.github.com/repos/teydra/OpenAutark/releases'], 'the changelog reads only the public repo; the old one is private');
 });
 
 test('one page per platform with a canonical address, one h1, a big button and valid structured data', () => {
@@ -115,14 +124,46 @@ test('/pair/ on an iPhone points to the Home Screen app (Safari keeps separate s
   assert.ok(html.includes('data-pair-ios') && html.includes('open Autark from your Home Screen'.replace('Autark', site.name)) && html.includes(`href="${appUrl}/"`));
 });
 
+test('the PC version comes from GitHub\'s releases/latest, not a newer phone-only tag at the top of the list', () => {
+  // A mocked fetch drives the real build: the list starts with android-v0.3.7 (binary only), releases/latest is v0.3.4.
+  const asset = (name, size) => ({ name, size, browser_download_url: `https://example.invalid/${name}` });
+  const android = { tag_name: 'android-v0.3.7', name: 'Android 0.3.7', published_at: '2026-11-08T18:00:00Z', html_url: 'https://example.invalid/android-v0.3.7', body: '', assets: [asset(release.files.android, 5e6)] };
+  const desktop = { tag_name: 'v0.3.4', name: '0.3.4', published_at: '2026-11-08T10:00:00Z', html_url: 'https://example.invalid/v0.3.4', body: '', assets: [asset(release.files.windows, 140e6), asset(release.files.android, 4e6)] };
+  const answers = {
+    [`${release.api}?per_page=30`]: [android, desktop],
+    [`${release.api}/latest`]: desktop,
+    [release.asset('latest-android-lite.json')]: { versionName: '0.3.7' },
+  };
+  const mock = `const answers = ${JSON.stringify(answers)}; globalThis.fetch = async (url) => (String(url) in answers ? new Response(JSON.stringify(answers[String(url)])) : new Response('', { status: 404 }));`;
+  const env = { ...process.env }; delete env.OFFLINE;
+  execFileSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(mock)}`, join(root, 'build.mjs')], { cwd: root, env, stdio: 'pipe' });
+  const siteDir = join(root, 'dist', ...BASE.split('/').filter(Boolean));
+  const facts = JSON.parse(readFileSync(join(siteDir, 'facts.json'), 'utf8'));
+  assert.equal(facts.platforms.windows.version, '0.3.4');
+  assert.equal(facts.platforms.windows.sizeMb, 140);
+  assert.equal(facts.platforms.android.version, '0.3.7', 'the phone app keeps its own version from latest-android-lite.json');
+  assert.ok(readFileSync(join(siteDir, 'llms-full.txt'), 'utf8').includes('- android-v0.3.7 (2026-11-08)'), 'the changelog still lists the Android tag');
+});
+
 test('the build ships the app with its shell, worker and icons; the app path allows camera and microphone, the rest of the site does not', () => {
   execFileSync(process.execPath, [join(root, 'build.mjs')], { cwd: root, env: { ...process.env, OFFLINE: '1' }, stdio: 'pipe' });
-  const dir = join(root, 'dist', ...APP_BASE.split('/').filter(Boolean));
+  // B-084: at base '/' the app is built apart (dist-app/, the Vercel project `autark`), the site's /app/ only forwards.
+  const apart = BASE === '/';
+  const dir = join(root, apart ? 'dist-app' : 'dist', ...APP_BASE.split('/').filter(Boolean));
   for (const file of ['index.html', 'shell.js', 'sw.js', 'app.webmanifest', 'app-icon.png', 'app-icon-512.png']) assert.ok(existsSync(join(dir, file)), file);
   assert.match(readFileSync(join(dir, 'shell.js'), 'utf8'), /^\/\/ autark-hosted-src: [0-9a-f]{32}/, 'the generated shell from apps/desktop');
   const old = join(root, 'dist', ...BASE.split('/').filter(Boolean), 'app');
   assert.ok(!existsSync(join(old, 'shell.js')) && readFileSync(join(old, 'index.html'), 'utf8').includes(`url=${appUrl}/`), 'the site\'s old /app/ only forwards');
   const vercel = JSON.parse(readFileSync(join(root, 'dist', 'vercel.json'), 'utf8'));
+  if (apart) {
+    const own = JSON.parse(readFileSync(join(root, 'dist-app', 'vercel.json'), 'utf8'));
+    for (const path of ['/autark', '/autark/', '/autark/faq/']) {
+      const route = own.routes.find((r) => r.src && new RegExp(`^${r.src}$`).test(path));
+      assert.equal(route?.status, 410, path);
+      assert.ok(!route.headers?.Location);
+    }
+    assert.ok(own.routes.some((h) => h.src === `${APP_BASE}(.*)` && h.headers['Permissions-Policy'] === 'camera=(self), microphone=(self), geolocation=()'), 'the app keeps its headers where it is served');
+  }
   const app = vercel.headers.find((h) => h.source === `${APP_BASE}(.*)`);
   const policy = (h) => h.headers.find((x) => x.key === 'Permissions-Policy')?.value;
   assert.equal(policy(app), 'camera=(self), microphone=(self), geolocation=()');

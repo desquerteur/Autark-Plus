@@ -1,5 +1,5 @@
 /* Composer (reference: Codex/ChatGPT desktop composer): compact auto-growing field on a 20 px rounded
-   surface and one action row of fixed cells – [+] [spacer: the dictation waveform] [Ultra] [model chip]
+   surface and one action row of fixed cells – [+] [spacer: the dictation waveform] [model chip]
    [mic] [send] –, the model menu (Auto, a searchable list, effort row), @/slash suggestions and the
    attachment chips. Nothing in the row changes size on a click (schedule mode: the Send cell stays round, a clock).
    Owns: these components. Never: message rendering (chat.css), generic menu/popover chrome
@@ -51,14 +51,6 @@
 .composer-plus .icon { opacity: .85; }
 .composer-plus[aria-expanded=true] { background: var(--hover); }
 
-/* Ultra: a small labelled switch of one fixed width right beside the model chip; on = the accent colour only */
-.ultra-switch {
-  display: inline-grid; place-items: center; flex: none; width: 52px; height: 28px; border: 1px solid var(--line); border-radius: 14px;
-  color: var(--secondary); font-size: 12px; font-weight: 500;
-}
-.ultra-switch:hover:not(.placeholder) { background: var(--hover); color: var(--text); }
-.ultra-switch.on { border-color: color-mix(in srgb, var(--update) 55%, var(--line)); background: color-mix(in srgb, var(--update) 12%, transparent); color: var(--update); }
-.ultra-switch.placeholder { border-color: transparent; pointer-events: none; }
 
 /* model chip: one fixed width (the name ends in an ellipsis), the model name in text colour, effort or the
    last model muted */
@@ -80,6 +72,22 @@
 }
 .effort:hover { background: var(--hover); color: var(--text); }
 .effort.on { background: var(--selected); color: var(--text); } /* B-044 §2: selection = colour only, never weight */
+
+/* ---- B-083 T2: the model menu's temperature row, directly above the effort row – label, a small native slider 0–1,
+   its value in a fixed cell ("0.3" / "Auto") and a text button "Auto" (no value); Auto dims the slider and the value
+   (colour only: nothing in the row moves) */
+.temp-row { display: flex; align-items: center; gap: 6px; min-height: 36px; margin-top: 4px; padding: 6px 4px 2px 8px; border-top: 1px solid var(--line); }
+.temp-row .temp-label { flex: none; color: var(--secondary); font-size: 12px; }
+.temp-row .temp-slider { flex: 1 1 auto; min-width: 0; height: 16px; margin: 0; accent-color: var(--secondary); cursor: pointer; }
+.temp-row .temp-value { flex: none; width: 32px; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.temp-row .temp-auto { flex: none; min-height: 26px; padding: 4px 6px; border-radius: 8px; color: var(--secondary); font-size: 12px; }
+.temp-row .temp-auto:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.temp-row .temp-auto:disabled { color: var(--muted); }
+.temp-row.auto .temp-slider { opacity: .45; }
+.temp-row.auto .temp-value { color: var(--muted); }
+body:has(.mobile-shell) .popover .temp-row { min-height: 48px; }
+body:has(.mobile-shell) .popover .temp-row .temp-auto { min-height: 44px; padding-inline: 10px; }
+/* ---- end B-083 T2 */
 
 /* Primary round button: Send; empty or busy drafts are visibly disabled. */
 .send-button {
@@ -122,3 +130,29 @@ dialog textarea.input { resize: vertical; min-height: 72px; line-height: 1.5; }
 .secret-band.chat { margin: 0 0 10px; padding: 0 0 10px; }
 .secret-band.chat .secret-band-body { height: 74px; }
 .secret-band.chat .secret-band-line { height: 18px; -webkit-line-clamp: 1; line-clamp: 1; }
+
+/* B-082 marks: unsure places of dictated text, painted by a mirror behind the transparent field (MarkLayer.tsx – the
+   same box, font, padding, line height, wrapping and scrolling as .composer-input, its letters invisible), and the
+   menu of one place (MarkMenu.tsx): an overlay above the span inside the field's box – nothing moves */
+.mark-layer {
+  position: absolute; inset: 0; padding: 0 2px; overflow-y: auto; pointer-events: none;
+  color: transparent; font: inherit; line-height: 24px; white-space: pre-wrap; overflow-wrap: break-word;
+}
+.composer-field .composer-input { position: relative; } /* painted above the mirror */
+.mobile-shell .mark-layer { font-size: 16px; } /* the field's phone size (mobile.css) */
+.mark-span { color: transparent; background: color-mix(in srgb, var(--warn) 18%, transparent); border-radius: 3px; }
+.mark-menu {
+  position: absolute; z-index: 25; width: max-content; min-width: 180px; max-width: min(320px, 100%); padding: 6px;
+  border: 1px solid var(--elevated-line); border-radius: var(--r-lg); background: var(--elevated); color: var(--text);
+  box-shadow: var(--shadow-popover); font-size: 13px;
+  --hover: var(--elevated-hover);
+}
+.mark-alt { justify-content: space-between; }
+.mark-alt-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mark-alt-pct { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mark-own { display: flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 2px 2px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.mark-own-input { flex: 1 1 auto; min-width: 0; height: 28px; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; }
+.mark-own-apply { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 6px; color: var(--secondary); }
+.mark-own-apply:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.mark-own-apply:disabled { opacity: var(--disabled-opacity); }
+/* ---- end B-082 marks */

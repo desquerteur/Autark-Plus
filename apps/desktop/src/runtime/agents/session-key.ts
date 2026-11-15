@@ -22,10 +22,10 @@ export interface ToolOffer {
 }
 
 /** The tools this turn offers, natively and through the MCP hub lease (hub.ts `specs`): B-049 F4 – the core set, the
- *  tools learned in this chat and tools.find / tools.call (tools/learned.ts engineOffer). */
-export function offeredTools(services: RuntimeServices, plan: Pick<TurnPlan, 'agent' | 'mode' | 'conversationId'>, caps: Pick<EngineCaps, 'dynamicTools' | 'mcp' | 'ownTools'>): ToolOffer {
-  const native = caps.dynamicTools ? engineOffer(services, plan.agent, plan.mode, { ownTools: caps.ownTools, via: 'native' }, plan.conversationId) : [];
-  const viaHub = caps.mcp ? engineOffer(services, plan.agent, plan.mode, { ownTools: true, via: 'mcp' }, plan.conversationId) : [];
+ *  tools it learned and tools.find / tools.call (tools/learned.ts engineOffer). */
+export function offeredTools(services: RuntimeServices, plan: Pick<TurnPlan, 'agent' | 'mode'>, caps: Pick<EngineCaps, 'dynamicTools' | 'mcp' | 'ownTools'>): ToolOffer {
+  const native = caps.dynamicTools ? engineOffer(services, plan.agent, plan.mode, { ownTools: caps.ownTools, via: 'native' }) : [];
+  const viaHub = caps.mcp ? engineOffer(services, plan.agent, plan.mode, { ownTools: true, via: 'mcp' }) : [];
   const names = [...new Set([...native, ...viaHub].map((tool) => tool.name))].sort();
   return { native, names };
 }
@@ -41,5 +41,5 @@ function modeName(services: RuntimeServices, key: string): string {
 
 /** Told to the agent when its session was renewed for a mode switch. */
 export function modeChangeNote(services: RuntimeServices, from: string, to: ModeInfo): string {
-  return `Mode changed from ${modeName(services, from)} to ${to.name || to.key}. My instructions and tools now follow the new mode.`;
+  return `My mode is now ${to.name || to.key} (was ${modeName(services, from)}).`;
 }

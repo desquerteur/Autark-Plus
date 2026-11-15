@@ -7,6 +7,8 @@
 // agents hold ≤ 2 sockets each, ≤ 8 together (more close with 1013); one closes with 4403 once its
 // access ends (`external.watch`, armed with the first external socket); a device's sockets close when its row is
 // revoked or removed (closeDevice – B-078 D5: no phone switch any more).
+// B-085: an owner Hello may name `agent` (an agent's own wf, wf-cli/discover.ts): the owner scope then carries agentId;
+// on any other scope it closes with 4400, for an agent that is gone or archived (agentLive) with 4403.
 // Owns: the Hello handshake and client limits and the socket → RpcConnection adapter (the shared
 // 30 s ping keepalive is http/keepalive.ts, re-exported here).
 // Never: dispatches RPC itself, logs tokens, or keeps a slow client's backlog in RAM.
@@ -109,7 +111,7 @@ function adapt(ws: WebSocket, log: () => Logger): RpcConnection & { deliver(text
   };
 }
 
-interface Hello { token: string; client?: string }
+interface Hello { token: string; client?: string; agent?: string }
 
 /** Validates the first frame; undefined when it is not a Hello. */
 function parseHello(text: string): Hello | 'protocol' | undefined {
@@ -119,7 +121,19 @@ function parseHello(text: string): Hello | 'protocol' | undefined {
   const hello = value as Record<string, unknown>;
   if (typeof hello.token !== 'string' || hello.token.length > 512) return undefined;
   if (hello.protocol !== undefined && hello.protocol !== PROTOCOL_VERSION) return 'protocol';
-  return { token: hello.token, client: typeof hello.client === 'string' ? hello.client.slice(0, 20) : undefined };
+  if (hello.agent !== undefined && (typeof hello.agent !== 'string' || !/^[\w.:-]{1,128}$/.test(hello.agent))) return undefined;
+  return { token: hello.token, client: typeof hello.client === 'string' ? hello.client.slice(0, 20) : undefined, ...(hello.agent ? { agent: hello.agent } : {}) };
+}
+
+/**
+ * B-085: the scope with the Hello's `agent` – only on an owner scope, and only for an agent `live` knows (exists, not
+ * archived; without `live` the handlers check it: rpc/handlers/chats.ts). A string is the close reason.
+ */
+function withAgent(scope: ClientScope, agent: string | undefined, live: ((agentId: string) => boolean) | undefined): ClientScope | 'not-owner' | 'gone' {
+  if (!agent) return scope;
+  if (scope.kind !== 'owner' || scope.main) return 'not-owner';
+  if (live && !live(agent)) return 'gone';
+  return { ...scope, agentId: agent };
 }
 
 /** C8: the second token kind on `/ws` – external agents docked into one chat (bridges/external-agents.ts). */
@@ -141,6 +155,8 @@ export interface ClientSocketDeps {
   /** C8: external-agent tokens, tried after `authenticate` refused a token. */
   external?: ExternalSocketAuth;
   view?(connection: RpcConnection, scope: ClientScope, client: string | undefined): RpcConnection; // B-050 K8 (d): by scope and Hello `client` (other programs' message view)
+  /** B-085: the agent exists and is not archived (an owner Hello's `agent`); absent: the handlers check it. */
+  agentLive?(agentId: string): boolean;
   keepalive: Keepalive;
   log: () => Logger;
   helloTimeoutMs?: number;
@@ -210,6 +226,11 @@ export class ClientSockets {
         if (removed) ws.close(CLOSE.revoked, 'revoked'); else ws.close(CLOSE.unauthorized, 'unauthorized');
         return;
       }
+      let agentScope: ReturnType<typeof withAgent>;
+      try { agentScope = withAgent(scope, hello.agent, this.deps.agentLive); } catch { agentScope = 'gone'; }
+      if (agentScope === 'not-owner') { ws.close(CLOSE.badHello, 'agent only with the owner token'); return; }
+      if (agentScope === 'gone') { ws.close(CLOSE.revoked, 'agent gone'); return; }
+      scope = agentScope;
       if (scope.kind === 'external') {
         if (!this.externalRoom(scope.memberId)) { ws.close(CLOSE.busy, 'too many connections'); return; }
         this.watchExternal();

@@ -1,7 +1,8 @@
-// Owns: a small durable input marker and app-authored interruption/retry context for every turn thread.
-// Short, unchanged retries keep their input. Longer pauses or changed input get timestamps and event references;
-// the original messages, wake notes and previous-action recap still carry their full content.
-// Never: invents a tool call, infers that a connection recovered, schedules retries, or duplicates message bodies.
+// Owns: a small durable input marker and the one note a turn after cut-off work starts with: when my last turn here was
+// cut off and why, then what it already did (the recap of unfinished runs, context/recent-actions.ts) when this engine
+// cannot know it. What arrived since comes below as ordinary chat lines and notes. A short retry with unchanged input
+// gets the recap only, when there is one. turn-prepare drops the wake note that says the same (INTERRUPTED_NOTE).
+// Never: invents a tool call, infers that a connection recovered, schedules retries, or repeats message bodies.
 
 import { createHash } from 'node:crypto';
 import type { RuntimeServices } from '../contracts.ts';
@@ -12,6 +13,8 @@ import { CLOSED_ERROR } from '../runs/journal.ts';
 import { CRASH_ERROR } from '../store/runs.ts';
 import { KvRepo } from '../store/kv.ts';
 import type { TurnPlan, TurnRequest } from './turn-types.ts';
+import { displayZone, dueText } from '../context/time.ts';
+import { noteLabel } from './note-label.ts';
 
 export const BRIEF_INTERRUPTION_MS = 60_000;
 const INPUT = 'turnInput';
@@ -21,7 +24,7 @@ const keyOf = (plan: TurnPlan) => `${plan.agent.id}:${plan.thread}`;
 
 function taskKey(plan: TurnPlan): string | undefined {
   const task = plan.task;
-  return task ? createHash('sha256').update(JSON.stringify([task.title, task.notes, task.goal, task.doneWhen, task.assigneeKind, task.assigneeId, task.mode, task.priority, task.dueAt])).digest('hex') : undefined;
+  return task ? createHash('sha256').update(JSON.stringify([task.title, task.notes, task.doneWhen, task.assigneeKind, task.assigneeId, task.priority, task.dueAt])).digest('hex') : undefined;
 }
 
 /** One latest marker per thread; no bodies, prompts or credentials are copied into it. */
@@ -34,61 +37,56 @@ export function recordTurnInput(s: Services, plan: TurnPlan, request: TurnReques
   }
 }
 
-function stamp(at: number, timezone?: string): string {
-  const date = new Date(at);
-  try { return date.toLocaleString('en-GB', { timeZone: timezone, dateStyle: 'medium', timeStyle: 'medium' }); }
-  catch { return date.toISOString(); }
+/** Why a run was cut, in a few words (redacted, one line). */
+function cutWhy(s: Services, run: Run): string {
+  if (run.error === CRASH_ERROR || run.error === CLOSED_ERROR) return 'the app restarted';
+  return s.secrets.redact(run.error || 'it was interrupted').replace(/\s+/g, ' ').slice(0, 300);
 }
 
-function interruption(s: Services, run: Run, items: RunItem[]): { at: number; text: string } {
-  const restart = run.error === CRASH_ERROR || run.error === CLOSED_ERROR;
+/** When a run was cut: its last recorded activity for a restart, else its end. */
+function cutAt(s: Services, run: Run, items: RunItem[]): number {
   const lastActivity = items.at(-1)?.createdAt ?? run.startedAt ?? s.clock.now();
-  const at = restart ? lastActivity : run.endedAt ?? lastActivity;
-  const text = restart
-    ? 'Last recorded activity before the app stopped. The interruption time is unknown; the app has restarted.'
-    : run.error || 'The previous attempt was interrupted.';
-  return { at, text: s.secrets.redact(text).replace(/\s+/g, ' ').slice(0, 300) };
+  return run.error === CRASH_ERROR || run.error === CLOSED_ERROR ? lastActivity : run.endedAt ?? lastActivity;
 }
 
-/** System markers surround the actual input; they are app events, never messages or the AI's own tool calls. */
-export function interruptionContext(s: Services, plan: TurnPlan, request: TurnRequest, lastSeq: number, timezone?: string): { before?: string; after?: string } {
+/**
+ * The one note about cut-off work for this turn, or undefined: `[note · now] My last turn here was cut off at <time>
+ * (<why>).` (left at "cut off." after a short retry with unchanged input), then `recap` – what it already did, when this
+ * engine cannot know it.
+ */
+export function interruptionNote(s: Services, plan: TurnPlan, request: TurnRequest, lastSeq: number, timezone?: string, recap?: string): string | undefined {
+  const cut = lastCut(s, plan, request, lastSeq);
+  if (!cut && !recap) return undefined;
+  const zone = displayZone(timezone);
+  const when = cut ? ` at ${dueText(cut.at, zone, s.clock.now())} (${cut.why})` : '';
+  return [`${noteLabel(s.clock.now(), timezone)} My last turn here was cut off${when}.`, recap].filter(Boolean).join('\n');
+}
+
+/** The latest cut and why; undefined without one, or after a short retry with unchanged input. */
+function lastCut(s: Services, plan: TurnPlan, request: TurnRequest, lastSeq: number): { at: number; why: string } | undefined {
   try {
     const runs = unfinishedRuns(s, recapScope(plan), request.runId)
       .filter(run => run.id !== request.runId && ['failed', 'interrupted', 'unknown'].includes(run.status));
     const active = request.interruption ? s.runs.get(request.runId) : undefined;
     if (active && request.interruption) runs.unshift({ ...active, status: 'failed', endedAt: request.interruption.at, error: request.interruption.reason });
-    if (!runs.length) return {};
+    if (!runs.length) return undefined;
     const latest = runs[0];
     const items = s.runs.items(latest.id);
     const stored = new KvRepo(s.db).get<InputMark>(INPUT, keyOf(plan));
     const mark = stored?.runId === latest.id ? stored : undefined;
     const oldest = runs.at(-1)!;
-    const first = interruption(s, oldest, oldest.id === latest.id ? items : s.runs.items(oldest.id));
-    const now = s.clock.now();
-    const since = latest.startedAt ?? first.at;
+    const first = cutAt(s, oldest, oldest.id === latest.id ? items : s.runs.items(oldest.id));
+    const since = latest.startedAt ?? first;
     const messages = plan.conversationId ? s.chats.messages(plan.conversationId, { beforeSeq: lastSeq + 1, limit: 60 })
       .filter(message => message.seq > (mark?.lastSeq ?? plan.memberCursor) && message.authorId !== plan.agent.id
         && (message.kind !== 'status' || (isAgentNotice(message) && message.meta.status?.details?.by !== plan.agent.id))
         && (mark !== undefined || message.createdAt > since)) : [];
     const notes = request.notes.filter(note => note.at > (mark?.notesAt ?? since) && (note.reason ?? request.reason) !== 'retry');
-    const changedTask = Boolean(mark?.taskKey && mark.taskKey !== taskKey(plan));
-    const changed = messages.length > 0 || notes.length > 0 || changedTask;
-    if (!changed && now - first.at < BRIEF_INTERRUPTION_MS) return {};
-
-    const events = runs.slice(0, 3).map(run => interruption(s, run, run.id === latest.id ? items : s.runs.items(run.id)));
-    if (runs.length > 3) events.push({ at: first.at, text: `${runs.length} recent attempts were interrupted; the latest three are listed.` });
-    for (const note of notes) events.push({ at: note.at, text: `${(note.reason ?? request.reason) === 'schedule' ? 'Scheduled event' : 'New event'} (see its note below).` });
-    if (messages.length > 6) events.push({ at: messages[0].createdAt, text: `${messages.length} new chat inputs; the latest six are listed (see the messages below).` });
-    for (const message of messages.slice(-6)) events.push({ at: message.createdAt, text: `${isAgentNotice(message) ? 'Changed' : 'New'} chat input #${message.seq} (see the message below).` });
-    if (changedTask) events.push({ at: now, text: 'The task input has changed; its current details are in my context.' });
-    events.sort((a, b) => a.at - b.at);
-    const before = ['[App system events: interrupted work]', ...events.map(event => `${stamp(event.at, timezone)} — ${event.text}`)].join('\n');
-    const elapsed = Math.max(0, Math.floor((now - first.at) / 1000));
-    const sinceRestart = oldest.error === CRASH_ERROR || oldest.error === CLOSED_ERROR;
-    const after = `[App system event: ${stamp(now, timezone)}] Retrying now, ${elapsed}s ${sinceRestart ? 'since the last recorded activity before restart' : 'after the earliest interruption in this context'}${changed ? '; input changed' : '; no new input'}. I continue from the current input and previous actions and check uncertain effects before repeating them.`;
-    return { before, after };
+    const changed = messages.length > 0 || notes.length > 0 || Boolean(mark?.taskKey && mark.taskKey !== taskKey(plan));
+    if (!changed && s.clock.now() - first < BRIEF_INTERRUPTION_MS) return undefined;
+    return { at: cutAt(s, latest, items), why: cutWhy(s, latest) };
   } catch (error) {
-    s.log.warn('interruption context not assembled', { runId: request.runId, error: String(error) });
-    return {};
+    s.log.warn('interruption note not assembled', { runId: request.runId, error: String(error) });
+    return undefined;
   }
 }

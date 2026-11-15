@@ -150,20 +150,22 @@ test('migration: the old Settings › Apps records move into the files once (tok
   assert.equal(migrateRecords(data.dir, kv), 0);
 });
 
-test('new mail wakes the mailbox\'s agent (by name or id, else the assistant) at most once a minute, merged', async () => {
+test('new mail wakes the mailbox\'s agent (by name or id, else the assistant) with durable due times instead of a process-local debounce timer', async () => {
   const { MailWaker, mailAgent } = await import('../../../src/runtime/apps/mail-wake.ts');
   const { ManualTimers } = await import('./service-fakes.ts');
   const box = { id: 'work', name: 'work', transport: 'mail' as const, enabled: true, fingerprint: 'f', mail: { address: 'me@example.com', password: 'secret://pw', agent: 'Secretary' } };
   const agents = [{ id: 'ag_sec', name: 'Secretary', managerId: undefined }, { id: 'ag_old', name: 'Old', archivedAt: 1 }];
   const org = { list: () => agents, get: (id: string) => agents.find((a) => a.id === id), managers: () => [] };
   assert.equal(mailAgent({ org } as never, box), 'ag_sec');
-  const wakes: Array<{ agentId: string; note: string }> = [];
+  const wakes: Array<{ agentId: string; note: string; dueAt: number }> = [];
   let now = 1_000_000;
   const timers = new ManualTimers();
-  const waker = new MailWaker({ services: { org, wakes: { wake: (input: { agentId: string; note: string }) => { wakes.push(input); } }, clock: { now: () => now } } as never, connected: () => box, timers });
+  const waker = new MailWaker({ services: { org, wakes: { list: () => [], wake: (input: { agentId: string; note: string; dueAt: number }) => { wakes.push(input); } }, clock: { now: () => now } } as never, connected: () => box, timers });
   waker.notice('work', { count: 1, from: 'Maria <maria@client.example>', subject: 'Offer' });
   waker.notice('work', { count: 2, subject: 'Again' });
-  assert.equal(wakes.length, 1);
+  assert.equal(wakes.length, 2);
+  assert.equal(wakes[0].dueAt, now);
+  assert.equal(wakes[1].dueAt, now + 60_000);
   assert.match(wakes[0].note, /New mail in me@example\.com: 1 new message\. Newest from "Maria \(maria@client\.example\)"/);
   now += 61_000;
   timers.fireAll();

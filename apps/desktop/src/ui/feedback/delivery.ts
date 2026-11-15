@@ -1,14 +1,15 @@
 // What Send does and says (feedback panel): one button – "Send" where this build can send (feedback.status: the
 // release's receiver), else "Save" (also while that is still unknown: a click never sends more than its label said)
-// – and one result line. A report is always saved on the PC first; sending is one feedback.send on top. When that
-// send was not confirmed (the report is only saved), the result's one action cell says "Send again" instead of
-// Close and sends the same saved report (its text and screenshot stay in it).
+// – and one result line. A report is always saved on the PC first; sending is one feedback.send on top. A confirmed
+// send names its short report number; when it was not confirmed (the report is only saved), the line says "Not
+// sent" and the result's one action cell says "Send again" instead of Close and sends the same saved report.
 // Owns: the can-we-send answer, the button's label and the result line. Never: publishes without a click or
 // opens a browser.
 
 import { signal } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import type { FeedbackReport } from '../../shared/model/system.ts';
+import { reportNumber } from '../../shared/model/feedback-delivery.ts';
 import { bridge } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { session } from '../lib/session.ts';
@@ -55,10 +56,19 @@ export const SHOT_LABEL = 'Screenshot';
 export const SHOT_HINT = 'Paint over anything private.';
 export const SHOT_MISSING = 'The window could not be captured.';
 
-/** The result line after Send/Save. `here`: the desktop window (else a phone: "your PC"). */
-export function doneText(status: FeedbackReport['status'], sending: boolean, here = Boolean(bridge)): string {
-  if (status === 'sent') return 'Sent.';
-  if (status === 'received') return 'Received.';
-  const saved = here ? 'Saved on this PC' : 'Saved on your PC';
-  return sending ? `${saved}.` : `${saved} – sending is not set up.`;
+/**
+ * The result line after Send/Save: a confirmed send with its short report number (the team inbox shows the same),
+ * else what happened to the saved report – `tried`: true = a send was tried and not confirmed ("Not sent"), false =
+ * this build cannot send, undefined = only saved while that was not known yet. `here`: the desktop window (else a
+ * phone: "your PC").
+ */
+export function doneText(report: Pick<FeedbackReport, 'status' | 'receiptId'>, tried: boolean | undefined, here = Boolean(bridge)): string {
+  if (report.status === 'sent') {
+    const number = reportNumber(report.receiptId);
+    return number ? `Sent. Report no. ${number}` : 'Sent.';
+  }
+  if (report.status === 'received') return 'Received.';
+  const pc = here ? 'this PC' : 'your PC';
+  if (tried === undefined) return `Saved on ${pc}.`;
+  return tried ? `Not sent. Your report is saved on ${pc}.` : `Saved on ${pc} – sending is not set up.`;
 }

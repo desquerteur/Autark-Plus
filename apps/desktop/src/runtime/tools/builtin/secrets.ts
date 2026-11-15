@@ -8,12 +8,15 @@
 // the secrets of a .env or flat JSON file on this PC by its path into the vault (no value reaches the agent) and
 // deletes a known browser's or manager's export after a complete import (owner 04.11.2026: every entry stored whole,
 // none skipped), never a .env, JSON or other CSV file. Agents use a secret only by its handle `secret://<id>` – in a
-// browser field, a command's env, a web.fetch header, a connector – on any site and for any host; the value is decrypted
+// browser field, typed on the screen, a command's env, a web.fetch header, a connector – on any site and for any host, at
+// any length (B-080); the value is decrypted
 // at that moment inside the runtime and never appears in a prompt, output or journal (secrets.save's value is a hidden
 // argument). Owner 04.11.2026 (the AI should simply do it): secrets.export writes chosen entries with their values into one
 // CSV file on this PC (secrets/export.ts) – for secrets.import in another company or on another PC; secrets.delete removes
 // entries by id, route or all at once (the CEO's linked PCs follow through the device sync); "all" and a route leave the
 // app's own working credentials unless named (secrets/units.ts catalogUnits). Both return names, a path and counts only.
+// secrets.list's query matches word by word (most words first); with a route, other routes' entries holding as many of
+// the words as the route's best match come too; its note says that the engine's own shell passes a handle on as plain text.
 // Owns: the agent's view of the catalog. Never: returns or logs a value.
 
 import { readFileSync, rmSync, statSync } from 'node:fs';
@@ -33,10 +36,14 @@ import { GENERIC_EXPORT, MAX_IMPORT_CHARS, MAX_IMPORT_ROWS } from '../../secrets
 import { exportSecrets } from '../../secrets/export.ts';
 import { catalogUnits } from '../../secrets/units.ts';
 
-export const NOTE = 'Values stay hidden. I use a secret by its handle "secret://<id>": in a browser field (browser.act value), in shell.exec or secrets.run env, in a web.fetch header or a connector file. Every secret works everywhere – any site, any command, any host, cards included; savedFrom only says where it came from, tags are notes. A login or card has one handle per field; a 2FA field fills the current one-time code. What a command or request returns has the values it received masked. Whenever I get a secret, I save it here at once (secrets.save, browser.save_secret) and use its id – values stay out of my notes, memory, rules, files and messages. Each route is a file <route>.md in the folder named here – I edit a name, description or tags there.';
+/** Where a handle becomes its value – the list's description and its result's note. */
+const WHERE = 'A handle "secret://<id>" becomes the value in browser.act, computer.type, computer.act set_value, phone.type, shell.exec env, web.fetch headers and connector files; my engine\'s own shell passes it on as plain text.';
+export const NOTE = `Values stay hidden. ${WHERE} Every secret works everywhere, any length – any site, any command, any host, cards and CVCs included; savedFrom only says where it came from, tags are notes. A login or card has one handle per field; a 2FA field fills the current one-time code. What a command or request returns has the values it received masked, and values stay out of my notes, memory, rules, files and messages. Each route is a file <route>.md in the folder named here – I edit a name, description or tags there.`;
 
-const TAGS = { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 12, description: 'usage tags, e.g. "for the web at example.com", "CI deploys" – information, not a restriction' } as const;
-const ROUTE = { type: 'string', maxLength: 40, description: `the catalog route: ${SECRET_ROUTES.join(', ')} or my own (lower-case, "-"); default: chosen from the kind and description` } as const;
+const TAGS = { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 12, description: 'Usage notes.' } as const;
+const ROUTE = { type: 'string', maxLength: 40, description: `${SECRET_ROUTES.join(', ')} or my own; default chosen.` } as const;
+const NAME = { type: 'string', minLength: 1, maxLength: 120 } as const;
+const DESCRIPTION = { type: 'string', minLength: 1, maxLength: 4000, description: 'What it opens and when it is used.' } as const;
 
 function single(info: SecretInfo): Record<string, unknown> {
   const out: Record<string, unknown> = {
@@ -61,26 +68,41 @@ function groupView(group: SecretGroup, fields: SecretInfo[]): Record<string, unk
   };
 }
 
-const list = defineTool<{ text?: string; route?: string }>({
+const list = defineTool<{ query?: string; route?: string }>({
   name: 'secrets.list',
-  description: `The secrets catalog, like a skill index: id, name, description, kind, route, tags and handle (logins and cards: one handle per field). Search by text or route. ${NOTE}`,
+  description: `Lists the secrets catalog with id, name, description, kind, route and handle. ${WHERE} Logins and cards have a handle per field; a 2FA field fills the current code.`,
   inputSchema: { type: 'object', properties: {
-    text: { type: 'string', maxLength: 100, description: 'Search name, id, description, tags or the site it was saved from' }, route: { type: 'string', maxLength: 40 },
+    query: { type: 'string', maxLength: 100, description: 'Words of name, id, description, tags or source.' }, route: { type: 'string', maxLength: 40 },
   }, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the secrets catalog'),
   async run(args, ctx) {
-    const needle = args.text?.trim().toLowerCase();
+    // B-080 (live: "windows password" in route logins gave three failed sign-ins that mention "password" – the Windows
+    // entry was a note): the text matches word by word, entries holding the most words first. With a route, an entry of
+    // another route that holds as many of the words as the route's best match comes too (the route's first on a tie).
+    const asked = [...new Set((args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean))];
     const route = args.route?.trim().toLowerCase();
-    const matches = (entry: { route?: string }, text: string) => (!route || entry.route === route) && (!needle || text.toLowerCase().includes(needle));
     const all = ctx.services.secrets.list();
-    const singles = all.filter((info) => !info.group && matches(info, `${secretMetadata(info)} ${info.id}`)).map((info) => ({ name: info.label, view: single(info) }));
-    const groups = ctx.services.secrets.groups()
-      .filter((group) => matches(group, `${secretMetadata(group)} ${group.id}`))
-      .map((group) => ({ name: group.label, view: groupView(group, all.filter((info) => info.group?.id === group.id)) }));
-    const secrets = [...singles, ...groups].sort((a, b) => a.name.localeCompare(b.name)).map((entry) => entry.view);
+    const entries = [
+      ...all.filter((info) => !info.group).map((info) => ({ name: info.label, route: info.route, text: `${secretMetadata(info)} ${info.id}`, view: () => single(info) })),
+      ...ctx.services.secrets.groups().map((group) => ({
+        name: group.label, route: group.route, text: `${secretMetadata(group)} ${group.id}`, view: () => groupView(group, all.filter((info) => info.group?.id === group.id)),
+      })),
+    ].map((entry) => ({ ...entry, held: asked.filter((word) => entry.text.toLowerCase().includes(word)).length }))
+      .filter((entry) => !asked.length || entry.held > 0)
+      .sort((a, b) => b.held - a.held || a.name.localeCompare(b.name));
+    const inRoute = route ? entries.filter((entry) => entry.route === route) : entries;
+    const best = inRoute[0]?.held ?? 0;
+    const others = route && asked.length ? entries.filter((entry) => entry.route !== route && entry.held >= best) : [];
+    const secrets = [...inRoute, ...others].sort((a, b) => b.held - a.held).map((entry) => entry.view()); // stable: the route's first on a tie
+    const found = !others.length ? undefined : inRoute.length
+      ? `Entries of other routes that hold as many of the words are here too; each shows its route.`
+      : `None in route ${route}; these are in other routes.`;
     const data = ctx.services.paths?.data;
-    return json({ note: NOTE, ...(data ? { folder: path.join(data, ROOT_SECRETS) } : {}), count: secrets.length, secrets });
+    return json({
+      ...(found ? { found } : {}),
+      note: NOTE, ...(data ? { folder: path.join(data, ROOT_SECRETS) } : {}), count: secrets.length, secrets,
+    });
   },
 });
 
@@ -88,19 +110,19 @@ interface SaveArgs { name: string; description: string; value: string; kind?: 'a
 
 const save = defineTool<SaveArgs>({
   name: 'secrets.save',
-  description: 'Add a secret to the catalog the moment I get one (a key or token a tool or page returned, a password or note I was given): give a name, a description (what it opens, when to use it) and the value – it goes straight into the encrypted store and only its handle comes back. The route is chosen and the id generated for me (I can name a route or suggest an id). Every agent can use it. I keep the value here, nowhere else. A value already stored returns that handle.',
+  description: 'Stores a secret in the encrypted catalog the moment I get one and returns its handle. Every agent can use it, the route and id are chosen for me, and I keep the value here, nowhere else; a value already stored returns its handle.',
   inputSchema: {
     type: 'object',
     properties: {
-      name: { type: 'string', minLength: 1, maxLength: 120 },
-      description: { type: 'string', minLength: 1, maxLength: 4000 },
+      name: NAME,
+      description: DESCRIPTION,
       value: { type: 'string', minLength: 1, maxLength: 16_384 },
-      kind: { type: 'string', enum: ['api_key', 'token', 'password', 'card', 'note', 'totp'], description: 'default api_key; totp = a 2FA setup key (its handle fills the current code)' },
-      username: { type: 'string', minLength: 1, maxLength: 320, description: 'with a password: saves a login (username + password), e.g. a server or database login' },
+      kind: { type: 'string', enum: ['api_key', 'token', 'password', 'card', 'note', 'totp'], description: 'Default api_key; totp: a 2FA setup key whose handle fills the current code.' },
+      username: { type: 'string', minLength: 1, maxLength: 320, description: 'With a password: a login.' },
       route: ROUTE,
-      id: { type: 'string', maxLength: 60, description: 'a suggested id (lower-case words with "-"), e.g. "github-ci-token"' },
+      id: { type: 'string', maxLength: 60, description: 'A suggested id, e.g. "github-ci-token".' },
       tags: TAGS,
-      source: { type: 'string', maxLength: 200, description: 'where the value came from, e.g. "api.example.com" or "the deploy CLI"' },
+      source: { type: 'string', maxLength: 200, description: 'Where it came from.' },
     },
     required: ['name', 'description', 'value'], additionalProperties: false,
   },
@@ -133,34 +155,33 @@ const save = defineTool<SaveArgs>({
   },
 });
 
-interface GenerateArgs { site?: string; label?: string; purpose?: string; length?: number; symbols?: boolean; username?: string; group?: string; replace?: boolean }
+interface GenerateArgs { source?: string; name?: string; description?: string; length?: number; symbols?: boolean; username?: string; group?: string; replace?: boolean }
 
 const generate = defineTool<GenerateArgs>({
   name: 'secrets.generate',
-  description: 'Create a strong random password – for a sign-up on a site, a server, a database or an app – and store it in the catalog (usable everywhere; a site is only noted as its source). Returns just its handle – use it in browser.act (value "secret://<id>") for the password and confirmation fields. With username it creates a login (username + password handles); with group it puts the password into a stored login (replace:true to change a stored password or username).',
+  description: 'Creates a strong random password in the catalog and returns only its handle. I fill the password fields with that handle in browser.act.',
   inputSchema: {
     type: 'object',
     properties: {
-      site: { type: 'string', minLength: 3, maxLength: 300, description: 'optional: the site or system it is for, e.g. "accounts.example.com" or "build server postgres"' },
-      label: { type: 'string', minLength: 1, maxLength: 120, description: 'e.g. "Example – support account"' },
-      purpose: { type: 'string', minLength: 1, maxLength: 4000, description: 'its description: what it opens and when to use it, e.g. "Sign-in of the support account on example.com"' },
+      source: { type: 'string', minLength: 3, maxLength: 300, description: 'The site or system it is for; noted as its source.' },
+      name: NAME, description: DESCRIPTION,
       length: { type: 'integer', minimum: 12, maximum: 64 },
-      symbols: { type: 'boolean', description: 'false when the site refuses symbols' },
-      username: { type: 'string', minLength: 1, maxLength: 320, description: 'the login name or email: creates a login (username + password)' },
-      group: { type: 'string', maxLength: 64, description: 'a stored login (secrets.list) to put the password into' },
-      replace: { type: 'boolean', description: 'true to replace the password (and the username, when given) already in that login' },
+      symbols: { type: 'boolean', description: 'false for sites that refuse them.' },
+      username: { type: 'string', minLength: 1, maxLength: 320, description: 'Makes a login of username and password.' },
+      group: { type: 'string', maxLength: 64, description: 'A stored login to put it into.' },
+      replace: { type: 'boolean', description: "true: replaces that login's password (and username, when given)." },
     },
     additionalProperties: false,
   },
   category: 'write_local',
-  describe: (args) => internal(`Create a password for ${args.site ? clip(registrableDomain(args.site) ?? args.site, 80) : 'a new secret'}${args.username !== undefined || args.group ? ' (login)' : ''}`),
+  describe: (args) => internal(`Create a password for ${args.source ? clip(registrableDomain(args.source) ?? args.source, 80) : 'a new secret'}${args.username !== undefined || args.group ? ' (login)' : ''}`),
   async run(args, ctx: ToolContext) {
-    const site = args.site?.trim() || undefined;
-    const label = args.label?.trim() || `${ctx.agent.name} · ${(site ? registrableDomain(site) : undefined) ?? site ?? 'password'}`;
+    const site = args.source?.trim() || undefined;
+    const label = args.name?.trim() || `${ctx.agent.name} · ${(site ? registrableDomain(site) : undefined) ?? site ?? 'password'}`;
     const info = await ctx.services.secrets.generate({
       label, agentId: ctx.agent.id, ...(site ? { site } : {}), length: args.length, symbols: args.symbols, username: args.username, groupId: args.group, replace: args.replace,
     });
-    const purpose = args.purpose?.trim();
+    const purpose = args.description?.trim();
     // A new login takes the description; an existing login keeps its own.
     if (purpose && info.group && args.group === undefined) await ctx.services.secrets.saveGroup({ id: info.group.id, label: info.group.label, description: purpose });
     else if (purpose && !info.group) await ctx.services.secrets.save({ id: info.id, kind: info.kind, label: info.label, description: purpose });
@@ -191,8 +212,12 @@ function settleFile(file: string, result: { format: string; failed: number; skip
 
 const importFile = defineTool<{ path: string }>({
   name: 'secrets.import',
-  description: 'Import a password export or a key/value file on this PC into the catalog: the CSV of Chrome, Edge, Brave, Firefox, Safari, Bitwarden, 1Password, KeePass, LastPass, Dashlane, Proton Pass or NordPass, a file secrets.export wrote (names, descriptions and routes come with it), Bitwarden JSON, a .env file or a flat JSON of names and values (its secrets go in; a plain setting such as NODE_ENV or PORT, or a value under 8 characters, counts as skipped). Give its path – the app reads it, so no value reaches me (opening it with Read or cat would bring every value into my context). I get the counts, one line about the file (the export of a browser or password manager is deleted once every entry is stored whole; a .env, JSON or other CSV file stays) and then I name, describe and check the new entries.',
-  inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 1000, description: 'the file, e.g. "C:/Users/me/Downloads/Chrome Passwords.csv" or "C:/code/shop/.env"' } }, required: ['path'], additionalProperties: false },
+  description: 'Imports a password export or key/value file from this PC into the catalog. The app reads it, so no value reaches me (reading it myself would); a browser or manager export is deleted once all is stored, and then I name, describe and check the new entries.',
+  inputSchema: {
+    type: 'object',
+    properties: { path: { type: 'string', minLength: 1, maxLength: 1000, description: 'A browser or password-manager CSV, a secrets.export file, Bitwarden JSON, .env or flat JSON.' } },
+    required: ['path'], additionalProperties: false,
+  },
   category: 'write_local',
   describe: (args) => internal(`Import the secrets of ${clip(path.basename(args.path), 80)} into the secrets catalog`),
   async run(args, ctx) {
@@ -215,11 +240,11 @@ const IDS = { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems
 
 const exportFile = defineTool<{ path?: string; ids?: string[]; route?: string }>({
   name: 'secrets.export',
-  description: 'Write catalog entries with their values into one CSV file on this PC – to move them into another company or onto another PC, where secrets.import reads it back with names, descriptions, tags and routes (browsers and password managers read its logins too). All entries (but the app\'s own working credentials – an account\'s API key, a bridge\'s token, an app\'s sign-in – unless I name them), those of a route, or the ids I name (a login or card by its id). I get the path and the counts, no value; the file holds every value in plain text (opening it with Read or cat would bring every value into my context) – I hand its path to secrets.import, which deletes it after a complete import; else I delete it when done.',
+  description: "Writes catalog entries with their values into a CSV file on this PC. It is for secrets.import elsewhere, which deletes it after a complete import; the file holds every value in plain text, so I hand its path on rather than read it. The app's own working credentials stay out unless named.",
   inputSchema: {
     type: 'object', properties: {
-      path: { type: 'string', minLength: 1, maxLength: 1000, description: 'file or folder; default ~/Downloads/autark-secrets-<date>.csv' },
-      ids: IDS, route: { type: 'string', maxLength: 40, description: 'only the entries of this route' },
+      path: { type: 'string', minLength: 1, maxLength: 1000, description: 'Default ~/Downloads/autark-secrets-<date>.csv.' },
+      ids: IDS, route: { type: 'string', maxLength: 40 },
     }, additionalProperties: false,
   },
   category: 'secret',
@@ -239,10 +264,10 @@ const exportFile = defineTool<{ path?: string; ids?: string[]; route?: string }>
 
 const removeEntries = defineTool<{ ids?: string[]; route?: string; all?: boolean }>({
   name: 'secrets.delete',
-  description: 'Delete catalog entries: the ids I name (a login or card by its id with all its fields, a single field by its handle\'s id), every entry of a route, or all: true for the whole catalog (a route or all leaves the app\'s own working credentials – an account\'s API key, a bridge\'s token, an app\'s sign-in – unless I name them by id). I get the names removed; the CEO\'s linked PCs remove them too.',
+  description: "Deletes catalog entries by id, by route, or all of them, on linked PCs too. The app's own working credentials go only when named by id.",
   inputSchema: {
     type: 'object', properties: {
-      ids: IDS, route: { type: 'string', maxLength: 40, description: 'every entry of this route' }, all: { type: 'boolean', enum: [true], description: 'every entry of the catalog' },
+      ids: { ...IDS, description: "A login or card id: all its fields; a field handle's id: that field." }, route: { type: 'string', maxLength: 40 }, all: { type: 'boolean', enum: [true] },
     }, additionalProperties: false,
   },
   category: 'delete',

@@ -1,8 +1,7 @@
-// Making chats (B-050 K1/K3): every member counts the same – agent ids, "human" (the owner) and people of the
+// Making chats (B-050 K1/K3): every member counts the same – agent ids, "human" (the person) and people of the
 // organisation (per_…, checked like chat/members-change.ts does: active, not revoked), named by id or by name
 // (chat-joins.ts). A colleague is seated only with agents they may work with (chat-joins.ts scopeRefusal).
-//  - chat.create: a chat (work group) of the calling agent and its members; the agent leads it. `agentIds` and
-//    `includeHuman` stay as older names for members. `hidden` keeps the room out of the person's list from its
+//  - chat.create: a chat (work group) of the calling agent and its members; the agent leads it. `hidden` keeps the room out of the person's list from its
 //    creation on. One member without a title (and not hidden) opens the pair's default 1:1 instead, as chat.direct
 //    and the person's New chat do (K1: no second chat of the pair); no other member, but a title: a work room of the
 //    agent alone, which others join later. B-078: `parent` places the new chat under one of my chats (chat/children.ts).
@@ -47,13 +46,14 @@ function membersOf(ctx: ToolContext, ids: string[]) {
   };
 }
 
-const createChat = defineTool<{ title?: string; members?: string[]; agentIds?: string[]; includeHuman?: boolean; hidden?: boolean; parent?: string }>({
+const createChat = defineTool<{ title?: string; members?: string[]; hidden?: boolean; parent?: string }>({
   name: 'chat.create',
-  description: 'I open a group I lead. members (ids or names): agents, "human" (the person) and colleagues (per_…), all equal. With "human" it is a group with the person – the place for a discussion they take part in; without, it is an internal room of us agents that the person can look into but gets nothing from. parent: a chat of mine to put it under (a special chat of that topic). For two people I use chat.direct.',
+  description: 'Opens a group chat that I lead and returns its id. With "human" it includes the person; without, it is a room of us agents the person can look into. For two of us I use chat.direct.',
   inputSchema: {
     type: 'object',
     properties: {
-      title: { type: 'string', maxLength: 120 }, members: MEMBERS, agentIds: MEMBERS, includeHuman: { type: 'boolean' }, hidden: { type: 'boolean' }, parent: { type: 'string', minLength: 1, maxLength: 64 },
+      title: { type: 'string', maxLength: 120 }, members: { ...MEMBERS, description: 'Agent ids, "human", colleagues\' per_… ids, or names.' },
+      hidden: { type: 'boolean', description: "true: not in the person's chat list." }, parent: { type: 'string', minLength: 1, maxLength: 64, description: 'A chat of mine to put it under.' },
     },
     additionalProperties: false,
   },
@@ -82,8 +82,12 @@ const createChat = defineTool<{ title?: string; members?: string[]; agentIds?: s
 
 const directChat = defineTool<{ with: string; topic?: string }>({
   name: 'chat.direct',
-  description: 'My 1:1 with one member: an agent id, "human" (the person), a colleague\'s per_… id or a name. My 1:1 with the person is where I tell them what they need from me; my 1:1 with a colleague is where we two work things out. It stays two. Without topic: my default 1:1 with them; with topic: a new chat of just us two about it.',
-  inputSchema: { type: 'object', properties: { with: { type: 'string', minLength: 1, maxLength: 200 }, topic: { type: 'string', minLength: 1, maxLength: 120 } }, required: ['with'], additionalProperties: false },
+  description: 'Opens my 1:1 chat with an agent, the person or a colleague and returns its id. Without topic I get our one default 1:1; it stays two.',
+  inputSchema: {
+    type: 'object',
+    properties: { with: { type: 'string', minLength: 1, maxLength: 200, description: 'Agent id, "human", per_… id or a name.' }, topic: { type: 'string', minLength: 1, maxLength: 120, description: 'A new chat of us two about this.' } },
+    required: ['with'], additionalProperties: false,
+  },
   category: 'think',
   describe: (args) => internal(`1:1 chat with ${args.with}${args.topic ? ` about "${args.topic}"` : ''}`),
   async run(args, ctx) {

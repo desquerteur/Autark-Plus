@@ -23,7 +23,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 import { detectChannel } from '../../src/runtime/browser/channel.ts';
 import { countNow } from '../../src/shared/model/todo-later.ts';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const shots = path.join(root, 'test-results', `${new Date().toISOString().slice(0, 10)}-pwa`);
@@ -131,7 +131,7 @@ test('PWA on a phone-sized browser: pairing, For you, chat, badge, offline snaps
   const chat = await owner.call('chats.create', { title: 'Phone check', agentIds: [manager.id] });
   await owner.call('events.subscribe', { topics: ['chats', 'tasks', 'org', `chat:${chat.id}`] });
   const choice = await owner.call('tasks.create', { // B-054: a chat-free to-do
-    title: 'Pick a thumbnail', assigneeKind: 'human', dueAt: Date.now() - 60 * 60_000, // overdue: Needs you
+    title: 'Pick a thumbnail', to: 'me', dueAt: Date.now() - 60 * 60_000, // overdue: Needs you
     widget: { type: 'choice', question: 'Which thumbnail?', options: ['Bright', 'Dark'] },
   });
   const note = await owner.call('todos.add', { text: 'Sign the delivery note' });
@@ -210,7 +210,7 @@ test('PWA on a phone-sized browser: pairing, For you, chat, badge, offline snaps
   await page.locator('textarea.composer-input').fill('Hello from the phone');
   await page.locator('.send-button[aria-label="Send"]').tap();
   const sent = await owner.waitFor('message.created', (message) => message.conversationId === chat.id && message.authorId === 'human' && message.body.includes('Hello from the phone'), 30_000);
-  const reply = await owner.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && message.seq > sent.seq, 90_000);
+  const reply = await owner.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && message.seq > sent.seq, 90_000);
   await page.locator(`article.message.agent[data-message-id="${reply.id}"]`).waitFor({ timeout: 30_000 });
   assert.equal(await page.locator('article.message.human', { hasText: 'Hello from the phone' }).count(), 1, 'the phone shows its own message once');
   clean('chat');
@@ -258,7 +258,7 @@ test('PWA on a phone-sized browser: pairing, For you, chat, badge, offline snaps
   // 4c. Settings › Devices on the phone – notifications are "on" only when the PC holds this browser's subscription
   //     (asked with pwa.pushConfig, allowed for every paired device); before that the row offers "Turn on".
   await page.evaluate(() => { location.hash = '#/settings/devices'; });
-  const devices = page.locator('#settings-devices');
+  const devices = page.locator('#settings-this-phone');
   await devices.waitFor({ timeout: 15_000 });
   await devices.locator('.set-row', { hasText: 'Notifications' }).locator('button', { hasText: 'Turn on' }).waitFor({ timeout: 15_000 });
   await delay(500);
@@ -273,7 +273,7 @@ test('PWA on a phone-sized browser: pairing, For you, chat, badge, offline snaps
 
   // 5. Offline: the snapshot holds the open item and a snoozed one (F04: offline it waits under a
   //    collapsed "Later (1)"), every loaded asset is cached; stop the PC, reload.
-  const nap = await owner.call('tasks.create', { title: 'Water the plants', assigneeKind: 'human' });
+  const nap = await owner.call('tasks.create', { title: 'Water the plants', to: 'me' });
   await owner.call('todos.snooze', { id: nap.id, minutes: 60 });
   await page.evaluate(() => { location.hash = '#/day'; });
   await item(note).waitFor({ timeout: 15_000 });

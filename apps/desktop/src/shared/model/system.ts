@@ -12,11 +12,17 @@ export interface Profile {
   timezone: string; // IANA, default OS zone
   /** B-078 (D17): the AI's own note on how the person wants to be spoken to (≤ 600 characters; the stable prompt's "My environment"). */
   notes?: string;
+  /**
+   * B-085: how far the team goes on its own on this PC, chosen on the first run's About card – 'whole' (absent: anywhere)
+   * or 'careful' (freely in its own folders, checks with the person before changes elsewhere). An agreement line in the
+   * agents' SYSTEM.md, never enforced.
+   */
+  pcAccess?: 'whole' | 'careful';
 }
 
 /** B-078 (D13): the public skill library (runtime/knowledge, track T3). */
 export interface LibrarySettings {
-  /** Skills worth sharing go to the public library as a pull request with the person's own GitHub sign-in (default on). */
+  /** Skills and notes worth sharing go to the public library at library.openautark.com, after the checks (default on). */
   publish: boolean;
 }
 
@@ -76,7 +82,8 @@ export interface RoutingSettings {
 }
 
 /**
- * The first run (ui/onboarding): the tour, the AI card, then About you; 'done' once it is through. A stored 'team'
+ * The first run (ui/onboarding): the choice card (step 'tour': new company or my other PC), the AI card, then About
+ * you; 'done' once it is through. A stored 'team'
  * or 'voice' (older cards) reads as 'about'. "Set up team again" starts at 'ai'.
  */
 export type OnboardingStep = 'tour' | 'ai' | 'about' | 'done';
@@ -216,9 +223,9 @@ export interface ResourceState {
   freeMemoryMb: number;
   totalMemoryMb: number;
   cpuCount: number;
-  heavySlots: number; // admitted heavy agent processes right now
-  heavyInUse: number;
-  queued: number; // wakes waiting for capacity
+  heavySlots: number; // B-080: the parts an agent runs at once (SPLIT_LIMITS.runningPerAgent); no lane has a global limit
+  heavyInUse: number; // running heavy processes (engine CLIs)
+  queued: number; // due wakes not run yet
   processes: Array<{ kind: string; pid: number; accountId?: string; idleMs: number }>;
   /** Added by MM9: the runtime process itself. */
   runtime?: RuntimeUsage;
@@ -229,6 +236,9 @@ export interface RuntimeUsage {
   pid: number;
   rssMb: number;
   heapUsedMb: number;
+  /** V8's reserved heap and the memory outside it (Buffers, native objects such as SQLite's cache): with rss they say where the process's size sits. */
+  heapTotalMb?: number;
+  externalMb?: number;
   /** CPU time (user + system) since the process started. */
   cpuMs: number;
   uptimeMs: number;
@@ -253,7 +263,7 @@ export interface RootInfo {
 
 declare module '../api/methods.ts' {
   interface Methods {
-    /** B-044 (OPEN-FS), owner: where `<data>` and its map are (Settings › About "Autark folder"). */
-    'system.root': { params: void; result: RootInfo };
+    /** B-044 (OPEN-FS), owner: where `<data>` and its map are (Settings › About "Autark folder"); B-081 `device`: that linked CEO PC's. */
+    'system.root': { params: { device?: string } | void; result: RootInfo };
   }
 }

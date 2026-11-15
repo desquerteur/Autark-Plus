@@ -42,6 +42,12 @@ export async function startRuntime(options = {}) {
   };
 }
 
+/**
+ * A message as it stands now: an agent's answer is posted as a new message (chat/publish-message.ts, final, failed or
+ * stopped) and may be updated later (an edit, chat/message-edits.ts) – a wait for "the final reply" takes either.
+ */
+export const MESSAGE_EVENTS = ['message.created', 'message.updated'];
+
 export async function connect(port, token, client = 'cli') {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -80,14 +86,16 @@ export async function connect(port, token, client = 'cli') {
         ws.send(JSON.stringify(params === undefined ? { id, method } : { id, method, params }));
       });
     },
-    /** Resolves with the data of the first (past or future) event matching `predicate`. */
+    /** Resolves with the data of the first (past or future) event matching `predicate`; `event` is one name or a list (MESSAGE_EVENTS). */
     waitFor(event, predicate = () => true, timeoutMs = 30_000) {
-      const seen = events.find((frame) => frame.event === event && predicate(frame.data));
+      const names = [event].flat();
+      const match = (frame) => names.includes(frame.event) && predicate(frame.data);
+      const seen = events.find(match);
       if (seen) return Promise.resolve(seen.data);
       return new Promise((resolve, reject) => {
-        const waiter = { match: (frame) => frame.event === event && predicate(frame.data), resolve };
+        const waiter = { match, resolve };
         waiters.add(waiter);
-        setTimeout(() => { if (waiters.delete(waiter)) reject(new Error(`timeout waiting for ${event}`)); }, timeoutMs).unref?.();
+        setTimeout(() => { if (waiters.delete(waiter)) reject(new Error(`timeout waiting for ${names.join(' or ')}`)); }, timeoutMs).unref?.();
       });
     },
     close() { ws.close(); },
@@ -138,7 +146,7 @@ export async function runEndedAfter(client, match, action, timeoutMs = 90_000) {
  */
 export async function ask(client, conversationId, agentId, body, { pattern = /[\s\S]/, timeoutMs = 30_000 } = {}) {
   const started = Date.now();
-  const reply = waitForNew(client, 'message.updated', (message) => message.conversationId === conversationId
+  const reply = waitForNew(client, MESSAGE_EVENTS, (message) => message.conversationId === conversationId
     && message.authorId === agentId && message.state === 'final' && pattern.test(message.body), timeoutMs);
   reply.catch(() => undefined); // a failing send rejects first; the reply is awaited below
   await client.call('messages.send', { conversationId, body });

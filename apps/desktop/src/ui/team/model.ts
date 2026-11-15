@@ -1,5 +1,6 @@
-// Pure helpers for the team views: the org tree (managers → reports), grouping by space, "most used" ranking from
-// real chat activity, agent status lines, search, the archived list and pairing of run items (tool call ↔ result).
+// Pure helpers for the team views: the org tree (managers → reports), grouping its roots by space and the space a
+// report names, "most used" ranking from real chat activity, agent status lines, the Team page headline, search,
+// the archived list and pairing of run items (tool call ↔ result).
 // Owns: these rules (unit-tested in test/unit/ui/team-model.test.ts).
 // Never: imports the store, rpc or the DOM – callers pass data in.
 
@@ -75,55 +76,45 @@ export function countReports(entry: OrgEntry): number {
 
 export interface SpaceGroup { space?: Space; entries: OrgEntry[] }
 
+/** An agent's space while it is active; an archived or unknown space counts as none. */
+export function activeSpace(agent: Pick<Agent, 'spaceId'>, spaces: readonly Space[]): Space | undefined {
+  return agent.spaceId ? spaces.find((space) => space.id === agent.spaceId && !space.archivedAt) : undefined;
+}
+
 /**
- * Groups the org by space (P05 areas): agents without an active space first – no heading; the
- * seed Manager spans all areas and stays on top – then one group per active space in sort
- * order. A report shows in the group of its space; when that differs from the group its manager
- * is shown in, it moves there with its own reports, so area agents hired by the Manager show in
- * their area. A report without a space follows its manager – unless it leads a team of exactly
- * one area (an area manager the Manager hired): then it moves into that area with its team, so
- * the chain of command stays visible. Archived or unknown spaces count as no space: archiving a
- * space removes its heading, never its agents.
+ * Groups the top of the org by space (P05 areas): roots without an active space first (the seed
+ * Manager spans all areas), then one group per active space in sort order. Only roots are grouped
+ * – a report always stays under its manager, whatever its space (the row names its space instead,
+ * see reportSpace). Archiving a space removes its heading, never its agents.
  */
 export function groupBySpace(entries: OrgEntry[], spaces: Space[]): SpaceGroup[] {
   const known = spaces.filter((space) => !space.archivedAt).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
-  const ids = new Set(known.map((space) => space.id));
-  const spaceOf = (agent: Agent) => (agent.spaceId && ids.has(agent.spaceId) ? agent.spaceId : '');
-  // The area an entry belongs to: its own space, else the single area its team works in ('' = none or mixed).
-  const areas = new Map<string, string>();
-  const area = (entry: OrgEntry): string => {
-    let key = areas.get(entry.agent.id);
-    if (key !== undefined) return key;
-    key = spaceOf(entry.agent);
-    if (!key) {
-      const below = new Set(entry.reports.map(area).filter(Boolean));
-      key = below.size === 1 ? [...below][0] : '';
-    }
-    areas.set(entry.agent.id, key);
-    return key;
-  };
-  const roots = new Map<string, OrgEntry[]>();
-  const moved = new Map<string, OrgEntry[]>();
-  const push = (map: Map<string, OrgEntry[]>, key: string, entry: OrgEntry) => {
-    const list = map.get(key);
-    if (list) list.push(entry); else map.set(key, [entry]);
-  };
-  // `shown`: the group the entry is displayed in.
-  const place = (entry: OrgEntry, shown: string): OrgEntry => {
-    const reports: OrgEntry[] = [];
-    for (const report of entry.reports) {
-      const theirs = area(report) || shown;
-      if (theirs !== shown) push(moved, theirs, place(report, theirs));
-      else reports.push(place(report, shown));
-    }
-    return { agent: entry.agent, reports };
-  };
-  // Roots stay where their own space is (the space-less Manager on top, without a heading).
-  for (const entry of entries) push(roots, spaceOf(entry.agent), place(entry, spaceOf(entry.agent)));
-  // A space's own roots first, then the reports moved in from other branches.
-  const bucket = (key: string) => [...(roots.get(key) ?? []), ...(moved.get(key) ?? [])];
-  const groups: SpaceGroup[] = [{ entries: bucket('') }, ...known.map((space) => ({ space, entries: bucket(space.id) }))];
+  const groups: SpaceGroup[] = [{ entries: [] }, ...known.map((space) => ({ space, entries: [] as OrgEntry[] }))];
+  for (const entry of entries) {
+    const space = activeSpace(entry.agent, known);
+    (groups.find((group) => group.space === space) ?? groups[0]).entries.push(entry);
+  }
   return groups.filter((group) => group.entries.length > 0);
+}
+
+/**
+ * The space a row names after its status: the agent's own active space when it differs from the one
+ * it sits in (`above`: the group's space, or the nearest manager's with one; '' = none). `context` is
+ * what its own reports sit in.
+ */
+export function reportSpace(agent: Pick<Agent, 'spaceId'>, above: string, spaces: readonly Space[]): { name: string; context: string } {
+  const own = activeSpace(agent, spaces);
+  if (!own) return { name: '', context: above };
+  return { name: own.id === above ? '' : own.name, context: own.id };
+}
+
+/** The Team page's one headline: "12 agents · 3 working · 1 waiting" (zero counts beyond the first are left out). */
+export function teamHeadline(agents: ReadonlyArray<Pick<Agent, 'id' | 'status' | 'archivedAt'>>, live: ReadonlyMap<string, unknown>): string {
+  const active = agents.filter((agent) => !agent.archivedAt);
+  const working = active.filter((agent) => live.has(agent.id) || agent.status === 'working').length;
+  const waiting = active.filter((agent) => !live.has(agent.id) && agent.status === 'waiting').length;
+  return [`${active.length} ${active.length === 1 ? 'agent' : 'agents'}`, working ? `${working} working` : '', waiting ? `${waiting} waiting` : '']
+    .filter(Boolean).join(' · ');
 }
 
 /** The archived agents after an 'agent.upserted' event: an archived one comes in (newest first), a restored one goes out. */

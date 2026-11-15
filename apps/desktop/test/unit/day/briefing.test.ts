@@ -27,11 +27,11 @@ async function night(helper: StructuredRunner | false = false, aiHelps = true) {
   const mara = f.s.chats.create({ title: 'Taxes', agentIds: ['ag_mara'], humans: true, createdBy: HUMAN_ID }).id;
   const tom = f.s.chats.create({ title: 'Website', agentIds: ['ag_tom'], humans: true, createdBy: HUMAN_ID }).id;
   const work = (conversationId: string, assigneeId: string, title: string) => f.s.tasks.create({ conversationId, title, assigneeKind: 'agent', assigneeId, createdBy: HUMAN_ID });
-  f.s.tasks.setStatus(work(mara, 'ag_mara', 'Sort the tax papers').id, 'done', HUMAN_ID);
+  f.s.tasks.finish(work(mara, 'ag_mara', 'Sort the tax papers').id, { status: 'done' as const, summary: 'Done' }, HUMAN_ID);
   work(tom, 'ag_tom', 'Fix the header');
   const [police, diary] = (await f.day.add({ text: 'Zettel zur Polizei bringen' }, HUMAN_ID)).tasks.concat((await f.day.add({ text: 'Tagebuch schreiben', private: true }, HUMAN_ID)).tasks);
   f.s.tasks.update(police.id, { prep: { byAgentId: 'ag_mara', note: 'Opens 08:00–12:00', at: f.clock.now() } }, 'ag_mara');
-  f.s.tasks.create({ conversationId: mara, title: 'Which tax year?', assigneeKind: 'human', createdBy: 'ag_mara', humanReason: 'review' });
+  f.s.tasks.create({ conversationId: mara, title: 'Which tax year?', assigneeKind: 'human', createdBy: 'ag_mara', });
   f.s.chats.send({ conversationId: tom, body: 'SECRET-BODY header draft ready', authorId: 'ag_tom', authorKind: 'agent' });
   f.clock.set(wall(TUE, '06:00'));
   f.calendar.block(police.id, wall(TUE, '08:00'), wall(TUE, '08:30'), 'planner');

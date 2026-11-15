@@ -4,7 +4,8 @@
 // this PC not in use yet (Use), one fixed row of four buttons –
 // Claude plan, Codex plan (plan-actions.tsx: add an account and sign in, install if needed), API key and Local server (both open
 // the one connection form inline under it, account-forms.tsx) – with the sign-in link cell and one status line for the
-// plan flow. Settings shows the use rows under it (ModelUses.tsx).
+// plan flow, and the sheet of a sign-in started from the phone (SignInSheet.tsx). Settings shows the use rows under it
+// (ModelUses.tsx).
 // Owns: this layout and its PC scan (accounts.detect, again after a plan flow). Never: a flow's steps (plan-setup.ts).
 
 import type { ComponentChildren } from 'preact';
@@ -21,6 +22,7 @@ import { signInStarted } from './account-actions.ts';
 import { ConnectionForm } from './account-forms.tsx';
 import { AccountRow } from './AccountRow.tsx';
 import { ActionButton, Row, useBusy } from './controls.tsx';
+import { SignInSheet } from './SignInSheet.tsx';
 import { cliRowView, groupAccounts, needsSignIn, PC_CLIS, PROVIDER_NAMES, stateLabel } from './providers.ts';
 
 type Cli = DetectionReport['clis'][number];
@@ -37,7 +39,7 @@ function CliRow(props: { cli: Cli; scanned: boolean; onChanged: () => void }) {
   const action = props.scanned && !covered ? view.action : undefined;
   const add = (detected: boolean) => void run(async () => {
     const added = await rpc.call('accounts.add', { provider, ...(detected ? { detected: true } : {}) });
-    if (needsSignIn(added)) signInStarted(added.id, added.provider);
+    if (needsSignIn(added)) signInStarted(added.id, added.provider, added);
     else pushToast({ title: `${view.name}: ${stateLabel(added)}` });
   });
   return (
@@ -103,6 +105,7 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
       </div>
       <p class={`model-setup-status${view?.tone ? ` ${view.tone}` : ''}`} role="status" title={view?.text}>{view?.text ?? ''}</p>
       {form && <ConnectionForm key={form} kind={form} onDone={() => setForm(null)} {...(form === 'local' && server ? { found: server } : {})} />}
+      <SignInSheet />
     </>
   );
 }

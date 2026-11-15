@@ -1,29 +1,46 @@
 // OpenAI Responses API engine (also usable with SIWC tokens later).
-// Owns: request shape (instructions, input items, function tools, reasoning.effort + summary,
+// Owns: request shape (instructions = the stable prompt, input items with the live context first, function tools, reasoning.effort + summary,
 // store:false, stream:true, encrypted reasoning carried between tool rounds) and SSE parsing
 // (reasoning summaries per output item with section breaks, D5). B-078: the agent's temperature goes to models without
-// reasoning; the reasoning families (gpt-5+, o-series) refuse the field, so it stays out there.
+// reasoning. B-083: effort `none` goes on the wire as `reasoning: {effort: 'none'}` (left out, the model reasons at its
+// default medium), and a reasoning model takes the temperature only there (OpenAI: "When reasoning effort is not none,
+// remove temperature"); the models that refuse `none` (NO_NONE) are not offered it and run at `low` when it comes anyway.
 // Never: uses previous_response_id (stateless: the full projection is sent each turn).
 
 import type { EngineId, Effort } from '../../../shared/model/providers.ts';
 import type { EngineEvent, EngineTurnInput } from '../types.ts';
 import type { ToolOutput } from '../../tools/types.ts';
 import { traceCallId, type TraceCall } from '../../../shared/model/subconscious.ts';
-import { ToolNames, isRecord, num, outputImages, outputText, str, tryJson } from '../shared.ts';
+import { ToolNames, contextText, isRecord, num, outputImages, outputText, str, tryJson } from '../shared.ts';
 import { HttpEngine, splitInput, type LoopStep } from './base.ts';
 import { HttpEngineError, postJson, readSse } from './common.ts';
 
 const LIMIT_CODES = /usage_limit|rate_limit|insufficient_quota|subscription_sharing_usage/;
-/** The reasoning families: they take reasoning.effort and refuse a temperature. */
+/** The reasoning families: they take reasoning.effort, and a temperature only at effort `none`. */
 const REASONING = /^(gpt-5|gpt-6|o\d)/;
 
-/** Reasoning models outside those families (codex-mini-latest): they refuse a temperature too. */
+/** B-083: reasoning models that refuse effort `none` (OpenAI docs 08.11.2026: GPT-6 Astra, GPT-6.1 Sol; the first gpt-5
+ *  generation and the o-series end at minimal/low). GPT-6 Sol, GPT-6 Luna, GPT-6.1 Terra and gpt-5.1+ take it. */
+const NO_NONE = /^(gpt-6-astra|gpt-6\.1-sol|gpt-5(-|$)|o\d)|-(codex|pro)(-|$)/; // -codex/-pro variants: not known to take `none` – at worst they run at `low`
+const LEVELS: Effort[] = ['low', 'medium', 'high', 'xhigh'];
+
+/** Reasoning models outside those families (codex-mini-latest): they refuse a temperature at every effort. */
 const NO_TEMPERATURE = /^codex-/;
 
-/** B-078 (D14, D16): the temperature this model gets on the Responses API (0..2), undefined where it is dropped (reasoning models, none asked). */
-export function openAiTemperature(model: string, value: number | undefined): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || REASONING.test(model) || NO_TEMPERATURE.test(model)) return undefined;
+/** B-078/B-083 (D14, D16): the temperature this model gets on the Responses API (0..2) at this effort, undefined where it is
+ *  dropped: none asked, codex-mini, a reasoning model above effort `none` (or without an effort to judge by). */
+export function openAiTemperature(model: string, value: number | undefined, effort?: Effort): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || NO_TEMPERATURE.test(model)) return undefined;
+  if (REASONING.test(model) && (effort !== 'none' || NO_NONE.test(model))) return undefined;
   return Math.max(0, Math.min(2, value));
+}
+
+/** B-083: the `reasoning` field for this effort – `none` explicitly (left out, the model reasons at medium), `low` for a model
+ *  that refuses `none`, nothing for a model without reasoning at `none`; `max` goes as the API's `xhigh`. */
+function reasoningFor(model: string, effort: Effort): Record<string, string> | undefined {
+  if (effort !== 'none') return { effort: effort === 'max' ? 'xhigh' : effort, summary: 'auto' };
+  if (!REASONING.test(model)) return undefined;
+  return NO_NONE.test(model) ? { effort: 'low', summary: 'auto' } : { effort: 'none' };
 }
 
 export class OpenAiEngine extends HttpEngine {
@@ -34,11 +51,14 @@ export class OpenAiEngine extends HttpEngine {
   }
 
   protected override effortsFor(model: string): Effort[] {
-    return REASONING.test(model) ? ['none', 'low', 'medium', 'high', 'xhigh'] : ['none'];
+    if (!REASONING.test(model)) return ['none'];
+    return NO_NONE.test(model) ? [...LEVELS] : ['none', ...LEVELS];
   }
 
   protected async startConversation(input: EngineTurnInput, names: ToolNames, base: string) {
     const content: Array<Record<string, unknown>> = [];
+    const context = contextText(input.system.volatile);
+    if (context) content.push({ type: 'input_text', text: context });
     for (const part of splitInput(input.input).parts) {
       if (part.type === 'text') content.push({ type: 'input_text', text: part.text });
       else content.push({ type: 'input_image', image_url: `data:${part.mime};base64,${await this.image(part.path)}` });
@@ -47,13 +67,14 @@ export class OpenAiEngine extends HttpEngine {
     const tools = input.tools.map((tool) => ({ type: 'function', name: names.wire(tool.name), description: tool.description, parameters: tool.inputSchema, strict: false }));
     const body: Record<string, unknown> = {
       model: input.model,
-      instructions: [input.system.stable, input.system.volatile].filter(Boolean).join('\n\n'),
+      instructions: input.system.stable,
       store: false, stream: true,
       include: ['reasoning.encrypted_content'],
     };
     if (tools.length) body.tools = tools;
-    if (input.effort !== 'none') body.reasoning = { effort: input.effort === 'max' ? 'xhigh' : input.effort, summary: 'auto' };
-    const temperature = openAiTemperature(input.model, input.temperature);
+    const reasoning = reasoningFor(input.model, input.effort);
+    if (reasoning) body.reasoning = reasoning;
+    const temperature = openAiTemperature(input.model, input.temperature, input.effort);
     if (temperature !== undefined) body.temperature = temperature;
     if (input.outputSchema) body.text = { format: { type: 'json_schema', name: 'result', schema: input.outputSchema, strict: false } };
 

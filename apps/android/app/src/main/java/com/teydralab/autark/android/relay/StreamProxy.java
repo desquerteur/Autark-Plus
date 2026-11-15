@@ -2,6 +2,10 @@
 // request carries the app's private gate cookie), each TCP connection one stream over the encrypted peer channel to the
 // PC's own runtime port (rendezvous/phone.ts: o/d/a/e messages, at most WINDOW unacknowledged bytes per direction).
 // The WebView therefore shows the PC's unchanged phone UI at http://127.0.0.1:<port>, a secure context like https.
+// B-084: a request whose channel dies before the PC answered gets a 503 instead of hanging; one that hears nothing for
+// 4 s has the link probed once (Channels.probe), so a dead link is found within seconds. M1: the phone holds channels
+// to several PCs; a new stream takes the page's one (Channels.await) and retire() ends the streams left on the others
+// (a stream that raced a move ends at once too: one PC answers the page).
 // Never: listens beyond loopback, lets another app's connection through, or buffers without bound.
 package com.teydralab.autark.android.relay;
 
@@ -19,16 +23,26 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class StreamProxy {
     /** The current channel to the PC, waited for up to a few seconds when a stream starts. */
-    public interface Channels { PeerChannel await(long timeoutMs); }
+    public interface Channels {
+        PeerChannel await(long timeoutMs);
+        /** The page's channel now, or null (never waits). */
+        PeerChannel used();
+        /** A stream heard nothing for a while: check the link now (a dead one ends, its streams get their 503). */
+        void probe();
+    }
 
     public static final String GATE_COOKIE = "autark_gate";
     static final int WINDOW = 256 * 1024;
     private static final int CHUNK = 32 * 1024;
+    private static final long QUIET_MS = 4_000;
     private static final byte[] END = new byte[0];
+    /** The channel died: a stream the PC has not answered yet answers 503 itself. */
+    private static final byte[] DEAD = new byte[0];
 
     private final ServerSocket server;
     private final String gate;
@@ -73,10 +87,26 @@ public final class StreamProxy {
         else if ("e".equals(type)) stream.toLocal.offer(END);
     }
 
-    /** The channel ended: its streams end, the WebView reconnects on its own. */
+    /** The channel ended: its streams end (503 where the PC had not answered yet), the WebView reconnects on its own. */
     public void channelClosed(PeerChannel channel) {
         Map<Integer, Stream> streams = live.remove(channel);
-        if (streams != null) for (Stream stream : streams.values()) stream.toLocal.offer(END);
+        if (streams != null) for (Stream stream : streams.values()) stream.toLocal.offer(DEAD);
+    }
+
+    /** The page moved to `keep` (B-084 M1): streams still on another PC's channel end there too (that PC hears it), so
+     *  the page's sockets and phone use (phoneuse/UseLink) come back through `keep`; the other channels stay open. */
+    public void retire(PeerChannel keep) {
+        for (Map.Entry<PeerChannel, Map<Integer, Stream>> entry : live.entrySet()) {
+            if (entry.getKey() == keep) continue;
+            for (Stream stream : new java.util.ArrayList<>(entry.getValue().values())) { stream.toLocal.offer(DEAD); stream.finish(true); }
+        }
+    }
+
+    private static void unavailable(OutputStream out) throws IOException {
+        byte[] body = "Your PC is not reachable right now. Autark must be running on it.".getBytes(StandardCharsets.UTF_8);
+        out.write(("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(body);
+        out.flush();
     }
 
     private void acceptLoop() {
@@ -106,17 +136,17 @@ public final class StreamProxy {
             socket.setSoTimeout(0);
             PeerChannel channel = channels.await(20_000);
             if (channel == null || channel.isClosed()) {
-                byte[] body = "Your PC is not reachable right now. Autark must be running on it.".getBytes(StandardCharsets.UTF_8);
-                socket.getOutputStream().write(("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
-                socket.getOutputStream().write(body);
+                unavailable(socket.getOutputStream());
                 socket.close();
                 return;
             }
             Stream stream = new Stream(nextId.getAndIncrement(), channel, socket);
             live.computeIfAbsent(channel, key -> new ConcurrentHashMap<>()).put(stream.id, stream);
             if (channel.isClosed()) channelClosed(channel);
+            if (channels.used() != channel) { unavailable(socket.getOutputStream()); stream.finish(false); return; } // the page moved meanwhile: one PC per page
             channel.send(Json.map("t", "o", "s", stream.id));
             stream.start();
+            RelayLink.LATER.schedule(() -> { if (!stream.answered && !stream.done) channels.probe(); }, QUIET_MS, TimeUnit.MILLISECONDS);
             stream.upload(head);
             byte[] buffer = new byte[CHUNK];
             for (;;) {
@@ -127,7 +157,7 @@ public final class StreamProxy {
                 if (!stream.upload(chunk)) break;
             }
             stream.finish(true);
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException error) { // a failure on this thread ends this request, never the app
             try { socket.close(); } catch (IOException ignored) { /* closing */ }
         }
     }
@@ -167,7 +197,9 @@ public final class StreamProxy {
         final Socket socket;
         final LinkedBlockingQueue<byte[]> toLocal = new LinkedBlockingQueue<>();
         private long unacked;
-        private boolean done;
+        private volatile boolean done;
+        /** The PC's first bytes reached the WebView. */
+        volatile boolean answered;
 
         Stream(int id, PeerChannel channel, Socket socket) { this.id = id; this.channel = channel; this.socket = socket; }
 
@@ -178,12 +210,14 @@ public final class StreamProxy {
                     OutputStream out = socket.getOutputStream();
                     for (;;) {
                         byte[] data = toLocal.take();
-                        if (data == END) break;
+                        if (data == DEAD && !answered) unavailable(out);
+                        if (data == END || data == DEAD) break;
+                        answered = true;
                         out.write(data);
                         out.flush();
                         channel.send(Json.map("t", "a", "s", id, "n", data.length));
                     }
-                } catch (IOException | InterruptedException error) { /* the WebView closed it */ }
+                } catch (IOException | InterruptedException | RuntimeException error) { /* the WebView closed it */ }
                 finish(true);
             }, "autark-stream-out");
             writer.setDaemon(true);

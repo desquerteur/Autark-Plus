@@ -5,51 +5,66 @@
 //   run journal + streaming message → engine attempt → session renewal once when the native
 //   session cannot continue (context full, thread gone; another folder, details.folder: quietly)
 //   → the account learns what the attempt says about it (always, also after tool calls) →
-//   failover once on limit/unavailable (renewal only when no tool ran; failover also after tool calls whose effects are all known – PR3: the
-//   continuation gets them as "Previous attempt"; finish then judges and books both attempts:
-//   tools, plan, tokens and cost – mergeAttempts) → finish (message, blocks, cursor, ownership …)
+//   failover on limit/unavailable (renewal only when no tool ran; failover also after tool calls whose effects are all known – PR3: the
+//   continuation gets them as "What I already did then" (in the cut-off note); finish then judges and books every attempt:
+//   tools, plan, tokens and cost – mergeAttempts; B-083: again after each account that fails, every failed account of the
+//   turn left out, until routing has no other or tools with unknown effects ran) → finish (message, blocks, cursor, ownership …)
 //   → the engine-reported context window is kept with the session. A turn that cannot start
 //   (routing or preparation failed) ends as a failed run; for a task, no model or account to run
 //   on is the ownership outcome 'unavailable' and a limit 'limit' (no stall), anything else
 //   'failed' – an outage of a task leaves one quiet line per outage, no failed bubble (T06); an
-//   outage of a chat turn without a task is noted for one automatic re-delivery (B-044, redelivery.ts).
-// Owns: the phase order, run start, switch/renewal status lines (a switch says why – wording in
-// switch-line.ts, RT5; judged against the chat's last turn, so the agent's own model.set request
-// and the return after it are switches too, RT2), the renewal retry, failover and recording
+//   outage of a chat turn without a task is noted for one automatic re-delivery (B-044, redelivery.ts) – B-080 wave 3: one
+//   the platform re-delivers by itself leaves one quiet Paused line too (on its first attempt there), no red bubble.
+// Owns: the phase order, run start, switch/renewal status lines (a switch someone asked for says why – route-line.ts decides,
+// switch-line.ts words it, RT5; judged against the chat's last turn), the renewal retry, failover and recording
 // the account consequence of every failed attempt (the rules – limit → cooling, a signed-out plan →
 // needs_login plus one notification, CLI missing → error, else a short cooling – live in
 // accounts/failure.ts, shared with helper calls).
-// B-047 D4: the run's status lines carry meta.fromRun. B-075: every run of a chat the agent is in gets its row – the live
-// status (meta.live, chat/live-row.ts) every device renders; where publishing is not the default (plan.publish
-// 'internal', agents/publishing.ts) a silent one that goes at the end unless the finish posts the answer.
-// B-048 E4.5: bindTurn reports what the turn runs on after every (re)build (the activity's model fields).
+// B-047 D4: the run's status lines carry meta.fromRun. 13.11.2026: a run has no row in the history – it shows in the
+// chat's live bar from the dispatcher's activity (chat/live.ts); a turn that fails before its engine posts its failed
+// bubble (a task's outage only its quiet line, T06).
+// B-048 E4.5: bindTurn reports what the turn runs on after every (re)build (the activity's model fields). A model.set request for
+// the next step is used up only once the turn is built and bound – just before its engine runs (a turn that fails
+// before its engine leaves it for the next one) – and only the one planning read (plan.nextStepAt): a request written
+// while the turn was routed or prepared holds for the next turn.
 // B-054: the run row carries the plan's origin (what started it); session and repair-note bookkeeping use plan.thread.
 // B-057: a split's turn (request.split, on its own dispatcher lane) runs the same phases on its thread `split:<id>`
 // (agents/split-turn.ts); its run row names the split, and a split run that fails before its engine tells the split service;
 // its session renewal starts fresh with the brief (no second seed from the parent).
+// B-083: the route a turn runs on carries its temperature (turnRoute: the agent's own request over the person's suggestion),
+// so its prompt's "## Now", its activity row (with whether the engine sends it), its switch lines – "<Agent> → <model> ·
+// <effort> · temperature T – <why>", a change of my own temperature alone too – and its finished row all say the same.
 // Never: runs two turns on one lane (the dispatcher guarantees that), retries a turn whose tool
 // effects are unknown, keeps a session that cannot continue, or swallows a failure silently
 // (run error; a failed message where the turn streams one or fails before the engine).
 
+import { isMailTurn, executeMailTurn } from './mail-turn.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
 import { ROUTE_BY_REQUEST, type Run } from '../../shared/model/runs.ts';
 import { toErrorData, type WorkforceErrorData } from '../../shared/errors.ts';
 import type { StatusLine } from '../../shared/model/chat.ts';
 import { buildTurn, planTurn, renewSession, routeRequest, visionUnavailable, withoutImages } from './turn-prepare.ts';
-import { canFailover, runAttempt } from './turn-attempt.ts';
+import { canFailover, liveRoute, runAttempt, sendsTemperature } from './turn-attempt.ts';
 import { effectsKnown } from '../context/recent-actions.ts';
 import { errorOutcome, finishTurn, takeRepairNotes } from './turn-finish.ts';
+import { ChatOutbox } from './chat-out.ts';
 import { SessionStore } from './sessions.ts';
 import { accountFailure, recordAccountFailure } from '../accounts/failure.ts';
 import { isOutage } from './outages.ts';
-import { outageLine } from './outage-line.ts';
+import { outageLine, pausedLine } from './outage-line.ts';
 import { noteChatOutage } from './redelivery.ts';
 import { failoverText } from './switch-line.ts';
-import { routeLines } from './route-line.ts';
+import { postRunLine, routeLine, type SwitchFrom } from './route-line.ts';
+import { takeNextRoute } from './next-route.ts';
 import { splitTurnFailed } from './split-turn.ts'; // B-057
 import { addCache } from '../engines/shared.ts';
 import type { AttemptResult, RoutedTurn, TurnOutcome, TurnPlan, TurnRequest } from './turn-types.ts';
+
+/** True when the agent is a current member of the chat. */
+function isMember(services: RuntimeServices, conversationId: string, agentId: string): boolean {
+  return services.chats.members(conversationId).some((item) => item.memberId === agentId && !item.leftAt);
+}
 
 /** Runs looked at for the chat's last turn (the return rule's window). */
 const SWITCH_WINDOW = 50;
@@ -62,16 +77,24 @@ export function sessionEnded(attempt: AttemptResult): boolean {
 /**
  * The switch line's base: plan.previous – unless a model.set request (RT2, the target, not the base)
  * shapes this turn or shaped the chat's last one: then what that last done turn ran on (none: no line).
+ * B-083: with the temperature the chat's last done turn ran with; `at`: when that turn began (a start model set since is new to this chat).
  */
-export function switchedFrom(services: Pick<RuntimeServices, 'runs' | 'log'>, plan: Pick<TurnPlan, 'agent' | 'conversationId' | 'previous'>): { modelId: string; effort: Effort; requested?: boolean } | undefined {
+export function switchedFrom(services: Pick<RuntimeServices, 'runs' | 'log'>, plan: Pick<TurnPlan, 'agent' | 'conversationId' | 'previous'>): SwitchFrom | undefined {
   const previous = plan.previous;
   let last: Run | undefined;
   try { last = services.runs.list(plan.agent.id, SWITCH_WINDOW).find((run) => !run.splitId && run.conversationId === plan.conversationId && run.model && run.status === 'done'); } catch (error) { // B-057: never a split's run
     services.log.warn('reading the last turn failed', { agentId: plan.agent.id, error: String(error) });
   }
   const requested = last?.route?.by === ROUTE_BY_REQUEST; // the return after a request
-  if (!previous?.explicit && !requested) return previous;
-  return last?.model ? { modelId: last.model, effort: last.effort ?? 'medium', requested } : undefined;
+  const warmth = last?.route?.temperature !== undefined ? { temperature: last.route.temperature } : {};
+  const at = last?.startedAt !== undefined ? { at: last.startedAt } : {};
+  if (!previous?.explicit && !requested) return previous ? { modelId: previous.modelId, effort: previous.effort, ...warmth, ...at } : undefined;
+  return last?.model ? { modelId: last.model, effort: last.effort ?? 'medium', ...warmth, ...at } : undefined;
+}
+
+/** B-083: the route a turn runs on, with its temperature – the agent's own request (plan) over the person's suggestion (router). */
+export function turnRoute(plan: Pick<TurnPlan, 'temperature'>, route: RouteDecision): RouteDecision {
+  return plan.temperature === undefined || plan.temperature === route.temperature ? route : { ...route, temperature: plan.temperature };
 }
 
 /**
@@ -108,7 +131,7 @@ export function mergeAttempts(first: AttemptResult, second: AttemptResult): Atte
 export function bindTurn(request: TurnRequest, turn: RoutedTurn): void {
   request.control.engine = turn.engine;
   request.control.lastSeq = turn.lastSeq;
-  try { request.onRoute?.({ model: turn.route.modelId, modelName: turn.modelName, effort: turn.route.effort, engine: turn.engine.id }); } catch { /* cosmetic */ }
+  try { request.onRoute?.(liveRoute(turn, turn.route.temperature)); } catch { /* cosmetic */ } // B-080: the account too; B-083: the temperature (turnRoute)
 }
 
 export class TurnExecutor {
@@ -120,11 +143,15 @@ export class TurnExecutor {
 
   async execute(request: TurnRequest): Promise<TurnOutcome> {
     const services = this.services();
+    // Mail isolation is held back until its route decision and push bundling are settled (owner 11.11.2026):
+    // without AUTARK_MAIL_ORIGIN_ISOLATION=on a mail-woken run goes the ordinary way, as in the installed build.
+    if (process.env.AUTARK_MAIL_ORIGIN_ISOLATION === 'on' && isMailTurn(services, request.origin)) return executeMailTurn(services, request);
     let plan = await planTurn(services, request);
     if (!plan) return { runId: request.runId, status: 'skipped' };
 
-    const started = services.runs.start({
-      id: request.runId, agentId: plan.agent.id, conversationId: plan.conversationId, taskId: plan.task?.id,
+    services.runs.start({
+      // 13.11.2026: the chat of the turn's main wake – a part's: the chat its work is for (agents.split part `chat`)
+      id: request.runId, agentId: plan.agent.id, conversationId: plan.conversationId ?? plan.split?.chat, taskId: plan.task?.id,
       trigger: request.reason, deviceId: plan.agent.deviceId, ...(plan.origin ? { origin: plan.origin } : {}),
       ...(plan.split ? { splitId: plan.split.splitId } : {}), // B-057: the run of a split (runs.split_id)
     });
@@ -144,15 +171,17 @@ export class TurnExecutor {
         route = await services.router.route(routeRequest(plan));
         services.runs.item(request.runId, { kind: 'note', data: { imagesHidden: true }, effectStatus: 'none' });
       }
-      turn = await buildTurn(services, plan, request, route, repairNotes);
+      turn = await buildTurn(services, plan, request, turnRoute(plan, route), repairNotes);
     } catch (error) {
       return this.failBeforeEngine(services, plan, request, toErrorData(error));
     }
     bindTurn(request, turn);
-    this.announceSwitch(services, plan, request.runId, turn.route, turn.modelName);
+    this.announceSwitch(services, plan, request.runId, turn);
+    if (!plan.split && plan.nextStepAt !== undefined) takeNextRoute(services.db, plan.agent.id, plan.nextStepAt); // B-080: the request this turn read is used up now
 
-    let messageId = this.beginMessage(services, plan, request, turn, started?.startedAt ?? services.clock.now());
-    let attempt = await runAttempt(services, plan, turn, request, messageId);
+    // 13.11.2026: what the run writes into chats – its <chat> blocks, posted as they arrive (agents/chat-out.ts)
+    const out = new ChatOutbox(services, { agentId: plan.agent.id, runId: request.runId, ...(plan.callId && plan.conversationId ? { skip: plan.conversationId } : {}) });
+    let attempt = await runAttempt(services, plan, turn, request, out);
 
     // Renew once (compaction + fresh session with the full projection) in the same run – only when
     // nothing external happened yet (else it is forgotten below); another folder: no chat line.
@@ -166,37 +195,43 @@ export class TurnExecutor {
         turn = await buildTurn(services, plan, retry, turn.route, repairNotes);
         bindTurn(request, turn);
         if (!folder) this.statusLine(services, plan, request.runId, 'note', 'Continued in a fresh session', { renewed: true, cause: attempt.result.error?.message });
-        attempt = await runAttempt(services, plan, turn, request, messageId);
+        attempt = await runAttempt(services, plan, turn, request, out);
       } catch (error) {
         services.log.warn('session renewal retry could not start', { agentId: plan.agent.id, error: toErrorData(error).message });
       }
     }
 
     this.accountFailed(services, turn, attempt);
-    const afterTools = attempt.toolCalls;
-    if (canFailover(attempt, request.signal, afterTools > 0 && effectsKnown(services, request.runId, afterTools))) {
+    // B-083: every account that failed in this turn stays out of the next route; it ends when routing has no other account
+    // (the route throws or names a failed one) or when tools with unknown effects ran (canFailover).
+    const failedAccounts: string[] = [];
+    while (canFailover(attempt, request.signal, attempt.toolCalls > 0 && effectsKnown(services, request.runId, attempt.toolCalls))) {
+      const afterTools = attempt.toolCalls;
       const failed = turn;
       const first = attempt;
+      failedAccounts.push(failed.account.id);
       const limited = accountFailure(attempt.result) === 'limit';
       const retry = { ...request, interruption: { at: services.clock.now(), reason: attempt.result.error?.message ?? (limited ? 'Usage limit reached.' : 'The model was unavailable.') } };
       try {
-        const alternative = await services.router.route(routeRequest(plan, [failed.account.id]));
-        if (alternative.accountId !== failed.account.id) {
-          turn = await buildTurn(services, plan, retry, alternative, repairNotes);
-          bindTurn(request, turn);
-          services.runs.item(request.runId, { kind: 'note', data: { failover: { from: failed.route.modelId, fromAccount: failed.account.id, to: alternative.modelId, toAccount: alternative.accountId, reason: limited ? 'limit' : 'unavailable', ...(afterTools ? { afterTools } : {}) } }, effectStatus: 'none' });
-          const text = failoverText({ modelName: turn.modelName, effort: alternative.effort, failedName: failed.modelName, sameModel: failed.route.modelId === alternative.modelId, limited });
-          this.statusLine(services, plan, request.runId, 'model_switched', text, { from: failed.route.modelId, to: alternative.modelId, effort: alternative.effort, reason: limited ? 'limit' : 'unavailable' });
-          attempt = mergeAttempts(first, await runAttempt(services, plan, turn, request, messageId));
-          this.accountFailed(services, turn, attempt);
-        }
+        const alternative = turnRoute(plan, await services.router.route(routeRequest(plan, [...failedAccounts])));
+        if (failedAccounts.includes(alternative.accountId)) break; // routing has no other account
+        turn = await buildTurn(services, plan, retry, alternative, repairNotes);
+        bindTurn(request, turn);
+        services.runs.item(request.runId, { kind: 'note', data: { failover: { from: failed.route.modelId, fromAccount: failed.account.id, to: alternative.modelId, toAccount: alternative.accountId, reason: limited ? 'limit' : 'unavailable', ...(afterTools ? { afterTools } : {}) } }, effectStatus: 'none' });
+        const text = failoverText(plan.agent.name, this.runsOn(turn), { failedName: failed.modelName, sameModel: failed.route.modelId === alternative.modelId, limited });
+        this.statusLine(services, plan, request.runId, 'model_switched', text, { from: failed.route.modelId, to: alternative.modelId, effort: alternative.effort, reason: limited ? 'limit' : 'unavailable' });
+        attempt = mergeAttempts(first, await runAttempt(services, plan, turn, request, out));
+        this.accountFailed(services, turn, attempt);
       } catch (error) {
         services.log.info('no failover route', { agentId: plan.agent.id, error: toErrorData(error).message });
+        break;
       }
     }
     // Still unusable (tools ran, stopped, or the retry ended the same way): the next turn starts fresh.
     if (sessionEnded(attempt)) attempt = this.forgetSession(services, plan, turn, request, attempt);
-    const outcome = finishTurn(services, plan, turn, request, attempt, messageId);
+    if (attempt.result.stop === 'done') out.segment(attempt.result.text || attempt.streamed, true); // the final text's blocks, its last open one closed
+    await out.done();
+    const outcome = finishTurn(services, plan, turn, request, attempt, out);
     this.rememberWindow(services, plan, turn, attempt);
     return outcome;
   }
@@ -231,42 +266,33 @@ export class TurnExecutor {
     }
   }
 
-  private beginMessage(services: RuntimeServices, plan: TurnPlan, request: TurnRequest, turn: RoutedTurn, startedAt: number): string | undefined {
-    // The final text is auto-posted only when the run came from exactly one chat the agent is in. B-075: its row is the
-    // run's live status from the start – silent where publishing is not the default (B-047 D4: background work).
-    if (!plan.conversationId) return undefined;
-    const member = services.chats.members(plan.conversationId).some((item) => item.memberId === plan.agent.id && !item.leftAt);
-    if (!member) return undefined;
-    return services.chats.beginAgentMessage(plan.conversationId, plan.agent.id, request.runId, {
-      model: turn.modelName, effort: turn.route.effort,
-      live: { steps: [], more: 0, startedAt, model: turn.modelName, effort: turn.route.effort, ...(plan.task ? { taskId: plan.task.id } : {}) },
-      ...(plan.callId ? { call: { id: plan.callId, participant: `agent:${plan.agent.id}`, name: plan.agent.name } } : {}),
-    }, { silent: plan.publish === 'internal' }).id;
+  /**
+   * A switch someone asked for (route-line.ts: my own request or temperature, a start model set since) becomes one quiet status line
+   * (identity stays the agent) that says why: "Mara → X · high – my start model" (RT5, switch-line.ts; the agent reads it too).
+   */
+  private announceSwitch(services: RuntimeServices, plan: TurnPlan, runId: string, turn: RoutedTurn): void {
+    const of = { agent: plan.agent.name, sent: this.runsOn(turn).sent, ownTemperature: plan.temperature !== undefined, pinAt: plan.agent.modelPolicy?.pinBy?.at };
+    const line = routeLine(turn.route, turn.modelName, switchedFrom(services, plan), of);
+    if (line) this.statusLine(services, plan, runId, 'model_switched', line.text, line.details);
   }
 
-  /**
-   * Every model/effort switch becomes one quiet status line (identity stays the agent) that says
-   * why: "Switched to X · high — <first reason>" (RT5, switch-line.ts; the agent reads it too).
-   */
-  private announceSwitch(services: RuntimeServices, plan: TurnPlan, runId: string, route: RouteDecision, modelName: string): void {
-    // SG (route-line.ts): also one "Kept …" line when routing deviates from the chat's model hint.
-    const scope = { agentId: plan.agent.id, conversationId: plan.conversationId };
-    for (const line of routeLines(services, scope, route, modelName, switchedFrom(services, plan))) this.statusLine(services, plan, runId, 'model_switched', line.text, line.details);
+  /** B-083: what the turn runs on, as a switch line names it (the temperature: sent, or the agent's stance). */
+  private runsOn(turn: RoutedTurn): { modelName: string; effort: Effort; temperature?: number; sent: boolean } {
+    const { temperature } = turn.route;
+    return { modelName: turn.modelName, effort: turn.route.effort, temperature, sent: temperature !== undefined && sendsTemperature(turn) };
   }
 
   /** A quiet line of this run (meta.fromRun: the UI may fold it into the run's steps). */
   private statusLine(services: RuntimeServices, plan: TurnPlan, runId: string, type: StatusLine['type'], text: string, details: Record<string, unknown>): void {
-    if (!plan.conversationId) return;
-    try { services.chats.status(plan.conversationId, { type, text, details }, { authorId: plan.agent.id, taskId: plan.task?.id, fromRun: runId }); } catch (error) {
-      services.log.warn('status line failed', { error: String(error) });
-    }
+    postRunLine(services, { agentId: plan.agent.id, runId, conversationId: plan.conversationId, taskId: plan.task?.id }, type, text, details);
   }
 
   /**
    * Routing/preparation failed: close the run, tell the chat briefly, let ownership retry later –
    * no model or account to run on ('unavailable') and limits are no stall of the task. A task's
    * outage gets one quiet "Paused: … – continues by itself" line per outage instead of a failed
-   * bubble on every retry (T06); a setup error, a chat turn or any other failure keeps its bubble.
+   * bubble on every retry (T06); B-080 wave 3: so does a chat turn's outage the platform re-delivers by itself (the line
+   * on its first attempt there, by the agent); a setup error or any other failure keeps its bubble.
    * The subconscious's trace was shown to nobody: it waits for the next turn on the thread.
    */
   private failBeforeEngine(services: RuntimeServices, plan: TurnPlan, request: TurnRequest, error: WorkforceErrorData): TurnOutcome {
@@ -274,13 +300,15 @@ export class TurnExecutor {
     if (plan.trace) services.subconscious.putBack?.(plan.agent.id, plan.thread, plan.trace);
     services.runs.finish(request.runId, { status: 'failed', endedAt: services.clock.now(), error: message });
     let messageId: string | undefined;
-    if (plan.task && isOutage(errorOutcome(error))) outageLine(services, plan.task, message, request.runId); // the pre-turn ledger decides the dedupe; B-059 #86: meta.fromRun
-    else if (plan.conversationId && services.chats.members(plan.conversationId).some((item) => item.memberId === plan.agent.id && !item.leftAt)) {
-      const draft = services.chats.beginAgentMessage(plan.conversationId, plan.agent.id, request.runId);
-      messageId = services.chats.finishAgentMessage(draft.id, { body: '', state: 'failed', meta: { error: message } }).id;
+    // B-044: no model or account for a chat turn – delivered again once one becomes usable (redelivery.ts); B-080 wave 3: its attempt number there.
+    const retry = !plan.task && plan.conversationId ? noteChatOutage(services, { agentId: plan.agent.id, conversationId: plan.conversationId, runId: request.runId, cursor: plan.memberCursor, error, toolCalls: 0 }) : 0;
+    const outage = isOutage(errorOutcome(error)) && (Boolean(plan.task) || retry > 0);
+    const member = plan.conversationId !== undefined && isMember(services, plan.conversationId, plan.agent.id);
+    if (outage && plan.task) outageLine(services, plan.task, message, request.runId); // meta.fromRun
+    else if (outage) { if (retry === 1 && member) pausedLine(services, plan.conversationId!, message, { runId: request.runId, authorId: plan.agent.id }); } // B-080 wave 3: once per outage
+    else if (plan.conversationId && member) {
+      messageId = services.chats.postAgentMessage(plan.conversationId, plan.agent.id, request.runId, { body: '', state: 'failed', meta: { error: message } }).id;
     }
-    // B-044: no model or account for a chat turn – delivered again once one becomes usable (redelivery.ts).
-    if (!plan.task && plan.conversationId) noteChatOutage(services, { agentId: plan.agent.id, conversationId: plan.conversationId, runId: request.runId, cursor: plan.memberCursor, error, toolCalls: 0 });
     if (plan.task) {
       try { services.ownership.afterTurn({ agentId: plan.agent.id, taskId: plan.task.id, runId: request.runId, progressed: false, outcome: errorOutcome(error), note: message, ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}) }); } catch (failure) { // B-059 C6: when the route can run again
         services.log.warn('ownership.afterTurn failed', { taskId: plan.task.id, error: String(failure) });

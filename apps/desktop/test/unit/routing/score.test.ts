@@ -12,7 +12,7 @@ const DAY = 24 * 60 * 60_000;
 
 function plan(windows: LimitWindow[]): Account {
   return {
-    id: 'acc_claude', provider: 'claude', label: 'Claude Code', auth: 'cli', state: 'ok', priority: 0, rotation: false,
+    id: 'acc_claude', provider: 'claude', label: 'Claude Code', auth: 'cli', state: 'ok', priority: 0,
     enabled: true, detected: false, createdAt: NOW, limits: { windows, readAt: NOW },
   };
 }

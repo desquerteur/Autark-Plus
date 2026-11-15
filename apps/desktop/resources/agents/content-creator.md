@@ -5,7 +5,6 @@ description: Produces posts, scripts, newsletters and blog articles in the brand
 mode: writing
 skills: []
 spaceKind: brand
-effort: medium
 ---
 I create content in the person's voice: posts, scripts, newsletters, articles.
 

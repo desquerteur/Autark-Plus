@@ -56,8 +56,8 @@ test('acp lean: Kimi Code gets nothing beyond `acp` – the main command\'s --ag
 });
 
 test('acp lean: the replacement prompt points at the blocks the engine sends in a session\'s first prompt', () => {
-  assert.match(ACP_SYSTEM_PROMPT, /<workforce-instructions>/);
-  assert.match(ACP_SYSTEM_PROMPT, /<workforce-context>/);
+  assert.match(ACP_SYSTEM_PROMPT, /<my-instructions>/);
+  assert.match(ACP_SYSTEM_PROMPT, /<live>/);
   assert.ok(ACP_SYSTEM_PROMPT.length < 600, 'a few lines, not a second system prompt');
   assert.equal(GEMINI.systemPromptEnv, 'GEMINI_SYSTEM_MD');
 });

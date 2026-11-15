@@ -21,8 +21,8 @@ const NAMES = { type: 'array', items: KEY, maxItems: LIMITS.items } as const;
 
 const listModes = defineTool<{ key?: string }>({
   name: 'modes.list',
-  description: 'List the modes (key, name, what they are for, built-in or saved in this company, the one I work in now, colleagues who work in it). With key: that whole mode, its instructions, skills and tools included.',
-  inputSchema: { type: 'object', properties: { key: KEY }, additionalProperties: false },
+  description: 'Lists the modes, or shows one whole with its instructions, skills and tools.',
+  inputSchema: { type: 'object', properties: { key: { ...KEY, description: 'One mode to show whole.' } }, additionalProperties: false },
   category: 'read',
   describe: (args) => internal(args.key ? `Read mode ${args.key}` : 'List modes'),
   async run(args, ctx) {
@@ -43,20 +43,20 @@ const listModes = defineTool<{ key?: string }>({
 
 const saveMode = defineTool<ModeSaveInput>({
   name: 'modes.save',
-  description: 'Create or change a mode – key (lowercase-hyphen), name, description (what kind of work), instructions (the prompt section agents get in this mode), skills, tools (name patterns, "*" = all, "!shell.*" excludes), category (routing), workspace, verifier, minTier, qualifiedTier. Fields left out keep the current values; from: start from a copy of another mode. Saving a built-in key replaces that mode for the whole company. Skills that do not exist yet are saved and reported.',
+  description: 'Creates or changes a mode: instructions, skills, tools and routing for one kind of work. Left-out fields keep their values; a built-in key replaces that mode company-wide.',
   inputSchema: {
     type: 'object',
     properties: {
-      key: KEY, from: KEY,
+      key: { ...KEY, description: 'lowercase-hyphen.' }, from: { ...KEY, description: 'A mode to copy first.' },
       name: { type: 'string', minLength: 1, maxLength: LIMITS.name },
-      description: { type: 'string', minLength: 1, maxLength: LIMITS.description },
-      instructions: { type: 'string', minLength: 1, maxLength: LIMITS.instructions },
-      skills: NAMES, tools: NAMES,
-      category: { type: 'string', enum: [...MODE_CATEGORIES] },
+      description: { type: 'string', minLength: 1, maxLength: LIMITS.description, description: 'The kind of work.' },
+      instructions: { type: 'string', minLength: 1, maxLength: LIMITS.instructions, description: 'Its prompt section.' },
+      skills: { ...NAMES, description: 'Missing ones are saved and reported.' }, tools: { ...NAMES, description: 'Name patterns: "*" all, "!shell.*" leaves out.' },
+      category: { type: 'string', enum: [...MODE_CATEGORIES], description: 'For model routing.' },
       workspace: { type: 'string', enum: ['', ...MODE_WORKSPACES] },
-      verifier: { type: 'string', maxLength: LIMITS.verifier },
-      minTier: { type: 'string', enum: [...MODE_TIERS] },
-      qualifiedTier: { type: 'string', enum: ['', ...MODE_QUALIFIED_TIERS] },
+      verifier: { type: 'string', maxLength: LIMITS.verifier, description: 'Rubric a finished task is checked against.' },
+      minTier: { type: 'string', enum: [...MODE_TIERS], description: 'Weakest model tier it runs on.' },
+      qualifiedTier: { type: 'string', enum: ['', ...MODE_QUALIFIED_TIERS], description: 'Tier it is fully qualified on.' },
     },
     required: ['key'], additionalProperties: false,
   },

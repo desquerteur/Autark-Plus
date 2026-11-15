@@ -5,7 +5,7 @@
 // 'chat'; so do `feedback.send`, `feedback.dismiss` and `feedback.status` (whether this build can send at all):
 // Send seals the report for the team (B-055); the team inbox and setup are owner-only (handlers/feedback-inbox.ts).
 // Onboarding and the legacy import stay owner-only. Local speech: voice.localModels and voice.speak need 'chat',
-// voice.pullLocal (a download) is owner-only.
+// voice.pullLocal (a download) is the owner's and – B-084 (D6) – the owner's phone's on a secure transport ('settings' + secure).
 // Never: implements feedback/onboarding/voice behaviour (extras do), or uploads anything.
 
 import type { FeedbackKind } from '../../../shared/model/system.ts';
@@ -14,8 +14,11 @@ import { HUMAN_ID } from '../../../shared/ids.ts';
 import { readTheme } from '../../root/theme.ts';
 import { bad, input, oneOf, onlyKeys, optId, optText, text, type Obj } from '../params.ts';
 import type { Handler, HandlerTable } from '../table.ts';
+import { register as registerVoiceRetry } from './voice-retry.ts';
 
 const CHAT = { capability: 'chat' } as const;
+/** B-084 (D6): the Models page's Download on my phone on a secure transport, like the PC. */
+const SETTINGS_SECURE = { capability: 'settings', secure: true } as const;
 
 const FEEDBACK_KINDS: readonly FeedbackKind[] = ['bug', 'idea', 'change', 'praise'];
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -31,6 +34,7 @@ function optFileId(o: Obj, key: string): string | undefined {
 }
 
 export function register(table: HandlerTable): void {
+  registerVoiceRetry(table); // B-082: voice.retranscribe (handlers/voice-retry.ts)
   // ---------------------------------------------------------------- feedback
   table.add('feedback.create', (params, ctx) => {
     const o = input(params);
@@ -87,13 +91,16 @@ export function register(table: HandlerTable): void {
   // ---------------------------------------------------------------- voice
   table.add('voice.transcribe', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['fileId', 'language']);
+    onlyKeys(o, ['fileId', 'language', 'chatId', 'before', 'live']);
     const language = optText(o, 'language', { max: 16 });
+    const chatId = optText(o, 'chatId', { max: 64 }); // the chat dictated into: its last agent message helps a listening model
     if (language !== undefined && !/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/.test(language)) bad('language', 'a language code like "de" or "en-US"');
-    return ctx.extras.voice.transcribe({ fileId: fileId(o, 'fileId'), language });
+    const before = optText(o, 'before', { max: 2_000, multiline: true, allowEmpty: true }); // B-082: the take's earlier text, context
+    if (o.live !== undefined && o.live !== true) bad('live', 'true or left out');
+    return ctx.extras.voice.transcribe({ fileId: fileId(o, 'fileId'), language, ...(chatId ? { chatId } : {}), ...(before ? { before } : {}), ...(o.live === true ? { live: true } : {}) });
   }, CHAT);
   // B-047 D14: local speech – the list and the voice for every chat device (the phone reads answers through
-  // the PC's voice), the download for the owner only (it writes to disk and chooses the model).
+  // the PC's voice), the download (it writes to disk and chooses the model) for the owner and my phone on a secure transport.
   table.add('voice.localModels', (params, ctx) => {
     onlyKeys(input(params), []);
     return ctx.extras.voice.localModels();
@@ -105,7 +112,7 @@ export function register(table: HandlerTable): void {
     // B-058 (T7): also the sound tagger (only downloaded, never chosen)
     if (!localSpeechIds('stt').includes(id) && !localSpeechIds('tts').includes(id) && id !== AUDIO_TAGGER.id) bad('id', 'a local speech model id from voice.localModels');
     return ctx.extras.voice.pullLocal(id);
-  });
+  }, SETTINGS_SECURE);
   table.add('voice.speak', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['text', 'voice', 'language']);

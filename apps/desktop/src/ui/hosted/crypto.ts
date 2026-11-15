@@ -3,10 +3,11 @@
 // byte for byte as runtime/devices/{keys,handshake,channel}.ts, rendezvous/seal.ts and Android's relay/Crypto.java, but on
 // WebCrypto (Safari 17 / iOS 17, Node 24). WebCrypto answers asynchronously, so every counter cipher runs its seals and
 // opens through one ordered queue: counters leave and are opened in order, as the PC requires. The phone's private key is
-// created non-extractable and only ever used through WebCrypto. Also the fingerprint and the Remote ID (remote/id.ts).
+// created non-extractable and only ever used through WebCrypto. Also the fingerprint, the Remote ID (remote/id.ts) and the
+// person code chain check (B-084, remote/code.ts).
 // Owns: these primitives and the ordering queue. Never: stores keys, sockets, or logs key material.
 
-import { b64url, concat, hex, own, utf8, type Bytes } from './bytes.ts';
+import { b64url, concat, fromB64url, hex, own, utf8, type Bytes } from './bytes.ts';
 
 const subtle = (): SubtleCrypto => {
   if (!globalThis.crypto?.subtle) throw new Error('This browser has no WebCrypto (iOS 17 or newer is needed).');
@@ -171,3 +172,27 @@ export async function remoteIdOf(fp: string): Promise<string> {
 }
 
 export const validRemoteId = (digits: string): boolean => /^\d{9}$/.test(digits) && luhnDigit(digits.slice(0, 8)) === digits[8];
+
+/**
+ * B-084: true when the key `fp` may answer for `remoteId` – its own Remote ID, or a person code chain {root, links:[{pub,
+ * sig}]} from the code's root to it (≤ 8 links, each signed by the previous key over "wf-code-v1|<member fingerprint>";
+ * runtime/remote/code.ts belongs).
+ */
+export async function belongs(remoteId: string, fp: string, chain: unknown): Promise<boolean> {
+  if ((await remoteIdOf(fp)) === remoteId) return true;
+  const c = chain as { root?: unknown; links?: unknown } | null;
+  if (!c || typeof c !== 'object' || typeof c.root !== 'string' || !Array.isArray(c.links) || c.links.length > 8) return false;
+  try {
+    let prev = fromB64url(c.root);
+    if (prev.length !== 32 || (await remoteIdOf(await fingerprint(prev))) !== remoteId) return false;
+    for (const link of c.links as Array<{ pub?: unknown; sig?: unknown }>) {
+      if (typeof link?.pub !== 'string' || typeof link.sig !== 'string') return false;
+      const pub = fromB64url(link.pub);
+      if (pub.length !== 32 || !(await verify(prev, utf8(`wf-code-v1|${await fingerprint(pub)}`), fromB64url(link.sig)))) return false;
+      prev = pub;
+    }
+    return (await fingerprint(prev)) === fp.toLowerCase();
+  } catch {
+    return false;
+  }
+}

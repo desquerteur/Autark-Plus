@@ -5,6 +5,8 @@
 // /.well-known/workforce reports `remoteId` and `findable`, and the peer listener stays open.
 // `nearby()` lists the PCs on this network that accept requests (remote/nearby.ts).
 // Turning requests off ends every open request. stop() ends the LAN answers for good (shutdown).
+// B-084 (person code, remote/code.ts): the Remote ID shown, put into the phone's QR and answered for is my person code
+// (my own ID while no code is open); a PC accepted here as my own gets my signature, and the LAN hello carries my chain.
 // Once a PC is linked – on either side – the person gets one notice (linkedNote): which PC, as what, what it receives
 // and where to remove it, so no link made from an agent's devices.connect sits unnoticed. An employee's PC accepted
 // here (a personId) also calls `admitted` (B-078 D15: the personal manager's one wake about that person).
@@ -18,6 +20,7 @@ import type { Clock, Logger } from '../contracts.ts';
 import type { Candidate, HelloAnswer } from '../devices/discovery.ts';
 import type { DeviceIdentity } from '../devices/identity.ts';
 import type { PeerInfo, Reply } from '../devices/pair-proof.ts';
+import { codeFor, watchCode } from './code.ts';
 import { formatRemoteId, remoteIdOf } from './id.ts';
 import { findTarget, type FindDeps, type Found } from './find.ts';
 import { RemoteJoiner, type ConnectInput } from './join.ts';
@@ -90,6 +93,7 @@ export class RemoteService {
   private readonly near: NearbyPcs;
   private lastFindable?: boolean;
   private stopped = false;
+  private readonly offCode: () => void;
 
   constructor(deps: RemoteDeps) {
     this.deps = deps;
@@ -101,6 +105,7 @@ export class RemoteService {
       self: () => deps.mesh.selfInfo(),
       link: (info, personId) => {
         this.store(info, { side: 'inviter', personId }, personId ? 'employee' : 'own');
+        if (!personId) codeFor(deps.identity.fingerprint)?.sign(info.pub); // my own PC answers for my code from now on
         if (personId) this.admitted(personId);
       },
       shown: (view) => deps.notify?.(view),
@@ -126,10 +131,17 @@ export class RemoteService {
       outgoing: () => this.joiner.outgoing(),
       now,
     });
+    this.offCode = watchCode(deps.identity.fingerprint, () => this.changed()); // a new code shows at once
   }
 
-  /** This PC's Remote ID (derived from its key). */
-  remoteId(): string { return remoteIdOf(this.deps.identity.fingerprint); }
+  /** The Remote ID people type for me: my person code, else this PC's own (derived from its key). */
+  remoteId(): string { return codeFor(this.deps.identity.fingerprint)?.code() ?? remoteIdOf(this.deps.identity.fingerprint); }
+
+  /** My chain to the person code's root, when I am not the root myself. */
+  private chain(): { chain: unknown } | Record<string, never> {
+    const chain = codeFor(this.deps.identity.fingerprint)?.chain();
+    return chain?.links.length ? { chain } : {};
+  }
 
   state(): RemoteState {
     const self = this.deps.mesh.selfInfo();
@@ -154,6 +166,7 @@ export class RemoteService {
   /** Shutdown: no more LAN answers (refresh() stays quiet). */
   stop(): void {
     this.stopped = true;
+    this.offCode();
     this.deps.responder?.answer(undefined);
   }
 
@@ -175,12 +188,12 @@ export class RemoteService {
   }
 
   /** What /.well-known/workforce answers: the public identity, the Remote ID, `findable` while requests are accepted. */
-  wellKnown(): { app: 'workforce'; protocol: 1; deviceId: string; name: string; fingerprint: string; remoteId: string; peerPort?: number; findable?: true } {
+  wellKnown(): { app: 'workforce'; protocol: 1; deviceId: string; name: string; fingerprint: string; remoteId: string; peerPort?: number; findable?: true; chain?: unknown } {
     const self = this.deps.mesh.selfInfo();
     const peerPort = this.deps.peerPort?.();
     return {
       app: 'workforce', protocol: 1, deviceId: self.id, name: self.name, fingerprint: this.deps.identity.fingerprint, remoteId: this.remoteId(),
-      ...(peerPort ? { peerPort } : {}), ...(this.findable() ? { findable: true as const } : {}),
+      ...(peerPort ? { peerPort } : {}), ...(this.findable() ? { findable: true as const } : {}), ...this.chain(),
     };
   }
 
@@ -199,11 +212,12 @@ export class RemoteService {
     try { this.deps.admitted?.(personId); } catch (error) { this.deps.log.warn('employee welcome not sent', { personId, error: errorText(error) }); }
   }
 
-  /** A LAN hello probe gets this PC's public identity and Remote ID while it accepts requests. */
+  /** A LAN hello probe gets this PC's public identity, own Remote ID (older PCs check it) and chain while it accepts requests. */
   private hello(): Candidate | undefined {
     if (!this.findable()) return undefined;
     const self = this.deps.mesh.selfInfo();
-    return { deviceId: self.id, name: self.name, fingerprint: this.deps.identity.fingerprint, remoteId: this.remoteId(), addresses: self.addresses };
+    const fingerprint = this.deps.identity.fingerprint;
+    return { deviceId: self.id, name: self.name, fingerprint, remoteId: remoteIdOf(fingerprint), addresses: self.addresses, ...this.chain() };
   }
 
   private changed(): void {

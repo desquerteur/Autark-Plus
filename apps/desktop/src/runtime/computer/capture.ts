@@ -16,6 +16,8 @@ export interface Screenshot extends ShotGeometry {
   source: 'helper' | 'host';
   at: number;
   ocr?: Array<{ text: string; rect: [number, number, number, number] }>;
+  /** B-080: a window picture of a window that is behind another one or off the screen (it draws itself; a click by coordinates hits what is in front). */
+  covered?: boolean;
 }
 
 export interface HelperShotInput {
@@ -32,7 +34,7 @@ export interface HelperShotInput {
 export async function helperShot(helper: HelperClient, input: HelperShotInput, at: number): Promise<Screenshot> {
   const target = { screen: input.display, hwnd: input.window, region: input.region };
   const quality = Math.min(95, Math.max(30, Math.round(input.quality ?? 70)));
-  const result = await helper.call<{ data: string; mime?: string; width: number; height: number; x: number; y: number; srcWidth: number }>('screenshot', {
+  const result = await helper.call<{ data: string; mime?: string; width: number; height: number; x: number; y: number; srcWidth: number; covered?: boolean }>('screenshot', {
     ...target, maxEdge: input.maxEdge, quality, format: 'jpeg',
   }, { timeoutMs: 25_000, signal: input.signal });
   const shot: Screenshot = {
@@ -44,6 +46,7 @@ export async function helperShot(helper: HelperClient, input: HelperShotInput, a
     scale: result.srcWidth && result.width ? result.srcWidth / result.width : 1,
     source: 'helper',
     at,
+    ...(result.covered === true ? { covered: true } : {}),
   };
   if (input.ocr) {
     const ocr = await helper.call<{ lines?: Array<{ text?: string; rect?: number[] }> }>('ocr', target, { timeoutMs: 40_000, signal: input.signal });

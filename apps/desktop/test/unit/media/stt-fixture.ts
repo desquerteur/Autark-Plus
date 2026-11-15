@@ -12,7 +12,7 @@ import { mediaSetup } from './setup.ts';
 
 export const STT_ACCOUNT: Account = {
   id: 'acc_stt', provider: 'vllm', label: 'Local whisper', auth: 'local', baseUrl: 'http://127.0.0.1:9100/v1',
-  state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1,
+  state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1,
 } as Account;
 
 const WHISPER: ModelInfo = {
@@ -61,7 +61,7 @@ export function sttSetup(options: { stt?: 'ready' | 'off' | 'missing'; respond?:
   };
   const stt = new Transcriber({ services: () => services, fetch });
   services.stt = stt;
-  const context = new Context({ services: () => services, runner: false });
+  const context = new Context({ services: () => services });
   services.context = context;
   return { ...base, services, stt, context, calls };
 }

@@ -3,16 +3,15 @@
 //  * the times and days a to-do text names (F05: parseWhen with parseDay – "tomorrow at 9",
 //    "am 25.10.", "on Friday"; B-041: "timer 10 min" is a timer ringing then; links are ignored);
 //  * a minimal block of a given type (the "Show as…" switch);
-//  * titles, human reasons and due-time parsing (the person's line for an answer is
+//  * titles, an agent's ask widget as stored (normalizeAskWidget) and due-time parsing (the person's line for an answer is
 //    shared/blocks/answer-text.ts).
 // Owns: those rules. Never: I/O, model calls (the decision model and the props filled from the
 // text are in subconscious/widget.ts and subconscious/widget-fill.ts).
 
-import { ASK_TYPES, YES_NO, type BlockType, type UiBlock } from '../../shared/blocks/catalog.ts';
+import { ALIASES, ASK_TYPES, HOST_ONLY_PROPS, YES_NO, type BlockType, type UiBlock } from '../../shared/blocks/catalog.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
 import { foldText } from '../../shared/text/normalize.ts';
 import { isoMinutes, timerMinutes } from '../../shared/text/durations.ts';
-import type { HumanReason } from '../../shared/model/tasks.ts';
 
 export function isAskBlock(block: UiBlock): boolean {
   return ASK_TYPES.has(block.type);
@@ -161,17 +160,6 @@ export function widgetOfType(type: string, title: string, previous?: UiBlock): U
   }
 }
 
-/** Why an ask block lands on the human's list (T9). */
-export function humanReasonFor(block: UiBlock): HumanReason {
-  switch (block.type) {
-    case 'approve': return 'taste'; // B-078: an agent's yes/no is the person's taste; 'approval' stays the host's (access requests)
-    case 'record': case 'confirm': case 'timer': case 'upload': return 'physical';
-    case 'form': return Array.isArray(block.fields) && block.fields.some(field => (field as { kind?: string }).kind === 'secret') ? 'credential' : 'taste';
-    case 'review': return 'review';
-    default: return 'taste';
-  }
-}
-
 /** Short verb-first title for a to-do created from a block. */
 export function titleForBlock(block: UiBlock): string {
   const text = [block.title, block.question, block.action, block.label, block.instructions, block.script ? 'Record with teleprompter' : undefined]
@@ -206,4 +194,29 @@ export function parseDue(due: unknown, from: number): number | undefined {
   }
   const at = Date.parse(due);
   return Number.isFinite(at) ? at : undefined;
+}
+
+/** What an old approve widget carried besides its yes/no (details, amount, risk) – read before it becomes a choice. */
+export function approveNotes(widget: Record<string, unknown>): string {
+  if (String(widget.type ?? '').toLowerCase() !== 'approve') return '';
+  const amount = widget.amount && typeof widget.amount === 'object' ? widget.amount as { value?: unknown; currency?: unknown } : undefined;
+  return [
+    typeof widget.details === 'string' ? widget.details.trim() : '',
+    amount?.value !== undefined ? `Amount: ${String(amount.value)}${typeof amount.currency === 'string' ? ` ${amount.currency}` : ''}` : '',
+    typeof widget.risk === 'string' && widget.risk.trim() ? `Risk: ${widget.risk.trim()}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+/** An agent's ask widget as stored: a catalog ask type (an approve becomes a yes/no choice), no host-only props; else why not. */
+export function normalizeAskWidget(widget: Record<string, unknown>): UiBlock | string {
+  const raw = String(widget.type ?? '').toLowerCase();
+  const type = (raw === 'approve' ? 'choice' : ALIASES[raw] ?? raw) as BlockType;
+  if (!ASK_TYPES.has(type) || type === 'approve') return `widget.type must be one of: ${[...ASK_TYPES].filter((name) => name !== 'approve').join(', ')}`;
+  const rest: Record<string, unknown> = { ...widget };
+  for (const key of HOST_ONLY_PROPS) delete rest[key];
+  if (type === 'choice' && type !== raw && rest.options === undefined) {
+    rest.options = [...YES_NO];
+    rest.question ??= rest.action;
+  }
+  return { ...rest, type } as UiBlock;
 }

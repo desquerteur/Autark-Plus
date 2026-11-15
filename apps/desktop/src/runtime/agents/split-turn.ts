@@ -1,18 +1,22 @@
 // B-057 – the turn pipeline's split parts (S2/S5/S9/S10/S12/S15), called with one line from each phase. A split's turn
 // (TurnRequest.split, started on its own dispatcher lane – dispatch-lanes.ts) is its parent agent working on one part:
-//   plan   – its own thread `split:<id>`, no chat, task or member cursor, published nowhere ('internal',
-//            awaited by nobody), in the parent's mode at the split while it still exists;
+//   plan   – its own thread `split:<id>`, no task or member cursor (its run carries the chat its work is for – the
+//            part's `chat`), in the parent's mode at the split while it still exists;
 //   route  – S10 (routing/split-route.ts): 'same' (default) = the parent run's model and – unless the part names one –
 //            its effort; 'cheap' = the router's 'cheaper' need from the parent's model; 'strong' = at least the strong
-//            tier; a catalog model id = that model; the part's choice beats the agent's pin and fixed effort;
+//            tier; a catalog model id = that model; the part's choice beats the agent's pin and fixed effort; B-083: the
+//            part's temperature goes on the plan like a model.set request's (engines that take one send it);
 //   session – the first turn without a binding on its thread is seeded from its parent (splits/fork.ts) and that ref is
 //            bound under (agent, split thread, engine) with this turn's prompt key; the seed's text goes before the input;
-//            the tool offer is the parent's (its chat's learned tools – S8), never promoted from a split;
+//            the tool offer is its agent's, like its parent's (the agent's learned tools – S8; what a part finds through
+//            tools.call is learned for its agent too, tools/registry.ts callThrough);
 //   attempt – ToolContext.split, the parent's chat for reach, its folder (its worktree, else the group's), and on a warm
 //            Codex app-server no heavy supervisor slot (S12);
-//   finish – internal only (turn-finish.ts skips the learning passes); the split service hears how the run ended.
-// For the agent's own (non-split) turns: the "Split results" block of settled groups joins the turn input, and the turn's
-// end lets the split service start the groups it created (afterParentTurn) and gather those it showed ('done').
+//   finish – its <chat> blocks post like the agent's own; its final text goes to its origin – on its own, at once (gather.ts
+//            returned); the split service hears how the run ended (B-080: a
+//            done run that brought nothing back – no last words, no note to its origin, no files – fails, NOTHING_BACK).
+// For the agent's own (non-split) turns: the "Split results" block of its parts that came back joins the turn input, and the
+// turn's end lets the split service start the groups it created (afterParentTurn) and gather the parts it showed ('done').
 // Owns: those split rules of the pipeline. Never: runs or stops a turn, touches the parent's session, ledger or chat
 // cursor, or decides a split's lifecycle (runtime/splits/service.ts does).
 
@@ -21,21 +25,18 @@ import type { SplitRunEnd } from '../contracts/splits.ts';
 import type { Engine } from '../engines/types.ts';
 import type { ModeInfo } from '../../shared/model/knowledge.ts';
 import type { Account, RouteDecision } from '../../shared/model/providers.ts';
-import type { Run, RunStatus, WakeReason } from '../../shared/model/runs.ts';
+import type { Run, RunStatus } from '../../shared/model/runs.ts';
 import type { WorkforceErrorData } from '../../shared/errors.ts';
-import { HUMAN_ID } from '../../shared/ids.ts';
-import { AWAITED_REASONS, awaitsAnswer } from './publishing.ts';
 import { splitThread, type SplitTurn } from '../../shared/model/splits.ts';
 import { effectsKnown } from '../context/recent-actions.ts';
 import { seedSplitSession, type SeedResult } from '../splits/fork.ts';
 import { SHUTDOWN_CUT } from '../splits/reconcile.ts';
+import { resultOf } from '../splits/results.ts';
 import { SessionStore, type SessionBinding } from './sessions.ts';
 import type { ToolOffer } from './session-key.ts';
 import type { AttemptResult, RoutedTurn, TurnPlan, TurnRequest } from './turn-types.ts';
 
 const FOCUS_CHARS = 4000;
-/** splitWaiter: the newest chat lines it looks through for the line the splitting turn answered. */
-const WAITER_LINES = 100;
 
 type Previous = NonNullable<RouteRequest['previous']>;
 
@@ -48,7 +49,8 @@ export function planSplit(services: RuntimeServices, request: TurnRequest, resol
   return {
     agent, mode: resolveMode(services, [split.modeKey, agent.mode]), ...(request.origin ? { origin: request.origin } : {}),
     thread: splitThread(split.splitId), memberCursor: 0, focus: request.notes.map((note) => note.text).join('\n').slice(-FOCUS_CHARS),
-    ...(previous ? { previous } : {}), needsVision: false, awaited: false, publish: 'internal', split,
+    ...(previous ? { previous } : {}), ...(split.temperature !== undefined ? { temperature: split.temperature } : {}), // B-083
+    needsVision: false, split,
   };
 }
 
@@ -71,19 +73,16 @@ export function splitPrevious(services: Pick<RuntimeServices, 'runs' | 'log'>, s
   const modelId = choice === 'same' ? from : choice;
   if (!modelId) return effortOnly;
   // 'same' keeps the parent's effort unless the part names one; an explicit model takes the part's effort, else the rules'.
-  if (choice === 'same' || effort) return { modelId, effort: effort ?? base, explicit: true };
-  return { modelId, effort: base, explicit: true, asked: 'model' };
+  // B-083 D1: `from` – the parent's model the part was forked on; it stays there while the named model cannot run.
+  const on = from && from !== modelId ? { from } : {};
+  if (choice === 'same' || effort) return { modelId, effort: effort ?? base, explicit: true, ...on };
+  return { modelId, effort: base, explicit: true, asked: 'model', ...on };
 }
 
 /** The split fields of a RouteRequest (routeRequest in turn-prepare.ts): the split marker and 'strong' as the tier floor. */
 export function splitRoute(plan: Pick<TurnPlan, 'split'>): Partial<Pick<RouteRequest, 'split' | 'needs'>> {
   if (!plan.split) return {};
   return { split: { splitId: plan.split.splitId }, ...(plan.split.model?.trim() === 'strong' ? { needs: { tier: 'strong' } } : {}) };
-}
-
-/** Whose tool offer a turn gets: a split's is its parent's (the parent chat's learned tools – S8 keeps the offer the same). */
-export function offerScope(plan: TurnPlan): Pick<TurnPlan, 'agent' | 'mode' | 'conversationId'> {
-  return plan.split ? { agent: plan.agent, mode: plan.mode, conversationId: plan.split.parentConversationId } : plan;
 }
 
 /** A split's folder: its own (a worktree) or its group's (the parent's at the split); undefined = the usual folder. */
@@ -133,46 +132,20 @@ export async function seedSplit(services: RuntimeServices, plan: TurnPlan, reque
   return { session, ...(prefix ? { prefix } : {}) };
 }
 
-/** S6: the "Split results" block of the agent's own turn on this thread (settled, not yet gathered groups); never a split's. */
-export function splitResults(services: RuntimeServices, plan: Pick<TurnPlan, 'agent' | 'thread' | 'split'>): { groupIds: string[]; text: string } | undefined {
+/** S6: the "Split results" block of the agent's own turn on this thread (its parts that ended and did not reach it yet); never a split's. */
+export function splitResults(services: RuntimeServices, plan: Pick<TurnPlan, 'agent' | 'thread' | 'split'>): { splitIds: string[]; text: string } | undefined {
   if (plan.split || !services.splits) return undefined;
   try {
     const found = services.splits.pendingResults(plan.agent.id, plan.thread);
-    return found && found.groupIds.length && found.text.trim() ? found : undefined;
+    return found && found.splitIds.length && found.text.trim() ? found : undefined;
   } catch (error) {
     services.log.warn('split results unavailable for this turn', { agentId: plan.agent.id, error: String(error) });
     return undefined;
   }
 }
 
-/**
- * S6: who waits for the agent's fan-in turn ('child' – it merges settled splits). A settled group of this thread was split
- * by a turn someone waited for – a person's line it answered (publishing.ts awaitsAnswer: the newest in its chat before
- * that turn started) or an awaited wake (AWAITED_REASONS) – so the merged answer reaches them as that turn's answer
- * would have, instead of staying in the run log. Undefined otherwise (and for any other reason).
- */
-export function splitWaiter(services: RuntimeServices, input: { agentId: string; thread: string; reason: WakeReason; conversationId?: string }): string | undefined {
-  if (input.reason !== 'child' || !services.splits) return undefined;
-  try {
-    const groups = services.splits.list({ agentId: input.agentId, ...(input.conversationId ? { conversationId: input.conversationId } : {}), active: true, limit: 20 })
-      .filter((group) => group.status === 'settled' && group.thread === input.thread);
-    for (const group of groups) {
-      const parent = services.runs.get(group.parentRunId);
-      if (parent && AWAITED_REASONS.has(parent.trigger)) return HUMAN_ID;
-      if (parent?.trigger !== 'message' || !group.conversationId) continue;
-      const started = parent.startedAt ?? group.createdAt;
-      const line = services.chats.messages(group.conversationId, { limit: WAITER_LINES })
-        .filter((message) => message.createdAt <= started && awaitsAnswer(message, input.agentId)).at(-1);
-      return line?.authorId ?? HUMAN_ID;
-    }
-  } catch (error) {
-    services.log.warn('the asker of a split could not be read; the merge turn publishes as usual', { agentId: input.agentId, error: String(error) });
-  }
-  return undefined;
-}
-
 /** turn-finish: a split's run end goes to the split service; the agent's own turn starts its new groups and gathers the shown ones. */
-export function splitTurnEnded(services: RuntimeServices, plan: TurnPlan, turn: Pick<RoutedTurn, 'splitGroups'>, request: TurnRequest, attempt: AttemptResult, status: RunStatus): void {
+export function splitTurnEnded(services: RuntimeServices, plan: TurnPlan, turn: Pick<RoutedTurn, 'splitParts'>, request: TurnRequest, attempt: AttemptResult, status: RunStatus): void {
   const splits = services.splits;
   if (!splits) return;
   try {
@@ -180,17 +153,24 @@ export function splitTurnEnded(services: RuntimeServices, plan: TurnPlan, turn: 
       splits.onSplitRunEnd(plan.split.splitId, splitEnd(services, request, attempt, status));
       return;
     }
-    if (status === 'done' && turn.splitGroups?.length) splits.markGathered(request.runId, turn.splitGroups);
+    if (status === 'done' && turn.splitParts?.length) splits.markGathered(request.runId, turn.splitParts);
     splits.afterParentTurn(request.runId, status === 'done' ? 'done' : request.control.stopKind === 'human' ? 'stopped' : 'failed');
   } catch (error) {
     services.log.warn('split bookkeeping after the turn failed', { runId: request.runId, error: String(error) });
   }
 }
 
-/** How a split's run ended: the person's Stop → stopped; a shutdown cut → retryable; a failure is retryable while no effect of it is unknown (and it is no setup error). */
+/** B-080: why a part whose run ended without bringing anything back failed (it runs once more – splits/runner.ts). */
+export const NOTHING_BACK = 'It ended without last words or a note to its origin – nothing came back.';
+
+/**
+ * How a split's run ended: the person's Stop → stopped; a shutdown cut → retryable; a failure is retryable while no effect
+ * of it is unknown (and it is no setup error). B-080: a done run counts as done when it brought something back – its last
+ * words or a note to its origin (splits/results.ts resultOf; turn-finish journaled its Answer before this) or files.
+ */
 function splitEnd(services: RuntimeServices, request: TurnRequest, attempt: AttemptResult, status: RunStatus): SplitRunEnd {
   const runId = request.runId;
-  if (status === 'done') return { runId, status: 'done' };
+  if (status === 'done') return resultOf(services.runs, { id: runId }) || attempt.result.files?.length ? { runId, status: 'done' } : { runId, status: 'failed', retryable: true, error: NOTHING_BACK };
   const kind = request.control.stopKind;
   if (status === 'interrupted' && kind === 'human') return { runId, status: 'stopped' };
   // S14: a shutdown cut is no failure of the part – it runs again (its next turn resumes its session and sees its earlier

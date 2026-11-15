@@ -5,8 +5,9 @@
 // rounded corner (that left a wedge against the window edge or the neighbour), the sheet's edge is
 // drawn once by the frame, the caption reserve follows the measured window-controls overlay, a chat's area
 // opens below the chat header row in one fixed height, in the chat's own look, the global pane's tab strip is the title
-// row's part above the pane only where the row leaves it room for three titled tabs (else, and in a narrow window, it is
-// the pane's first line below the row), and a narrow tab keeps its × cell and its icon's place.
+// row's part above the pane only where the row leaves it room for three titled tabs (else it is the pane's first line
+// below the row; B-080: a narrow window's pane yields its width – no float over the chat), and a narrow tab keeps its
+// × cell and its icon's place.
 // Owns: static checks of header/shell/chat/chat-area/tasks/base CSS text. Never: renders (test/ui/shell-columns-window
 // and test/ui/stability-window do).
 
@@ -30,18 +31,6 @@ function selectors(list: string): string[] {
     if (char === ',' && depth === 0) { parts.push(current.trim()); current = ''; } else current += char;
   }
   return [...parts, current.trim()];
-}
-
-/** The text inside the first `@media <query> { … }` block. */
-function media(text: string, query: string): string {
-  const start = text.indexOf(`@media ${query} {`);
-  assert.ok(start >= 0, `no @media ${query}`);
-  let depth = 0;
-  for (let i = text.indexOf('{', start); i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    if (text[i] === '}' && --depth === 0) return text.slice(text.indexOf('{', start) + 1, i);
-  }
-  return '';
 }
 
 /** Declarations of every top-level rule whose selector list contains `selector`, in order. */
@@ -172,10 +161,13 @@ test("where the row has room, the global pane's tab strip is the title row above
   assert.match(rule(shell, '.shell > .app-frame::after'), /top:\s*var\(--header-h\)/);
   assert.match(shell, /::before, \.shell > \.app-frame::after \{[^}]*z-index:\s*11/);
   // the room: the strip's tab room in the row at the pane's width beside the open sidebar (its toggle moves no strip),
-  // less the caption controls and the frame's cells; none in a narrow window; Shell.tsx compares it with ROW_ROOM
+  // less the caption controls and the frame's cells; B-080: by the pane's own min(), so a narrow window's smaller pane
+  // has less (no float, no media rule); Shell.tsx compares it with ROW_ROOM
   const room = rule(shell, '.shell > .app-frame > .pane-row-room');
-  assert.match(room, /width:\s*max\(0px, clamp\(280px, var\(--pane-width, 400px\), min\(800px, 100vw - var\(--rail-w\) - 540px\)\) - 19px - var\(--native-caption-space, 0px\) - var\(--workspace-cell\) - var\(--feedback-cell\)\)/);
-  assert.match(media(shell, '(max-width: 875px)'), /\.shell > \.app-frame > \.pane-row-room\s*\{\s*width:\s*0;/);
+  assert.match(room, /width:\s*max\(0px, min\(clamp\(280px, var\(--pane-width, 400px\), 800px\), 100vw - var\(--rail-w\) - 540px\) - 19px - var\(--native-caption-space, 0px\) - var\(--workspace-cell\) - var\(--feedback-cell\)\)/);
+  assert.match(rule(shell, '.shell > .app-frame'), /--pane-size:\s*min\(clamp\(280px, var\(--pane-width, 400px\), 800px\), calc\(100vw - var\(--rail-w\) - 540px\)\)/, 'the pane yields its width: the chat keeps 340 px, the list 200 px');
+  assert.match(rule(shell, '.shell > .app-frame.sidebar-closed'), /--pane-size:\s*min\(clamp\(280px, var\(--pane-width, 400px\), 800px\), calc\(100vw - var\(--rail-w\) - 340px\)\)/, 'without the list: the chat keeps 340 px');
+  for (const text of [shell, css('header.css')]) assert.doesNotMatch(text, /@media \(max-width: 875px\)/, 'B-080: no narrow-window float over the chat');
   const ui = path.resolve(STYLES, '..');
   const frame = readFileSync(path.join(ui, 'shell', 'Shell.tsx'), 'utf8');
   assert.match(frame, /getBoundingClientRect\(\)\.width >= ROW_ROOM/, 'three titled tabs fit (strip-slots.ts)');

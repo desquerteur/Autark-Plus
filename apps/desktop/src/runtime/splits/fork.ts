@@ -1,45 +1,43 @@
 // Seeding a split's native session (B-057 S4): a 'fork' part starts as its parent with the context the parent had at the
 // split, tried in this order – the first that works wins, a failure falls to the next and is recorded:
 // (a) a native engine fork – the worker's routed engine has caps.fork, the parent's splitting run ran on that engine and
-//     account, the parent has a session binding for (agent, its thread, that engine) on the worker's account, the
-//     worker's model window holds it, and the parent's session has not moved on since the group started (a binding
-//     saved after it, or a turn of the parent running there now): engine.fork (Codex thread/fork, Claude --resume
-//     --fork-session) – also with another model or effort of that account;
+//     account, and the session my main self's splitting turn ended with (B-080: recorded when the group started –
+//     recordedParent, SplitGroup.parentSession – so a later turn of the parent that renews or moves its binding changes
+//     nothing) is of that engine and account and fits the worker's model window (pastFit; B-080: the window the engine
+//     reported for that model, else the catalog's – windowOf): engine.fork (Codex
+//     thread/fork through that turn – lastTurn, Claude --resume --fork-session) – also with another model or effort of
+//     that account; a recorded ref the parent replaced since stays forkable (the session sweep keeps it ≥ 24 h);
 // (b) else a text fallback – the checkpoint of the parent's task (context.checkpoint: goal, done, open, constraints,
-//     artifacts – no "next step": the part is the worker's next step) and the chat lines the parent had seen (context.delta
-//     up to its read cursor – the summary included, redacted, the section headers relabelled), bounded to TEXT_CHARS,
-//     returned as `inputPrefix`; nothing to carry (e.g. a mailbox thread) → fresh.
+//     artifacts – no "next step": the part is the worker's next step) and my own record as text (agents/history-text.ts, the
+//     parent thread's context ledger, marks applied – 13.11.2026: never a chat's history), within half the worker model's
+//     fit, returned as `inputPrefix`; nothing to carry → fresh.
 // A 'brief' part starts fresh. The turn pipeline (agents/turn-prepare.ts chooseSession) calls this for a split's first turn
 // when its thread `split:<id>` has no binding yet, binds `ref` under (agent, split thread, engine) with the current
 // promptKey and puts `inputPrefix` in front of the turn's input. The choice is noted on the worker's run
 // ({splitSeed: how, parentRef?, fellBack?} – not for a brief), recorded as the split's `fork` (services.splits.markFork)
 // and returned.
-// Owns: that choice, the seeding, the note and the record. Never: touches the parent's native session or binding, or
-// binds the result itself.
+// Owns: that choice, the seeding, the note, the record and the parent session's record at the group's start. Never:
+// touches the parent's native session or binding, or binds the result itself.
 
 import type { RuntimeServices } from '../contracts.ts';
+import type { Db } from '../db/database.ts';
 import type { Engine } from '../engines/types.ts';
 import type { TurnPlan } from '../agents/turn-types.ts';
 import type { ToolSpec } from '../tools/types.ts';
 import type { Account, Effort, RouteDecision } from '../../shared/model/providers.ts';
 import type { Handoff } from '../../shared/model/knowledge.ts';
-import type { SplitFork, SplitTurn } from '../../shared/model/splits.ts';
-import { threadKey } from '../../shared/model/origin.ts';
-import { SessionStore, type SessionBinding } from '../agents/sessions.ts';
-import { SplitRepo } from '../store/splits.ts';
-import { needsRenewal } from '../agents/compaction-policy.ts';
+import type { Run } from '../../shared/model/runs.ts';
+import { PAST_WINDOW, type SplitFork, type SplitGroup, type SplitParentSession, type SplitTurn } from '../../shared/model/splits.ts';
+import { SessionStore } from '../agents/sessions.ts';
+import { turnsOn } from '../agents/native-turns.ts';
+import { fitLimit, pastFit } from '../agents/compaction-policy.ts';
+import { historyText } from '../agents/history-text.ts';
 import { turnCwd } from '../git/records.ts';
-import { PROJECTION, quoteHeaders } from '../context/projection.ts';
+import { quoteHeaders } from '../context/projection.ts';
 
-/** The text fallback's size: the checkpoint gets at most CHECKPOINT_CHARS, the newest chat lines the rest. */
-export const TEXT_CHARS = 6_000;
+/** The text fallback's checkpoint: at most CHECKPOINT_CHARS (my record follows within half the worker model's fit). */
 const CHECKPOINT_CHARS = 2_000;
-const TEXT_HEAD = "Note from the app – my main self's context at the split, as text (this session did not inherit it):";
-/** The projection's section headers as plain labels, so the prefix never reads as a projection of this session's own. */
-const RELABEL = new Map<string, string>([
-  [PROJECTION.summary, 'Summary of older messages (by the app):'],
-  [PROJECTION.earlier, 'Messages I had seen:'],
-]);
+const TEXT_HEAD = "My origin's context at the split, as text:";
 
 /** The worker turn's route as buildTurn resolved it (RoutedTurn's engine, account and provider model, plus the effort it runs with). */
 export interface SeedRoute {
@@ -118,34 +116,40 @@ async function nativeFork(s: RuntimeServices, args: SeedArgs, cwd: string): Prom
   const ran = s.runs.get(args.split.parentRunId);
   if (ran?.engine && ran.engine !== engine.id) return "the parent's turn ran on another engine";
   if (ran?.accountId && ran.accountId !== account.id) return "the parent's turn ran on another account";
-  const thread = args.split.parentThread;
-  const parent = thread ? new SessionStore(s.db).get(agentId, thread, engine.id) : undefined;
-  if (!parent) return 'the parent has no session on this engine';
+  // B-080: the session the splitting turn ended with, as recorded when the group started – never the live binding, which
+  // the parent's next turn may have renewed or moved on by the time this part starts.
+  const parent = args.split.parentSession;
+  if (!parent || parent.engine !== engine.id) return "the parent's splitting turn left no session on this engine";
   if (parent.accountId !== account.id) return 'the parent session belongs to another account';
-  if (needsRenewal(parent.contextTokens, windowOf(s, args))) return "the parent session exceeds the worker model's limit";
-  const moved = movedOn(s, args.split, agentId, parent);
-  if (moved) return moved;
-  const forked = await engine.fork({ runId: args.runId, agentId, account, parentRef: parent.ref, cwd, model: args.route.model });
+  if (pastFit(parent.contextTokens, windowOf(s, args))) return PAST_WINDOW;
+  const forked = await engine.fork({ runId: args.runId, agentId, account, parentRef: parent.ref, cwd, model: args.route.model,
+    ...(parent.turn ? { lastTurn: parent.turn } : {}) });
   if (!forked.ref || forked.ref === parent.ref) throw new Error('the engine gave no new session');
   return { how: 'native', ref: forked.ref, generation: forked.generation ?? 1, parentRef: parent.ref };
 }
 
 /**
- * A fork copies the parent's session as it is now: why not, when it moved on since the group started – its binding was
- * saved after that (a later turn of the parent on that thread), or a turn of the parent runs there now.
+ * B-080: the session the parent's splitting turn ended with – its binding on (agent, the group's thread, the run's engine),
+ * with that run's native turn on it (agents/native-turns.ts; Codex names its turns) – recorded when the group starts
+ * (splits/runner.ts startGroup; turn-finish saved the binding before it started the group). Undefined: the run named no
+ * engine or left no session there (its 'fork' parts start from the text seed).
  */
-function movedOn(s: RuntimeServices, split: SplitTurn, agentId: string, parent: SessionBinding): string | undefined {
-  let startedAt: number | undefined;
-  try { startedAt = new SplitRepo(s.db).getGroup(split.groupId)?.startedAt; } catch { startedAt = undefined; }
-  if (startedAt !== undefined && parent.updatedAt > startedAt) return "the parent's session moved on since the split (no turn to fork through)";
-  const running = s.db.all<{ conversation_id: string | null; task_id: string | null; source: string | null }>(
-    `SELECT conversation_id, task_id, source FROM runs WHERE agent_id = ? AND status = 'running' AND split_id IS NULL AND id <> ?`, [agentId, split.parentRunId]);
-  const busy = running.some((run) => threadKey({ conversationId: run.conversation_id ?? undefined, taskId: run.task_id ?? undefined,
-    ...(run.source ? { origin: { source: run.source, label: run.source } } : {}) }) === split.parentThread);
-  return busy ? "the parent is working on that thread right now (no turn to fork through)" : undefined;
+export function recordedParent(db: Db, run: Pick<Run, 'engine' | 'startedAt'> | undefined, group: Pick<SplitGroup, 'agentId' | 'thread' | 'parentRunId'>): SplitParentSession | undefined {
+  if (!run?.engine) return undefined;
+  try {
+    const binding = new SessionStore(db).get(group.agentId, group.thread, run.engine);
+    // B-080 review: only the binding the splitting run left – an older turn's session lacks the split's own context
+    if (!binding || (run.startedAt !== undefined && binding.updatedAt < run.startedAt)) return undefined;
+    const turn = turnsOn(db, { agentId: group.agentId, conversationId: group.thread, engine: run.engine }, binding.ref)
+      .find((entry) => entry.runId === group.parentRunId)?.turn;
+    return {
+      engine: binding.engine, ...(binding.accountId ? { accountId: binding.accountId } : {}), ref: binding.ref,
+      ...(binding.contextTokens !== undefined ? { contextTokens: binding.contextTokens } : {}), ...(turn ? { turn } : {}),
+    };
+  } catch { return undefined; }
 }
 
-/** (b) The parent's checkpoint and the chat lines it had seen as text in front of the worker's input; fresh when there is nothing. */
+/** (b) The parent's checkpoint and my record as text in front of the worker's input; fresh when there is nothing. */
 function textSeed(s: RuntimeServices, args: SeedArgs, fellBack: string[]): SeedResult {
   const agentId = args.plan.agent.id;
   const chat = args.split.parentConversationId;
@@ -157,15 +161,9 @@ function textSeed(s: RuntimeServices, args: SeedArgs, fellBack: string[]): SeedR
     try { checkpoint = clip(quoteHeaders(checkpointText(s.context.checkpoint({ agentId, taskId, conversationId: chat }))), CHECKPOINT_CHARS); }
     catch (error) { fellBack.push(`checkpoint: ${reason(error)}`); }
   }
-  let lines = '';
-  if (chat) {
-    try { lines = seenLines(s.context.delta({ agent: args.plan.agent, conversationId: chat, sinceSeq: cursorOf(s, chat, agentId), full: true }).text); }
-    catch (error) { fellBack.push(`chat lines: ${reason(error)}`); }
-  }
-  const room = TEXT_CHARS - TEXT_HEAD.length - checkpoint.length - 64; // the labels, the blank lines and the cut mark
-  const recent = tail(lines, room);
-  if (!checkpoint.trim() && !recent.trim()) return { how: 'fresh' };
-  const parts = [TEXT_HEAD, checkpoint && `My state:\n${checkpoint}`, recent && `Recent chat lines:\n${recent}`];
+  const record = historyText(s, agentId, args.split.parentThread, Math.floor(fitLimit(windowOf(s, args)) / 2)) ?? '';
+  if (!checkpoint.trim() && !record.trim()) return { how: 'fresh' };
+  const parts = [TEXT_HEAD, checkpoint && `My state:\n${checkpoint}`, record];
   return { how: 'text', inputPrefix: parts.filter(Boolean).join('\n\n') };
 }
 
@@ -176,36 +174,22 @@ export function checkpointText(handoff: Handoff): string {
     handoff.goal && `Goal: ${handoff.goal}`,
     handoff.verified.length && `Done so far:\n${list(handoff.verified)}`,
     handoff.open.length && `Open:\n${list(handoff.open)}`,
-    handoff.constraints?.length && `Constraints:\n${list(handoff.constraints)}`,
+    handoff.constraints?.length && `Known so far:\n${list(handoff.constraints)}`, // B-080: what checkpoint.ts puts there – tried ways, facts found
     handoff.artifacts.length && `Artifacts:\n${list(handoff.artifacts.map((item) => `${item.label}: ${item.ref}`))}`,
   ].filter((part): part is string => typeof part === 'string' && part.length > 0).join('\n');
 }
 
-/** A full projection (delta.ts) without its new part (lines the parent had not seen) and with its headers relabelled. */
-export function seenLines(projection: string): string {
-  const lines = projection.split('\n');
-  if (!lines.some((line) => RELABEL.has(line))) return ''; // no history part: every line is one the parent had not seen
-  const fresh = lines.findIndex((line, index) => line === PROJECTION.fresh && (index === 0 || lines[index - 1] === ''));
-  return (fresh < 0 ? lines : lines.slice(0, fresh)).map((line) => RELABEL.get(line) ?? line).join('\n').trim();
-}
-
-/** The parent's read cursor in its chat (the lines it had seen); 0 when it is no member. */
-function cursorOf(s: RuntimeServices, chat: string, agentId: string): number {
-  try { return s.chats.members(chat).find((member) => member.memberId === agentId && !member.leftAt)?.readSeq ?? 0; } catch { return 0; }
-}
-
-/** The worker model's context window (the catalog's), for the renewal limit. */
+/**
+ * The worker model's context window for the fit – B-080: the main path's rule (agents/turn-prepare.ts chooseSession): the
+ * window its engine reported for this model (the one it really runs with), else the catalog's; neither → DEFAULT_WINDOW.
+ */
 function windowOf(s: RuntimeServices, args: SeedArgs): number | undefined {
-  try { return s.catalog.get(args.route.route.modelId)?.caps.contextTokens; } catch { return undefined; }
-}
-
-/** The last `max` characters of `text` from a line start, marked as cut. */
-function tail(text: string, max: number): string {
-  if (text.length <= max) return text;
-  if (max <= 0) return '';
-  const cut = text.slice(text.length - max);
-  const start = cut.indexOf('\n');
-  return `(older lines cut)\n${start >= 0 ? cut.slice(start + 1) : cut}`;
+  const modelId = args.route.route.modelId;
+  try {
+    const reported = new SessionStore(s.db).reportedWindow(args.route.engine.id, modelId);
+    if (reported) return reported;
+  } catch { /* the catalog's then */ }
+  try { return s.catalog.get(modelId)?.caps.contextTokens; } catch { return undefined; }
 }
 
 function clip(text: string, max: number): string {

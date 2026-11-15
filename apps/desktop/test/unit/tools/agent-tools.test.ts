@@ -2,7 +2,8 @@
 // chain-of-command locks): a team of three is ONE call with results per hire, its summary names every hire (role,
 // changed mode, own instructions), uncut; agents.templates lists every template; archive keeps the last agent and
 // moves reports up; agents.update moves a report (cycles refused), sets the avatar colour/emoji and the home device;
-// the secretary reports to the person, keeps her template and is never hired twice by an agent.
+// the secretary reports to the person, keeps her template and is never hired twice by an agent; B-080: effort 'auto'
+// clears a fixed effort, and agents.delegate's constraints say what the receiver should know first.
 // Owns: these assertions only. Never: real engines, timers or sleeps.
 
 import { test } from 'node:test';
@@ -145,3 +146,4 @@ test('the secretary reports to the person, keeps her template and is hired once 
   assert.equal(again.data.existing, true);
   assert.equal(org.list().filter((agent) => agent.template === 'secretary').length, 1);
 });
+

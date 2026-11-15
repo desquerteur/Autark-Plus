@@ -15,6 +15,8 @@ export interface SkillSaveInput {
   modes?: string[];
   /** Wave 3: a new skill goes into the owner's Main Skills (<data>/agents/<owner>/skills; needs ownerAgentId, a taken name is refused). A Main Skill saved again stays one either way. */
   main?: boolean;
+  /** B-085: public library entries the skill draws on ("library:<id>@<rev>"); joined with the kept ones (the same entry is replaced); absent keeps them. */
+  derivedFrom?: string[];
 }
 
 /** MM8: one skill from an agent file (SKILL.md only), stored as `ownerAgentId`'s own; without an owner in the shared library. */

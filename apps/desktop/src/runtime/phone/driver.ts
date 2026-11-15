@@ -9,6 +9,8 @@ import type { PhoneDevice, PhoneNode } from './uiautomator.ts';
 export interface PhoneStepOptions {
   /** Ends the step before its next command (a cancelled run). */
   signal?: AbortSignal;
+  /** The run the step belongs to: the phone's ✕ ends exactly this job (owner 10.11.2026). */
+  job?: string;
 }
 
 export interface PhoneShot { serial: string; data: Uint8Array; mime: string; width: number; height: number; scale: number; screen: { width: number; height: number } }

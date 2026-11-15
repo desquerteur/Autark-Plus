@@ -6,18 +6,22 @@
 // with its `files` row, which this PC takes like a synced row (rows.ts); the bytes follow when first shown (blobs.ts
 // needBlob pulls them from there). One mesh frame holds at most 8 MiB (channel.ts) and a larger one closes the whole
 // link, so a save that cannot fit stays here with a clear answer, and a read whose text would not fit answers 'large'.
+// B-081: a missing path's `near` (its similar paths, found there) comes back as it is; 'root' answers that PC's <data>,
+// workspace and map – system.root with `device`, the new-tab page's Files cell of that PC.
 // Owns: this forwarding and the peer method. Never: answers a PC that is no 'ceo' link, passes a request on to a third
 // PC, or logs a path or a file's content.
 
 import path from 'node:path';
 import { WorkforceError } from '../../../shared/errors.ts';
-import type { FileRef } from '../../../shared/model/system.ts';
+import type { FileRef, RootInfo } from '../../../shared/model/system.ts';
+import '../../contracts/open-fs.ts'; // rootMaps on RuntimeServices (module augmentation)
 import type { RuntimeServices } from '../../contracts.ts';
+import { ROOT_README } from '../../root/layout.ts';
 import { DevicesRepo } from '../repo.ts';
 import { linkOf } from './home.ts';
 import type { RowSync } from './rows.ts';
 
-export type PathOp = 'read' | 'write' | 'list' | 'store';
+export type PathOp = 'read' | 'write' | 'list' | 'store' | 'root';
 type Obj = Record<string, unknown>;
 /** This PC's own operations on checked parameters (files-path.ts PATH_OPS). */
 export type PathOps = Record<'read' | 'write' | 'list', (o: Obj) => Promise<unknown>>;
@@ -64,10 +68,18 @@ export class RemotePaths {
       return { ...facts, state: 'large' };
     }
     if (op === 'write' || op === 'list') return this.ops[op](rest);
+    if (op === 'root') return this.root();
     if (op !== 'store') throw new WorkforceError('bad_request', 'Unknown file request.');
     if (Object.keys(rest).some((key) => key !== 'path') || typeof rest.path !== 'string' || !path.isAbsolute(rest.path)) throw new WorkforceError('bad_request', 'A stored file needs its absolute path.');
     const ref = await this.s.files.putPath(rest.path);
     return { ref, item: this.rows.fileItem(ref.id) };
+  }
+
+  /** 'root': this PC's <data>, its workspace and its map (written when missing), as system.root says them here. */
+  private root(): RootInfo {
+    this.s.rootMaps?.writeRoot();
+    const { data, workspace } = this.s.paths;
+    return { path: data, workspace, readme: path.join(data, ROOT_README) };
   }
 }
 

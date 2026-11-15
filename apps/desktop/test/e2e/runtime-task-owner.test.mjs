@@ -3,7 +3,7 @@
 // real WebSocket RPC. The fake engine's echo counts as progress, so an agent's own task keeps
 // continuing about every second – which makes a missing stop visible within seconds.
 // Covers: after a reassignment the previous owner starts no more turns on the task and the
-// ledger notes the change; the new owner runs it; after the human cancels it nobody does.
+// chat notes the change (a handoff line); the new owner runs it; after the human cancels it nobody does.
 // Run: npm run build && node --test test/e2e/runtime-task-owner.test.mjs
 
 import { test } from 'node:test';
@@ -38,10 +38,12 @@ test('retries follow the owner; the human cancel stops the work', { timeout: 240
   await client.waitFor('run.upserted', (run) => run.agentId === manager.id && run.taskId === task.id, 90_000);
 
   await t.test('after a reassignment the previous owner starts no more turns on the task', async () => {
-    const reassigned = await client.call('tasks.update', { id: task.id, patch: { assigneeKind: 'agent', assigneeId: rhea.id } });
+    const reassigned = await client.call('tasks.give', { id: task.id, to: rhea.id });
     const at = Date.now();
     assert.equal(reassigned.assigneeId, rhea.id);
-    assert.ok(reassigned.ledger.facts?.some((fact) => /^Reassigned from .+ to Rhea\.$/.test(fact)), 'the ledger notes the new owner');
+    assert.equal(reassigned.assignedBy, 'human', 'it records who gave it');
+    const line = await client.waitFor('message.created', (message) => message.meta?.status?.type === 'handoff' && message.meta.status.details?.taskId === task.id, 90_000);
+    assert.equal(line.meta.status.details.to, rhea.id, 'its chat notes the new owner');
     await client.waitFor('run.upserted', (run) => run.agentId === rhea.id && run.taskId === task.id, 90_000);
     await sleep(QUIET_MS);
     assert.equal(turnsOn(task.id, manager.id, at + GRACE_MS), 0, 'no duplicate work by the previous owner');
@@ -49,11 +51,11 @@ test('retries follow the owner; the human cancel stops the work', { timeout: 240
   });
 
   await t.test('after the human cancels the task nobody starts another turn on it', async () => {
-    await client.call('tasks.setStatus', { id: task.id, status: 'cancelled' });
+    await client.call('tasks.finish', { id: task.id, status: 'dropped' });
     const at = Date.now();
     await sleep(QUIET_MS);
     assert.equal(turnsOn(task.id, rhea.id, at + GRACE_MS), 0);
     assert.equal(turnsOn(task.id, manager.id, at), 0);
-    assert.equal((await client.call('tasks.get', { id: task.id })).status, 'cancelled');
+    assert.equal((await client.call('tasks.get', { id: task.id })).status, 'dropped');
   });
 });

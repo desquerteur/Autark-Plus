@@ -20,13 +20,13 @@ import { STATUS_LABELS, countdownMs, dueState, ownerOf, progressPercent, whenTex
 const NOTES_CLAMP_CHARS = 320;
 
 /** Round status circle (T2/T23): state by shape + icon, never by colour alone. */
-export function StatusGlyph(props: { status: TaskStatus; running?: boolean; size?: number; label?: string }) {
+export function StatusGlyph(props: { status: TaskStatus | 'working' | 'needs_you'; running?: boolean; size?: number; label?: string }) {
   const size = props.size ?? 18;
-  const label = props.label ?? (props.running ? 'Working now' : STATUS_LABELS[props.status]);
+  const label = props.label ?? (props.running ? 'Working now' : (STATUS_LABELS as Record<string, string>)[props.status] ?? String(props.status));
   if (props.running) {
     return <span class="task-glyph running" style={{ width: `${size}px`, height: `${size}px` }} title={label}><Spinner size={size - 2} label={label} /></span>;
   }
-  const icon = props.status === 'done' ? 'check' : props.status === 'blocked' ? 'exclamation-mark' : props.status === 'cancelled' ? 'x' : props.status === 'waiting' ? 'clock' : null;
+  const icon = props.status === 'done' ? 'check' : props.status === 'dropped' ? 'x' : props.status === 'waiting' ? 'clock' : null;
   return (
     <span class="task-glyph" data-status={props.status} style={{ width: `${size}px`, height: `${size}px` }} role="img" aria-label={label} title={label}>
       {icon && <Icon name={icon} size={Math.max(9, Math.round(size * 0.6))} />}

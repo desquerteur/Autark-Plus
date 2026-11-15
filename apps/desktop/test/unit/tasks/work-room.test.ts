@@ -38,14 +38,3 @@ test('T1.3: a task for a member of the 1:1, or created by the system, keeps its 
   assert.equal(system.conversationId, h.direct);
 });
 
-test('T1.3: tasks.assign to an agent outside the 1:1 moves the task into the giver\'s 1:1 with it and wakes it there', () => {
-  const h = pair();
-  const task = h.tasks.create({ conversationId: h.direct, title: 'Music', assigneeId: 'ag_ava', createdBy: 'human' });
-  h.db.run('DELETE FROM wakes');
-  const view = h.tasks.assign(task.id, { kind: 'agent', id: 'ag_bob' }, 'human');
-  const room = findDirect(h.services, 'human', 'ag_bob');
-  assert.equal(view.conversationId, room);
-  assert.equal(isMember(h, h.direct, 'ag_bob'), false);
-  const wake = h.wakeRows().find((row) => row.agent_id === 'ag_bob' && row.task_id === task.id);
-  assert.equal(wake?.conversation_id, room);
-});

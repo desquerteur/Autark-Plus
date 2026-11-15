@@ -3,8 +3,9 @@
 // never an employer's or an employee's), so the phone tunnels to the first one online; phoneUse.reply answers one
 // phoneUse.request. Both only for the paired phone app itself (secure transport, a phone row with its key); so is
 // phone.pcs – the same list for the iPhone web app, which claims no phone use; phone.forget – the phone app removes its
-// own row (its Forget). phone.pairLink (owner): this PC's Remote ID and the QR of
-// its pair link for "Connect a phone" (shared/api/methods-phone.ts PHONE_PAIR_LINK).
+// own row (its Forget). phone.pairLink (the owner and – B-084 (D6) – my phone on a secure transport, 'settings' + secure,
+// so another phone scans it off this one): this PC's Remote ID and the QR of its pair link for "Connect a phone"
+// (shared/api/methods-phone.ts PHONE_PAIR_LINK).
 // Owns: param checks. Never: drives the phone or decides what it does.
 
 import '../../../shared/api/methods-phone.ts';
@@ -18,6 +19,8 @@ import type { RuntimeServices } from '../../contracts.ts';
 
 /** A screenshot answer stays below this (JPEG of a phone screen: a few hundred KB). */
 const REPLY_MAX = 6_000_000;
+/** B-084 (D6): device administration for my phone on a secure transport, like the PC (phone.pairLink only). */
+const DEVICE_ADMIN = { capability: 'settings', secure: true } as const;
 
 /**
  * The phone app itself: a device scope on a secure transport (the app's loopback tunnel through the meeting server)
@@ -93,5 +96,5 @@ export function register(table: HandlerTable): void {
     if (!remoteId) throw new WorkforceError('unavailable', 'Connecting devices is not available on this PC.');
     const url = phonePairLink(remoteId);
     return { remoteId, url, qrDataUrl: await qrDataUrl(url) };
-  });
+  }, DEVICE_ADMIN);
 }

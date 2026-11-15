@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const provider = process.env.WORKFORCE_E2E_REAL;
 const RENEWED = ['sessionRenewed', 'fresh', 'sessionDropped'];
@@ -53,7 +53,7 @@ test(`real ${provider ?? 'provider'} session resumes after a runtime restart, to
   await client.call('events.subscribe', { topics: [`chat:${chat.id}`] });
   await client.call('models.setPolicy', { agentId: manager.id, conversationId: chat.id, policy: { pin: model.id, effort: model.efforts.includes('low') ? 'low' : model.defaultEffort } });
   await client.call('messages.send', { conversationId: chat.id, body: 'Reply with exactly the word: pong' });
-  const first = await client.waitFor('message.updated', (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final', 240_000);
+  const first = await client.waitFor(MESSAGE_EVENTS, (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final', 240_000);
   t.diagnostic(`model ${model.id}, before the restart: ${first.body.slice(0, 120)}`);
   await live.stop();
   live = undefined;
@@ -66,7 +66,7 @@ test(`real ${provider ?? 'provider'} session resumes after a runtime restart, to
   await client.call('accounts.detect', { force: false });
   await client.call('messages.send', { conversationId: chat.id, body: 'Use your task tool to create a task titled "Restart tool check" in this chat, then reply with: created' });
   const task = await client.waitFor('task.upserted', (item) => item.conversationId === chat.id && /restart tool check/i.test(item.title), 240_000);
-  const reply = await client.waitFor('message.updated', (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final' && m.id !== first.id, 240_000);
+  const reply = await client.waitFor(MESSAGE_EVENTS, (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final' && m.id !== first.id, 240_000);
   t.diagnostic(`after the restart: task ${task.id}; reply ${reply.body.slice(0, 120)}`);
   const runs = (await client.call('agents.runs', { id: manager.id })).filter((run) => run.conversationId === chat.id);
   const latest = runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];

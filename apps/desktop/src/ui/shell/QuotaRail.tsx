@@ -7,8 +7,8 @@
 //   one line with the minutes to the 5-hour reset ("42m", "2h 5m"; reserved and empty without one);
 //   one line with the plan's name (the runtime's UsageSummary.name – a label of the person's own, else the e-mail's local
 //   part, shared/model/plan-names.ts – else the label).
-// Active rotation plan first, then by weekly share; max 4 + "+n". A stale reading dims the badge.
-// Details on hover/focus/click: every limit window with bar, share left and "resets in 42 min", the next rotation plan and
+// The plan in use first, then by weekly share; max 4 + "+n". A stale reading dims the badge.
+// Details on hover/focus/click: every limit window with bar, share left and "resets in 42 min", the next plan and
 // – B-044 – a Codex plan's banked resets with the next one's expiry (labels and shares from the shared helper, lib/limits.ts).
 // Opening the details asks the runtime for fresh readings (lib/usage-refresh.ts: usage.list refresh – with
 // the Codex reset details; the runtime's account monitor shares its 15 s Codex / 60 s Claude cadence;

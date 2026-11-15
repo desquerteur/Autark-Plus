@@ -3,7 +3,9 @@
 // Owns: argument checks per op, safeStorage refusal rules, the notification lifecycle (click → show window +
 // navigate) and its sound (one per burst, a beep while the window has focus), the link allowlist, power-save
 // blockers held for the runtime, badge, and handing media jobs to the hidden media analyzer (media-analyzer.ts) and
-// a company switch to companies.ts (B-072), and a watched side tab's ops to main/side-driver/caster.ts (B-076).
+// a company switch to companies.ts (B-072), a watched side tab's ops to main/side-driver/caster.ts (B-076), and a
+// dictation for the Codex plan's voice to the hidden voice window (voice-rtc.ts, owner 07.11.2026), and (B-080) the install
+// of a build from a file to updates-wiring.ts installFile – answered first, run on the next tick.
 // Never: restarts the runtime (runtime.restart/booting are RuntimeHost's), imports electron
 // (objects are injected so tests use fakes), logs secrets or cipher bytes, opens anything but
 // http(s)/mailto links, keeps a blocker after the runtime is gone.
@@ -55,6 +57,12 @@ export interface HostServicesDeps {
   sideBrowser?: (call: SideBrowserCall) => Promise<SideBrowserResult>;
   /** B-076: a side tab watched from another PC or a phone (main/side-driver/caster.ts checks every field); missing = 'unavailable'. */
   sideView?: { cast(args: unknown): Promise<Result<'sideCast'>>; input(args: unknown): Promise<Result<'sideInput'>>; nav(args: unknown): Promise<Result<'sideNav'>> };
+  /** Owner 07.11.2026: a dictation sent to the Codex plan's voice over WebRTC (voice-rtc.ts checks every field); missing = 'unavailable'. */
+  voiceRtc?: {
+    offer(args: { fileId?: unknown; mime?: unknown }): Promise<Result<'voice.rtcOffer'>>;
+    answer(args: { jobId?: unknown; sdp?: unknown }): Promise<Result<'voice.rtcAnswer'>>;
+    close(args: { jobId?: unknown }): Result<'voice.rtcClose'>;
+  };
   window: {
     /** True while the user looks at the app (the UI shows the item itself and a beep sounds, no OS toast). */
     focused(): boolean;
@@ -64,6 +72,8 @@ export interface HostServicesDeps {
   onBadge?(count: number): void; // tray tooltip
   /** B-072: opens a company on this PC (companies.ts checks the args); missing = 'unavailable' (a test profile). */
   openCompany?(args: HostOps['company.open']['args']): HostOps['company.open']['result'];
+  /** B-080: installs a build from a file the way an update does (updates-wiring.ts installFile); called after the answer went out. */
+  install?(installer: string): Promise<void>;
   setTimer?(fn: () => void, ms: number): unknown;
   clearTimer?(handle: unknown): void;
 }
@@ -136,9 +146,15 @@ export class HostServices {
         if (!view) throw new WorkforceError('unavailable', 'The side browser is not available in this window.');
         return request.op === 'sideCast' ? view.cast(args) : request.op === 'sideInput' ? view.input(args) : view.nav(args);
       }
+      case 'voice.rtcOffer': case 'voice.rtcAnswer': case 'voice.rtcClose': { // owner 07.11.2026
+        const rtc = this.deps.voiceRtc;
+        if (!rtc) throw new WorkforceError('unavailable', 'The plan\'s voice is not available in this build of the app.');
+        return request.op === 'voice.rtcOffer' ? rtc.offer(args) : request.op === 'voice.rtcAnswer' ? rtc.answer(args) : rtc.close(args);
+      }
       case 'company.open': // B-072
         if (!this.deps.openCompany) throw new WorkforceError('unavailable', 'Other companies open only in the desktop app.');
         return this.deps.openCompany(args as Args<'company.open'>);
+      case 'app.install': return this.install(args as Args<'app.install'>); // B-080
       // MM7: the runtime's own lifecycle is RuntimeHost's – it answers these before `handle` is asked.
       case 'runtime.restart':
       case 'runtime.booting': throw new WorkforceError('unavailable', 'The runtime host answers this request.');
@@ -245,6 +261,16 @@ export class HostServices {
     }
     const error = await this.deps.shell.openPath(target);
     if (error) throw new WorkforceError('unavailable', 'The file could not be opened.');
+    return { ok: true };
+  }
+
+  /** B-080: answered before it acts, like the runtime's lifecycle ops – the install (a drain and a quit) runs on the next tick. */
+  private install(args: Args<'app.install'>): Result<'app.install'> {
+    const installer = args.installer as unknown;
+    if (typeof installer !== 'string' || !installer || installer.length > 4096 || installer.includes('\0') || !isAbsolute(installer)) bad('Invalid installer path.');
+    const install = this.deps.install;
+    if (!install) throw new WorkforceError('unavailable', 'This app cannot install a build here.');
+    this.setTimer(() => { void install(installer).catch(() => undefined); }, 0); // desktop.ts logs a failure
     return { ok: true };
   }
 

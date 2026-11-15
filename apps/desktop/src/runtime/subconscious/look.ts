@@ -1,0 +1,192 @@
+// What the subconscious reads and does before a turn besides the model and effort (Unterbewusstsein v2, owner 15.11.2026: "dass es sich
+// die Suchergebnisse bekommt … Dann kann es dieses Suchergebnisse auswählen, die es glaubt, was wichtig ist. Es kann kompakten der
+// Kontext und Teile davon"; 13:27: the rule of three hits goes, the model condenses with a good explanation, leanText stays the net).
+// Hits: the word search the main AI's own knowledge.find runs (find/service.ts – notes, skills, references, documents, with the
+// agent's own reach) on the text that wakes the turn; the call chooses freely among them, and code opens each chosen one as the main
+// AI's own knowledge.open in the turn's trace (owner 01.11.2026: real calls in its history, never a hint in a prompt). Each hit shows
+// how it begins – a note's or reference's first words, read without opening it (opening counts as use) –, and the call says for each
+// one it opens what it changes in this turn: measured 15.11. on 39 hand-labelled live messages, titles alone had the call open 5.6
+// entries a message (9/13 helping, 4/26 wrong), with how each begins and that sentence 2.4 (9/13 helping, 2/26 wrong; v2/RESULTS-V2.md).
+// An entry shown to an agent in this runtime is not offered again in the same version: it stands in its context already.
+// Context: the biggest items still whole in the agent's record (the context ledger) – tool, file and skill items of every run but the
+// newest finished one, at least ITEM_TOKENS each –, read with how they start by the call beside the turn (route-turn.ts
+// condenseTurn, which nobody waits for). What it condenses keeps its note of what still
+// matters, then window.ts leanText of the original (every id, path, file name and link: the net under the note) and the restore
+// stamp. The call does not hide: on the 12 hard E2 cases under these conditions all its lost values and critical cuts came from
+// hiding (net 0.77 with, 0.88 without; code alone 0.89; v2/RESULTS-V2.md). Marks reach the session at the next rebuild that pays
+// (agents/rebuild.ts); what the call leaves, the lean history condenses there once its run is finished.
+// Owns: which hits and items the call reads, how they read, opening the chosen hits and writing the chosen marks. Never: chooses
+// itself, shows an entry the agent cannot open, hides anything, marks a message, a pinned or nested item, or the newest finished run's work.
+
+import type { RuntimeServices } from '../contracts.ts';
+import type { Agent } from '../../shared/model/org.ts';
+import type { TraceCall } from '../../shared/model/subconscious.ts';
+import type { LedgerItem, LedgerKind, LedgerMark } from '../../shared/model/context-ledger.ts';
+import '../contracts/ledger.ts';
+import { findService, publicCandidate, type FindCaller } from '../find/service.ts';
+import type { Found } from '../find/candidates.ts';
+import { openedText } from '../find/render.ts';
+import { leanText } from '../context/ledger/window.ts';
+import { ageText } from '../knowledge/age.ts';
+import { inventedValues } from './context-tools.ts';
+
+/** Hits the call reads at most (find's own cap is 20). */
+export const HITS = 10;
+/** Context items the condensing call reads at most: the biggest still whole (nobody waits for it; 12 took up to ~28 s on 15.11.). */
+export const ITEMS = 12;
+/** An item below this many tokens stays: a note in its place costs about as much as it saves. */
+export const ITEM_TOKENS = 1000;
+/** The kinds of item the call reads: work the agent did or loaded – never a chat line, its own words or its reasoning (code hides that). */
+const LISTED: ReadonlySet<LedgerKind> = new Set(['tool', 'file', 'skill']);
+const DESCRIPTION_CHARS = 200;
+/** How much of a hit's text the call reads (a note's or reference's first words). */
+const HIT_HEAD_CHARS = 200;
+const HEAD_CHARS = 240;
+/** The call's note on a condensed item at most; leanText's values follow it. */
+export const NOTE_CHARS = 400;
+/** The reason a mark of the call carries (its note stands in the condensed text). */
+export const LOOK_REASON = 'set aside before a turn: its job was done';
+/** Runs looked at for the newest finished one. */
+const RECENT_RUNS = 20;
+
+/** A hit with how it begins (a note's or reference's first words; a skill shows its description). */
+export type Hit = Found & { head?: string };
+
+export interface Looked {
+  agent: Agent;
+  conversationId?: string;
+  mode?: string;
+  thread: string;
+}
+
+/** An item the call reads, with how it starts (redacted). */
+export interface ContextItem { item: LedgerItem; head: string }
+
+const shown = new WeakMap<object, Map<string, string>>();
+const shownTo = (services: RuntimeServices): Map<string, string> => {
+  let seen = shown.get(services);
+  if (!seen) { seen = new Map(); shown.set(services, seen); }
+  return seen;
+};
+const redact = (services: RuntimeServices, text: string): string => {
+  try { return services.secrets.redact(text); } catch { return text; }
+};
+const callerOf = (input: Looked): FindCaller => ({ agent: input.agent, ...(input.conversationId ? { conversationId: input.conversationId } : {}), thread: input.thread, ...(input.mode ? { mode: input.mode } : {}), via: 'agent' });
+const flat = (text: string, max: number) => {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > max ? `${line.slice(0, max)} …` : line;
+};
+
+/** A note's or reference's first words, redacted, read from the store (not opened: knowledge.open counts as use); none for other kinds. */
+function headOf(services: RuntimeServices, hit: Found): string | undefined {
+  if (!/^(note|ref):/.test(hit.id)) return undefined;
+  try {
+    const body = services.knowledge.get(hit.id.replace(/^(note|ref):/, ''))?.body;
+    return body ? redact(services, flat(body, HIT_HEAD_CHARS)) : undefined;
+  } catch { return undefined; }
+}
+
+/** The word search's hits for `text` this agent can open and was not shown in this version, best first, with how each begins; none when the search fails. */
+export async function searchHits(services: RuntimeServices, input: Looked & { text: string; signal?: AbortSignal }): Promise<Hit[]> {
+  const text = input.text.trim();
+  if (!text) return [];
+  try {
+    const found = await findService(services).find(callerOf(input), { query: text, limit: HITS, ...(input.signal ? { signal: input.signal } : {}) });
+    const seen = shownTo(services);
+    return found.filter((hit) => seen.get(`${input.agent.id}|${hit.id}`) !== hit.version).map((hit) => {
+      const head = headOf(services, hit);
+      return head ? { ...hit, head } : hit;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** The hits as the call reads them: id · kind · title – description (why it was found) – how it begins. */
+export function hitLines(hits: readonly Hit[]): string {
+  if (!hits.length) return '';
+  const lines = hits.map((hit) => `- ${hit.id} · ${hit.kind} · ${flat(hit.title, 120)}${hit.description ? ` – ${flat(hit.description, DESCRIPTION_CHARS)}` : ''} (${hit.why})${hit.head ? ` – begins: ${hit.head}` : ''}`);
+  return ['What the word search found in the agent\'s knowledge for this (id · kind · title – description · why – how it begins):', ...lines].join('\n');
+}
+
+/**
+ * The chosen hits opened as the main AI's own knowledge.open calls, in the order chosen; `chosen` holds the answer's entries ({id,
+ * changes} – the sentence only makes the choice deliberate, it is not shown) or bare ids. An id not among `hits`, gone or out of reach
+ * shows nothing.
+ */
+export async function openHits(services: RuntimeServices, input: Looked, chosen: readonly unknown[], hits: readonly Found[]): Promise<TraceCall[]> {
+  const offered = new Map(hits.map((hit) => [hit.id, hit]));
+  const seen = shownTo(services);
+  const calls: TraceCall[] = [];
+  const ids = chosen.map((entry) => String(typeof entry === 'object' && entry !== null ? (entry as { id?: unknown }).id ?? '' : entry));
+  for (const id of new Set(ids)) {
+    const hit = offered.get(id);
+    if (!hit) continue;
+    try {
+      const opened = await findService(services).open(callerOf(input), { id });
+      // as every tool output of ours (tools/outputs.ts finalizeOutput): a stored secret's value never reaches the engine
+      calls.push({ tool: 'knowledge.open', args: { id }, output: redact(services, openedText({ ...opened, candidate: publicCandidate(opened.candidate), follow: [] })) });
+      seen.set(`${input.agent.id}|${id}`, hit.version);
+    } catch { /* gone, or not this agent's to open: nothing shown */ }
+  }
+  return calls;
+}
+
+/** The newest finished run of the agent's own lane: its work stays whole (the coming message often goes on from it). */
+function newestFinished(services: RuntimeServices, agentId: string): string | undefined {
+  try { return services.runs.list(agentId, RECENT_RUNS).find((run) => !run.splitId && run.endedAt)?.id; } catch { return undefined; }
+}
+
+/** The ITEMS biggest items still whole in the agent's record, oldest first, each with how it starts; none without a ledger. */
+export function contextItems(services: RuntimeServices, agentId: string, thread: string): ContextItem[] {
+  const ledger = services.ledger;
+  if (!ledger) return [];
+  try {
+    const newest = newestFinished(services, agentId);
+    const open = ledger.items(agentId, thread).filter((row) => row.state === 'keep' && !row.nested && row.pinnedUntil === undefined && LISTED.has(row.kind)
+      && row.tokens >= ITEM_TOKENS && !(newest && row.runId === newest));
+    const out: ContextItem[] = [];
+    for (const item of open.sort((a, b) => b.tokens - a.tokens)) {
+      if (out.length >= ITEMS) break;
+      const original = ledger.original(agentId, thread, item.itemId);
+      if (!original || original.pruned) continue;
+      out.push({ item, head: redact(services, flat(original.text, HEAD_CHARS)) });
+    }
+    return out.sort((a, b) => a.item.order - b.item.order);
+  } catch {
+    return [];
+  }
+}
+
+/** The items as the call reads them: id · kind · tokens · age · title – how it starts. */
+export function itemLines(items: readonly ContextItem[], now: number): string {
+  if (!items.length) return '';
+  const lines = items.map(({ item, head }) => `- ${item.itemId} · ${item.kind} · ${item.tokens.toLocaleString('en-US')} tokens · ${ageText(item.createdAt, now)} · ${flat(item.title, 120)}${head ? ` – starts: ${head}` : ''}`);
+  return ['The biggest items still whole in the main AI\'s context (id · kind · tokens · age · title – how it starts), oldest first:', ...lines].join('\n');
+}
+
+/**
+ * The call's marks: each condensed item keeps its note (unless it names a value the original lacks, context-tools.ts inventedValues),
+ * then leanText of the original. Only items it was shown. Returns how many.
+ */
+export function markItems(services: RuntimeServices, agentId: string, thread: string, items: readonly ContextItem[], chosen: unknown): number {
+  const ledger = services.ledger;
+  const listed = new Map(items.map((entry) => [entry.item.itemId, entry.item]));
+  const condense = Array.isArray(chosen) ? chosen : [];
+  if (!ledger || !condense.length) return 0;
+  const marks: LedgerMark[] = [];
+  const done = new Set<string>();
+  for (const entry of condense) {
+    const id = String((entry as { id?: unknown })?.id ?? '');
+    if (!listed.has(id) || done.has(id)) continue;
+    const original = ledger.original(agentId, thread, id);
+    if (!original || original.pruned) continue;
+    const source = original.args ? `${original.args}\n${original.text}` : original.text;
+    const said = flat(String((entry as { note?: unknown }).note ?? ''), NOTE_CHARS);
+    const note = said && !inventedValues(source, said).length ? said : '';
+    marks.push({ itemId: id, state: 'condensed', condensed: redact(services, [note, leanText(source)].filter(Boolean).join('\n')), by: 'subconscious', reason: LOOK_REASON });
+    done.add(id);
+  }
+  if (marks.length) ledger.mark(agentId, thread, marks);
+  return marks.length;
+}

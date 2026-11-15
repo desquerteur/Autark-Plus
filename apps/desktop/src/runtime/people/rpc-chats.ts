@@ -145,7 +145,7 @@ export function registerPersonChats(table: HandlerTable): void {
   table.addPerson('messages.send', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
-    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'clientId', 'speech', 'ultra']);
+    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'clientId', 'speech', 'ultra', 'marks']);
     const { chat } = ownChat(ctx.services, person, id(o, 'conversationId'));
     if (chat.archivedAt !== undefined) throw new WorkforceError('conflict', 'This chat is archived.');
     const body = text(o, 'body', { max: MAX_BODY, allowEmpty: true, multiline: true });
@@ -166,6 +166,7 @@ export function registerPersonChats(table: HandlerTable): void {
       ...levelOf(o), replyTo: quoted && quoted.createdAt >= visibleFrom(chat, membership(ctx.services.db, person.id, chat.id)!.joinedAt) ? replyTo : undefined,
       clientId: optText(o, 'clientId', { max: 100 }), authorId: person.id, authorKind: 'human',
       speech: o.speech as SendMessageInput['speech'], // validated and capped by the chat service
+      marks: o.marks as SendMessageInput['marks'], // B-082: hidden marks, checked against the body there (cleanMarks)
       ...(optBool(o, 'ultra') ? { meta: { ultra: true as const } } : {}), // B-057: Ultra suggested for this message (a hint)
     });
     return viewMessage(person.id, message, names(ctx));

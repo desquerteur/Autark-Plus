@@ -7,15 +7,17 @@
 // whether anything is read aloud right now (echo guard for every reader, not only the conversation's own).
 // B-047 D14: with a local voice chosen on the PC (settings.voice.localTts) and voice.speak allowed here, a
 // line is read by the PC's own voice model instead – split into sentences, each one asked of voice.speak
-// while the one before plays (Web Audio), so speaking starts after the first sentence; speechSynthesis
-// reads whatever the local voice cannot (no voice chosen, a failed call, audio output not allowed yet).
-// Owns: the queue, the line tokens, the speaking state, the speechSynthesis engine with the reading
+// while the one before plays (Web Audio), so speaking starts after the first sentence; this device's own
+// voice reads whatever the local voice cannot (no voice chosen, a failed call, audio output not allowed yet):
+// speechSynthesis, or in the Android app (no voices in its WebView) the phone's voice over the native port.
+// Owns: the queue, the line tokens, the speaking state, the device-voice engine with the reading
 // voice and profile language, and the local voice engine in front of it. Never: decides what
 // is read or when (the readers do).
 
 import type { VoiceSettings } from '../../../shared/model/system.ts';
 import type { SpokenAudio } from '../../../shared/model/local-speech-models.ts';
 import { pcm16ToFloat } from '../../lib/pcm.ts';
+import { hasNativePort, onNative, sendNative } from '../../pwa/native-port.ts';
 import { rpc } from '../../lib/rpc.ts';
 import { can } from '../../lib/session.ts';
 import { settings } from '../../lib/store.ts';
@@ -92,10 +94,31 @@ export class DeviceSpeech {
   }
 }
 
-/** speechSynthesis with the reading voice and the profile language. */
+/** No speechSynthesis here or one without voices (Android's WebView), but the Android app's port: the phone's own voice. */
+function phoneVoice(): boolean {
+  if (!hasNativePort()) return false;
+  if (typeof speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') return true;
+  try { return speechSynthesis.getVoices().length === 0; } catch { return true; }
+}
+
+let phoneLines = 0;
+
+/**
+ * speechSynthesis with the reading voice and the profile language. In the Android app, whose WebView reads nothing,
+ * the line goes to the phone's own voice over the native port (`speak {id, text, lang}` → PhoneSpeech.java, its end
+ * comes back as `speechDone {id}`; stop sends `stopSpeech`).
+ */
 export function synthesisEngine(): SpeechEngine {
+  let phoneLine: (() => void) | null = null; // unsubscribes the current phone line's end
   return {
     play(text, reading, ended) {
+      if (text.trim() && phoneVoice()) {
+        const id = `line-${++phoneLines}`;
+        const off = onNative('speechDone', (msg) => { if (msg.id !== id) return; off(); if (phoneLine === off) phoneLine = null; ended(); });
+        phoneLine = off;
+        if (!sendNative({ t: 'speak', id, text, ...(reading.language ? { lang: reading.language } : {}) })) { off(); phoneLine = null; ended(); }
+        return;
+      }
       if (typeof speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined' || !text.trim()) { ended(); return; }
       const utterance = new SpeechSynthesisUtterance(text);
       if (reading.language) utterance.lang = reading.language;
@@ -108,6 +131,7 @@ export function synthesisEngine(): SpeechEngine {
       try { speechSynthesis.speak(utterance); } catch { ended(); }
     },
     stop() {
+      if (phoneLine) { phoneLine(); phoneLine = null; sendNative({ t: 'stopSpeech' }); }
       if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
     },
   };
@@ -163,8 +187,8 @@ export function localVoiceEngine(deps: LocalVoiceDeps, fallback: SpeechEngine): 
   return {
     play(text, reading, ended) {
       if (!text.trim() || !deps.active()) { line = { cut: false, stop: () => fallback.stop() }; fallback.play(text, reading, ended); return; }
-      // Review fix: the output is opened now, in the reader's call – after voice.speak's await a phone's tap is
-      // over, its AudioContext stayed suspended and every line waited for the PC's voice only to fall back.
+      // The output is first opened in the call's tap (conversation-audio.ts primeSpeech); this is the second chance
+      // for a reader without one – a reply arrives long after any tap, so on a phone this alone may stay suspended.
       try { deps.prepare?.(); } catch { /* play() says whether audio can play */ }
       const mine = { cut: false, stop: () => {} };
       line = mine;

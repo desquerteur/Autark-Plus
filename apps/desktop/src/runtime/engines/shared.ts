@@ -1,7 +1,8 @@
 // Small helpers shared by all engines.
 // Owns: bounded newline-delimited JSON reading, provider-safe tool names, ToolOutput → text,
 // effort normalization, the folder comparison of sessions, the fixed, user-safe error data
-// engines return and the sums of the cached tokens a usage reports (CacheTokens).
+// engines return, the sums of the cached tokens a usage reports (CacheTokens) and the one
+// <live> block every engine puts in front of a turn's input (contextText).
 // Never: talks to a provider or knows a provider's wire format beyond names.
 
 import path from 'node:path';
@@ -106,6 +107,14 @@ export const ERR = {
 export function sameFolder(a: string, b: string): boolean {
   const norm = (dir: string) => { const full = path.resolve(dir); return process.platform === 'win32' ? full.toLowerCase() : full; };
   return norm(a) === norm(b);
+}
+
+/**
+ * The live context (EngineTurnInput.system.volatile) as the block every engine sends first in a turn's input – never in the
+ * system prompt, so the system prompt stays the same cached text for every session of an agent. '' when there is none.
+ */
+export function contextText(volatile: string | undefined): string {
+  return volatile?.trim() ? `<live>\n${volatile}\n</live>` : '';
 }
 
 /** Parses JSON text; undefined on failure. */

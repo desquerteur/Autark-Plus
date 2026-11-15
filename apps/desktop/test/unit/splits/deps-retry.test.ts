@@ -6,6 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { NOTHING_BACK } from '../../../src/runtime/agents/split-turn.ts';
 import { PARENT, part, settleGit, splitAndEnd, world } from './fixture.ts';
 
 test('after: a pipeline part waits, then starts with the results of the parts it builds on', () => {
@@ -53,6 +54,23 @@ test('a retryable failure runs the part once more; the second one fails it', () 
   assert.equal(w.splits.list({ groupId })[0].status, 'settled');
 });
 
+test('B-080: a part that brought nothing back runs once more, then fails with that reason; its dependant is skipped', () => {
+  const w = world();
+  const groupId = splitAndEnd(w, [part('Fix'), part('Check the fix', { after: [1] })]);
+  const splitId = w.lanes.started[0];
+  w.lanes.end(splitId, 'failed', { retryable: true, error: NOTHING_BACK }); // agents/split-turn.ts: done, but nothing came back
+  assert.deepEqual(w.lanes.started, [splitId, splitId], 'runs once more');
+  assert.equal(w.splits.get(splitId)!.split.attempts, 2);
+  w.lanes.end(splitId, 'failed', { retryable: true, error: NOTHING_BACK });
+  const group = w.splits.list({ groupId })[0];
+  assert.deepEqual(group.splits.map((split) => [split.status, split.error]), [
+    ['failed', NOTHING_BACK], ['skipped', 'Part #1, which it builds on, failed.'],
+  ]);
+  assert.equal(w.lanes.started.length, 2, 'the check never started on a fix that is not there');
+  assert.equal(group.status, 'settled');
+  assert.match(w.splits.pendingResults('ag_ava', group.thread)!.text, /### #1 Fix – failed – It ended without last words or a note to its origin – nothing came back./);
+});
+
 test('a stop the dispatcher reports (no retry) ends the part as stopped; the group settles normally', () => {
   const w = world();
   const groupId = splitAndEnd(w, [part('A'), part('B')]);
@@ -85,7 +103,7 @@ test('a worktree part opens its own folder first, works there, and is committed 
   assert.match(text, /Branch wf\/split-part-1 \(2 files changed, \+10 -1\): I merge it into my folder with agents\.split_merge \{"groupId":"[^"]+","idx":1,"action":"merge"\}/);
 });
 
-test('a part building on a worktree part learns where its changes are, without the merge hint (merging is its main self\'s)', async () => {
+test('a part building on a worktree part learns where its changes are, without the merge hint (merging is its origin\'s)', async () => {
   const w = world();
   splitAndEnd(w, [part('Code', { worktree: true }), part('Review', { after: [1] })]);
   await settleGit();

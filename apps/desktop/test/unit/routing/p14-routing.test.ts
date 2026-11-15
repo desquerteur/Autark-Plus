@@ -85,12 +85,12 @@ test('coding → GPT-6.1 Sol; a Remotion animation after it → Claude Opus 5.5 
   const coding = await h.route({ text: CODING });
   assert.deepEqual([coding.modelId, coding.effort, coding.category, coding.by], [SOL, 'medium', 'coding', 'rules']);
 
-  const previous = returnChoice([run({ model: SOL, effort: coding.effort, route: { reason: coding.reason, by: coding.by, category: coding.category } })], 'ch_1', undefined);
+  const previous = returnChoice([run({ model: SOL, effort: coding.effort, route: { reason: coding.reason, by: coding.by, category: coding.category } })], undefined);
   const remotion = await h.route({ text: REMOTION, previous });
   assert.deepEqual([remotion.modelId, remotion.effort, remotion.category, remotion.by], [OPUS, 'high', 'video-animation', 'rules']);
   assert.match(remotion.reason, /^GPT-6\.1 Sol is weak at video animation · /);
-  assert.equal(switchText('Claude Opus 5.5', remotion.effort, firstReason(remotion.reason, remotion.category)),
-    'Switched to Claude Opus 5.5 · high — GPT-6.1 Sol is weak at video animation');
+  assert.equal(switchText('Vera', { modelName: 'Claude Opus 5.5', effort: remotion.effort }, firstReason(remotion.reason, remotion.category)),
+    'Vera → Claude Opus 5.5 · high – GPT-6.1 Sol is weak at video animation'); // B-083: the line names the agent
 });
 
 test('model.set {effort: max} holds for the next turn only; then the previous effort returns', async () => {
@@ -98,12 +98,12 @@ test('model.set {effort: max} holds for the next turn only; then the previous ef
   const video = { reason: 'video animation · strongest fit', category: 'video-animation' };
   const runs = [run({ model: OPUS, effort: 'high', route: { ...video, by: 'previous' } }), run({ model: SOL, effort: 'medium', route: { reason: 'coding', by: 'rules', category: 'coding' } })];
 
-  const asked = returnChoice(runs, 'ch_1', { effort: 'max', at: T0 });
+  const asked = returnChoice(runs, { effort: 'max', at: T0 });
   const lifted = await h.route({ text: 'Continue the Remotion animation.', previous: asked });
   assert.deepEqual([lifted.modelId, lifted.effort, lifted.by], [OPUS, 'max', 'request']);
 
   const after = [run({ model: OPUS, effort: 'max', route: { reason: lifted.reason, by: lifted.by, category: lifted.category } }), ...runs];
-  const back = await h.route({ text: 'Polish the Remotion animation.', previous: returnChoice(after, 'ch_1', undefined) });
+  const back = await h.route({ text: 'Polish the Remotion animation.', previous: returnChoice(after, undefined) });
   assert.deepEqual([back.modelId, back.effort, back.by], [OPUS, 'high', 'previous'], 'the run the request shaped is skipped');
 });
 

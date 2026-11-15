@@ -55,7 +55,7 @@ function Bubble(props: { task: TaskView; message: Message }) {
           <ProgressBar done={task.progress.done} total={task.progress.total} label={`${task.title} progress`} />
         </div>
       )}
-      {waiting && !done && !answerHere && <div class={`task-waiting${task.status === 'blocked' ? ' blocked' : ''}`}>{waiting}</div>}
+      {waiting && !done && !answerHere && <div class="task-waiting">{waiting}</div>}
       {live && <div class="task-live" aria-live="polite">{plainPreview(live, 120)}</div>}
       {answerHere && (
         <div class="task-bubble-ask">
@@ -136,7 +136,7 @@ export function TaskMessage(props: { message: Message }) {
   return (
     <div class={`task-bubble placeholder${task === null ? ' removed' : ''}`}>
       <div class="task-bubble-head">
-        <span class="task-glyph" data-status={task === null ? 'cancelled' : 'open'} aria-hidden="true" />
+        <span class="task-glyph" data-status={task === null ? 'dropped' : 'open'} aria-hidden="true" />
         <span class="task-bubble-title">{plainPreview(message.body, 160) || 'Task'}</span>
       </div>
       {task === null && <div class="task-waiting">Task removed</div>}

@@ -110,7 +110,7 @@ test('claude transcript: the record chain, hub calls 1:1, a Codex shell call as 
     assert.equal(rec.isSidechain, false);
   });
   assert.ok(recs.every((rec) => !String(rec.type).startsWith('api-request')), 'no api-request records');
-  assert.equal(recs[0].message.content, '[Earlier work in this chat, rebuilt by the app]', 'the transcript starts with a user record');
+  assert.equal(recs[0].message.content, '[My earlier work, rebuilt from my record]', 'the transcript starts with a user record');
   assert.equal(recs[2].message.content, '[10:00] Lena: go on');
   // Signed Claude thinking of the same account and family stays a thinking block, in front of the hub call.
   assert.deepEqual(recs[3].message.content, [

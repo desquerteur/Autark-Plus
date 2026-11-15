@@ -1,7 +1,6 @@
 // day.* (B-041 My day, shared/api/methods-day.ts): the person's own input, planning a day, the morning briefing and
-// the work handed off – for the owner's window and phones holding 'todo' (a To-do-only phone runs its day); handing
-// an own to-do to the team needs 'tasks'. Everything delegates to services.day and answers 'unavailable' while it is
-// missing. Devices act as the owner ('human'). No person variants in this build; external agents have none.
+// the work given others – for the owner's window and phones holding 'todo' (a To-do-only phone runs its day; handing an
+// own to-do on is tasks.give). Everything delegates to services.day and answers 'unavailable' while it is missing. Devices act as the owner ('human'). No person variants in this build; external agents have none.
 // Owns: parameter checks and scope rules. Never: My day's rules (runtime/day/*).
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
@@ -10,11 +9,10 @@ import '../../../shared/api/methods-day.ts'; // the method shapes (module augmen
 import { DAY_PLAN_MODES, isLocalDate } from '../../../shared/model/calendar.ts';
 import '../../contracts/calendar.ts';
 import type { DayService } from '../../contracts/calendar.ts';
-import { bad, id, input, num, oneOf, onlyKeys, optBool, optNum, optText, text, type Obj } from '../params.ts';
+import { bad, input, num, oneOf, onlyKeys, optBool, optNum, optText, text, type Obj } from '../params.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
 const TODO = { capability: 'todo' } as const;
-const TASKS = { capability: 'tasks' } as const;
 
 function dayOf(ctx: HandlerContext): DayService {
   const service = ctx.services.day;
@@ -50,12 +48,6 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['date']);
     return dayOf(ctx).briefing(HUMAN_ID, date(o));
   }, TODO);
-
-  table.add('day.sendToTeam', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id']);
-    return dayOf(ctx).sendToTeam(id(o), HUMAN_ID);
-  }, TASKS);
 
   table.add('day.handedOff', (params, ctx) => {
     const o = input(params);

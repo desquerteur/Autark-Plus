@@ -3,11 +3,13 @@
 // first save and kept by later ones (a finish never drops it).
 // B-057: runs.split_id (migration 084) names the split a run worked for – kept like the origin; listByAgent's
 // `topLevel` leaves split runs out (the agent's own turns), listBySplit reads the runs of splits.
+// B-089 (11.11.2026: what a run costs, written down): runs.cached_tokens and runs.model_calls (migration 100) are written
+// with the finish like the token counts; NULL reads as absent (an older row, an engine without a count).
 // Owns: SQL and row↔Run/RunItem mapping. Never: lifecycle rules or events (runs/journal.ts).
 
 import { json, toJson, type Db, type Row } from '../db/database.ts';
 import type { Run, RunItem } from '../../shared/model/runs.ts';
-import type { Origin } from '../../shared/model/origin.ts';
+import { cleanOrigin, type Origin } from '../../shared/model/origin.ts';
 import { compact, nul, opt, optNumber } from './rows.ts';
 
 function toRun(row: Row): Run {
@@ -27,6 +29,8 @@ function toRun(row: Row): Run {
     endedAt: optNumber(row.ended_at),
     inputTokens: optNumber(row.input_tokens),
     outputTokens: optNumber(row.output_tokens),
+    cachedTokens: optNumber(row.cached_tokens), // B-089: undefined on a row before migration 100 or without a report
+    modelCalls: optNumber(row.model_calls),
     costUsd: optNumber(row.cost_usd),
     error: opt<string>(row.error),
     summary: opt<string>(row.summary),
@@ -39,7 +43,10 @@ function toRun(row: Row): Run {
 /** The stored origin (B-054; the label falls back to the source), or undefined. */
 function originOf(row: Row): Origin | undefined {
   const source = opt<string>(row.source);
-  return source ? { source, label: opt<string>(row.source_label) ?? source } : undefined;
+  if (!source) return undefined;
+  const mail = json<Pick<Origin, 'mailProvenance' | 'mailScope'>>(row.mail_origin, {});
+  return cleanOrigin({ source, label: opt<string>(row.source_label) ?? source,
+    ...(mail && typeof mail === 'object' ? mail : {}) });
 }
 
 function toItem(row: Row): RunItem {
@@ -69,9 +76,12 @@ export class RunRepo {
   }
 
   /** Newest first; `topLevel` (B-057): without the runs of splits (the agent's own turns only). */
-  listByAgent(agentId: string, limit: number, opts: { topLevel?: boolean } = {}): Run[] {
+  /** Newest first; `before`: only runs that started earlier (the activity log's next page). */
+  listByAgent(agentId: string, limit: number, opts: { topLevel?: boolean; before?: number } = {}): Run[] {
     const split = opts.topLevel ? ' AND split_id IS NULL' : '';
-    return this.db.all(`SELECT * FROM runs WHERE agent_id = ?${split} ORDER BY started_at DESC, rowid DESC LIMIT ?`, [agentId, limit]).map(toRun);
+    const before = opts.before === undefined ? '' : ' AND started_at < ?';
+    const params = opts.before === undefined ? [agentId, limit] : [agentId, opts.before, limit];
+    return this.db.all(`SELECT * FROM runs WHERE agent_id = ?${split}${before} ORDER BY started_at DESC, rowid DESC LIMIT ?`, params).map(toRun);
   }
 
   /** B-057: the runs of these splits, oldest first (index runs_split). */
@@ -88,13 +98,16 @@ export class RunRepo {
   save(run: Run): void {
     this.db.run(
       `INSERT INTO runs (id, agent_id, conversation_id, task_id, trigger, engine, model, effort, account_id, device_id, status,
-         started_at, ended_at, input_tokens, output_tokens, cost_usd, error, summary, route, source, source_label, split_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         started_at, ended_at, input_tokens, output_tokens, cost_usd, error, summary, route, source, source_label, split_id, mail_origin,
+         cached_tokens, model_calls)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, task_id = excluded.task_id,
          engine = excluded.engine, model = excluded.model, effort = excluded.effort, account_id = excluded.account_id,
          device_id = excluded.device_id, status = excluded.status, started_at = excluded.started_at,
          ended_at = excluded.ended_at, input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
+         cached_tokens = excluded.cached_tokens, model_calls = excluded.model_calls,
          cost_usd = excluded.cost_usd, error = excluded.error, summary = excluded.summary, route = excluded.route,
+         mail_origin = CASE WHEN runs.source IS NULL THEN excluded.mail_origin ELSE runs.mail_origin END,
          source = COALESCE(runs.source, excluded.source), source_label = CASE WHEN runs.source IS NULL THEN excluded.source_label ELSE runs.source_label END,
          split_id = COALESCE(runs.split_id, excluded.split_id)`,
       [
@@ -102,6 +115,8 @@ export class RunRepo {
         nul(run.effort), nul(run.accountId), nul(run.deviceId), run.status, nul(run.startedAt), nul(run.endedAt),
         nul(run.inputTokens), nul(run.outputTokens), nul(run.costUsd), nul(run.error), nul(run.summary),
         run.route ? toJson(run.route) : null, nul(run.origin?.source), nul(run.origin?.label), nul(run.splitId),
+        run.origin?.mailProvenance || run.origin?.mailScope ? toJson({ mailProvenance: run.origin.mailProvenance, mailScope: run.origin.mailScope }) : null,
+        nul(run.cachedTokens), nul(run.modelCalls), // B-089
       ],
     );
   }

@@ -5,7 +5,8 @@
 // main zone keeps free for it: the main zone's header row runs on over the pane, so opening or closing it moves no header
 // cell. Its tab strip is the row's part above it (`strip-in-row`) only where the row leaves it room for three titled tabs
 // after the caption controls and the frame's cells (measured on .pane-row-room, shell.css; strip-slots.ts ROW_ROOM), else
-// its first line under the row: a drag of the pane or the window may move the strip, a click never does.
+// its first line under the row: a drag of the pane or the window may move the strip, a click never does. B-080: in a
+// narrow window the pane yields its width: the chat keeps 340 px, the list 200 px; full view gives a page the whole zone.
 // Each zone's header row is the top --header-h of the zone; its body scrolls below it. The main zone
 // is `rightmost` (shell.css turns that into --caption-space: the caption controls plus the frame's workspace
 // and feedback cells, WindowBar.tsx). The status line (StatusLine.tsx) lies over the top of the main zone.

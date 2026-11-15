@@ -14,7 +14,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WF = path.join(root, 'app', 'wf.mjs');
@@ -80,7 +80,7 @@ test('wf terminal client against the headless runtime (fake engine)', { timeout:
   });
 
   await t.test('send, then read sees the fake answer', async () => {
-    const reply = client.waitFor('message.updated', (message) => message.conversationId === managerChat.id && message.authorId === manager.id && message.state === 'final' && /From the terminal/.test(message.body), 90_000);
+    const reply = client.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === managerChat.id && message.authorId === manager.id && message.state === 'final' && /From the terminal/.test(message.body), 90_000);
     const sent = await wf(['send', managerChat.id, 'From the terminal', '@Manager'], { data: dataDir });
     assert.equal(sent.code, 0, sent.stderr);
     assert.match(sent.stdout, /^Sent to .+ \(msg_[0-9a-z]+\)\.\n$/);

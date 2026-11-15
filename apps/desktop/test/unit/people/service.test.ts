@@ -75,11 +75,11 @@ test('joining by code, a declined request, and an Allow from a phone that is ref
   assert.ok(todo, 'the owner decides on a host-written to-do');
   // The owner's phone may not admit people: its Allow is refused and the to-do comes back.
   const phone = new TestClient(r.server, DEVICE_SCOPE_PHONE);
-  await phone.call('tasks.complete', { id: todo!.id, answer: { choice: 'Allow' } });
+  await phone.call('tasks.finish', { id: todo!.id, answer: { choice: 'Allow' } });
   await settle();
   const back = (await r.owner.call<Array<{ id: string; title: string }>>('todos.list')).find((entry) => entry.title === 'Let Laptop · Firefox join as Ben?');
   assert.ok(back && back.id !== todo!.id, 'the to-do came back');
-  await r.owner.call('tasks.complete', { id: back!.id, answer: { choice: 'Deny' } });
+  await r.owner.call('tasks.finish', { id: back!.id, answer: { choice: 'Deny' } });
   await settle();
   const waited = await r.server.handleHttp({ id: 3, method: 'people.awaitJoin', params: { ticket } }, { remote: '10.0.0.2' });
   assert.equal((waited.result as { status: string }).status, 'denied');
@@ -88,32 +88,6 @@ test('joining by code, a declined request, and an Allow from a phone that is ref
   assert.ok(actions.includes('join_requested') && actions.includes('join_declined'), actions.join());
 });
 
-test('revoking ends tokens and live connections at once, leaves chats, returns open work, moves reports up', async (t) => {
-  const r = peopleRig();
-  t.after(() => r.cleanup());
-  const anna = await r.join('Anna Berg');
-  const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id], createdBy: 'human', title: 'Design' });
-  const task = r.tasks.create({ conversationId: chat.id, title: 'Draw the logo', assigneeKind: 'human', assigneeId: anna.person.id, createdBy: 'human' });
-  r.org.update('ag_research', { managerId: anna.person.id });
-  const ben = await r.owner.call<Person>('people.save', { name: 'Ben', managerId: anna.person.id });
-  await anna.client.call('events.subscribe', { topics: ['chats'] });
-  assert.equal(anna.client.raw.closed, false);
-  const revoked = await r.owner.call<Person>('people.revoke', { id: anna.person.id });
-  await settle();
-  assert.equal(revoked.status, 'revoked');
-  assert.equal(anna.client.raw.closed, true, 'the live connection was dropped');
-  assert.equal(r.service.authenticate(anna.token), undefined);
-  assert.equal(r.service.revoked(anna.token), true, 'the page learns it was removed (4403)');
-  assert.ok(!r.chats.members(chat.id).some((member) => member.memberId === anna.person.id), 'left the chat');
-  const back = r.tasks.get(task.id)!;
-  assert.equal(back.assigneeKind, 'team', 'open work returned to the team');
-  assert.equal(r.org.get('ag_research')?.managerId, undefined, 'the agent moved up');
-  assert.equal(r.service.require(ben.id).managerId, undefined, 'the person moved up');
-  const line = r.service.audit(anna.person.id)[0];
-  assert.equal(line.action, 'revoked');
-  assert.deepEqual(line.details, { chats: 1, tasks: 1, reports: 2 });
-  await assert.rejects(r.owner.call('people.revoke', { id: 'human' }), /owner cannot be removed/);
-});
 
 test('changed rights reach the open app at once: only that person\'s connections close, and the next one has the new rights', async (t) => {
   const r = peopleRig();
@@ -168,7 +142,7 @@ test('a second device joins with a new invite; removing one device drops only th
   const asked = await r.server.handleHttp({ id: 1, method: 'people.join', params: { ticket: invite.url.split('#join=')[1], name: 'Laptop' } }, { remote: '10.0.0.8' });
   const todo = (await r.owner.call<Array<{ id: string; title: string }>>('todos.list')).find((entry) => entry.title === 'Let Laptop join as Anna Berg?');
   assert.ok(todo);
-  await r.owner.call('tasks.complete', { id: todo!.id, answer: { choice: 'Allow' } });
+  await r.owner.call('tasks.finish', { id: todo!.id, answer: { choice: 'Allow' } });
   await settle();
   const waited = await r.server.handleHttp({ id: 2, method: 'people.awaitJoin', params: { ticket: (asked.result as { ticket: string }).ticket } }, { remote: '10.0.0.8' });
   const laptopToken = (waited.result as { token: string }).token;

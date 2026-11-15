@@ -9,9 +9,18 @@
 //   Linux: /bin/sh moves the downloaded AppImage over $APPIMAGE (mv -f, chmod +x) and execs it with --updated.
 // Values reach the cmd script through environment variables, so the script is plain ASCII and a path with spaces,
 // umlauts or % needs no quoting. When the helper cannot start, the library's own quitAndInstall runs as before.
+//   Windows start, a hand-over (08.11.2026): a detached cmd (DETACHED_PROCESS) has no console, so every console tool it
+//     runs (tasklist, find, ping) gets a console of its own instead of the script's redirections; `find` then read
+//     that console's keyboard forever, the installer never ran and the app stayed closed. A non-detached child dies
+//     with the app (libuv kills its children through a job object when the process ends). So the app starts a hidden
+//     cmd (windowsHide: a console without a window) whose only step is `start "" /b cmd /d /c .\update-helper.cmd`:
+//     that grandchild shares the hidden console, is outside the job (silent breakaway) and outlives the app. The
+//     first cmd's exit code 0 means the helper runs; the helper's own end cannot be watched, so `ended` follows after
+//     HANDOFF_LIFETIME_MS, when a helper that found the app still running has given up.
 // When the app still runs after WAIT_SECONDS (longer than update-service.ts INSTALL_WATCHDOG_MS, after which the app
 // has resumed work), both helpers leave the update for the next try and install nothing; while a helper process lives,
 // a further quitAndInstall only quits again (that helper installs once the app ends); its exit frees the next start.
+// B-080: a build from a file (app.install / system.install) runs through the same helpers (updates-wiring.ts installFile).
 // Owns: the two scripts, their launch values, the detached spawn, the quitAndInstall override. Never: imports electron
 // (updates-wiring.ts injects quit), drains the app or decides when to restart (update-service.ts), downloads or verifies
 // the update (electron-updater did both before 'update-downloaded').
@@ -29,6 +38,11 @@ export const WINDOWS_SCRIPT_NAME = 'update-helper.cmd';
  * a resumed app: it gives up instead (install-helper.test.ts checks the order).
  */
 export const WAIT_SECONDS = 45;
+/**
+ * Windows: after this long a handed-over helper counts as ended. Its wait loop runs WAIT_SECONDS rounds of about
+ * 1–1.5 s (tasklist, then ping as the pause), so twice WAIT_SECONDS lies safely past its give-up.
+ */
+export const HANDOFF_LIFETIME_MS = WAIT_SECONDS * 2 * 1000;
 
 /** The cmd helper (LF here; windowsHelper() hands it out with CRLF, which cmd's label search needs). */
 export const WINDOWS_HELPER_SCRIPT = `@echo off
@@ -36,11 +50,11 @@ setlocal
 call :note "helper started; waiting for the app (pid %AUTARK_UPDATE_PID%) to end"
 set /a tries=0
 :wait
-tasklist /FI "PID eq %AUTARK_UPDATE_PID%" /NH 2>nul | find " %AUTARK_UPDATE_PID% " >nul
+"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq %AUTARK_UPDATE_PID%" /NH 2>nul | "%SystemRoot%\\System32\\find.exe" " %AUTARK_UPDATE_PID% " >nul
 if errorlevel 1 goto gone
 set /a tries+=1
 if %tries% geq ${WAIT_SECONDS} goto late
-ping -n 2 127.0.0.1 >nul
+"%SystemRoot%\\System32\\PING.EXE" -n 2 127.0.0.1 >nul
 goto wait
 :late
 call :note "the app still runs after ${WAIT_SECONDS} s; update left for the next try"
@@ -98,13 +112,18 @@ export interface HelperLaunch {
   cwd: string;
   /** Windows: the arguments go to cmd exactly as written (windowsVerbatimArguments). */
   verbatim: boolean;
+  /** Windows: the started process only hands over to the helper (start /b) and ends; see the header. */
+  handoff: boolean;
   /** Windows: the script text written to args' script file before the spawn. */
   script?: { file: string; text: string };
 }
 
 export interface WindowsHelperInput { pid: number; installer: string; packageFile?: string | null; exe: string; logFile: string }
 
-/** The cmd helper beside the installer; cmd runs it as `/d /s /c ""<script>""` (the outer quotes are cmd's own). */
+/**
+ * The cmd helper beside the installer, started by a hidden cmd that hands over to it in the same folder. `.\` because
+ * cmd skips the current folder when NoDefaultCurrentDirectoryInExePath is set; no path in the command line, so no quoting.
+ */
 export function windowsHelper(input: WindowsHelperInput): HelperLaunch {
   const dir = path.win32.dirname(input.installer);
   const file = path.win32.join(dir, WINDOWS_SCRIPT_NAME);
@@ -118,10 +137,11 @@ export function windowsHelper(input: WindowsHelperInput): HelperLaunch {
   if (input.packageFile) env.AUTARK_UPDATE_PACKAGE = input.packageFile;
   return {
     command: 'cmd.exe',
-    args: ['/d', '/s', '/c', `""${file}""`],
+    args: ['/d', '/c', `start "" /b cmd.exe /d /c .\\${WINDOWS_SCRIPT_NAME}`],
     env,
     cwd: dir, // never the install folder: the uninstaller removes that folder
     verbatim: true,
+    handoff: true,
     script: { file, text: WINDOWS_HELPER_SCRIPT.replace(/\n/g, '\r\n') },
   };
 }
@@ -135,6 +155,7 @@ export function linuxHelper(input: LinuxHelperInput): HelperLaunch {
     env: { APPIMAGE_SILENT_INSTALL: 'true' },
     cwd: path.posix.dirname(input.appImage),
     verbatim: false,
+    handoff: false,
   };
 }
 
@@ -214,18 +235,30 @@ export function installWithHelper(updater: Updater, deps: InstallHelperDeps): vo
   };
 }
 
-/** Writes the script, then starts the helper detached and hidden; 'spawn' or 'error' tells which way it went, 'exit' its end. */
+/**
+ * Writes the script, then starts the helper hidden. Linux: detached; 'spawn' or 'error' tells which way it went, 'exit'
+ * its end. Windows hand-over: not detached (a console without a window); the first cmd's exit 0 means the helper runs.
+ */
 export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEvents): void {
   mkdirSync(logs, { recursive: true });
   if (launch.script) writeFileSync(launch.script.file, launch.script.text, 'utf8');
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     env: { ...process.env, ...launch.env },
-    detached: true,
+    detached: !launch.handoff,
     stdio: 'ignore',
     windowsHide: true,
     windowsVerbatimArguments: launch.verbatim,
   });
+  if (launch.handoff) {
+    child.once('exit', code => {
+      if (code !== 0) { events.failed(Object.assign(new Error('hand-over failed'), { code: `HANDOFF_EXIT_${code ?? 'SIGNAL'}` })); return; }
+      setTimeout(() => events.ended(), HANDOFF_LIFETIME_MS).unref();
+      events.started();
+    });
+    child.once('error', error => events.failed(error));
+    return;
+  }
   child.once('spawn', () => {
     child.unref(); // unref keeps no event loop alive; 'exit' still arrives while this process runs
     child.once('exit', () => events.ended());

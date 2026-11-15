@@ -1,10 +1,10 @@
 // The focus timer and the person's estimate of a to-do (B-041 track A2, the My day concept §4.3,
 // §4.5): day.focus starts the timer (timerStartedAt; one runs at a time – starting another stops the running one)
-// and stops it (its time joins spentMs); checking a to-do off or cancelling it stops it too (a task.upserted
+// and stops it (its time joins spentMs); checking a to-do off or dropping it stops it too (a task.upserted
 // listener of the day service), and a finished to-do's measured time teaches the estimates once (≥ 1 min;
 // day/estimates.ts 'actual'). day.setEstimate stores the person's minutes ('person') and teaches them as the
 // correction that wins. Only the person's own list (assignee 'human', the owner's). A to-do given to someone else
-// by any path (Work's owner field, Make it mine, sendToTeam) stops its running timer at once – its time so far
+// by any path (tasks.give, Work's owner field) stops its running timer at once – its time so far
 // joins spentMs and nothing is learned – and day.focus 'stop' clears a running timer whoever owns the task now.
 // Owns: those writes. Never: touches an agent's task, a colleague's to-do, or the to-do's blocks.
 
@@ -19,7 +19,7 @@ export type FocusDeps = Pick<RuntimeServices, 'clock' | 'tasks' | 'log'> & Parti
 
 const MIN = 60_000;
 const MAX_LEARNED = 500;
-const finished = (task: Pick<TaskView, 'status'>) => task.status === 'done' || task.status === 'cancelled';
+const finished = (task: Pick<TaskView, 'status'>) => task.status === 'done' || task.status === 'dropped';
 
 /** On the person's own list (the owner's): assignee 'human', no other person's id. */
 const isOwn = (task: Pick<TaskView, 'assigneeKind' | 'assigneeId'>) => task.assigneeKind === 'human' && (task.assigneeId === undefined || task.assigneeId === 'human');
@@ -57,7 +57,7 @@ export class FocusTimer {
 
   setEstimate(taskId: string, minutes: number, by: string): TaskView {
     const task = ownTodo(this.s, taskId);
-    if (task.status === 'cancelled') throw new WorkforceError('conflict', 'This to-do was cancelled.', { details: { taskId } });
+    if (task.status === 'dropped') throw new WorkforceError('conflict', 'This to-do was dropped.', { details: { taskId } });
     const value = Math.min(Math.max(Math.round(minutes), 1), 24 * 60);
     const view = this.s.tasks.update(taskId, { estimateMin: value, estimateSource: 'person' }, by);
     this.s.estimates?.learn(task.assigneeId ?? 'human', task.title, value, 'person');

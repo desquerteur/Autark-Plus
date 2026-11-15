@@ -42,5 +42,5 @@ test('"more" names the next call only where it can be heard', () => {
 
 test('the end argument says so (lean)', () => {
   const end = (listen.inputSchema as { properties: { end: { description: string } } }).properties.end.description;
-  assert.match(end, /by 1800 – the first 30 minutes – unless the file is a WAV/);
+  assert.match(end, /within the first 30 minutes unless the file is a WAV/);
 });

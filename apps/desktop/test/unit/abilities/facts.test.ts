@@ -19,7 +19,7 @@ import { fitLocalSpeech, localSpeechModel } from '../../../src/shared/model/loca
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 import { modelDir, unpackDir } from '../../../src/runtime/voice/local/store.ts';
 
-const codex = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'plus', state: 'ok', priority: 0, rotation: false, enabled: true, detected: true, createdAt: 1 } as Account;
+const codex = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'plus', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 1 } as Account;
 const sol = { id: 'codex:gpt-6.1-sol', provider: 'codex', model: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', engine: 'codex', efforts: [], caps: { vision: true }, tier: 'frontier', strengths: {}, available: true, accounts: [codex.id] } as unknown as ModelInfo;
 
 function services(input: { data: string; functions?: Record<string, string>; voice?: Record<string, unknown>; installed?: string[]; tools?: string[]; engine?: boolean }): { s: RuntimeServices; updates: unknown[] } {

@@ -1,40 +1,35 @@
-// Memory tools. The tree of Markdown files (knowledge/memory-tree.ts), the same handlers for the main AI and the subconscious,
-// on demand, not in the core set: memory.browse {folder}, memory.read {path}, memory.write {…} and memory.forget {path}.
-// Searching memory is vector.search over "memory/…" – there is no search tool of its own here.
-// The older wrappers over the same files: knowledge.remember (save; an exact repeat is not stored twice, and a note with the
-// same title or clearly the same content in the same scope is updated – never a duplicate), knowledge.recall (search the
-// folders the caller names, else the whole tree; without an embedder by words, and it says so) and knowledge.correct (the old
-// version kept as history). Scopes: agent (default), conversation (private
-// to this chat), space, global, website / app (scopeId = host or process name, knowledge/scope-id.ts), mode.
-// Owns: these tools and their wording (folderText also for the subconscious's memory.browse). Never: a list of memory in a prompt.
+// Memory tools: the tree of Markdown files (knowledge/memory-tree.ts), on demand, never a list of memory in a prompt –
+// memory.browse {folder}, memory.read {path}, memory.write {…} and memory.forget {path}. Finding is knowledge.find (notes by
+// their words, `in` memory folders); vector.search reaches files embedded on purpose. memory.write is the one write: the folder is the place
+// (agents/<me> by default, company, branches/<space>, chats/<chat>, company/websites/<host>, company/apps/<process> with the
+// host or process name normalised – knowledge/scope-id.ts –, company/modes/<mode>, references/<person> or any topic
+// folder); a file of the same title, or clearly the same content, in that folder is updated – never a duplicate, the old
+// version kept as history; `pinned` moves it into or out of its place's pinned/ folder (withPinned); into references/ it
+// keeps the person's own words with a reference kind (references/references.ts captureReference). memory.* is anyMode.
+// Owns: these tools and their wording (folderText also for the subconscious's memory.browse).
 
-import type { ToolDef } from '../types.ts';
-import { failure, json, text } from '../types.ts';
-import type { KnowledgeItem, KnowledgeKind, KnowledgeScope } from '../../../shared/model/knowledge.ts';
+import type { ToolContext, ToolDef } from '../types.ts';
+import { failure, json } from '../types.ts';
+import type { KnowledgeItem } from '../../../shared/model/knowledge.ts';
 import { foldText } from '../../knowledge/normalize.ts';
 import { agentTags } from '../../knowledge/reserved.ts';
-import { normalScopeId, scopeIdHint } from '../../knowledge/scope-id.ts';
+import { appId, websiteId } from '../../knowledge/scope-id.ts';
+import { memoryId, scopeOfPath } from '../../knowledge/memory-tree.ts';
+import { REFERENCE_KINDS, captureReference, type ReferenceKind } from '../../references/references.ts';
 import { COVERS, similarity } from '../../subconscious/text.ts';
-import { DESCRIPTION_SHOWN, type MemoryFolder, type MemoryKind } from '../../../shared/model/memory.ts';
-import { clip, defineTool, internal, parseWhen, readChat } from './util.ts';
-import '../../contracts/vectors.ts';
+import type { MemoryFolder, MemoryKind } from '../../../shared/model/memory.ts';
+import { clip, defineTool, internal, parseWhen } from './util.ts';
+import { subjectOf } from './references.ts';
 
-/** Rule (e): without an embedder the write says it is not searchable by meaning. */
-const NOT_EMBEDDED = 'No embedder is connected: not embedded, so vector.search does not find it; memory.browse and memory.read do.';
-/** Rule (e): without an embedder a memory search says that it matched words, not meaning (q-r1c z4, 03.11.2026: it said nothing). */
-export const WORDS_ONLY = 'No embedder is connected: this is a word search, not by meaning.';
+const KINDS = ['fact', 'preference', 'experience', 'procedure', 'plan', 'observation', 'note'] as const;
+const REFERENCES = /^references(?:\/([^/]+))?\/?$/;
 
-const KINDS: KnowledgeKind[] = ['fact', 'preference', 'experience', 'procedure', 'plan', 'observation', 'note'];
-const SCOPES: KnowledgeScope[] = ['agent', 'conversation', 'space', 'global', 'website', 'app', 'mode'];
-
-/** The current note a new one would only repeat in other words: same title, else clearly the same content (never the
- * person's references or a chat's observations). */
+/** The current note a new one would only repeat in other words: same title, else clearly the same content. */
 function twinOf(current: readonly KnowledgeItem[], title: string, body: string): KnowledgeItem | undefined {
-  const own = current.filter((item) => item.kind !== 'reference' && item.kind !== 'observation');
   const key = foldText(title);
   const text = `${title} ${body}`;
   let best: { item: KnowledgeItem; score: number } | undefined;
-  for (const item of own) {
+  for (const item of current) {
     if (foldText(item.title) === key) return item;
     const score = similarity(`${item.title} ${item.body}`, text);
     if (score >= COVERS && (!best || score > best.score)) best = { item, score };
@@ -42,88 +37,30 @@ function twinOf(current: readonly KnowledgeItem[], title: string, body: string):
   return best?.item;
 }
 
-const remember = defineTool<{ title: string; body: string; kind?: KnowledgeKind; scope?: KnowledgeScope; scopeId?: string; tags?: string[]; pinned?: boolean; validFrom?: string; validTo?: string; confidence?: number }>({
-  name: 'knowledge.remember',
-  description: 'Save something worth knowing later (fact, preference, experience, procedure) as a memory file. scope: agent (default, my own), conversation (only this chat), space, global (the whole team), website (scopeId = the host or a page URL), app (scopeId = the process name, e.g. excel), mode (what I learned in my current specialist mode). pinned: always in my prompt (I keep it short). A note with the same title (or the same content) in that scope is updated, not saved twice. Every note keeps the date it was saved.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      title: { type: 'string', minLength: 1, maxLength: 200 }, body: { type: 'string', minLength: 1, maxLength: 8000 },
-      kind: { type: 'string', enum: KINDS }, scope: { type: 'string', enum: SCOPES }, scopeId: { type: 'string' },
-      tags: { type: 'array', items: { type: 'string' }, maxItems: 12 }, pinned: { type: 'boolean' },
-      validFrom: { type: 'string' }, validTo: { type: 'string' }, confidence: { type: 'number', minimum: 0, maximum: 1 },
-    },
-    required: ['title', 'body'], additionalProperties: false,
-  },
-  category: 'think',
-  describe: (args) => internal(`Remember "${clip(args.title, 60)}"`),
-  async run(args, ctx) {
-    const now = ctx.services.clock.now();
-    const scope = args.scope ?? 'agent';
-    const given = args.scopeId ?? (scope === 'agent' ? ctx.agent.id : scope === 'conversation' ? readChat(ctx) : scope === 'space' ? ctx.agent.spaceId : scope === 'mode' ? ctx.mode : undefined);
-    const scopeId = normalScopeId(scope, given);
-    if (scope !== 'global' && !scopeId) return failure(scope === 'website' || scope === 'app' ? `scope ${scope} needs a scopeId: ${scopeIdHint(scope)}.` : `scope ${scope} needs a scopeId.`);
-    const title = args.title.trim();
-    const body = args.body.trim();
-    const current = await ctx.services.knowledge.list({ scope, ...(scopeId ? { scopeId } : {}), limit: 500 });
-    const same = current.find((item) => item.body.trim() === body && foldText(item.title) === foldText(title));
-    if (same) return json({ ok: true, id: same.id, outcome: 'duplicate', note: 'Already known; nothing new was stored.' });
-    const twin = twinOf(current, title, body);
-    if (twin) {
-      const next = ctx.services.knowledge.correct(twin.id, { title, body, validTo: parseWhen(args.validTo, now) }, ctx.agent.id);
-      const pinned = args.pinned === undefined || args.pinned === twin.pinned ? next : ctx.services.knowledge.pin(next.id, args.pinned, ctx.agent.id);
-      return json({ ok: true, id: pinned.id, outcome: 'updated', supersedes: twin.id, note: `Updated my note "${clip(twin.title, 60)}" (the old version is kept as history).` });
-    }
-    const item = ctx.services.knowledge.save({
-      title: args.title, body: args.body, kind: args.kind ?? 'fact', scope, scopeId, tags: agentTags(args.tags ?? []),
-      pinned: args.pinned ?? false, confidence: args.confidence ?? 0.7,
-      validFrom: parseWhen(args.validFrom, now), validTo: parseWhen(args.validTo, now),
-      source: { kind: 'agent', ref: ctx.runId, trusted: true }, createdBy: ctx.agent.id,
-    });
-    return json({ ok: true, id: item.id, outcome: 'added' });
-  },
-});
+/** A folder as stored: a website's host or an app's process name normalised, no slash at either end. */
+function placeOf(folder: string): string {
+  const clean = folder.trim().replace(/^memory\//, '').replace(/^\/+|\/+$/g, '');
+  const area = /^company\/(websites|apps)\/([^/]+)(.*)$/.exec(clean);
+  if (!area) return clean;
+  const id = area[1] === 'websites' ? websiteId(area[2]) : appId(area[2]);
+  return `company/${area[1]}/${id ?? area[2]}${area[3]}`;
+}
 
-const recall = defineTool<{ query: string; in?: string[]; limit?: number; kinds?: KnowledgeKind[] }>({
-  name: 'knowledge.recall',
-  description: 'Search what the team and I know in the memory tree, by meaning: in the folders of `in` (e.g. "company/customers"), else all of it. Notes say when they were saved; knowledge.correct fixes a wrong one.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', minLength: 1, maxLength: 1000 }, in: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 512 } },
-      limit: { type: 'integer', minimum: 1, maximum: 20 }, kinds: { type: 'array', items: { type: 'string', enum: [...KINDS, 'reference'] } },
-    },
-    required: ['query'], additionalProperties: false,
-  },
-  category: 'read',
-  describe: (args) => internal(`Recall "${clip(args.query, 60)}"`),
-  async run(args, ctx) {
-    const hits = await ctx.services.knowledge.search({ text: args.query, folders: args.in?.length ? args.in : [''], conversationId: readChat(ctx), limit: args.limit ?? 8, kinds: args.kinds }).catch(() => []);
-    const lines: string[] = [];
-    for (const hit of hits) {
-      const item = hit.item;
-      const validity = item.validTo ? ` (valid until ${new Date(item.validTo).toISOString().slice(0, 10)})` : '';
-      const area = item.scope === 'mode' ? ` [${item.scopeId} mode]` : '';
-      lines.push(`- [${item.id}] ${item.title}${validity}${item.description ? ` (${clip(item.description, DESCRIPTION_SHOWN)})` : ''}: ${clip(item.body, 800)} — ${hit.why}${area}`);
-    }
-    const words = ctx.services.vectors?.available() === false;
-    if (!lines.length) return text(words ? `${WORDS_ONLY} It found nothing.` : 'Nothing relevant found.');
-    return text([...(words ? [WORDS_ONLY] : []), ...lines].join('\n'));
-  },
-});
+/** The notes of `folder` itself (and its pinned/), the twin check's candidates. */
+async function notesIn(ctx: ToolContext, folder: string): Promise<KnowledgeItem[]> {
+  const items = await ctx.services.knowledge.list({ ...scopeOfPath(`${folder}/x.md`), limit: 500 }).catch(() => []);
+  return items.filter((item) => item.kind !== 'reference' && item.kind !== 'observation'
+    && item.id.split(':').slice(0, -1).filter((part) => part !== 'pinned').join('/') === folder);
+}
 
-const correctMemory = defineTool<{ id: string; body?: string; title?: string; validTo?: string }>({
-  name: 'knowledge.correct',
-  description: 'Correct or end a stored item; the old version is kept as history.',
-  inputSchema: { type: 'object', properties: { id: { type: 'string' }, body: { type: 'string', minLength: 1 }, title: { type: 'string' }, validTo: { type: 'string' } }, required: ['id'], additionalProperties: false },
-  category: 'think',
-  describe: (args) => internal(`Correct memory ${args.id}`, args.id),
-  async run(args, ctx) {
-    if (!ctx.services.knowledge.get(args.id)) return failure('Memory item not found.');
-    const next = ctx.services.knowledge.correct(args.id, { body: args.body, title: args.title, validTo: parseWhen(args.validTo, ctx.services.clock.now()) }, ctx.agent.id);
-    return json({ ok: true, id: next.id, supersedes: args.id });
-  },
-});
+/** memory.write into references/<person>: the person's own words with a reference kind. */
+function writeReference(ctx: ToolContext, person: string | undefined, args: { title: string; text: string; kind?: string; source?: string; audience?: string }) {
+  const kind = (args.kind ?? 'example') as ReferenceKind;
+  if (!REFERENCE_KINDS.includes(kind)) return failure(`In references/ the kind is one of ${REFERENCE_KINDS.join(', ')}.`);
+  const messageId = /^message:(.+)$/.exec(args.source ?? '')?.[1];
+  const item = captureReference(ctx.services.knowledge, { kind, text: args.text, subject: subjectOf(ctx.services, person), situation: args.title, ...(args.audience ? { audience: args.audience } : {}), by: ctx.agent.id, ...(messageId ? { messageId } : {}) });
+  return json({ ok: true, path: item.id.replace(/:/g, '/'), outcome: 'created', title: item.title });
+}
 
 const PATH = { type: 'string', minLength: 1, maxLength: 512 } as const;
 const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
@@ -142,8 +79,8 @@ export function folderText(folder: MemoryFolder): string {
 
 const browse = defineTool<{ folder?: string }>({
   name: 'memory.browse',
-  description: 'One folder of the memory tree: what it is for, its subfolders and its newest files (titles, with a file\'s description when it has one). No folder = the top (company, branches, agents, references).',
-  inputSchema: { type: 'object', properties: { folder: { type: 'string', maxLength: 512 } }, additionalProperties: false },
+  description: 'Shows a folder of the memory tree: its subfolders and newest files. Each file with title, kind, date and description.',
+  inputSchema: { type: 'object', properties: { folder: { type: 'string', maxLength: 512, description: 'Default the top: company, branches, agents, references.' } }, additionalProperties: false },
   category: 'read',
   describe: (args) => internal(`Browse memory ${clip(args.folder ?? '', 60)}`),
   async run(args, ctx) {
@@ -158,7 +95,7 @@ const browse = defineTool<{ folder?: string }>({
 
 const read = defineTool<{ path: string }>({
   name: 'memory.read',
-  description: 'One memory file: its title, description, kind, tags, date, source and text.',
+  description: 'Reads one memory file with its title, description, kind, tags, date, source and text.',
   inputSchema: { type: 'object', properties: { path: PATH }, required: ['path'], additionalProperties: false },
   category: 'read',
   describe: (args) => internal(`Read memory ${clip(args.path, 60)}`, args.path),
@@ -174,16 +111,27 @@ const read = defineTool<{ path: string }>({
   },
 });
 
-const write = defineTool<{ path?: string; folder?: string; title: string; text: string; description?: string; kind?: MemoryKind; tags?: string[]; source?: string; validFrom?: string; validTo?: string }>({
+type WriteArgs = {
+  path?: string; folder?: string; title: string; text: string; description?: string; kind?: MemoryKind | ReferenceKind; tags?: string[]; source?: string;
+  pinned?: boolean; confidence?: number; validFrom?: string; validTo?: string; audience?: string;
+};
+
+const write = defineTool<WriteArgs>({
   name: 'memory.write',
-  description: 'Create or update a memory file; it is findable with vector.search at once. I write one whenever an exchange taught me something that will still matter in weeks – short, dated, with names, in the words someone would search for; what I do not keep, my next turn does not know. folder: where it goes, default my own (agents/<me>); company for everyone, branches/<space> for a branch, or any topic subfolder (created as needed). The same title in a folder updates that file; path names a file to update. description: one line on when the file helps (optional).',
+  description: 'Creates or updates a memory file, findable at once. What I do not keep, my next turn does not know, so I write what will still matter in weeks – short, dated, in the words someone would search for. The same title or content in a folder updates that file.',
   inputSchema: {
     type: 'object',
     properties: {
-      path: PATH, folder: { type: 'string', maxLength: 512 }, title: { type: 'string', minLength: 1, maxLength: 200 }, text: { type: 'string', minLength: 1, maxLength: 50_000 },
-      description: { type: 'string', maxLength: 300 },
-      kind: { type: 'string', enum: KINDS }, tags: { type: 'array', items: { type: 'string' }, maxItems: 12 }, source: { type: 'string', maxLength: 500 },
-      validFrom: { type: 'string' }, validTo: { type: 'string' },
+      path: { ...PATH, description: 'A file to update.' },
+      folder: { type: 'string', maxLength: 512, description: "Default my own (agents/<me>); company for everyone, branches/<space>, chats/<chat>, company/websites/<host>, company/apps/<process>, company/modes/<mode>, references/<person> for the person's own words, or any topic subfolder." },
+      title: { type: 'string', minLength: 1, maxLength: 200 }, text: { type: 'string', minLength: 1, maxLength: 50_000 },
+      description: { type: 'string', maxLength: 300, description: 'One line on when it helps.' },
+      kind: { type: 'string', enum: [...KINDS, ...REFERENCE_KINDS], description: `In references/: ${REFERENCE_KINDS.join(', ')} (default example).` },
+      audience: { type: 'string', maxLength: 120, description: 'In references/: whom the person wrote it for, so a later draft for them finds it.' },
+      tags: { type: 'array', items: { type: 'string' }, maxItems: 12 }, source: { type: 'string', maxLength: 500, description: 'Where it came from, e.g. "message:<id>".' },
+      pinned: { type: 'boolean', description: 'true: in my prompt every turn – for what stays true, kept short; a state that moves I read fresh where it lives. false moves it out.' },
+      confidence: { type: 'number', minimum: 0, maximum: 1, description: '0–1.' },
+      validFrom: { type: 'string' }, validTo: { type: 'string', description: 'Ends it at this time.' },
     },
     required: ['title', 'text'], additionalProperties: false,
   },
@@ -192,13 +140,20 @@ const write = defineTool<{ path?: string; folder?: string; title: string; text: 
   async run(args, ctx) {
     const now = ctx.services.clock.now();
     try {
-      const result = ctx.services.knowledge.memoryWrite({
-        ...(args.path ? { path: args.path } : { folder: args.folder ?? `agents/${ctx.agent.id}` }),
+      const folder = args.path ? undefined : placeOf(args.folder ?? `agents/${ctx.agent.id}`);
+      const reference = folder !== undefined ? REFERENCES.exec(folder) : null;
+      if (reference) return writeReference(ctx, reference[1], args);
+      if ((REFERENCE_KINDS as readonly string[]).includes(args.kind ?? '')) return failure(`${args.kind} is a reference kind: it goes into references/<person>.`);
+      const twin = folder !== undefined ? twinOf(await notesIn(ctx, folder), args.title.trim(), args.text.trim()) : undefined;
+      const written = ctx.services.knowledge.memoryWrite({
+        ...(args.path ? { path: args.path } : twin ? { path: twin.id } : { folder }),
         title: args.title, text: args.text, ...(args.description !== undefined ? { description: args.description } : {}),
-        kind: args.kind, tags: args.tags && agentTags(args.tags), source: args.source ?? `run:${ctx.runId}`,
-        validFrom: parseWhen(args.validFrom, now), validTo: parseWhen(args.validTo, now), by: ctx.agent.id,
+        kind: args.kind as MemoryKind | undefined, tags: args.tags && agentTags(args.tags), source: args.source ?? `run:${ctx.runId}`,
+        validFrom: parseWhen(args.validFrom, now), validTo: parseWhen(args.validTo, now), confidence: args.confidence, by: ctx.agent.id,
       });
-      return json({ ok: true, ...result, ...(ctx.services.vectors?.available() === false ? { note: NOT_EMBEDDED } : {}) });
+      const path = args.pinned === undefined ? written.path : ctx.services.knowledge.pin(memoryId(written.path), args.pinned, ctx.agent.id).id.replace(/:/g, '/');
+      const note = twin && foldText(twin.title) !== foldText(args.title) ? `Updated my note "${clip(twin.title, 60)}" (the old version is kept as history).` : '';
+      return json({ ok: true, ...written, path, ...(note ? { note } : {}) });
     } catch (error) {
       return failure((error as Error).message);
     }
@@ -207,7 +162,7 @@ const write = defineTool<{ path?: string; folder?: string; title: string; text: 
 
 const forget = defineTool<{ path: string }>({
   name: 'memory.forget',
-  description: 'Delete a memory file for good, with its old versions.',
+  description: 'Deletes a memory file for good, with its old versions.',
   inputSchema: { type: 'object', properties: { path: PATH }, required: ['path'], additionalProperties: false },
   category: 'think',
   describe: (args) => internal(`Forget memory ${clip(args.path, 60)}`, args.path),
@@ -221,4 +176,4 @@ const forget = defineTool<{ path: string }>({
   },
 });
 
-export const memoryTools: ToolDef[] = [browse, read, write, forget, remember, recall, correctMemory];
+export const memoryTools: ToolDef[] = [browse, read, write, forget].map((tool) => ({ ...tool, anyMode: true as const }));

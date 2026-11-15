@@ -67,8 +67,11 @@ export type DeviceCapability = 'todo' | 'chat' | 'tasks' | 'settings' | 'manage'
 
 /** Who is calling. Decided by the transport during the handshake, never by the client. */
 export type ClientScope =
-  /** Desktop window / local CLI with the launch token: full access. `main` marks Electron main's own port (entry-electron). */
-  | { kind: 'owner'; main?: true }
+  /**
+   * Desktop window / local CLI with the launch token: full access. `main` marks Electron main's own port (entry-electron).
+   * B-085: `agentId` – an agent's own `wf` (Hello `agent`, checked by http/ws.ts): its chat lines are that agent's.
+   */
+  | { kind: 'owner'; main?: true; agentId?: string }
   /**
    * PWA / phone. `secure` is set by the transport: true for loopback (incl. the local
    * `tailscale serve` https proxy) and tailnet peers that reached this PC's tailnet address;
@@ -88,4 +91,9 @@ export interface Hello {
   token: string; // launch token, device token or peer session token
   client: 'desktop' | 'pwa' | 'peer' | 'cli' | 'external'; // 'external': C8 external agent
   deviceName?: string;
+  /** B-085: the agent an owner-token client runs for (its AGENT_ENV); http/ws.ts takes it only for a live agent. */
+  agent?: string;
 }
+
+/** B-085: the env variable that names the agent whose process it is (engines/wf-shim.ts sets it, wf-cli/discover.ts reads it). */
+export const AGENT_ENV = 'AUTARK_AGENT';

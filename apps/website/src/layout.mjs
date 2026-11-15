@@ -57,7 +57,7 @@ function footer(root) {
         <p>${site.descriptor}. A company of AI agents that works on its own, on the AI plans you already pay for.</p>
       </div>
       ${col('Product', [['Overview', root], ['All capabilities', `${root}product/`], ['How it works', `${root}how-it-works/`], ['Access and data', `${root}access/`], ['Compare', `${root}compare/`], ['Download', `${root}download/`], ['Changelog', `${root}changelog/`]])}
-      ${col('Resources', [['FAQ', `${root}faq/`], ['Brand and press kit', `${root}brand/`], ['Releases on GitHub', release.releasesUrl, 1], ['Report a problem', maker.feedbackUrl, 1], ['llms.txt', `${root}llms.txt`], ['Facts (JSON)', `${root}facts.json`]])}
+      ${col('Resources', [['FAQ', `${root}faq/`], ['In the press', `${root}press/`], ['Brand and press kit', `${root}brand/`], ['Releases on GitHub', release.releasesUrl, 1], ['Report a problem', maker.feedbackUrl, 1], ['llms.txt', `${root}llms.txt`], ['Facts (JSON)', `${root}facts.json`]])}
       ${col('Download', platforms.map((p) => [p.os, `${root}download/${p.id}/`]).concat([['All releases', release.releasesUrl, 1]]))}
       ${col(maker.company, [['About', `${root}about/`], [maker.company, maker.companyUrl, 1], [maker.founder, maker.founderUrl, 1], [`Book: ${maker.bookTitle}`, maker.bookUrl, 1], ...maker.social.map((s) => [s.name, s.url, 1]), ['Contact', maker.contactUrl, 1]])}
     </div>
@@ -79,7 +79,6 @@ const orgLd = {
 const personLd = {
   '@type': 'Person', '@id': 'https://stanislaushees.com/#person', name: maker.founder, url: maker.founderUrl,
   jobTitle: 'Founder & Software Engineer', worksFor: { '@id': 'https://teydralab.com/#organization' },
-  homeLocation: { '@type': 'Place', name: 'Salzburg, Österreich' },
   sameAs: ['https://at.linkedin.com/in/stanislaus-hees-364966432', 'https://teydralab.com/stanislaus-hees'],
 };
 

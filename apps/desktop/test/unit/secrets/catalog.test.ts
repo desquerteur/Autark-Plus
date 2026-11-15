@@ -1,7 +1,7 @@
 // The secrets catalog for agents (owner 29.10.2026, a catalog like skills):
 // secrets.save adds an entry with a description – the route chosen automatically (or named), the id generated (or
 // suggested), for every agent, the value straight into the vault and never in the result or the journal; entries are
-// found like skills (skills.find's catalog lines – single secrets and logins, never a value);
+// found like skills (knowledge.find's catalog lines – single secrets and logins, never a value);
 // a stored value never lands anywhere else: every tool argument passes the leak redactor before the tool runs (the
 // registry guard), so a note, memory, file or message gets the handle; the agent guidance says so.
 // Owns: these assertions only. Never: a real keychain, model or network.
@@ -16,7 +16,7 @@ import { SecretVault } from '../../../src/runtime/secrets/service.ts';
 import { newEntryId, slugOf } from '../../../src/runtime/secrets/entry-id.ts';
 import { withoutSecretValues } from '../../../src/runtime/secrets/guard.ts';
 import { findSecrets } from '../../../src/runtime/tools/builtin/skills-find.ts';
-import { secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
+import { NOTE, secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
 import { HIDDEN_ARGS, Registry } from '../../../src/runtime/tools/registry.ts';
 import { journalArgs } from '../../../src/runtime/tools/journal.ts';
 import { autoSecretRoute } from '../../../src/shared/model/security.ts';
@@ -76,7 +76,7 @@ test('automatic routes and ids', () => {
   assert.equal(newEntryId([], [], '!!!'), 'sec_secret');
 });
 
-test('found like skills: skills.find lines name single secrets and logins with their handles – never a value', async () => {
+test('found like skills: knowledge.find lines name single secrets and logins with their handles – never a value', async () => {
   const t = setup();
   await t.vault.save({ label: 'GitHub CI token', kind: 'token', value: TOKEN, description: 'Releases from the CI pipeline.' });
   const login = await t.vault.saveGroup({ label: 'Support mailbox login', kind: 'login', description: 'Customer support inbox at mail.example', fields: [
@@ -119,6 +119,6 @@ test('a stored value never lands anywhere else: every tool argument passes the l
 });
 
 test('the agent guidance: save a secret straight into the catalog and use its id – never copy it elsewhere', () => {
-  assert.match(tool('secrets.list').description, /values stay out of my notes, memory, rules, files and messages/);
-  assert.match(tool('secrets.save').description, /I keep the value here, nowhere else/);
+  assert.match(NOTE, /values stay out of my notes, memory, rules, files and messages/);
+  assert.match(tool('secrets.save').description, /the moment I get one .*I keep the value here, nowhere else/);
 });

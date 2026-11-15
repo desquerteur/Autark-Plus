@@ -107,7 +107,7 @@ function viewTaskRow<T extends Task>(self: string, task: T): T {
     if (task.assigneeId === self) delete view.assigneeId;
     else view.assigneeId = task.assigneeId === undefined || task.assigneeId === HUMAN_ID ? OWNER_ALIAS : task.assigneeId;
   }
-  if (task.waitingOn?.id !== undefined) view.waitingOn = { ...task.waitingOn, id: viewId(self, task.waitingOn.id) };
+  if (task.waitingOn?.who !== undefined) view.waitingOn = { ...task.waitingOn, who: viewId(self, task.waitingOn.who) };
   return view;
 }
 

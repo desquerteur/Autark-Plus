@@ -4,7 +4,7 @@
 // Owns: a small in-memory cache, the synchronous lookup used by delta() (cached text in the
 // files row, else a bounded sync read for text files – one whose bytes are not here goes the async way) and the async
 // prepare() that brings the bytes of a file uploaded on another of the person's PCs here (devices/sync/blobs.ts
-// needBlob: images and recordings too), extracts PDFs and transcribes recordings ahead of a turn. A PDF that was never extracted (or a
+// needBlob: images and recordings too; B-080: all missing ones at once), extracts PDFs and transcribes recordings ahead of a turn. A PDF that was never extracted (or a
 // recording never transcribed) starts in the background (delta() then keeps that message
 // unseen so its text arrives with the next turn); a failure is remembered ("nothing readable",
 // or the reason a recording has no transcript) so it never retries in a loop – except a busy decoder
@@ -114,13 +114,19 @@ export class AttachmentTexts {
     return { pending: true };
   }
 
-  /** Brings the bytes of the given attachments here, extracts their text (PDFs included) and transcribes recordings so text() finds it. */
+  /**
+   * Brings the bytes of the given attachments here, extracts their text (PDFs included) and transcribes recordings so
+   * text() finds it. B-080: the missing bytes are pulled all at once – their pulls share one dial of a PC without a
+   * live link (devices/mesh.ts keeps one dial per PC in flight), so three images on a sleeping PC cost one dial, not three.
+   */
   async prepare(files: Attachment[]): Promise<void> {
     const s = this.services();
-    for (const file of files) {
-      const recording = isRecording(file.mime);
-      if (recording && dictated(s.db, file.fileId)) continue; // its words are the message's body (synced with the row): no bytes needed
+    const wanted = files.filter((file) => !(isRecording(file.mime) && dictated(s.db, file.fileId))); // a dictation's words are the message's body (synced with the row): no bytes needed
+    await Promise.all(wanted.map(async (file) => {
       try { if (!existsSync(s.files.path(file.fileId))) await needBlob(s, file.fileId); } catch { /* the read below finds what is missing */ }
+    }));
+    for (const file of wanted) {
+      const recording = isRecording(file.mime);
       if (recording) {
         // A transcription another turn's delta started is awaited too, so this turn gets the text.
         if (this.hearing.has(file.fileId) || this.recording(file) === 'transcribe') await this.hear(file.fileId);

@@ -44,6 +44,7 @@ function store(file: string, bytes: Uint8Array, mime: string, size: number) {
       get: (id: string) => (id === 'f' ? { id, name: path.basename(file), mime, size, createdAt: 0 } : undefined),
       read: async () => { reads.count++; return bytes; },
       path: () => file,
+      local: async () => file, // B-080: the path with the bytes here
     },
     host: {},
   } as unknown as HearServices;

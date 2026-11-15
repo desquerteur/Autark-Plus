@@ -1,7 +1,7 @@
 // Events the runtime pushes to subscribed clients (and that runtime modules publish on the
 // in-process bus). Owns: event names → payload types and which topic carries them.
-// Never: sends full state snapshots for small changes – events are deltas. B-075: a run's streaming answer has no
-// event of its own – its row is written (body and meta.live, throttled) and goes out as message.updated.
+// Never: sends full state snapshots for small changes – events are deltas. Who works for a chat travels in its
+// summary (ConversationSummary.live, conversation.upserted – runtime/chat/live.ts).
 
 import type { Agent, Space } from '../model/org.ts';
 import type { ConversationSummary, Message } from '../model/chat.ts';
@@ -18,6 +18,7 @@ import type { WorkStopState } from '../model/work-stop.ts';
 import type { BrowserFrame, BrowserViewState } from '../model/browser.ts';
 import type { PointerState } from '../model/pointers.ts'; // B-055
 import type { CalendarEvent } from '../model/calendar.ts';
+import type { LiveCall } from '../model/call.ts'; // B-081
 import type { Topic } from './protocol.ts';
 
 export interface EventMap {
@@ -27,9 +28,13 @@ export interface EventMap {
   'message.created': Message;
   'message.updated': Message;
   'message.removed': { id: string; conversationId: string };
+  /** B-081: the ringing and running calls changed (shared/model/call.ts LiveCall; topic 'chats': every device of the person). */
+  'calls.live': { calls: LiveCall[] };
   // tasks
   'task.upserted': TaskView;
   'task.removed': { id: string; conversationId?: string }; // no conversationId: a chat-free task (B-054)
+  /** Runtime only: a colleague (per_…) is told about a task – given to them, due, or ended after they gave it (runtime/tasks/give.ts tell → pwa/person-push.ts). */
+  'person.notice': { personId: string; kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info'; title: string; body: string; taskId?: string; conversationId?: string };
   'schedule.upserted': Schedule;
   'schedule.removed': { id: string };
   /** B-041 My day (shared/model/calendar.ts): a calendar row of a member was created or changed (topic 'tasks', 'todo' devices). */
@@ -111,6 +116,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'conversation.upserted':
     case 'conversation.removed':
     case 'bridge.upserted':
+    case 'calls.live': // B-081: rings and running calls reach every chat-capable device
       return 'chats';
     case 'media.upserted':
       return value.conversationId ? `chat:${value.conversationId}` : 'chats';

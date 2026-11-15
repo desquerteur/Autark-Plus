@@ -2,7 +2,8 @@
 // secrets.list (metadata in the agent's scope – route, tags, source –, never values) and secrets.generate
 // (crypto.randomInt, in the catalog for every agent, recorded as the agent's, saved from the registrable domain – not
 // bound to it –, only the handle comes back); nothing binds on use and nobody can restrict a secret to sites; browser.act
-// fills a password or a card on any host; tools.find leads to secrets.import for an export or a .env (04.11.2026).
+// fills a password or a card on any host; tools.find leads to secrets.import for an export or a .env (04.11.2026);
+// B-080: secrets.list's text matches word by word; with a route, other routes' entries holding as many words come too.
 // Owns: these assertions only. Never: a real browser or keychain.
 
 import { test } from 'node:test';
@@ -77,19 +78,42 @@ test('secrets.list shows every secret and never a value – like a skill index w
   assert.equal(result.secrets[1].handle, `secret://${result.secrets[1].id}`);
   assert.match(result.secrets[1].handle, /^secret:\/\/sec_/);
   assert.ok(result.secrets.every((entry) => entry.domains === undefined), 'owner 29.10.2026: no site restriction is listed – there is none');
-  assert.match(result.note, /cards included/);
+  assert.match(result.note, /any length – any site, any command, any host, cards and CVCs included/);
+  assert.match(result.note, /computer\.type, computer\.act set_value, phone\.type/, 'B-080: typing on screen is a sink too');
   const saved = await t.vault.save({ label: 'Forum password', kind: 'password', value: 'pw-forum-list', source: 'forum.example', tags: ['for the web at forum.example'] });
-  const listed = ((await tool('secrets.list').run({ text: 'forum.example' }, t.ctx())).structured as { secrets: Array<{ id: string; tags?: string[]; savedFrom?: string }> }).secrets;
+  const listed = ((await tool('secrets.list').run({ query: 'forum.example' }, t.ctx())).structured as { secrets: Array<{ id: string; tags?: string[]; savedFrom?: string }> }).secrets;
   assert.deepEqual(listed.map((entry) => [entry.id, entry.tags, entry.savedFrom]), [[saved.id, ['for the web at forum.example'], 'forum.example']], 'found by the site it was saved from');
   assert.equal(((await tool('secrets.list').run({ route: 'payment' }, t.ctx())).structured as { count: number }).count, 1, 'by route');
   for (const value of ['hunter2-shop', '4111111111111234', 'sk-ben-0000']) assert.ok(!all(out).includes(value), value);
   assert.equal(tool('secrets.list').category, 'read');
-  assert.deepEqual(((await tool('secrets.list').run({ text: 'shop' }, t.ctx())).structured as { count: number }).count, 1);
+  assert.deepEqual(((await tool('secrets.list').run({ query: 'shop' }, t.ctx())).structured as { count: number }).count, 1);
+});
+
+test('B-080: secrets.list matches word by word, most words first; with a route, other routes\' entries holding as many words as its best come too; the note names what my own shell does with a handle', async () => {
+  const t = setup();
+  const windows = await t.vault.save({ label: 'Windows-Anmeldung – office-pc – Moser', kind: 'note', value: 'win-pw-0815-moser', route: 'notes' });
+  await t.vault.save({ label: 'Mail login', kind: 'password', value: 'pw-mail-4711', description: 'The password of the mail account.', route: 'logins' });
+  await t.vault.save({ label: 'Shop key', kind: 'api_key', value: 'sk-shop-0000' });
+  type Listed = { found?: string; note: string; count: number; secrets: Array<{ id: string; name: string; route: string }> };
+  const list = async (args: Record<string, unknown>) => (await tool('secrets.list').run(args, t.ctx())).structured as Listed;
+  const words = await list({ query: 'windows password moser' });
+  assert.deepEqual(words.secrets.map((entry) => entry.name), ['Windows-Anmeldung – office-pc – Moser', 'Mail login'], 'the entry holding the most words first');
+  const elsewhere = await list({ query: 'windows moser', route: 'logins' });
+  assert.equal(elsewhere.found, 'None in route logins; these are in other routes.');
+  assert.deepEqual(elsewhere.secrets.map((entry) => [entry.id, entry.route]), [[windows.id, 'notes']], 'each with its route');
+  assert.equal((await list({ query: 'mail', route: 'logins' })).found, undefined, 'a route whose best match no other route reaches answers alone');
+  // The live shape: a login of the asked route mentions "password", the Windows entry is a note – it comes too.
+  const live = await list({ query: 'windows password', route: 'logins' });
+  assert.deepEqual(live.secrets.map((entry) => [entry.name, entry.route]), [['Mail login', 'logins'], ['Windows-Anmeldung – office-pc – Moser', 'notes']], 'a tie: the route\'s first');
+  assert.equal(live.found, 'Entries of other routes that hold as many of the words are here too; each shows its route.');
+  const more = await list({ query: 'windows password moser', route: 'logins' });
+  assert.deepEqual(more.secrets.map((entry) => entry.route), ['notes', 'logins'], 'an entry of another route holding more words comes first');
+  assert.match(words.note, /shell\.exec env, web\.fetch headers and connector files; my engine's own shell passes it on as plain text\./);
 });
 
 test('secrets.generate: in the catalog for every agent, recorded as the agent\'s, saved from the site (no binding), only the handle comes back', async () => {
   const t = setup();
-  const out = await tool('secrets.generate').run({ site: 'https://accounts.example.com/signup', length: 24 }, t.ctx());
+  const out = await tool('secrets.generate').run({ source: 'https://accounts.example.com/signup', length: 24 }, t.ctx());
   assert.equal(out.isError, undefined);
   const result = out.structured as { handle: string; label: string; savedFrom: string };
   const [info] = t.vault.list();
@@ -103,11 +127,11 @@ test('secrets.generate: in the catalog for every agent, recorded as the agent\'s
   assert.equal(t.vault.redact(`typed ${value}`), `typed secret://${info.id}`, 'a leak would be redacted');
   assert.equal(await t.vault.use(info.id, 'ag_ben', 'example.com'), value, 'every agent may use it');
   assert.equal(await t.vault.use(info.id, 'ag_mira', 'other-service.example'), value, 'it works on another site too');
-  const plain = await tool('secrets.generate').run({ label: 'Build DB', purpose: 'Postgres on the build box' }, t.ctx());
+  const plain = await tool('secrets.generate').run({ name: 'Build DB', description: 'Postgres on the build box' }, t.ctx());
   assert.notEqual(plain.isError, true, 'no web site needed (review intent #9)');
   const server = t.vault.list().find((entry) => entry.label === 'Build DB')!;
   assert.deepEqual([server.source, server.tags?.length ?? 0], [undefined, 0]);
-  assert.match(tool('secrets.generate').describe!({ site: 'https://a.b.example.com' }, t.ctx()).summary, /for example\.com$/);
+  assert.match(tool('secrets.generate').describe!({ source: 'https://a.b.example.com' }, t.ctx()).summary, /for example\.com$/);
 });
 
 test('owner 29.10.2026: no restriction anywhere – nothing binds on use, cards included; nobody can set one', async () => {
@@ -132,7 +156,7 @@ test('owner 04.11.2026: an agent looking for a way to bring in a password export
   for (const query of ['import the passwords exported from chrome', 'import a .env file with keys', 'csv export of my logins']) {
     assert.equal(rankTools(specs, query, 3)[0]?.name, 'secrets.import', query);
   }
-  assert.match(tool('secrets.import').description, /a \.env file or a flat JSON of names and values/);
+  assert.match((tool('secrets.import').inputSchema.properties as Record<string, { description: string }>).path.description, /Bitwarden JSON, \.env or flat JSON/);
 });
 
 /** A browser whose page sits on `page.host`. */

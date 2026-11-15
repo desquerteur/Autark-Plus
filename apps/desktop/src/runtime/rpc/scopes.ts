@@ -12,7 +12,9 @@
 //             modes.changed with 'chat'; settings.updated with 'settings' or 'permissions'. computer.activity and
 //             work.state (the stops of computer use and agent work) reach every device with 'todo';
 //             browser.sessions (agent ids only) devices with 'todo' on a secure transport. tabs.changed and
-//             tabs.position (B-076: the PC's side pane, which the phone shows too) devices with 'manage'. pwa.updated,
+//             tabs.position (B-076: the PC's side pane, which the phone shows too) devices with 'manage'. B-084 (D6):
+//             remote.updated, relay.updated, device.upserted and device.removed (Settings › Devices) devices with
+//             'settings' on a secure transport (as remote.* / devices.* themselves). pwa.updated,
 //             calendar.sources and 'browser:<agentId>' (the live view – devices pull frames with browser.pull)
 //             stay with the owner.
 //   external – C8: only 'chat:<its chat>', and there message.created/updated/removed and the
@@ -55,6 +57,8 @@ const PANE_EVENTS: ReadonlySet<string> = new Set(['tabs.changed', 'tabs.position
 const BUS_ONLY: ReadonlySet<string> = new Set(['task.changed', 'phoneUse.reply', 'phoneUse.attached']);
 /** B-078: accounts on the phone (accounts.* is 'settings' on a secure transport, rpc/handlers/providers.ts). */
 const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed']);
+/** B-084 (D6): Settings › Devices on the phone (remote.* / devices.* are 'settings' on a secure transport). */
+const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed']);
 
 /** True for a syntactically valid topic ('chats' … or 'chat:<id>' / 'runs:<agentId>' / 'browser:<agentId>'). */
 export function isTopic(value: unknown): value is Topic {
@@ -84,6 +88,7 @@ function deviceEvent(scope: DeviceScope, topic: Topic, event: EventName, data: u
   if (BRAKE_EVENTS.has(event)) return scope.capabilities.includes('todo');
   if (PANE_EVENTS.has(event)) return scope.capabilities.includes('manage');
   if (event === 'browser.sessions') return scope.capabilities.includes('todo') && scope.secure === true; // X02: agent ids only
+  if (DEVICE_ADMIN_EVENTS.has(event)) return scope.capabilities.includes('settings') && scope.secure === true;
   return event === 'settings.updated' && (scope.capabilities.includes('settings') || scopeHas(scope, 'permissions'));
 }
 

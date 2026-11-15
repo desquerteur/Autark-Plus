@@ -221,7 +221,7 @@ export class ConversationRepo {
     const out = new Map<string, number>();
     if (!ids.length) return out;
     const rows = this.db.all<Row>(
-      `SELECT conversation_id, COUNT(*) AS n FROM tasks WHERE parent_id IS NULL AND status NOT IN ('done', 'cancelled')
+      `SELECT conversation_id, COUNT(*) AS n FROM tasks WHERE parent_id IS NULL AND status IN ('open', 'waiting')
        AND conversation_id IN (${ids.map(() => '?').join(',')}) GROUP BY conversation_id`,
       ids,
     );

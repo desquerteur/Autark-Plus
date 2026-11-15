@@ -1,21 +1,20 @@
-// Task dependencies (Task.dependsOn): a task that comes after other tasks. While one of them is unfinished it is 'waiting' on
-// them (waitingOn kind 'task') and nobody is woken for it; when the last one is done, cancelled or removed it opens again
-// with a quiet "Ready: …" line and its owner is woken with how it ended. It orders work and holds nothing back: anyone may
-// set such a task to working at any time, and then it only hears when the last one ends.
-// Owns: the checks of a list, the wait it causes and its release. Never: replaces another wait (the person, a schedule,
-// something external) or a pause, or wakes anyone for a task that was finished meanwhile.
+// Waits on tasks: a task that comes after other tasks (Task.dependsOn) waits on them (waitingOn on 'task'), and so does a
+// task its owner set waiting on tasks (tasks.update on: task). When the last of them is done, dropped or removed it is
+// open again – a quiet "Ready: …" line, its agent owner hears how it ended. It orders work and holds nothing back: anyone
+// may open such a task at any time.
+// Owns: the checks of a list, the wait it causes and its end. Never: replaces another wait or a pause, or wakes anyone for
+// a task that was finished meanwhile.
 
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { isPaused } from '../../shared/model/task-pause.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
-import type { Task, TaskStatus } from '../../shared/model/tasks.ts';
+import { isFinished, isPaused, type Task } from '../../shared/model/tasks.ts';
 import type { TaskServiceImpl } from './service.ts';
-import { waitedIds, wakeOwner } from './transitions.ts';
+import { nextLook } from './next.ts';
+import { tell } from './give.ts';
 
 export const MAX_DEPENDS = 20;
 const MAX_WALK = 1000;
-const FINISHED: ReadonlySet<TaskStatus> = new Set(['done', 'cancelled']);
 
 type Repo = Pick<TaskServiceImpl['repo'], 'get'>;
 
@@ -39,57 +38,57 @@ export function checkDepends(repo: Repo, id: string | undefined, parentId: strin
 
 /** What is still unfinished of `ids`. */
 function unfinished(repo: Repo, ids: readonly string[]): Task[] {
-  return ids.flatMap((id) => { const task = repo.get(id); return task && !FINISHED.has(task.status) ? [task] : []; });
+  return ids.flatMap((id) => { const task = repo.get(id); return task && !isFinished(task.status) ? [task] : []; });
 }
 
-const waitingOnTasks = (task: Task): boolean => task.status === 'waiting' && task.waitingOn?.kind === 'task';
+const waitsOnTasks = (task: Pick<Task, 'status' | 'waitingOn'>): boolean => task.status === 'waiting' && task.waitingOn?.on === 'task';
 
-const ending = (draft: Task): void => { delete draft.waitingOn; draft.status = draft.startedAt === undefined ? 'open' : 'working'; };
-
-/** Sets the list on a task about to be written: an open one waits while one is unfinished; a list with nothing left ends that wait. True when it ended. */
-export function applyDepends(repo: Repo, draft: Task, ids: readonly string[], now: number): boolean {
-  const delegated = waitingOnTasks(draft) ? waitedIds(draft.waitingOn).filter((id) => !draft.dependsOn?.includes(id)) : []; // children waited on stay waited on
+/** Sets the list on a task about to be written: an open one waits while one is unfinished; a list with nothing left ends that wait. */
+export function applyDepends(repo: Repo, draft: Task, ids: readonly string[], now: number): void {
+  const waited = waitsOnTasks(draft) ? (draft.waitingOn!.ids ?? []).filter((id) => !draft.dependsOn?.includes(id)) : []; // tasks waited on stay waited on
   if (ids.length) draft.dependsOn = [...ids]; else delete draft.dependsOn;
-  const left = unfinished(repo, [...new Set([...ids, ...delegated])]);
+  const left = unfinished(repo, [...new Set([...ids, ...waited])]);
   if (left.length) {
-    if (draft.status !== 'open' && !waitingOnTasks(draft)) return false;
+    if (draft.status !== 'open' && !waitsOnTasks(draft)) return;
     draft.status = 'waiting';
-    draft.waitingOn = { kind: 'task', id: left.at(-1)!.id, ids: left.map((task) => task.id), reason: `After: ${left.map((task) => excerpt(task.title, 60)).join(', ')}`, since: now };
-    return false;
-  }
-  if (!waitingOnTasks(draft)) return false;
-  ending(draft);
-  return true;
-}
-
-/** A task's wait just ended: the line, the event and whoever works on it next. */
-export function dependsReleased(t: TaskServiceImpl, task: Task, note?: string): void {
-  t.line(task, { type: 'note', text: `Ready: ${excerpt(task.title, 60)}`, details: { taskId: task.id } }, SYSTEM_ID);
-  t.emit(task);
-  if (task.assigneeKind === 'agent') wakeOwner(t, task, note ? { note } : {});
-  else t.life.created(task);
-}
-
-/** One task coming after `ended`: it waits for one less, or goes on. */
-function stepOn(t: TaskServiceImpl, task: Task, ended: Task, how: 'done' | 'cancelled' | 'removed'): void {
-  const waited = waitingOnTasks(task);
-  const left = unfinished(t.repo, [...new Set([...(task.dependsOn ?? []), ...(waited ? waitedIds(task.waitingOn) : [])])]); // delegated children may be waited on beside them
-  if (left.length) {
-    if (waited) t.emit(t.mutate(task.id, (draft) => { draft.waitingOn = { ...draft.waitingOn!, id: left.at(-1)!.id, ids: left.map((item) => item.id) }; }));
+    draft.waitingOn = { on: 'task', ids: left.map((task) => task.id), why: `After: ${left.map((task) => excerpt(task.title, 60)).join(', ')}`, since: draft.waitingOn?.since ?? now };
     return;
   }
-  const word = how === 'done' ? `done${ended.result?.summary ? `: ${excerpt(ended.result.summary, 400)}` : ''}` : how;
-  const note = `"${excerpt(ended.title, 80)}", which this task comes after, is ${word}. Nothing else is ahead of it.`;
-  if (waited) dependsReleased(t, t.mutate(task.id, ending), note);
-  else wakeOwner(t, task, { note });
+  if (!waitsOnTasks(draft)) return;
+  draft.status = 'open';
+  delete draft.waitingOn;
 }
 
-/** `ended` finished or went: everything that comes after it hears. */
-export function dependencyEnded(t: TaskServiceImpl, ended: Task, how: 'done' | 'cancelled' | 'removed'): void {
-  for (const task of t.repo.dependents(ended.id)) {
-    if (isPaused(task)) continue; // the end of the pause wakes the owner
-    try { stepOn(t, task, ended, how); } catch (error) {
-      t.s.log?.warn('a task coming after another was not released', { taskId: task.id, after: ended.id, error: String(error) });
+/** `ended` finished or went: every task that waits on it waits for one less, or is open again (its owner told unless `tell` is false). */
+export function waitsEnded(t: TaskServiceImpl, ended: Task, how: 'done' | 'dropped' | 'removed', tell = true): void {
+  const rows = t.s.db.all<{ id: string }>(
+    `SELECT id FROM tasks WHERE status IN ('open', 'waiting') AND (depends_on LIKE ? OR (status = 'waiting' AND waiting_on LIKE ?))`,
+    [`%"${ended.id}"%`, `%"${ended.id}"%`]);
+  for (const { id } of rows) {
+    try { stepOn(t, id, ended, how, tell); } catch (error) {
+      t.s.log?.warn('a task waiting on another was not released', { taskId: id, after: ended.id, error: String(error) });
     }
   }
+}
+
+function stepOn(t: TaskServiceImpl, id: string, ended: Task, how: 'done' | 'dropped' | 'removed', tellOwner: boolean): void {
+  const task = t.repo.get(id);
+  if (!task || isPaused(task) || !waitsOnTasks(task)) return; // a pause, or a wait on something else, stays
+  const left = unfinished(t.repo, [...new Set([...(task.dependsOn ?? []), ...(task.waitingOn!.ids ?? [])])]).filter((item) => item.id !== ended.id);
+  const now = t.s.clock.now();
+  if (left.length) {
+    t.emit(t.mutate(id, (draft) => { draft.waitingOn = { ...draft.waitingOn!, ids: left.map((item) => item.id) }; }));
+    return;
+  }
+  const opened = t.mutate(id, (draft) => {
+    draft.status = 'open';
+    delete draft.waitingOn;
+    draft.ledger = { ...draft.ledger, movedAt: now, stalls: 0 };
+    draft.nextAt = nextLook(draft, now, t.openPieces(draft));
+  });
+  t.line(opened, { type: 'note', text: `Ready: ${excerpt(opened.title, 60)}`, details: { taskId: id } }, SYSTEM_ID);
+  t.emit(opened);
+  if (!tellOwner || opened.assigneeKind !== 'agent' || !opened.assigneeId) return;
+  const word = how === 'done' ? `done${ended.result?.summary ? `: ${excerpt(ended.result.summary, 400)}` : ''}` : how;
+  tell(t.s, opened.assigneeId, { reason: 'child', taskId: id, conversationId: opened.conversationId, note: `"${excerpt(ended.title, 80)}", which my task "${excerpt(opened.title, 80)}" waited on, is ${word}. Nothing else is ahead of it.` });
 }

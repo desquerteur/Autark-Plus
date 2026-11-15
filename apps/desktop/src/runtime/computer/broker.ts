@@ -1,5 +1,6 @@
 // The desktop broker connection (B-077, computer use on the lock screen): once `AutarkDesktopBroker` is installed
-// (scripts/broker-install.ps1), its SYSTEM worker in the console session serves the helper protocol on a named pipe and
+// (B-080: resources/broker/install.ps1, run by the app's setup or at a start where it is missing – main/broker-setup.ts),
+// its SYSTEM worker in the console session serves the helper protocol on a named pipe and
 // follows the input desktop, so the normal computer.* tools also reach the locked screen and UAC prompts.
 // brokerLease() hands WindowsHelper (helper.ts) a lease whose "child" is the pipe: the handshake proves the
 // installation key both ways, then lines pass through unchanged – except typed text ('type', 'act' value), which leaves
@@ -79,6 +80,7 @@ let leases = 0;
 
 /** A lease on one pipe connection: WindowsHelper talks to it like to the PowerShell child. */
 export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; connect?: (pipe: string) => net.Socket }): Lease {
+  const connectionId = ++leases;
   const socket = (input.connect ?? ((pipe) => net.connect(pipe)))(input.pipe);
   const stdout = new PassThrough();
   const events = new EventEmitter();
@@ -86,6 +88,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   let serverNonce: Buffer | undefined;
   let session: Buffer | undefined;
   let buffer = '';
+  let observedDesktop: string | undefined;
   let resolveExit: (code: number | null) => void = () => undefined;
   const exited = new Promise<number | null>((resolve) => { resolveExit = resolve; });
 
@@ -105,9 +108,20 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
       if (proof.length !== expected.length || !timingSafeEqual(proof, expected)) return fail('the broker did not prove the installation key');
       session = mac(input.key, 'session', serverNonce, clientNonce);
       brokerState.via = 'broker';
+      input.log.info('desktop broker authenticated', { connectionId, via: 'broker' });
     }
     const desktop = DESKTOP.exec(line.slice(-100));
-    if (desktop) brokerState.desktop = desktop[1];
+    if (desktop) {
+      brokerState.desktop = desktop[1];
+      // Only names from the transport envelope, never a result, UI text or typed value.
+      // Log the first actual response (not just ready) and later desktop changes.
+      const response = JSON.parse(line) as { id?: number };
+      if (Number.isSafeInteger(response.id) && observedDesktop !== desktop[1]) {
+        observedDesktop = desktop[1];
+        const name = /^(Default|Winlogon|Screen-saver)$/i.test(desktop[1]) ? desktop[1] : 'other';
+        input.log.info('desktop broker observed', { connectionId, requestId: response.id, desktop: name });
+      }
+    }
     stdout.write(`${line}\n`);
   };
   socket.setEncoding('utf8');
@@ -124,6 +138,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   });
   socket.on('error', (error) => input.log.debug('desktop broker pipe error', { message: error.message }));
   socket.on('close', () => {
+    input.log.info('desktop broker disconnected', { connectionId, authenticated: Boolean(session) });
     child.exitCode = session ? 0 : 1;
     stdout.end();
     events.emit('exit', child.exitCode, null);
@@ -150,7 +165,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   const release = async () => { socket.destroy(); await exited; };
   const now = Date.now();
   return {
-    id: ++leases, owner: 'computer:desktop-broker', kind: 'light', startedAt: now, lastActiveAt: now,
+    id: connectionId, owner: 'computer:desktop-broker', kind: 'light', startedAt: now, lastActiveAt: now,
     child: child as unknown as ChildLike, touch: () => undefined, release, releaseAfter: release, exited,
   };
 }

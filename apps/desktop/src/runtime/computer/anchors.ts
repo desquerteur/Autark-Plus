@@ -18,10 +18,11 @@ export type ElementRect = [number, number, number, number];
 
 export const ANCHOR_SCHEMA = {
   type: 'object',
+  description: 'A ref from computer.ui_tree; x/y: fractions inside it, default its centre.',
   properties: {
-    ref: { type: 'string', minLength: 2, maxLength: 16, description: 'an element ref from computer.ui_tree' },
-    x: { type: 'number', minimum: 0, maximum: 1, description: 'fraction across the element (0 = left edge, default 0.5)' },
-    y: { type: 'number', minimum: 0, maximum: 1, description: 'fraction down the element (0 = top edge, default 0.5)' },
+    ref: { type: 'string', minLength: 2, maxLength: 16 },
+    x: { type: 'number', minimum: 0, maximum: 1 },
+    y: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['ref'], additionalProperties: false,
 } as const;
@@ -30,7 +31,7 @@ export const OFFSET_SCHEMA = {
   type: 'object',
   properties: { dx: { type: 'integer', minimum: -10_000, maximum: 10_000 }, dy: { type: 'integer', minimum: -10_000, maximum: 10_000 } },
   required: ['dx', 'dy'], additionalProperties: false,
-  description: 'move by exactly these screen pixels from the start point',
+  description: 'Screen pixels from the start.',
 } as const;
 
 const fraction = (value: number | undefined, name: string): number => {

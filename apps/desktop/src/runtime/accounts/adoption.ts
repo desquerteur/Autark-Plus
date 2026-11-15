@@ -1,11 +1,11 @@
 // Detection → accounts (split from service.ts): the cached DetectionReport (one scan at a time;
 // dismissed entries marked; one that could not tell an installed CLI's login is scanned again on the
-// next detect, audit 23.10.), adoption of what a scan found – logins in the default CLI homes and
-// running local servers become 'detected' accounts unless the person removed them (PR5,
-// dismissed.ts) – the checks a scan triggers, and "Add again" for a dismissed login.
+// next detect), adoption of what a scan found – logins in the default CLI homes and running local servers become
+// 'detected' accounts unless the person removed them (dismissed.ts); a Codex login runs on a copy in a home of its own
+// (cli-homes.ts found) – the checks a scan triggers, and "Add again" for a dismissed login.
 // Owns: the report cache and the adoption rules. Never: scans itself (detect.ts), signs in or deletes.
 
-import type { Account, DetectionReport, ProviderId } from '../../shared/model/providers.ts';
+import { foundHere, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
 import { isPlanProvider } from '../../shared/model/plan-roles.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { AccountRepo } from './repo.ts';
@@ -23,6 +23,8 @@ export interface AdoptionDeps {
   save(account: Account): Account;
   /** A new account row with the service's defaults (label, priority, id). */
   blank(provider: ProviderId, patch: Partial<Account>): Account;
+  /** A found login as its account (cli-homes.ts CliHomes.found: Codex in a home of its own with a copy of the login). */
+  found(account: Account): Account;
   /** One check in the account monitor's serial queue. */
   checkOnce(id: string): void;
   scan(): Promise<DetectionReport>;
@@ -70,11 +72,11 @@ export class Adoption {
     for (const cli of report.clis) {
       if (!CLI_PROVIDERS.has(cli.provider as ProviderId)) continue;
       const provider = cli.provider as ProviderId;
-      const own = existing.find((a) => a.provider === provider && a.home === undefined);
+      const own = existing.find((a) => a.provider === provider && foundHere(a));
       const signInChanged = own?.enabled && cli.loggedIn !== undefined && cli.loggedIn === (own.state === 'needs_login');
       if (own) { if (signInChanged) this.deps.checkOnce(own.id); continue; }
       if (!cli.loggedIn || gone.has(loginKey(provider))) continue;
-      const adopted = this.deps.save(this.deps.blank(provider, { auth: 'cli', state: 'ok', detected: true }));
+      const adopted = this.deps.save(this.deps.found(this.deps.blank(provider, { auth: 'cli', state: 'ok', detected: true })));
       if (isPlanProvider(provider)) this.deps.checkOnce(adopted.id);
     }
     for (const server of report.localServers) {
@@ -97,7 +99,7 @@ export class Adoption {
     const signedIn = (report: DetectionReport | undefined) => report?.clis.some((cli) => cli.provider === provider && cli.loggedIn) === true;
     const report = signedIn(this.report) ? this.report! : await this.detect(true);
     this.adopt(report); // idempotent; also covers a scan that was already running when the dismissal ended
-    const account = this.deps.repo.list().find((a) => a.provider === provider && a.auth === 'cli' && a.home === undefined);
+    const account = this.deps.repo.list().find((a) => a.provider === provider && foundHere(a));
     if (!account) throw new WorkforceError('not_found', `No ${label} sign-in was found on this PC.`);
     return account;
   }

@@ -3,7 +3,8 @@
 // engine reports – that stays on the run as the notional list-price cost ("plan, no charge").
 // Rules:
 // * Paid = pay-per-use: an API key (auth 'api_key'), a key from the environment (auth 'env'),
-//   or a Codex/Claude Code CLI signed in with an API key (its status check reports plan 'api').
+//   or a Codex/Claude Code CLI signed in with an API key (its status check reports plan 'api') –
+//   unless it holds a plan's monthly API credits (B-083 `credits`: prepaid, lost at the month's end → a plan).
 //   Local runtimes and servers without a key are free; every other account is a plan.
 // * The price of one attempt's tokens, first source that knows it: the cost the provider or
 //   engine reported (OpenRouter usage.cost, Claude Code total_cost_usd) → tokens × the curated price in
@@ -36,11 +37,11 @@ const PAID_AUTH: ReadonlySet<string> = new Set(['api_key', 'env']);
 const API_LOGIN_PLAN = 'api';
 
 /** Does a turn on this account cost real money ('paid'), nothing per turn ('plan') or nothing at all ('free')? */
-export function chargeOf(account: Pick<Account, 'auth' | 'provider' | 'plan'> | undefined): Charge {
+export function chargeOf(account: Pick<Account, 'auth' | 'provider' | 'plan' | 'credits'> | undefined): Charge {
   if (!account) return 'plan';
   if (account.auth === 'local' || LOCAL_PROVIDERS.has(account.provider)) return 'free';
-  if (PAID_AUTH.has(account.auth)) return 'paid';
-  if (account.auth === 'cli') return account.plan?.trim().toLowerCase() === API_LOGIN_PLAN ? 'paid' : 'plan';
+  if (PAID_AUTH.has(account.auth)) return account.credits ? 'plan' : 'paid';
+  if (account.auth === 'cli') return account.plan?.trim().toLowerCase() === API_LOGIN_PLAN && !account.credits ? 'paid' : 'plan';
   return 'free'; // 'none': a server without a key bills nobody
 }
 

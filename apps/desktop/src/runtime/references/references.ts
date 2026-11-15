@@ -1,7 +1,7 @@
 // References: the person's own words, reasons and corrections that agents use to write and decide the
 // way the person (the CEO) would. Each one is a memory file in references/<whose>/ ('human' or a person per_…; knowledge
 // scope 'reference', kind 'reference'), titled by what it is ("Example: …", "Reason: …"). Every agent of
-// the team reads them (knowledge.recall, references.find). "Remember why…" turns an own message and the typed
+// the team reads them (knowledge.find; memory.write into references/<whose> adds one). "Remember why…" turns an own message and the typed
 // reason into an example and a reason; repeating it on the same message replaces the earlier pair.
 // Owns: those rules. Never: rights, grants, exports or proposals – a reference is just a note everyone may use.
 

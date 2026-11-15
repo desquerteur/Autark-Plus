@@ -1,4 +1,4 @@
-/* The first-run layer (onboarding/FirstRun.tsx and its two cards: AI, About you). The layer is Home's place in
+/* The first-run layer (onboarding/FirstRun.tsx: B-085 the choice card, then its two cards: AI, About you). The layer is Home's place in
    the main zone: the same airy column as Home, one card at a time. Nothing moves: the card's status line and
    every async hint are reserved one-line slots and busy buttons keep their box (base.css). One card build and one card height for every
    step: the title with its rule, the body from the top, the status line on the body's foot and the action row
@@ -9,7 +9,7 @@
 .first-run-view { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--surface); }
 .first-run-scroll { flex: 1 1 auto; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .first-run-column { max-width: 620px; margin: 0 auto; padding: 28px clamp(16px, 4vw, 40px) 56px; }
-.first-run-step { margin: 0 0 8px; padding: 0 2px; color: var(--muted); font-size: 12px; line-height: 18px; }
+.first-run-step { min-height: 18px; margin: 0 0 8px; padding: 0 2px; color: var(--muted); font-size: 12px; line-height: 18px; } /* empty on the choice card, same slot */
 
 .first-run-card { display: flex; flex-direction: column; gap: 12px; min-height: 552px; padding: 20px 22px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
 .first-run-title { margin: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 17px; font-weight: 600; line-height: 24px; }
@@ -39,6 +39,32 @@
 .first-run-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .first-run-field { display: flex; flex-direction: column; min-width: 0; }
 .first-run-field .input { width: 100%; }
+
+/* B-085 the choice card (onboarding/ChoiceCard.tsx): two big buttons, the first with the strong border; "Watch how it works" sits in
+   the action row as the quiet link (.first-run-link) */
+.first-run-choices { display: flex; flex-direction: column; gap: 12px; }
+.first-run-choice {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; min-height: 76px; padding: 14px 16px; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--surface); color: var(--text); text-align: left; cursor: pointer;
+}
+.first-run-choice:hover:not(:disabled) { background: var(--hover); }
+.first-run-choice.primary { border-color: var(--text); }
+.first-run-choice:disabled { opacity: var(--disabled-opacity, .5); cursor: default; }
+.first-run-choice-title { font-size: 15px; font-weight: 600; line-height: 22px; }
+.first-run-choice-text { color: var(--muted); font-size: 13px; line-height: 19px; }
+.first-run-actions > .first-run-link { margin-right: auto; align-self: center; }
+
+/* B-085 About you: the PC access rows – a choice changes only the colour, both rows keep their size */
+.first-run-access { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 4px 0 0; padding: 0; border: 0; }
+.first-run-access > legend { padding: 0; margin-bottom: 6px; }
+.first-run-access-row {
+  display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 11px 12px; border: 1px solid var(--line);
+  border-radius: var(--r-md); color: var(--muted); font-size: 13px; line-height: 20px; cursor: pointer;
+}
+.first-run-access-row:hover { background: var(--hover); }
+.first-run-access-row.chosen { border-color: var(--text); color: var(--text); }
+.first-run-access-row > input { flex: none; margin: 3px 0 0; }
+.first-run-access-title { color: var(--text); font-weight: 600; }
 
 @media (max-width: 640px) {
   .first-run-card { padding: 16px; }

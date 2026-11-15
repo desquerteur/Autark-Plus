@@ -131,7 +131,7 @@ export async function codexImage(s: CodexImageServices, account: Account, reques
   try {
     const result = await engine.run({
       runId: `img_${randomUUID()}`, agentId: options.agentId ?? 'runtime', account, model: model.model, effort: 'low',
-      system: { stable: INSTRUCTIONS, volatile: 'I reply in one short sentence.' },
+      system: { stable: INSTRUCTIONS, volatile: '' },
       input: [{ type: 'text', text: `I make exactly one image with my image generation tool and write no files.${sizeLine(request.size)} Prompt: ${request.prompt}` }],
       tools: [UNABLE_TOOL],
       callTool: async (_name, args) => {

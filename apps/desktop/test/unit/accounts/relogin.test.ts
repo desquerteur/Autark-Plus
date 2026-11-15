@@ -10,9 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { agent, harness } from '../chat/harness.ts';
 import { recordAccountFailure } from '../../../src/runtime/accounts/failure.ts';
-import { MAX_PER_DAY, Relogin, signInAgent } from '../../../src/runtime/accounts/relogin.ts';
+import { MAX_PER_DAY, RELOGIN_ORIGIN, Relogin, signInAgent } from '../../../src/runtime/accounts/relogin.ts';
 import { accountTools, pickAccount } from '../../../src/runtime/tools/builtin/accounts.ts';
-import { HUMAN_ID } from '../../../src/shared/ids.ts';
+import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import type { Account } from '../../../src/shared/model/providers.ts';
 import type { EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
@@ -20,7 +20,7 @@ import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
 import { Registry } from '../../../src/runtime/tools/registry.ts';
 
 function account(id: string, extra: Partial<Account> = {}): Account {
-  return { id, provider: 'codex', label: 'Codex work', auth: 'cli', state: 'ok', priority: 0, rotation: true, enabled: true, detected: true, createdAt: 0, ...extra };
+  return { id, provider: 'codex', label: 'Codex work', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 0, ...extra };
 }
 
 const SIGNED_OUT = { stop: 'error', text: '', error: { code: 'unavailable', message: 'Codex is not signed in.' } } as unknown as EngineTurnResult;
@@ -103,19 +103,13 @@ test('another usable account: ONE task for the origin Manager with the way throu
   assert.equal(r.relogin.openWork('acc_a'), undefined);
 });
 
-test('no usable account left: a real human to-do (credential) and one notification that names it; it closes itself too', () => {
-  const r = rig([account('acc_a')]);
+test('B-091: a linked CEO PC already made the open sign-in task (it travelled here): no second one', () => {
+  const r = rig([account('acc_a'), account('acc_b', { provider: 'claude', label: 'Claude Max' })]);
+  r.tasks.create({ origin: RELOGIN_ORIGIN, title: 'Sign in to Codex work again', notes: 'from the notebook', assigneeKind: 'agent', assigneeId: 'ag_boss', createdBy: SYSTEM_ID });
   r.fail('acc_a');
-  const [todo] = r.tasks.list({}).filter((item) => item.title.startsWith('Sign in'));
-  assert.equal(todo.assigneeKind, 'human');
-  assert.equal(todo.humanReason, 'credential');
-  assert.match(todo.notes, /No other model account can run the team right now/);
-  assert.match(todo.notes, /Settings › Models/);
-  assert.equal(r.notified.length, 1);
-  assert.equal(r.notified[0].taskId, todo.id, 'the notification names the to-do');
-  r.set('acc_a', { state: 'ok' });
-  assert.equal(r.tasks.get(todo.id)!.status, 'done');
+  assert.equal(r.tasks.list({}).filter((task) => task.title === 'Sign in to Codex work again').length, 1);
 });
+
 
 test('no agent to take it, or the day\'s cap of sign-in tasks reached: the person gets the to-do', () => {
   const lonely = rig([account('acc_a'), account('acc_b', { provider: 'claude' })], { manager: false });
@@ -160,12 +154,12 @@ test('the account removed or switched off: its open sign-in work is cancelled', 
   r.fail('acc_a');
   const task = r.relogin.openWork('acc_a')!;
   r.bus.emit('account.removed', { id: 'acc_a' });
-  assert.equal(r.tasks.get(task.id)!.status, 'cancelled');
+  assert.equal(r.tasks.get(task.id)!.status, 'dropped');
   r.set('acc_a', { state: 'ok' });
   r.fail('acc_a');
   const again = r.relogin.openWork('acc_a')!;
   r.set('acc_a', { enabled: false });
-  assert.equal(r.tasks.get(again.id)!.status, 'cancelled');
+  assert.equal(r.tasks.get(again.id)!.status, 'dropped');
   assert.deepEqual(r.warnings, [], 'nothing failed on the way');
 });
 

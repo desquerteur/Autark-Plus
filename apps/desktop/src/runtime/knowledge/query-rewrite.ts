@@ -90,6 +90,3 @@ export function exactId(ids: readonly string[], text: string): boolean {
   const words = ` ${foldText(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ')} `;
   return ids.some((id) => words.includes(` ${foldText(id).split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ')} `));
 }
-
-/** Rank bonus of a row that holds the exact ID the query asks for. */
-export const EXACT_ID_BONUS = 1 / 61;

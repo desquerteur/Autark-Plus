@@ -56,5 +56,5 @@ test('the strip fills the composer as a reply and sends nothing itself; it sits 
   assert.match(strip, /jumpToMessage\(chatId, messageId\)/, 'the text jumps to the message');
   assert.doesNotMatch(strip, /submitAnswer|rpc\.call/, 'the person sends');
   const view = readFileSync(path.join(root, 'chat/ChatView.tsx'), 'utf8');
-  assert.match(view, /<MessageList [^\n]*\/>\s*<AskStrip conversationId=\{conversationId\} \/>\s*<Composer chat=\{chat\} \/>/);
+  assert.match(view, /<MessageList [^\n]*\/>\s*<AskStrip conversationId=\{conversationId\} \/>\s*<LiveBar chat=\{chat\} \/>\s*<Composer chat=\{chat\} \/>/);
 });

@@ -1,7 +1,7 @@
 // RPC contract part (wave 3): an agent's core folder – the state of its SYSTEM.md (the instructions
 // agents.update edits) and its Main Skills, and saving one Main Skill. Removing one is skills.delete.
 // B-044: its home project (agents.setHome – the person's set or clear; agents set their own through the
-// agents.update tool; agents.openHome opens it). Handlers: runtime/rpc/handlers/agent-core.ts. Merged into Methods by module augmentation
+// agents.update tool; agents.openHome opens it). Owner 15.11.2026: agents.setHuman – the person's own HUMAN.md. Handlers: runtime/rpc/handlers/agent-core.ts. Merged into Methods by module augmentation
 // (methods.ts is at its size limit). Owns: these method shapes. Never: behaviour.
 
 import type { AgentCoreInfo, AgentHome } from '../model/agent-core.ts';
@@ -21,6 +21,8 @@ declare module '../api/methods.ts' {
     'agents.setHome': { params: { agentId: string; home: string | null }; result: { home?: AgentHome } };
     /** B-044, owner (the desktop's file manager): opens the agent's home project folder while it is usable ('not_found' otherwise). */
     'agents.openHome': { params: { agentId: string }; result: { ok: true } };
+    /** 'manage': writes the agent's HUMAN.md – the person's own lines, last in its system prompt ('' empties it); returns its text. */
+    'agents.setHuman': { params: { agentId: string; text: string }; result: { human: string } };
   }
 }
 

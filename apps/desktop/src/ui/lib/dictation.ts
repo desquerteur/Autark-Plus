@@ -1,16 +1,20 @@
 // Dictation, one path on the desktop and the phone: the microphone (microphone.ts, 16 kHz through the
-// worklet tap) → the take as a 16 kHz mono WAV → files.upload → voice.transcribe → editable text. The
-// runtime decides who hears it: this PC's speech model, else a transcription service, else a listening
+// worklet tap) → pieces of the take as 16 kHz mono WAVs → files.upload → voice.transcribe → editable text. The
+// runtime decides who hears it: the Codex plan, this PC's speech model, a transcription service or a listening
 // model (runtime/voice/transcribe.ts). While this PC's speech model still downloads and nothing else can
 // hear, dictationNote() says "Speech model downloading NN %" (the mic shows it).
+// B-082: a long take is cut at pauses while it is recorded (take-pieces.ts); each piece is uploaded at once and heard
+// right away, one after the other, with the text heard before as context – after Stop only the last piece is left.
+// finish() joins the pieces' texts (marks moved along). Nothing is lost: a piece whose hearing failed comes back in
+// `kept` with its upload (from KEEP_TAKE_MS on), a piece whose upload failed waits in this page (take-store.ts) and
+// uploads itself once the link is back; a take that gave no text at all throws TakeNotTranscribed with its kept
+// pieces. An answer lost with the connection may still have been heard (and the file released), so that piece is
+// stored again in the background (same bytes, same id). keep() only stores the pieces (audio where nothing hears).
 // One take at a time: a newer start tells the older caller its take ended, a start overtaken while the
-// microphone opens throws DictationCancelled. A take whose transcription failed comes back as
-// TakeNotTranscribed with its upload when it is worth attaching (≥ KEEP_TAKE_MS); an answer lost with the
-// connection may still have been heard, so the take is stored again in the background (same bytes, same id).
-// keep() only uploads the take (an audio attachment where nothing can transcribe).
-// Owns: the take's microphone lifetime, its WAV and the "can this page dictate" note. Never: API keys or
-// provider calls, audio sent anywhere but the runtime's blob store, a microphone left open after
-// finish/keep/cancel.
+// microphone opens throws DictationCancelled.
+// Owns: the take's microphone lifetime, its pieces and the "can this page dictate" note. Never: API keys or
+// provider calls, audio sent anywhere but the runtime's blob store (or this page's held pieces), a microphone
+// left open after finish/keep/cancel.
 
 import type { ResultOf } from '../../shared/api/methods.ts';
 import { localSpeechModel } from '../../shared/model/local-speech-models.ts';
@@ -18,6 +22,7 @@ import { functionCandidates } from '../../shared/model/providers.ts';
 import { useValue } from '../../shared/model/models-uses.ts';
 import type { FileRef } from '../../shared/model/system.ts';
 import { languageHint } from '../../shared/voice/conversation.ts';
+import type { MarkedText, TextMarks } from '../../shared/voice/marks.ts';
 import { pullPercent, running } from '../settings/speech-models-text.ts';
 import { speechPulls, watchSpeechPulls } from '../settings/speech-models.ts';
 import { uploadRef } from './files.ts';
@@ -28,27 +33,33 @@ import { RpcError, rpc } from './rpc.ts';
 import { blockedNote } from './session.ts';
 import { models, settings } from './store.ts';
 import { takeName } from './take-name.ts';
+import { PieceCutter, joinPieces, type Piece } from './take-pieces.ts';
+import { takeStore, type HeldTake } from './take-store.ts';
 
-/** A take at least this long is handed back for attaching when its transcription failed. */
-export const KEEP_TAKE_MS = 2000;
-/** At most ~10 min of 16 kHz PCM16 (the upload limit is 20 MB); later audio is not kept. */
-const MAX_BYTES = 600 * 32_000;
+/** A piece at least this long is kept when it was not heard (B-082: from 1 s on). */
+export const KEEP_TAKE_MS = 1000;
 const BLOCK_MS = 32;
+/** The text heard before a piece, as its context (voice.transcribe takes ≤ 2000 chars). */
+const BEFORE_CHARS = 2000;
 
 /** The running take's input levels (0..1, the waveform beside the mic button reads them). */
 export const dictationLevels = new LevelHistory(48);
 
-/** A finished take: its text ('' when nothing was heard). */
-export interface DictationResult { text: string }
+/** A piece that was not heard: its upload (`ref`) or, with the link down, held in this page (`held`); `error`: why. */
+export interface KeptPiece { ref?: FileRef; held?: HeldTake; error?: string; lengthMs: number }
 
-/** The transcription failed after the upload; `recording` is the take when it is worth attaching. */
+/** A finished take: its text ('' when nothing was heard), the marks beside it, the pieces kept unheard. */
+export interface DictationResult { text: string; marks?: TextMarks; kept?: KeptPiece[] }
+
+/** Nothing of the take was heard; `kept` holds its pieces worth keeping (`recording`: the first upload). */
 export class TakeNotTranscribed extends Error {
-  readonly recording?: FileRef;
-  constructor(cause: unknown, recording?: FileRef) {
-    super(cause instanceof Error && cause.message ? cause.message : 'The transcription failed.');
+  readonly kept: KeptPiece[];
+  constructor(cause: unknown, kept: KeptPiece[] = []) {
+    super(errorText(cause));
     this.name = 'TakeNotTranscribed';
-    this.recording = recording;
+    this.kept = kept;
   }
+  get recording(): FileRef | undefined { return this.kept.find((piece) => piece.ref)?.ref; }
 }
 
 /** Thrown by a start that a newer start or a cancel overtook (double tap, another panel) – not a failure. */
@@ -64,19 +75,45 @@ export interface DictationDeps {
   problem(): string | undefined;
   openMicrophone(onSamples: SampleListener): Promise<Microphone>;
   upload(blob: Blob, name: string): Promise<FileRef>;
-  transcribe(params: { fileId: string; language?: string }): Promise<ResultOf<'voice.transcribe'>>;
+  transcribe(params: { fileId: string; language?: string; chatId?: string; before?: string }): Promise<ResultOf<'voice.transcribe'>>;
   now(): number;
   /** The transcription call was lost with the connection, not answered (absent: never). */
   lost?(error: unknown): boolean;
+  /** The link is down now: a piece is held at once instead of waiting for it (absent: never). */
+  offline?(): boolean;
+  /** Holds a piece whose upload failed until the link is back (absent: such a piece is lost). */
+  hold?(blob: Blob, name: string, owner?: string): Promise<HeldTake>;
+  /** Deletes a held piece (its take was discarded). */
+  drop?(key: string): void;
 }
+
+/** How a take is heard: the language hint, the chat as context, the draft its held pieces belong to. */
+export interface HearOptions {
+  language?: string;
+  chatId?: string;
+  owner?: string;
+  /** false: pieces are only stored while recording (nothing can hear right now); finish() still hears them. */
+  hear?: boolean;
+}
+
+type Stored = { ref: FileRef } | { held: HeldTake } | { error: unknown };
+
+interface TakePiece { blob: Blob; name: string; lengthMs: number; stored: Promise<Stored>; tried: boolean; heard?: MarkedText; error?: unknown }
 
 interface Take {
   mic: Microphone | null;
   encoder: Pcm16Encoder | null;
-  pcm: Uint8Array[];
-  bytes: number;
+  cutter: PieceCutter;
+  pieces: TakePiece[];
+  chain: Promise<void>;
+  options: HearOptions;
+  cancelled: boolean;
   startedAt: number;
   onEnded?: () => void;
+}
+
+function errorText(cause: unknown): string {
+  return cause instanceof Error && cause.message ? cause.message : 'The transcription failed.';
 }
 
 export class Dictation {
@@ -93,7 +130,7 @@ export class Dictation {
   get active(): boolean { return this.take !== null; }
 
   /** Opens the microphone and records. `onEnded` fires when a newer start takes the microphone. */
-  async start(onEnded?: () => void): Promise<void> {
+  async start(onEnded?: () => void, options: HearOptions = {}): Promise<void> {
     const previous = this.take;
     if (previous) {
       this.cancel(); // one microphone at a time: the other caller is told its take ended
@@ -102,7 +139,7 @@ export class Dictation {
     const ticket = ++this.starts;
     const problem = this.deps.problem();
     if (problem) throw new Error(problem);
-    const take: Take = { mic: null, encoder: null, pcm: [], bytes: 0, startedAt: this.deps.now(), onEnded };
+    const take: Take = { mic: null, encoder: null, cutter: new PieceCutter(), pieces: [], chain: Promise.resolve(), options: { ...options }, cancelled: false, startedAt: this.deps.now(), onEnded };
     this.take = take;
     dictationLevels.clear();
     let mic: Microphone;
@@ -117,62 +154,129 @@ export class Dictation {
     take.startedAt = this.deps.now();
   }
 
-  /** Stops the take and transcribes it ('' when nothing was recorded or heard); `language` is a hint ("de", "en-US"). */
-  async finish(language?: string, { attachable = true }: { attachable?: boolean } = {}): Promise<DictationResult> {
-    const recorded = this.stopTake();
-    if (!recorded) return { text: '' };
-    const ref = await this.deps.upload(recorded.blob, recorded.name);
-    const lang = languageHint(language);
-    let heard: ResultOf<'voice.transcribe'>;
-    try {
-      heard = await this.deps.transcribe(lang ? { fileId: ref.id, language: lang } : { fileId: ref.id });
-    } catch (error) {
-      const keep = attachable && recorded.lengthMs >= KEEP_TAKE_MS;
-      // Sent again once the connection is back, before the draft that attaches the take is saved.
-      if (keep && this.deps.lost?.(error)) void this.deps.upload(recorded.blob, recorded.name).catch(() => undefined);
-      throw new TakeNotTranscribed(error, keep ? ref : undefined);
+  /** Stops the take and waits for its last pieces ('' when nothing was recorded or heard); `language` is a hint ("de", "en-US"). */
+  async finish(language?: string, { chatId }: { attachable?: boolean; chatId?: string } = {}): Promise<DictationResult> {
+    const take = this.stopTake();
+    if (!take) return { text: '' };
+    if (language !== undefined) take.options.language = language;
+    if (chatId) take.options.chatId = chatId; // context for a listening model
+    for (const piece of take.pieces) this.queue(take, piece);
+    await take.chain;
+    const joined = joinPieces(take.pieces.flatMap((piece) => piece.heard ? [piece.heard] : []));
+    const kept: KeptPiece[] = [];
+    let failure: unknown;
+    for (const piece of take.pieces) {
+      if (piece.heard) continue;
+      failure ??= piece.error;
+      const entry = piece.lengthMs >= KEEP_TAKE_MS ? keptOf(await piece.stored, piece) : null;
+      if (entry) kept.push(entry);
     }
-    return { text: typeof heard?.text === 'string' ? heard.text.trim() : '' };
+    if (!joined.text && failure !== undefined) throw new TakeNotTranscribed(failure, kept);
+    return kept.length ? { ...joined, kept } : joined;
   }
 
-  /** Stops the take and uploads it without transcribing (an audio attachment); null when empty. */
-  async keep(): Promise<FileRef | null> {
-    const recorded = this.stopTake();
-    return recorded ? this.deps.upload(recorded.blob, recorded.name) : null;
+  /** Stops the take and stores its pieces without hearing them (audio attachments); [] when empty. */
+  async keep(): Promise<KeptPiece[]> {
+    const take = this.stopTake();
+    if (!take) return [];
+    const kept = await Promise.all(take.pieces.map(async (piece) => keptOf(await piece.stored, piece)));
+    return kept.filter((piece): piece is KeptPiece => piece !== null);
   }
 
-  /** Discards the take; a start still opening the microphone gives up, too. */
+  /** Hears one stored file again ("Transcribe again" on a kept piece). */
+  async hear(fileId: string, options: { language?: string; chatId?: string } = {}): Promise<MarkedText> {
+    const language = languageHint(options.language);
+    const heard = await this.deps.transcribe({ fileId, ...(language ? { language } : {}), ...(options.chatId ? { chatId: options.chatId } : {}) });
+    return markedOf(heard);
+  }
+
+  /** Discards the take (its held pieces too); a start still opening the microphone gives up, too. */
   cancel(): void {
     this.starts += 1;
     const take = this.take;
     this.take = null;
-    take?.mic?.close();
+    if (!take) return;
+    take.cancelled = true;
+    take.mic?.close();
+    for (const piece of take.pieces) void piece.stored.then((stored) => { if ('held' in stored) this.deps.drop?.(stored.held.key); });
   }
 
   private heard(take: Take, samples: Float32Array, rate: number): void {
     if (this.take !== take) return;
     dictationLevels.push(meterLevel(rms(samples)));
     take.encoder ??= new Pcm16Encoder(rate, PCM_RATE, { lowPass: true }); // at 16 kHz already: no resampling
-    this.keepPcm(take, take.encoder.push(samples));
+    const piece = take.cutter.push(take.encoder.push(samples));
+    if (piece) this.addPiece(take, piece, take.options.hear !== false);
   }
 
-  private keepPcm(take: Take, bytes: Uint8Array | undefined): void {
-    if (!bytes?.byteLength || take.bytes + bytes.byteLength > MAX_BYTES) return;
-    take.pcm.push(bytes);
-    take.bytes += bytes.byteLength;
+  private addPiece(take: Take, piece: Piece, hear: boolean): void {
+    const base = takeName('audio/wav', new Date(take.startedAt));
+    const index = take.pieces.length + 1;
+    const name = index === 1 ? base : base.replace(/(\.\w+)$/, ` (${index})$1`);
+    const blob = new Blob([wavFile(piece.pcm).buffer as ArrayBuffer], { type: 'audio/wav' });
+    const entry: TakePiece = { blob, name, lengthMs: piece.ms, stored: this.store(blob, name, piece.ms, take.options.owner), tried: false };
+    take.pieces.push(entry);
+    if (hear) this.queue(take, entry);
   }
 
-  /** Detaches the take (a start or cancel meanwhile leaves it alone) and releases the microphone; null without audio. */
-  private stopTake(): { blob: Blob; name: string; lengthMs: number } | null {
+  /** Uploads a piece; with the link down (or the upload failing) a piece worth keeping is held in this page. */
+  private async store(blob: Blob, name: string, lengthMs: number, owner?: string): Promise<Stored> {
+    const hold = async (error: unknown): Promise<Stored> => {
+      if (!this.deps.hold || lengthMs < KEEP_TAKE_MS) return { error };
+      try { return { held: await this.deps.hold(blob, name, owner) }; } catch { return { error }; }
+    };
+    if (this.deps.offline?.()) return hold(new Error('The connection is down: the recording uploads once it is back.'));
+    try { return { ref: await this.deps.upload(blob, name) }; } catch (error) { return hold(error); }
+  }
+
+  /** Hears the piece after the pieces before it (their text is its context). */
+  private queue(take: Take, piece: TakePiece): void {
+    take.chain = take.chain.then(() => this.hearPiece(take, piece));
+  }
+
+  private async hearPiece(take: Take, piece: TakePiece): Promise<void> {
+    if (take.cancelled || piece.tried) return;
+    piece.tried = true;
+    const stored = await piece.stored;
+    if (!('ref' in stored)) { piece.error = 'error' in stored ? stored.error : new Error('The connection is down: the recording uploads once it is back.'); return; }
+    const earlier = take.pieces.slice(0, take.pieces.indexOf(piece)).flatMap((other) => other.heard ? [other.heard] : []);
+    const before = joinPieces(earlier).text.slice(-BEFORE_CHARS);
+    const language = languageHint(take.options.language);
+    const chatId = take.options.chatId;
+    try {
+      piece.heard = markedOf(await this.deps.transcribe({ fileId: stored.ref.id, ...(language ? { language } : {}), ...(chatId ? { chatId } : {}), ...(before ? { before } : {}) }));
+    } catch (error) {
+      piece.error = error;
+      // Sent again once the connection is back, before the draft that holds the piece is saved.
+      if (piece.lengthMs >= KEEP_TAKE_MS && this.deps.lost?.(error)) void this.deps.upload(piece.blob, piece.name).catch(() => undefined);
+    }
+  }
+
+  /** Detaches the take (a start or cancel meanwhile leaves it alone), releases the microphone, cuts the last piece; null without audio. */
+  private stopTake(): Take | null {
     const take = this.take;
     this.take = null;
     if (!take) return null;
     take.mic?.close();
-    this.keepPcm(take, take.encoder?.flush()); // the resampler's delayed tail
-    if (!take.bytes) return null;
-    const blob = new Blob([wavFile(take.pcm).buffer as ArrayBuffer], { type: 'audio/wav' });
-    return { blob, name: takeName('audio/wav', new Date(take.startedAt)), lengthMs: this.deps.now() - take.startedAt };
+    const tail = take.encoder ? take.cutter.push(take.encoder.flush()) : null; // the resampler's delayed tail
+    if (tail) this.addPiece(take, tail, false);
+    const last = take.cutter.flush();
+    if (last) this.addPiece(take, last, false);
+    return take.pieces.length ? take : null;
   }
+}
+
+function markedOf(heard: ResultOf<'voice.transcribe'> | undefined): MarkedText {
+  const text = typeof heard?.text === 'string' ? heard.text : '';
+  const uncertain = Array.isArray(heard?.marks) ? heard.marks : [];
+  return uncertain.length ? { text, marks: { uncertain } } : { text };
+}
+
+function keptOf(stored: Stored, piece: TakePiece): KeptPiece | null {
+  const error = piece.error === undefined ? {} : { error: errorText(piece.error) };
+  if ('ref' in stored) return { ref: stored.ref, lengthMs: piece.lengthMs, ...error };
+  if ('held' in stored) return { held: stored.held, lengthMs: piece.lengthMs, ...error };
+  return null;
 }
 
 // ------------------------------------------------------------------ this page
@@ -201,7 +305,7 @@ export function dictationNote(): string | undefined {
   return blockedNote('voice.transcribe') ?? blockedNote('files.upload') ?? recordingProblem() ?? downloadNote();
 }
 
-/** This page's dictation: the browser's microphone, the app's rpc. */
+/** This page's dictation: the browser's microphone, the app's rpc, held pieces in this page's IndexedDB. */
 export const dictation = new Dictation({
   problem: recordingProblem,
   openMicrophone: (onSamples) => openMicrophone(onSamples, { sampleRate: PCM_RATE, blockMs: BLOCK_MS }),
@@ -210,4 +314,7 @@ export const dictation = new Dictation({
   now: () => Date.now(),
   // rpc rejects every pending call with 'unavailable' once the connection is closed.
   lost: (error) => error instanceof RpcError && error.code === 'unavailable' && rpc.status.peek() !== 'open',
+  offline: () => rpc.status.peek() !== 'open', // a call made now would wait in rpc's queue: hold the piece instead
+  hold: (blob, name, owner) => takeStore.hold(blob, name, owner),
+  drop: (key) => void takeStore.drop(key),
 });

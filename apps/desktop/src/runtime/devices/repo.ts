@@ -1,16 +1,14 @@
 // Repository for the `devices` table (this PC, linked PCs, phones and PWA browsers).
 // Owns: SQL and row mapping for devices, including the stored raw public key and the link's role, kept in
 // the JSON column `allow` of migration 6 as {personId?, joinedAs?}: `personId` for a linked PC that joined
-// this one as an employee, `joinedAs` on the PC that joined the other one (devices/sync reads both).
-// Never: crypto, networking or pairing decisions.
+// this one as an employee, `joinedAs` on the PC that joined the other one (devices/sync reads both; B-081: the UI too).
+// Never: crypto, networking, pairing decisions, or the key in what goes to clients.
 
 import { bool, int, json, toJson, type Db } from '../db/database.ts';
 import type { Device, DeviceCaps, DeviceKind, DeviceRole } from '../../shared/model/devices.ts';
 
 export interface DeviceRecord extends Device {
   publicKey?: string; // raw Ed25519 public key, base64url (never sent to the UI)
-  /** This PC joined that PC – as its CEO (everything the same) or as an employee there (devices/sync/home.ts). */
-  joinedAs?: 'ceo' | 'employee';
 }
 
 interface DeviceRow {
@@ -52,9 +50,9 @@ function toRecord(row: DeviceRow): DeviceRecord {
   return record;
 }
 
-/** Strips the key (and the link's role) so the object can be sent to clients. */
+/** Strips the key so the object can be sent to clients (B-081: the link's role stays – the UI offers files of CEO PCs only). */
 export function publicDevice(record: DeviceRecord): Device {
-  const { publicKey: _key, joinedAs: _role, ...device } = record;
+  const { publicKey: _key, ...device } = record;
   return device;
 }
 

@@ -18,7 +18,7 @@ const TEMP = path.resolve('fake-data', 'tmp');
 const HOUR = 3_600_000;
 
 function acct(id: string, patch: Partial<Account> = {}): Account {
-  return { id, provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch };
+  return { id, provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch };
 }
 
 function model(id: string, patch: Partial<ModelInfo> = {}): ModelInfo {

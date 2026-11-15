@@ -1,8 +1,10 @@
-// KnowledgeStore (the old calls over the memory files): German word folding, folders by scope, correct/expire/history,
-// pinned cap and redaction.
+// KnowledgeStore (the old calls over the memory files): German word folding, the word index following the files, folders by
+// scope, correct/expire/history, pinned cap and redaction.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate } from '../../../src/runtime/db/migrate.ts';
 import { ManualClock } from '../../../src/runtime/system/clock.ts';
@@ -42,6 +44,21 @@ test('FTS matches across umlaut spellings', async () => {
   }
   const hits = await store.search({ text: 'Groesse' });
   assert.equal(hits.length, 0);
+});
+
+test('the word index follows the files: a direct edit and a removal are found by the next search, folders pick from the one index', async () => {
+  const { store } = setup();
+  store.memoryWrite({ folder: 'company/partner', title: 'Larsen Marine AS', text: 'Preise und Rechnungen nur in NOK.' });
+  store.memoryWrite({ folder: 'company/sites', title: 'Baustelle Hafenkante', text: 'Material nimmt nur Frau Okonkwo an.' });
+  assert.deepEqual((await store.search({ text: 'Preisübersicht für Larsen Marine' })).map((hit) => hit.item.title), ['Larsen Marine AS']);
+  assert.deepEqual((await store.search({ text: 'Larsen Okonkwo', folders: ['company/sites'] })).map((hit) => hit.item.title), ['Baustelle Hafenkante'], 'only the named folder');
+  const file = path.join(store.memoryRoot, 'company', 'partner', 'larsen-marine-as.md');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('nur in NOK', 'nur in Kronen'));
+  utimesSync(file, new Date(), new Date(Date.now() + 5_000)); // a direct edit: the file's own time moves
+  assert.equal((await store.search({ text: 'Kronen' }))[0]?.item.title, 'Larsen Marine AS', 'the edited text is searched');
+  assert.deepEqual(await store.search({ text: 'NOK' }), []);
+  store.memoryForget('company/sites/baustelle-hafenkante.md');
+  assert.deepEqual(await store.search({ text: 'Okonkwo' }), [], 'a removed file is gone from the index');
 });
 
 test('ACL: agent sees global, own space, own items, member chats, websites – not others', async () => {

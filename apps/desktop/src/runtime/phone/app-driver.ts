@@ -17,7 +17,7 @@ import { renderDump, screenOf, type PhoneDevice, type PhoneNode } from './uiauto
 export const APP_PHONE_TIMEOUT_MS = 20_000;
 
 /** What the phone says when phone use is not on yet (it shows the enable notification itself). */
-export const PHONE_USE_OFF = 'Phone use is off on this phone. The app showed the person a notification "Let the AI use this phone"; one tap opens Android\'s Accessibility settings (a sideloaded app first needs App info › ⋮ › Allow restricted settings). I try again once it is on.';
+export const PHONE_USE_OFF = 'Phone use is off on this phone. The app showed the person a notification "Let the AI use this phone"; one tap opens Android\'s Accessibility settings (an app from outside the Play Store first needs Settings › Apps › Autark › ⋮ › Allow restricted settings). I try again once it is on.';
 
 export interface AppPhonesDeps {
   bus: Pick<Bus, 'on' | 'emit'>;
@@ -141,7 +141,7 @@ export class AppPhones implements PhoneDriver {
         entry.off = () => step.signal?.removeEventListener('abort', cancel);
       }
       this.pending.set(id, entry);
-      this.deps.bus.emit('phoneUse.request', { deviceId, id, op, args });
+      this.deps.bus.emit('phoneUse.request', { deviceId, id, op, args, ...(step?.job ? { job: step.job } : {}) });
     });
   }
 
@@ -158,7 +158,11 @@ export class AppPhones implements PhoneDriver {
     if (!entry || entry.deviceId !== reply.deviceId) return; // only the phone that was asked answers its request
     if (reply.error) {
       const code = reply.error.code === 'off' ? 'unavailable' : KNOWN.has(reply.error.code) ? reply.error.code : 'conflict';
-      const message = reply.error.code === 'off' ? PHONE_USE_OFF : String(reply.error.message ?? 'The phone refused this step.').slice(0, 300);
+      // 'off' keeps the phone's own reason (no consent yet, a build without phone use) – only its bare "off" becomes PHONE_USE_OFF.
+      const said = typeof reply.error.message === 'string' ? reply.error.message.trim() : '';
+      const message = reply.error.code === 'off'
+        ? (!said || said.startsWith('Phone use is off') ? PHONE_USE_OFF : said.slice(0, 300))
+        : String(reply.error.message ?? 'The phone refused this step.').slice(0, 300);
       this.settle(reply.id, entry, new WorkforceError(code as ErrorCode, message));
       return;
     }

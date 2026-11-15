@@ -160,7 +160,12 @@ export abstract class HttpEngine implements Engine {
       .filter((m): m is { id: string; display_name?: unknown } => typeof m.id === 'string' && m.id.length <= 200 && (!key || !m.id.includes(key)))
       .slice(0, 500)
       .sort((a, b) => a.id.localeCompare(b.id));
-    return ids.map((m) => ({ model: m.id, name: typeof m.display_name === 'string' ? m.display_name.slice(0, 200) : m.id, efforts: this.effortsFor(m.id) }));
+    return ids.map((m) => this.listedModel(m, account));
+  }
+
+  /** Provider metadata stays with its account; basic adapters only need the id. */
+  protected listedModel(raw: { id: string; display_name?: unknown }, _account: Account): EngineModel {
+    return { model: raw.id, name: typeof raw.display_name === 'string' ? raw.display_name.slice(0, 200) : raw.id, efforts: this.effortsFor(raw.id) };
   }
 
   protected effortsFor(_model: string): EngineModel['efforts'] {

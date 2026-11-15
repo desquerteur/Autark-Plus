@@ -3,9 +3,13 @@
 // (runs/journal.ts outputBlob, over 24,000 also the registry's blobIds). Without this step a forgotten fact came back
 // through context.restore or a native rebuild (agents/rebuild.ts). Here, per ledger row (newest first, bounded):
 //  - a title, condensed text or mark reason that mentions it reads '[forgotten]';
-//  - an original that mentions it (the run item's data, its call's arguments or its blob) is pruned: the row says so on a restore,
-//    a rebuild replays neither its output nor its arguments (view.ts), the run item no longer names the blob (json_remove – the clean-up's delay never lets it be read again) and the blob
-//    goes back to the store's clean-up (files/cleanup.ts decides; another unpruned ledger row with the same bytes keeps it).
+//  - an original that mentions it (the run item's data, its call's arguments or its blob) is pruned: its title and condensed text
+//    (both made from it) read '[forgotten]' too, the row says so on a restore, a rebuild replays neither its output nor its arguments
+//    (view.ts), the run item no longer names the blob (json_remove – the clean-up's delay never lets it be read again) and the blob
+//    goes back to the store's clean-up (files/cleanup.ts decides; another unpruned ledger row with the same bytes keeps it);
+//  - a row the retention already pruned is matched by its run item's data and its call's arguments (its blob went back then): a fact
+//    that sat only past the run item's first 4,000 characters is no longer there to match – its lean text lost its values at that
+//    prune (retention.ts, window.ts leanStart), so nothing from there stays.
 // Chat messages stay (the chat is the original). The match rule is the caller's
 // (privacy/mentions.ts), so the ledger never sees the forgotten text itself.
 // Owns: that selection and those updates. Never: deletes rows or chat messages, logs text, or reads more than
@@ -30,12 +34,15 @@ export interface LedgerForget {
   truncated: boolean;
 }
 
-/** Does the original behind `row` mention it (the run item's own data or a blob it names)? Its blob ids either way. */
+/**
+ * Does the original behind `row` mention it (the run item's own data, its call's arguments or a blob it names)? Its blob ids either way.
+ * A row the retention pruned has no blob left to read (it went back to the clean-up then), but its run item and call still say what it was.
+ */
 function originalMentions(deps: RetentionDeps, row: LedgerRow, match: (text: string) => boolean, budget: { reads: number; truncated: boolean }): { hit: boolean; blobs: string[]; itemId?: string } {
-  if (row.pruned_at !== null || !row.ref?.startsWith('item:')) return { hit: false, blobs: [] };
+  if (!row.ref?.startsWith('item:')) return { hit: false, blobs: [] };
   const item = journalRow(deps.db, row.ref.slice(5));
   if (!item) return { hit: false, blobs: [] };
-  const blobs = blobIdsOf(item.data);
+  const blobs = row.pruned_at === null ? blobIdsOf(item.data) : [];
   const call = typeof item.data.callId === 'string' ? callRow(deps.db, item.run_id, item.data.callId) : undefined;
   if (match(JSON.stringify(item.data)) || (call && match(JSON.stringify(call.data)))) return { hit: true, blobs, itemId: item.id };
   for (const id of blobs) {
@@ -68,15 +75,19 @@ export function forgetInLedger(deps: RetentionDeps, match: (text: string) => boo
       const reason = row.mark_reason !== null && match(row.mark_reason);
       const original = originalMentions(deps, row, match, budget);
       if (!title && !condensed && !reason && !original.hit) continue;
+      // a title and a condensed text are made from the original (the call's summary or the output's first line; the lean text keeps its
+      // values without the words around them): when the original goes, they go too
+      const titleGoes = title || original.hit;
+      const condensedGoes = condensed || (original.hit && row.condensed !== null);
       deps.db.run(
         `UPDATE context_items SET title = ?, condensed = ?, mark_reason = ?, pruned_at = coalesce(pruned_at, ?) WHERE agent_id = ? AND conversation_id = ? AND item_id = ?`,
-        [title ? LEDGER_FORGOTTEN : row.title, condensed ? LEDGER_FORGOTTEN : row.condensed, reason ? LEDGER_FORGOTTEN : row.mark_reason,
+        [titleGoes ? LEDGER_FORGOTTEN : row.title, condensedGoes ? LEDGER_FORGOTTEN : row.condensed, reason ? LEDGER_FORGOTTEN : row.mark_reason,
           original.hit ? now : null, row.agent_id, row.conversation_id, row.item_id],
       );
       if (original.hit) {
         if (original.itemId) dropBlobRefs(deps.db, original.itemId);
         if (original.blobs.length) giveBack(deps, original.blobs, row);
-        originals++;
+        if (row.pruned_at === null) originals++; // one the retention pruned before counts as a row, not as an original pruned now
       }
       items++;
     }

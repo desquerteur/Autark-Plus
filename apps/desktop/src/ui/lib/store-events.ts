@@ -2,9 +2,8 @@
 // in sync with the open chat. Called once from main.tsx.
 // Owns: event → signal mapping, the `chat:<id>` topic lifecycle, the one start notice (RC1), when a toast is
 // seen already (its chat or My day open), the For-you clock's timing (F04); My day's calendar, briefing and
-// handed-off events are applied by lib/day-store.ts (wireDay, called here). B-075: a run's streaming answer arrives as
-// updates of its row (message.updated: body and live values), like any message – no event of its own; agent.activity
-// still feeds `activity` for Team, tasks and the work stop.
+// handed-off events are applied by lib/day-store.ts (wireDay, called here). Who works for a chat arrives
+// with its summary (conversation.upserted, its `live` – the live bar); agent.activity still feeds `activity` for Team, tasks and the work stop.
 // Never: fetches big snapshots on every event (only on reconnect, see store.loadAll).
 
 import { effect } from '@preact/signals';
@@ -91,7 +90,7 @@ export function wireEvents(): void {
 
   // tasks
   rpc.on('task.upserted', (task) => {
-    if (task.status === 'done' || task.status === 'cancelled') {
+    if (task.status === 'done' || task.status === 'dropped') {
       removeById(tasks, task.id);
       dismissToastsWhere((toast) => toast.taskId === task.id); // answered elsewhere (phone, an agent): its toast goes
     } else upsertById(tasks, task);

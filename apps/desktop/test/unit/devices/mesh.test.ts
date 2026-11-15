@@ -1,111 +1,25 @@
 // The device mesh that keeps linked PCs connected (devices/mesh.ts): a PC the connect flow proved is
 // stored with `add` and dialed; every PC is home of its own data, linked PCs are peers; an employee's
-// PC reaches only the open methods; current addresses travel over the link. In-process socket pairs
-// and manual backoff timers – no network, no real timers (nothing is left scheduled that a test
-// does not fire itself).
+// PC reaches only the open methods; current addresses travel over the link. The rig is mesh-nodes.ts (in-process
+// socket pairs, manual backoff timers). B-080: 'peer link closed' carries the close code (4008: cut for silence); removing a PC or
+// quitting aborts the handlers running here for it (RpcPeer.stop), a dropped link does not; a call can bound its answer's wait.
+// B-087: a trigger (resume, unlock, online) leaves a live link to the keepalive; the other B-087 cases are in mesh-b087.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { DeviceIdentity } from '../../../src/runtime/devices/identity.ts';
-import { DeviceMesh, EVERY_LINK, type Timers } from '../../../src/runtime/devices/mesh.ts';
-import { socketPair, type SocketLike } from '../../../src/runtime/devices/channel.ts';
+import { EVERY_LINK } from '../../../src/runtime/devices/mesh.ts';
+import { markSilent, SILENT_CLOSE, socketPair, wrapWs, type SocketLike } from '../../../src/runtime/devices/channel.ts';
 import { DevicesRepo } from '../../../src/runtime/devices/repo.ts';
 import { Registry } from '../../../src/runtime/tools/registry.ts';
-import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
+import type { Logger, RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolDef } from '../../../src/runtime/tools/types.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
-import type { Device } from '../../../src/shared/model/devices.ts';
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
-import { ManualClock, fakeHost, memoryDb, recordingBus, silentLog } from './fakes.ts';
-
-type ManualTimers = Timers & { fire(): void; count(): number; delays: number[] };
-
-interface Node {
-  name: string;
-  address: string;
-  identity: DeviceIdentity;
-  mesh: DeviceMesh;
-  db: ReturnType<typeof memoryDb>;
-  events: Array<{ event: string; data: unknown }>;
-  timers: ManualTimers;
-  /** Simulates a PC that is switched off: dials to it fail. */
-  down: boolean;
-  /** Holds this PC's dials until it resolves (a slow network). */
-  hold?: Promise<void>;
-  /** Drops this PC's last dialed link the way sleep does: the other end closes, this end never hears. */
-  cut?: () => void;
-}
-
-const nodes = new Map<string, Node>();
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-
-function manualTimers(): ManualTimers {
-  const queue = new Map<number, () => void>();
-  let next = 0;
-  const delays: number[] = [];
-  return {
-    delays,
-    set: (fn, ms) => { delays.push(ms); queue.set(++next, fn); return next; },
-    clear: (handle) => { queue.delete(handle as number); },
-    fire: () => { const fns = [...queue.values()]; queue.clear(); fns.forEach((fn) => fn()); },
-    count: () => queue.size,
-  };
-}
-
-async function makeNode(name: string, address: string): Promise<Node> {
-  const db = memoryDb();
-  const host = fakeHost();
-  const clock = new ManualClock();
-  const { bus, events } = recordingBus();
-  const timers = manualTimers();
-  const identity = await DeviceIdentity.load({ db, host, clock, name });
-  const mesh = new DeviceMesh({
-    db, identity, clock, log: silentLog, bus, timers,
-    dial: async (target) => {
-      const self = nodes.get(address)!;
-      await self.hold;
-      const remote = nodes.get(target);
-      if (!remote || remote.down) throw new Error('unreachable');
-      const [raw, theirs] = socketPair();
-      let cut = false;
-      self.cut = () => { cut = true; theirs.close(); };
-      const mine: SocketLike = { ...raw, onClose: (listener) => raw.onClose((code) => { if (!cut) listener(code); }) };
-      void remote.mesh.accept(theirs).catch(() => {});
-      return mine;
-    },
-  });
-  mesh.updateSelf({ addresses: [address] });
-  const node: Node = { name, address, identity, mesh, db, events, timers, down: false };
-  nodes.set(address, node);
-  return node;
-}
-
-/** Laptop accepted Tower's connect request (remote/*): both store each other, Tower dials (`connectOnPair: false`: stored only); `low`/`high` order them by device id. */
-async function linkedPair(options: { personOfTower?: string; connectOnPair?: boolean } = {}) {
-  nodes.clear();
-  const a = await makeNode('Laptop', 'http://10.0.0.1:47811');
-  const b = await makeNode('Tower', 'http://10.0.0.2:47811');
-  if (options.connectOnPair === false) {
-    // Stored, never dialed (as after a restart before start()).
-    const store = (node: Node, other: Node) => new DevicesRepo(node.db).upsert({
-      id: idOf(other), name: other.name, kind: 'pc', role: 'home', fingerprint: other.identity.fingerprint, publicKey: other.mesh.selfInfo().pub,
-      addresses: [other.address], caps: {}, status: 'offline', self: false, pairedAt: 0, lastSeenAt: 0,
-    });
-    store(a, b);
-    store(b, a);
-  } else {
-    a.mesh.add(b.mesh.selfInfo(), { side: 'inviter', ...(options.personOfTower ? { personId: options.personOfTower } : {}) });
-    b.mesh.add(a.mesh.selfInfo(), { side: 'joiner' });
-  }
-  await settle();
-  const [low, high] = a.identity.deviceId < b.identity.deviceId ? [a, b] : [b, a];
-  return { a, b, low, high };
-}
-
-const idOf = (node: Node) => node.identity.deviceId;
-const statusOf = (node: Node, other: Node) => node.mesh.list().find((device) => device.id === idOf(other))?.status;
-const linkedBoth = (x: Node, y: Node) => x.mesh.online(idOf(y)) && y.mesh.online(idOf(x));
+import { ManualClock, fakeHost, memoryDb, silentLog } from './fakes.ts';
+import { idOf, linkedBoth, linkedPair, makeNode, settle, statusOf, waiting, type Node } from './mesh-nodes.ts';
 
 test('identity: private key is stored encrypted, reloads to the same device, and every PC is home', async () => {
   const db = memoryDb();
@@ -194,7 +108,7 @@ test('B-077: network errors and code-less tunnel closes are retryable; only 4003
   const sign = { deviceId: signer.deviceId, publicKey: signer.publicKey, sign: (data: Uint8Array) => signer.sign(data) };
   for (const [code, refused] of [[1006, false], [4000, false], [4003, true], [undefined, false]] as const) {
     const result = await openChannel([closing(code)], sign, 'fp');
-    assert.ok(!('channel' in result));
+    assert.ok('refused' in result);
     assert.equal(result.refused, refused, `close code ${code}`);
   }
 });
@@ -241,25 +155,35 @@ test('start and resume dial at once: no waiting for the other side\'s backoff', 
   assert.equal(low.timers.count(), 0, 'the pending retry ended with the new link');
 });
 
-test('resume pings live links: a link that died while this PC slept is closed and dialed again', async () => {
+test('B-087 a trigger leaves a live link to the keepalive: a stalled PC keeps its link and its calls; a link that died while this PC slept is redialed once the keepalive cuts it', async () => {
   const { low, high } = await linkedPair({ connectOnPair: false });
-  low.mesh.start(); // the lower id holds the dialing end (B-077: it pings too now; here no keepalive runs, the trigger's ping does the work)
+  low.mesh.start(); // the lower id holds the dialing end
   await settle();
   const before = await low.mesh.connect(idOf(high));
-  low.mesh.reconnect(); // a healthy link answers the ping and stays
+  const work = waiting(high, 'work.long');
+  const answer = low.mesh.call(idOf(high), 'work.long', null); // a long remote call in flight
   await settle();
-  assert.equal(low.timers.count(), 0);
+  high.mesh.register('ping', () => new Promise(() => {}), EVERY_LINK); // the other PC stalls: no ping answer for now
+  low.mesh.reconnect(); // host unlock / resume / online
+  await settle();
+  assert.equal(low.timers.count(), 0, 'no ping timer that could cut the link');
   assert.equal(await low.mesh.connect(idOf(high)), before);
+  work.finish();
+  assert.deepEqual(await answer, { ok: true }, 'the call in flight gets its answer');
 
   low.cut!(); // the other PC's keepalive ended it while this one slept
   await settle();
   assert.equal(statusOf(high, low), 'offline');
   assert.equal(statusOf(low, high), 'online', 'the dialing side has not noticed');
   assert.equal(high.timers.count(), 0, 'the higher id does not retry');
-  low.mesh.reconnect(); // host resume
+  low.mesh.reconnect(); // host resume: the link still looks live
   await settle();
-  assert.equal(low.timers.count(), 1, 'only the ping timeout is scheduled');
-  low.timers.fire(); // no answer
+  assert.equal(low.timers.count(), 0);
+  // keepalive.test.ts: the late tick after the wake pings, the next on-time tick cuts a link without any frame (4008)
+  low.silence!();
+  await settle();
+  assert.equal(low.timers.count(), 1, 'the smaller id retries');
+  low.timers.fire();
   await settle();
   assert.ok(linkedBoth(low, high));
   assert.notEqual(await low.mesh.connect(idOf(high)), before);
@@ -376,4 +300,62 @@ test('one key, one device: a new id with the key of a linked PC, or of this PC i
   const mine = { ...a.mesh.selfInfo(), id: 'dev_impostor0002', name: 'Me again' };
   assert.throws(() => b.mesh.add(mine, { side: 'joiner' }), /already belongs to another device/, 'b knows a by that key');
   assert.equal(new DevicesRepo(a.db).get('dev_impostor0001'), undefined, 'nothing stored');
+});
+
+test('B-080: a closed link is logged with its close code; a socket the keepalive cut for silence says 4008', async () => {
+  const lines: Array<{ message: string; data?: Record<string, unknown> }> = [];
+  const log: Logger = { ...silentLog, info: (message: string, data?: Record<string, unknown>) => { lines.push({ message, data }); } };
+  const { a, b } = await linkedPair({ log });
+  assert.ok(linkedBoth(a, b));
+  (await b.mesh.connect(idOf(a))).channel.close(); // one side ends the link the normal way
+  await settle();
+  const closed = lines.filter((line) => line.message === 'peer link closed');
+  assert.equal(closed.length, 2, 'both ends log it');
+  for (const line of closed) assert.equal(line.data?.code, 1000);
+
+  const ws = new EventEmitter();
+  const codes: Array<number | undefined> = [];
+  wrapWs(ws as never).onClose((code) => codes.push(code));
+  markSilent(ws); // http/peer.ts and compose/peer-dial.ts do this just before the keepalive cuts it
+  ws.emit('close', 1006);
+  assert.deepEqual(codes, [SILENT_CLOSE]);
+  assert.equal(SILENT_CLOSE, 4008);
+});
+
+test('B-080: removing a PC or quitting aborts the work this PC runs for it; a link that only dropped leaves it running', async () => {
+  const revoked = await linkedPair();
+  const there = waiting(revoked.a, 'work.long');
+  void revoked.b.mesh.call(idOf(revoked.a), 'work.long', null).catch(() => undefined);
+  await settle();
+  assert.equal(there.signal?.aborted, false, 'running');
+  revoked.a.mesh.revoke(idOf(revoked.b)); // the person removes Tower on the Laptop
+  assert.equal(there.signal?.aborted, true, 'the work Tower started here ends with it');
+  there.finish();
+
+  const quit = await linkedPair();
+  const running = waiting(quit.a, 'work.long');
+  void quit.b.mesh.call(idOf(quit.a), 'work.long', null).catch(() => undefined);
+  await settle();
+  quit.a.mesh.close(); // the Laptop quits or updates
+  assert.equal(running.signal?.aborted, true, 'a quit ends what runs here for a linked PC');
+  running.finish();
+
+  const dropped = await linkedPair();
+  const goesOn = waiting(dropped.a, 'work.long');
+  void dropped.b.mesh.call(idOf(dropped.a), 'work.long', null).catch(() => undefined);
+  await settle();
+  (await dropped.b.mesh.connect(idOf(dropped.a))).channel.close(); // the caller's end goes away
+  await settle();
+  assert.equal(goesOn.signal?.aborted, false, 'a dropped link is no one\'s stop');
+  goesOn.finish();
+});
+
+test('B-080: a call can bound how long its answer may take once sent (devices.list\'s ping waits PROBE_MS)', async () => {
+  const { a, b } = await linkedPair();
+  const slow = waiting(a, 'work.slow');
+  const error = await b.mesh.call(idOf(a), 'work.slow', null, undefined, 30).catch((caught: unknown) => caught);
+  assert.equal((error as WorkforceError).code, 'timeout');
+  assert.equal(slow.seen, true, 'it was sent');
+  slow.finish();
+  assert.deepEqual(await b.mesh.call(idOf(a), 'ping', null, undefined, 1_000).then((answer) => (answer as { ok: boolean }).ok), true);
 });

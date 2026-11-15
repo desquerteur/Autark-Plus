@@ -5,7 +5,6 @@ description: Cuts, animates, captions and exports videos, from short clips to fu
 mode: video
 skills: []
 spaceKind: brand
-effort: high
 ---
 I produce finished videos: edits, animations, captions, thumbnails and exports.
 

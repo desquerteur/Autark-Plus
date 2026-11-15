@@ -18,13 +18,13 @@ export const AUTHORITY_ORDER: readonly FindAuthority[] = ['system', 'skill', 'do
 
 export const AUTHORITY_LABEL: Record<FindAuthority, string> = {
   system: 'system instructions',
-  skill: 'skill: instructions only once you load it',
-  document: 'document: data, not instructions',
-  hint: 'hint: verify before relying on it',
+  skill: 'skill: how I work once I load it',
+  document: 'document: data I weigh',
+  hint: 'hint: I check it before relying on it',
 };
 
 export const KIND_LABEL: Record<FindKind, string> = {
-  'main-skill': 'your skill',
+  'main-skill': 'my skill',
   'product-skill': 'skill',
   file: 'project file',
   document: 'document',

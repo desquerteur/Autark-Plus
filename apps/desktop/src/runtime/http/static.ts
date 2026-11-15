@@ -1,6 +1,7 @@
 // Static UI for the PWA/browser: files from the built UI directory (app/ui) with correct MIME
 // types, cache headers, ETags, the app CSP for HTML and an SPA fallback to index.html for
-// navigation paths (no file extension).
+// navigation paths (no file extension). B-082: /turn/<name> – the conversation's turn detector files by fixed name
+// (onnxruntime-web's wasm and loader, Silero VAD, Smart Turn; turnFile), never a path from the client.
 // Owns: URL → file mapping with traversal protection and the cache/CSP policy of UI files.
 // Never: serves files outside `root`, dotfiles, or anything authenticated (files.ts does that).
 
@@ -9,12 +10,14 @@ import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { TURN_ROUTE, turnFile } from '../../shared/model/local-speech-models.ts';
+import { modelDir } from '../voice/local/store.ts';
 import { BASE_HEADERS, sendError } from './body.ts';
 
 /** CSP of the UI shell served over HTTP (the PWA). */
 export const APP_CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'", // B-082: the conversation's turn models (onnxruntime-web); WebAssembly only, never eval
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
@@ -103,15 +106,23 @@ const RESERVED = /^\/(?:api|rpc|ws|mcp|files|peer|sandbox|\.well-known|chunks|ic
 
 export class StaticFiles {
   private readonly root: string;
+  private readonly dataDir?: () => string;
 
-  constructor(root: string) {
+  /** `dataDir`: where the downloaded models are (the turn files); without it /turn/ serves the ort files only. */
+  constructor(root: string, dataDir?: () => string) {
     this.root = path.resolve(root);
+    this.dataDir = dataDir;
   }
 
   /** Serves a GET/HEAD for a UI file or the SPA shell. Always answers (404/405 included). */
   async serve(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendError(res, 405, 'bad_request', 'Method not allowed.', { Allow: 'GET, HEAD' });
+      return;
+    }
+    if (pathname.startsWith(TURN_ROUTE)) {
+      const file = this.turnPath(pathname.slice(TURN_ROUTE.length));
+      if (!file || !(await this.send(req, res, file))) sendError(res, 404, 'not_found', 'Not found.');
       return;
     }
     const file = resolveUnder(this.root, pathname);
@@ -126,6 +137,15 @@ export class StaticFiles {
       if (await this.send(req, res, path.join(this.root, 'index.html'))) return;
     }
     sendError(res, 404, 'not_found', 'Not found.');
+  }
+
+  /** The file behind one fixed turn name: ort next to the app's package.json (unpacked from the asar), a model in its folder. */
+  private turnPath(name: string): string | null {
+    const source = turnFile(name);
+    if (!source) return null;
+    if ('ort' in source) return path.join(this.root, '..', '..', 'node_modules', 'onnxruntime-web', 'dist', source.ort).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    const dataDir = this.dataDir?.();
+    return dataDir ? path.join(modelDir(dataDir, source.model), source.model.files[0]) : null;
   }
 
   /** Streams one file with its headers; false when it does not exist (nothing written). */

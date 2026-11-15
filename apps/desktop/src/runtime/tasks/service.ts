@@ -1,48 +1,61 @@
-// TaskService ("simplified Asana"): one task model – work is a task, steps are child tasks, the person's work is a
-// task owned by 'human'. Tasks are rows of their own (B-054: a chat is only where one was handed over – its anchoring
-// 'task' message; chat-free tasks have none). Atomic claim, assignment (assignedBy = who assigned), status, completion
-// with result, optimistic concurrency (rev), TaskView, the "For you" list. Side effects (wakes, notifications, status
-// lines, the one verification step) live in tasks/lifecycle.ts; human widget flows in tasks/human.ts (arming:
-// tasks/timers.ts); owner transitions (joining the chat, archived agents hand over, pause/resume after the person's
-// Stop) in tasks/owners.ts; waits that end (a person's step, a delegated child) in tasks/transitions.ts. Building a
-// new task lives in tasks/create.ts, completing it in tasks/complete.ts, views in tasks/views.ts. B-078: 'working' ends
-// with the last live run on it (tasks/working.ts); a person's typed reply to an ask answers it (tasks/reply-answer.ts).
+// TaskService ("simplified Asana"): one task model – work is a task, a piece is a child task, the person's work is a
+// task owned by 'human' (or a colleague's per_… id). Tasks are rows of their own (a chat is only where one was handed
+// over – its anchoring 'task' message). Four stored states: open, waiting, done, dropped; "working" is a live run on it
+// (TaskView.running). Writes: create (tasks/create.ts), update (fields, a wait set or ended, the plan and facts),
+// give (tasks/give.ts), finish (done or dropped, with a result), pause / resume (the person's Stop), remove. Every write
+// that changes when a task needs a look plans it (Task.nextAt, tasks/next.ts); the watcher fires it (tasks/watch.ts).
+// Side effects (who hears, lines, verification, dependencies) live in tasks/lifecycle.ts; human widget flows in
+// tasks/human.ts (arming: tasks/timers.ts); owner moves (archived agents, pause) in tasks/owners.ts.
 // Owns: every write to `tasks`/`tasks_fts` and the task events.
-// Never: shows unverified work as verified or keeps a second copy of the task text outside its row.
+// Never: shows unverified work as verified, stores "working", or keeps a second copy of the task text outside its row.
 
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { excerpt } from '../../shared/text/chat-names.ts';
 import type { UiBlock } from '../../shared/blocks/catalog.ts';
 import type { Message, StatusLine } from '../../shared/model/chat.ts';
-import type { CreateTaskInput, Task, TaskFilter, TaskResult, TaskStatus, TaskView } from '../../shared/model/tasks.ts';
+import { isFinished, isPaused, type CreateTaskInput, type Task, type TaskFilter, type TaskResult, type TaskView, type TaskWait } from '../../shared/model/tasks.ts';
 import type { RuntimeServices, TaskService } from '../contracts.ts';
 import { ActivityTracker } from '../chat/activity.ts';
 import { chatTitleFor } from '../chat/titles.ts';
 import { TaskRepo } from './repo.ts';
 import { HumanTodos } from './human.ts';
-import {
-  RESUMED_NOTE, changeOwner, claimedTeamWork, handOver, isPaused, pauseTask, resumeOnHumanMessage, resumeTask, routeOwner,
-} from './owners.ts';
+import { handOver, onPersonLine, pauseTask, resumeTask } from './owners.ts';
 import { TaskLifecycle } from './lifecycle.ts';
-import { markCancel, mergeWait, reopenFact } from './transitions.ts';
 import { armTimer, dueAfter, prepareWidget } from './timers.ts';
-import { checkPersonWorkFor, createTask, type CreateOptions } from './create.ts';
+import { createTask, type CreateOptions } from './create.ts';
 import { taskViews } from './views.ts';
 import { isHumanActor, isPersonId } from '../../shared/model/people.ts';
-import { DAY_PATCH_FIELDS } from './patch-fields.ts'; // B-041 My day: estimate, focus timer, window, prep, private
-import { completeTask } from './complete.ts';
-import { applyDepends, checkDepends, dependsReleased } from './depends.ts';
+import { DAY_PATCH_FIELDS, type DayPatchField } from './patch-fields.ts';
+import { applyDepends, checkDepends } from './depends.ts';
 import { answerByReply } from './reply-answer.ts';
-import { settleWorking } from './working.ts';
+import { askedRoute, giveTask, nameOf, pickOwner, receiverOf, type GiveInput } from './give.ts';
+import { nextLook } from './next.ts';
+import type { Effort } from '../../shared/model/providers.ts';
+import { setTaskRoute } from '../agents/next-route.ts';
 import '../contracts/people.ts';
 
 export type TaskDeps = Pick<RuntimeServices, 'db' | 'bus' | 'clock' | 'chats' | 'wakes'>
-  & Partial<Pick<RuntimeServices, 'org' | 'subconscious' | 'scheduler' | 'notifications' | 'log' | 'dispatcher' | 'catalog' | 'people' | 'settings' | 'decisions'>>; // decisions: B-078 route-pick.ts // people (F-52): names of colleagues; settings: the owner's name in chat titles // catalog: the RT3 rating hooks (models/feedback.ts)
+  & Partial<Pick<RuntimeServices, 'org' | 'subconscious' | 'scheduler' | 'notifications' | 'log' | 'dispatcher' | 'catalog' | 'people' | 'settings' | 'decisions'>>;
 
-const PATCHABLE = new Set<keyof Task>([
-  'title', 'notes', 'dueAt', 'priority', 'doneWhen', 'mode', 'sort', 'goal', 'widget', 'humanReason', 'waitingOn', 'ledger', 'attempts', ...DAY_PATCH_FIELDS,
-]);
+/** A wait as a caller gives it (since is set here). */
+export type WaitInput = Omit<TaskWait, 'since'>;
+
+/** What update() takes: the fields, a wait (status 'waiting' + waitingOn) or its end (status 'open'), the plan and a fact. */
+export type TaskPatch = Partial<Pick<Task, 'title' | 'notes' | 'dueAt' | 'priority' | 'doneWhen' | 'sort' | 'widget' | 'dependsOn' | 'status'>>
+  & Partial<Pick<Task, DayPatchField>> & { waitingOn?: WaitInput; plan?: string[]; fact?: string; facts?: string[]; doneCount?: number };
+
+/** What finish() takes. */
+export interface FinishInput {
+  status: 'done' | 'dropped';
+  summary: string;
+  evidence?: TaskResult['evidence'];
+  alsoHandled?: string[];
+  followUps?: TaskResult['followUps'];
+  quiet?: boolean;
+  answer?: unknown;
+}
+
+const FIELDS = new Set<string>(['title', 'notes', 'dueAt', 'priority', 'doneWhen', 'sort', 'widget', ...DAY_PATCH_FIELDS]);
 
 export class TaskServiceImpl implements TaskService {
   readonly s: TaskDeps;
@@ -55,17 +68,15 @@ export class TaskServiceImpl implements TaskService {
   constructor(deps: TaskDeps) {
     this.s = deps;
     this.repo = new TaskRepo(deps.db);
-    this.activity = new ActivityTracker(deps.bus, ({ tasks, conversations }) => {
-      const settled = settleWorking(this, tasks, conversations); // B-078: 'working' only while a run is live
-      for (const id of tasks) { const task = this.repo.get(id); if (task && !settled.has(id)) this.emit(task); }
+    this.activity = new ActivityTracker(deps.bus, ({ tasks }) => {
+      for (const id of tasks) { const task = this.repo.get(id); if (task) this.emit(task); } // "Working" follows the live run
     });
     this.human = new HumanTodos(this);
     this.life = new TaskLifecycle(this);
-    // An archived agent's open work moves to its successor; a human message in a chat ends the pause of the work there.
     this.offs = [
       deps.bus.on('agent.removed', ({ id }) => handOver(this, id)),
-      deps.bus.on('message.created', message => resumeOnHumanMessage(this, message)),
-      deps.bus.on('message.created', message => answerByReply(this, message)), // B-078: a typed reply answers the ask it replies to
+      deps.bus.on('message.created', message => onPersonLine(this, message)),
+      deps.bus.on('message.created', message => answerByReply(this, message)), // a typed reply answers the ask it replies to
     ];
   }
 
@@ -86,115 +97,123 @@ export class TaskServiceImpl implements TaskService {
     return createTask(this, input, options);
   }
 
-  update(id: string, patch: Partial<Task>, by: string, rev?: number): TaskView {
+  /**
+   * New work for `to` ("me", "team", an agent, the person or a colleague by id): "team" picks one owner now (`team`
+   * narrows it to that team's agents); `route` is what the work needs from its first turn on.
+   */
+  async createTo(input: Omit<CreateTaskInput, 'assigneeKind' | 'assigneeId'> & { createdBy: string }, to: string, options: CreateOptions & { team?: string; route?: GiveInput['route'] } = {}): Promise<TaskView> {
+    let receiver = receiverOf(to, input.createdBy);
+    if (receiver.kind === 'team') receiver = await pickOwner(this, { title: input.title, notes: input.notes ?? '', spaceId: input.spaceId }, input.createdBy, options.team);
+    const owner = receiver.kind === 'agent' ? { assigneeKind: 'agent' as const, assigneeId: receiver.id } : { assigneeKind: 'human' as const, ...(receiver.kind === 'human' && receiver.id ? { assigneeId: receiver.id } : {}) };
+    const view = this.create({ ...input, ...owner }, options);
+    if (receiver.kind === 'agent' && options.route) setTaskRoute(this.s.db, receiver.id, view.id, { ...options.route, reason: `given by ${nameOf(this.s, input.createdBy)}`, at: this.s.clock.now() });
+    return view;
+  }
+
+  /**
+   * Changes fields; status 'waiting' with waitingOn sets (or refreshes) a wait, status 'open' ends it (a pause too) – and
+   * a person's 'open' on finished work reopens it. `plan` replaces the plan, `fact` adds one line; both count as a move.
+   */
+  update(id: string, patch: TaskPatch, by: string, rev?: number): TaskView {
     const current = this.require(id);
     if (patch.widget && current.assigneeKind === 'human') {
       const armed = prepareWidget(patch.widget, this.s.clock.now(), by);
       const due = patch.dueAt === undefined ? dueAfter(current, armed) : undefined; // the old timer's due time moves with the new one
       patch = { ...patch, widget: armed.widget, ...(due !== undefined && due !== current.dueAt ? { dueAt: due } : {}) };
     }
-    if (patch.assigneeKind !== undefined || patch.assigneeId !== undefined) {
-      this.assign(id, { kind: patch.assigneeKind ?? current.assigneeKind, id: patch.assigneeId }, by);
+    if (patch.status === 'open' && isPaused(current)) return this.resume(id, by);
+    if (patch.status !== undefined && isFinished(current.status)) {
+      if (patch.status !== 'open' || !isHumanActor(by)) throw new WorkforceError('conflict', 'This task is finished; new work is a new task (tasks.create).', { details: { taskId: id } });
     }
-    if (patch.status !== undefined && (patch.status !== current.status || isPaused(current))) this.setStatus(id, patch.status, by);
+    if (patch.status === 'waiting' && !patch.waitingOn && current.status !== 'waiting') throw new WorkforceError('bad_request', 'A wait says what it waits on (waitingOn).');
     const after = patch.dependsOn ? checkDepends(this.repo, id, current.parentId, patch.dependsOn) : undefined;
-    let released = false;
+    const now = this.s.clock.now();
     const task = this.mutate(id, draft => {
-      for (const key of Object.keys(patch) as Array<keyof Task>) {
-        if (!PATCHABLE.has(key)) continue;
-        // A second child to wait on keeps the first one (waitingOn.ids) while it is still open.
-        (draft as unknown as Record<string, unknown>)[key] = key === 'waitingOn' ? mergeWait(this, draft.waitingOn, patch.waitingOn) : patch[key];
+      const fields = draft as unknown as Record<string, unknown>;
+      for (const key of Object.keys(patch)) if (FIELDS.has(key)) fields[key] = (patch as Record<string, unknown>)[key];
+      let moved = false;
+      if (patch.plan !== undefined) { draft.ledger = { ...draft.ledger, plan: patch.plan.map((line) => line.trim()).filter(Boolean).slice(0, 20) }; moved = true; }
+      if (patch.fact?.trim()) {
+        const fact = patch.fact.trim();
+        draft.ledger = { ...draft.ledger, facts: [...(draft.ledger.facts ?? []).filter((item) => item !== fact), fact].slice(-20) };
+        moved = true;
       }
-      if (after) released = applyDepends(this.repo, draft, after, this.s.clock.now());
+      if (patch.facts !== undefined) draft.ledger = { ...draft.ledger, facts: patch.facts.slice(-20) }; // a runtime caller's whole list (a routine's one skip note)
+      if (patch.doneCount !== undefined) draft.ledger = { ...draft.ledger, doneCount: patch.doneCount };
+      if (patch.status === 'waiting') {
+        const wait = patch.waitingOn ?? current.waitingOn!;
+        const same = current.status === 'waiting' && current.waitingOn?.on === wait.on && current.waitingOn.who === wait.who;
+        draft.status = 'waiting';
+        draft.waitingOn = { ...wait, since: same ? current.waitingOn!.since : now }; // a refreshed wait keeps when it began
+        moved = true;
+      } else if (patch.status === 'open' && current.status !== 'open') {
+        draft.status = 'open';
+        delete draft.waitingOn;
+        delete draft.completedAt;
+        if (isFinished(current.status)) draft.ledger = { ...draft.ledger, facts: [...(draft.ledger.facts ?? []), `Reopened by ${nameOf(this.s, by)}.`].slice(-20) };
+        moved = true;
+      } else if (patch.waitingOn && draft.status === 'waiting') {
+        draft.waitingOn = { ...patch.waitingOn, since: draft.waitingOn?.since ?? now };
+      }
+      if (after) applyDepends(this.repo, draft, after, now);
+      if (moved) draft.ledger = { ...draft.ledger, movedAt: now, stalls: 0 };
+      if (moved || after || patch.dueAt !== undefined || Object.hasOwn(patch, 'dueAt') || patch.status !== undefined) draft.nextAt = nextLook(draft, now, this.openPieces(draft));
     }, rev);
     if (patch.widget) armTimer(this.s, task);
-    if (released) { dependsReleased(this, task); return this.views([task])[0]; }
-    return this.emit(task);
+    const view = this.emit(task);
+    this.life.changed(current, task, by);
+    return view;
   }
 
-  setStatus(id: string, status: TaskStatus, by: string, note?: string): TaskView {
+  /** Gives task `id` to `to` ("me", "team", an agent, the person or a colleague by id); "team" picks one owner now. */
+  async give(id: string, to: string, by: string, input: { note?: string; model?: string; effort?: Effort; from?: string; fact?: string; givenIn?: string } = {}): Promise<TaskView> {
+    const task = this.require(id);
+    const route = this.s.catalog ? askedRoute(this.s as Pick<RuntimeServices, 'catalog'>, input) : undefined;
+    let receiver = receiverOf(to, by);
+    if (receiver.kind === 'team') receiver = await pickOwner(this, task, by);
+    const give: GiveInput = { ...(input.note ? { note: input.note } : {}), ...(route ? { route } : {}), ...(input.fact ? { fact: input.fact } : {}), ...(input.givenIn ? { givenIn: input.givenIn } : {}) };
+    return giveTask(this, id, receiver, by, give);
+  }
+
+  /** Ends a task: done with what came out, or dropped with why. A finished task comes back as it is. */
+  finish(id: string, input: FinishInput, by: string): TaskView {
     const before = this.require(id);
-    // The human moving paused work on ends the pause; the owner continues.
-    if (by === HUMAN_ID && isPaused(before) && (status === 'open' || status === 'working')) return this.resume(id, by, RESUMED_NOTE);
-    if (before.status === status) return this.views([before])[0];
-    if (status === 'done') {
-      if (!isHumanActor(by)) throw new WorkforceError('bad_request', 'Use complete() with a result to finish a task.'); // F-52: people report like the owner
-      return this.complete(id, { summary: note ?? 'Done', evidence: [], verification: 'reported_by_human' }, by);
-    }
+    if (isFinished(before.status)) return this.views([before])[0];
+    if (!input.summary?.trim()) throw new WorkforceError('bad_request', 'Finishing a task needs a summary.');
+    const human = isHumanActor(by);
+    const summary = input.status === 'dropped' && by !== before.assigneeId && by !== HUMAN_ID ? `Dropped by ${nameOf(this.s, by)}: ${input.summary.trim()}` : input.summary.trim();
     const now = this.s.clock.now();
     const task = this.mutate(id, draft => {
-      draft.status = status;
-      if (status === 'working') draft.startedAt ??= now;
-      if (status === 'cancelled') draft.completedAt = now;
-      else delete draft.completedAt; // reopened: no longer counts as recently finished
-      if (status === 'blocked' || status === 'waiting' || status === 'needs_you') {
-        draft.waitingOn = draft.waitingOn ?? { kind: status === 'needs_you' ? 'human' : 'external', reason: note ?? status, since: now };
-      } else if (status === 'working' || status === 'open') {
-        delete draft.waitingOn;
-      }
-      reopenFact(draft, before.status, by, note); // the person reopening agent work is a ledger fact
-      markCancel(draft, status, by);
+      draft.status = input.status;
+      draft.result = {
+        summary, evidence: input.evidence ?? [], verification: human ? 'reported_by_human' : 'claimed_by_agent',
+        ...(input.alsoHandled?.length ? { alsoHandled: input.alsoHandled } : {}), ...(input.followUps?.length ? { followUps: input.followUps } : {}),
+        ...(input.answer !== undefined ? { answer: input.answer } : {}), ...(input.quiet ? { quiet: true as const } : {}),
+      };
+      draft.completedAt = now;
+      delete draft.waitingOn;
+      delete draft.nextAt;
     });
-    this.life.statusChanged(task, before.status, by, note);
     const view = this.emit(task);
-    this.life.humanProgress(task, by);
+    this.life.finished(task, by);
     return view;
   }
 
-  claim(id: string, agentId: string): boolean {
-    const now = this.s.clock.now();
-    const before = this.repo.get(id);
-    if (!this.repo.claim(id, agentId, now)) return false;
-    const task = before?.assigneeKind === 'team' ? claimedTeamWork(this, id, agentId) : this.require(id);
-    // No joinChat: claiming is self-assignment, and an agent outside the chat must not join it so.
-    if (!task.parentId) this.line(task, { type: 'task_claimed', text: `${this.nameOf(agentId)} took: ${excerpt(task.title, 60)}`, details: { taskId: id, agentId } }, agentId);
-    this.emit(task);
-    return true;
-  }
-
-  assign(id: string, assignee: { kind: Task['assigneeKind']; id?: string }, by: string): TaskView {
-    const before = this.require(id);
-    if (assignee.kind === 'agent' && !assignee.id) throw new WorkforceError('bad_request', 'Assigning to an agent needs its id.');
-    if (assignee.kind === 'agent' && this.s.org && !this.s.org.get(assignee.id!)) throw new WorkforceError('not_found', 'Agent not found.');
-    const toPerson = assignee.kind === 'human' && isPersonId(assignee.id); // F-52: a colleague, not the owner's To-do list
-    if (toPerson) checkPersonWorkFor(this, assignee.id!, before.conversationId, by); // chat-free: only from the owner (P3)
-    // D7: into the task's chat, or – out of a 1:1 the agent is not in – the task moves into by's 1:1 with it, so the wake lands there.
-    if (assignee.kind === 'agent') routeOwner(this, before, assignee.id!, by);
-    const moved = this.mutate(id, draft => {
-      draft.assigneeKind = assignee.kind;
-      if (assignee.kind === 'team' || (assignee.kind === 'human' && !toPerson)) delete draft.assigneeId; else if (assignee.id) draft.assigneeId = assignee.id;
-      draft.assignedBy = by; // the assigner hears once when it is done (lifecycle.completed)
-      if (draft.assigneeKind !== before.assigneeKind || draft.assigneeId !== before.assigneeId) changeOwner(this, draft, before);
-    });
-    // The person giving paused work an owner moves it on (an agent's reassignment keeps the pause).
-    const task = (by === HUMAN_ID && assignee.kind !== 'human' ? resumeTask(this, id, by) : undefined) ?? moved;
-    // The previous owner's wakes for this task are stale; so are the lead's follow-ups.
-    if (before.assigneeKind === 'agent' && before.assigneeId && before.assigneeId !== task.assigneeId) this.s.wakes.cancel(before.assigneeId, { taskId: id });
-    if (before.assigneeKind === 'team' && task.assigneeKind !== 'team') this.s.wakes.cancelTask(id, ['review']);
-    this.life.assigning(task, assignee, by);
-    const view = this.emit(task);
-    this.life.assigned(task, assignee, by);
-    return view;
-  }
-
-  complete(id: string, result: TaskResult, by: string): TaskView { return completeTask(this, id, result, by); }
-
+  /** The person's Stop: the task waits on them ("Paused by you") until they or its owner move it on. */
   pause(id: string, by: string): TaskView {
     const task = pauseTask(this, id, by);
     return task ? this.emit(task) : this.views([this.require(id)])[0];
   }
 
-  resume(id: string, by: string, wakeNote?: string): TaskView {
+  /** Ends a pause: the task is open again and its owner goes on (its look is now). */
+  resume(id: string, by: string): TaskView {
     const task = resumeTask(this, id, by);
-    if (!task) return this.views([this.require(id)])[0];
-    const view = this.emit(task);
-    if (wakeNote !== undefined) this.life.resumed(task, by, wakeNote);
-    return view;
+    return this.emit(task ?? this.require(id));
   }
 
   remove(id: string, by: string): void {
     const task = this.require(id);
-    const parts = this.partsOf(id); // its steps and delegated work go with it (ON DELETE CASCADE)
+    const parts = this.partsOf(id); // its pieces go with it (ON DELETE CASCADE)
     this.repo.delete(id);
     this.life.removed(task, by, parts);
     this.s.bus.emit('task.removed', { id, ...(task.conversationId ? { conversationId: task.conversationId } : {}) });
@@ -210,7 +229,7 @@ export class TaskServiceImpl implements TaskService {
   snooze(ref: string | { messageId: string; blockIndex: number }, until: number): TaskView { return this.human.snooze(ref, until); }
   stopRepeating(id: string, by: string): TaskView { return this.human.stopRepeating(id, by); }
 
-  // ------------------------------------------------------------- shared internals (used by human.ts / ownership.ts)
+  // ------------------------------------------------------------- shared internals
 
   require(id: string): Task {
     const task = this.repo.get(id);
@@ -240,18 +259,23 @@ export class TaskServiceImpl implements TaskService {
     return view;
   }
 
-  /** True while a turn runs on this task (the live activity). */
-  isRunning(id: string): boolean { return this.activity.running(id); }
+  /** True while a turn runs on this task (the live activity) – with `agentId`, a turn of that agent. */
+  isRunning(id: string, agentId?: string): boolean { return this.activity.running(id, agentId); }
 
   /** True while any agent runs a turn in this chat. */
   chatRunning(conversationId: string): boolean { return this.activity.working(conversationId).length > 0; }
 
-  /** Steps, progress, chat title, running and its worktree (tasks/views.ts). */
+  /** Unfinished pieces of the task that someone other than its owner holds (their end wakes its owner). */
+  openPieces(task: Pick<Task, 'id' | 'assigneeId'>): boolean {
+    return this.repo.children(task.id).some((piece) => !isFinished(piece.status) && piece.assigneeId !== task.assigneeId);
+  }
+
+  /** Pieces, progress, chat title and whether a turn runs on it (tasks/views.ts). */
   views(tasks: Task[]): TaskView[] {
     return taskViews(this.repo, (conversationId?: string) => conversationId ? chatTitleFor(this.s, conversationId, HUMAN_ID) : '', id => this.activity.running(id), tasks);
   }
 
-  /** Every task under `id` (steps, delegated work, their parts), breadth first, at most 500. */
+  /** Every task under `id` (its pieces and theirs), breadth first, at most 500. */
   private partsOf(id: string): Task[] {
     const out: Task[] = [];
     const seen = new Set([id]);
@@ -263,7 +287,7 @@ export class TaskServiceImpl implements TaskService {
     return out;
   }
 
-  /** Quiet status line about a task in its handover chat (P12: a chat-free task writes none – its ledger and runs are its history). */
+  /** Quiet status line about a task in its handover chat (a chat-free task writes none – its ledger and runs are its history). */
   line(task: Task, line: StatusLine, by: string): void {
     if (!task.conversationId) return;
     try {
@@ -274,7 +298,7 @@ export class TaskServiceImpl implements TaskService {
   }
 
   nameOf(id: string): string {
-    if (isPersonId(id)) return this.s.people?.nameOf(id) ?? 'Former colleague'; // F-52
+    if (isPersonId(id)) return this.s.people?.nameOf(id) ?? 'Former colleague';
     return id === HUMAN_ID ? 'You' : this.s.org?.get(id)?.name ?? id;
   }
 

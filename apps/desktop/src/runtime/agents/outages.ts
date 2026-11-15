@@ -1,6 +1,6 @@
 // Outages of agent turns (a usage limit, or no model/account reachable): no failure of the work, retried when it ends.
 // isOutage names those turn outcomes; OutageTracker tells which account and model changes end one (an account that
-// became usable, a model that became available) – tasks/ownership.ts brings task retries forward on them and
+// became usable, a model that became available) – the task watcher (tasks/watch.ts) brings task retries forward on them and
 // agents/redelivery.ts re-delivers a cut-off chat turn; onlineDeliveryAt is when a turn may run after the host's
 // 'online' (after a short settle, past the short coolings the outage left).
 // Owns: these pure helpers. Never: plans wakes, reads services, or polls.

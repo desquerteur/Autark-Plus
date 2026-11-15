@@ -4,12 +4,12 @@
 // Owns: these assertions only. Never: runs an installer, starts Autark or touches the real updater cache.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  LINUX_HELPER_SCRIPT, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, windowsHelper, type HelperLaunch, type InstallHelperDeps,
+  LINUX_HELPER_SCRIPT, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, windowsHelper, type HelperLaunch, type InstallHelperDeps,
 } from '../../../src/main/updates/install-helper.ts';
 import { INSTALL_WATCHDOG_MS } from '../../../src/main/updates/update-service.ts';
 import type { Updater } from '../../../src/main/updates/update-service.ts';
@@ -25,8 +25,9 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   const launch = windowsHelper({ pid: 4242, installer: INSTALLER, exe: EXE, logFile: LOG });
   const dir = 'C:\\Users\\Jürgen Ä\\AppData\\Local\\autark-updater\\pending';
   assert.equal(launch.command, 'cmd.exe');
-  assert.deepEqual(launch.args, ['/d', '/s', '/c', `""${dir}\\update-helper.cmd""`]);
+  assert.deepEqual(launch.args, ['/d', '/c', 'start "" /b cmd.exe /d /c .\\update-helper.cmd'], 'a hidden cmd hands over; no path in the line');
   assert.equal(launch.verbatim, true);
+  assert.equal(launch.handoff, true, 'not detached: a detached cmd has no console and its tasklist | find never ends');
   assert.equal(launch.cwd, dir, 'never the install folder, which the uninstaller removes');
   assert.deepEqual(launch.env, {
     AUTARK_UPDATE_PID: '4242', AUTARK_UPDATE_INSTALLER: INSTALLER, AUTARK_UPDATE_EXE: EXE,
@@ -40,7 +41,8 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   assert.match(text, /start "" \/wait "%AUTARK_UPDATE_INSTALLER%" --updated \/S\r\n/);
   assert.doesNotMatch(text, /--force-run/, 'the helper starts the app, not NSIS through Explorer');
   assert.match(text, /start "" \/D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated/);
-  assert.match(text, /tasklist \/FI "PID eq %AUTARK_UPDATE_PID%"/);
+  assert.match(text, /"%SystemRoot%\\System32\\tasklist\.exe" \/FI "PID eq %AUTARK_UPDATE_PID%"/);
+  assert.match(text, /\| "%SystemRoot%\\System32\\find\.exe" /, 'never a find from PATH (Git\'s find matches nothing)');
   assert.match(text, />>"%AUTARK_UPDATE_LOG%" echo/);
   assert.doesNotMatch(text, /timeout /, 'timeout fails without a console input; ping waits instead');
   assert.equal(WINDOWS_HELPER_SCRIPT.includes('\r'), false);
@@ -60,6 +62,7 @@ test('Linux: sh with positional arguments, mv -f and chmod, then exec with --upd
   assert.deepEqual(launch.args.slice(3), ['77', '/home/a b/.cache/autark-updater/pending/autark-linux-x64.AppImage', '/home/a b/Apps/autark-linux-x64.AppImage', '/home/a b/.config/Autark/logs/update-helper.log']);
   assert.equal(launch.cwd, '/home/a b/Apps');
   assert.equal(launch.verbatim, false);
+  assert.equal(launch.handoff, false);
   assert.match(LINUX_HELPER_SCRIPT, /mv -f "\$downloaded" "\$target"/);
   assert.match(LINUX_HELPER_SCRIPT, /chmod \+x "\$target"/);
   assert.match(LINUX_HELPER_SCRIPT, /exec "\$target" --updated/);
@@ -148,6 +151,33 @@ test('the library\'s own path where the helper has nothing to work with', () => 
   updater.quitAndInstall(true, true);
   assert.deepEqual(updater.original, [[true, true]]);
   assert.equal(record.launches.length, 0);
+});
+
+test('Windows helper, really run through spawnHelper: waits for the process, then runs the installer', { skip: process.platform !== 'win32' && 'Windows only' }, async () => {
+  // Before 08.11.2026 the helper ran detached without a console; its `find` waited for keyboard input forever.
+  const dir = path.join(tmp, 'win run Ä');
+  mkdirSync(dir);
+  const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+  const installer = path.join(dir, 'autark-windows-x64.exe');
+  copyFileSync(path.join(system32, 'whoami.exe'), installer); // a stand-in: rejects --updated /S with exit code 1
+  const logFile = path.join(dir, 'update-helper.log');
+  const app = spawn(path.join(system32, 'PING.EXE'), ['-n', '4', '127.0.0.1'], { stdio: 'ignore', windowsHide: true }); // "the app", about 3 s
+  let appEnded = false;
+  app.once('exit', () => { appEnded = true; });
+  const launch = windowsHelper({ pid: app.pid!, installer, exe: path.join(dir, 'missing', 'Autark.exe'), logFile });
+  await new Promise<void>((resolve, reject) => spawnHelper(launch, dir, { started: resolve, failed: reject, ended: () => undefined }));
+  const read = () => (existsSync(logFile) ? readFileSync(logFile, 'utf8').trim().split(/\r?\n/) : []);
+  let sawEnd = false;
+  for (let i = 0; i < 120 && read().length < 4; i++) {
+    if (!sawEnd && read().some(line => line.includes('app ended'))) { sawEnd = true; assert.equal(appEnded, true, 'the installer starts only after the app ended'); }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  const lines = read();
+  assert.equal(lines.length, 4, lines.join('\n'));
+  assert.match(lines[0], new RegExp(`waiting for the app \\(pid ${app.pid}\\) to end$`));
+  assert.match(lines[1], /app ended; installer starts$/);
+  assert.match(lines[2], /installer ended \(exit code 1\)$/);
+  assert.match(lines[3], /the app file is missing after the install; nothing to start$/);
 });
 
 const shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;

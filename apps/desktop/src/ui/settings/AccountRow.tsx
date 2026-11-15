@@ -1,16 +1,20 @@
 // One connection (plan, API key, local server): its name and state chip, one hint line (provider, plan, e-mail,
 // address, key source, when a paused plan is back, how many models it lists), the two limit bars of a Codex or Claude
 // Code plan, its models when shown, one fixed action slot (Sign in while it needs it, else Codex "Use reset (N)", else
-// empty) and a right-click menu: Rename (B-078), Show models, Sign in / Sign out, Move up / down among accounts of one provider, Add
-// another account (a plan with its own sign-in profile), Enable / Disable, Claude Code's Delete histories, Remove.
-// B-072: no plan roles or rotation switch here – the order decides, and rotation stays an account field the AI sets on
-// request (accounts.update, skill ai-providers).
+// B-083's "Plan credits" switch on a key that can hold a plan's monthly API credits – shared/model/charge.ts
+// creditsPossible –, its hint as a wrapped line under the hint line, there in both states and readable on the phone, else
+// empty) and a right-click menu: Rename (B-078), Show models, Sign in / Sign out, Move up / down
+// among accounts of one provider, Add another account (a plan with its own sign-in profile), Enable / Disable, Claude
+// Code's Delete histories, Remove.
+// B-072: no plan roles or rotation switch here – every signed-in plan takes turns, the one whose week resets first runs
+// first (09.11.2026, accounts/candidates.ts); the order decides the rest.
 // Owns: the row. Never: shows tokens or invents limits (unknown = '–').
 
 import '../../shared/api/methods-provider-history.ts'; // privacy.purgeProviderHistory (module augmentation)
 import { useState } from 'preact/hooks';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import { isPlanProvider } from '../../shared/model/plan-roles.ts';
+import { creditsPossible } from '../../shared/model/charge.ts';
 import { askText, confirm } from '../lib/dialog.tsx';
 import { limitSlots, nextCredit, otherWindows, PLAN_SLOTS, resetButtonLabel, resetClock, resetConfirmText, resetCount, resetExpiryText, resetOutcomeText } from '../lib/limits.ts';
 import type { MenuItem, MenuSection } from '../lib/popover.tsx';
@@ -20,12 +24,15 @@ import { shortModelName } from '../chat/live-text.ts';
 import { serviceOfAccount } from '../../shared/model/providers-connect.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
-import { act, ActionButton, Row, useBusy } from './controls.tsx';
+import { act, ActionButton, Row, Toggle, useBusy } from './controls.tsx';
 import { inTerminal, recheckOnFocus, removeText, repairText, signInStarted, startLogin } from './account-actions.ts';
 import { needsSignIn, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './providers.ts';
 
 /** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Gemini CLI and Copilot CLI have one per PC. */
 const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli']);
+/** B-083: the "Plan credits" switch's hint – routing spends them like a plan and before any paying key (accounts/candidates.ts,
+ *  routing/pool.ts), not before a plan with quota left. */
+const CREDITS_HINT = 'Prepaid credits from a plan – used like a plan, before paying keys; they expire monthly';
 
 /** The two fixed bars of a plan (5-hour limit, Weekly); other windows in the tooltip. */
 function LimitBars(props: { account: Account }) {
@@ -95,7 +102,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const [busy, run] = useBusy();
   const [showModels, setShowModels] = useState(false);
   const listed = modelsOf(account, models.value);
-  const update = (patch: { enabled?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
+  const update = (patch: { enabled?: boolean; credits?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
   const index = siblings.indexOf(account);
   // swap priorities with the neighbour so the order is explicit and stable
   const move = (dir: -1 | 1) => {
@@ -125,7 +132,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   // one more plan of this provider, with its own sign-in profile; Move up / down sets which runs first
   const addAnother = () => void run(async () => {
     const added = await rpc.call('accounts.add', { provider: account.provider });
-    if (needsSignIn(added)) signInStarted(added.id, added.provider);
+    if (needsSignIn(added)) signInStarted(added.id, added.provider, added);
   });
   const purge = async () => {
     const ok = await confirm({
@@ -142,6 +149,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const plan = cli && isPlanProvider(account.provider);
   const repair = account.state === 'needs_login' && !signIn ? repairText(account) : undefined;
   const hint = hintOf(account, repair, listed.length);
+  const credits = creditsPossible(account); // an Anthropic/OpenAI key: no sign-in, no reset in its slot
   const menu = (): MenuSection[] => {
     const order: MenuItem[] = [];
     if (siblings.length > 1) order.push({ label: 'Move up', disabled: index <= 0, onSelect: () => move(-1) }, { label: 'Move down', disabled: index >= siblings.length - 1, onSelect: () => move(1) });
@@ -164,6 +172,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
       label={<><span>{account.label}</span> <span class={`state-chip ${account.state}`}>{stateLabel(account)}</span></>}
       hint={<>
         <div class="account-hint" title={hint}>{hint}</div>
+        {credits && <div class="account-credits-hint">{CREDITS_HINT}</div>}
         {plan && <LimitBars account={account} />}
         {showModels && listed.length > 0 && <div class="account-models">{listed.map((model) => shortModelName(model.name) || model.model).join(' · ')}</div>}
       </>}
@@ -171,7 +180,13 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
       <span class="account-slot">
         {signIn && needsSignIn(account)
           ? <ActionButton class="account-sign-in" label="Sign in" disabled={busy} onClick={() => void startLogin(account.id)} />
-          : signIn && account.provider === 'codex' && (resetCount(account.limits?.resets) ?? 0) > 0 ? <ResetButton account={account} /> : null}
+          : signIn && account.provider === 'codex' && (resetCount(account.limits?.resets) ?? 0) > 0 ? <ResetButton account={account} />
+          : credits ? (
+            <label class="account-credits">
+              <span>Plan credits</span>
+              <Toggle label="Plan credits" checked={account.credits === true} disabled={busy} onChange={(credits) => update({ credits })} />
+            </label>
+          ) : null}
       </span>
     </Row>
   );

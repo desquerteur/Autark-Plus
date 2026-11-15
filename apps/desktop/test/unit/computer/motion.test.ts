@@ -4,7 +4,8 @@
 // timing, a drag that never overshoots, the person moving the mouse mid-path as the presence
 // refusal, an element click with a planned path, `motion` validation (tool schema and service), and
 // the named pointers (Q8): agent moves with their path on 'screen:local', the person's pointer, and
-// the line about others under computer.* results.
+// the line about others under computer.* results. B-081: the person's idle time and window, one pointer
+// read per result (none while another request is in flight), and a planned move named before the helper replays it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -194,29 +195,67 @@ test('named pointers: agent moves with their path on screen:local, the person wh
   assert.ok(point!.path!.length > 1 && point!.path!.length <= POINTER_PATH_MAX, 'the path travels along (thinned) so viewers animate the same motion');
   assert.deepEqual({ x: point!.path!.at(-1)!.x, y: point!.path!.at(-1)!.y }, { x: 640, y: 360 });
 
-  // Another agent reads Ada in its results (every computer.* tool), Ada reads nobody.
+  // Another agent reads Ada in its results (every computer.* tool), Ada reads only the person (resting a minute: B-081 keeps 5 min).
   const tools = new Map(computerTools(r.computer).map((tool) => [tool.name, tool]));
   r.helper.answers.windows = () => [];
   const ctx = (id: string, name: string) => ({ agent: agent(id, name), runId: 'run_1', mode: 'computer', signal: new AbortController().signal, status() {} }) as unknown as ToolContext;
   r.tick(3000);
   const other = await tools.get('computer.windows')!.run({}, ctx('ag_ben', 'Ben'));
-  assert.equal((other.content[0] as { text: string }).text, 'No visible windows.\nAda (agent) clicked at 640,360, 3 s ago');
+  assert.equal((other.content[0] as { text: string }).text, 'No visible windows.\nLukas (person) rests at 100,100, last move 60 s ago\nAda (agent) clicked at 640,360, 3 s ago');
   const own = await tools.get('computer.windows')!.run({}, ctx('ag_ada', 'Ada'));
-  assert.equal((own.content[0] as { text: string }).text, 'No visible windows.');
+  assert.equal((own.content[0] as { text: string }).text, 'No visible windows.\nLukas (person) rests at 100,100, last move 60 s ago');
 
   // The person's input is newer than ours when the pointer is read: their pointer is reported too.
   r.helper.answers.cursor = () => ({ x: 900, y: 50, idleMs: 400, injectedAgoMs: 5000 });
   await r.computer.move({ x: 10, y: 10, caller: ada });
   const person = r.hub.on(SCREEN_SURFACE).find((p) => p.actor.kind === 'person');
   assert.deepEqual([person?.actor.name, person?.x, person?.y], ['Lukas', 900, 50]);
-  const line = r.computer.othersLine({ key: 'ag_ben', id: 'ag_ben', name: 'Ben' });
+  const line = await r.computer.othersLine({ key: 'ag_ben', id: 'ag_ben', name: 'Ben' });
   assert.match(line, /^Ada \(agent\) is pointing at 10,10, just now$/m);
-  assert.match(line, /^Lukas \(person\) is pointing at 900,50, just now$/m);
-  assert.equal(r.computer.othersLine({ key: 'ag_ada', id: 'ag_ada', name: 'Ada' }), 'Lukas (person) is pointing at 900,50, just now');
+  // B-081: the person's pointer reads as moving (input under 2 s ago) or resting with the time of the last move
+  assert.match(line, /^Lukas \(person\) is moving at 900,50$/m);
+  assert.equal(await r.computer.othersLine({ key: 'ag_ada', id: 'ag_ada', name: 'Ada' }), 'Lukas (person) is moving at 900,50');
+
+  // B-081: each computer.* result reads the pointer once: the last move from the helper's idle time, the window under it.
+  r.helper.answers.cursor = () => ({ x: 900, y: 50, idleMs: 40_000, injectedAgoMs: 90_000, window: 'Figma – Landing' });
+  const reads = r.helper.ops().filter((op) => op === 'cursor').length;
+  const rest = await tools.get('computer.windows')!.run({}, ctx('ag_ada', 'Ada'));
+  assert.equal((rest.content[0] as { text: string }).text, 'No visible windows.\nLukas (person) rests on window "Figma – Landing", last move 40 s ago');
+  assert.equal(r.helper.ops().filter((op) => op === 'cursor').length, reads + 1, 'one helper read per result, no polling');
+
+  // The helper answers one request at a time: while another one runs (Ben's tree), the line read is skipped – it would
+  // wait in line and its 5 s timeout would restart the helper under Ben's request. The last known line stands.
+  let release: (value: unknown) => void = () => {};
+  r.helper.answers.tree = () => new Promise((resolve) => { release = resolve; });
+  const tree = r.computer.uiTree({ caller: { key: 'ag_ben', id: 'ag_ben', name: 'Ben' } });
+  const busy = await tools.get('computer.windows')!.run({}, ctx('ag_ada', 'Ada'));
+  assert.equal((busy.content[0] as { text: string }).text, 'No visible windows.\nLukas (person) rests on window "Figma – Landing", last move 40 s ago');
+  assert.equal(r.helper.ops().filter((op) => op === 'cursor').length, reads + 1, 'no read behind a request in flight');
+  release({ hwnd: 5, title: 'Notes', nodes: [] });
+  await tree;
+  await tools.get('computer.windows')!.run({}, ctx('ag_ada', 'Ada'));
+  assert.equal(r.helper.ops().filter((op) => op === 'cursor').length, reads + 2, 'idle again: read again');
 
   // Our own input was the newest: the pointer is ours, nobody else is reported.
   const fresh = rig({ hub: true });
   fresh.helper.answers.cursor = () => ({ x: 900, y: 50, idleMs: 400, injectedAgoMs: 450 });
   await fresh.computer.move({ x: 10, y: 10, caller: ada });
   assert.equal(fresh.hub.on(SCREEN_SURFACE).some((p) => p.actor.kind === 'person'), false);
+});
+
+test('B-081: a planned move is named before the helper replays it (the drawn AI cursor travels with it); a jump after it', async () => {
+  const r = rig({ hub: true });
+  const ofAda = () => r.hub.on(SCREEN_SURFACE).find((p) => p.actor.id === 'ag_ada');
+  let during: ReturnType<typeof ofAda>;
+  r.helper.answers.path = (args) => { during = ofAda(); r.tick(400); const steps = args.steps as number[]; return { done: true, at: steps.slice(-3, -1) }; };
+  await r.computer.click({ x: 640, y: 360, caller: ada });
+  assert.deepEqual([during?.x, during?.y, during?.action], [640, 360, 'click'], 'the hub has the move while the helper runs it');
+  assert.ok(during!.path!.length > 1 && during!.path!.at(-1)!.x === 640);
+  assert.equal(ofAda()!.at, during!.at, 'and it is not named a second time on arrival');
+  let jumped: ReturnType<typeof ofAda> | null = null;
+  r.helper.answers.click = () => { jumped = ofAda() ?? null; return { done: true }; };
+  r.tick(20_000);
+  await r.computer.click({ x: 50, y: 60, caller: ada, motion: 'instant' });
+  assert.equal(jumped, null, 'an instant step is named when it arrived');
+  assert.deepEqual([ofAda()?.x, ofAda()?.y], [50, 60]);
 });

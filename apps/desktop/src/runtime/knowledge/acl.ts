@@ -1,6 +1,6 @@
 // Which memory folders a query searches (relevance, not a permission: any agent may name any folder). The folders a caller
 // names; else by agent: company/ (with the website, app and mode areas), its branch, its own folder, the references and its
-// chat's folder. No agentId (the person / UI) reads everything. An agent's own tools (knowledge.recall, knowledge.find) pass no
+// chat's folder. No agentId (the person / UI) reads everything. An agent's own tools (knowledge.find) pass no
 // agentId: the agent names the folders or searches the whole tree (owner's rule (f), q-r 03.11.2026: code names no place).
 // Owns: those folders and the filter a found item passes. Never: ranking or writing.
 
@@ -37,6 +37,12 @@ export function queryFolders(db: Db, query: Pick<KnowledgeQuery, 'agentId' | 'co
     'references',
     ...chats.map((chat) => folderOfScope('conversation', chat)),
   ];
+}
+
+/** Does the memory file `id` (its path, '/' written ':') lie in one of `folders` ('' = the whole tree)? */
+export function inFolders(id: string, folders: readonly string[]): boolean {
+  const rel = id.replace(/:/g, '/');
+  return folders.some((folder) => !folder || rel.startsWith(`${folder}/`));
 }
 
 /** Does a found item pass the query's filters (validity, scopes, kinds, chat, mode area, `before`)? */

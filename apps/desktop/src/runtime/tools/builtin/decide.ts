@@ -43,19 +43,15 @@ type Checked = { name: string; args: Record<string, unknown> };
 
 const decide = defineTool<DecideArgs>({
   name: DECIDE_TOOL,
-  description: 'Hand a bounded choice to the decision model: a question and 2–255 text or number options (e.g. which file, which category, seconds to wait). A selected number is returned as a number. '
-    + 'It answers outcome "choice" (with choice and confidence), "none_fit" (none of the options fits) or "unsure" (low confidence or no decision model: I decide myself). '
-    + 'context: the facts it needs. source: a read tool to run first ({tool, args}, e.g. files.list); its output goes only to the decision model, never to me – '
-    + 'I use it when I need the pick, not the content. It judges; it does not count, compute or extract exact text from long data (it sees a bounded excerpt) – for that I use files.search, a command or my own reading. '
-    + 'A source call that would spend or change anything is refused. "none" stays off the list: it is always possible.',
+  description: 'Hands a bounded choice to the decision model and returns its pick. It answers choice, none_fit or unsure (then I decide myself); it judges, it does not count, compute or copy exact text – for that I search or read myself.',
   inputSchema: {
     type: 'object',
     properties: {
       question: { type: 'string', minLength: 1, maxLength: 1000 },
-      options: { type: 'array', minItems: 2, maxItems: MAX_OPTIONS, items: { anyOf: [{ type: 'string', minLength: 1, maxLength: 500 }, { type: 'number' }] } },
-      context: { type: 'string', maxLength: MAX_DECIDE_CONTEXT },
+      options: { type: 'array', minItems: 2, maxItems: MAX_OPTIONS, items: { anyOf: [{ type: 'string', minLength: 1, maxLength: 500 }, { type: 'number' }] }, description: `2–${MAX_OPTIONS} texts or numbers; none_fit is always possible.` },
+      context: { type: 'string', maxLength: MAX_DECIDE_CONTEXT, description: 'The facts it needs.' },
       source: {
-        type: 'object',
+        type: 'object', description: 'A read tool run first, {tool, args}, when I need the pick, not the content; only the decision model sees its output.',
         properties: { tool: { type: 'string', minLength: 1, maxLength: 100 }, args: { type: 'object' } },
         required: ['tool'],
         additionalProperties: false,

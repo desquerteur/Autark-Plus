@@ -130,7 +130,7 @@ test("the person's normal message reaches a running turn in its chat at the next
   const later = h.chats.send({ conversationId: a.id, body: 'add the discount too', authorId: 'human' });
   await flush();
   assert.equal(texts.length, 1);
-  assert.match(texts[0], /Lena: add the discount too$/m);
+  assert.match(texts[0], / · Lena \(CEO\) · .*\] add the discount too$/m);
   assert.doesNotMatch(texts[0], /\(important\)/, 'a normal line stays normal');
   assert.equal(call.request.signal.aborted, false);
   assert.equal(call.request.control.steeredSeq, later.seq);
@@ -153,8 +153,10 @@ test('a normal message without steering waits for the next turn; an agent\'s nor
   assert.equal(call.request.signal.aborted, false, 'a normal message never interrupts');
   h.chats.send({ conversationId: b.id, body: 'unrelated', authorId: 'human' });
   await flush();
-  assert.equal(refused.length, 1, 'a message in another chat waits for its own turn');
+  assert.equal(refused.length, 2, '07.11.2026: a line in another chat is offered to the running turn too (steerOther)');
+  assert.match(refused[1], /^New lines while I work:/);
   assert.equal(call.request.signal.aborted, false);
+  assert.deepEqual(h.chats.messages(b.id, { limit: 50 }).filter((message) => message.kind === 'status').map((message) => message.body).length, 0, 'no waiting line there');
   call.finish();
   await flush();
   const next = h.executor.last();
@@ -165,7 +167,7 @@ test('a normal message without steering waits for the next turn; an agent\'s nor
   await flush();
   assert.equal(h.executor.calls.length, 3);
   assert.equal(openWakes(h.db).length, 0);
-  // An agent's normal message: no steer.
+  // B-080: a colleague's normal line to Tom (an @mention) goes into his running turn too.
   const team = h.chats.create({ agentIds: ['ag_tom', 'ag_lea'], createdBy: 'human' });
   h.chats.send({ conversationId: team.id, body: '@Tom start', authorId: 'human', mentions: ['ag_tom'] });
   await flush();
@@ -173,7 +175,11 @@ test('a normal message without steering waits for the next turn; an agent\'s nor
   const seen = steerable(teamCall);
   h.chats.send({ conversationId: team.id, body: 'FYI the file moved', authorId: 'ag_lea', authorKind: 'agent', mentions: ['ag_tom'] });
   await flush();
-  assert.equal(seen.length, 0);
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], / · Lea · .*] FYI the file moved$/);
+  h.chats.send({ conversationId: team.id, body: 'and the logo is in assets/', authorId: 'ag_lea', authorKind: 'agent', silent: true });
+  await flush();
+  assert.equal(seen.length, 1, 'a quiet line is not folded');
 });
 
 test('halt (the emergency stop): every running turn ends at once as the person\'s Stop, nothing starts until lifted, then what waited runs', async () => {
@@ -274,6 +280,8 @@ test("the person's Stop after an urgent cut makes it a stop: the cut work is not
   await flush();
   const running = h.executor.last();
   h.chats.send({ conversationId: a.id, body: 'Now please', authorId: 'human', priority: 'important' });
+  // B-080: the fold is tried first (async) – this engine never steers, so the turn is cut; the person's Stop comes while it winds down.
+  for (let i = 0; i < 100 && !running.request.signal.aborted; i++) await Promise.resolve();
   assert.equal(running.request.signal.aborted, true, 'no call in flight: cut at once');
   assert.equal(running.request.control.stopKind, 'urgent');
   void h.dispatcher.cancelRun(running.request.runId); // the person stops it while it winds down
@@ -285,7 +293,7 @@ test("the person's Stop after an urgent cut makes it a stop: the cut work is not
   assert.deepEqual(openWakes(h.db), []);
 });
 
-test('lines with files or speech are never steered: the next turn brings them in full; an important one interrupts at the boundary', async () => {
+test('B-080: a line with files is steered with each file named, a line said live is not; behind it an important one cuts at the boundary', async () => {
   const { h, a } = withTom();
   const first = h.chats.send({ conversationId: a.id, body: 'draft the flyer', authorId: 'human' });
   await flush();
@@ -295,14 +303,18 @@ test('lines with files or speech are never steered: the next turn brings them in
   h.chats.send({ conversationId: a.id, body: 'use this photo', authorId: 'human', attachments: [{ fileId: 'file_abc', name: 'photo.png', mime: 'image/png', size: 1234 }] });
   h.chats.send({ conversationId: a.id, body: 'and make it bigger', authorId: 'human' });
   await flush();
-  assert.deepEqual(texts, [], 'nothing steered past the photo (the later line waits behind it)');
-  assert.equal(call.request.control.steeredSeq, first.seq, 'the cursor stays before the photo');
+  assert.equal(texts.length, 1, 'each line once: the second fold waits for the first and finds nothing new (folds of one chat run one after another)');
+  assert.match(texts[0], /^New lines while I work:\n\[[^\]]* · Lena \(CEO\) · 09:00 #\d+\] use this photo\n\[Image: photo\.png\] \(image\/png, 1 KB[^\n]*\n\[[^\]]* · Lena \(CEO\) · 09:00 #\d+\] and make it bigger$/, 'as in Codex or Claude Code: the file comes along, named');
+  assert.equal(call.request.control.steeredSeq, h.chats.messages(a.id, { limit: 50 }).at(-1)!.seq, 'the cursor is past both');
   assert.equal(call.request.signal.aborted, false, 'a normal message never interrupts');
   h.chats.markRead(a.id, 'ag_tom', Math.max(call.request.control.lastSeq, call.request.control.steeredSeq)); // as turn-finish does
   call.finish();
   await flush();
+  assert.equal(h.executor.last(), call, 'both lines were in that turn: no turn just to read them again');
+  h.chats.send({ conversationId: a.id, body: 'now the back side', authorId: 'human' });
+  await flush();
   const next = h.executor.last();
-  assert.notEqual(next, call, 'the next turn reads the photo in full');
+  assert.notEqual(next, call);
   const spoken = steerable(next);
   next.request.control.lastSeq = h.chats.messages(a.id, { limit: 50 }).at(-1)!.seq;
   h.chats.send({ conversationId: a.id, body: 'what about the colours', authorId: 'human', speech: { source: 'endpoint', live: true } });
@@ -311,6 +323,6 @@ test('lines with files or speech are never steered: the next turn brings them in
   h.chats.send({ conversationId: a.id, body: 'Stop, see this', authorId: 'human', priority: 'important', attachments: [{ fileId: 'file_def', name: 'error.png', mime: 'image/png', size: 99 }] });
   await flush();
   assert.deepEqual(spoken, []);
-  assert.equal(next.request.signal.aborted, true, 'important with a file: cut at the boundary (no call in flight) instead of a partial steer');
+  assert.equal(next.request.signal.aborted, true, 'behind the line said live nothing is steered: the important line cuts at the boundary (no call in flight)');
   assert.equal(next.request.control.stopKind, 'urgent');
 });

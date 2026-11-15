@@ -2,7 +2,7 @@
 // ```app fences (web-genui §7.2/§7.5). Used by every renderer (desktop, PWA, phone) and by
 // the runtime (ask blocks → human to-dos, repair notes to the agent).
 // Owns: fence detection, the part list, stable block indexes, ui JSON parsing + validation
-// (via lenient-json/validate), app info-string attributes (incl. a to-do's reason=, F01) and
+// (via lenient-json/validate), app info-string attributes (a mini-app to-do's todo=, title=, expand, permissions=) and
 // size limits.
 // Never: renders anything, touches the DOM, or treats ```html / ```json as live UI; never
 // words a human answer (the person's line for it is shared/blocks/answer-text.ts).
@@ -27,16 +27,7 @@ export interface AppAttrs {
   todo: boolean; // default false: an app is a to-do only when the agent says so
   expand: boolean;
   permissions: string[]; // e.g. ["microphone"]; granted only by the human, once
-  /** Why a todo=true app needs the person (F01: the to-do's humanReason, default 'taste'). */
-  reason?: AppReason;
 }
-
-/**
- * The reasons a mini-app to-do may give. Approvals and credentials are not among them: the
- * host's approval flow and the vault (secret form fields) own those, never an agent's app.
- */
-export type AppReason = 'physical' | 'identity' | 'taste' | 'review';
-const APP_REASONS: ReadonlySet<string> = new Set<AppReason>(['physical', 'identity', 'taste', 'review']);
 
 export type Part =
   | { kind: 'markdown'; text: string }
@@ -179,7 +170,7 @@ function safeStringify(value: unknown): string {
   try { return JSON.stringify(value, null, 2) ?? ''; } catch { return ''; }
 }
 
-/** Info string after ```app: title="Voice take" todo=true reason=physical expand permissions="microphone". */
+/** Info string after ```app: title="Voice take" todo=true expand permissions="microphone". */
 export function parseAppInfo(info: string): AppAttrs {
   const attrs: AppAttrs = { todo: false, expand: false, permissions: [] };
   const re = /([A-Za-z_][\w-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+)))?/g;
@@ -190,7 +181,6 @@ export function parseAppInfo(info: string): AppAttrs {
     if (key === 'title') { if (raw?.trim()) attrs.title = raw.trim().slice(0, 120); } // a blank title is none
     else if (key === 'todo') attrs.todo = flag;
     else if (key === 'expand') attrs.expand = flag;
-    else if (key === 'reason' && raw && APP_REASONS.has(raw.toLowerCase())) attrs.reason = raw.toLowerCase() as AppReason;
     else if (key === 'permissions' || key === 'permission') {
       attrs.permissions = (raw ?? '').split(/[\s,]+/).map(p => p.toLowerCase()).filter(p => APP_PERMISSIONS.has(p));
     }

@@ -22,6 +22,7 @@ import { parseMessage } from './mime.ts';
 import { AUTOMATIC_HEADERS, automaticMail } from './loops.ts';
 import type { MailSockets } from './socket.ts';
 import { ReconnectNeeded } from '../types.ts';
+import { messageId } from './mailbox.ts';
 
 export const REIDLE_MS = 25 * 60_000;
 export const BACKOFF_MIN_MS = 60_000;
@@ -30,7 +31,15 @@ export const BACKOFF_MAX_MS = 30 * 60_000;
 export const CHECK_MAX = 50;
 const ITEMS = `UID FLAGS ENVELOPE BODY.PEEK[HEADER.FIELDS (${AUTOMATIC_HEADERS.join(' ')})]`;
 
-type NewMail = { count: number; from?: string; subject?: string };
+type NewMail = { count: number; from?: string; subject?: string; messageIds?: string[] };
+
+/** INBOX identity from the selected IMAP session and FETCH UID, never envelope fields or model text.
+ * Missing UIDVALIDITY/UID yields no authority; count-only fallback reports cannot mint capabilities. */
+export function noticedMessageId(validity: number | undefined, row: ReadonlyMap<string, ImapValue>): string | undefined {
+  const uid = Number(str(row.get('UID')));
+  return Number.isSafeInteger(validity) && validity! > 0 && Number.isSafeInteger(uid) && uid > 0
+    ? messageId('INBOX', validity!, uid) : undefined;
+}
 
 /** A response code's number ("UIDNEXT 42"), from the tagged line or an untagged OK. */
 function codeNumber(result: ImapResult, name: string): number | undefined {
@@ -190,10 +199,10 @@ export class NewMailWatcher {
       found = { info: { count: Math.max(1, grown) } }; // fail open: the wake-up matters more than the details
     }
     if (!found) return;
-    // The mark moves only once the new mail was looked at (or woken for), so each message is reported exactly once.
+    // Commit the high-water mark after the durable queue accepts the notice. A failed queue write
+    // reconnects from the old mark; coalescing exact identities makes the retry harmless.
+    if (found.info.count > 0) this.target.onNewMail?.(found.info);
     if (found.next !== undefined && this.validity) this.save({ validity: this.validity, next: found.next });
-    if (found.info.count <= 0) return;
-    try { this.target.onNewMail?.(found.info); } catch { /* listener errors stay there */ }
   }
 
   /** The new messages (UIDs from the mark; without one the newest `grown`), automatic and bulk mail left out, and
@@ -231,17 +240,20 @@ export class NewMailWatcher {
     }
     let count = Math.max(0, total - asked); // older than the newest CHECK_MAX: counted as real mail (gone meanwhile: not at all)
     let newest: Envelope | undefined;
+    const messageIds: string[] = [];
     for (const u of rows) {
       const row = fetchMap(u.values);
       if (flagsOf(row.get('FLAGS')).some((f) => f.toUpperCase() === '\\SEEN')) continue; // read elsewhere: handled
       const env = parseEnvelope(row.get('ENVELOPE'));
       if (automaticMail(headersOf(row), env.from[0]?.address)) continue;
+      const identity = noticedMessageId(this.validity, row);
+      if (identity) messageIds.push(identity);
       count += 1;
       newest = env;
     }
     const sender = newest?.from[0];
     const from = sender ? (sender.name ? `${decodeWords(sender.name)} <${sender.address}>` : sender.address) : undefined;
     const subject = newest?.subject !== undefined ? decodeWords(newest.subject).slice(0, 200) : undefined;
-    return { info: { count, ...(from ? { from } : {}), ...(subject !== undefined ? { subject } : {}) }, next };
+    return { info: { count, ...(from ? { from } : {}), ...(subject !== undefined ? { subject } : {}), ...(messageIds.length ? { messageIds } : {}) }, next };
   }
 }

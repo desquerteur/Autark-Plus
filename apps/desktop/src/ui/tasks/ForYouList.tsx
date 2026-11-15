@@ -1,8 +1,8 @@
 // My day's list (B-041 §4.1, formerly the calm "For you" list): a query over the person's open to-dos
 // (store.todos) in My day's groups (ui/day/day-groups.ts) – Needs you · Today (the day's blocks and near timers, by
 // time) · Unplanned · Handed off (collapsed: what the person asked others for, ui/day/HandedOff.tsx) · Later
-// (collapsed: snoozed, repeating, far timers, due or planned on a later day). Another day than today lists only that
-// day's blocks. One item expanded at a time; answered or removed items leave with a short animation. Read at the
+// (collapsed: snoozed, repeating, far timers, due or planned on a later day). Another day than today lists Needs you
+// (B-080: by the badge's rule, so the badge's count is always there to see) and that day's blocks and to-dos. One item expanded at a time; answered or removed items leave with a short animation. Read at the
 // later of the For-you clock and the day clock, so a timer, a due time or a block moves by itself.
 // F07 take guard: a to-do whose recorder is recording or holds an unsent take stays open when another one expands,
 // and collapsing it asks "Discard recording?"; each mount sweeps unsent takes older than a week (pwa/idb.ts).

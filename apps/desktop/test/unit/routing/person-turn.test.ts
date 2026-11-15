@@ -68,11 +68,13 @@ test('a Work model set in Settings, a fixed effort and the cheaper cost mode win
   assert.equal(byUse.by, 'pin');
 
   const fixed = await withChat([{ seq: 1, authorKind: 'human' }]);
+  const low = await fixed.router.route(request({ agent: agent('ag_1', { modelPolicy: { effort: 'low' } }) }));
+  assert.equal(low.effort, 'low', 'the fixed effort of the agent stays');
+  assert.equal(fixed.catalog.get(low.modelId)!.tier, 'frontier');
+  // 13.11.2026: an effort the person suggests in the chat is information on their line – the rule's effort stands
   fixed.addChat('ch_2', ['ag_1'], { efforts: { ag_1: 'low' } });
   Object.assign(fixed.services.chats, { messages: () => [{ seq: 1, authorKind: 'human', kind: 'text' }] });
-  const low = await fixed.router.route(request({ conversationId: 'ch_2' }));
-  assert.equal(low.effort, 'low', 'the chat effort the person chose stays');
-  assert.equal(fixed.catalog.get(low.modelId)!.tier, 'frontier');
+  assert.equal((await fixed.router.route(request({ conversationId: 'ch_2' }))).effort, 'high');
 
   const economy = await withChat([{ seq: 1, authorKind: 'human' }]);
   economy.settings.update({ routing: { costMode: 'economy' } });

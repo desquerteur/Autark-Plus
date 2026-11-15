@@ -42,8 +42,9 @@ test('timer to-do: Snooze menu lets it wait and leave the list', { timeout: 180_
   const shot = async (name) => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(shots, `${name}.png`) }); };
   const info = JSON.parse(await readFile(path.join(profile, 'runtime.json'), 'utf8'));
   rpc = await connect(info.port, info.token, 'cli');
+  await rpc.call('settings.update', { onboarding: { step: 'done' } }); // past the first-run layer (B-085)
 
-  const todo = await rpc.call('tasks.create', { title: 'Stretch', assigneeKind: 'human', widget: { type: 'timer', label: 'Stretch', at: new Date(Date.now() + 20 * 60_000).toISOString() } });
+  const todo = await rpc.call('tasks.create', { title: 'Stretch', widget: { type: 'timer', label: 'Stretch', at: new Date(Date.now() + 20 * 60_000).toISOString() } });
   assert.equal(todo.widget?.type, 'timer');
   await page.evaluate(() => { location.hash = '#/day'; });
   const item = page.locator(`.day-group .todo-item[data-task-id="${todo.id}"]`);
@@ -66,7 +67,7 @@ test('timer to-do: Snooze menu lets it wait and leave the list', { timeout: 180_
   await item.waitFor({ state: 'detached', timeout: 15_000 });
   const task = await rpc.call('tasks.get', { id: todo.id });
   assert.equal(task.status, 'waiting');
-  assert.equal(task.waitingOn?.reason, 'Snoozed');
+  assert.equal(task.waitingOn?.why, 'Snoozed');
   if (task.conversationId) {
     const receipts = (await rpc.call('messages.list', { conversationId: task.conversationId })).filter((message) => message.kind === 'answer');
     assert.equal(receipts.length, 0, 'no receipt for a snooze');
@@ -75,7 +76,7 @@ test('timer to-do: Snooze menu lets it wait and leave the list', { timeout: 180_
 
   // Phone width: the menu fits (after the "Snoozed until …" toast is gone).
   await page.locator('.status-note[data-notice^="toast-"]').first().waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
-  const second = await rpc.call('tasks.create', { title: 'Drink water', assigneeKind: 'human', widget: { type: 'timer', label: 'Drink water', at: new Date(Date.now() + 30 * 60_000).toISOString() } });
+  const second = await rpc.call('tasks.create', { title: 'Drink water', widget: { type: 'timer', label: 'Drink water', at: new Date(Date.now() + 30 * 60_000).toISOString() } });
   await size(420, 860);
   await page.waitForTimeout(600);
   const phoneItem = page.locator(`.todo-item[data-task-id="${second.id}"]`);

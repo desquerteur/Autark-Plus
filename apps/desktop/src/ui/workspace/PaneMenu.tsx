@@ -2,9 +2,10 @@
 // the zoom (kept per site), Mute, Mark a region, DevTools, Copy address, Open in system browser and Send page to chat;
 // on the Screen tab Mark a region; Keep tab on an agent's preview tab; All tabs (the list of the surface's tabs, a popover
 // at this cell – TabsMenu.tsx); in the desktop app History (Ctrl+H, a popover at this cell too) and Reopen closed tab; on
-// a computer Full view. A fixed cell; the menu is text only, and over a page the native view hides while it is open
-// (native-surface.ts).
-// Owns: the cell and its items. Never: what they do (pages.ts, send-page.ts, full-view.ts, RegionDialog.tsx).
+// a computer Full view. B-081: on a file, folder or media-by-path tab "Open on" – This PC and each linked CEO PC
+// (linked-pcs.ts; "Offline" as its hint), the one it is on ticked – opens the same path there in the tab's place. A fixed
+// cell; the menu is text only, and over a page the native view hides while it is open (native-surface.ts).
+// Owns: the cell and its items. Never: what they do (pages.ts, file-tabs.ts, send-page.ts, full-view.ts, RegionDialog.tsx).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { modKey, openExternal } from '../lib/platform.ts';
@@ -12,9 +13,12 @@ import { can } from '../lib/session.ts';
 import { isMobile } from '../lib/store.ts';
 import { toastError } from '../lib/toasts.ts';
 import { IconButton, Menu, type MenuSection } from '../lib/ui.tsx';
+import type { TabEntry } from './browser-model.ts';
+import { openPathOn, type PathTab } from './file-tabs.ts';
 import { fullView, toggleFullView } from './full-view.ts';
 import { HistoryPopover } from './HistoryPopover.tsx';
-import { browserPages, command, goTo, hasPersonalBrowser, historyAsk, openFind, openWebsite, reopenTab, shownEntry } from './pages.ts';
+import { linkedPcs, watchLinkedPcs } from './linked-pcs.ts';
+import { browserPages, command, goTo, hasPersonalBrowser, historyAsk, openFind, openWebsite, reopenTab, shownEntry, tabsOf } from './pages.ts';
 import { markPage, markScreen } from './RegionDialog.tsx';
 import { sendPageToChat } from './send-page.ts';
 import { useSpace } from './space.ts';
@@ -23,6 +27,18 @@ import { AllTabs, copyAddress, keepTab } from './TabsMenu.tsx';
 
 /** The last history request this window acted on (one made while no menu cell was drawn still counts once). */
 let handledHistory = 0;
+
+/** A file, folder or media-by-path tab: "Open on" This PC / each linked CEO PC, the one it is on ticked (none without a linked PC). */
+function openOnSection(entry: TabEntry | undefined, space: string): MenuSection[] {
+  const pcs = linkedPcs.value;
+  if (!pcs.length || !entry || !(entry.kind === 'file' || entry.kind === 'folder' || (entry.kind === 'media' && entry.path))) return [];
+  const tab: PathTab = { id: entry.id, kind: entry.kind, path: entry.path!, ...(entry.kind === 'media' && entry.name ? { name: entry.name } : {}) };
+  const to = (device: string | undefined) => () => { if (device !== entry.device) openPathOn(tab, device, space); };
+  return [{ title: 'Open on', items: [
+    { label: 'This PC', checked: !entry.device, onSelect: to(undefined) },
+    ...pcs.map((pc) => ({ label: pc.name, hint: pc.status === 'online' ? undefined : 'Offline', checked: entry.device === pc.id, onSelect: to(pc.id) })),
+  ] }];
+}
 
 /** A history row opens in the tab `space` shows when that is a page or a blank tab, else (or asked) in a new one. */
 function openFromHistory(space: string, url: string, newTab: boolean): void {
@@ -46,9 +62,11 @@ export function PaneMenu(props: { id: string | undefined }) {
     handledHistory = asked.ask;
     showHistory();
   }, [asked]);
+  useEffect(() => { watchLinkedPcs(); }, []); // the PCs are known before the menu opens, so it never grows while open
   const tabs = tabInfosOf(space);
   const shownTab = tabs.find((tab) => tab.id === id);
   const kind = shownTab?.kind;
+  const onPcs = openOnSection(tabsOf(space).find((entry) => entry.id === id), space);
   const website = kind === 'website';
   const page = website ? browserPages.value.find((item) => item.id === id) : undefined;
   const url = page?.url ?? '';
@@ -71,6 +89,7 @@ export function PaneMenu(props: { id: string | undefined }) {
       { label: 'Send page to chat', disabled: !url, onSelect: () => void sendPageToChat(id).catch((error) => toastError(error)) },
     ] }] : []),
     ...(kind === 'screen' && can('computer.preview') ? [{ items: [{ label: 'Mark a region', onSelect: () => void markScreen() }] }] : []),
+    ...onPcs,
     { items: [
       ...(shownTab?.transient ? [{ label: 'Keep tab', onSelect: () => keepTab(shownTab) }] : []),
       { label: 'All tabs', hint: String(tabs.length), onSelect: () => setListAt(atCell()) },

@@ -24,7 +24,7 @@
 // B-055 Q4: the feedback cell (feedback/FeedbackButton.tsx: tap opens the feedback sheet, hold talks where this page
 // can dictate) sits before the profile on every top row – without a screenshot row on a phone (no window capture).
 // B-078: in a chat a sideways swipe switches between its messages and its area (workspace/phone-swipe.ts, on the main
-// element); Back goes layer by layer (pwa/back.ts).
+// element); Back goes layer by layer (pwa/back.ts). B-084: on a phone a pull down on a tab root refreshes (pwa/pull-refresh.ts).
 // Owns: the phone frame, its top row, the tab bar and the global sheet. Never: view content or which view a route shows.
 
 import { useEffect, useRef } from 'preact/hooks';
@@ -46,6 +46,8 @@ import { FeedbackButton } from '../feedback/FeedbackButton.tsx';
 import { workspaceAttention } from '../workspace/attention.ts';
 import { phonePaneOpen } from '../workspace/phone-pane.ts';
 import { watchChatSwipe } from '../workspace/phone-swipe.ts';
+import { watchPullRefresh } from '../pwa/pull-refresh.ts';
+import { refresh, rpc } from '../lib/rpc.ts';
 import { setChatArea } from '../lib/shell-state.ts';
 import { phonePane } from '../workspace/phone-tabs.ts';
 import { WorkspacePane } from '../workspace/WorkspacePane.tsx';
@@ -106,6 +108,7 @@ export function MobileShell() {
   useEffect(() => () => { phonePaneOpen.value = false; }, [current]); // any navigation (a line's Open too) shows its screen
   const main = useRef<HTMLElement>(null);
   useEffect(() => (main.current ? watchChatSwipe(main.current, () => { const r = route.peek(); return r.view === 'chat' ? r.id : undefined; }, (id, to) => setChatArea(id, to === 'area')) : undefined), []);
+  useEffect(() => (main.current && platform !== 'desktop' ? watchPullRefresh(main.current, refresh, rpc.onOpen) : undefined), []); // phones only (pwa/pull-refresh.ts)
   // every screen with Back is pushed and has no tab bar: a task's detail (a detail page like the others) and the
   // frame's rows with Back – the settings list (Back to Home) and a settings section (Back to all settings)
   const pushed = view.pushed || view.back !== null || (current.view === 'tasks' && !!current.task);

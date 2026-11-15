@@ -1,6 +1,6 @@
 // References (runtime/references/references.ts): "Remember why…" turns the caller's own text message and the typed
 // reason into memory files in references/<whose>/ ("Example: …", "Reason: …"); repeating it replaces them; another
-// author's message is refused; every agent finds references through knowledge search, references.find narrows to one
+// author's message is refused; every agent finds references through knowledge search, knowledge.find {person} narrows to one
 // person's.
 
 import { test } from 'node:test';
@@ -37,7 +37,7 @@ test('Remember why: an example and a reason; a repeat replaces them; only own te
   await assert.rejects(() => rememberWhy(w, { messageId: 'msg_none', why: 'x' }, 'human'), /not found/i);
 });
 
-test('every agent finds references; references.find narrows to one person', async () => {
+test('every agent finds references; knowledge.find {person} narrows to one person', async () => {
   const w = world();
   captureReference(w.knowledge, { kind: 'style', text: 'Short answers, the next step first.', by: 'ag_a' });
   captureReference(w.knowledge, { kind: 'style', text: 'Long answers with every detail.', subject: 'per_anna', by: 'ag_a' });

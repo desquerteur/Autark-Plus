@@ -26,7 +26,11 @@ const outRoot = (rel, data) => write(join(dist, rel), data);
 const appProblem = appOriginProblem(appUrl);
 if (appProblem) { console.error(`APP_URL ${appUrl}: ${appProblem}`); process.exit(1); }
 const APP_BASE = new URL(`${appUrl}/`).pathname; // '/app/'
-const appDir = join(dist, ...APP_BASE.split('/').filter(Boolean));
+// B-084: with an own domain at base '/' (openautark.com) the site's own /app/ would be the app's folder, so the app goes
+// to dist-app/ instead: the Vercel project `autark` serves only that, and everything else there forwards to the site.
+const appApart = !sub;
+const appRoot = appApart ? join(root, 'dist-app') : dist;
+const appDir = join(appRoot, ...APP_BASE.split('/').filter(Boolean));
 const outApp = (rel, data) => write(join(appDir, rel), data);
 
 // ── 1. current release facts ──
@@ -40,7 +44,7 @@ async function releaseFacts() {
   if (process.env.OFFLINE) return rel;
   // The changelog spans every channel (OpenAutark and the old repo); a tag published to both appears once.
   const seen = new Set();
-  for (const [i, api] of release.historyApis.entries()) {
+  for (const api of release.historyApis) {
     const list = await fetchText(`${api}?per_page=30`);
     if (!list) continue;
     try {
@@ -54,19 +58,23 @@ async function releaseFacts() {
           assets: r.assets.filter((a) => /\.(exe|dmg|zip|AppImage|apk|txt)$/.test(a.name)).map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url })),
         });
       }
-      const latest = i === 0 ? j[0] : null; // the current channel alone decides what "latest" is
-      if (latest) {
-        const size = (name) => latest.assets.find((a) => a.name === name)?.size;
-        const exe = size(release.files.windows); const apk = size(release.files.android);
-        rel.windows = { version: latest.tag_name.replace(/^v/, ''), date: vienna(latest.published_at), sizeMb: exe ? Math.round(exe / 1e6) : rel.windows.sizeMb };
-        if (apk) rel.android = { ...rel.android, date: vienna(latest.published_at), sizeMb: Math.max(1, Math.round(apk / 1e6)) };
-      }
     } catch { /* keep fallback */ }
   }
   rel.history.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-  // The phone app's own version (apps/android) sits in latest-android.json next to the APK.
+  // GitHub's own "latest" of the current channel decides the PC version, not the newest list entry: a phone-only tag
+  // (android-v0.3.7, not marked latest) can be newer and stays in the history only.
   try {
-    const a = JSON.parse((await fetchText(release.asset('latest-android.json'))) || 'null');
+    const latest = JSON.parse((await fetchText(`${release.api}/latest`)) || 'null');
+    if (latest?.tag_name) {
+      const size = (name) => latest.assets.find((a) => a.name === name)?.size;
+      const exe = size(release.files.windows); const apk = size(release.files.android);
+      rel.windows = { version: latest.tag_name.replace(/^v/, ''), date: vienna(latest.published_at), sizeMb: exe ? Math.round(exe / 1e6) : rel.windows.sizeMb };
+      if (apk) rel.android = { ...rel.android, date: vienna(latest.published_at), sizeMb: Math.max(1, Math.round(apk / 1e6)) };
+    }
+  } catch { /* keep fallback */ }
+  // The phone app's own version (apps/android) sits next to its APK: latest-android-lite.json for the Lite APK the site offers.
+  try {
+    const a = JSON.parse((await fetchText(release.asset(release.files.android.endsWith('-lite.apk') ? 'latest-android-lite.json' : 'latest-android.json'))) || 'null');
     const v = a && (a.versionName || a.version);
     if (v) rel.android = { ...rel.android, version: String(v).replace(/-preview$/, ' preview') };
   } catch { /* keep fallback */ }
@@ -282,4 +290,26 @@ await outRoot('vercel.json', JSON.stringify({
   ],
 }, null, 2));
 
-console.log('done →', dist);
+// B-084: the app's own deploy folder (Vercel project `autark`): the app with its headers; every other path there
+// retires /autark with 410; other non-app paths forward to the public site.
+if (appApart) await write(join(appRoot, 'vercel.json'), JSON.stringify({
+  $schema: 'https://openapi.vercel.sh/vercel.json',
+  routes: [
+    // Gone, not moved: terminate before normalization or the general site redirect.
+    { src: '/autark(?:/.*)?', status: 410 },
+    { src: APP_BASE.slice(0, -1), headers: { Location: APP_BASE }, status: 308 },
+    { src: `/((?!${APP_BASE.slice(1)}).*)`, headers: { Location: `${site.url}/$1` }, status: 308 },
+    ...[
+    { source: '/(.*)', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }, { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }] },
+    { source: `${APP_BASE}(.*)`, headers: [
+      { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=()' },
+      { key: 'Content-Security-Policy', value: APP_CSP },
+      { key: 'X-Frame-Options', value: 'DENY' },
+    ] },
+    { source: `${APP_BASE}(|index.html|shell.js|sw.js|app.webmanifest)`, headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
+    ].map(({ source, headers }) => ({ src: source, headers: Object.fromEntries(headers.map(({ key, value }) => [key, value])), continue: true })),
+    { handle: 'filesystem' },
+  ],
+}, null, 2));
+
+console.log('done →', dist, appApart ? `(app → ${appRoot})` : '');

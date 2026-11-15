@@ -74,7 +74,7 @@ export interface RouteRequest {
   conversationId?: string;
   taskId?: string;
   mode: ModeInfo;
-  text?: string; // what the turn is about (for category inference)
+  text?: string; // what the turn is asked (for category inference; B-080: the person's newest line, else the task)
   /** Decision → LLM return rule. `explicit` (addition R3-R): the agent itself asked for this model/effort
    * (model.set request) – it then beats default pins and weak priors, but never policy bounds.
    * Additions (RT2, routing/previous.ts): `asked` = what the request named, 'model' or 'effort'
@@ -84,9 +84,15 @@ export interface RouteRequest {
    * B-048 E4.2 (ROUTING hunk, routing/need.ts): `need` = the agent asked for a kind of model instead of
    * a concrete one, relative to `from` (the model it ran on); the router resolves it (`modelId` = the
    * model model.set named in its answer, kept while it still meets the need).
-   * B-078 (D14, D16): `temperature` = the sampling temperature 0..2 the request asked for; the router never reads it, the
-   * turn hands it to the engine (agents/next-route.ts temperatureOf → EngineTurnInput.temperature). */
-  previous?: { modelId: string; effort: Effort; explicit?: boolean; asked?: 'model' | 'effort'; category?: string; need?: { kind: 'stronger' | 'cheaper' | 'faster' | 'vision' | 'long_context'; from?: string }; temperature?: number };
+   * B-080: a requested temperature is no routing input – it rides on TurnPlan.temperature (agents/turn-types.ts).
+   * B-083: `by`/`why` – the request in force is my subconscious's (agents/next-route.ts); router.ts names it
+   * "my subconscious: <why>". */
+  previous?: {
+    modelId: string; effort: Effort; explicit?: boolean; asked?: 'model' | 'effort'; category?: string;
+    need?: { kind: 'stronger' | 'cheaper' | 'faster' | 'vision' | 'long_context'; from?: string }; by?: 'subconscious'; why?: string;
+    /** B-083 D1: the model the turn was on when the request named another; the turn stays there while the named one cannot run (routing/router.ts). */
+    from?: string;
+  };
   exclude?: string[]; // models/accounts that just failed
   needs?: { vision?: boolean; computerUse?: boolean; structured?: boolean; tier?: ModelInfo['tier'] };
   /** B-057 S10: a split's turn (routing/split-route.ts) – its own model/effort beats the agent's pin and fixed effort; plan pacing. */
@@ -103,13 +109,13 @@ export interface AccountService {
   detect(force?: boolean): Promise<DetectionReport>;
   /** Addition (RT7), optional so simple fakes stay valid: the last detection's report, no scan. */
   lastDetection?(): DetectionReport | undefined;
-  add(input: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; rotation?: boolean }): Promise<Account>;
-  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'rotation' | 'enabled'>>): Account;
+  add(input: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string }): Promise<Account>;
+  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'enabled' | 'credits'>>): Account;
   login(id: string): Promise<{ started: boolean; url?: string }>;
   logout(id: string): Promise<void>;
   remove(id: string): Promise<void>;
   install(provider: 'claude' | 'codex'): Promise<void>;
-  /** Healthy accounts able to run `engine`, best first (priority, headroom, rotation rules). */
+  /** Healthy accounts able to run `engine`, best first (plans before paying keys, the week that resets first, priority, headroom). */
   candidates(engine: EngineId, model?: string): Account[];
   markLimited(id: string, until: number, limits?: AccountLimits): void;
   updateLimits(id: string, limits: AccountLimits): void;

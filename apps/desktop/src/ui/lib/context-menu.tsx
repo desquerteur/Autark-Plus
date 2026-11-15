@@ -3,7 +3,8 @@
 // or a long press (touch) opens the shared Menu at the pointer. <ContextMenuHost/> is mounted once in
 // App.tsx. Builders run when the menu opens, so they always see current state.
 // A row inside a modal keeps the menu's anchor and popover inside that dialog's top layer.
-// Owns: where the menu opens and the touch long-press. Never: what an item does (the caller's builder).
+// B-084: a long press that opens the menu gives a light haptic tick (the Android app's, else navigator.vibrate).
+// Owns: where the menu opens, the touch long-press and its tick. Never: what an item does (the caller's builder).
 
 import { signal } from '@preact/signals';
 import { addBackLayer } from './back-layers.ts';
@@ -11,6 +12,7 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Menu } from './popover.tsx';
 import type { MenuSection } from './popover.tsx';
+import { sendNative } from '../pwa/native-port.ts';
 
 interface OpenMenu { x: number; y: number; sections: MenuSection[]; host?: HTMLElement | null }
 
@@ -32,6 +34,13 @@ export function closeContextMenu(): void {
 }
 
 addBackLayer({ open: () => current.peek() !== null, close: closeContextMenu }); // the phone's Back closes it first
+
+/** The light tick a native app gives when a long press opens a menu: the Android app's own (over its port), else the
+ *  browser's vibrate where it has one. */
+function buzz(): void {
+  if (sendNative({ t: 'haptic' })) return;
+  try { navigator.vibrate?.(8); } catch { /* no vibration here */ }
+}
 
 /** Props for an element: right-click and touch long-press open `build()`'s sections. */
 export function useContextMenu(build: () => MenuSection[]) {
@@ -56,7 +65,12 @@ export function useContextMenu(build: () => MenuSection[]) {
       if (event.pointerType !== 'touch' || native(event)) return;
       const { clientX: x, clientY: y } = event;
       const container = host(event);
-      press.current = { x, y, timer: setTimeout(() => { fired.current = true; press.current = null; openContextMenu(x, y, build(), container); }, LONG_PRESS_MS) };
+      press.current = { x, y, timer: setTimeout(() => {
+        fired.current = true;
+        press.current = null;
+        openContextMenu(x, y, build(), container);
+        if (current.peek()) buzz();
+      }, LONG_PRESS_MS) };
     },
     onPointerMove: (event: PointerEvent) => {
       const at = press.current;

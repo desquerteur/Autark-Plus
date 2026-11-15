@@ -19,15 +19,20 @@ import { newId } from '../../shared/ids.ts';
 import type { Db } from '../db/database.ts';
 import type { Clock, Wake, WakeQueue, WakeRequest } from '../contracts.ts';
 import type { WakeReason } from '../../shared/model/runs.ts';
-import { cleanOrigin, type Origin } from '../../shared/model/origin.ts';
+import { cleanOrigin, mailOriginKey, type Origin } from '../../shared/model/origin.ts';
 
 type Row = Record<string, unknown>;
 
-/** Higher wins when two wakes merge. */
+/** Higher wins when two wakes merge (a piece's end beats a plain task wake under the same key, so it keeps rank 1). */
 const STRENGTH: Record<WakeReason, number> = {
-  answer: 9, message: 8, approval: 7, task: 6, event: 6, child: 5, handoff: 4, schedule: 3, review: 2, report: 2, retry: 1, manual: 0, setup: 0,
+  answer: 9, message: 8, approval: 7, child: 6, task: 5, event: 5, handoff: 4, schedule: 3, review: 2, report: 2, retry: 1, manual: 0, setup: 0,
   split: 0, // B-057: a split's run – never a queued wake
 };
+
+function mailJson(origin: Origin | undefined): string | null {
+  return origin?.mailProvenance || origin?.mailScope
+    ? JSON.stringify({ mailProvenance: origin.mailProvenance, mailScope: origin.mailScope }) : null;
+}
 
 const MAX_NOTE = 4000;
 const CLAIMED = '.'; // claimed id = `<coalesce id>.<unique>`
@@ -46,10 +51,26 @@ function toWake(row: Row): Wake {
   return wake;
 }
 
+/** The identity a mail wake gets when the runtime issued none: the app, no exact messages (read back the same way). */
+function legacyMail(origin: Origin | undefined): Origin | undefined {
+  if (!origin || origin.mailProvenance || origin.mailScope) return origin;
+  if (!origin.source.startsWith('app:') || !origin.label.startsWith('New mail in ')) return origin;
+  return { ...origin, mailProvenance: { appId: origin.source.slice(4), messageIds: [] } };
+}
+
 /** The stored origin of a wakes row (source_label falls back to the source). */
 function originOf(row: Row): Origin | undefined {
   if (row.source === null || row.source === undefined) return undefined;
-  return { source: String(row.source), label: row.source_label === null || row.source_label === undefined ? String(row.source) : String(row.source_label) };
+  const source = String(row.source);
+  const label = row.source_label == null ? source : String(row.source_label);
+  let mail: Pick<Origin, 'mailProvenance' | 'mailScope'> = {};
+  if (row.mail_origin != null) {
+    try { mail = JSON.parse(String(row.mail_origin)); }
+    catch { mail = { mailProvenance: { appId: source.slice(4), messageIds: [] } }; }
+  } else if (source.startsWith('app:') && label.startsWith('New mail in ')) {
+    mail = { mailProvenance: { appId: source.slice(4), messageIds: [] } };
+  }
+  return cleanOrigin({ source, label, mailProvenance: mail?.mailProvenance, mailScope: mail?.mailScope });
 }
 
 /** Small stable hash (FNV-1a 64 → base36) for coalesce ids. */
@@ -86,12 +107,15 @@ export class WakeQueueImpl implements WakeQueue {
   wake(request: WakeRequest): void {
     const now = this.clock.now();
     const dueAt = request.dueAt ?? now;
-    const origin = cleanOrigin(request.origin);
+    // A mail wake without a runtime-authored identity is partitioned as the legacy one it is read back as (originOf),
+    // so it can never fold into other work's row – on the first write as little as on the second.
+    const origin = legacyMail(cleanOrigin(request.origin));
     // Default key: identical wakes (same reason/chat/task) are redundant and merge; with neither chat nor task the
     // source keys them too (B-054), so two sources never fold into one row.
     const own = request.conversationId || request.taskId || !origin ? '' : `:${origin.source}`;
     const key = request.coalesceKey ?? `${request.reason}:${request.conversationId ?? ''}:${request.taskId ?? ''}${own}`;
-    const id = coalesceId(request.agentId, key);
+    const partition = mailOriginKey(origin);
+    const id = coalesceId(request.agentId, key) + (partition ? `_${hashKey(partition)}` : '');
     this.upsert(id, {
       agentId: request.agentId, reason: request.reason, conversationId: request.conversationId, taskId: request.taskId,
       note: request.note, dueAt, createdAt: now, attempts: 0, origin,
@@ -109,7 +133,9 @@ export class WakeQueueImpl implements WakeQueue {
 
   /** Withdraws the unclaimed wake of `agentId` under `coalesceKey`; false when none waits (claimed or gone). */
   cancelKey(agentId: string, coalesceKey: string): boolean {
-    const removed = this.db.run('DELETE FROM wakes WHERE id = ? AND claimed_at IS NULL', [coalesceId(agentId, coalesceKey)]).changes > 0;
+    const id = coalesceId(agentId, coalesceKey);
+    const removed = this.db.run('DELETE FROM wakes WHERE (id = ? OR substr(id, 1, ?) = ?) AND claimed_at IS NULL',
+      [id, id.length + 1, `${id}_`]).changes > 0;
     if (removed) this.changed(agentId);
     return removed;
   }
@@ -213,12 +239,17 @@ export class WakeQueueImpl implements WakeQueue {
    */
   private upsert(id: string, wake: Omit<Wake, 'id' | 'claimedAt'>, released = false): void {
     const existing = this.db.get<Row>('SELECT * FROM wakes WHERE id = ?', [id]);
+    if (existing && mailOriginKey(toWake(existing).origin) !== mailOriginKey(wake.origin)) {
+      // Legacy/released ids may predate partitioned keys. Never merge their notes into another scope.
+      this.upsert(`${id}_${hashKey(mailOriginKey(wake.origin))}`, wake, released);
+      return;
+    }
     if (!existing) {
       this.db.run(
-        `INSERT INTO wakes (id, agent_id, conversation_id, task_id, reason, note, due_at, created_at, attempts, source, source_label)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO wakes (id, agent_id, conversation_id, task_id, reason, note, due_at, created_at, attempts, source, source_label, mail_origin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [id, wake.agentId, wake.conversationId ?? null, wake.taskId ?? null, wake.reason, wake.note ?? null, wake.dueAt, wake.createdAt, wake.attempts,
-          wake.origin?.source ?? null, wake.origin?.label ?? null],
+          wake.origin?.source ?? null, wake.origin?.label ?? null, mailJson(wake.origin)],
       );
       return;
     }
@@ -228,10 +259,10 @@ export class WakeQueueImpl implements WakeQueue {
     const note = released ? join(wake.note, old.note) : join(old.note, wake.note);
     const origin = old.origin ?? wake.origin; // the older origin wins, like the chat and the task
     this.db.run(
-      `UPDATE wakes SET reason = ?, note = ?, due_at = ?, conversation_id = ?, task_id = ?, created_at = ?, attempts = ?, source = ?, source_label = ?
+      `UPDATE wakes SET reason = ?, note = ?, due_at = ?, conversation_id = ?, task_id = ?, created_at = ?, attempts = ?, source = ?, source_label = ?, mail_origin = ?
        WHERE id = ?`,
       [reason, note ?? null, Math.min(old.dueAt, wake.dueAt), old.conversationId ?? wake.conversationId ?? null, old.taskId ?? wake.taskId ?? null,
-        Math.min(old.createdAt, wake.createdAt), Math.max(old.attempts, wake.attempts), origin?.source ?? null, origin?.label ?? null, id],
+        Math.min(old.createdAt, wake.createdAt), Math.max(old.attempts, wake.attempts), origin?.source ?? null, origin?.label ?? null, mailJson(origin), id],
     );
   }
 

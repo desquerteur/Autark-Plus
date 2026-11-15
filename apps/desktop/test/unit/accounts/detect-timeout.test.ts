@@ -73,7 +73,7 @@ test('adoption: a report with an unknown login is scanned again on the next non-
   const saved: unknown[] = [];
   const adoption = new Adoption({
     repo: { list: () => [] } as never, dismissed: { list: () => [], mark: (report: unknown) => report } as never,
-    save: (row) => { saved.push(row); return row; }, blank: (provider, patch) => ({ ...account({ provider }), ...patch }),
+    save: (row) => { saved.push(row); return row; }, blank: (provider, patch) => ({ ...account({ provider }), ...patch }), found: (row) => row,
     checkOnce: () => {}, scan: async () => reports[Math.min(scans++, reports.length - 1)], env: () => ({}), now: () => 1,
   });
   assert.equal((await adoption.detect(false)).checkedAt, 1);
@@ -92,7 +92,7 @@ test('adoption: an unknown login neither adopts a new account nor flips a signed
   const own = account({ id: 'acc_claude', provider: 'claude', state: 'ok' });
   const adoption = new Adoption({
     repo: { list: () => [own] } as never, dismissed: { list: () => [], mark: (report: unknown) => report } as never,
-    save: (row) => { saved.push(row); return row; }, blank: (provider, patch) => ({ ...account({ provider }), ...patch }),
+    save: (row) => { saved.push(row); return row; }, blank: (provider, patch) => ({ ...account({ provider }), ...patch }), found: (row) => row,
     checkOnce: (id) => checks.push(id), scan: async () => { throw new Error('unused'); }, env: () => ({}), now: () => 1,
   });
   adoption.adopt({ clis: [{ provider: 'claude', path: '/bin/claude' }, { provider: 'codex', path: '/bin/codex' }], localServers: [], envKeys: [], checkedAt: 1 });

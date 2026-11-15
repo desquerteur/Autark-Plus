@@ -100,7 +100,7 @@ export interface PersonChat {
 
 /** In a person's session the CEO's member id (`human` there means the caller). */
 export const OWNER_ALIAS = 'owner';
-const PERSON_ID = /^per_[0-9a-z]{10,40}$/;
+const PERSON_ID = /^per_[0-9a-z]{8,40}$/;
 
 /** A person other than the owner ('per_…'). */
 export function isPersonId(value: unknown): boolean {

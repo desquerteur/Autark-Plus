@@ -50,7 +50,7 @@ export const faq = [
   { q: 'Is Autark open source?',
     a: `Yes. The source code is public under the Apache-2.0 license at ${release.repoUrl}, together with the installers and the shared library of skills.` },
   { q: 'Who makes Autark?',
-    a: 'Teydra Lab from Salzburg, Austria, founded by Stanislaus Hees. Autark grew up in Meta Jarvis, the Teydra Lab family of projects around AI agents and the human who stays in charge of them.' },
+    a: 'Teydra Lab from Austria, founded by Stanislaus Hees. Autark grew up in Meta Jarvis, the Teydra Lab family of projects around AI agents and the human who stays in charge of them.' },
   { q: 'Was "Proactive Agent Workforce" the same product?',
     a: release.renamed
       ? 'Yes. Proactive Agent Workforce was the working name. Updating from an older version moves the data folder to the new name, so there is no second app.'

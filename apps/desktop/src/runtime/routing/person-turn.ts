@@ -16,7 +16,7 @@ import type { Effort } from '../../shared/model/providers.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { effortRank } from '../models/efforts.ts';
 import type { PoolEntry } from './pool.ts';
-import { WEAK, strengthOf, tierRank } from './score.ts';
+import { WEAK, listPrice, strengthOf, tierRank } from './score.ts';
 
 /** The lowest effort a person's own request runs at (clamped to what the model offers). */
 export const PERSON_EFFORT: Effort = 'high';
@@ -52,20 +52,14 @@ const SMARTS_WEIGHT = 0.01;
 const SMARTS_UNKNOWN = 70;
 /** What the whole price range (relCost 0 → 1) costs in score: Fable at 2.5x Opus needs 30 smarts points more to win. */
 export const PRICE_WEIGHT = 0.5;
-const TIER_PRICE: Record<string, number> = { local: 0, small: 0.05, strong: 0.3, frontier: 0.6 };
 
 type Scored = Pick<PoolEntry, 'model'> & { score?: number };
-
-/** A model's list price on the 0..1 scale (relCost, else a guess from its tier). */
-function priceOf(model: Scored['model']): number {
-  return model.relCost ?? TIER_PRICE[model.tier] ?? 0.3;
-}
 
 /** A model's worth for a person's request: its score + smarts − list price (see the header). */
 export function personValue(entry: Scored): number {
   const { model } = entry;
   const smarts = typeof model.smarts === 'number' ? model.smarts : SMARTS_UNKNOWN;
-  return (entry.score ?? 0) + SMARTS_WEIGHT * smarts - PRICE_WEIGHT * priceOf(model);
+  return (entry.score ?? 0) + SMARTS_WEIGHT * smarts - PRICE_WEIGHT * listPrice(model);
 }
 
 /** The previous model's session goes on unless the best one is worth this much more (Fable 5.1 → Opus 5.5 is about 0.3). */
@@ -87,7 +81,7 @@ export function strongestPick<T extends Scored>(ranked: readonly T[], category: 
   const weak = previous !== undefined && strengthOf(previous.entry.model, category) < WEAK;
   if (previous && !weak && best.value - previous.value <= KEEP_MARGIN) return { entry: previous.entry, kept: true };
   if (!previous || previous === best) return { entry: best.entry, kept: false };
-  const why = weak ? 'weak' as const : priceOf(best.entry.model) < priceOf(previous.entry.model) ? 'value' as const : 'stronger' as const;
+  const why = weak ? 'weak' as const : listPrice(best.entry.model) < listPrice(previous.entry.model) ? 'value' as const : 'stronger' as const;
   return { entry: best.entry, kept: false, left: previous.entry, why };
 }
 

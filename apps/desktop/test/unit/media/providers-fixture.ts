@@ -48,7 +48,7 @@ export function send(res: ServerResponse, status: number, body: unknown, type = 
 }
 
 export function account(provider: ProviderId, baseUrl: string): Account {
-  return { id: `acc_${provider}`, provider, label: provider, auth: 'api_key', baseUrl, secretId: 'sec_1', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 0 };
+  return { id: `acc_${provider}`, provider, label: provider, auth: 'api_key', baseUrl, secretId: 'sec_1', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 0 };
 }
 
 export function target(provider: ProviderId, baseUrl: string, model: string, key: string | undefined = KEY): GenerationTarget {

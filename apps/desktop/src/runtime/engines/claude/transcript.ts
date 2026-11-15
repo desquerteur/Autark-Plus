@@ -120,7 +120,7 @@ export function transcriptMessages(items: RebuildItem[], context: Pick<Transcrip
     message.blocks = message.blocks.filter((block, index) => block.type !== 'thinking' || index < lastOther);
   }
   out = out.filter((message) => message.blocks.length);
-  if (!context.parentUuid && out[0]?.role === 'assistant') out.unshift({ role: 'user', blocks: [{ type: 'text', text: '[Earlier work in this chat, rebuilt by the app]' }] });
+  if (!context.parentUuid && out[0]?.role === 'assistant') out.unshift({ role: 'user', blocks: [{ type: 'text', text: '[My earlier work, rebuilt from my record]' }] });
   // A clean turn boundary: Claude Code (2.1.303, read from the CLI) treats a transcript that ends in a user record –
   // a tool_result or a note – as an interrupted turn on resume ("Continue from where you left off.").
   if (out.at(-1)?.role === 'user') out.push({ role: 'assistant', blocks: [{ type: 'text', text: context.closing ?? END_MARK }] });

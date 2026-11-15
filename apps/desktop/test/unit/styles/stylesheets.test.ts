@@ -15,7 +15,7 @@ const STYLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..
 const ALL_FILES = readdirSync(STYLES).filter((name) => name.endsWith('.css')).sort();
 const AREA_FILES = ALL_FILES.filter((name) => name !== 'index.css' && name !== 'tokens.css');
 /** Custom properties set inline by components (style={{ '--x': … }}), not by tokens.css. */
-const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width']);
+const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width', '--lanes']);
 /** Literal colors left in area files, whole rules (open point for the CSS owner: a token for them). B-044 visual
  *  pass: the filled danger button got its tokens (--danger-fill, --danger-fill-fg), none is left. */
 const KNOWN_LITERALS: Record<string, string[]> = {};
@@ -126,7 +126,7 @@ test('compact desktop windows keep caption controls beside the draggable top row
 test('the chat panel overlays exactly when the chat view has no room for the chat + the panel minimum', () => {
   const shell = stripComments(read('shell.css'));
   const minChat = Number(shell.match(/--sidebar-size:[^;]*100% - (\d+)px/)?.[1]);
-  const paneMin = Number(shell.match(/--pane-size:\s*clamp\((\d+)px/)?.[1]);
+  const paneMin = Number(shell.match(/--pane-size:\s*min\(clamp\((\d+)px/)?.[1]); // B-080: the stored width's floor, before the room the chat keeps
   // B-044 decision 3: opening the panel never narrows the sidebar (that would move the chat title)
   assert.doesNotMatch(shell, /--panel-reserve/);
   const chat = stripComments(read('chat.css'));
@@ -148,6 +148,9 @@ test('one centred chat column: the text column and the composer share one axis a
   assert.match(chat, /--col-inset: clamp\(16px, 5cqi, 24px\)/);
   // a gutter on both edges: the scroller's middle is the column's middle
   assert.match(chat, /\.message-scroller \{[^}]*scrollbar-gutter: stable both-edges/);
+  // B-080: the phone layout in a desktop window keeps that mirrored gutter, so the text column sits over the composer's centre
+  assert.doesNotMatch(stripComments(read('mobile.css')).match(/\.mobile-shell \.message-scroller \{[^}]*\}/)?.[0] ?? '', /scrollbar-gutter/);
+  assert.match(stripComments(read('mobile.css')), /\.mobile-shell \.message-scroller \{ padding: 12px 12px 16px; \}/);
   assert.doesNotMatch(composer, /\.composer-area \{[^}]*margin: 0 0 18px var/);
   // no layout switch keyed on the column's own width (the inset scales without a step)
   assert.doesNotMatch(chat + composer, /@container chat-column/);

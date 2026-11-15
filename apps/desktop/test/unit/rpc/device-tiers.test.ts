@@ -1,6 +1,6 @@
 // DEV2 device tiers against the real chat service and RPC server: what a chat-capable phone may
 // change in a chat, own-message edits, agent edits, the event side of the tiers (providers, runs,
-// settings, notifications, feedback/knowledge/theme), a To-do link seeing no chat content and
+// settings, notifications, feedback/knowledge/theme, B-084 the device events), a To-do link seeing no chat content and
 // closing the live connections of a revoked device. (Paired phones get every tier but
 // 'permissions' since B5; the tiers stay the table's vocabulary.)
 
@@ -69,7 +69,12 @@ test('events per tier: provider usage/models and feedback/knowledge for chat, ru
   assert.ok(mayReceive(device(['settings']), 'system', 'settings.updated'));
   assert.ok(mayReceive(device(['permissions'], true), 'system', 'settings.updated'));
   assert.ok(!mayReceive(device(['permissions'], false), 'system', 'settings.updated'));
-  assert.ok(!mayReceive(device([...FULL, 'permissions']), 'system', 'device.upserted'));
+  // B-084 (D6): Settings › Devices on the phone – the device events for 'settings' on a secure transport only
+  for (const event of ['device.upserted', 'device.removed', 'remote.updated', 'relay.updated'] as const) {
+    assert.ok(mayReceive(device(FULL), 'system', event), event);
+    assert.ok(!mayReceive(device(FULL, false), 'system', event), `${event}: not over plain LAN http`);
+    assert.ok(!mayReceive(device(['todo', 'chat', 'tasks', 'manage', 'permissions']), 'system', event), `${event}: needs settings`);
+  }
   assert.ok(mayReceive(device(['todo']), 'system', 'notify', { kind: 'todo' }) && mayReceive(device(['todo']), 'system', 'notify', { kind: 'blocker' }));
   for (const kind of ['reply', 'important', 'done', 'info', undefined]) assert.ok(!mayReceive(device(['todo', 'tasks']), 'system', 'notify', { kind }), String(kind));
   assert.ok(!mayReceive(device(['todo']), 'system', 'notify'), 'no payload: fail closed');

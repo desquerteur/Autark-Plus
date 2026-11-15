@@ -5,6 +5,10 @@
 // One compact line per model (texts: model-facts.ts), at most MAX_MODELS lines and about MAX_CHARS characters.
 // Decisions and embeddings are uses of their own (B-072): what answers them now (context/setup-facts.ts usesLine) and
 // only the connected models made for them – a chat model with no prior for them is no embedding model.
+// B-083: the footer names my start model (and who set it) as what I start on and change with model.set when my work
+// needs another; a start model of mine that cannot run now says so, with the stand-in rule (router.ts D3). A limited line
+// says until when (unfit.ts backAt). B-083 (live 09.11.): a line names whether the model takes a temperature
+// (model-facts.ts temperatureTag).
 // Owns: this selection and its text. Never: changes state, routes a turn, or lists a chat model outside the policy band
 // (decisions and embeddings list what is connected for that use).
 
@@ -14,14 +18,16 @@ import type { ModeInfo } from '../../shared/model/knowledge.ts';
 import { servesUse } from '../../shared/model/models-uses.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import { isDecisionModel, usesLine } from '../context/setup-facts.ts';
+import { profileZone, stampText } from '../context/time.ts';
 import { categoryLabel, resolveCategory } from './categories.ts';
+import { backAt } from './unfit.ts';
 import { effectivePolicy } from './policies.ts';
 import { PIN_TEXT, resolvePin } from './pins.ts';
 import { MODEL_CHOICE_LABELS } from '../../shared/model/model-guide.ts';
 import { workPlanOf } from './preference.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { NEVER, isPaid, scoreModel, strengthOf, tierRank, withinTiers, type CostMode } from './score.ts';
-import { effortRange, priceText, signed, sourceOf, strengthOverview } from './model-facts.ts';
+import { effortRange, priceText, signed, sourceOf, strengthOverview, temperatureTag } from './model-facts.ts';
 
 export const MAX_MODELS = 30;
 export const MAX_CHARS = 2500;
@@ -30,7 +36,6 @@ export const NO_MODELS_TEXT = 'No model is connected yet. The person adds a plan
 export interface ModelListInput {
   services: RuntimeServices;
   agent: Agent;
-  conversationId?: string;
   /** The caller's mode: its category is the default kind of work, its minTier applies to that category (as router.ts). */
   mode: Pick<ModeInfo, 'category' | 'minTier'>;
   category?: string;
@@ -39,7 +44,7 @@ export interface ModelListInput {
 
 type State = 'ok' | 'limited' | 'paid-off' | 'none';
 
-interface Entry { model: ModelInfo; account?: Account; state: State; score: number }
+interface Entry { model: ModelInfo; account?: Account; state: State; score: number; text?: string }
 
 const STATE_TEXT: Record<Exclude<State, 'ok'>, string> = {
   limited: 'limited right now', 'paid-off': 'API key, used only when nothing else is left', none: 'no usable account',
@@ -53,7 +58,7 @@ export function modelList(input: ModelListInput): string {
   const models = s.catalog.list();
   if (!models.length) return NO_MODELS_TEXT;
   const settings = s.settings.get().routing;
-  const policy = effectivePolicy(s, input.agent, input.conversationId);
+  const policy = effectivePolicy(s, input.agent);
   const own = resolveCategory(input.mode.category, undefined);
   const category = input.category ?? own;
   const explicit = input.category !== undefined;
@@ -71,7 +76,8 @@ export function modelList(input: ModelListInput): string {
   const states = candidates.map((entry) => {
     const usable = paidSpill ? entry.usable.filter((account) => !isPaid(account)) : entry.usable;
     const state: State = !entry.model.available ? 'none' : !entry.all.length ? 'limited' : !usable.length ? 'paid-off' : 'ok';
-    return { model: entry.model, account: usable[0] ?? entry.all[0], state };
+    const until = state === 'limited' ? backAt(s, [entry.model], now).until : undefined;
+    return { model: entry.model, account: usable[0] ?? entry.all[0], state, ...(until !== undefined ? { text: `limited until ${stampText(until, profileZone(s), now)}` } : {}) };
   });
   const prefer = new Set(policy.prefer);
   const workPlan = input.agent.id === SYSTEM_ID ? undefined : workPlanOf(s);
@@ -83,14 +89,19 @@ export function modelList(input: ModelListInput): string {
 
   const pin = policy.pin;
   const pinned = pin ? resolvePin(models, pin.modelId) : undefined;
-  const lines = shown.slice(0, MAX_MODELS).map((entry) => lineOf(entry, category, explicit, pinned?.id));
+  const lines = shown.slice(0, MAX_MODELS).map((entry) => lineOf(entry, category, explicit, pinned && pin ? { id: pinned.id, text: PIN_TEXT[pin.source] } : undefined));
 
   const bounds = policy.floorTier || policy.ceilingTier ? `; my model policy spans ${policy.floorTier ?? 'local'} to ${policy.ceilingTier ?? 'frontier'} models` : '';
   const title = `Models I can use for ${categoryLabel(category)}${explicit ? '' : " (my mode's kind of work; category picks another)"}, best first as routing ranks them (model preference ${MODEL_CHOICE_LABELS[costMode]}${bounds}):`;
   const footer: string[] = [];
   if (hidden) footer.push(`${hidden} more cannot run right now (includeUnavailable: true lists ${hidden === 1 ? 'it' : 'them'} with the reason).`);
-  if (pin) footer.push(`My model is ${PIN_TEXT[pin.source]} (${pinned?.name ?? pin.modelId}): model.set cannot change it.`);
-  else if (shown.length) footer.push('I ask for one with model.set (its id, or a need such as "stronger" or "cheaper"; for: "task" keeps it for my whole task).');
+  // B-083: my start model is where I begin, and model.set picks another.
+  const name = pinned?.name ?? pin?.modelId;
+  const held = pinned ? ranked.find((entry) => entry.model.id === pinned.id) : undefined; // hidden entries included
+  if (pin && held && (held.state === 'limited' || held.state === 'none')) { // a key-only start model still runs (router.ts tryPin)
+    footer.push(`My start model is ${name}${setBy(input.agent)}; it cannot run now (${held.text ?? STATE_TEXT[held.state]}) – until then my turns start on a model from the strongest tier that runs at most at its price.`);
+  } else if (pin) footer.push(`My start model is ${name}${setBy(input.agent)}; I start on it and change it when my work needs another.`);
+  if (shown.length) footer.push('I ask for one with model.set (its id, or a need such as "stronger" or "cheaper"; for: "task" keeps it for my whole task).');
 
   if (!shown.length) return [title, `No model I can use fits ${categoryLabel(category)} right now.`, ...footer].join('\n');
   const moreLine = (count: number) => `… ${count} more not shown${explicit ? '' : ' (category narrows it)'}.`;
@@ -126,7 +137,14 @@ function useModelList(s: RuntimeServices, use: 'decision' | 'embeddings'): strin
   ].join('\n');
 }
 
-function lineOf(entry: Entry, category: string, explicit: boolean, pinnedId: string | undefined): string {
+/** " (Stanislaus set it)" / " (I set it myself)" – who set my start model (ModelPolicy.pinBy), else nothing. */
+function setBy(agent: Agent): string {
+  const by = agent.modelPolicy?.pinBy;
+  if (by?.self) return ' (I set it myself)';
+  return typeof by?.name === 'string' && by.name ? ` (${by.name} set it)` : '';
+}
+
+function lineOf(entry: Entry, category: string, explicit: boolean, pinned: { id: string; text: string } | undefined): string {
   const { model } = entry;
   const named = model.name && model.name.toLowerCase() !== model.model.toLowerCase();
   const parts = [named ? `${model.id} (${model.name})` : model.id, model.tier, sourceOf(model, entry.account)];
@@ -140,8 +158,10 @@ function lineOf(entry: Entry, category: string, explicit: boolean, pinnedId: str
   const price = priceText(model); // B-078: the real list price and smarts instead of the relative cost
   if (price) parts.push(price);
   if (model.smarts !== undefined) parts.push(`smarts ${model.smarts}`);
-  if (entry.state !== 'ok') parts.push(STATE_TEXT[entry.state]);
-  if (model.id === pinnedId) parts.push('pinned');
+  const temperature = temperatureTag(model); // B-083
+  if (temperature) parts.push(temperature);
+  if (entry.state !== 'ok') parts.push(entry.text ?? STATE_TEXT[entry.state]);
+  if (model.id === pinned?.id) parts.push(pinned.text);
   return `- ${parts.join(' · ')}`;
 }
 

@@ -1,9 +1,10 @@
-// Owns: the team's local feedback inbox: fetch on opening or Refresh, select text and screenshot, remove a report.
+// Owns: the team's local feedback inbox: fetch on opening or Refresh, select text and screenshot, remove a report;
+// each report's meta line starts with the same short report number its sender saw (B-085).
 // Never: exposes keys, polls the mailbox or renders a report as HTML. The runtime permits inbox calls only to the owner.
 
 import { signal } from '@preact/signals';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
+import { reportNumber, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { errorText, rpc } from '../lib/rpc.ts';
@@ -128,7 +129,7 @@ function InboxContent() {
         </div>
         <section class="feedback-inbox-report" aria-label="Selected feedback">
           {current ? <>
-            <p class="feedback-inbox-meta">{new Date(current.createdAt).toLocaleString()} · {current.appVersion} · {current.os}{current.fromAgent ? ' · Agent report' : ''}</p>
+            <p class="feedback-inbox-meta">No. {reportNumber(current.id)} · {new Date(current.createdAt).toLocaleString()} · {current.appVersion} · {current.os}{current.fromAgent ? ' · Agent report' : ''}</p>
             <p class="feedback-inbox-text">{current.text}</p>
             <ReportScreenshot key={current.id} item={current} />
             {current.diagnostics && <details><summary>Diagnostics</summary><pre>{current.diagnostics}</pre></details>}

@@ -1,18 +1,22 @@
 // B-072: the agents' `wf` (engines/wf-shim.ts) – the shim texts for sh and cmd, the wf.mjs path of a packaged
 // build, PATH order and AUTARK_DATA of the agents' env, writing only what changed, nothing without wf.mjs, the
 // registry handing the env to its CLI engines, and the shim really running a script with this node (sh; on Windows
-// cmd, and Git Bash in a non-UTF-8 locale when one is installed).
+// cmd, and Git Bash in a non-UTF-8 locale when one is installed). B-080: Codex's rg last on PATH and PYTHONUTF8
+// (withTools, codexRgDir), also in the Codex app-server's env; wave 3: PYTHONUNBUFFERED and PowerShell 7 last on PATH
+// (pwshDir); review: POWERSHELL_TELEMETRY_OPTOUT, and a Store app's execution alias counts as a program (isProgram).
 // Owns: these assertions only. Never: writes outside its temp folder or starts the app.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { agentEnv, shimDir, shimFiles, wfEntry, withShim } from '../../../src/runtime/engines/wf-shim.ts';
+import { agentEnv, codexRgDir, isProgram, pwshDir, pwshUserDir, shimDir, shimFiles, wfEntry, withShim, withTools } from '../../../src/runtime/engines/wf-shim.ts';
 import { createEngineRegistry } from '../../../src/runtime/engines/registry.ts';
-import { account, acpAgent, fakeFinder, testSupervisor } from '../engines/fakes.ts';
+import { CodexServer } from '../../../src/runtime/engines/codex/server.ts';
+import type { Executable } from '../../../src/runtime/accounts/executables.ts';
+import { account, acpAgent, fakeFinder, fakeSpawn, testSupervisor } from '../engines/fakes.ts';
 
 const text = (files: Array<{ name: string; text: string }>, name: string) => files.find((file) => file.name === name)?.text;
 
@@ -89,7 +93,7 @@ test('agentEnv writes the shim once, rewrites it when the app moved, and writes 
   const entry = path.join(root, 'app', 'wf.mjs');
   const none = agentEnv(data, { entry, env: { PATH: '/usr/bin' }, platform: 'linux', executable: '/opt/a/autark' });
   assert.equal(existsSync(shimDir(data)), false, 'no wf.mjs: no bin folder');
-  assert.deepEqual(none, { PATH: '/usr/bin', AUTARK_DATA: data });
+  assert.deepEqual(none, { PATH: '/usr/bin', AUTARK_DATA: data, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', POWERSHELL_TELEMETRY_OPTOUT: '1' });
 
   mkdirSync(path.dirname(entry), { recursive: true });
   writeFileSync(entry, '');
@@ -107,6 +111,144 @@ test('agentEnv writes the shim once, rewrites it when the app moved, and writes 
   assert.equal(statSync(cmd).mtimeMs, old.getTime(), 'same text: not written again');
   agentEnv(data, { entry, env: {}, platform: 'win32', executable: 'C:\\B\\Autark.exe' });
   assert.match(readFileSync(cmd, 'utf8'), /B\\Autark\.exe/);
+});
+
+const WINDOWS = { skip: process.platform !== 'win32' ? 'Windows paths' : undefined };
+
+test('B-080: Codex\'s rg goes last on PATH where no PATH entry holds an rg.exe; PYTHONUTF8=1 unless the person set it', WINDOWS, (t) => {
+  const root = temp();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const data = path.join(root, 'data');
+  const entry = path.join(root, 'app', 'wf.mjs');
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(entry, '');
+  const local = path.join(root, 'local');
+  const bin = path.join(local, 'OpenAI', 'Codex', 'bin');
+  const h1 = path.join(bin, 'h1');
+  const h0 = path.join(bin, 'h0');
+  for (const dir of [h0, h1]) { mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'rg.exe'), ''); }
+  const old = new Date('2026-01-01T00:00:00Z');
+  utimesSync(path.join(h0, 'rg.exe'), old, old);
+  const options = { entry, platform: 'win32' as const, executable: 'C:\\A\\Autark.exe' };
+  const env = agentEnv(data, { ...options, env: { PATH: 'C:\\x', LOCALAPPDATA: local } });
+  assert.equal(env.PATH, `${shimDir(data)};C:\\x;${h1}`, 'the shim folder first, the newest Codex rg last');
+  assert.equal(env.PYTHONUTF8, '1');
+  const tools = path.join(root, 'tools');
+  mkdirSync(tools, { recursive: true });
+  writeFileSync(path.join(tools, 'rg.exe'), '');
+  assert.equal(agentEnv(data, { ...options, env: { Path: tools, LOCALAPPDATA: local } }).Path, `${shimDir(data)};${tools}`, 'the person\'s own rg: no extra folder');
+  assert.equal(agentEnv(data, { ...options, env: { PATH: 'C:\\x', PYTHONUTF8: '0' } }).PYTHONUTF8, '0', 'the person\'s value stays');
+  assert.equal(agentEnv(data, { ...options, env: { PATH: 'C:\\x', LOCALAPPDATA: path.join(root, 'nowhere') } }).PATH, `${shimDir(data)};C:\\x`, 'no rg found: PATH as it was');
+  assert.deepEqual(agentEnv(data, { entry: path.join(root, 'none.mjs'), platform: 'darwin', env: { PATH: '/usr/bin', LOCALAPPDATA: local } }),
+    { PATH: '/usr/bin', LOCALAPPDATA: local, AUTARK_DATA: data, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', POWERSHELL_TELEMETRY_OPTOUT: '1' }, 'macOS: nothing but the Python and PowerShell variables');
+});
+
+test('B-080: the rg beside the codex.exe the app runs, else in a sibling folder under the same bin root, else the newest under LOCALAPPDATA', WINDOWS, (t) => {
+  const root = temp();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'Codex', 'bin');
+  const [h1, h2] = [path.join(bin, 'h1'), path.join(bin, 'h2')];
+  for (const dir of [h1, h2]) mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(h1, 'codex.exe'), '');
+  writeFileSync(path.join(h2, 'rg.exe'), '');
+  const codex = path.join(h1, 'codex.exe');
+  assert.equal(codexRgDir({ PATH: 'C:\\x' }, codex), h2, 'a sibling folder under the same bin root');
+  writeFileSync(path.join(h1, 'rg.exe'), '');
+  assert.equal(codexRgDir({ PATH: 'C:\\x' }, codex), h2, 'the same env: the folder found before (memoized, its rg.exe still there)');
+  assert.equal(codexRgDir({ PATH: 'C:\\y' }, codex), h1, 'beside codex.exe');
+  rmSync(path.join(h2, 'rg.exe'));
+  assert.equal(codexRgDir({ PATH: 'C:\\x' }, codex), h1, 'the remembered rg.exe is gone: looked for anew');
+  assert.equal(codexRgDir({ PATH: `C:\\x;"${h1}"` }, codex), undefined, 'PATH holds one (quoted entries too)');
+  assert.equal(codexRgDir({ PATH: 'C:\\x' }), undefined, 'no codex.exe and no LOCALAPPDATA: none');
+  assert.deepEqual(withTools({ PATH: 'C:\\x' }, 'win32', codex), { PATH: `C:\\x;${h1}`, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', POWERSHELL_TELEMETRY_OPTOUT: '1' });
+});
+
+// B-080 wave 3 (live 08.–09.11.2026: Python jobs printed nothing until they ended and were taken for hung): Python's
+// output reaches the pipe as it happens.
+test('B-080 wave 3: PYTHONUNBUFFERED=1 is added when absent and kept when the env sets its own; the input stays as it was', () => {
+  const base = { PATH: '/usr/bin' };
+  assert.deepEqual(withTools(base, 'linux'), { PATH: '/usr/bin', PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', POWERSHELL_TELEMETRY_OPTOUT: '1' });
+  assert.deepEqual(base, { PATH: '/usr/bin' }, 'the input env is not changed');
+  assert.equal(withTools({ PATH: '/usr/bin', PYTHONUNBUFFERED: '' }, 'darwin').PYTHONUNBUFFERED, '', 'the person\'s own value stays');
+  const win = withTools({ Path: 'C:\\x', pythonunbuffered: '0' }, 'win32');
+  assert.equal(win.pythonunbuffered, '0', 'Windows: any spelling of it counts');
+  assert.equal(win.PYTHONUNBUFFERED, undefined);
+});
+
+// B-080 wave 3 review: pwsh 7 reports each start to Microsoft unless opted out, and the engines start one per command.
+test('B-080 wave 3 review: POWERSHELL_TELEMETRY_OPTOUT=1 is added when absent and kept when the env sets its own', () => {
+  assert.equal(withTools({ PATH: '/usr/bin' }, 'linux').POWERSHELL_TELEMETRY_OPTOUT, '1');
+  assert.equal(withTools({ Path: 'C:\\x' }, 'win32').POWERSHELL_TELEMETRY_OPTOUT, '1');
+  const own = withTools({ Path: 'C:\\x', powershell_telemetry_optout: '0' }, 'win32');
+  assert.equal(own.powershell_telemetry_optout, '0', 'the person\'s own value stays (any spelling on Windows)');
+  assert.equal(own.POWERSHELL_TELEMETRY_OPTOUT, undefined);
+});
+
+// B-080 wave 3 review (measured: stat of WindowsApps\SnippingTool.exe throws EACCES, lstat names a link): a Store pwsh on
+// PATH is such an alias – Windows starts it, so it counts.
+test('B-080 wave 3 review: an app execution alias counts as a program; a missing file does not', WINDOWS, (t) => {
+  const apps = path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'WindowsApps');
+  assert.equal(isProgram(path.join(apps, 'wf-no-such-program.exe')), false);
+  let names: string[] = [];
+  try { names = readdirSync(apps).filter((name) => name.toLowerCase().endsWith('.exe')); } catch { names = []; }
+  const alias = names.map((name) => path.join(apps, name)).find((file) => { try { statSync(file); return false; } catch { return true; } });
+  if (!alias) { t.skip('no app execution alias on this PC'); return; }
+  assert.equal(isProgram(alias), true, alias);
+});
+
+// B-080 wave 3 (live 08.–09.11.2026: Codex's Windows PowerShell 5.1 piped "Nächste" into python as "N?chste"): PowerShell 7
+// goes last on the engines' PATH where no PATH entry holds a pwsh.exe – %ProgramFiles%\PowerShell\7 first, else the
+// per-user install of accounts/install.ts.
+test('B-080 wave 3: withTools appends the PowerShell 7 folder – per-user, then ProgramFiles – once, and a pwsh on PATH wins', WINDOWS, (t) => {
+  const root = temp();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const local = path.join(root, 'local');
+  const programs = path.join(root, 'programs');
+  const user = pwshUserDir(local);
+  const system = path.join(programs, 'PowerShell', '7');
+  const own = path.join(root, 'own-tools');
+  const env = { PATH: 'C:\\x', LOCALAPPDATA: local, ProgramFiles: programs };
+  assert.equal(withTools(env, 'win32').PATH, 'C:\\x', 'no pwsh anywhere: PATH as it was');
+  assert.equal(pwshDir(env), undefined);
+  mkdirSync(user, { recursive: true });
+  writeFileSync(path.join(user, 'pwsh.exe'), '');
+  assert.equal(user, path.join(local, 'Microsoft', 'powershell'));
+  assert.equal(withTools(env, 'win32').PATH, `C:\\x;${user}`, 'the per-user install last on PATH');
+  mkdirSync(system, { recursive: true });
+  writeFileSync(path.join(system, 'pwsh.exe'), '');
+  assert.equal(withTools(env, 'win32').PATH, `C:\\x;${system}`, '%ProgramFiles%\\PowerShell\\7 before the per-user one');
+  assert.equal(withTools({ ...env, PATH: `C:\\x;${system}` }, 'win32').PATH, `C:\\x;${system}`, 'already on PATH: no duplicate');
+  mkdirSync(own, { recursive: true });
+  writeFileSync(path.join(own, 'pwsh.exe'), '');
+  assert.equal(pwshDir({ ...env, PATH: `C:\\x;"${own}"` }), own, 'a PATH entry first (quoted entries too)');
+  assert.equal(withTools({ ...env, PATH: `${own};C:\\x` }, 'win32').PATH, `${own};C:\\x`, 'a pwsh on PATH wins: nothing added');
+  assert.deepEqual(env, { PATH: 'C:\\x', LOCALAPPDATA: local, ProgramFiles: programs }, 'the input env is not changed');
+  assert.deepEqual(withTools({ PATH: '/usr/bin', LOCALAPPDATA: local, ProgramFiles: programs }, 'linux'),
+    { PATH: '/usr/bin', LOCALAPPDATA: local, ProgramFiles: programs, PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', POWERSHELL_TELEMETRY_OPTOUT: '1' }, 'other platforms: PATH unchanged');
+});
+
+test('B-080: the Codex app-server starts with the rg of its codex.exe\'s bin root last on PATH', WINDOWS, async (t) => {
+  const root = temp();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'Codex', 'bin');
+  const [h1, h2] = [path.join(bin, 'h1'), path.join(bin, 'h2')];
+  for (const dir of [h1, h2]) mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(h1, 'codex.exe'), '');
+  writeFileSync(path.join(h2, 'rg.exe'), '');
+  const fake = fakeSpawn(({ child }) => {
+    child.onLine = (msg) => { if (msg.method === 'initialize') child.send({ id: msg.id, result: { userAgent: 'codex_cli_rs/0.164.0' } }); };
+  });
+  const command = path.join(h1, 'codex.exe');
+  const server = new CodexServer({
+    key: 'acc_test', executable: { command, prefixArgs: [], path: command } as unknown as Executable,
+    supervisor: testSupervisor(fake.spawn), cwd: root, version: '0.2.0', env: { PATH: 'C:\\D\\bin;C:\\x' },
+  });
+  try {
+    await server.rpc();
+    assert.equal(fake.calls[0].options.env?.PATH, `C:\\D\\bin;C:\\x;${h2}`);
+  } finally {
+    await server.dispose();
+  }
 });
 
 test('the registry hands the agents env to its CLI engines (an ACP agent sees AUTARK_DATA)', async (t) => {

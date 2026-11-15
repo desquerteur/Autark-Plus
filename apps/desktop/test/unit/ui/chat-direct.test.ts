@@ -1,5 +1,5 @@
-// B-050 K4/K9 in the UI: the new-chat dialog's plan (one member without a topic → the pair's default
-// 1:1, else a chat with agents, people and the topic – src/ui/chat/new-chat.ts), who opens the default
+// B-050 K4/K9 in the UI: the new-chat dialog's plan (always a new chat with agents, people and the topic,
+// also with one member and an empty or blank topic – regression 12.11.2026, src/ui/chat/new-chat.ts), who opens the default
 // 1:1 directly from "Message" on the owner's window, a phone link and a person's device (chats.direct or
 // people.directChat from the real handler table – src/ui/chat/direct.ts), and the
 // composer's /important and /silent (the level of the next message, or its text sent at that level –
@@ -26,13 +26,16 @@ const as = (scope: ClientScope): void => { session.value = sessionInfo(table, sc
 const device = (capabilities: readonly DeviceCapability[]): ClientScope => ({ kind: 'device', deviceId: 'dv_phone', capabilities: [...capabilities], secure: true });
 const isAgent = (id: string) => id.startsWith('ag_');
 
-test('newChatPlan: one member and no topic opens the default 1:1; a topic or more members create a chat', () => {
+test('newChatPlan: "Start chat" always creates a new chat – an empty or blank topic never opens an existing 1:1 instead', () => {
   assert.equal(newChatPlan([], 'Launch', isAgent), null, 'nothing chosen: nothing to start');
-  assert.deepEqual(newChatPlan(['ag_mara'], '', isAgent), { kind: 'direct', memberId: 'ag_mara' });
-  assert.deepEqual(newChatPlan(['per_anna0000001'], '   ', isAgent), { kind: 'direct', memberId: 'per_anna0000001' }, 'a blank topic is none');
-  assert.deepEqual(newChatPlan(['ag_mara'], ' Video edit ', isAgent), { kind: 'create', title: 'Video edit', agentIds: ['ag_mara'], people: [] },
-    'a topic chat with the same agent stays possible');
-  assert.deepEqual(newChatPlan(['ag_mara', 'per_anna0000001', 'ag_tom'], '', isAgent), { kind: 'create', agentIds: ['ag_mara', 'ag_tom'], people: ['per_anna0000001'] },
+  // Regression 12.11.2026 (Stanislaus): one member and no name made no new chat – it opened the default 1:1.
+  assert.deepEqual(newChatPlan(['ag_mara'], '', isAgent), { agentIds: ['ag_mara'], people: [] }, 'one agent, empty topic: a new untitled chat');
+  assert.deepEqual(newChatPlan(['per_anna0000001'], '   ', isAgent), { agentIds: [], people: ['per_anna0000001'] }, 'one person, blank topic: a new untitled chat');
+  assert.deepEqual(newChatPlan(['ag_mara'], ' \t\n ', isAgent), { agentIds: ['ag_mara'], people: [] }, 'whitespace only is no title');
+  assert.ok(!('title' in (newChatPlan(['ag_mara'], '  ', isAgent) ?? {})), 'a blank topic sends no title at all');
+  assert.deepEqual(newChatPlan(['ag_mara'], ' Video edit ', isAgent), { title: 'Video edit', agentIds: ['ag_mara'], people: [] },
+    'a topic: a new chat with that title, even with a member who has a 1:1');
+  assert.deepEqual(newChatPlan(['ag_mara', 'per_anna0000001', 'ag_tom'], '', isAgent), { agentIds: ['ag_mara', 'ag_tom'], people: ['per_anna0000001'] },
     'a group without a topic: no title (each viewer sees the names)');
 });
 

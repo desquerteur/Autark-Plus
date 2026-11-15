@@ -1,10 +1,12 @@
 // Electron window check of spaces (P05 areas) with the demo engine in an isolated test profile:
 //   * the seed Manager has no space; hiring the secretary and a video editor (reports of the
 //     Manager) creates "Private" and "Personal brand";
-//   * the Team sidebar (the org lives in ONE place – Umbau Einfachheit: no second org tree on #/team): the agents'
-//     space-less group (Manager) first under "Agents", then one heading per space with the area agents under it;
-//   * spaces stay system data – a rename, a new space and an archive through the RPCs show as sidebar headings, the
-//     archived space's agents stay on the team (back under the Manager);
+//   * the Team sidebar (B-085: reports always stay under their manager; only top agents are grouped by space): one
+//     group – headed "Agents" only when People stand beside it – with the Manager and, under it, the area agents,
+//     whose rows name their space first on the status line ("Private", "Personal brand"); the desktop #/team page
+//     shows the same tree read-only and open (no carets);
+//   * spaces stay system data – a rename and an archive through the RPCs show on the rows (the archived space's agents
+//     stay on the team under the Manager, without a space name); a new space without agents adds no group;
 //   * screenshots light, dark and 640×480; no renderer errors.
 // Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -20,7 +22,7 @@ import { connect } from '../e2e/lib/runtime-client.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
 
-test('spaces: created by hiring, Team headings; rename/add/archive through the RPCs (no Settings › Agents)', { timeout: 180_000 }, async (t) => {
+test('spaces: created by hiring, named on the Team rows; rename/add/archive through the RPCs (no Settings › Agents)', { timeout: 180_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-spaces-'));
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
@@ -59,20 +61,29 @@ test('spaces: created by hiring, Team headings; rename/add/archive through the R
   assert.deepEqual(names, ['Personal brand', 'Private']);
   assert.ok(secretary.spaceId && editor.spaceId && secretary.spaceId !== editor.spaceId);
 
-  // The Team sidebar: the Manager's group first under 'Agents', then one heading per space.
+  // The Team sidebar: one group with the Manager; the area agents stay under it and name their space on the row.
   const groups = page.locator('.team-nav .team-space:not(.team-people):not(.team-archived)');
   const heading = (name) => page.locator('.team-nav .team-space-title', { hasText: name });
+  const row = (name) => page.locator('.team-nav .team-row', { has: page.locator('.row-title', { hasText: name }) });
   await go('#/team');
-  await heading('Private').waitFor({ timeout: 15_000 });
-  await heading('Personal brand').waitFor({ timeout: 15_000 });
-  assert.equal(await groups.count(), 3);
-  assert.deepEqual(await groups.nth(0).locator('.team-space-title').allTextContents(), ['Agents'], 'the space-less group is headed Agents');
-  assert.equal((await groups.nth(0).locator('.team-row .row-title').first().textContent())?.trim(), 'Manager');
+  await groups.first().locator('.team-row .row-title', { hasText: 'Manager' }).waitFor({ timeout: 15_000 });
   const expandAll = async () => { for (let i = 0; i < 5; i += 1) { const closed = page.locator('.team-nav .team-caret[aria-expanded="false"]'); if (!(await closed.count())) break; await closed.first().click(); } };
   await expandAll();
-  assert.equal(await page.locator('.team-nav .team-row .row-title', { hasText: 'Ella' }).count(), 1, 'the secretary is on the team');
-  assert.equal(await page.locator('.team-nav .team-row .row-title', { hasText: 'Jonas' }).count(), 1, 'the video editor is on the team');
-  assert.equal(await page.locator('.team-view .org-space').count(), 0, 'no second org tree in the main zone');
+  await row('Ella').waitFor({ timeout: 15_000 });
+  assert.equal(await groups.count(), 1, 'reports stay under their manager: no group per space');
+  const hasPeople = (await page.locator('.team-nav .team-people').count()) > 0;
+  assert.deepEqual(await groups.nth(0).locator(':scope > .team-space-title').allTextContents(), hasPeople ? ['Agents'] : [], 'headed Agents only beside People');
+  assert.equal(await heading('Private').count(), 0, 'no space heading');
+  assert.equal(await heading('Personal brand').count(), 0, 'no space heading');
+  assert.equal((await groups.nth(0).locator('.team-row .row-title').first().textContent())?.trim(), 'Manager');
+  assert.equal(await row('Ella').count(), 1, 'the secretary is on the team');
+  assert.equal(await row('Jonas').count(), 1, 'the video editor is on the team');
+  assert.equal(await groups.nth(0).locator('.team-reports .row-title', { hasText: 'Ella' }).count(), 1, 'the secretary sits under the Manager');
+  assert.equal((await row('Ella').locator('.team-row-space').textContent())?.trim(), 'Private', "the secretary's row names its space");
+  assert.equal((await row('Jonas').locator('.team-row-space').textContent())?.trim(), 'Personal brand', "the video editor's row names its space");
+  // The desktop Team page: the same tree, read-only and fully open.
+  assert.ok((await page.locator('.team-view .team-overview .team-row').count()) >= 3, 'the main page shows the whole tree');
+  assert.equal(await page.locator('.team-view .team-caret').count(), 0, 'read-only: no carets in the main zone');
   await shot('spaces-01-team-light');
 
   // Spaces are system data (renamed by managers through spaces.save, archived through spaces.archive).
@@ -90,10 +101,14 @@ test('spaces: created by hiring, Team headings; rename/add/archive through the R
   const still = (await rpc.call('agents.list')).find((agent) => agent.id === secretary.id);
   assert.equal(still?.archivedAt, undefined, 'archiving a space never archives its agents');
 
-  await heading('Brand studio').waitFor({ timeout: 15_000 });
-  await page.waitForFunction(() => ![...document.querySelectorAll('.team-nav .team-space-title')].some((el) => el.textContent.trim() === 'Private'), undefined, { timeout: 15_000 });
   await expandAll();
-  await page.locator('.team-nav .team-row .row-title', { hasText: 'Ella' }).first().waitFor({ timeout: 10_000 }); // the secretary stays on the team
+  await row('Jonas').locator('.team-row-space', { hasText: /^Brand studio$/ }).waitFor({ timeout: 15_000 }); // the rename shows on the row
+  await row('Ella').first().waitFor({ timeout: 10_000 }); // the secretary stays on the team
+  await page.waitForFunction(() => {
+    const ella = [...document.querySelectorAll('.team-nav .team-row')].find((el) => el.querySelector('.row-title')?.textContent?.trim() === 'Ella');
+    return Boolean(ella) && !ella.querySelector('.team-row-space');
+  }, undefined, { timeout: 15_000 }); // the archived space is no longer named on its row
+  assert.equal(await groups.count(), 1, 'the new space without agents adds no group');
   await shot('spaces-04-team-after-archive-light');
 
   await page.emulateMedia({ colorScheme: 'dark' });

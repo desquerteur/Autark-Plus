@@ -5,8 +5,10 @@
 // On Accept the phone is stored as a phone with its key (pwa/service.ts pairPhone) – the meeting server then pins it
 // (rendezvous/service.ts), the roster carries it to my other PCs (devices/sync/roster.ts) – and its device token rides
 // in the accepted answer, which travels sealed. Access exists exactly while that device row exists; Remove ends it.
+// F1: Accept names whose phone it is (remote.decide personId; Me = none): an employee's phone gets that person's token,
+// my own phone the device token as before.
 // Owns: routing the phone's request steps, merging them into the PCs' request list, the phone's linked notice.
-// Never: links a phone without the person's Accept, or hands a phone a PC link.
+// Never: links a phone without the person's Accept, gives an employee's phone my access, or hands a phone a PC link.
 
 import type { RemoteIncoming, RemoteState } from '../../../shared/model/remote.ts';
 import { TargetRequests, type Timers } from '../../remote/requests.ts';
@@ -14,8 +16,11 @@ import { RemoteService, type RemoteDeps } from '../../remote/service.ts';
 import type { Reply } from '../pair-proof.ts';
 
 export interface PhonePairDeps {
-  /** Stores the accepted phone with its key and issues its device token (pwa/service.ts pairPhone). */
-  pair(input: { id: string; name: string; publicKey: string }): { token: string; deviceId: string };
+  /**
+   * Stores the accepted phone with its key and issues its token (pwa/service.ts pairPhone): mine, or with `personId` that
+   * employee's person token (`person` = their name).
+   */
+  pair(input: { id: string; name: string; publicKey: string; personId?: string }): { token: string; deviceId: string; person?: string };
 }
 
 const realTimers: Timers = {
@@ -23,8 +28,12 @@ const realTimers: Timers = {
   clear: (handle) => { if (handle) clearTimeout(handle as ReturnType<typeof setTimeout>); },
 };
 
-/** The notice once a phone is linked: which phone, what it reaches, where to remove it. */
-export function phoneLinkedNote(name: string): { title: string; body: string } {
+/** The notice once a phone is linked: which phone, whose, what it reaches, where to remove it. */
+export function phoneLinkedNote(name: string, person?: string): { title: string; body: string } {
+  if (person) return {
+    title: `${name} is now linked as ${person}'s phone`,
+    body: `The phone ${name} belongs to ${person}: it opens this company with ${person}'s access, not yours. Remove it in Settings › Devices.`,
+  };
   return {
     title: `${name} is now linked`,
     body: `The phone ${name} is linked as your phone: it reaches this company's chats, tasks, settings and secrets on each of your PCs. Remove it in Settings › Devices.`,
@@ -40,6 +49,8 @@ export function isPhoneStep(body: Record<string, unknown>, phones: Pick<TargetRe
 export class RemoteWithPhones extends RemoteService {
   readonly phones: TargetRequests;
   private readonly bus: RemoteDeps['bus'];
+  /** Accepted phone requests' device id → the employee they belong to, until the phone collects its answer. */
+  private readonly owners = new Map<string, string>();
 
   constructor(deps: RemoteDeps & PhonePairDeps) {
     super(deps);
@@ -49,8 +60,13 @@ export class RemoteWithPhones extends RemoteService {
       findable: () => { try { return deps.findable(); } catch { return false; } },
       self: () => deps.mesh.selfInfo(),
       link: (info) => {
-        const issued = deps.pair({ id: info.id, name: info.name, publicKey: info.pub });
-        deps.linked?.(phoneLinkedNote(info.name));
+        const personId = this.owners.get(info.id);
+        this.owners.delete(info.id);
+        const issued = deps.pair({ id: info.id, name: info.name, publicKey: info.pub, ...(personId ? { personId } : {}) });
+        deps.linked?.(phoneLinkedNote(info.name, issued.person));
+        if (personId && issued.person) {
+          try { deps.admitted?.(personId); } catch (error) { deps.log.warn('employee welcome not sent', { personId, error: String((error as Error)?.message ?? error) }); }
+        }
         return { token: issued.token, deviceId: issued.deviceId };
       },
       shown: (view) => deps.notify?.(view),
@@ -66,8 +82,11 @@ export class RemoteWithPhones extends RemoteService {
   }
 
   override decide(id: string, accept: boolean, personId?: string): void {
-    if (this.phones.holds(id)) this.phones.decide(id, accept);
-    else super.decide(id, accept, personId);
+    if (!this.phones.holds(id)) return super.decide(id, accept, personId);
+    const deviceId = this.phones.incoming().find((view) => view.id === id)?.deviceId;
+    this.phones.decide(id, accept);
+    if (deviceId && accept && personId) this.owners.set(deviceId, personId);
+    else if (deviceId) this.owners.delete(deviceId);
   }
 
   override handle(body: Record<string, unknown>, remote: { address?: string }): Promise<Reply> {

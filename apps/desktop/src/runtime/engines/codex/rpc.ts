@@ -1,6 +1,7 @@
 // Newline-delimited JSON-RPC client for `codex app-server --listen stdio://`.
 // Owns: request/response matching, notifications fan-out, server→client requests (answered by
-// a handler; unknown methods get -32601), timeouts and connection failure.
+// a handler; unknown methods get -32601), timeouts and connection failure. B-080: a request with timeoutMs 0 has no
+// timer – it waits for Codex's answer (the caller ends its own wait, helper-thread.ts orStopped); close() still rejects it.
 // Never: knows thread/turn semantics (server.ts / engine.ts do) or logs message bodies.
 
 import type { ChildLike } from '../../system/supervisor.ts';
@@ -22,7 +23,7 @@ export class RpcError extends Error {
 
 export class RpcClient {
   private readonly child: ChildLike;
-  private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void; timer?: ReturnType<typeof setTimeout> }>();
   private readonly listeners = new Set<(n: RpcNotification) => void>();
   private readonly closeListeners = new Set<(error: Error) => void>();
   private sequence = 0;
@@ -56,8 +57,8 @@ export class RpcClient {
     if (this.closed) return Promise.reject(this.closed);
     const id = ++this.sequence;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new RpcError(-32000, `codex did not answer ${method}`)); }, timeoutMs);
-      timer.unref?.();
+      const timer = timeoutMs > 0 ? setTimeout(() => { this.pending.delete(id); reject(new RpcError(-32000, `codex did not answer ${method}`)); }, timeoutMs) : undefined; // B-080: 0 = no timer
+      timer?.unref?.();
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
       try { this.write({ id, method, params }); } catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error as Error); }
     });

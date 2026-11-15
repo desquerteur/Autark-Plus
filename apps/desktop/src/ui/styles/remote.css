@@ -3,7 +3,7 @@
    one-line status, the role / person selects and the people invite card. Rows reuse settings.css (.set-row, .dot);
    light and dark come through the tokens; everything wraps at phone width.
    Owns: `remote-*`, `scan-actions` and `access-code-input`. Never: literal colors (tokens only). */
-#settings-devices .set-row-hint { text-wrap: pretty; }
+#settings-devices .set-row-hint, #settings-add-device .set-row-hint { text-wrap: pretty; }
 
 /* the QR box is the last cell of the "Connect a phone" row */
 .remote-phone-row > .set-row-control { flex-wrap: nowrap; }

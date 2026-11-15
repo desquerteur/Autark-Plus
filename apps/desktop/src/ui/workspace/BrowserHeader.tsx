@@ -1,6 +1,7 @@
-// A surface's address row (40 px, under the tab strip, directly above the page): Back, Forward, Reload, the
-// address slot and the menu cell (PaneMenu.tsx). Every cell is always there at one place – Back, Forward and
-// Reload are only faint on a blank or app tab – so nothing shifts on a click. At rest the slot shows the
+// A surface's address row (40 px, under the tab strip, directly above the page): Back, Forward, Reload, Pin (B-081, the
+// desktop only: the page's element picker – pressed while on, Esc ends; pins go to the chat, pin.ts), the address slot
+// and the menu cell (PaneMenu.tsx). Every cell is always there at one place – Back, Forward, Reload and Pin are only
+// faint on a blank or app tab, and Pin changes only its colour – so nothing shifts on a click. At rest the slot shows the
 // address alone (the page's title lives on its tab) and it becomes the editable field on a click (or
 // Ctrl+L, or a new tab; Omnibox.tsx, with its suggestions – the open tabs of this space and, where the frame has a global
 // pane, of global); Enter opens an address or a search, Escape puts the page's address back. On Ctrl+F
@@ -12,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { GLOBAL_SPACE, type WorkspaceBrowserPage } from '../../shared/api/workspace-browser.ts';
-import { isMobile } from '../lib/platform.ts';
+import { bridge, isMobile } from '../lib/platform.ts';
 import { IconButton } from '../lib/ui.tsx';
 import { APP_KIND_LABEL, displayAddress, isAppTab } from './browser-model.ts';
 import { FindField } from './FindField.tsx';
@@ -24,6 +25,8 @@ import { useSpace } from './space.ts';
 
 /** The last address-focus request this window acted on (a request made while its surface was closed still counts once). */
 let handledFocus = 0;
+/** Only the desktop app's own pages can pick (the native browser); fixed for the window's life, so the row never changes. */
+const PICKS = Boolean(bridge?.workspaceBrowser);
 
 function Address(props: { id: string | undefined; page: WorkspaceBrowserPage | undefined; blank: boolean }) {
   const { id, page, blank } = props;
@@ -88,6 +91,8 @@ export function BrowserHeader(props: { id: string | undefined }) {
       <IconButton icon="caret-left" label="Back" size="small" disabled={!live || !page?.back} onClick={() => go('back')} />
       <IconButton icon="caret-right" label="Forward" size="small" disabled={!live || !page?.forward} onClick={() => go('forward')} />
       <IconButton icon="arrow-clockwise" label="Reload" size="small" disabled={!live} onClick={() => go('reload')} />
+      {PICKS && <IconButton icon="cursor-click" label="Pin an element (Esc ends)" size="small" disabled={!live} pressed={live && page?.picking === true}
+        onClick={() => { if (id) void command({ action: 'pick', id, on: page?.picking !== true }); }} />}
       {app?.kind === 'file' || app?.kind === 'folder' ? <PathField key={app.id} id={app.id} path={app.path} device={app.device} />
         : app
         ? <div class="browser-address-form"><div class="browser-address browser-address-view is-static"><span class="browser-url">{APP_KIND_LABEL[app.kind]}</span></div></div>

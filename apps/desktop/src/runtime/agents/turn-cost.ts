@@ -5,6 +5,7 @@
 // (models/pricing.ts with the catalog's Artificial Analysis prices and the shipped priors'
 // curated prices; the cached input an attempt reported at the prior's cached price, when it has one); the paid amount is
 // booked as the agent's 'tokens' spend, the cost basis and a plan's notional list-price cost are stored on the run (store/run-cost.ts).
+// B-089 (11.11.2026: what a run costs, written down): runTokens gives the finish the run's cached input and model calls.
 // Owns: the attempt split, the price lookups and the booking.
 // Never: books a plan's or a local model's cost, invents a price, or fails the turn (a lookup or
 // write that fails is logged; without the failover note the whole turn counts on its account).
@@ -13,7 +14,7 @@ import type { RuntimeServices } from '../contracts.ts';
 import { priorFor } from '../models/catalog-merge.ts';
 import { Priors } from '../models/priors.ts';
 import { attemptCost, combineCosts, type AttemptCost, type RunCost, type TokenUsage } from '../models/pricing.ts';
-import { addCache } from '../engines/shared.ts';
+import { addCache, cachedInput } from '../engines/shared.ts';
 import { RunCostRepo } from '../store/run-cost.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import type { AttemptResult, RoutedTurn } from './turn-types.ts';
@@ -47,6 +48,20 @@ function priceAttempts(services: RuntimeServices, turn: Pick<RoutedTurn, 'accoun
     parts.unshift(priceAttempt(services, priors, account, from?.model ?? turn.route.modelId, first));
   }
   return { run: combineCosts(parts), last };
+}
+
+/**
+ * B-089: the run's cached input (a part of its inputTokens, over its attempts – cachedInput of the merged usage) and its
+ * model calls, each only where the engine reported it. After a failover the count stays out (mergeAttempts keeps only the
+ * final attempt's) – a part is no count.
+ */
+export function runTokens(attempt: Pick<AttemptResult, 'usage' | 'lastUsage' | 'modelCalls'>): { cachedTokens?: number; modelCalls?: number } {
+  const { usage } = attempt;
+  const cached = usage.cachedInputTokens !== undefined || usage.cacheReadTokens !== undefined;
+  return {
+    ...(cached ? { cachedTokens: cachedInput(usage) } : {}),
+    ...(attempt.modelCalls !== undefined && !attempt.lastUsage ? { modelCalls: attempt.modelCalls } : {}),
+  };
 }
 
 /** Stores the basis and notional cost on the run (before runs.finish, so its event can carry them). */

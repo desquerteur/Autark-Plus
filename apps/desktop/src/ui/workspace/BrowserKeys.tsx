@@ -4,7 +4,8 @@
 // sentinel: what is typed or inserted goes to the page as text, deleting the sentinel as
 // Backspace, Enter as Enter, Tab and arrow keys of a hardware keyboard as keys (browser-touch.ts
 // keyProxy); after every event it holds the sentinel again, so nothing typed stays or shows.
-// Esc leaves the field. Owns: the field. Never: keeps, renders or logs what is typed.
+// Esc leaves the field. B-081 T9: a remote tab (RemoteWebTab.tsx) also focuses it by itself when the page says this
+// viewer's tap left a text field focused there, and lets it go when the page's focus leaves the field. Owns: the field. Never: keeps, renders or logs what is typed.
 
 import type { Ref } from 'preact';
 import { useMemo, useRef } from 'preact/hooks';

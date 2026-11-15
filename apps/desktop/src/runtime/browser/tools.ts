@@ -1,12 +1,19 @@
 // browser.* tools. An agent browses in its own browser (its own profile: the logins it made stay – service.ts) or in the
-// person's browser – `where: 'chat'` (this chat's area above its messages, shared by everyone in the chat) or 'global'
-// (the person's own pane), with the logins the person made in those tabs (side.ts). A call goes where the agent worked
-// last unless `where` or a tab id says otherwise (place.ts); a page opened there without newTab takes the agent's preview
-// tab (show-tool.ts PREVIEW_HINT). 'own' here is always the agent's own browser; its area on its agent page takes pages
-// through browser.show (show-tool.ts). Stored secrets fill by handle in both (value
+// person's browser – `where: 'chat'` (this chat's area above its messages, shared by everyone in the chat, where that
+// chat's work goes) or 'global' (the person's own pane, theirs across chats), one session: a login the person makes in
+// one of those tabs holds in both (side.ts). A call goes where the agent worked last in this chat unless `where` or a
+// tab id says otherwise (place.ts); a page opened there without newTab takes the agent's preview tab (show-tool.ts
+// show-tool.ts). 'own' here is always the agent's own browser; its area on its agent page takes pages through
+// browser.show (show-tool.ts). Stored secrets fill by handle in both (value
 // "secret://<id>"). Page results carry the untrusted-content line, the others pointing at that tab (named cursors,
 // runtime/pointers), a human check as a fact and `structured.url` (the registry's site hints). browser.find/console/network/eval/wait are inspect-tools.ts,
 // browser.save_secret and browser.save_totp secret-tools.ts.
+// B-080: browser.open where: 'chrome' opens the page in the person's own Chrome (own-chrome.ts: their profile and logins,
+// a window I then work in with computer.*) – decided before Places, so every other browser tool keeps own, chat and
+// global; in the person's browser a step named by its words is looked up there first (side.ts); every tab line names
+// its browser (place.ts tabLine).
+// B-081: browser.batch glides by default like browser.act (motion.ts, ≤ 300 ms per pointed step); `instant` jumps in
+// the agent's own browser when it passes it – the person's browser glides whatever is passed.
 // Owns: schemas, where a call goes, summaries and outputs. Never: puts secret values into outputs.
 
 import type { ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
@@ -16,12 +23,17 @@ import { imageOutput } from '../computer/tools.ts';
 import { MOTION_STYLES, type MotionStyle } from '../../shared/model/pointer-motion.ts';
 import { BATCH_MAX, type BatchOutcome, type BatchStep, type BrowserService } from './service.ts';
 import { describeTarget, type BrowserAction, type BrowserTarget } from './page.ts';
+import { WorkforceError } from '../../shared/errors.ts';
+import type { SideActStep } from '../../shared/model/side-browser.ts';
+import type { ComputerService } from '../computer/service.ts';
+import { callerOf } from '../computer/lease.ts';
 import { POINTER_ACTIONS } from './motion.ts';
 import { SECRET, sideCall, sidePage, sideStep, type StepArgs } from './side.ts';
-import { maskSetupKeys, pageText, Places, sideOn, surfaceOf, TAB_PROP, UNTRUSTED, useOf, WHERE_PROP, type On } from './place.ts';
+import { maskSetupKeys, pageText, Places, sideOn, surfaceOf, tabLine, TAB_ID, TAB_PROP, UNTRUSTED, useOf, WHERE_PROP, type On, type Place } from './place.ts';
+import { openInOwnChrome, type OwnChromeOptions } from './own-chrome.ts';
+import { typedText } from '../secrets/handles.ts'; // a stored link (secret://<id>) in browser.open's url
 import { inspectTools } from './inspect-tools.ts';
 import { secretTools } from './secret-tools.ts';
-import { PREVIEW_HINT } from './show-tool.ts';
 
 const ACTIONS: BrowserAction[] = [
   'click', 'double_click', 'right_click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover', 'scroll_into_view', 'upload', 'scroll', 'back', 'forward', 'reload',
@@ -29,25 +41,25 @@ const ACTIONS: BrowserAction[] = [
 
 const STEP_PROPS = {
   action: { type: 'string', enum: ACTIONS },
-  ref: { type: 'string', maxLength: 24, description: 'element ref from the last snapshot (e12 in my browser, s123 in the person\'s) – preferred' },
-  role: { type: 'string', maxLength: 40, description: 'ARIA role, e.g. button, link, textbox, checkbox, combobox' },
-  name: { type: 'string', maxLength: 300, description: 'accessible name used with role' },
+  ref: { type: 'string', maxLength: 24, description: 'From the last snapshot; the surest way to name an element.' },
+  role: { type: 'string', maxLength: 40, description: 'ARIA role, with name.' },
+  name: { type: 'string', maxLength: 300 },
   label: { type: 'string', maxLength: 300 },
   placeholder: { type: 'string', maxLength: 300 },
   text: { type: 'string', maxLength: 300 },
-  css: { type: 'string', maxLength: 500 },
+  css: { type: 'string', maxLength: 500, description: 'My own browser only.' },
   exact: { type: 'boolean' },
-  nth: { type: 'integer', minimum: 0, maximum: 500 },
-  value: { type: 'string', maxLength: 20_000, description: 'fill/type text, or secret://<id> for a stored secret' },
-  values: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 50 },
-  key: { type: 'string', maxLength: 40, description: 'press: Enter, Tab, Escape, ArrowDown, Control+A …' },
-  files: { type: 'array', items: { type: 'string', maxLength: 1000 }, minItems: 1, maxItems: 20, description: 'upload: paths inside the workspace (my own browser)' },
-  amount: { type: 'integer', minimum: -20_000, maximum: 20_000, description: 'scroll pixels (positive = down)' },
-  submit: { type: 'boolean', description: 'true when this sends, posts, pays, books or signs in (journaled as an outside effect)' },
+  nth: { type: 'integer', minimum: 0, maximum: 500, description: 'Which match, from 0.' },
+  value: { type: 'string', maxLength: 20_000, description: 'Text to fill or type; a secret or 2FA code as "secret://<id>".' },
+  values: { type: 'array', items: { type: 'string', maxLength: 300 }, maxItems: 50, description: 'Options to select.' },
+  key: { type: 'string', maxLength: 40, description: 'For press, e.g. Enter, Control+A.' },
+  files: { type: 'array', items: { type: 'string', maxLength: 1000 }, minItems: 1, maxItems: 20, description: 'For upload: workspace paths.' },
+  amount: { type: 'integer', minimum: -20_000, maximum: 20_000, description: 'Scroll pixels, positive is down.' },
+  submit: { type: 'boolean', description: 'true when it sends, posts, pays, books or signs in; journaled as an outside effect.' },
 };
 
-const MOTION_PROP = { type: 'string', enum: [...MOTION_STYLES], description: 'how the mouse moves: glide (default for act), instant (default for batch), human (recordings)' };
-const FULL_PROP = { type: 'boolean', description: 'the whole snapshot instead of the change list' };
+const MOTION_PROP = { type: 'string', enum: [...MOTION_STYLES], description: 'glide (default, at most 300 ms), human or instant.' };
+const FULL_PROP = { type: 'boolean', description: 'true: the whole snapshot instead of what changed.' };
 
 type ActArgs = StepArgs & BrowserTarget & { action: BrowserAction; submit?: boolean };
 
@@ -79,8 +91,10 @@ async function runSteps(browser: BrowserService, places: Places, ctx: ToolContex
     ? `${summaries[0]}: ${failure ? `failed – ${why(failure)}` : 'done'}`
     : `Batch: ${done} of ${args.steps.length} steps done${failure ? ` – step ${done + 1} (${summaries[done] ?? 'next'}) failed: ${why(failure)}` : ''}`}${after}.`;
   if (place !== 'own') {
-    const steps = await Promise.all(args.steps.map((step) => sideStep(ctx, step)));
-    const result = await sideCall(ctx, { action: 'act', steps, motion: args.motion ?? motion, ...sideOn(ctx, place, args) }, true);
+    const on = sideOn(ctx, place, args);
+    const steps: SideActStep[] = [];
+    for (const step of args.steps) steps.push(await sideStep(ctx, on, step)); // a step named by its words: one find there
+    const result = await sideCall(ctx, { action: 'act', steps, motion: args.motion ?? motion, ...on }, true);
     const done = result.done ?? (result.ok ? steps.length : 0);
     const page = sidePage(result);
     return {
@@ -113,33 +127,73 @@ async function runSteps(browser: BrowserService, places: Places, ctx: ToolContex
   };
 }
 
-export function browserTools(browser: BrowserService): ToolDef[] {
+/**
+ * Opens the page in the person's own Chrome under the caller's pointer lease and answers with that window's UI tree (own-chrome.ts).
+ * B-080 (live 09.11.: windows behind the person's app read as blank pages): a window that did not come to the front
+ * (Windows kept it behind, or the person was working), and a tree with the browser's frame only (own-chrome.ts `frame`,
+ * with its cause), are each one fact line.
+ */
+async function inOwnChrome(computer: ComputerService | undefined, options: OwnChromeOptions, ctx: ToolContext, url: string, mask: (text: string) => string = (text) => text): Promise<ToolOutput> {
+  if (!computer) throw new WorkforceError('unavailable', "The person's own Chrome is reached through computer use on this PC, which this runtime has not.");
+  const opened = await openInOwnChrome(url, computer, { signal: ctx.signal, caller: callerOf(ctx) }, options);
+  const { window, tree } = opened;
+  const title = tree.window.title || window.title;
+  // mask: a stored link opened here carries its token in the address bar (tree.text / url); the output shows the handle.
+  return {
+    ...text(mask([
+      `Opened in the person's own ${opened.browser}, window ${window.hwnd} "${title}" – their profile and logins. I go on there with computer.ui_tree / computer.act (a password as its secret:// handle).`,
+      ...(opened.focused ? [] : [`I did not bring this window to the front; ${opened.browser} draws a page only in a window that is not covered.`]),
+      ...(opened.frame ? [opened.frame] : []),
+      `${tree.count} elements${tree.truncated ? ' (truncated – computer.ui_tree with maxNodes or a name reads more)' : ''}. Format: role "name" [ref] #automationId = value [state] (actions) @centre-x,centre-y`,
+      UNTRUSTED, tree.text,
+    ].join('\n'))),
+    structured: { url: mask(opened.url), window: window.hwnd, app: window.process },
+  };
+}
+
+/** The browser.* tools; `computer` reaches the person's own Chrome (browser.open where: 'chrome'), `ownChrome` is the tests' seam for starting it. */
+export function browserTools(browser: BrowserService, computer?: ComputerService, ownChrome: OwnChromeOptions = {}): ToolDef[] {
   const places = new Places();
   const device = { remote: true, requires: 'device' as const };
 
-  const open = defineTool<{ url: string; newTab?: boolean } & On>({
+  const open = defineTool<{ url: string; newTab?: boolean; tab?: string; where?: Place | 'chrome' }>({
     name: 'browser.open',
-    description: "Open a URL in my own browser (my profile: the logins I made stay), in this chat's area (where: chat) or in the person's pane (where: global) – the person sees those two, with the logins they made there. Returns the page as an accessibility snapshot with element refs.",
-    inputSchema: { type: 'object', properties: { url: { type: 'string', minLength: 1, maxLength: 4000 }, newTab: { type: 'boolean', description: `Without it the page takes my current tab – in the chat area or the person's pane: ${PREVIEW_HINT}` }, tab: TAB_PROP, where: WHERE_PROP }, required: ['url'], additionalProperties: false },
+    description: "Opens a web page and returns its snapshot with element refs. In my own browser I keep my logins; in chat or global the person sees it with theirs; chrome is the person's own Chrome, as a UI tree for computer.act.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', minLength: 1, maxLength: 4000, description: 'A stored link with a token works as secret://<id>.' },
+        newTab: { type: 'boolean', description: 'Else the current tab (in chat or global: my preview tab).' },
+        tab: TAB_PROP,
+        where: { ...WHERE_PROP, enum: [...WHERE_PROP.enum, 'chrome'], description: 'own, chat, global or chrome; default where I worked last here.' },
+      },
+      required: ['url'], additionalProperties: false,
+    },
     category: 'read', ...device,
-    describe: (args) => ({ summary: `Open ${args.url}`, resource: hostOf(args.url), reversible: true, external: false }),
+    describe: (args) => ({ summary: `Open ${args.url}${args.where === 'chrome' ? " in the person's own Chrome" : ''}`, resource: hostOf(args.url), reversible: true, external: false }),
     async run(args, ctx) {
+      const { text: url, mask } = await typedText(ctx, args.url); // a stored link opens with its value; the handle stays in the output
+      if (args.where === 'chrome') {
+        ctx.status(`opening ${hostOf(args.url) ?? 'a page'} in the person's own Chrome`);
+        return inOwnChrome(computer, ownChrome, ctx, url, mask);
+      }
       ctx.status(`opening ${hostOf(args.url) ?? 'a page'}`);
-      const place = places.use(ctx, args);
+      const on: On = { tab: args.tab, where: args.where };
+      const place = places.use(ctx, on);
       if (place !== 'own') {
         const newTab = args.tab ? false : args.newTab; // left out: the agent's preview tab there (main/workspace-marks.ts)
-        const result = await sideCall(ctx, { action: 'open', url: args.url, ...(newTab === undefined ? {} : { newTab }), ...sideOn(ctx, place, args) });
+        const result = await sideCall(ctx, { action: 'open', url, ...(newTab === undefined ? {} : { newTab }), ...sideOn(ctx, place, on) });
         const page = sidePage(result);
-        return { ...text(pageText(ctx, place, page, result.text ?? '')), structured: { url: page.url, tab: page.tab } };
+        return { ...text(mask(pageText(ctx, place, page, result.text ?? ''))), structured: { url: mask(page.url), tab: page.tab } };
       }
-      const state = await browser.open(ctx.agent.id, { url: args.url, newTab: args.newTab, tab: args.tab, use: useOf(ctx) });
-      return { ...text(pageText(ctx, place, state, state.snapshot)), structured: { url: state.url, tab: state.tab } };
+      const state = await browser.open(ctx.agent.id, { url, newTab: args.newTab, tab: args.tab, use: useOf(ctx) });
+      return { ...text(mask(pageText(ctx, place, state, state.snapshot))), structured: { url: mask(state.url), tab: state.tab } };
     },
   });
 
   const snapshot = defineTool<On>({
     name: 'browser.snapshot',
-    description: 'Accessibility snapshot of the current tab (roles, names, values, refs). Use refs with browser.act; browser.find returns only matching lines.',
+    description: "Returns a tab's accessibility snapshot with element refs. Its refs are what browser.act works on; browser.find returns only matching lines.",
     inputSchema: { type: 'object', properties: { tab: TAB_PROP, where: WHERE_PROP }, additionalProperties: false },
     category: 'read', ...device,
     describe: () => ({ summary: 'Read the browser page', reversible: true, external: false }),
@@ -157,7 +211,7 @@ export function browserTools(browser: BrowserService): ToolDef[] {
 
   const act = defineTool<ActArgs & On & { motion?: MotionStyle; full?: boolean }>({
     name: 'browser.act',
-    description: 'Do one thing on the page – click, fill (type = real key presses for autocomplete), press a key, select, (un)check, hover, upload a workspace file, scroll, back/forward/reload – and get what changed (full: the whole snapshot). Address elements by ref (best), role+name, label, placeholder, text or css. Stored secret or 2FA code: value "secret://<id>". Set submit: true when it sends, posts, pays or signs in. Many steps at once: browser.batch.',
+    description: 'Does one action on the page, such as click, fill or select, and returns what changed. type presses real keys for autocomplete; many steps at once go in browser.batch.',
     inputSchema: { type: 'object', properties: { ...STEP_PROPS, tab: TAB_PROP, where: WHERE_PROP, motion: MOTION_PROP, full: FULL_PROP }, required: ['action'], additionalProperties: false },
     category: 'device', ...device,
     describe: (args) => ({ summary: stepSummary(args), reversible: args.submit !== true, external: args.submit === true }),
@@ -166,7 +220,7 @@ export function browserTools(browser: BrowserService): ToolDef[] {
 
   const batch = defineTool<On & { steps: ActArgs[]; motion?: MotionStyle; full?: boolean }>({
     name: 'browser.batch',
-    description: `Run up to ${BATCH_MAX} browser.act steps on one tab in one call (fill a form, then click Send); stops at the first failing step and returns how many ran and one change list. The mouse jumps unless motion says otherwise.`,
+    description: `Runs up to ${BATCH_MAX} browser.act steps on one tab in one call, stopping at the first that fails. I get how many ran and one change list.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -180,13 +234,13 @@ export function browserTools(browser: BrowserService): ToolDef[] {
       const outside = args.steps.some((step) => step.submit === true);
       return { summary: `Batch of ${args.steps.length}: ${args.steps.map(stepSummary).join('; ')}`.slice(0, 900), reversible: !outside, external: outside };
     },
-    run: (args, ctx) => runSteps(browser, places, ctx, args, 'instant'),
+    run: (args, ctx) => runSteps(browser, places, ctx, args, 'glide'),
   });
 
   const screenshot = defineTool<On & { fullPage?: boolean }>({
     name: 'browser.screenshot',
-    description: 'Screenshot of the current tab (viewport, or fullPage in my own browser). Use for visual checks; use browser.snapshot to find and act on elements.',
-    inputSchema: { type: 'object', properties: { tab: TAB_PROP, fullPage: { type: 'boolean' }, where: WHERE_PROP }, additionalProperties: false },
+    description: 'Takes a screenshot of a tab. It is for visual checks; elements to act on come from browser.snapshot.',
+    inputSchema: { type: 'object', properties: { tab: TAB_PROP, fullPage: { type: 'boolean', description: 'The whole page (my own browser).' }, where: WHERE_PROP }, additionalProperties: false },
     category: 'read', ...device,
     describe: () => ({ summary: 'Screenshot of the browser page', reversible: true, external: false }),
     async run(args, ctx) {
@@ -195,16 +249,16 @@ export function browserTools(browser: BrowserService): ToolDef[] {
         const result = await sideCall(ctx, { action: 'screenshot', ...sideOn(ctx, place, args) });
         if (!result.image) throw new Error("The person's browser sent no picture.");
         const page = sidePage(result);
-        return imageOutput({ data: Buffer.from(result.image.data, 'base64'), mime: result.image.mime }, `Tab ${page.tab} · ${page.url} · "${page.title}"`, { url: page.url, tab: page.tab });
+        return imageOutput({ data: Buffer.from(result.image.data, 'base64'), mime: result.image.mime }, tabLine(place, page), { url: page.url, tab: page.tab });
       }
       const shot = await browser.screenshot(ctx.agent.id, { tab: args.tab, fullPage: args.fullPage, use: useOf(ctx) });
-      return imageOutput(shot, `Tab ${shot.tab} · ${shot.url} · "${shot.title}"`, { url: shot.url, tab: shot.tab });
+      return imageOutput(shot, tabLine(place, shot), { url: shot.url, tab: shot.tab });
     },
   });
 
   const extract = defineTool<On & { css?: string; maxChars?: number }>({
     name: 'browser.extract',
-    description: 'Visible text of the page (in my own browser also of a css selector) for reading articles, tables, prices. Untrusted data.',
+    description: 'Returns the visible text of a page, or of a CSS selector in my own browser.',
     inputSchema: { type: 'object', properties: { tab: TAB_PROP, css: { type: 'string', maxLength: 500 }, maxChars: { type: 'integer', minimum: 500, maximum: 100_000 }, where: WHERE_PROP }, additionalProperties: false },
     category: 'read', ...device,
     describe: () => ({ summary: 'Read text from the browser page', reversible: true, external: false }),
@@ -219,14 +273,14 @@ export function browserTools(browser: BrowserService): ToolDef[] {
       } else {
         result = await browser.extract(ctx.agent.id, { tab: args.tab, css: args.css, maxChars: args.maxChars, use: useOf(ctx) });
       }
-      return { ...text(`Tab ${result.tab} · ${result.url} · "${result.title}"\n${UNTRUSTED}\n---\n${maskSetupKeys(result.text)}${result.truncated ? '\n… (truncated)' : ''}`), structured: { url: result.url, tab: result.tab } };
+      return { ...text(`${tabLine(place, result)}\n${UNTRUSTED}\n---\n${maskSetupKeys(result.text)}${result.truncated ? '\n… (truncated)' : ''}`), structured: { url: result.url, tab: result.tab } };
     },
   });
 
   const tabs = defineTool<{ close?: string; activate?: string; where?: On['where'] }>({
     name: 'browser.tabs',
-    description: 'List the open tabs (my own browser: also recent downloads saved to the workspace); close a tab, or switch to one of my own.',
-    inputSchema: { type: 'object', properties: { close: TAB_PROP, activate: TAB_PROP, where: WHERE_PROP }, additionalProperties: false },
+    description: 'Lists the open tabs and recent downloads, closes one or switches to one of mine.',
+    inputSchema: { type: 'object', properties: { close: TAB_ID, activate: TAB_ID, where: WHERE_PROP }, additionalProperties: false },
     category: 'read', ...device,
     describe: (args) => ({ summary: args.close ? `Close tab ${args.close}` : 'List browser tabs', reversible: true, external: false }),
     async run(args, ctx) {

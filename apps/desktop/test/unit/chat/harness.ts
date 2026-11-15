@@ -1,6 +1,7 @@
 // Test harness for package A2 (chats, delivery, tasks, ownership, wakes, schedules):
 // in-memory SQLite + migrations, a manual clock, fake org/notifications/dispatcher/decisions
-// and fake timers. Services are wired late-bound like the composition root does.
+// and fake timers. Services are wired late-bound like the composition root does. B-080: an optional fake run journal
+// (fakeJournal) for the loop guard's worked-line check.
 
 import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate } from '../../../src/runtime/db/migrate.ts';
@@ -9,13 +10,14 @@ import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { ChatServiceImpl } from '../../../src/runtime/chat/service.ts';
 import { DeliveryServiceImpl } from '../../../src/runtime/chat/delivery.ts';
 import { TaskServiceImpl } from '../../../src/runtime/tasks/service.ts';
-import { OwnershipServiceImpl } from '../../../src/runtime/tasks/ownership.ts';
+import { TaskWatcher } from '../../../src/runtime/tasks/watch.ts';
 import { WakeQueueImpl } from '../../../src/runtime/wakes/queue.ts';
 import { SchedulerImpl, type Timers } from '../../../src/runtime/schedules/scheduler.ts';
-import type { DecisionService, Dispatcher, NotificationService, OrgService, RuntimeServices, Subconscious } from '../../../src/runtime/contracts.ts';
+import type { DecisionService, Dispatcher, NotificationService, OrgService, RunJournal, RuntimeServices, Subconscious } from '../../../src/runtime/contracts.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
 import type { EventMap, EventName } from '../../../src/shared/api/events.ts';
-import type { AgentActivity } from '../../../src/shared/model/runs.ts';
+import type { AgentActivity, Run, RunItem, WakeReason } from '../../../src/shared/model/runs.ts';
+import type { ActionCategory } from '../../../src/runtime/tools/types.ts';
 import type { PowerEvent } from '../../../src/shared/api/host-bridge.ts';
 
 export function agent(id: string, name: string, extra: Partial<Agent> = {}): Agent {
@@ -56,7 +58,33 @@ export class FakeTimers implements Timers {
   fire() { const timer = this.only(); if (!timer) throw new Error('no timer armed'); this.pending = []; timer.fn(); }
 }
 
-export function harness(options: { decisions?: DecisionService; subconscious?: Partial<Subconscious>; maxPerMinute?: number } = {}) {
+/** One tool call of a fake run (fakeJournal): ours with its category, or engine-native (`own`). */
+export interface FakeCall { name: string; category?: ActionCategory; own?: boolean; ok?: boolean; nested?: boolean }
+
+/**
+ * B-080: a fake run journal for delivery's worked-line check (chat/worked.ts): `add` records a run with its trigger and
+ * tool calls (journaled as the registry and the engines do: a tool_call, then its tool_result). `runs` goes into
+ * harness({ runs }).
+ */
+export function fakeJournal() {
+  const runs = new Map<string, { run: Run; items: RunItem[] }>();
+  let seq = 0;
+  const add = (runId: string, trigger: WakeReason, calls: FakeCall[] = []) => {
+    const items: RunItem[] = [];
+    calls.forEach((call, index) => {
+      const callId = `${runId}_c${index}`;
+      const data = { callId, ...(call.own ? { own: true } : { category: call.category }), ...(call.nested ? { nested: true } : {}) };
+      items.push({ id: `ri_${++seq}`, runId, seq, kind: 'tool_call', name: call.name, data, createdAt: 0 });
+      if (call.ok !== undefined) items.push({ id: `ri_${++seq}`, runId, seq, kind: 'tool_result', name: call.name, data: { callId, ok: call.ok }, createdAt: 0 });
+    });
+    runs.set(runId, { run: { id: runId, agentId: 'ag_any', trigger, status: 'running' }, items });
+    return runId;
+  };
+  const journal = { get: (runId: string) => runs.get(runId)?.run, items: (runId: string) => runs.get(runId)?.items ?? [] } as unknown as RunJournal;
+  return { runs: journal, add };
+}
+
+export function harness(options: { decisions?: DecisionService; subconscious?: Partial<Subconscious>; maxPerMinute?: number; runs?: RunJournal } = {}) {
   const db = new Db(':memory:');
   migrate(db);
   const bus = new Bus(error => { throw error; });
@@ -82,17 +110,18 @@ export function harness(options: { decisions?: DecisionService; subconscious?: P
     subconscious: options.subconscious as Subconscious | undefined,
     host: { onPower: (listener: (event: PowerEvent) => void) => { powerListeners.push(listener); return () => {}; } },
     log: { debug() {}, info() {}, warn() {}, error() {} },
+    ...(options.runs ? { runs: options.runs } : {}),
   } as unknown as RuntimeServices;
 
   const wakes = new WakeQueueImpl({ db, clock });
   services.wakes = wakes;
-  const chats = new ChatServiceImpl(services, { liveGapMs: 0 }); // B-075: every live write at once (the throttle: live-row.test.ts)
+  const chats = new ChatServiceImpl(services, { liveGapMs: 0 }); // every live-bar announcement at once (chat/live.ts)
   services.chats = chats;
   const delivery = new DeliveryServiceImpl(services, { maxPerMinute: options.maxPerMinute });
   services.delivery = delivery;
   const tasks = new TaskServiceImpl(services);
   services.tasks = tasks;
-  const ownership = new OwnershipServiceImpl(services);
+  const ownership = new TaskWatcher(services, { set: () => 0, clear: () => {} }); // passes run when a test calls ownership.pass()
   services.ownership = ownership;
   const scheduler = new SchedulerImpl(services, { timers });
   services.scheduler = scheduler;

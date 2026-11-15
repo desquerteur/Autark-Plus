@@ -13,7 +13,7 @@
 import { useContext, useEffect, useState } from 'preact/hooks';
 import type { UiBlock } from '../../../shared/blocks/catalog.ts';
 import { showMedia } from '../../chat/side-pane.ts';
-import { fileUrl } from '../../lib/files.ts';
+import { useFileUrl } from '../../lib/files.ts';
 import { playerGuard, streamUrl } from '../../lib/media-stream.ts';
 import { platform } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
@@ -52,7 +52,7 @@ export function useMediaUrl(src: string, preferred?: string, options: { stream?:
   }, [src, stored]);
   const id = stored ?? imported;
   const streamed = options.stream && id ? streamUrl(id) : null;
-  const blobUrl = id && !streamed ? fileUrl(id).value : null;
+  const blobUrl = useFileUrl(id && !streamed ? id : null);
   const url = remote ? (clicked ? src : null) : !stored && src.startsWith('data:image/') ? src : streamed ?? blobUrl;
   return { url, remote, load: () => setClicked(true), failed };
 }

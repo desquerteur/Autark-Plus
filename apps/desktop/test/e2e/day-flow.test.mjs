@@ -2,13 +2,14 @@
 // splits the rest): Robin's evening list through both inputs, the calendar, the day plan, check-off and "Send to
 // team" – over the real headless runtime (built app/runtime-cli.mjs) with the deterministic demo engine and real
 // WebSocket RPC.
-//   * Work (tasks.quickCreate) makes ONE plain task of what was typed – team work for the responsible manager, not
-//     the person's list.
+//   * Work (tasks.quickCreate) makes ONE plain task of what was typed – team work: "team" picks one owner at once
+//     (the responsible manager here: one agent, no decider), not the person's list.
 //   * My day (day.add) makes one to-do per line and keeps every one the person's.
 //   * calendar.add (kind 'event') at 10:00 tomorrow; day.plan for tomorrow places blocks inside working hours,
 //     clear of the event and its buffer.
 //   * Ticking off 'Küche aufräumen' before its block removes the block.
-//   * day.sendToTeam takes a to-do off the person's list; it stays the team's and is listed as handed off.
+//   * "Send to team" (tasks.give to "team", ui/day/day-actions.ts) takes a to-do off the person's list; Autark picks its
+//     one owner at once (the responsible manager) and it is listed as handed off.
 // Owns: this flow check. Never: touches the person's data (temp profile).
 // Run: npm run build && node --test test/e2e/day-flow.test.mjs
 
@@ -44,6 +45,9 @@ test('My day flow: Work task, day.add, event, plan, check-off, Send to team', { 
   t.after(() => runtime.stop());
   const { client } = runtime;
   await client.call('events.subscribe', { topics: ['chats', 'tasks', 'org', 'system'] });
+  const agents = await client.call('agents.list');
+  const manager = agents.find((agent) => agent.template === 'manager') ?? agents[0];
+  assert.ok(manager, 'the first run seeds a manager');
   const settings = await client.call('settings.get');
   const day = settings.day;
   assert.ok(day?.workStart && day?.workEnd, 'day settings are filled with defaults');
@@ -54,7 +58,7 @@ test('My day flow: Work task, day.add, event, plan, check-off, Send to team', { 
   await t.test('Work: one plain task of what was typed – team work, not the person\'s list', async () => {
     const posted = await client.call('tasks.quickCreate', { text: 'Prepare the tax papers for the accountant', clientId: 'e2e-day-flow-work' });
     assert.equal(posted.task.title, 'Prepare the tax papers for the accountant');
-    assert.notEqual(posted.task.assigneeKind, 'human', 'no target: team work');
+    assert.deepEqual([posted.task.assigneeKind, posted.task.assigneeId], ['agent', manager.id], 'no target: team work, one owner picked now');
     const again = await client.call('tasks.quickCreate', { text: 'Prepare the tax papers for the accountant', clientId: 'e2e-day-flow-work' });
     assert.equal(again.task.id, posted.task.id, 'a retried post returns the first task');
     const todos = await client.call('todos.list', { limit: 200 });
@@ -115,24 +119,24 @@ test('My day flow: Work task, day.add, event, plan, check-off, Send to team', { 
     const block = blocks.find((row) => row.taskId === kitchen.id);
     assert.ok(block, 'it has a block tomorrow');
     const removed = client.waitFor('calendar.removed', (data) => data.id === block.id, 30_000);
-    await client.call('tasks.complete', { id: kitchen.id, clientId: 'e2e-day-flow-done' });
+    await client.call('tasks.finish', { id: kitchen.id, clientId: 'e2e-day-flow-done' });
     await removed;
     const list = await client.call('calendar.list', { from: wallTime(tomorrow, 0, 0, tz), to: wallTime(tomorrow, 23, 59, tz) });
     assert.ok(!list.events.some((row) => row.id === block.id), 'the block is gone');
     assert.ok(list.events.some((row) => row.id === event.id), 'the event stays');
   });
 
-  await t.test('day.sendToTeam: the to-do leaves the person\'s list and stays the team\'s', async () => {
+  await t.test('Send to team: the to-do leaves the person\'s list and gets one owner of the team', async () => {
     const todos = await client.call('todos.list', { limit: 200 });
     const taxes = todos.find((task) => ids.day.includes(task.id) && /steuern/i.test(task.title));
     assert.ok(taxes, 'the My day to-do Steuern erledigen');
-    const sent = await client.call('day.sendToTeam', { id: taxes.id });
-    assert.notEqual(sent.assigneeKind, 'human', 'handed to the team');
-    await new Promise((resolve) => setTimeout(resolve, 1500)); // the responsible manager may take it meanwhile
+    const sent = await client.call('tasks.give', { id: taxes.id, to: 'team' });
+    assert.deepEqual([sent.assigneeKind, sent.assigneeId], ['agent', manager.id], 'handed to the team: its one owner picked now');
+    await new Promise((resolve) => setTimeout(resolve, 1500)); // the owner's turn may run meanwhile
     const after = await client.call('todos.list', { limit: 200 });
     assert.ok(!after.some((task) => task.id === taxes.id), 'off the person\'s list');
     const current = await client.call('tasks.get', { id: taxes.id });
-    assert.notEqual(current.assigneeKind, 'human', 'still the team\'s');
+    assert.equal(current.assigneeId, manager.id, 'still with that owner');
     const handed = await client.call('day.handedOff', {});
     assert.ok(handed.some((task) => task.id === taxes.id), 'listed under Handed off');
   });

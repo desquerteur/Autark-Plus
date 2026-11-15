@@ -114,15 +114,18 @@ test('the windowless page for installers with pages compiles with warnings as er
  * GetTickCount before and after, so Windows' scan of the fresh file is not counted); null when Windows refused three
  * new stubs. `updated` is what electron-builder's ${isUpdated} answers (an installer started with --updated).
  */
-function runRunningCheck(image: string, updated = false): { status: number | null; ms: number } | null {
+function runRunningCheck(image: string, updated = false, brokerKey = NO_BROKER): { status: number | null; ms: number; moves: number } | null {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = runRunningCheckOnce(image, updated);
+    const result = runRunningCheckOnce(image, updated, brokerKey);
     if (result) return result;
   }
   return null;
 }
 
-function runRunningCheckOnce(image: string, updated: boolean): { status: number | null; ms: number } | null {
+/** B-084: a service key that exists on no PC – the broker is absent, whatever this PC has installed. */
+const NO_BROKER = 'SYSTEM\\CurrentControlSet\\Services\\AutarkDesktopBrokerTestNone';
+
+function runRunningCheckOnce(image: string, updated: boolean, brokerKey: string): { status: number | null; ms: number; moves: number } | null {
   counter += 1;
   const script = path.join(root, `check${counter}.nsi`);
   const exe = path.join(root, `check${counter}.exe`);
@@ -132,6 +135,17 @@ function runRunningCheckOnce(image: string, updated: boolean): { status: number 
     'SetCompressor zlib',
     `!define APP_EXECUTABLE_FILENAME "${image}"`,
     '!define PRODUCT_NAME "Autark"',
+    // B-084: no broker service on a test PC, even on one that has the real broker installed.
+    `!define BROKER_SERVICE_KEY "${brokerKey}"`,
+    // 14.11.2026: the move of a legacy service never runs the real install.ps1 here (it would ask for elevation and change
+    // this PC's broker): it notes each try and fails, as a declined Windows prompt does.
+    '!macro brokerMoveLegacy',
+    `  FileOpen $R0 "${timing}.moves" a`,
+    '  FileSeek $R0 0 END',
+    '  FileWrite $R0 "x"',
+    '  FileClose $R0',
+    '  StrCpy $R0 1',
+    '!macroend',
     '!include LogicLib.nsh',
     '!include FileFunc.nsh',
     '!include nsDialogs.nsh',
@@ -162,7 +176,8 @@ function runRunningCheckOnce(image: string, updated: boolean): { status: number 
   assert.equal(compile.status, 0, `${compile.stdout}\n${compile.stderr}`);
   const run = spawnSync(exe, ['/S'], { encoding: 'utf8', timeout: 60_000 });
   if (run.error || !existsSync(timing)) return null;
-  return { status: run.status, ms: Number(readFileSync(timing, 'utf8')) };
+  const moves = existsSync(`${timing}.moves`) ? readFileSync(`${timing}.moves`, 'utf8').length : 0;
+  return { status: run.status, ms: Number(readFileSync(timing, 'utf8')), moves };
 }
 
 test('the running check: nothing running passes at once, without PowerShell', { skip: !makensis }, (t) => {
@@ -174,6 +189,29 @@ test('the running check: nothing running passes at once, without PowerShell', { 
   assert.equal(result.status, 0);
   assert.ok(result.ms < 3000, `the check itself took ${result.ms} ms`);
   t.diagnostic(`the check itself took ${result.ms} ms`);
+});
+
+test('the running check: a broker service whose image is not under Program Files is moved first; when that fails nothing is replaced (B-084, 14.11.)', { skip: !makensis }, (t) => {
+  // Tcpip's ImagePath (System32\drivers) stands in for a legacy broker run from the app folder: read-only, present on every Windows.
+  const result = runRunningCheck(`wf-nsh-none-${process.pid}.exe`, true, 'SYSTEM\\CurrentControlSet\\Services\\Tcpip');
+  if (!result) { t.diagnostic('not run, Windows refused the stub'); return; }
+  assert.equal(result.status, 2);
+  assert.equal(result.moves, 1, 'one move tried; a silent run answers Cancel to the Retry box');
+  const none = runRunningCheck(`wf-nsh-none-${process.pid}.exe`, true);
+  if (none) assert.equal(none.moves, 0, 'no service: no move, no PowerShell');
+});
+
+test('the legacy move runs the 64-bit PowerShell with the install.ps1 and broker this package carries; the uninstaller carries none', () => {
+  const text = readFileSync(installerNsh, 'utf8');
+  const move = text.slice(text.indexOf('!macro brokerMoveLegacy'), text.indexOf('!macroend', text.indexOf('!macro brokerMoveLegacy')));
+  assert.match(move, /!ifdef BUILD_UNINSTALLER\s+StrCpy \$R0 2/);
+  assert.ok(move.includes('File "/oname=$PLUGINSDIR\\install.ps1" "${PROJECT_DIR}\\resources\\broker\\install.ps1"'));
+  assert.ok(move.includes('File "/oname=$PLUGINSDIR\\AutarkDesktopBroker.exe" "${PROJECT_DIR}\\resources\\broker\\AutarkDesktopBroker.exe"'));
+  assert.ok(move.includes('!insertmacro brokerPowerShell $R0'));
+  const shell = text.slice(text.indexOf('!macro brokerPowerShell'), text.indexOf('!macroend', text.indexOf('!macro brokerPowerShell')));
+  assert.ok(shell.indexOf('Sysnative') < shell.indexOf('$SYSDIR'), 'the 64-bit PowerShell first');
+  assert.ok(!text.replace(shell, '').includes('$SYSDIR\\WindowsPowerShell'), 'every run of install.ps1 goes through brokerPowerShell');
+  for (const file of ['install.ps1', 'AutarkDesktopBroker.exe']) assert.ok(existsSync(path.resolve('resources', 'broker', file)), file);
 });
 
 test('the running check: a plain close request before /F, and an update first waits for the app to quit by itself', () => {

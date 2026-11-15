@@ -1,13 +1,15 @@
 // B-057 track A: the parent's results – pendingResults gives one "Split results" block per thread for the settled groups
 // (from each part's 'Answer' run item), bounded to SPLIT_LIMITS.resultChars with a fair share per part and a pointer to
 // agents.split_results for a cut one; markGathered closes them (and withdraws the unclaimed fan-in wake); results()
-// gives the full text of a group or a part, only to its own agent; the fair share itself.
+// gives the full text of a group or a part, only to its own agent – B-080: from any of its threads; the fair share itself.
+// B-080: a part without last words shows its last note to its origin (agents.split_tell); one that brought nothing failed.
 // Owns: these checks. Never: an engine or the real dispatcher.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SPLIT_LIMITS } from '../../../src/shared/model/splits.ts';
 import { fairShare } from '../../../src/runtime/splits/results.ts';
+import { NOTHING_BACK } from '../../../src/runtime/agents/split-turn.ts';
 import { CHAT, part, splitAndEnd, world } from './fixture.ts';
 
 test('fair share: short texts whole, the rest split what is left equally', () => {
@@ -25,12 +27,12 @@ test('pendingResults: one bounded block, a fair share per part, a pointer for a 
   w.lanes.end(c, 'done', { answer: 'z'.repeat(20_000) });
   assert.equal(w.splits.pendingResults('ag_ava', 'other-thread'), undefined, 'only the thread it was split in');
   const block = w.splits.pendingResults('ag_ava', CHAT)!;
-  assert.deepEqual(block.groupIds, [groupId]);
+  assert.equal(block.splitIds.length, 3);
   assert.ok(block.text.length <= SPLIT_LIMITS.resultChars, `${block.text.length} characters`);
   assert.ok(block.text.length > SPLIT_LIMITS.resultChars - 200, 'the budget is used');
   assert.match(block.text, /^# Split results\n/);
   assert.match(block.text, /## Review the release – 3 parts: 3 done \(group sgr_/);
-  assert.match(block.text, /### #1 Short – done · codex:gpt-6\.1-sol · low\nShort result\.\n/, 'a short result stays whole');
+  assert.match(block.text, /### #1 Short – done · codex:gpt-6\.1-sol · low\nAsked: Do short\.\nShort result\.\n/, 'a short result stays whole (B-086: under its brief)');
   assert.match(block.text, new RegExp(`more characters – the whole result: agents\\.split_results \\{"groupId":"${groupId}","idx":2\\}\\]`));
   assert.match(block.text, new RegExp(`agents\\.split_results \\{"groupId":"${groupId}","idx":3\\}`));
   const longTwo = block.text.split('### #3')[1];
@@ -45,13 +47,13 @@ test('markGathered closes the groups, withdraws the waiting wake, and the next b
   assert.equal(w.wakes.list('ag_ava').length, 1);
   // The person wrote meanwhile: the parent's next chat turn carries the results and ends 'done'.
   const block = w.splits.pendingResults('ag_ava', CHAT)!;
-  w.splits.markGathered('run_next', block.groupIds);
+  w.splits.markGathered('run_next', block.splitIds);
   const group = w.splits.list({ groupId })[0];
   assert.equal(group.status, 'gathered');
   assert.equal(group.gatheredAt, w.clock.now());
   assert.equal(w.wakes.list('ag_ava').length, 0, 'the fan-in wake is withdrawn: its results arrived');
   assert.equal(w.splits.pendingResults('ag_ava', CHAT), undefined);
-  w.splits.markGathered('run_next', [groupId, 'sgr_missing']); // idempotent, unknown ids ignored
+  w.splits.markGathered('run_next', [...block.splitIds, 'spl_missing']); // idempotent, unknown ids ignored
   assert.equal(w.splits.list({ groupId })[0].status, 'gathered');
 });
 
@@ -65,11 +67,11 @@ test('groups that settled earlier come first in one block', () => {
   w.splits.afterParentTurn('run_two', 'done');
   w.lanes.end(w.lanes.started[1], 'done', { answer: 'second' });
   const block = w.splits.pendingResults('ag_ava', CHAT)!;
-  assert.deepEqual(block.groupIds, [first, second]);
+  assert.equal(block.splitIds.length, 2);
   assert.ok(block.text.indexOf('First goal') < block.text.indexOf('Second goal'));
 });
 
-test('results(): the full text of a group or a part, only for its own agent', () => {
+test('results(): the full text of a group or a part, only for its own agent – also named from another thread (B-080)', () => {
   const w = world();
   const groupId = splitAndEnd(w, [part('A'), part('B')]);
   w.lanes.end(w.lanes.started[0], 'done', { answer: 'a'.repeat(30_000) });
@@ -77,18 +79,51 @@ test('results(): the full text of a group or a part, only for its own agent', ()
   assert.ok(whole.includes('a'.repeat(30_000)), 'never cut');
   assert.match(w.splits.results('ag_ava', { groupId }), /### #2 B – still running/);
   assert.match(w.splits.results('ag_ava', { thread: CHAT }), new RegExp(groupId));
-  assert.equal(w.splits.results('ag_ava', { thread: 'task:other' }), 'I have no split results in this thread yet.');
+  // My own group named from another chat: its whole text (chat.read shows me that chat anyway).
+  assert.ok(w.splits.results('ag_ava', { groupId, idx: 1, thread: 'ch_kernteam' }).includes('a'.repeat(30_000)), 'named from another thread');
+  assert.match(w.splits.results('ag_ava', { thread: 'task:other' }), new RegExp(`group ${groupId}`), 'no group in this thread: my newest');
+  assert.equal(w.splits.results('ag_ben', { thread: CHAT }), 'I have no split results yet.');
+  assert.throws(() => w.splits.results('ag_ben', { groupId, thread: CHAT }), /belongs to another agent/, 'another agent\'s group stays its own');
   assert.throws(() => w.splits.results('ag_ben', { groupId }), /belongs to another agent/);
   assert.throws(() => w.splits.results('ag_ava', { groupId, idx: 7 }), /has no part #7/);
-  assert.throws(() => w.splits.results('ag_ava', { groupId: 'sgr_none' }), /No split group sgr_none/);
+  assert.throws(() => w.splits.results('ag_ava', { groupId: 'sgr_none' }), /I have no split group sgr_none\./);
 });
 
-test('a part without an answer reads "(no result text)", a failed one names its error', () => {
+test('a done part without words or note reads "(no result text)" (it brought files), a failed one names its error', () => {
   const w = world();
-  splitAndEnd(w, [part('Quiet'), part('Broken')]);
+  splitAndEnd(w, [part('Quiet'), part('Broken'), part('Empty')]);
   w.lanes.end(w.lanes.started[0], 'done');
   w.lanes.end(w.lanes.started[1], 'failed', { error: 'The engine crashed.' });
+  w.lanes.end(w.lanes.started[2], 'failed', { error: NOTHING_BACK }); // agents/split-turn.ts: no last words, no note, no files
   const text = w.splits.pendingResults('ag_ava', CHAT)!.text;
-  assert.match(text, /### #1 Quiet – done · codex:gpt-6\.1-sol · low\n\(no result text\)/);
+  assert.match(text, /### #1 Quiet – done · codex:gpt-6\.1-sol · low\nAsked: Do quiet\.\n\(no result text\)/);
   assert.match(text, /### #2 Broken – failed – The engine crashed\./);
+  assert.match(text, /### #3 Empty – failed – It ended without last words or a note to its origin – nothing came back\./);
+});
+
+test('B-080: a done part that reported through agents.split_tell to its origin shows its last note as its result', () => {
+  const w = world();
+  const groupId = splitAndEnd(w, [part('Pairs')]);
+  const splitId = w.lanes.started[0];
+  const runId = w.lanes.lanes.get(splitId)!.runId;
+  const tell = (to: string | number, text: string, summary: string) => w.runs.item(runId, { kind: 'tool_call', name: 'agents.split_tell', effectStatus: 'none',
+    data: { callId: `call_${text.length}`, args: JSON.stringify({ to, text }), summary } });
+  tell('origin', 'First pair found.', 'To my origin: First pair found.');
+  tell(2, 'Take the EU pairs.', 'To my part #2: Take the EU pairs.');
+  tell('origin', 'EU-IN pairs: Anna and Ben.', 'To my origin: EU-IN pairs: Anna and Ben.');
+  w.lanes.end(splitId, 'done');
+  const block = w.splits.pendingResults('ag_ava', CHAT)!.text;
+  assert.match(block, /### #1 Pairs – done · codex:gpt-6\.1-sol · low\nAsked: Do pairs\.\nEU-IN pairs: Anna and Ben\./, 'its last note to its origin, not "(no result text)"');
+  assert.doesNotMatch(block, /no result text|Take the EU pairs|First pair found/);
+  assert.match(w.splits.results('ag_ava', { groupId, idx: 1 }), /### #1 Pairs – done · codex:gpt-6\.1-sol · low\nAsked: Do pairs\.\nEU-IN pairs: Anna and Ben\.$/);
+  // Args cut in the journal (tools/outputs.ts preview: 2,000 characters and "…" – a note may be as long): its text up to
+  // the cut, marked "…" (not the summary's first 300); a cut escape stays out; args without a text: the summary's start.
+  const cutTell = (args: string, summary: string) => w.runs.item(runId, { kind: 'tool_call', name: 'agents.split_tell', effectStatus: 'none', data: { callId: 'call_cut', args, summary } });
+  const long = `Long list: ${'row, '.repeat(500)}end.`;
+  cutTell(`${JSON.stringify({ to: 'origin', text: long }).slice(0, 2_000)}…`, `To my origin: ${long.slice(0, 280)}…`);
+  assert.ok(w.splits.results('ag_ava', { groupId, idx: 1 }).endsWith(`\n${long.slice(0, 2_000 - '{"to":"origin","text":"'.length)}…`));
+  cutTell('{"to":"origin","text":"Line one\\nLine \\"two\\…', 'To my origin: Line one Line "two');
+  assert.ok(w.splits.results('ag_ava', { groupId, idx: 1 }).endsWith('\nLine one\nLine "two…'));
+  cutTell('{"to":"orig…', 'To my origin: Long list follows');
+  assert.match(w.splits.results('ag_ava', { groupId, idx: 1 }), /\nLong list follows$/);
 });

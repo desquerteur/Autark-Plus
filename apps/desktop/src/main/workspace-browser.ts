@@ -51,6 +51,7 @@ export interface WorkspaceBrowserOptions {
   /** A tab's page was made (its contents) or is gone (null) – main/side-driver watches it for agents. */
   onTab?(id: string, contents: WebContents | null): void;
   keep?(id: string): boolean; // B-076: someone watches the page from another PC or a phone – it stays loaded
+  pick?(id: string, on: boolean): void; // B-081: the Pin button – main/side-driver switches the tab's picker (workspace-chrome.ts)
 }
 
 export class WorkspaceBrowser {
@@ -89,6 +90,7 @@ export class WorkspaceBrowser {
       window: () => this.getWindow(), publish: () => this.publish(),
       mainKey: (id, action) => { try { this.command(action === 'reopen' ? { action, space: this.saved.spaceOf(id) } : { action, id }); } catch { /* the tab went meanwhile */ } },
       agentTab: (id) => Boolean(this.marks.opener(id) ?? this.saved.byOf(id)),
+      pick: options.pick,
     }, { historyFile: options.historyFile, zoomFile: options.zoomFile });
     this.discards = new DiscardTimer({
       after: discardAfter(options.discardMs), now: Date.now, set: (run, ms) => setTimeout(run, ms), clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -390,6 +392,7 @@ export class WorkspaceBrowser {
   }
   /** B-076: nobody watches `id` from another PC or a phone any more: off the host, unless an agent used it lately. */
   sideRelease(id: string): void { if (this.host.has(id) && !this.host.usedLately(id)) this.fromHost(id); }
+  sideSize(id: string, box?: { width: number; height: number }): boolean { return this.host.size(id, box); } // B-081: the watcher's box
   sideOpen(url: string, opener: PageOpener, show = false, space: string = GLOBAL_SPACE, newTab = false): string {
     const preview = newTab ? undefined : this.marks.previewOf(opener.agentId, (id) => this.saved.spaceOf(id) === space);
     if (preview && (!show || this.slots.shownIn(space) === preview)) { this.load(preview, new URL(browserUrl(url)).href, space); return preview; }
@@ -399,6 +402,7 @@ export class WorkspaceBrowser {
   }
   sideKeep(id: string): void { if (this.marks.keep(id)) this.publish(); }
   sideClose(id: string): void { this.command({ action: 'close', id }); }
+  sidePicked(id: string, pick: Parameters<TabChrome['picked']>[2]): void { this.chrome.picked(id, this.tabs.get(id)?.view.webContents, pick); } // B-081: a pin, or the picker ended
 
   /** A new tab of `space` at `url`, its id: in the background unless `show` (the tabs shown stay shown), with the agent that opened it. */
   private openTab(url: string, space: string, show: boolean, opener?: PageOpener, preview = false): string {

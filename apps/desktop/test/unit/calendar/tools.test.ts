@@ -105,22 +105,6 @@ test("calendar.add: an appointment as the agent's, visible in its chat; refused 
   assert.equal((await w.call('calendar.add', { title: 'Late', startAt: '2026-10-27T07:00' })).error, true, 'not in the past');
 });
 
-test('calendar.add kind todo: a to-do for the person with a reason and its block; without a reason it is refused', async () => {
-  const w = setup();
-  assert.match((await w.call('calendar.add', { title: 'Pass abholen', startAt: '2026-10-27T16:00', kind: 'todo' })).text, /needs reason/);
-  const out = await w.call('calendar.add', { title: 'Pass abholen', startAt: '2026-10-27T16:00', endAt: '2026-10-27T16:20', kind: 'todo', reason: 'physical' });
-  assert.equal(out.error, false, out.text);
-  const task = w.tasks.get(out.data!.taskId as string)!;
-  assert.deepEqual([task.assigneeKind, task.createdBy, task.humanReason, task.conversationId, task.estimateMin], ['human', 'ag_mara', 'physical', w.chat.id, 20]);
-  const block = w.calendar.repo.get(out.data!.eventId as string)!;
-  assert.deepEqual([block.kind, block.taskId, block.setBy, block.createdBy], ['todo', task.id, 'agent', 'ag_mara']);
-  // B-054: a run with no chat makes a chat-free to-do with the run's origin (no hidden To-do chat).
-  const origin = { source: 'schedule:sch_1', label: 'Reminder' };
-  const free = await w.call('calendar.add', { title: 'Brille abholen', startAt: '2026-10-27T17:00', endAt: '2026-10-27T17:15', kind: 'todo', reason: 'physical' }, { conversationId: undefined, origin });
-  assert.equal(free.error, false, free.text);
-  const chatFree = w.tasks.get(free.data!.taskId as string)!;
-  assert.deepEqual([chatFree.conversationId, chatFree.origin], [undefined, origin]);
-});
 
 test("calendar.place_task: the person's own open to-do gets a block as the agent's; the person's own placement stays", async () => {
   const w = setup();
@@ -142,7 +126,7 @@ test('calendar.place_task refuses private, finished and non-to-do work, unknown 
   w.row({ title: 'Meeting', startAt: at('10:00'), endAt: at('11:00') });
   const secret = w.todo('Therapie', { private: true });
   const finished = w.todo('Erledigt');
-  w.tasks.setStatus(finished.id, 'done', HUMAN_ID);
+  w.tasks.finish(finished.id, { status: 'done' as const, summary: 'Done' }, HUMAN_ID);
   const work = w.tasks.create({ conversationId: w.chat.id, title: 'Recherche', createdBy: HUMAN_ID, assigneeKind: 'agent', assigneeId: 'ag_mara' });
   const open = w.todo('Steuern');
   for (const [taskId, pattern] of [[secret.id, /not found/], [finished.id, /already finished/], [work.id, /not one of the person's own to-dos/],

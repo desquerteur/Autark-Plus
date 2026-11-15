@@ -7,12 +7,15 @@
 @import "./shell.css";
 @import "./header.css"; /* B-044: one header for every zone (lib/header.tsx) and the notice band */
 @import "./chat.css";
+@import "./call.css"; /* B-085: the floating call card and a call's row in the chat */
 @import "./chat-tree.css"; /* B-078: sub-chats under their parent */
 @import "./chat-area.css"; /* B-072: a chat's area – its tabs above the messages */
-@import "./working.css"; /* B-048 E4.5: the chat header's working popover and the live block's model slot */
+@import "./working.css"; /* B-048 E4.5: the chat header's working popover */
+@import "./live-bar.css"; /* 13.11.2026: who works for the chat, above the composer */
 @import "./composer.css";
 @import "./ask-strip.css"; /* B-078: important question above the composer */
 @import "./schedule.css"; /* B-044: the schedule dialog and the chat's Scheduled line */
+@import "./markdown.css"; /* B-081: Markdown typography, split from blocks.css */
 @import "./blocks.css";
 @import "./widgets.css";
 @import "./settings.css";
@@ -23,7 +26,7 @@
 @import "./mobile.css";
 @import "./phone-swipe.css"; /* B-078: swipe between a chat and its area on the phone */
 @import "./first-run.css"; /* B-044: the first-run layer */
-@import "./tour.css"; /* B-055 Q5: the feedback tour (first-run step and replay dialog) */
+@import "./tour.css"; /* B-055 Q5: the feedback tour's replay dialog; B-085: the spotlight tour */
 @import "./tasks.css";
 @import "./task-center.css"; /* task center: quick composer, posts, quick-task panel, references */
 @import "./day.css"; /* B-041: My day */
@@ -39,6 +42,6 @@
 @import "./file-tab.css"; /* the pane's file tab, the memory tree of Settings › Skills & memory */
 @import "./notes.css"; /* Chat details › Notes row */
 @import "./bridges.css";
-@import "./splits.css"; /* B-057: split rows, the sidebar's split rows, a split's page, the composer's Ultra cell */
+@import "./splits.css"; /* B-057: split rows, the sidebar's split rows, a split's page */
 @import "./remote.css";
 @import "./repair.css"; /* 23.10.: repair screen after a broken upgrade or a crash loop */

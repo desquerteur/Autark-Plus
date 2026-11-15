@@ -48,7 +48,7 @@ test('acp: initialize, session/new with the HTTP MCP hub behind the proxy, instr
   assert.match(hub.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp\/[A-Za-z0-9_-]{32,}$/);
   const prompt = requests('session/prompt')[0].params.prompt;
   assert.equal(prompt[0].type, 'text');
-  assert.match(prompt[0].text, /^<workforce-instructions>\nSTABLE\n<\/workforce-instructions>\n\n<workforce-context>\nVOLATILE\n<\/workforce-context>$/);
+  assert.match(prompt[0].text, /^<my-instructions>\nSTABLE\n<\/my-instructions>\n\n<live>\nVOLATILE\n<\/live>$/);
   assert.deepEqual(prompt[1], { type: 'text', text: 'hello' });
   assert.deepEqual(events.filter((e: any) => e.type === 'text').map((e: any) => e.delta), ['Hel', 'lo']);
   assert.deepEqual(events.filter((e: any) => e.type === 'reasoning').map((e: any) => e.delta), ['Thinking']);

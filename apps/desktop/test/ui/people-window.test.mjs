@@ -98,7 +98,7 @@ test('Team › People: add, invite, join, chat member, task owner, and the perso
   const asked = await postRpc(info.port, 'people.join', { ticket, name: 'Laptop · Chrome' });
   const todo = (await rpc.call('todos.list')).find((entry) => entry.title.startsWith('Let Laptop · Chrome join as Anna Berg'));
   assert.ok(todo, 'the owner decides in For you');
-  await rpc.call('tasks.complete', { id: todo.id, answer: { choice: 'Allow' } });
+  await rpc.call('tasks.finish', { id: todo.id, answer: { choice: 'Allow' } });
   const joined = await postRpc(info.port, 'people.awaitJoin', { ticket: asked.ticket });
   assert.equal(joined.status, 'accepted');
   // Her own row in the sidebar's People group (the right-click menu holds her actions).

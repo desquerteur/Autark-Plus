@@ -66,7 +66,7 @@ test("agents.split_merge: only the agent that split, never in a split's turn; a 
 
     assert.throws(() => tool.describe!(args, f.ctx('ag_bob')), /I have no split group sg_1\./);
     const turn: SplitTurn = { splitId: split.id, groupId: group.id, idx: 1, of: 1, title: 'Fix the header', parentRunId: 'run_parent', parentThread: f.chat.id, context: 'brief', firstTurn: false };
-    assert.throws(() => tool.describe!(args, f.ctx('ag_ada', turn)), /A split does not merge or discard parts: my main self does that once the group has ended\./);
+    assert.throws(() => tool.describe!(args, f.ctx('ag_ada', turn)), /My origin merges or discards the parts' branches once the group has ended\./);
     assert.throws(() => tool.describe!({ ...args, idx: 9 }, f.ctx()), /Split group sg_1 has no part #9\./);
     await assert.rejects(tool.run(args, f.ctx('ag_bob')), /I have no split group sg_1\./);
     assert.equal(readFileSync(path.join(f.site, 'a.txt'), 'utf8'), 'a\n', 'nothing merged by a refused call');

@@ -1,7 +1,7 @@
 // RT5: routing.preview answers what Auto would pick for the chat's next turn – with the chat's last
 // done run as RouteRequest.previous like a turn (agents/next-route.ts returnChoice), so the return
-// rule and the previous effort hold; `ignorePin` (a pinned chat) leaves the chat's own model/effort
-// choice out but still returns to its last run; without a chat it is a fresh recommendation.
+// rule and the previous effort hold; a chat's model choice never routes (13.11.2026); `ignorePin` leaves the agent's own
+// pin out without a chat; without a chat it is a fresh recommendation.
 // Real router and catalog (models harness), fake run journal and modes.
 
 import { test } from 'node:test';
@@ -39,18 +39,18 @@ async function previewSetup(runs: Run[]) {
     return entry.handler({ agentId: VERA, ...params } as never, ctx) as Promise<RouteDecision>;
   };
   /** What the chat's next turn routes on (agents/turn-prepare.ts: the chat, and the return choice of its runs). */
-  const turn = (conversationId: string) => h.router.route({ agent: vera, conversationId, mode: mode('chat'), previous: returnChoice(runs, conversationId, undefined) });
+  const turn = (conversationId: string) => h.router.route({ agent: vera, conversationId, mode: mode('chat'), previous: returnChoice(runs, undefined) });
   return { ...h, vera, preview, turn };
 }
 
-test('the chat\'s last run continues in the preview like in the turn (return rule and its effort)', async () => {
-  const h = await previewSetup([run('run_2', 'ch_other', OPUS, 'max'), run('run_1', 'ch_main', LUNA, 'high')]);
+test('my last run continues in the preview like in the turn, in any chat (return rule and its effort; one context)', async () => {
+  const h = await previewSetup([run('run_2', 'ch_main', LUNA, 'high'), run('run_1', 'ch_other', OPUS, 'max')]);
   h.addChat('ch_main', [VERA]);
   h.addChat('ch_fresh', [VERA]);
   const fresh = await h.preview({});
   assert.equal(fresh.modelId, SOL, 'without a chat: a fresh recommendation (the best fit)');
   assert.equal(fresh.by, 'rules');
-  assert.equal((await h.preview({ conversationId: 'ch_fresh' })).modelId, SOL, 'a chat without runs: nothing to return to');
+  assert.equal((await h.preview({ conversationId: 'ch_fresh' })).modelId, LUNA, 'a chat without runs: my last run, from another chat');
 
   const main = await h.preview({ conversationId: 'ch_main' });
   assert.equal(main.modelId, LUNA, 'Luna is not weak at chat: it continues');
@@ -60,19 +60,16 @@ test('the chat\'s last run continues in the preview like in the turn (return rul
   assert.deepEqual([main.modelId, main.effort, main.by], [next.modelId, next.effort, next.by], 'the caption names what the turn runs on');
 });
 
-test('a pinned chat: ignorePin leaves the pin out, the pinned run is still the choice Auto returns to', async () => {
-  const h = await previewSetup([run('run_1', 'ch_pinned', LUNA, 'low', 'pin')]);
-  h.addChat('ch_pinned', [VERA], { models: { [VERA]: LUNA }, efforts: { [VERA]: 'low' } });
-  const pinned = await h.preview({ conversationId: 'ch_pinned' });
-  assert.equal(pinned.by, 'pin', 'without ignorePin the chat\'s pin answers');
-
-  const auto = await h.preview({ conversationId: 'ch_pinned', ignorePin: true });
-  assert.equal(auto.modelId, LUNA, 'not ranked[0] (Sol): after switching to Auto the pinned model continues');
-  assert.equal(auto.by, 'previous');
-  // Switching to Auto clears the chat's model and effort (ModelChip setChatModel 'auto'); the next turn:
-  h.conversations.set('ch_pinned', { ...h.conversations.get('ch_pinned')!, settings: {} });
-  const next = await h.turn('ch_pinned');
-  assert.deepEqual([auto.modelId, auto.effort, auto.by], [next.modelId, next.effort, next.by]);
+test('a chat with a suggestion: the preview is what runs – the chat\'s choice never routes (13.11.2026), its last run continues', async () => {
+  const h = await previewSetup([run('run_1', 'ch_chip', LUNA, 'low', 'pin')]);
+  h.addChat('ch_chip', [VERA], { modelHints: { [VERA]: OPUS }, efforts: { [VERA]: 'max' } });
+  const plain = await h.preview({ conversationId: 'ch_chip' });
+  const auto = await h.preview({ conversationId: 'ch_chip', ignorePin: true });
+  assert.deepEqual([plain.modelId, plain.by], [LUNA, 'previous'], 'not the suggested Opus: the last run continues');
+  assert.notEqual(plain.effort, 'max');
+  assert.deepEqual([auto.modelId, auto.effort, auto.by], [plain.modelId, plain.effort, plain.by], 'in a chat ignorePin changes nothing');
+  const next = await h.turn('ch_chip');
+  assert.deepEqual([plain.modelId, plain.effort, plain.by], [next.modelId, next.effort, next.by]);
 });
 
 test('an agent pinned to a model: without a chat, ignorePin names what its unpinned option would run (B-072)', async () => {

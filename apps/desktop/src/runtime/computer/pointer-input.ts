@@ -7,6 +7,10 @@
 // mid-path stops it ('human_active' → the presence refusal). Q8: each move is reported as the
 // agent's named pointer on 'screen:local' (screen-pointers.ts); the person's pointer when
 // computer use sees them active. Q10: the window a step hit is remembered (window-memory.ts).
+// B-081: a planned path is reported BEFORE the helper replays it, so the drawn AI cursor (main/screen-cursor.ts)
+// travels with the real pointer; the person's pointer carries its idle time and the window under it, kept 5 minutes
+// for the agents' lines, read once more per computer.* result (readPerson) while the helper runs anyway and is idle
+// (counted: the helper answers one request at a time, so that read never waits behind – or times out over – another).
 // Owns: that gate, the human-priority judgement over host and helper idle times, the request per
 // step and what it reports. Never: fights the person for mouse or keyboard, retries an input step,
 // types through the clipboard, or plans motion itself (motion.ts / shared/model/pointer-motion.ts).
@@ -14,7 +18,7 @@
 import type { Host } from '../host.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { DEFAULT_MOTION, isMotionStyle, type MotionStep, type MotionStyle } from '../../shared/model/pointer-motion.ts';
-import { POINTER_TTL_MS, type PointerAction } from '../../shared/model/pointers.ts';
+import { POINTER_PERSON_TTL_MS, type PointerAction } from '../../shared/model/pointers.ts';
 import type { Point } from './geometry.ts';
 import type { HelperClient } from './helper.ts';
 import type { HelperOp } from './protocol.ts';
@@ -53,9 +57,22 @@ export function motionStyle(value: unknown): MotionStyle {
 export class PointerInput {
   private readonly deps: PointerInputDeps;
   private lastInjectedAt = Number.NEGATIVE_INFINITY;
+  private inFlight = 0;
 
   constructor(deps: PointerInputDeps) {
     this.deps = deps;
+  }
+
+  /** The helper every computer-use request goes through (ComputerService.helper), counting the requests it has in flight. */
+  counted(inner: HelperClient): HelperClient {
+    return {
+      call: async <T>(op: HelperOp, args?: Record<string, unknown>, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> => {
+        this.inFlight++;
+        try { return await inner.call<T>(op, args, options); } finally { this.inFlight--; }
+      },
+      running: () => inner.running(),
+      dispose: () => inner.dispose(),
+    };
   }
 
   async click(point: Point, options: StepOptions & { button?: Button; count?: number; targetSize?: number }): Promise<PointerResult> {
@@ -127,14 +144,20 @@ export class PointerInput {
    * whether the person used this PC after our own last input; then their pointer is reported.
    */
   async cursor(): Promise<Point | undefined> {
-    let answer: (Presence & { x?: unknown; y?: unknown }) | undefined;
+    let answer: (Presence & { x?: unknown; y?: unknown; window?: unknown }) | undefined;
     try { answer = await this.deps.helper().call('cursor', {}, { timeoutMs: 5000 }); } catch { return undefined; }
     if (typeof answer?.x !== 'number' || typeof answer.y !== 'number' || !Number.isFinite(answer.x) || !Number.isFinite(answer.y)) return undefined;
     const point = { x: answer.x, y: answer.y };
     const idle = typeof answer.idleMs === 'number' ? answer.idleMs : undefined;
     const ours = typeof answer.injectedAgoMs === 'number' ? answer.injectedAgoMs : undefined;
-    if (idle !== undefined && idle < POINTER_TTL_MS && (ours === undefined || idle + 150 < ours)) this.deps.pointers.person(point);
+    const window = typeof answer.window === 'string' ? answer.window : undefined;
+    if (idle !== undefined && idle < POINTER_PERSON_TTL_MS && (ours === undefined || idle + 150 < ours)) this.deps.pointers.person(point, idle, window);
     return point;
+  }
+
+  /** B-081: one cursor read for a computer.* result's lines (where the person's pointer rests), only while the helper runs anyway and has nothing else in flight. */
+  async readPerson(): Promise<void> {
+    if (this.inFlight === 0 && this.deps.pointers.wired() && this.deps.canControl() && this.deps.helper().running()) await this.cursor();
   }
 
   /**
@@ -174,8 +197,10 @@ export class PointerInput {
 
   private async cursorOfPerson(): Promise<void> {
     try {
-      const at = await this.deps.helper().call<{ x?: unknown; y?: unknown }>('cursor', {}, { timeoutMs: 5000 });
-      if (typeof at?.x === 'number' && typeof at.y === 'number') this.deps.pointers.person({ x: at.x, y: at.y });
+      const at = await this.deps.helper().call<{ x?: unknown; y?: unknown; idleMs?: unknown; window?: unknown }>('cursor', {}, { timeoutMs: 5000 });
+      if (typeof at?.x === 'number' && typeof at.y === 'number') {
+        this.deps.pointers.person({ x: at.x, y: at.y }, typeof at.idleMs === 'number' ? at.idleMs : undefined, typeof at.window === 'string' ? at.window : undefined);
+      }
     } catch { /* the refusal matters, not the position */ }
   }
 
@@ -201,8 +226,9 @@ export class PointerInput {
   }
 
   private async finish(planned: PlannedPath, to: Point, action: PointerAction, options: StepOptions): Promise<PointerResult> {
+    this.deps.pointers.agent(options.caller, to, action, planned.path); // before the move: the drawn AI cursor travels with the pointer
     const answer = await this.send<StepAnswer>('path', { ...planned.args }, options, pathTimeout(planned));
-    return this.after(to, action, options.caller, planned.path, answer);
+    return this.after(to, action, options.caller, planned.path, answer, true);
   }
 
   /** One helper request under the lease; the person moving the mouse mid-path is their priority. */
@@ -218,10 +244,11 @@ export class PointerInput {
     }
   }
 
-  private after(at: Point | undefined, action: PointerAction, caller: ComputerCaller | undefined, path: MotionStep[] | undefined, answer: StepAnswer): PointerResult {
+  /** `reported`: the move was named before it ran (a planned path); the one-shot ops report on arrival. */
+  private after(at: Point | undefined, action: PointerAction, caller: ComputerCaller | undefined, path: MotionStep[] | undefined, answer: StepAnswer, reported = false): PointerResult {
     const window = typeof answer?.window === 'number' && answer.window ? answer.window : undefined;
     if (typeof answer?.title === 'string') this.deps.windows.title(window, answer.title);
-    if (at) this.deps.pointers.agent(caller, at, action, path);
+    if (at && !reported) this.deps.pointers.agent(caller, at, action, path);
     this.deps.lease.noteWindow(caller, window);
     const shared = this.deps.windows.use(caller, window);
     return { x: at?.x ?? 0, y: at?.y ?? 0, ...(window ? { window } : {}), ...(shared ? { shared } : {}) };

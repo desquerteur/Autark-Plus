@@ -81,7 +81,8 @@ test('tools/call maps the wire name back and calls the registry with the lease c
   const reply = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'tasks__create', arguments: { title: 'Cut the intro' } } });
   assert.deepEqual(reply.body, {
     jsonrpc: '2.0', id: 7,
-    result: { content: [{ type: 'text', text: '{"id":"task_9"}' }, { type: 'image', data: 'iVBO', mimeType: 'image/png' }], isError: false, structuredContent: { id: 'task_9' } },
+    // B-080: no structuredContent – the agent reads the text and images (mcp/convert.ts)
+    result: { content: [{ type: 'text', text: '{"id":"task_9"}' }, { type: 'image', data: 'iVBO', mimeType: 'image/png' }], isError: false },
   });
   const call = calls[0];
   assert.equal(call.name, 'tasks.create');
@@ -98,6 +99,16 @@ test('tools/call maps the wire name back and calls the registry with the lease c
   await rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'mcp__workforce__human__ask' } });
   assert.deepEqual(calls.slice(1).map((item) => [item.name, item.callId]), [['human.ask', 'mcp-2']]);
   assert.deepEqual(calls[1].args, {});
+});
+
+test('the call id is the model\'s own tool_use id where Claude Code sends it, so a re-sent call is the same call', async () => {
+  const { rpc, calls } = setup();
+  const meta = { 'claudecode/toolUseId': 'toolu_01AbC-x_9' };
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'human__ask', arguments: {}, _meta: meta } });
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'human__ask', arguments: {}, _meta: meta } }); // after a reconnect
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'human__ask', arguments: {}, _meta: { 'claudecode/toolUseId': 'bad id!' } } });
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'human__ask', arguments: {} } });
+  assert.deepEqual(calls.map((call) => call.callId), ['toolu_01AbC-x_9', 'toolu_01AbC-x_9', 'mcp-1', 'mcp-2'], 'without a usable id: a fresh one, never the JSON-RPC id');
 });
 
 test('tool failures are results; unknown tools, methods and bad params are JSON-RPC errors', async () => {

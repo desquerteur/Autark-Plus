@@ -196,13 +196,13 @@ test('media.listen: a paid failure the provider billed is booked and unknown; a 
   } finally { await t.close(); }
 });
 
-test('media.listen is a read built-in that names its data rule and the formats it takes', () => {
+test('media.listen is a read built-in that says what it answers and where the words are', () => {
   assert.ok(builtinTools().some((entry) => entry.name === 'media.listen'));
   assert.equal(listenTool.category, 'read');
-  assert.match(listenTool.description, /Takes every common audio and video format; a decoded part is at most 5 minutes/);
-  assert.match(listenTool.description, /Without a connected listening model it hears on this PC/);
+  assert.match(listenTool.description, /^Listens to a stored recording or video and answers my question about its sound\./);
+  assert.match(listenTool.description, /Without a listening model this PC returns sound tags with times and the transcript; for the words alone I use media\.transcribe\./);
   assert.doesNotMatch(listenTool.description, /ffmpeg|convert/i);
-  assert.match(listenTool.description, /not instructions/);
+  assert.match((listenTool.inputSchema as { properties: { end: { description: string } } }).properties.end.description, /at most 5 minutes after start/);
   assert.deepEqual((listenTool.inputSchema as { required: string[] }).required, ['fileId', 'question']);
   assert.deepEqual(Object.keys((listenTool.inputSchema as { properties: object }).properties), ['fileId', 'question', 'start', 'end']);
   assert.equal(listenUsd(100), 0.11); // e.g. the longest 400 KB of unknown length can play (32 kbit/s)

@@ -20,23 +20,23 @@ function todo(patch: Partial<TaskView> = {}): TaskView {
   seq++;
   return {
     id: patch.id ?? `todo_${seq}`, conversationId: 'ch_a', title: `To-do ${seq}`, notes: '', status: 'open', assigneeKind: 'human',
-    createdBy: 'ag_ava', priority: 0, ledger: {}, attempts: 0, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
+    createdBy: 'ag_ava', priority: 0, ledger: {}, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
     steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'Alpha', running: false,
     ...patch,
   };
 }
 
 const timer = (at: number, patch: Partial<TaskView> = {}) => todo({ widget: { type: 'timer', label: 'Stretch', at: new Date(at).toISOString() }, dueAt: at, ...patch });
-const snoozed = (until?: number) => todo({ status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Snoozed', since: NOW - MINUTE_MS, ...(until === undefined ? {} : { until }) } });
+const snoozed = (until?: number) => todo({ status: 'waiting', waitingOn: { on: 'outside', why: 'Snoozed', since: NOW - MINUTE_MS, ...(until === undefined ? {} : { until }) } });
 
 test('snoozedUntil: the end a snooze recorded on its wait – nothing for other waits or older snoozes', () => {
   assert.equal(snoozedUntil(snoozed(NOW + 10 * MINUTE_MS)), NOW + 10 * MINUTE_MS);
   assert.equal(snoozedUntil(snoozed()), undefined, 'a snooze from before `until` was recorded');
-  const repeats = todo({ status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Repeats', since: NOW, until: NOW + DAY } });
+  const repeats = todo({ status: 'waiting', waitingOn: { on: 'outside', why: 'Repeats', since: NOW, until: NOW + DAY } });
   assert.equal(snoozedUntil(repeats), undefined, 'a repeating timer is not snoozed');
-  const external = todo({ status: 'waiting', waitingOn: { kind: 'external', reason: 'Snoozed', since: NOW, until: NOW + HOUR_MS } });
-  assert.equal(snoozedUntil(external), undefined, 'only a wait for a ring');
-  assert.equal(snoozedUntil(todo({ waitingOn: { kind: 'schedule', reason: 'Snoozed', since: NOW, until: NOW + HOUR_MS } })), undefined, 'an open to-do');
+  const external = todo({ status: 'waiting', waitingOn: { on: 'outside', why: 'Snoozed elsewhere', since: NOW, until: NOW + HOUR_MS } });
+  assert.equal(snoozedUntil(external), undefined, 'only the snooze wait');
+  assert.equal(snoozedUntil(todo({ waitingOn: { on: 'outside', why: 'Snoozed', since: NOW, until: NOW + HOUR_MS } })), undefined, 'an open to-do');
 });
 
 test('laterText: the offline row time of a "Later" item', () => {
@@ -45,7 +45,7 @@ test('laterText: the offline row time of a "Later" item', () => {
   const far = NOW + 3 * DAY;
   assert.equal(laterText(timer(far), NOW), whenText(far, NOW), 'a timer far ahead: its ring time');
   const next = NOW + DAY;
-  const repeats = timer(next, { status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Repeats', since: NOW } });
+  const repeats = timer(next, { status: 'waiting', waitingOn: { on: 'outside', why: 'Repeats', since: NOW } });
   assert.equal(laterText(repeats, NOW), whenText(next, NOW), 'a repeating timer: its next ring');
   assert.equal(laterText(todo({ dueAt: far }), NOW), undefined, 'no timer: the row keeps its due time');
 });

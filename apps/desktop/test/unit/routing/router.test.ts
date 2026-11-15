@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { account, agent, mode, setup, standardSetup } from '../models/harness.ts';
+import { PERSON_LINE, account, agent, mode, setup, standardSetup } from '../models/harness.ts';
 import { NO_MODEL_MESSAGE } from '../../../src/runtime/routing/router.ts';
 import { setPolicy } from '../../../src/runtime/routing/policies.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
@@ -51,19 +51,15 @@ test('cost modes: economy prefers small/cheap models, best prefers frontier', as
   assert.equal(h.catalog.get(economyAgent.modelId)!.tier, 'small');
 });
 
-test('pins: chat choice > agent pin; an unusable pin falls back with a reason', async () => {
+test('start model: the agent\'s start model, also beside a chat suggestion (13.11.2026: never a route); an unusable one falls back with a reason', async () => {
   const h = await standardSetup();
   const pinnedAgent = agent('ag_1', { modelPolicy: { pin: 'claude:claude-opus-5-5' } });
-  h.addChat('ch_1', ['ag_1'], { models: { ag_1: 'claude:claude-haiku-5-5' } });
-  const chatPin = await h.router.route(request({ agent: pinnedAgent, conversationId: 'ch_1' }));
-  assert.equal(chatPin.modelId, 'claude:claude-haiku-5-5');
-  assert.equal(chatPin.by, 'pin');
-  assert.match(chatPin.reason, /pinned in this chat/);
-
-  h.addChat('ch_2', ['ag_1'], { models: { ag_1: 'auto' } });
-  const agentPin = await h.router.route(request({ agent: pinnedAgent, conversationId: 'ch_2' }));
-  assert.equal(agentPin.modelId, 'claude:claude-opus-5-5');
-  assert.equal(agentPin.by, 'pin');
+  h.addChat('ch_1', ['ag_1'], { modelHints: { ag_1: 'claude:claude-haiku-5-5' }, models: { ag_1: 'claude:claude-haiku-5-5' } }, PERSON_LINE);
+  for (const conversationId of [undefined, 'ch_1']) {
+    const own = await h.router.route(request({ agent: pinnedAgent, conversationId }));
+    assert.deepEqual([own.modelId, own.by], ['claude:claude-opus-5-5', 'pin'], conversationId);
+    assert.match(own.reason, /^my start model/);
+  }
 
   const missing = await h.router.route(request({ agent: agent('ag_1', { modelPolicy: { pin: 'claude:claude-fable-5-1' } }) }));
   assert.equal(missing.by, 'fallback');
@@ -73,6 +69,29 @@ test('pins: chat choice > agent pin; an unusable pin falls back with a reason', 
   const excluded = await h.router.route(request({ agent: pinnedAgent, exclude: ['claude:claude-opus-5-5'] }));
   assert.equal(excluded.by, 'fallback');
   assert.notEqual(excluded.modelId, 'claude:claude-opus-5-5');
+});
+
+test('B-079/B-083: the start model is where I begin – the agent\'s own request beats it', async () => {
+  const h = await standardSetup();
+  const haiku = agent('ag_1', { modelPolicy: { pin: 'claude:claude-haiku-5-5', effort: 'low' } });
+  const route = (patch: Partial<RouteRequest> = {}) => h.router.route(request({ agent: haiku, ...patch }));
+  const start = await route();
+  assert.deepEqual([start.modelId, start.effort, start.temperature, start.by], ['claude:claude-haiku-5-5', 'low', undefined, 'pin']);
+  // The agent names a model: it runs there (its fixed effort still holds).
+  const named = await route({ previous: { modelId: 'codex:gpt-6.1-sol', effort: 'low', explicit: true, asked: 'model' } });
+  assert.deepEqual([named.modelId, named.effort, named.by], ['codex:gpt-6.1-sol', 'low', 'request']);
+  // A need: the kind it asked for.
+  const stronger = await route({ previous: { modelId: 'claude:claude-haiku-5-5', effort: 'low', explicit: true, asked: 'model', need: { kind: 'stronger', from: 'claude:claude-haiku-5-5' } } });
+  assert.equal(h.catalog.get(stronger.modelId)!.tier, 'frontier');
+  assert.equal(stronger.by, 'request');
+  // An effort alone: the start model at the agent's effort.
+  const effort = await route({ previous: { modelId: '', effort: 'high', explicit: true, asked: 'effort' } });
+  assert.deepEqual([effort.modelId, effort.effort, effort.by], ['claude:claude-haiku-5-5', 'high', 'request']);
+  assert.match(effort.reason, /^my start model · .*effort requested by the agent/);
+  // A request nothing meets leaves the start model in place.
+  const unmet = await route({ previous: { modelId: 'claude:claude-haiku-5-5', effort: 'low', explicit: true, asked: 'model', need: { kind: 'faster', from: 'claude:claude-haiku-5-5' } } });
+  assert.equal(unmet.modelId, 'claude:claude-haiku-5-5', unmet.reason);
+  assert.match(unmet.reason, /^no faster model fits · my start model/);
 });
 
 test('return rule: the previous model continues (with its effort) while it is still a candidate', async () => {
@@ -118,7 +137,7 @@ test('Settings uses: the Work model for every agent turn it can do, the Decision
   h.settings.update({ routing: { work: 'claude:claude-haiku-5-5', decision: 'claude:claude-haiku-5-5' } });
   const plain = await h.router.route(request());
   assert.equal(plain.modelId, 'claude:claude-haiku-5-5');
-  assert.match(plain.reason, /set in Settings/);
+  assert.match(plain.reason, /the Work model in Settings/);
   assert.equal((await h.router.route(request({ mode: video }))).modelId, 'claude:claude-haiku-5-5', "every kind of work (a mode's tier is a preference)");
   h.settings.update({ routing: { work: 'codex:gpt-6.1-sol' } });
   const vision = await h.router.route(request({ needs: { vision: true } }));
@@ -130,7 +149,7 @@ test('Settings uses: the Work model for every agent turn it can do, the Decision
   h.settings.update({ routing: { work: 'claude:claude-haiku-5-5' } });
   const helper = await h.router.route(request({ agent: agent('system', { modelPolicy: { costMode: 'economy', ceilingTier: 'strong' } }), mode: mode('cheap-chat'), text: 'compact' }));
   assert.equal(helper.modelId, 'claude:claude-haiku-5-5', 'the Decisions model, not the Codex helper default');
-  assert.match(helper.reason, /set in Settings/);
+  assert.match(helper.reason, /the Decisions model in Settings/);
   h.settings.update({ routing: { work: 'codex', decision: 'auto' } });
   assert.equal((await h.router.route(request())).by, 'rules', 'a plan as the Work use is a preference, no pin');
   assert.match((await h.router.route(request({ agent: agent('system', { modelPolicy: { costMode: 'economy', ceilingTier: 'strong' } }), mode: mode('cheap-chat'), text: 'decision' }))).reason, /helper default/);
@@ -170,7 +189,7 @@ test('policy bounds and mode tiers are never exceeded silently', async () => {
 test('excluding a failed account moves to another account of the same model', async () => {
   const h = setup();
   h.accounts.upsert(account('acc_c1', 'claude'), false);
-  h.accounts.upsert(account('acc_c2', 'claude', { priority: 1, rotation: true }), false);
+  h.accounts.upsert(account('acc_c2', 'claude', { priority: 1 }), false);
   h.engine('claude').lists.set('claude', [{ model: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high'] }]);
   await h.catalog.refresh({ force: true });
   const first = await h.router.route(request({ mode: video }));
@@ -181,10 +200,10 @@ test('excluding a failed account moves to another account of the same model', as
   await assert.rejects(h.router.route(request({ mode: video, exclude: ['acc_c1', 'acc_c2'] })), /limited right now/);
 });
 
-test('effort: agent policy > chat choice > default; clamped to what the model supports', async () => {
+test('effort: agent policy > default (a chat\'s suggested effort is no route); clamped to what the model supports', async () => {
   const h = await standardSetup();
   h.addChat('ch_1', ['ag_1'], { models: { ag_1: 'codex:gpt-6.1-sol' }, efforts: { ag_1: 'low' } });
-  assert.equal((await h.router.route(request({ conversationId: 'ch_1' }))).effort, 'low');
+  assert.equal((await h.router.route(request({ conversationId: 'ch_1' }))).effort, 'medium', 'the chip\'s effort is information on the person\'s line');
   const fixed = agent('ag_1', { modelPolicy: { effort: 'max' } });
   assert.equal((await h.router.route(request({ agent: fixed, conversationId: 'ch_1' }))).effort, 'xhigh'); // Sol tops out at xhigh
   const none = agent('ag_1', { modelPolicy: { pin: 'claude:claude-opus-5-5', effort: 'none' } });
@@ -232,7 +251,7 @@ test('the Work use (also set as a global default pin) stays inside the agent ban
   h.settings.update({ routing: { work: 'claude:claude-haiku-5-5', decision: 'claude:claude-haiku-5-5' } });
   const viaSettings = await h.router.route(request({ agent: small }));
   assert.equal(viaSettings.modelId, 'claude:claude-haiku-5-5');
-  assert.match(viaSettings.reason, /set in Settings/);
+  assert.match(viaSettings.reason, /the Work model in Settings/);
   // Runtime helpers: the Decisions model; a global default pin is the Work use and never reaches them.
   setPolicy(h.services, {}, { pin: 'codex:gpt-6-luna' });
   assert.equal(h.settings.get().routing.work, 'codex:gpt-6-luna');
@@ -249,16 +268,14 @@ test('pins: a provider-qualified id never moves to another provider; bare ids re
   h.engine('openai').lists.set('openai', [{ model: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'medium', 'high'] }]);
   h.engine('compatible').lists.set('ollama', [{ model: 'qwen3.8:27b', name: 'qwen3.8:27b', efforts: [] }]);
   await h.catalog.refresh({ force: true });
+  const pinned = (pin: string) => request({ agent: agent('ag_1', { modelPolicy: { pin } }) });
   // The Codex plan pin has no Codex account any more: never the pay-per-use OpenAI key instead.
-  h.addChat('ch_1', ['ag_1'], { models: { ag_1: 'codex:gpt-6.1-sol' } });
-  const moved = await h.router.route(request({ conversationId: 'ch_1' }));
+  const moved = await h.router.route(pinned('codex:gpt-6.1-sol'));
   assert.notEqual(moved.modelId, 'openai:gpt-6.1-sol');
   assert.equal(moved.by, 'fallback');
   assert.match(moved.reason, /^pinned model unavailable/);
-  h.addChat('ch_2', ['ag_1'], { models: { ag_1: 'claude-haiku-5-5' } });
-  assert.equal((await h.router.route(request({ conversationId: 'ch_2' }))).modelId, 'claude:claude-haiku-5-5');
-  h.addChat('ch_3', ['ag_1'], { models: { ag_1: 'qwen3.8:27b' } });
-  const local = await h.router.route(request({ conversationId: 'ch_3' }));
+  assert.equal((await h.router.route(pinned('claude-haiku-5-5'))).modelId, 'claude:claude-haiku-5-5');
+  const local = await h.router.route(pinned('qwen3.8:27b'));
   assert.deepEqual([local.modelId, local.accountId, local.by], ['ollama:qwen3.8:27b', 'acc_ollama', 'pin']);
 });
 

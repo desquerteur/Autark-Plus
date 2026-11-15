@@ -3,8 +3,12 @@
 // picture of it (a DevTools screencast, pulled one frame at a time like browser.pull) and sends clicks, wheel turns,
 // keys, text and navigation back. main/side-driver/caster.ts casts, runtime/browser/side-view.ts holds the pulls,
 // runtime/devices/side-view.ts carries them between linked PCs, ui/workspace/RemoteWebTab.tsx shows them.
+// B-081: the viewer names its picture box (`view`, CSS px) with every pull; while it watches, the page there takes that
+// size (caster.ts), so the picture fills the viewer's box whatever pane the page sits in on its PC. B-081 T9: the page
+// says each time a press of the viewer left a text field focused (`editing`, a stamp), so a phone opens its keyboard.
 // side.* are merged into Methods by module augmentation.
-// Owns: these shapes and their limits. Never: behaviour.
+// Owns: these shapes, their limits, the clamp of a view size and how an older PC's refusal of it reads. Never: behaviour
+// beyond those checks.
 
 import type { BrowserInput, BrowserNavigation } from './browser.ts';
 
@@ -15,6 +19,30 @@ export const SIDE_WAIT_MS = 5000;
 export const SIDE_PART_BYTES = 1024 * 1024;
 /** A side-browser tab id (main/workspace-browser.ts makes them: 'web-<uuid>'). */
 export const SIDE_TAB_ID = /^web-[a-zA-Z0-9-]{1,80}$/;
+/** A viewer's picture box (whole CSS px) stays within these, on either side. */
+export const SIDE_VIEW_MIN = 200;
+export const SIDE_VIEW_MAX = 4096;
+
+/** The viewer's picture box in whole CSS px: the page's viewport on its PC while that viewer watches. */
+export interface SideViewSize { width: number; height: number }
+
+/** A box size as a view: whole px, each side within SIDE_VIEW_MIN … SIDE_VIEW_MAX. */
+export function clampView(width: number, height: number): SideViewSize {
+  const side = (value: number) => Math.min(SIDE_VIEW_MAX, Math.max(SIDE_VIEW_MIN, Math.round(Number.isFinite(value) ? value : SIDE_VIEW_MIN)));
+  return { width: side(width), height: side(height) };
+}
+
+/** Both views name the same size (none is never the same). */
+export const sameView = (a?: SideViewSize, b?: SideViewSize): boolean => Boolean(a && b && a.width === b.width && a.height === b.height);
+
+/** A PC from before B-081 refuses side.pull's `view` key (bad_request on "params.view"): it is asked without one. */
+export function refusesView(error: unknown): boolean {
+  type Details = { details?: { param?: unknown } };
+  const e = error as (Details & { code?: unknown; message?: unknown; data?: Details }) | null | undefined; // RpcError or WorkforceError
+  if (e?.code !== 'bad_request') return false;
+  const param = e.data?.details?.param ?? e.details?.param;
+  return typeof param === 'string' ? param === 'params.view' : typeof e.message === 'string' && e.message.includes('"params.view"');
+}
 
 /** A dialog the page opened on its PC (alert, confirm, beforeunload …): the page waits until it is answered. */
 export interface SideDialog { type: string; message: string }
@@ -28,6 +56,9 @@ export interface SidePage {
   loading: boolean;
   /** Open while the page waits for an answer (side.nav `dialog`). */
   dialog?: SideDialog;
+  /** B-081 T9: a watcher's press that ended left the page's focus on an element that takes text – a new stamp (host ms,
+   *  rising) for each such press, so a tap into the next field is news too (the phone opens its keyboard); absent: none. */
+  editing?: number;
 }
 
 export interface SideViewState extends SidePage {
@@ -61,6 +92,8 @@ export interface SidePullRequest {
   after?: { state?: number; frame?: number };
   maxBytes?: number;
   waitMs?: number;
+  /** B-081: the viewer's picture box; the page takes this size while it watches (clamped to SIDE_VIEW_MIN … MAX). */
+  view?: SideViewSize;
 }
 
 /** With `parts` > 1, `frame.data` is part 0 – fetch parts 1 … parts-1 with side.pullPart and join them. */

@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { detectChannel } from '../../src/runtime/browser/channel.ts';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 function installedChannel() {
   try { return detectChannel(); } catch { return undefined; }
@@ -60,7 +60,7 @@ test('PWA at phone width: agent media shows by fileId, the file row offers Downl
     conversationId: chat.id,
     body: 'Show [[ui:{"type":"media","src":"out/chart.png","caption":"Chart"}]] and [[ui:{"type":"file","path":"out/report.txt","label":"Report"}]]',
   });
-  const reply = await owner.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id
+  const reply = await owner.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id
     && message.state === 'final' && message.body.includes('report.txt'), 90_000); // the file path becomes absolute (backslashes on Windows)
   assert.equal((reply.body.match(/"fileId":"[a-f0-9]{64}"/g) ?? []).length, 2, 'both blocks carry a stored file id');
   const link = await owner.call('pwa.link', { name: 'Files phone' });

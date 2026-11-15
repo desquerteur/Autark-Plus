@@ -136,17 +136,6 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   await expectStable(page, steady, async () => { await tabsCell.click(); await page.locator('.chat-area').waitFor({ state: 'detached' }); });
   assert.equal(await tabsCell.getAttribute('aria-pressed'), 'false');
 
-  // The Ultra switch beside the model chip: on and off change only its colour.
-  const composerRow = ['.composer', '.composer-actions', '.composer .composer-plus', '.composer .ultra-switch',
-    '.composer .model-chip', '.composer .send-button', '.message-scroller', '.chat-header'];
-  const ultra = page.locator('.composer .ultra-switch');
-  for (const on of ['true', 'false']) {
-    await expectStable(page, composerRow, async () => {
-      await ultra.click();
-      await page.locator(`.composer .ultra-switch[aria-checked="${on}"]`).waitFor({ timeout: 5_000 });
-    });
-    if (on === 'true') await shot('stable-03b-ultra-on');
-  }
 
   // An agent starts working: the live line fills the reserved sub line; the title stays.
   const working = rpc.waitFor('agent.activity', (event) => event.active.some((run) => run.conversationId === chat.id), 30_000);

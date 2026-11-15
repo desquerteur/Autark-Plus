@@ -4,6 +4,7 @@
 // Never: calls a model – this is the cheap deterministic first step; a specific mode's category wins.
 // B-047 D12: 'manager-planner' (the manager mode) is refined like 'chat': a Manager's chat, research or PC turn
 // gets the category of its text (else 'chat'); only a turn without text (model lists) keeps the mode's own category.
+// B-080: equal top scores name no kind (inferCategory) – a tie used to go to the table's first row, video work.
 
 import type { Effort } from '../../shared/model/providers.ts';
 import { CATEGORIES } from '../models/priors.ts';
@@ -15,14 +16,19 @@ export type Category = (typeof CATEGORIES)[number];
  * ("termin" → "Termine", not "determine"), `parts` match anywhere (German compounds such as
  * "Musikvideo", "Buchhaltungssoftware"; a RegExp part is used as is). Weight 3 = specific;
  * weight 1 = generic: two different ones needed – one generic word repeated is no second hint.
+ * B-083 D6: a word that names what the work is about (a medium: video, animation, podcast) is one hint however often
+ * and in whatever form it appears (`max: 1`); the work itself is named by a craft word beside it.
  */
-interface KeywordGroup { category: Category; weight: number; words?: string[]; prefixes?: string[]; parts?: Array<string | RegExp> }
+interface KeywordGroup { category: Category; weight: number; max?: number; words?: string[]; prefixes?: string[]; parts?: Array<string | RegExp> }
 
 const GROUPS: KeywordGroup[] = [
-  { category: 'video-animation', weight: 3, parts: ['remotion', 'after effects', 'premiere pro', 'davinci', 'keyframe', 'b-roll', 'footage', 'motion canvas', 'videoschnitt', 'animation', 'video', 'untertitel', 'subtitles'] },
-  // "Schneide den Podcast": cutting ("zusammenschneiden") and a podcast together are video work –
-  // every form of "schneiden" is one hint, the name or trade "Schneider" none.
-  { category: 'video-animation', weight: 1, parts: ['animier', 'animate', /schneid(?!er)/, 'podcast', 'thumbnail'], prefixes: ['render', 'schnitt', 'clip', 'intro', 'outro', 'timeline', 'blender'], words: ['reel', 'reels'] },
+  { category: 'video-animation', weight: 3, parts: ['remotion', 'after effects', 'premiere pro', 'davinci', 'keyframe', 'b-roll', 'footage', 'motion canvas', 'videoschnitt', 'untertitel', 'subtitles'] },
+  // "Schneide den Podcast", "Cut the video": cutting ("zusammenschneiden") and a podcast together are video work –
+  // every form of "schneiden" is one hint, the name or trade "Schneider" none; a clipboard is no clip.
+  { category: 'video-animation', weight: 1, parts: ['animier', 'animate', /schneid(?!er)/, /(?<![\p{L}\p{N}])clip(?!board)/u, 'thumbnail'], prefixes: ['render', 'schnitt', 'intro', 'outro', 'timeline', 'blender'], words: ['reel', 'reels', 'cut', 'cuts', 'cutting'] },
+  // D6: a word that names a medium says what the work is about – one hint however often it appears; video work needs a
+  // craft hint beside it (or a specific craft word above).
+  { category: 'video-animation', weight: 1, max: 1, parts: ['video', 'animation', 'podcast'] },
   { category: 'frontend-ui', weight: 3, parts: ['frontend', 'front-end', 'landingpage', 'landing page', 'tailwind', 'figma', 'benutzeroberfläche', 'user interface'], words: ['css', 'html', 'ui/ux'] },
   { category: 'frontend-ui', weight: 1, parts: ['website', 'webseite', 'homepage', 'komponente', 'design system', 'dark mode', 'responsive'], words: ['ui', 'ux', 'layout', 'component', 'components'] },
   { category: 'computer-use', weight: 3, parts: ['bildschirm', 'formular ausfüll', 'fill in the form', 'fill out the form', 'on my screen', 'on the screen', 'desktop app'], words: ['click', 'klick', 'klicke', 'mouse', 'maus', 'screenshot'] },
@@ -48,12 +54,12 @@ const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 const LETTER_BEFORE = String.raw`(?<![\p{L}\p{N}])`;
 const LETTER_AFTER = String.raw`(?![\p{L}\p{N}])`;
 
-const KEYWORDS: Array<{ category: Category; weight: number; pattern: RegExp }> = GROUPS.map((group) => {
+const KEYWORDS: Array<{ category: Category; weight: number; max?: number; pattern: RegExp }> = GROUPS.map((group) => {
   const alternatives: string[] = [];
   if (group.words?.length) alternatives.push(`${LETTER_BEFORE}(?:${group.words.map(escape).join('|')})${LETTER_AFTER}`);
   if (group.prefixes?.length) alternatives.push(`${LETTER_BEFORE}(?:${group.prefixes.map(escape).join('|')})`);
   if (group.parts?.length) alternatives.push(`(?:${group.parts.map((part) => typeof part === 'string' ? escape(part) : part.source).join('|')})`);
-  return { category: group.category, weight: group.weight, pattern: new RegExp(alternatives.join('|'), 'gu') };
+  return { category: group.category, weight: group.weight, max: group.max, pattern: new RegExp(alternatives.join('|'), 'gu') };
 });
 
 const MIN_SCORE = 2;
@@ -64,18 +70,15 @@ export function inferCategory(text: string | undefined): Category | undefined {
   if (!text || !text.trim()) return undefined;
   const value = text.slice(-4000).toLowerCase();
   const scores = new Map<Category, number>();
-  for (const { category, weight, pattern } of KEYWORDS) {
+  for (const { category, weight, max, pattern } of KEYWORDS) {
     const matches = value.match(pattern) ?? [];
     // A generic keyword counts once ("Podcast … Podcast", "schneiden … zuschneiden" is one hint).
     const hits = weight === 1 ? new Set(matches).size : matches.length;
-    if (hits) scores.set(category, (scores.get(category) ?? 0) + weight * Math.min(hits, MAX_HITS_PER_GROUP));
+    if (hits) scores.set(category, (scores.get(category) ?? 0) + weight * Math.min(hits, max ?? MAX_HITS_PER_GROUP));
   }
-  let best: Category | undefined;
-  let bestScore = 0;
-  for (const [category, score] of scores) {
-    if (score > bestScore) { best = category; bestScore = score; }
-  }
-  return bestScore >= MIN_SCORE ? best : undefined;
+  const [best, second] = [...scores].sort((a, b) => b[1] - a[1]);
+  // Equal scores name no kind – the table's order is no judgement (it made every tie video work).
+  return best && best[1] >= MIN_SCORE && !(second && second[1] === best[1]) ? best[0] : undefined;
 }
 
 /** True for known category names (mode files and tools use exactly these strings). */
@@ -88,8 +91,9 @@ export const REFINED_CATEGORIES: ReadonlySet<string> = new Set(['chat', 'manager
 
 /**
  * The category of a turn: a specific mode category wins; the generic 'chat' (general mode) and the
- * manager mode's 'manager-planner' are refined by keyword inference from the turn text; otherwise 'chat'
- * (the router may still classify it). Without any text a refined mode keeps its own category.
+ * manager mode's 'manager-planner' are refined by keyword inference from the text – what the turn is asked (B-080:
+ * the person's newest line, else the task, agents/turn-prepare.ts); otherwise 'chat'. Without any text a refined
+ * mode keeps its own category.
  */
 export function resolveCategory(modeCategory: string | undefined, text: string | undefined): string {
   if (modeCategory && isCategory(modeCategory) && !REFINED_CATEGORIES.has(modeCategory)) return modeCategory;

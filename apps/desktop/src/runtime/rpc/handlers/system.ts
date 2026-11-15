@@ -1,10 +1,13 @@
 // RPC handlers: system info/resources/restart, event subscriptions, settings, UI state
-// (drafts of all chats + the last open chat; both are chat content, so a device without 'chat'
+// (drafts of all chats with their files – B-082 – + the last open chat; both are chat content, so a device without 'chat'
 // – a To-do link – gets an empty state). A device with
-// 'settings' changes only preferences and notifications, never the PC-only preferences (window
-// close, login item, automatic update download – they change the PC, settings audit 23.10.2026).
-// system.root (B-044, owner): where <data> and its generated map README.md are (the map written when missing),
-// plus the settings file's quiet notice.
+// 'settings' changes preferences and notifications. On a secure transport (the owner's paired phone, not a colleague's
+// session) it also changes routing, voice, devices, profile and day, and the PC's own preferences – window close,
+// login item, automatic update download (owner 12.11.2026; main applies them on change). Plain LAN keeps the PC ones.
+// system.root (B-044, owner; B-081 `device`: that linked CEO PC's, without notices): where <data> and its generated
+// map README.md are (the map written when missing),
+// plus the settings file's quiet notice. B-080: system.install (owner) installs a build the way an update does;
+// system.prepareRestart carries the update's version (`to`), so the next start can say whether it landed.
 // Owns: param checks and scope rules for these methods. Never: business logic – it delegates
 // to extras.system, the settings service and the chat service.
 
@@ -20,7 +23,9 @@ import { KvRepo } from '../../store/kv.ts';
 import { json } from '../../db/database.ts';
 import { attachedSecrets } from '../../secrets/chat-capture.ts';
 import { restartRuntime, restoreStatus } from '../../portability/service.ts';
-import { bad, id, input, isIdLike, optBool, text } from '../params.ts';
+import { installBuild } from '../../tasks/recover-notes.ts'; // B-080
+import { bad, id, input, isIdLike, optBool, optText, text } from '../params.ts';
+import { onDevice } from './files-path.ts'; // B-081: system.root of a linked CEO PC
 import { isTopic, maySubscribe } from '../scopes.ts';
 import { scopeHas } from '../table.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
@@ -30,8 +35,12 @@ const CHAT = { capability: 'chat' } as const;
 const SETTINGS = { capability: 'settings' } as const;
 /** Settings sections a phone/browser with the 'settings' capability may change. */
 const DEVICE_SETTINGS: ReadonlySet<string> = new Set(['preferences', 'notifications']);
-/** Preferences that change the PC itself (window close, login item, updates): never from a device (settings audit 23.10.). */
-const PC_ONLY_PREFERENCES: ReadonlySet<string> = new Set(['closeToTray', 'openAtLogin', 'autoDownloadUpdates']);
+/** B-084: the sections a 'settings' device on a secure transport (my phone app's tunnel) changes as well. */
+const SECURE_DEVICE_SETTINGS: ReadonlySet<string> = new Set(['routing', 'voice', 'devices', 'profile', 'day']);
+/** Preferences that change the PC itself (window close, login item, updates). Owner 12.11.2026: my own securely paired
+ * phone reaches all my settings, so a secure 'settings' device changes them too (main applies them on change); a plain-LAN
+ * device or a colleague does not. */
+const PC_PREFERENCES: ReadonlySet<string> = new Set(['closeToTray', 'openAtLogin', 'autoDownloadUpdates']);
 const MAX_TOPICS = 256;
 const MAX_DRAFT = 100_000;
 const UI_KV = { ns: 'ui', key: 'lastConversationId' };
@@ -65,12 +74,13 @@ function subscribe(params: unknown, ctx: HandlerContext): { ok: true } {
 function updateSettings(params: unknown, ctx: HandlerContext) {
   const patch = input(params) as SettingsPatch;
   if (ctx.scope.kind === 'device') {
+    const secure = ctx.scope.secure === true && ctx.scope.capabilities.includes('settings');
     for (const section of Object.keys(patch)) {
-      if (!DEVICE_SETTINGS.has(section)) throw new WorkforceError('forbidden', 'This device may only change appearance and notification settings.', { details: { section } });
+      if (!DEVICE_SETTINGS.has(section) && !(secure && SECURE_DEVICE_SETTINGS.has(section))) throw new WorkforceError('forbidden', 'This device may only change appearance and notification settings.', { details: { section } });
     }
     const prefs = patch.preferences;
     for (const key of prefs && typeof prefs === 'object' ? Object.keys(prefs) : []) {
-      if (PC_ONLY_PREFERENCES.has(key)) throw new WorkforceError('forbidden', 'This setting changes the PC and can only be changed there.', { details: { section: 'preferences', key } });
+      if (!secure && PC_PREFERENCES.has(key)) throw new WorkforceError('forbidden', 'This setting changes the PC; change it on the PC or from the paired phone app over a secure connection.', { details: { section: 'preferences', key } });
     }
   }
   return ctx.services.settings.update(patch);
@@ -83,23 +93,29 @@ function rootInfo(services: RuntimeServices): RootInfo {
   return { path: services.paths.data, workspace: services.paths.workspace, readme: path.join(services.paths.data, ROOT_README), ...(notice ? { notices: [notice] } : {}) };
 }
 
-function uiState(ctx: HandlerContext): { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; lastConversationId?: string } {
+type UiState = { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; draftFiles?: Record<string, Attachment[]>; lastConversationId?: string };
+
+function uiState(ctx: HandlerContext): UiState {
   if (!scopeHas(ctx.scope, 'chat')) return { drafts: {} };
   const { db } = ctx.services;
   const drafts: Record<string, string> = {};
-  const rows = db.all<{ conversation_id: string; text: string; secret_ids: string }>(
-    `SELECT d.conversation_id, d.text, d.secret_ids FROM drafts d JOIN conversations c ON c.id = d.conversation_id
-     WHERE c.archived_at IS NULL AND (d.text != '' OR d.secret_ids != '[]') ORDER BY d.updated_at DESC LIMIT 500`,
+  const rows = db.all<{ conversation_id: string; text: string; secret_ids: string; attachments: string }>(
+    `SELECT d.conversation_id, d.text, d.secret_ids, d.attachments FROM drafts d JOIN conversations c ON c.id = d.conversation_id
+     WHERE c.archived_at IS NULL AND (d.text != '' OR d.secret_ids != '[]' OR d.attachments != '[]') ORDER BY d.updated_at DESC LIMIT 500`,
   );
   for (const row of rows) if (row.text) drafts[row.conversation_id] = row.text;
   const secretDrafts: Record<string, string[]> = {};
+  const draftFiles: Record<string, Attachment[]> = {}; // B-082: a kept take in a draft comes back after a reload
   for (const row of rows) {
     const refs = json<string[]>(row.secret_ids, []);
     if (refs.length) secretDrafts[row.conversation_id] = refs;
+    const files = draftAttachments(json<unknown>(row.attachments, []));
+    if (files.length) draftFiles[row.conversation_id] = files;
   }
   const last = new KvRepo(db).get<string>(UI_KV.ns, UI_KV.key);
-  const result: { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; lastConversationId?: string } = { drafts };
+  const result: UiState = { drafts };
   if (Object.keys(secretDrafts).length) result.secretDrafts = secretDrafts;
+  if (Object.keys(draftFiles).length) result.draftFiles = draftFiles;
   if (typeof last === 'string' && ctx.services.chats.get(last) && !ctx.services.chats.get(last)!.archivedAt) result.lastConversationId = last;
   return result;
 }
@@ -128,8 +144,14 @@ export function register(table: HandlerTable): void {
   table.add('system.resources', (_params, ctx) => ctx.extras.system.resources());
   table.add('system.restartReadiness', (_params, ctx) => ctx.extras.system.restartReadiness());
   table.add('system.prepareRestart', async (params, ctx) => {
-    await ctx.extras.system.prepareRestart(optBool(input(params), 'cancel'));
+    const o = input(params);
+    await ctx.extras.system.prepareRestart(optBool(o, 'cancel'), optText(o, 'to', { max: 64 })); // B-080: the update's version
     return { ok: true };
+  });
+  // B-080: a build installed the way an update installs (tasks/recover-notes.ts installBuild; owner only: this PC's program).
+  table.add('system.install', async (params, ctx) => {
+    const record = await installBuild(ctx.services, text(input(params), 'installer', { max: 1024 }));
+    return { ok: true, from: record.from, ...(record.to ? { to: record.to } : {}) };
   });
 
   table.add('events.subscribe', (params, ctx) => subscribe(params, ctx), TODO);
@@ -154,6 +176,7 @@ export function register(table: HandlerTable): void {
   // MM7: Settings › About › Backup – the restore's state and the in-app restart (owner only: paths and the runtime of this PC).
   table.add('system.restoreStatus', (_params, ctx) => restoreStatus(ctx.services));
   table.add('system.restartRuntime', (_params, ctx) => restartRuntime(ctx.services));
-  // B-044: where <data> and its generated README.md map are (owner only: paths of this PC).
-  table.add('system.root', (_params, ctx) => rootInfo(ctx.services));
+  // B-044: where <data> and its generated README.md map are (owner only: paths of this PC). B-081: with `device` that
+  // linked CEO PC's (files.path 'root', devices/sync/paths.ts) – the new-tab page's Files cell of that PC.
+  table.add('system.root', (params, ctx) => onDevice(ctx, params, 'root', async () => rootInfo(ctx.services)));
 }

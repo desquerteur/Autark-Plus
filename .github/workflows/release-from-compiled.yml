@@ -32,6 +32,8 @@ env:
   RELEASE_PAYLOAD_SHA256: ${{ inputs.sha256 }}
 jobs:
   package:
+    # B-085: forks of OpenAutark do not run our release (it signs and uploads under teydra/OpenAutark).
+    if: github.repository == 'teydra/OpenAutark'
     strategy:
       fail-fast: false
       matrix:

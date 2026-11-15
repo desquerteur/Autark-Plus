@@ -18,6 +18,12 @@ export type AccountTry =
   | { ok: true; ms: number; model: string }
   | { ok: false; reason: 'missing' | 'signed_out' | 'plan' | 'limit' | 'error'; message: string };
 
+/**
+ * B-091: a sign-in started from a device away from the PC (the phone) – `code`: the one-time code the person
+ * enters on the sign-in page (Codex); `paste`: the page shows a code the person hands back with accounts.loginCode (Claude).
+ */
+export interface AwaySignIn { code?: string; paste?: true }
+
 /** Result of `catalog.status`: catalog size, available models and the last full refresh. */
 export interface ModelCatalogStatus {
   models: number;
@@ -31,9 +37,11 @@ declare module '../api/methods.ts' {
     // ----------------------------------------------------------------- providers & routing
     'accounts.list': { params: void; result: Account[] };
     'accounts.detect': { params: { force?: boolean } | void; result: DetectionReport };
-    'accounts.add': { params: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; rotation?: boolean; envVar?: string; detected?: boolean }; result: Account & { signInUrl?: string } }; // apiKey: typed, or a handle secret://<id> of the catalog (the account then only names that entry); PR5: envVar = key variable name, detected = "Add again"; B-051: signInUrl = the page the CLI's sign-in printed (when it did within a few seconds)
-    'accounts.update': { params: { id: string; label?: string; priority?: number; rotation?: boolean; enabled?: boolean }; result: Account };
-    'accounts.login': { params: { id: string }; result: { started: boolean; url?: string } };
+    'accounts.add': { params: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; envVar?: string; detected?: boolean }; result: Account & { signInUrl?: string } & AwaySignIn }; // apiKey: typed, or a handle secret://<id> of the catalog (the account then only names that entry); PR5: envVar = key variable name, detected = "Add again"; B-051: signInUrl = the page the CLI's sign-in printed (when it did within a few seconds)
+    'accounts.update': { params: { id: string; label?: string; priority?: number; enabled?: boolean; credits?: boolean }; result: Account }; // B-083 credits: the key holds a plan's monthly API credits (used like a plan)
+    'accounts.login': { params: { id: string }; result: { started: boolean; url?: string } & AwaySignIn };
+    /** B-091: the code the Claude sign-in page showed the person on their phone, handed to the running away sign-in; ok = the account works now. */
+    'accounts.loginCode': { params: { id: string; code: string }; result: { ok: boolean } };
     'accounts.logout': { params: { id: string }; result: { ok: true } };
     'accounts.remove': { params: { id: string }; result: { ok: true } };
     'accounts.install': { params: { provider: 'claude' | 'codex' }; result: { ok: true } };
@@ -55,7 +63,7 @@ declare module '../api/methods.ts' {
     /** The stored policy at one scope (no ids = global default for agents); null when none is set. */
     'models.getPolicy': { params: { agentId?: string; conversationId?: string } | void; result: ModelPolicy | null };
     'models.setPolicy': { params: { agentId?: string; conversationId?: string; policy: ModelPolicy }; result: { ok: true } };
-    /** RT5: like a turn, the chat's last done run is the previous choice; `ignorePin` = as on a picker's "nothing chosen" option (in a chat its own model/effort choice does not answer; without a chat the agent's own pin does not either). */
+    /** RT5: like a turn, the chat's last done run is the previous choice (a chat's model choice is information for the AI, never a route); `ignorePin` = as on the agent page's "nothing chosen" option: without a chat the agent's own pin does not answer. */
     'routing.preview': { params: { agentId: string; conversationId?: string; text?: string; mode?: string; ignorePin?: boolean }; result: RouteDecision };
     'catalog.refresh': { params: void; result: { ok: true; models: number; fetchedAt?: number; refreshedAt?: number } };
     'catalog.status': { params: void; result: ModelCatalogStatus };

@@ -83,3 +83,26 @@ test('a failed send gives the draft back as typed – the command, its file, sec
   assert.deepEqual({ text: back.text, attachments: back.attachments, secrets: back.secrets, replyTo: back.replyTo },
     { text: '/silent see attached', attachments: [FILE], secrets: ['sec_1'], replyTo: 'msg_0' });
 });
+
+test('B-082: the hidden marks go out beside the plain body (only when there are some) and come back with a failed send', async () => {
+  sent.length = 0;
+  const text = 'ask Kodex now';
+  const marks = { uncertain: [{ start: 4, end: 9, pct: 55, alts: [{ t: 'Codex', pct: 40 }] }], dictated: [{ start: 4, end: 13 }] };
+  updateDraft('ch_marks', { text: `/important ${text}`, marks: { uncertain: marks.uncertain.map((m) => ({ ...m, start: m.start + 11, end: m.end + 11 })), dictated: [{ start: 15, end: 24 }] } });
+  await enter('ch_marks');
+  assert.equal(sent[0].body, text);
+  assert.deepEqual(sent[0].marks, marks, 'moved to the sent text');
+  assert.equal(draftFor('ch_marks').peek().marks, undefined, 'the fresh draft has none');
+  updateDraft('ch_marks', { text: 'typed only' });
+  await send('ch_marks', 'typed only', 'normal');
+  assert.equal('marks' in sent[1], false, 'no marks key without marks');
+  fail = true;
+  updateDraft('ch_marks', { text, marks });
+  await send('ch_marks', text, 'normal');
+  fail = false;
+  assert.deepEqual(draftFor('ch_marks').peek().marks, marks, 'back with the text');
+  updateDraft('ch_marks', { text: `${text}!` });
+  assert.deepEqual(draftFor('ch_marks').peek().marks, marks, 'typing after them keeps them (updateDraft moves marks along)');
+  updateDraft('ch_marks', { text: 'ask Kodax now!' });
+  assert.equal(draftFor('ch_marks').peek().marks?.uncertain, undefined, 'typing into the unsure word drops it');
+});

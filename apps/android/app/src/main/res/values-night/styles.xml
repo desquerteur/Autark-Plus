@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: platform-native chrome colors in dark mode (a dark parent, so the WebView reports prefers-color-scheme: dark
+     and the page's system theme turns dark; light bar icons until SystemBars repaints from the page). Never: restyles the shared web app. -->
+<resources>
+    <style name="AppThemeBase" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#2C665A</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

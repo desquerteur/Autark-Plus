@@ -63,7 +63,7 @@ test('device scope rules follow the capability matrix', () => {
   const device = (capabilities: DeviceCapability[]): ClientScope => ({ kind: 'device', deviceId: 'dev_x', capabilities, secure: true });
   const may = (method: string, scope: ClientScope) => allowedScope(table.get(method)!.scope, scope);
   const todo = device(['todo']);
-  for (const method of ['todos.list', 'todos.add', 'todos.changeWidget', 'tasks.complete', 'blocks.answer', 'blocks.state', 'blocks.event',
+  for (const method of ['todos.list', 'todos.add', 'todos.changeWidget', 'tasks.finish', 'blocks.answer', 'blocks.state', 'blocks.event',
     'files.upload', 'files.uploadChunk', 'files.get', 'files.read', 'events.subscribe', 'events.unsubscribe', 'system.info', 'settings.get', 'agents.list', 'ui.state']) {
     assert.ok(may(method, todo), `${method} for 'todo'`);
   }
@@ -83,7 +83,7 @@ test('device scope rules follow the capability matrix', () => {
     assert.ok(!may(method, chat), `${method} not for 'chat'`);
   }
   const tasks = device(['todo', 'tasks']);
-  for (const method of ['tasks.list', 'tasks.get', 'tasks.create', 'tasks.update', 'tasks.setStatus', 'tasks.reorder', 'tasks.delete', 'tasks.share', 'schedules.list']) {
+  for (const method of ['tasks.list', 'tasks.get', 'tasks.create', 'tasks.update', 'tasks.give', 'tasks.reorder', 'tasks.delete', 'tasks.share', 'schedules.list']) {
     assert.ok(may(method, tasks), `${method} for 'tasks'`);
   }
   for (const method of ['schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.items', 'runs.cancel', 'agents.update', 'spaces.save', 'system.resources']) {

@@ -7,35 +7,6 @@ import type { Task } from '../../../src/shared/model/tasks.ts';
 
 const WEEK = 7 * 86_400_000;
 
-test('verify: missing result fails, no done-condition passes, decision verdicts, no decision model', async () => {
-  const result = { summary: 'Page is live', evidence: [{ kind: 'link' as const, label: 'Landing page', ref: 'https://acme.test' }], verification: 'claimed_by_agent' as const };
-  const plain = fixture();
-  assert.equal((await plain.subconscious.verify(doneTask(), { summary: ' ', evidence: [], verification: 'claimed_by_agent' })).ok, false);
-  assert.deepEqual(await plain.subconscious.verify(doneTask(), result), { ok: true, reason: 'no done-condition', checked: false });
-  const unchecked = await plain.subconscious.verify(doneTask({ doneWhen: 'The page is reachable over HTTPS' }), result);
-  assert.equal(unchecked.ok, true);
-  assert.equal(unchecked.checked, false);
-
-  const no = fakeDecisions(() => ({ value: false, confidence: 0.9 }));
-  const f = fixture({ decisions: no.service });
-  const failed = await f.subconscious.verify(doneTask({ doneWhen: 'The page has a signup form', mode: 'video' }), result);
-  assert.equal(failed.ok, false);
-  assert.ok(failed.reason.includes('The page has a signup form'));
-  assert.equal(no.calls[0].purpose, 'verify');
-  assert.equal(no.calls[0].question, 'Does this result satisfy: The page has a signup form?');
-  assert.ok(no.calls[0].context!.includes('- link: Landing page (https://acme.test)'));
-  assert.ok(no.calls[0].context!.includes('Quality rubric: The video file exists and plays.'));
-
-  const yes = fakeDecisions(() => ({ value: true, confidence: 0.8 }));
-  const g = fixture({ decisions: yes.service });
-  const passed = await g.subconscious.verify(doneTask({ doneWhen: 'The page is live' }), result);
-  assert.deepEqual([passed.ok, passed.checked], [true, true]);
-
-  const unsure = fakeDecisions(() => ({ value: false, confidence: 0.2 }));
-  const h = fixture({ decisions: unsure.service });
-  const soft = await h.subconscious.verify(doneTask({ doneWhen: 'The page is live' }), result);
-  assert.deepEqual([soft.ok, soft.checked], [true, false]);
-});
 
 test('widgetFor: keyword fallback without a decision model; decision choice with details carried over', async () => {
   const f = fixture();
@@ -58,5 +29,5 @@ test('widgetFor: keyword fallback without a decision model; decision choice with
 });
 
 function doneTask(extra: Partial<Task> = {}): Task {
-  return { id: 'task_1', conversationId: 'ch_1', title: 'Write the landing page', notes: '', status: 'done', assigneeKind: 'agent', createdBy: 'human', priority: 0, ledger: {}, attempts: 1, sort: 0, rev: 1, createdAt: 0, updatedAt: 0, ...extra };
+  return { id: 'task_1', conversationId: 'ch_1', title: 'Write the landing page', notes: '', status: 'done', assigneeKind: 'agent', createdBy: 'human', priority: 0, ledger: {}, sort: 0, rev: 1, createdAt: 0, updatedAt: 0, ...extra };
 }

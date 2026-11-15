@@ -36,7 +36,7 @@ class FakeTimers implements CleanupTimers {
   }
 }
 
-const ACCOUNT = { id: 'acc_1', provider: 'compatible', label: 'STT', auth: 'api_key', baseUrl: 'https://stt.example/v1', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 } as Account;
+const ACCOUNT = { id: 'acc_1', provider: 'compatible', label: 'STT', auth: 'api_key', baseUrl: 'https://stt.example/v1', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 } as Account;
 const MODEL = { id: 'compatible:whisper-1', provider: 'compatible', model: 'whisper-1', name: 'whisper-1', engine: 'compatible', efforts: [], caps: {}, tier: 'strong', strengths: {}, available: true, accounts: [ACCOUNT.id], functions: ['stt'] } as ModelInfo;
 
 function setup(transcriptionMs = 0) {

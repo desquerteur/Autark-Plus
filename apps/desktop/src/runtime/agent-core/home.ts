@@ -2,7 +2,7 @@
 // (git/records.ts turnCwd: task worktree -> home -> workspace), like a coding agent opened in a source folder; the agent
 // still works anywhere. Stored as `home` in the agent's agent.json (<data>/agents/<id>/agent.json - layout.ts
 // manifestText writes it, store.ts keeps it across renames), so an edit on disk counts like every edit there. Reading it
-// without native file tools: home-read.ts (skills.load home; files.read and files.list by absolute path).
+// without native file tools: home-read.ts (knowledge.open home:<name>; files.read and files.list by absolute path).
 // The agent sets it itself (agents.update home), the person with agents.setHome or in the file. A folder that is not
 // there (also after a restore on another PC) is 'missing', a file or a network path 'refused'; then turns start in the
 // workspace. An edit of agent.json on disk reaches the agent view at once (watch.ts -> reread -> 'agentCore.changed').

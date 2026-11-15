@@ -4,6 +4,9 @@
 // page's CSS px onto the letterboxed picture (pointer-overlay.ts) – and an agent's move travels along
 // the path its mouse took (the shared motion steps), with one animation frame loop only while a move
 // is under way; a pointer older than POINTER_TTL_MS goes by itself (one timer for the next to expire).
+// B-081: an agent is drawn as the AI cursor (shared/model/agent-cursor.ts: rounded arrowhead in its colour,
+// leaning while it travels, the name pill upright), a person as a thin plain arrow; an agent's move that came
+// as one point glides from where its cursor is drawn (this view only, pointer-overlay.ts drawnPath).
 // A view that opens reads the surface's pointers once (pointers.list), then follows the events.
 // The person's own pointer over the picture is reported to the runtime (pointers.point, about 8 a
 // second at most, in page CSS px; a press as a click) so agents read where the person points. Only
@@ -16,19 +19,23 @@ import type { RefObject } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { BrowserFrame } from '../../shared/model/browser.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
+import { AGENT_CURSOR, cursorColor } from '../../shared/model/agent-cursor.ts';
 import { POINTER_TTL_MS, type PointerAction, type PointerPoint } from '../../shared/model/pointers.ts';
 import { paletteIndex } from '../lib/avatar.tsx';
 import { rpc } from '../lib/rpc.ts';
 import { can, isOwner } from '../lib/session.ts';
 import { framePoint } from './browser-input.ts';
-import { createPointerReporter, pagePointInView, pathMs, positionAt, shownPointers, viewSurface } from './pointer-overlay.ts';
+import { createPointerReporter, drawnAt, drawnPath, pagePointInView, pathMs, shownPointers, viewSurface, type DrawnStep } from './pointer-overlay.ts';
 
 const point = (params: { surface: string; x: number; y: number; action?: PointerAction }) => rpc.call('pointers.point', params);
 
 /** This person's own pointer, never drawn back: the owner's actor id (the runtime names the owner 'human'), else the last point sent. */
 const self: { id?: string; last?: { x: number; y: number } } = {};
 
-interface Drawn { point: PointerPoint; arrived: number }
+/** A pointer as this view draws it: the point, when it came (performance ms) and the path it travels (with the lean for an agent). */
+interface Drawn { point: PointerPoint; arrived: number; path?: readonly DrawnStep[] }
+
+const AGENT_SHAPE = { left: `${-AGENT_CURSOR.tipX}px`, top: `${-AGENT_CURSOR.tipY}px`, transformOrigin: `${AGENT_CURSOR.tipX}px ${AGENT_CURSOR.tipY}px` };
 
 const box = (rect: DOMRect) => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
 
@@ -46,9 +53,12 @@ export function PointerLayer(props: { agentId: string; frame: BrowserFrame; view
     let live = true;
     const take = (points: readonly PointerPoint[]) => {
       const arrived = performance.now();
+      const wall = Date.now();
       setDrawn((before) => points.map((next) => {
         const known = before.find((entry) => entry.point.actor.id === next.actor.id);
-        return known && known.point.at === next.at ? known : { point: next, arrived }; // an unchanged pointer keeps its animation
+        if (known && known.point.at === next.at) return known; // an unchanged pointer keeps its animation
+        const from = known && wall - known.point.at < POINTER_TTL_MS ? drawnAt(known.point, known.path, arrived - known.arrived) : undefined;
+        return { point: next, arrived, path: drawnPath(next, from) };
       }));
     };
     if (can('pointers.list')) rpc.call('pointers.list', { surface }).then((state) => { if (live) take(state.points); }, () => undefined); // a phone (device) neither lists nor points
@@ -58,7 +68,7 @@ export function PointerLayer(props: { agentId: string; frame: BrowserFrame; view
 
   // a move under way: one frame loop until it arrives; then one timer for the next pointer to expire
   useEffect(() => {
-    const moving = () => drawn.some((entry) => performance.now() - entry.arrived < pathMs(entry.point.path));
+    const moving = () => drawn.some((entry) => performance.now() - entry.arrived < pathMs(entry.path));
     let frameId = 0;
     const step = () => { setTick((n) => n + 1); frameId = moving() ? requestAnimationFrame(step) : 0; };
     if (moving()) frameId = requestAnimationFrame(step);
@@ -113,17 +123,24 @@ export function PointerLayer(props: { agentId: string; frame: BrowserFrame; view
   const now = performance.now();
   return (
     <div class="browser-pointers" role="group" aria-label="Pointers on this page">
-      {drawn.filter((entry) => live.has(entry.point)).map(({ point: pointer, arrived }) => {
+      {drawn.filter((entry) => live.has(entry.point)).map(({ point: pointer, arrived, path }) => {
         const elapsed = now - arrived;
-        const moving = Boolean(pointer.path?.length) && elapsed < pathMs(pointer.path);
-        const spot = moving ? positionAt(pointer.path!, elapsed)! : pointer;
+        const moving = elapsed < pathMs(path);
+        const spot = drawnAt(pointer, path, elapsed);
         const place = pagePointInView(spot.x, spot.y, frame, pictureBox, viewBox);
         if (!place) return null;
-        const who = `${pointer.actor.name} (${pointer.actor.kind === 'person' ? 'person' : 'agent'})`;
+        const agent = pointer.actor.kind !== 'person';
+        const who = `${pointer.actor.name} (${agent ? 'agent' : 'person'})`;
+        const look = agent
+          ? { '--pointer': cursorColor(pointer.actor.id), '--pointer-on': '#fff', '--tilt': `${spot.r.toFixed(1)}deg` }
+          : { '--pointer': `var(--av-${paletteIndex(pointer.actor.id)}-fg)`, '--pointer-on': `var(--av-${paletteIndex(pointer.actor.id)}-bg)` };
         return (
-          <div key={pointer.actor.id} class="browser-pointer" role="img" aria-label={`${who} points here`} data-click={!moving && pointer.action === 'click' ? '' : undefined}
-            style={{ transform: `translate(${Math.round(place.left)}px, ${Math.round(place.top)}px)`, '--pointer': `var(--av-${paletteIndex(pointer.actor.id)}-fg)`, '--pointer-on': `var(--av-${paletteIndex(pointer.actor.id)}-bg)` }}>
-            <svg width="16" height="20" viewBox="0 0 16 20" aria-hidden="true"><path d="M1.5 1.5v14.2l3.9-3.7 2.6 6.3 2.6-1.1-2.6-6.2h5.4z" stroke-width="1.3" stroke-linejoin="round" /></svg>
+          <div key={pointer.actor.id} class="browser-pointer" role="img" aria-label={`${who} points here`} data-agent={agent ? '' : undefined}
+            data-moving={moving ? '' : undefined} data-click={!moving && pointer.action === 'click' ? '' : undefined}
+            style={{ transform: `translate(${Math.round(place.left)}px, ${Math.round(place.top)}px)`, ...look }}>
+            {agent
+              ? <svg width={AGENT_CURSOR.width} height={AGENT_CURSOR.height} viewBox={AGENT_CURSOR.viewBox} aria-hidden="true" style={AGENT_SHAPE}><path d={AGENT_CURSOR.d} stroke-width="1.5" stroke-linejoin="round" /></svg>
+              : <svg width="16" height="20" viewBox="0 0 16 20" aria-hidden="true"><path d="M1.5 1.5v14.2l3.9-3.7 2.6 6.3 2.6-1.1-2.6-6.2h5.4z" stroke-width="1.3" stroke-linejoin="round" /></svg>}
             <span class="browser-pointer-name">{pointer.actor.name}</span>
           </div>
         );

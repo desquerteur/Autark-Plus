@@ -32,8 +32,8 @@ const withTool: (result: EngineTurnResult) => Script = (result) => async (input)
   return result;
 };
 
-/** Two Claude Code plans (or two accounts of `provider`): acc_1 is used first, acc_2 is the second one (rotation on by default). */
-function limitSetup(options: { rotation?: boolean; provider?: ProviderId & EngineId } = {}) {
+/** Two Claude Code plans (or two accounts of `provider`): acc_1 is used first, acc_2 is the second one – every signed-in plan takes turns. */
+function limitSetup(options: { provider?: ProviderId & EngineId } = {}) {
   const provider = options.provider ?? 'claude';
   const h = setup();
   const unused = () => { throw new Error('not used in this test'); };
@@ -44,7 +44,7 @@ function limitSetup(options: { rotation?: boolean; provider?: ProviderId & Engin
   const now = h.clock.now();
   const repo = new AccountRepo(h.db);
   repo.save(account('acc_1', provider, { label: provider === 'claude' ? 'Claude Code' : provider, createdAt: now }));
-  repo.save(account('acc_2', provider, { label: provider === 'claude' ? 'Claude Code 2' : `${provider} 2`, priority: 1, rotation: options.rotation ?? true, createdAt: now + 1 }));
+  repo.save(account('acc_2', provider, { label: provider === 'claude' ? 'Claude Code 2' : `${provider} 2`, priority: 1, createdAt: now + 1 }));
 
   const calls: string[] = [];
   const scripts: Record<string, Script> = {};
@@ -107,16 +107,21 @@ test('a limit before any tool call cools the account with the provider hint and 
   assert.equal(zero.service.get('acc_1')!.coolingUntil, zero.now + MINUTE);
 });
 
-test('rotation off: with the primary cooling no plan of that provider runs', async () => {
-  const h = limitSetup({ rotation: false });
+test('owner 09.11.2026: a limited plan hands the turn to the next signed-in plan, without any switch; with both limited nothing runs', async () => {
+  const h = limitSetup();
   h.scripts.acc_1 = async () => LIMIT;
   await h.run();
-  assert.deepEqual(h.calls, ['acc_1'], 'the second plan is not used automatically');
+  assert.deepEqual(h.calls, ['acc_1', 'acc_2'], 'the second plan steps in');
   assert.equal(h.service.get('acc_1')!.state, 'cooling');
+  h.calls.length = 0;
+  h.scripts.acc_2 = async () => LIMIT;
+  assert.equal((await h.run()).status, 'failed', 'the second plan reaches its limit too');
+  assert.deepEqual(h.calls, ['acc_2']);
+  h.calls.length = 0;
   const next = await h.run();
   assert.equal(next.status, 'failed');
   assert.match(next.error ?? '', /limited right now/);
-  assert.deepEqual(h.calls, ['acc_1']);
+  assert.deepEqual(h.calls, [], 'both cool: no plan runs');
 });
 
 test('a limit on the model window (weekly-opus) keeps the account for other models', async () => {
@@ -142,8 +147,8 @@ test('a limit on the model window (weekly-opus) keeps the account for other mode
   assert.deepEqual(h.calls, ['acc_1']);
 });
 
-test("'not signed in' sets needs_login with one notification (not cooling); the next plan runs without rotation", async () => {
-  const h = limitSetup({ rotation: false });
+test("'not signed in' sets needs_login with one notification (not cooling); the next plan runs", async () => {
+  const h = limitSetup();
   h.scripts.acc_1 = async () => unavailable('Claude Code is not signed in for this account.');
   const outcome = await h.run();
   assert.equal(outcome.status, 'done');

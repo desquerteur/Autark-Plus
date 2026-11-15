@@ -173,7 +173,7 @@ test("upsertBlock: one block per to-do, moved by the planner; never the person's
   const work = w.tasks.create({ conversationId: chat.id, title: 'Recherche', createdBy: HUMAN_ID, assigneeKind: 'agent', assigneeId: 'ag_mara' });
   assert.equal(code(() => w.calendar.upsertBlock(work.id, at('17:00'), at('17:30'), 'planner')), 'bad_request', 'agent work gets no block');
   const finished = w.todo('Erledigt');
-  w.tasks.setStatus(finished.id, 'done', HUMAN_ID);
+  w.tasks.finish(finished.id, { status: 'done' as const, summary: 'Done' }, HUMAN_ID);
   assert.equal(code(() => w.calendar.upsertBlock(finished.id, at('17:00'), at('17:30'), 'planner')), 'conflict');
   assert.equal(code(() => w.calendar.upsertBlock('task_missing', at('17:00'), at('17:30'), 'planner')), 'not_found');
   assert.equal(code(() => w.calendar.upsertBlock(other.id, at('17:30'), at('17:00'), 'planner')), 'bad_request');

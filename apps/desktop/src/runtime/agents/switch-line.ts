@@ -1,28 +1,37 @@
-// Wording of the quiet "model switched" status line (RT5): "Switched to <model> · <effort> —
-// <why>", at most 120 characters. The chat shows the text and the agent reads the same text in its
-// delta ("· Switched to …", context/render.ts), so both know why the model changed.
-//   why = the first segment of the route reason ("GPT-6.1 Sol is weak at video animation",
-//   "pinned in this chat"); a bare category label joins what follows ("strongest fit for coding").
+// Wording of the quiet "model switched" status line (RT5; B-083 – owner 08.11.: the switches between models, efforts and
+// temperatures in the chat, "jeweil Agent Name", "und dass es wirklich auch stimmt"): "<Agent> → <model> · <effort>
+// [· temperature T[ (stance)]] – <why>", at most 120 characters. The chat shows the text (whose line it is stays readable
+// in a group) and the agent reads the same text in its delta ("· Mara → …", context/render.ts), so both know why it changed.
+// 14.11.2026: the line is for a switch someone asked for (route-line.ts decides which); a switch routing made shows in the live bar.
+//   why = the first segment of the route reason ("my start model", "requested by me", a need's text, what I asked for that
+//   cannot run); a bare category label joins what follows ("strongest fit for coding"); the router's "requested by the agent"
+//   reads in the agent's own voice ("requested by me"). An effort change on the same model that I asked for myself (model.set)
+//   says "effort requested by me" (RT2).
+//   temperature: the turn's (the agent's own request – 13.11.2026: the chat's suggestion never routes); "(stance)" where the model samples at
+//   its own setting.
 //   failover = what happened to the model before ("GPT-6.1 Sol hit its usage limit"); the same
 //   model on another account names no account (labels may hold an e-mail address).
-//   RT2: an effort change the agent asked for itself (model.set) says "effort requested by the
-//   agent"; the return to the choice before a request says so (RETURN_WHY).
-//   An escalation of a stuck task says "no progress in the last 4 turns" (no routing jargon).
-// Owns: these texts. Never: posts lines (turn.ts does) or reads state.
+// Owns: these texts. Never: posts lines (route-line.ts does) or reads state.
 
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
+import { temperatureText } from '../../shared/model/runs.ts';
 import { categoryLabel } from '../routing/categories.ts';
-import { BY_REQUEST, EFFORT_REQUESTED } from '../routing/previous.ts';
+import { EFFORT_REQUESTED } from '../routing/previous.ts';
 
 /** Longest status text (the chat line and the agent's delta stay one short line). */
 export const STATUS_MAX = 120;
 const SEGMENT = ' · ';
 
-/** routing/escalate.ts's note on a stuck task's route ("stuck 4 turns → stronger model"). */
-const STUCK = /^stuck (\d+) turns?(?![a-z])/;
+/** B-083: why of a temperature the agent asked for (model.set) and of its model.set inside the running turn. */
+export const REQUESTED_WHY = 'requested by me';
+/** How router.ts opens the reason of a request my subconscious set ("my subconscious: <why>"). */
+const SUBCONSCIOUS = 'my subconscious';
 
-/** Why of the turn after the agent's own request (RT2) that returns to the choice before it. */
-export const RETURN_WHY = 'back to the choice before the agent\'s request';
+/** The router's words for the agent's own request, in the agent's voice (the line is its own). */
+const MINE: Readonly<Record<string, string>> = { 'requested by the agent': REQUESTED_WHY, [EFFORT_REQUESTED]: 'effort requested by me' };
+
+/** What a turn runs on, as the line names it. */
+export interface SwitchTo { modelName: string; effort: Effort; temperature?: number; sent?: boolean }
 
 /** Cuts at a word boundary when one is near and ends with "…". */
 export function capText(text: string, max = STATUS_MAX): string {
@@ -30,45 +39,53 @@ export function capText(text: string, max = STATUS_MAX): string {
   if (clean.length <= max) return clean;
   const cut = clean.slice(0, max - 1);
   const space = cut.lastIndexOf(' ');
-  return `${(space >= max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s·—-]+$/u, '')}…`;
+  return `${(space >= max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s·—–→-]+$/u, '')}…`;
 }
 
-/** The first reason segment of a route reason (router.ts joins segments with " · "). */
+/** The segments of a route reason (router.ts joins them with " · "). */
+export function reasonParts(reason: string | undefined): string[] {
+  return (reason ?? '').split(SEGMENT).map((segment) => segment.trim()).filter(Boolean);
+}
+
+/** The first reason segment of a route reason. */
 export function firstReason(reason: string | undefined, category: string | undefined): string | undefined {
-  const segments = (reason ?? '').split(SEGMENT).map((segment) => segment.trim()).filter(Boolean);
-  const [first, next] = segments;
+  const [first, next] = reasonParts(reason);
   if (!first) return undefined;
   const label = category ? categoryLabel(category) : undefined;
-  if (first !== label) return first;
+  if (first !== label) return MINE[first] ?? first;
   return next ? `${next} for ${label}` : `for ${label}`;
 }
 
-/** "Switched to Claude Opus 5.5 · high — GPT-6.1 Sol is weak at video animation". */
-export function switchText(modelName: string, effort: Effort, why?: string): string {
-  return capText(`Switched to ${modelName} · ${effort}${why ? ` — ${why}` : ''}`);
+/** "Claude Opus 5.5 · high · temperature 0.3 (stance)". */
+export function runsOnText(to: SwitchTo): string {
+  const warmth = to.temperature === undefined ? '' : ` · temperature ${temperatureText(to.temperature)}${to.sent ? '' : ' (stance)'}`;
+  return `${to.modelName} · ${to.effort}${warmth}`;
+}
+
+/** "Mara → Claude Opus 5.5 · high – my start model". */
+export function switchText(agent: string, to: SwitchTo, why?: string): string {
+  return capText(`${agent} → ${runsOnText(to)}${why ? ` – ${why}` : ''}`);
 }
 
 /** The failover line: the model (or account) the turn moved away from and why. */
-export function failoverText(input: { modelName: string; effort: Effort; failedName: string; sameModel: boolean; limited: boolean }): string {
+export function failoverText(agent: string, to: SwitchTo, input: { failedName: string; sameModel: boolean; limited: boolean }): string {
   if (input.sameModel) {
     const why = input.limited ? 'the first one hit its usage limit' : 'the first one is unavailable right now';
-    return capText(`Switched to another account · ${input.modelName} · ${input.effort} — ${why}`);
+    return capText(`${agent} → another account · ${runsOnText(to)} – ${why}`);
   }
-  const why = input.limited ? `${input.failedName} hit its usage limit` : `${input.failedName} is unavailable right now`;
-  return switchText(input.modelName, input.effort, why);
+  return switchText(agent, to, input.limited ? `${input.failedName} hit its usage limit` : `${input.failedName} is unavailable right now`);
 }
 
 /**
- * The why of a routing switch away from `from` (what the chat's last turn ran on; `requested` =
- * that turn was shaped by the agent's own request): an effort-only change the agent asked for names
- * the request, the return rule continuing the choice before a request says so, else the first reason.
+ * The why of a switch someone asked for, away from `from` (what the chat's last turn ran on): an effort-only change I asked for
+ * names the request, else the first reason.
  */
-export function switchWhy(route: Pick<RouteDecision, 'modelId' | 'reason' | 'category' | 'by'>, from: { modelId: string; requested?: boolean }): string | undefined {
-  const segments = route.reason.split(SEGMENT).map((segment) => segment.trim());
-  if (route.by === BY_REQUEST && route.modelId === from.modelId && segments.includes(EFFORT_REQUESTED)) return EFFORT_REQUESTED;
-  if (from.requested && route.by === 'previous') return RETURN_WHY;
-  // an escalation (routing/escalate.ts "stuck N turns …"): plain words, without the work category
-  const stalls = segments.map((segment) => STUCK.exec(segment)?.[1]).find(Boolean);
-  if (stalls) return stalls === '1' ? 'no progress in the last turn' : `no progress in the last ${stalls} turns`;
+export function switchWhy(route: Pick<RouteDecision, 'modelId' | 'reason' | 'category'>, from: { modelId: string }): string | undefined {
+  if (route.modelId === from.modelId && reasonParts(route.reason).includes(EFFORT_REQUESTED)) return MINE[EFFORT_REQUESTED];
   return firstReason(route.reason, route.category);
+}
+
+/** B-083: the reason segment of a request my subconscious set before the turn ("my subconscious: <why>", routing/router.ts). */
+export function subconsciousWhy(reason: string): string | undefined {
+  return reasonParts(reason).find((segment) => segment.startsWith(SUBCONSCIOUS));
 }

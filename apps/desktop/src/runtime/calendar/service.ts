@@ -83,7 +83,7 @@ export class CalendarServiceImpl implements CalendarService {
     if (!task) throw new WorkforceError('not_found', 'Task not found.', { details: { taskId } });
     const ownerId = blockOwner(task);
     if (!ownerId) throw new WorkforceError('bad_request', 'Only to-dos get a time block.');
-    if (task.status === 'done' || task.status === 'cancelled') throw new WorkforceError('conflict', 'This to-do is already finished.');
+    if (task.status === 'done' || task.status === 'dropped') throw new WorkforceError('conflict', 'This to-do is already finished.');
     const current = this.repo.byTask(taskId);
     if (current?.setBy === 'person' && setBy !== 'person') throw new WorkforceError('conflict', 'The person placed this to-do; it stays where they put it.', { details: { eventId: current.id } });
     if (setBy !== 'person') this.refuseFixed(ownerId, { startAt, endAt }, taskId);
@@ -97,7 +97,7 @@ export class CalendarServiceImpl implements CalendarService {
     const row = this.writable(id);
     if (row.rev !== rev) throw new WorkforceError('conflict', 'This entry changed meanwhile. Reload and try again.', { details: { id, rev: row.rev } });
     const task = row.taskId ? this.s.tasks.get(row.taskId) : undefined;
-    const open = task !== undefined && task.status !== 'done' && task.status !== 'cancelled';
+    const open = task !== undefined && task.status !== 'done' && task.status !== 'dropped';
     const state = row.state !== 'planned' && open ? 'planned' : row.state; // a moved block of an open to-do plans it again
     return this.save({ ...row, startAt, endAt, setBy: setByOf(by), state, rev: row.rev + 1, updatedAt: this.s.clock.now() }, rev);
   }

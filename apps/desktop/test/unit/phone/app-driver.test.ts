@@ -50,7 +50,7 @@ test('phone use off, a pause on the phone, the timeout and the run\'s cancel eac
   const { phones, requests, reply, timers } = rig();
   const off = phones.key(undefined, 'back');
   await tick();
-  reply('dev_phone0000001', requests[0].id, { error: { code: 'off', message: 'x' } });
+  reply('dev_phone0000001', requests[0].id, { error: { code: 'off', message: 'Phone use is off on this phone.' } });
   await assert.rejects(off, (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable' && error.message === PHONE_USE_OFF);
 
   const paused = phones.type(undefined, 'hi');
@@ -101,4 +101,34 @@ test('drivers: a step without a serial goes to the app phone while ADB has none 
 test('safeNode keeps order and parents honest and drops what uiautomator does not know', () => {
   assert.deepEqual(safeNode({ parent: 5, text: 'a'.repeat(400), bounds: [0, 0, 10, 10], clickable: 'yes' }, 2), { index: 2, depth: 0, parent: -1, text: 'a'.repeat(300), bounds: [0, 0, 10, 10] });
   assert.deepEqual(safeNode(null, 0), { index: 0, depth: 0, parent: -1 });
+});
+
+test('an off answer keeps the phone\'s own reason; only a bare "off" becomes the generic enable text', async () => {
+  const { phones, requests, reply } = rig();
+  const consent = phones.key(undefined, 'back');
+  await tick();
+  reply('dev_phone0000001', requests[0].id, { error: { code: 'off', message: 'The person has not yet agreed to the phone-use disclosure in the app.' } });
+  await assert.rejects(consent, (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable' && error.message === 'The person has not yet agreed to the phone-use disclosure in the app.');
+  const bare = phones.key(undefined, 'back');
+  await tick();
+  reply('dev_phone0000001', requests[1].id, { error: { code: 'off', message: '' } });
+  await assert.rejects(bare, (error: unknown) => error instanceof WorkforceError && error.message === PHONE_USE_OFF);
+});
+
+test('each step names its run as job, so the phone ✕ ends exactly that job; paused and ended keep the phone\'s words', async () => {
+  const { phones, requests, reply } = rig();
+  const tap = phones.tap(undefined, 1, 1, { job: 'run_abc' });
+  await tick();
+  assert.equal(requests[0].job, 'run_abc');
+  reply('dev_phone0000001', requests[0].id, { error: { code: 'paused', message: 'The person touched the phone, so phone use paused before this step (it did not run). The task stays.' } });
+  await assert.rejects(tap, (error: unknown) => error instanceof WorkforceError && error.code === 'conflict' && error.message.includes('The task stays.'));
+  const tree = phones.uiTree(undefined, { job: 'run_abc' });
+  await tick();
+  reply('dev_phone0000001', requests[1].id, { error: { code: 'ended', message: 'The person ended phone use for this task with ✕.' } });
+  await assert.rejects(tree, (error: unknown) => error instanceof WorkforceError && error.message.includes('✕'));
+  const bare = phones.tap(undefined, 2, 2);
+  await tick();
+  assert.equal('job' in requests[2], false, 'without a run no job field');
+  reply('dev_phone0000001', requests[2].id, { result: {} });
+  await bare;
 });

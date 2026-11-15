@@ -1,8 +1,9 @@
 // The iPhone web app's service worker (src/ui/hosted/sw.ts) in node:vm, bundled with esbuild like the build does: a PC
 // path reaches the shell window over a MessagePort and streams back; chunks are cache-first; main.js revalidates with
 // its ETag (304 → the copy) and falls back to the copy without a tunnel; no copy and no tunnel → 503; navigations get the
-// shell, a sandbox frame goes to the PC; a duplicate push is still shown, quietly; a clear still shows a notice; a tap
-// opens the app's scope plus the route, never the origin root.
+// shell, a sandbox frame goes to the PC; a duplicate push is still shown, quietly; a clear still shows a notice on Apple's
+// push service and only closes on any other (B-087: the hosted app in Chrome or Edge); a tap opens the app's scope plus
+// the route, never the origin root.
 // Owns: these assertions. Never: a real browser or push service.
 
 import { test } from 'node:test';
@@ -33,7 +34,10 @@ function fakeCaches(seed: Record<string, Response> = {}) {
   return { store, caches: { open, delete: async () => true, keys: async () => [] } };
 }
 
-function worker(options: { answer?: Answer; seed?: Record<string, Response>; open?: Array<{ tag: string; data?: unknown; close(): void }> } = {}) {
+const APPLE = 'https://web.push.apple.com/QA_iphone';
+const FCM = 'https://fcm.googleapis.com/fcm/send/chrome_1';
+
+function worker(options: { answer?: Answer; seed?: Record<string, Response>; open?: Array<{ tag: string; data?: unknown; close(): void }>; endpoint?: string } = {}) {
   const handlers = new Map<string, Handler>();
   const asked: Array<{ path: string; headers: Array<[string, string]>; method: string }> = [];
   const shown: Array<{ title: string; options: Record<string, unknown> }> = [];
@@ -54,6 +58,7 @@ function worker(options: { answer?: Answer; seed?: Record<string, Response>; ope
       scope: SCOPE,
       showNotification: async (title: string, shownOptions: Record<string, unknown>) => { shown.push({ title, options: shownOptions }); },
       getNotifications: async (filter?: { tag?: string }) => (options.open ?? []).filter((n) => !filter?.tag || n.tag === filter.tag),
+      pushManager: { getSubscription: async () => (options.endpoint ? { endpoint: options.endpoint } : null) },
     },
     clients: { get: async (id: string) => (id === 'c1' ? shell : undefined), matchAll: async () => [shell], openWindow: async (url: string) => { opened.push(url); }, claim: async () => undefined },
     skipWaiting: async () => undefined,
@@ -126,7 +131,7 @@ test('navigations get the shell; a sandbox frame is the PC\'s; other origins and
 test('pushes always show a notice on iOS: a duplicate quietly, a clear quietly; a tap opens the scope plus the route', async () => {
   const closed: string[] = [];
   const open = [{ tag: 'chat:c1', data: { id: 'n1' }, close: () => closed.push('chat:c1') }];
-  const sw = worker({ open });
+  const sw = worker({ open, endpoint: APPLE });
   const push = (payload: unknown) => sw.dispatch('push', { data: { json: () => payload, text: () => JSON.stringify(payload) } });
   await push({ title: 'Mara', body: 'Done', tag: 'chat:c1', id: 'n1', url: '/#/chat/c1' });
   assert.equal(sw.shown.length, 1, 'shown although another PC showed it already');
@@ -139,4 +144,19 @@ test('pushes always show a notice on iOS: a duplicate quietly, a clear quietly; 
   assert.deepEqual(sw.posted.filter((m) => (m as { type?: string }).type === 'wf.wake').length, 2, 'every push wakes the shell');
   await sw.dispatch('notificationclick', { notification: { data: { url: '/#/chat/c9' }, close: () => undefined } });
   assert.deepEqual(plain(sw.posted.at(-1)), { type: 'wf.navigate', url: `${SCOPE}#/chat/c9` });
+});
+
+test('B-087: in Chrome or Edge (not Apple’s push service) a clear closes the notice and shows none – no dismissed notice comes back, no blank one', async () => {
+  const closed: string[] = [];
+  const open = [{ tag: 'chat:c1', data: { id: 'n1' }, close: () => closed.push('chat:c1') }];
+  const sw = worker({ open, endpoint: FCM });
+  const push = (payload: unknown) => sw.dispatch('push', { data: { json: () => payload, text: () => JSON.stringify(payload) } });
+  await push({ clear: 'chat:c1', tag: 'chat:c1', title: 'Mara', body: 'Done', silent: true, id: 'n1' }); // read on the PC
+  await push({ clear: 'chat:c1' }); // a ring ended (runtime/calls/ring.ts)
+  assert.equal(sw.shown.length, 0, 'nothing shown again');
+  assert.deepEqual(closed, ['chat:c1', 'chat:c1'], 'each clear closes the tag’s notice');
+  assert.equal(sw.posted.filter((m) => (m as { type?: string }).type === 'wf.wake').length, 2, 'every push still wakes the shell');
+  const none = worker({ open: [] });
+  await none.dispatch('push', { data: { json: () => ({ clear: 'chat:c2' }), text: () => '' } });
+  assert.equal(none.shown.length, 0, 'no subscription found: nothing shown either');
 });

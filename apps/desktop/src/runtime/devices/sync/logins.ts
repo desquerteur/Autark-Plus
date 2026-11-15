@@ -1,16 +1,17 @@
-// Plan logins between the CEO's own PCs (mesh method 'sync.login'; owner 04.11.2026: sign in on one PC, the plan
-// works on all of his): the files that hold a CLI plan's login (accounts/cli-homes.ts loginFiles – Codex auth.json,
+// Plan logins between the CEO's own PCs (mesh method 'sync.login': sign in on one PC, the plan works on all of his): the files that hold a CLI plan's login (accounts/cli-homes.ts loginFiles – Codex auth.json,
 // Claude Code .credentials.json, Gemini CLI oauth_creds.json and google_accounts.json) are read at send time and
 // travel only inside the encrypted, key-pinned mesh channel, like secret values (secrets.ts). One unit per account:
 // its files and the login's own time (Codex last_refresh, Claude Code's and Gemini CLI's token expiry, else the
 // file's mtime); the newer login wins, an older or equal one never replaces the one here, and a file without a token
 // to refresh with (an emptied login) never travels. The receiver writes the files whole (temp beside them, mode 0600,
 // file-io.ts) into the account's home here – its own <data>/accounts/<provider>/<id>, or a CLI's default home
-// (~/.codex …) for a login this PC found there, but never over a file whose identity (Codex tokens.account_id,
-// Gemini CLI's id token subject) differs – and asks for the account check when the account is not signed in yet.
+// (~/.claude, ~/.gemini) for a login this PC found there, but never over a file whose identity (accounts/login-file.ts) differs – and asks for the account check when the account is not signed in yet.
 // A login of another PC's account that this PC has itself (tables.ts: the same provider and e-mail) lands in that
 // account. A plan the person signed out of here (accounts/cli-homes.ts signedOut) takes no login from another PC
-// until one is made here again. The CLIs refresh their tokens and rewrite these files: a watch on each home's
+// until one is made here again. A login whose refresh token another plan's home on the same PC already holds is one login
+// in two accounts (a Claude Code login file names no account; the next refresh signed both plans out) – it is neither taken
+// nor sent; neither is a refresh token a list carries for two accounts at once, also when it comes alone later, and one
+// login is checked and written at a time. The CLIs refresh their tokens and rewrite these files: a watch on each home's
 // folder and every account change (a cheap compare) send a changed login within a second, so a second PC acts
 // like a second process on the same PC, which reads the file again before it refreshes. Claude Code on macOS keeps
 // its login in the Keychain: nothing is sent or written there.
@@ -26,6 +27,7 @@ import type { RuntimeServices } from '../../contracts.ts';
 import type { Account } from '../../../shared/model/providers.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { defaultHome, loginFiles, ownHomes, signedOut } from '../../accounts/cli-homes.ts';
+import { MAX_LOGIN_FILE, identity, loginTime, parseLogin, refreshToken, signedIn, type Json } from '../../accounts/login-file.ts';
 import { DevicesRepo } from '../repo.ts';
 import { replaceWith } from './file-io.ts';
 import { linkOf, links } from './home.ts';
@@ -44,50 +46,36 @@ export interface LoginDeps {
 
 /** How long a change gathers before the login is read (a CLI writes in steps). */
 const SETTLE_MS = 500;
-const MAX_FILE = 256 * 1024;
 const SETTLED: ReadonlySet<string> = new Set(['ok', 'cooling', 'disabled']);
 
-type Json = Record<string, unknown>;
-const isJson = (value: unknown): value is Json => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
 const code = (error: unknown) => (error instanceof WorkforceError ? error.code : String((error as NodeJS.ErrnoException)?.code ?? 'failed')); // never a message: it could quote content
 
-function parse(bytes: Buffer): Json | undefined {
-  try { const value = JSON.parse(bytes.toString('utf8')) as unknown; return isJson(value) ? value : undefined; } catch { return undefined; }
-}
-
-/** Whether the deciding file holds a login the CLI can refresh. */
-function signedIn(provider: string, file: Json): boolean {
-  if (provider === 'codex') return Boolean((isJson(file.tokens) && text(file.tokens.refresh_token)) || text(file.OPENAI_API_KEY));
-  if (provider === 'claude') return isJson(file.claudeAiOauth) && Boolean(text(file.claudeAiOauth.refreshToken));
-  return Boolean(text(file.refresh_token));
-}
-
-/** The login's own time (see the header), else the file's mtime. */
-function loginTime(provider: string, file: Json, mtime: number): number {
-  const at = provider === 'codex' ? Date.parse(String(file.last_refresh ?? ''))
-    : provider === 'claude' ? Number(isJson(file.claudeAiOauth) ? file.claudeAiOauth.expiresAt : Number.NaN)
-      : Number(file.expiry_date);
-  return Number.isFinite(at) && at > 0 ? at : Math.floor(mtime);
-}
-
-/** Whose login it is, where the file says so. */
-function identity(provider: string, file: Json): string | undefined {
-  if (provider === 'codex') return isJson(file.tokens) ? text(file.tokens.account_id) : undefined;
-  const token = text(file.id_token);
-  try {
-    const claims = token ? JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as unknown : undefined;
-    return isJson(claims) ? text(claims.sub) : undefined;
-  } catch { return undefined; }
-}
-
 const digestOf = (files: readonly LoginFile[]) => createHash('sha256').update(JSON.stringify(files)).digest('hex');
+
+/** A login's refresh token as a hash (a CLI with homes of its own), to compare without keeping the token. */
+function tokenKey(login: Login): string | undefined {
+  if (!ownHomes(login.provider as Account['provider'])) return undefined;
+  const first = parseLogin(Buffer.from(login.files[0].data, 'base64'));
+  const token = first && refreshToken(login.provider, first);
+  return token ? createHash('sha256').update(`${login.provider}\n${token}`).digest('hex') : undefined;
+}
+
+/** The token keys one list carries for two accounts or more. */
+function twinKeys(logins: readonly Login[]): string[] {
+  const owners = new Map<string, Set<string>>();
+  for (const login of logins) {
+    const key = tokenKey(login);
+    if (key) owners.set(key, (owners.get(key) ?? new Set<string>()).add(login.account));
+  }
+  return [...owners].filter(([, accounts]) => accounts.size > 1).map(([key]) => key);
+}
 
 const valid = (item: unknown): item is Login => {
   const login = item as Login;
   return Boolean(login) && typeof login.account === 'string' && login.account.length <= 200 && typeof login.provider === 'string'
     && typeof login.at === 'number' && Array.isArray(login.files) && login.files.length > 0 && login.files.length <= 4
-    && login.files.every((file) => typeof file?.name === 'string' && typeof file.data === 'string' && file.data.length <= MAX_FILE * 2);
+    && login.files.every((file) => typeof file?.name === 'string' && typeof file.data === 'string' && file.data.length <= MAX_LOGIN_FILE * 2)
+    && new Set(login.files.map((file) => file.name)).size === login.files.length;
 };
 
 export class LoginSync {
@@ -98,6 +86,10 @@ export class LoginSync {
   private readonly watchers = new Map<string, { account: string; watcher: FSWatcher }>();
   private readonly pending = new Set<string>();
   private timer?: ReturnType<typeof setTimeout>;
+  /** The login being checked and written (two calls at once would both find no twin here). */
+  private applying: Promise<unknown> = Promise.resolve();
+  /** Token keys a linked PC sent for two plans at once: that login is no plan's, also when it comes alone later. */
+  private readonly twins = new Set<string>();
 
   constructor(s: RuntimeServices, deps: LoginDeps = {}) {
     this.s = s;
@@ -183,10 +175,11 @@ export class LoginSync {
     for (const [index, name] of names.entries()) {
       const file = path.join(home, name);
       const info = await lstat(file).catch(() => undefined);
-      if (!info?.isFile() || info.size > MAX_FILE) { if (index === 0) return undefined; continue; }
+      if (!info?.isFile() || info.size > MAX_LOGIN_FILE) { if (index === 0) return undefined; continue; }
       const bytes = await readFile(file);
-      const json = parse(bytes);
+      const json = parseLogin(bytes);
       if (!json || (index === 0 && !signedIn(account.provider, json))) return undefined;
+      if (index === 0 && await this.heldElsewhere(account, json)) return undefined; // whose it is stays unclear: it stays here
       if (index === 0) at = loginTime(account.provider, json, info.mtimeMs);
       files.push({ name, data: bytes.toString('base64') });
     }
@@ -230,9 +223,13 @@ export class LoginSync {
   async receive(params: unknown, from: string): Promise<{ ok: true; applied: number }> {
     if (linkOf(new DevicesRepo(this.s.db).get(from))?.kind !== 'ceo') throw new WorkforceError('forbidden', 'Logins come only from the CEO\'s own PCs.');
     const list = (params as { logins?: unknown } | null)?.logins;
+    const logins = (Array.isArray(list) ? list : []).filter(valid);
+    for (const key of twinKeys(logins)) this.twins.add(key);
     const applied: Login[] = [];
-    for (const login of (Array.isArray(list) ? list : []).filter(valid)) {
-      try { if (await this.apply(login)) applied.push(login); } catch (error) { this.s.log.warn('synced login not stored', { account: login.account, error: code(error) }); }
+    for (const login of logins) {
+      const key = tokenKey(login);
+      if (key && this.twins.has(key)) { this.s.log.warn('one login for two plans not taken', { account: login.account }); continue; }
+      try { if (await this.inTurn(login)) applied.push(login); } catch (error) { this.s.log.warn('synced login not stored', { account: login.account, error: code(error) }); }
     }
     for (const peer of this.ceoPeers(from)) if (this.s.devices.online(peer)) await this.post(peer, applied);
     return { ok: true, applied: applied.length };
@@ -245,6 +242,12 @@ export class LoginSync {
       ?? plans.find((account) => !ownHomes(account.provider) || (Boolean(login.email) && account.email === login.email));
   }
 
+  private inTurn(login: Login): Promise<boolean> {
+    const run = this.applying.then(() => this.apply(login));
+    this.applying = run.catch(() => undefined);
+    return run;
+  }
+
   private async apply(login: Login): Promise<boolean> {
     const target = this.targetOf(login);
     const home = target && this.homeOf(target);
@@ -255,14 +258,19 @@ export class LoginSync {
       return false;
     }
     const files = login.files.filter((file) => names.includes(file.name)).map((file) => ({ name: file.name, bytes: Buffer.from(file.data, 'base64') }));
-    const first = parse(files[0].bytes);
-    if (!first || !signedIn(target.provider, first) || files.some((file) => !parse(file.bytes))) return false;
+    const first = parseLogin(files[0].bytes);
+    if (!first || !signedIn(target.provider, first) || files.some((file) => !parseLogin(file.bytes))) return false;
     const here = await this.loginHere(target, path.join(home, names[0]));
     if (here && here.at >= login.at) return false; // never an older login over this one
     const mine = here && identity(target.provider, here.json);
     const theirs = identity(target.provider, first);
     if (mine && theirs && mine !== theirs) {
       this.s.log.info('login of another account kept', { account: target.id });
+      return false;
+    }
+    const twin = await this.heldElsewhere(target, first);
+    if (twin) {
+      this.s.log.warn('login of another plan here not taken', { account: target.id, holder: twin.id });
       return false;
     }
     await mkdir(home, { recursive: true });
@@ -274,11 +282,26 @@ export class LoginSync {
     return true;
   }
 
+  /** Another plan of the provider whose home here holds the refresh token of `file` (never the same home). */
+  private async heldElsewhere(account: Account, file: Json): Promise<Account | undefined> {
+    const token = refreshToken(account.provider, file);
+    const home = this.homeOf(account);
+    if (!token || !home) return undefined;
+    for (const other of this.plans()) {
+      const there = other.id !== account.id && other.provider === account.provider ? this.homeOf(other) : undefined;
+      if (!there || path.resolve(there) === path.resolve(home)) continue;
+      const bytes = await readFile(path.join(there, loginFiles(other.provider, this.platform)[0])).catch(() => undefined);
+      const json = bytes && parseLogin(bytes);
+      if (json && refreshToken(other.provider, json) === token) return other;
+    }
+    return undefined;
+  }
+
   /** The login file in the home here with its time (0: no login in it, e.g. emptied). */
   private async loginHere(account: Account, file: string): Promise<{ json: Json; at: number } | undefined> {
     const info = await lstat(file).catch(() => undefined);
     if (!info?.isFile()) return undefined;
-    const json = parse(await readFile(file)) ?? {};
+    const json = parseLogin(await readFile(file)) ?? {};
     return { json, at: signedIn(account.provider, json) ? loginTime(account.provider, json, info.mtimeMs) : 0 };
   }
 

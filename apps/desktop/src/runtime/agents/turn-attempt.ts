@@ -1,6 +1,6 @@
 // Turn phase 2 – one engine attempt: wires engine.run to our tools (dynamic tools or the
-// MCP hub lease), streaming deltas into the chat
-// message, live status, usage, account limits and the run journal for engine-own tools.
+// MCP hub lease), the streamed text (kept for the finish – no chat row) and every text to the run's chat outbox
+// (agents/chat-out.ts: a complete <chat> block posts at once – 13.11.2026), live status, usage, account limits and the run journal for engine-own tools.
 // D5: reasoning is journaled live per block (reasoning-log.ts) and its headline is the live status;
 // an engine-native call is journaled with its human line (shared/text/step-label.ts: summary + step),
 // which is also the live status while it runs (the engine's raw "running <cmd>" line is dropped then).
@@ -17,7 +17,8 @@
 // The engine's folder is the task's active worktree (git/records.ts turnCwd), else the agent's home project (B-044), else the workspace.
 // B-044 stall watchdog (stall-watch.ts): an engine quiet for 10 min (45 min while a tool call runs) is cut
 // and the attempt ends 'unavailable' ("The
-// engine stopped responding."), so turn.ts's failover applies; a run note records the cut.
+// engine stopped responding."), so turn.ts's failover applies (B-080: no account cools for it); a run note records the cut
+// with how long the engine was silent (quietMs) and how long the attempt ran (afterMs).
 // B-048 E1 (LEDGER): the attempt names its run to the context ledger (services.ledger.capture – the chat lines its
 // input shows, then the run's journal items, become ledger items); an engine-native call's full output
 // (tool_end.output, redacted) is journaled with its result, so the ledger can restore and replay it. B-049 F9: an
@@ -29,13 +30,24 @@
 // wake note (ToolContext.wakeNote, at most WAKE_NOTE_MAX characters; only an outside event's ('event') own note, never a
 // schedule, retry, review or message note – dispatch-groups.ts originNote).
 // B-057 (agents/split-turn.ts): a split's calls carry ToolContext.split (also through the hub lease); its engine runs in its
-// worktree or its group's folder; on a Codex app-server it takes no heavy supervisor slot
-// (S12 – the process is shared), a cold one's only while that server starts (split-admit.ts).
+// worktree or its group's folder. 07.11.2026: no turn waits for a heavy slot any more (split-admit.ts and the
+// supervisor's admission are gone) – the attempt goes straight to 'Working'; how many turns run is the dispatcher's rule.
 // B-059 #184: a provider's transient failure (an engine timeout, a cloud provider's HTTP 500/502/504 – never a local
-// runtime's) ends the attempt 'unavailable' – an outage of the account, not of the model (engines/provider-outage.ts
-// providerOutage), so turn.ts's cooling and failover apply.
+// runtime's) ends the attempt 'unavailable' – an outage, not a failure of the model (engines/provider-outage.ts
+// providerOutage), so turn.ts's cooling and failover apply (B-080: an engine timeout is our own process, details.local: no cooling).
 // B-059 #182: an engine-native tool_result
 // is journaled with its call's tool name (by call id), so the readers of the journal see which native call failed.
+// B-080: that result's `preview` is its summary and output ("exit 1" and the error text), as our tools' preview; a fresh
+// native session the engine announces ('session') is bound at once with the turn's start cursor (finishTurn overwrites it);
+// an in-turn model switch ('model', Engine.setModel) moves the turn's route, the run's books and the activity row to it;
+// the engine's own background work ('background') counts as a call in flight for the stall watch.
+// B-083: the engine gets the turn's temperature – the agent's own request (plan), else the person's suggestion on the route;
+// the activity row says whether the engine sends it (liveRoute, engines/http/temperature.ts); an in-turn switch posts the
+// quiet switch line with the agent's name (route-line.ts postRunLine) – a running turn keeps its temperature.
+// B-085: a turn the person stopped (stopKind 'human') whose engine still returns 'done' ends 'interrupted'.
+// B-089 (11.11.2026: what a run costs, written down): an engine whose 'usage' events come one per model request (Codex:
+// thread/tokenUsage/updated) gives the attempt its model calls (AttemptResult.modelCalls); every other engine reports
+// running totals or one sum, so its count stays absent. An in-turn switch that changes the effort makes it the agent's own.
 // Never: decides failover or integrates the result (turn.ts / turn-finish.ts do).
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -51,14 +63,17 @@ import { StallWatch } from './stall-watch.ts';
 import { ReasoningLog } from './reasoning-log.ts';
 import { stepLabel, stepText } from '../../shared/text/step-label.ts';
 import { calledTool } from '../tools/builtin/tools-meta.ts'; // B-049 F4 (TOOLS-CORE)
-import type { AttemptResult, RoutedTurn, ToolUse, TurnPlan, TurnRequest } from './turn-types.ts';
+import type { AttemptResult, RoutedTurn, ToolUse, TurnPlan, TurnRequest, TurnRoute } from './turn-types.ts';
+import { takesTemperature } from '../engines/http/temperature.ts'; // B-083
+import { postRunLine } from './route-line.ts'; // B-083
+import { REQUESTED_WHY, switchText } from './switch-line.ts'; // B-083
 import { splitCwd } from './split-turn.ts'; // B-057
-import { admitAttempt } from './split-admit.ts'; // B-057 S12: the heavy slot (a split's only while a Codex app-server starts)
 import { traceCallId } from '../../shared/model/subconscious.ts';
 import { traceInput } from '../engines/trace-text.ts';
 import { recordTurnInput } from './interruption-context.ts';
 import { runWithNativeTimeouts } from './native-timeout.ts';
-import { temperatureOf } from './next-route.ts'; // B-078
+import { SessionStore } from './sessions.ts'; // B-080: a fresh native session bound at once
+import type { ChatOutbox } from './chat-out.ts';
 
 /**
  * B-054: the first line of the note of the outside event that started the run (TurnRequest.originNote – only an
@@ -70,6 +85,37 @@ export function wakeNoteOf(request: Pick<TurnRequest, 'origin' | 'originNote'>):
   const line = request.originNote.split('\n').map((part) => part.trim()).find(Boolean);
   if (!line) return {};
   return { wakeNote: line.length > WAKE_NOTE_MAX ? `${line.slice(0, WAKE_NOTE_MAX - 1)}…` : line };
+}
+
+/** B-089: engines whose 'usage' events come one per model request (engines/codex/turn.ts: each thread/tokenUsage/updated). */
+const PER_REQUEST_USAGE: ReadonlySet<string> = new Set(['codex']);
+
+declare module './turn-types.ts' {
+  interface AttemptResult {
+    /** B-089: the attempt's model requests – only from an engine that reports one usage event per request (absent: no count). */
+    modelCalls?: number;
+  }
+}
+
+/** B-083: the route fields a turn reports (TurnRoute), with its temperature and whether its engine sends it. */
+export type LiveRoute = TurnRoute;
+
+/** B-083: the temperature a turn runs with – the agent's own request (model.set, its subconscious), else the person's suggestion. */
+export function turnTemperature(plan: Pick<TurnPlan, 'temperature'>, turn: Pick<RoutedTurn, 'route'>): number | undefined {
+  return plan.temperature ?? turn.route.temperature;
+}
+
+/** B-083: the turn's engine puts a temperature on the wire for its model at its effort (else the model samples at its own setting). */
+export function sendsTemperature(turn: Pick<RoutedTurn, 'engine' | 'model' | 'route'>): boolean {
+  return takesTemperature(turn.engine.id, turn.model, turn.route.effort);
+}
+
+/** B-048 E4.5: what the turn runs on, as its activity row reports it (B-080: with its account; B-083: with its temperature). */
+export function liveRoute(turn: RoutedTurn, temperature: number | undefined): LiveRoute {
+  return {
+    model: turn.route.modelId, modelName: turn.modelName, effort: turn.route.effort, engine: turn.engine.id, accountId: turn.account.id,
+    ...(temperature !== undefined ? { temperature, temperatureSent: sendsTemperature(turn) } : {}),
+  };
 }
 
 /** The subconscious's calls in the run's journal, as the calls they are (once per run, also over a failover). Never throws. */
@@ -85,7 +131,7 @@ function journalTrace(services: RuntimeServices, plan: TurnPlan, runId: string):
   }
 }
 
-export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn: RoutedTurn, request: TurnRequest, messageId: string | undefined): Promise<AttemptResult> {
+export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn: RoutedTurn, request: TurnRequest, out?: ChatOutbox): Promise<AttemptResult> {
   const started = services.clock.now();
   recordTurnInput(services, plan, request, turn.lastSeq);
   const status = (note: string) => { try { request.onStatus?.(note); } catch { /* cosmetic */ } };
@@ -102,7 +148,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   // A failover attaches again with its own engine and model.
   // The subconscious's calls stand in front of the chat lines of this turn, as the engine's own session holds them (injected before the input).
   const journal = () => journalTrace(services, plan, request.runId);
-  if (plan.conversationId && services.ledger?.capture) services.ledger.capture({ runId: request.runId, agentId: plan.agent.id, conversationId: plan.conversationId, engine: turn.engine.id, model: turn.route.modelId, seenSeq: turn.lastSeq, first: journal });
+  if (!plan.split && services.ledger?.capture) services.ledger.capture({ runId: request.runId, agentId: plan.agent.id, thread: plan.thread, conversationId: plan.conversationId ?? '', engine: turn.engine.id, model: turn.route.modelId, seenSeq: turn.lastSeq, fromSeq: turn.session ? plan.memberCursor : 0, first: journal });
   else journal();
   let streamed = '';
   // D5: reasoning blocks are journaled live, one run item each, between the steps (reasoning-log.ts).
@@ -135,6 +181,10 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     return use;
   };
   const usage: AttemptResult['usage'] = { inputTokens: 0, outputTokens: 0 };
+  const perRequest = PER_REQUEST_USAGE.has(turn.engine.id); // B-089: its usage events count the model calls
+  let modelCalls = 0;
+  const temperature = turnTemperature(plan, turn); // B-083 (T3 request 1): the agent's own, else the person's suggestion
+  let inTurnFrom: string | undefined; // B-083: the model before the last in-turn switch (a refused one puts the turn back there)
 
   const onEvent = (event: EngineEvent) => {
     watch.activity();
@@ -143,7 +193,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
         case 'text':
           if (event.delta) thoughts.close();
           streamed += event.delta;
-          if (messageId && event.delta) services.chats.appendDelta(messageId, event.delta);
+          if (event.delta) out?.text(event.delta);
           break;
         case 'reasoning':
           thoughts.delta(event.delta, event.id);
@@ -154,6 +204,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
         case 'commentary':
           thoughts.close();
           if (event.text.trim()) {
+            out?.segment(event.text);
             streamed = ''; // pre-tool text is an update, never the fallback final answer
             services.runs.item(request.runId, { kind: 'note', name: 'Update', data: { text: services.secrets.redact(event.text).slice(0, 4000), commentary: true }, effectStatus: 'none' });
             status(services.secrets.redact(event.text).replace(/\s+/g, ' ').slice(0, 140));
@@ -204,6 +255,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
             if (native) native.ok = event.ok; // B-059: a failed or declined engine-native call is no activity (turn-types.ts effectful)
             services.runs.item(request.runId, { kind: 'tool_result', name: native?.name, data: { // B-059 #182: named by its call
               callId: event.callId, ok: event.ok, summary: preview(services.secrets, event.summary, 400),
+              preview: preview(services.secrets, [event.summary, event.output].filter(Boolean).join('\n'), 600), // B-080: "exit 1" and what it printed, as our tools' preview
               ...(event.output ? { output: services.secrets.redact(event.output) } : {}), // B-048 E1 (LEDGER): kept whole by the journal (over 4,000 chars: a blob)
             }, effectStatus: 'none' });
           } else {
@@ -213,6 +265,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
           }
           break;
         case 'usage':
+          if (perRequest) modelCalls++; // B-089
           // Engines report running totals per turn; keep the latest (and the largest context).
           usage.inputTokens = Math.max(usage.inputTokens, event.inputTokens);
           usage.outputTokens = Math.max(usage.outputTokens, event.outputTokens);
@@ -227,6 +280,32 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
           // for it ("running C:\…\powershell.exe -Command …", "using Read") never replaces it.
           if (ownCalls.size) break;
           status(event.note);
+          break;
+        case 'session': // B-080: the engine's fresh session is bound now (as finishTurn binds it) – a kill or restart mid-turn resumes it
+          if (turn.engine.caps.sessions) new SessionStore(services.db).save({
+            agentId: plan.agent.id, conversationId: plan.thread, engine: turn.engine.id, accountId: turn.account.id, ref: event.ref, generation: event.generation,
+            cursorSeq: plan.memberCursor, model: turn.route.modelId, updatedAt: services.clock.now(), promptKey: turn.promptKey, mode: plan.mode.key,
+          });
+          break;
+        case 'model': { // B-080: Engine.setModel switched this turn – the run's route, cost and the activity row take the new model
+          const before = turn.route;
+          const info = services.catalog.list().find((model) => model.engine === turn.engine.id && model.model === event.model);
+          turn.route = { ...turn.route, ...(info ? { modelId: info.id } : {}), effort: event.effort, ...(event.effort !== before.effort ? { effortBy: 'request' as const } : {}) }; // B-089
+          turn.model = event.model;
+          if (info) turn.modelName = info.name;
+          toolCtx.modelId = turn.route.modelId;
+          try { request.onRoute?.(liveRoute(turn, temperature)); } catch { /* cosmetic */ }
+          if (before.modelId === turn.route.modelId && before.effort === turn.route.effort) break;
+          // B-083: the switch inside the turn gets its quiet line too (my model.set now – or the engine refused it: back)
+          const why = turn.route.modelId === inTurnFrom ? 'back on the model before' : REQUESTED_WHY;
+          inTurnFrom = before.modelId;
+          const to = { modelName: turn.modelName, effort: turn.route.effort, temperature, sent: temperature !== undefined && sendsTemperature(turn) };
+          postRunLine(services, { agentId: plan.agent.id, runId: request.runId, conversationId: plan.conversationId, taskId: plan.task?.id }, 'model_switched',
+            switchText(plan.agent.name, to, why), { from: before.modelId, to: turn.route.modelId, effort: turn.route.effort, inTurn: true });
+          break;
+        }
+        case 'background': // B-080: the engine's own background work counts as a call in flight for the stall watch
+          watch.call(`bg:${event.id}`, event.running);
           break;
       }
     } catch (error) {
@@ -244,16 +323,13 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   if (lease) watch.signal.addEventListener('abort', releaseLease, { once: true });
   // The tool offer is computed by buildTurn (SES2: the session's prompt key covers exactly these).
   const tools = turn.engine.caps.dynamicTools ? (turn.tools ?? []) : [];
-  const temperature = temperatureOf(plan.previous);
-  let release: (() => void) | undefined;
   let result: EngineTurnResult;
   try {
-    release = await admitAttempt(services, plan, turn, request, status); // CLI engines run processes, HTTP turns are light; B-057 S12: a split holds a Codex slot only to start the app-server (split-admit.ts)
     status('Working'); // D5: the reasoning headline or the running step replaces it as soon as there is one
     watch.start();
     result = await runWithNativeTimeouts(turn.engine, {
       runId: request.runId, agentId: plan.agent.id, account: turn.account, model: turn.model, effort: turn.route.effort,
-      ...(temperature !== undefined ? { temperature } : {}), // B-078: the agent's model.set temperature (engines that take one send it)
+      ...(temperature !== undefined ? { temperature } : {}), // B-078/B-083: the turn's temperature (engines whose model takes one send it)
       session: turn.session ? { ref: turn.session.ref, generation: turn.session.generation } : undefined,
       system: turn.prompt, tools,
       ...(turn.trace && !turn.engine.caps.trace ? { input: [traceInput(turn.trace.calls), ...turn.input] } : { input: turn.input, ...(turn.trace ? { trace: turn.trace } : {}) }),
@@ -283,10 +359,11 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   } finally {
     thoughts.close(); // a block still open ends with the attempt (live: false)
     watch.stop();
-    release?.();
     watch.signal.removeEventListener('abort', releaseLease);
     lease?.release();
   }
+  // B-085: the person's Stop wins over an engine that did not hear it and still says 'done'.
+  if (request.signal.aborted && request.control.stopKind === 'human' && result.stop === 'done') result = { ...result, stop: 'interrupted' };
   if (turn.trace && (!turn.engine.caps.trace || result.traceAsText)) {
     try { services.runs.item(request.runId, { kind: 'note', data: { traceAsText: result.traceAsText ?? turn.engine.id }, effectStatus: 'none' }); } catch { /* journal is best effort */ }
   }
@@ -298,7 +375,8 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   }
   if (watch.stalled) {
     services.log.warn('engine stopped responding; attempt cut', { runId: request.runId, engine: turn.engine.id, toolCalls });
-    try { services.runs.item(request.runId, { kind: 'note', data: { stalled: { engine: turn.engine.id, afterMs: services.clock.now() - started } }, effectStatus: 'none' }); } catch { /* journal is best effort */ }
+    // B-080: quietMs – how long the engine was silent at the cut; afterMs – how long the attempt ran
+    try { services.runs.item(request.runId, { kind: 'note', data: { stalled: { engine: turn.engine.id, quietMs: watch.quietMs, afterMs: services.clock.now() - started } }, effectStatus: 'none' }); } catch { /* journal is best effort */ }
   }
   if (result.usage) {
     usage.inputTokens = Math.max(usage.inputTokens, result.usage.inputTokens);
@@ -307,7 +385,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     Object.assign(usage, addCache(result.usage, {})); // the turn's cached input as its result sums it (Codex's events count per request)
   }
   if (result.contextTokens !== undefined) usage.contextTokens = result.contextTokens;
-  return { result, streamed, reasoning: thoughts.text, toolCalls, tools: used, plan: planSteps, ...(planDone !== undefined ? { planDone } : {}), usage, ms: services.clock.now() - started };
+  return { result, streamed, reasoning: thoughts.text, toolCalls, tools: used, plan: planSteps, ...(planDone !== undefined ? { planDone } : {}), usage, ...(perRequest ? { modelCalls } : {}), ms: services.clock.now() - started };
 }
 
 /** The full length of a call's arguments as the journal would show them uncut (B-049 F9). */

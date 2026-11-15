@@ -1,5 +1,6 @@
-// Auto mode when this PC's model fails: a stand-in (an API key) answers what it can and starts no paid background work; after a
-// restart nothing unchanged is embedded again. Only a choice in settings re-embeds the existing files, once, also across a restart.
+// When the embedding model changes: only a choice in settings re-embeds the existing files, once, also across a restart; a model
+// that changes without a choice re-embeds nothing; files embedded with another model on purpose are found, with a note. (Auto
+// mode's stand-in for a failed local model ended with the word index, lane find 14.11.2026: "auto" embeds with nothing.)
 // Owns: these assertions only. Never: real models or network.
 
 import { test } from 'node:test';
@@ -9,8 +10,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate } from '../../../src/runtime/db/migrate.ts';
-import { KnowledgeStore } from '../../../src/runtime/knowledge/service.ts';
-import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { unit, type Embedder } from '../../../src/runtime/vectors/embedders.ts';
 import { VectorSystem } from '../../../src/runtime/vectors/service.ts';
 
@@ -37,12 +36,12 @@ function world(t: { after(fn: () => void): void }) {
   mkdirSync(path.join(memoryRoot, 'company'), { recursive: true });
   const local = new Fake('local:mini', false);
   const paid = new Fake('openai:small', true);
-  const state = { choice: 'auto', current: local as Embedder | undefined, standIn: false };
+  const state = { choice: 'local', current: local as Embedder | undefined };
   const systems: VectorSystem[] = [];
   /** A start of the app: everything in memory is new (the local model's failures too). */
   const start = () => {
     systems.at(-1)?.stop();
-    const system = new VectorSystem({ db, memoryRoot, embedder: () => state.current, choice: () => state.choice, standIn: () => state.standIn, changeDelayMs: 0 });
+    const system = new VectorSystem({ db, memoryRoot, embedder: () => state.current, choice: () => state.choice, changeDelayMs: 0 });
     systems.push(system);
     system.start();
     return system;
@@ -53,56 +52,16 @@ function world(t: { after(fn: () => void): void }) {
     writeFileSync(file, body);
     return file;
   };
-  const giveUp = () => { state.current = paid; state.standIn = true; };
-  const comeBack = () => { state.current = local; state.standIn = false; };
-  return { db, memoryRoot, local, paid, state, start, write, giveUp, comeBack };
+  return { db, memoryRoot, local, paid, state, start, write };
 }
 
-test('the local model fails, then a restart: the API key is never paid for the existing files, the local model redoes nothing unchanged', async (t) => {
-  const w = world(t);
-  const offer = w.write('angebot.md', 'Das Angebot ging raus.');
-  w.write('firma.md', 'Die Firma heißt Teydra Lab.');
-  let system = w.start();
-  await system.embed(['memory']);
-  assert.equal(w.local.documents.length, 2);
-
-  w.giveUp();
-  await settled(system);
-  system.settingsChanged();
-  await settled(system);
-  const found = await system.search({ query: 'Angebot', in: ['memory'] });
-  await settled(system);
-  system.onFileChanged(offer);
-  await settled(system);
-  const pass = await system.embed(['memory'], { notYet: true });
-  assert.equal(pass.failed, true, 'the tree comes again later');
-  assert.deepEqual(w.paid.documents, [], 'nothing paid in the background, whatever happened');
-  assert.deepEqual(found.hits, []);
-  assert.match(found.note ?? '', /another embedding model/);
-  assert.doesNotMatch(found.note ?? '', /being re-embedded/);
-  assert.deepEqual(w.paid.queries, [], 'nothing it could answer: not even the query is paid');
-
-  // Edited while the stand-in served; then the next start: the local model is back.
-  writeFileSync(offer, 'Das Angebot ging raus, Preis 90 Euro.');
-  w.comeBack();
-  system = w.start();
-  await settled(system);
-  w.local.documents.length = 0;
-  const again = await system.embed(['memory'], { notYet: true });
-  assert.equal(again.reembedded, 1);
-  assert.equal(again.unchanged, 1);
-  assert.equal(w.local.documents.length, 1, 'only what changed');
-  assert.deepEqual(w.paid.documents, []);
-  assert.equal((await system.search({ query: 'Angebot', in: ['memory'], k: 1 })).hits[0]?.path, 'memory/company/angebot.md');
-});
-
-test('a stand-in answers what it can: files embedded with it on purpose', async (t) => {
+test('files embedded on purpose with another model are found, with a note', async (t) => {
   const w = world(t);
   const system = w.start();
   w.write('firma.md', 'Die Firma heißt Teydra Lab.');
   await system.embed(['memory']);
   const offer = w.write('angebot.md', 'Das Angebot ging raus.');
-  w.giveUp();
+  w.state.current = w.paid;
   await system.embed([offer]); // somebody asked for it: that is no background work
   assert.equal(w.paid.documents.length, 1);
   const found = await system.search({ query: 'Angebot', in: ['memory'] });
@@ -112,12 +71,12 @@ test('a stand-in answers what it can: files embedded with it on purpose', async 
   assert.deepEqual(w.paid.queries, ['Angebot']);
 });
 
-test('auto drifting to another model (a server connected, a key removed) re-embeds nothing', async (t) => {
+test('the model changing without a choice in settings (a server connected, a key removed) re-embeds nothing', async (t) => {
   const w = world(t);
   w.write('firma.md', 'Die Firma heißt Teydra Lab.');
   const system = w.start();
   await system.embed(['memory']);
-  w.state.current = w.paid; // no stand-in: this PC cannot run its own model any more, nobody chose anything
+  w.state.current = w.paid; // nobody chose anything
   w.local.documents.length = 0;
   system.settingsChanged();
   await settled(system);
@@ -151,63 +110,11 @@ test('a model chosen in settings re-embeds the existing files once; the work sur
   await settled(system);
   assert.deepEqual(w.paid.documents, [], 'finished: a later start redoes nothing');
 
-  // Back to auto: another choice, while this PC's model works.
-  w.state.choice = 'auto';
+  // Back to this PC's model: another choice.
+  w.state.choice = 'local';
   w.state.current = w.local;
   w.local.documents.length = 0;
   system.settingsChanged();
   await settled(system);
   assert.equal(w.local.documents.length, 2);
-});
-
-test('auto chosen again while only a stand-in serves: the work waits for the chosen model', async (t) => {
-  const w = world(t);
-  w.state.choice = 'openai:small';
-  w.state.current = w.paid;
-  w.write('firma.md', 'Die Firma heißt Teydra Lab.');
-  let system = w.start();
-  await system.embed(['memory']);
-  await settled(system);
-  w.state.choice = 'auto';
-  w.giveUp();
-  w.state.current = new Fake('deepinfra:qwen', true);
-  system.settingsChanged();
-  await settled(system);
-  assert.deepEqual((w.state.current as Fake).documents, []);
-  w.comeBack();
-  system = w.start();
-  await settled(system);
-  assert.equal(w.local.documents.length, 1, 'then the existing file goes to it');
-});
-
-test('the memory tree\'s own pass through the store: no paid embedding while a stand-in serves, a new file comes with the local model', async (t) => {
-  const w = world(t);
-  const clock = new ManualClock();
-  let vectors: VectorSystem = w.start();
-  const store = new KnowledgeStore({ db: w.db, clock, root: w.memoryRoot, vectors: () => vectors, embedRetryMs: 5 });
-  store.save({ title: 'Firma', body: 'Die Firma heißt Teydra Lab.', scope: 'global', createdBy: 'human' });
-  await store.startMemory();
-  await settled(vectors);
-  for (let i = 0; i < 100 && !w.local.documents.length; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(w.local.documents.length, 1);
-
-  w.giveUp();
-  store.save({ title: 'Angebot', body: 'Das Angebot ging raus.', scope: 'global', createdBy: 'human' });
-  store.embedderChanged();
-  await settled(vectors);
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  store.stopMemory();
-  assert.deepEqual(w.paid.documents, []);
-  assert.equal((await store.search({ text: 'Angebot' })).length, 1, 'the words find it meanwhile');
-
-  w.comeBack();
-  w.local.documents.length = 0;
-  vectors = w.start();
-  const next = new KnowledgeStore({ db: w.db, clock, root: w.memoryRoot, vectors: () => vectors, embedRetryMs: 5 });
-  await next.startMemory();
-  for (let i = 0; i < 100 && !w.local.documents.length; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-  next.stopMemory();
-  assert.equal(w.local.documents.length, 1, 'only the file written meanwhile');
-  assert.match(w.local.documents[0], /Angebot/);
-  assert.deepEqual(w.paid.documents, []);
 });

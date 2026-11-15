@@ -57,13 +57,16 @@ export function firstOpen(opens: Array<() => Promise<SocketLike>>): Promise<Sock
  * (including a broken tunnel) is retryable. A 'not_found' from the handshake is thrown.
  */
 export async function openChannel(
-  routes: Array<() => Promise<SocketLike>>, signer: Signer, fingerprint: string,
-): Promise<{ channel: SecureChannel } | { refused: boolean; error: unknown }> {
+  routes: Array<() => Promise<SocketLike>>, signer: Signer, fingerprint: string, stale?: () => boolean,
+): Promise<{ channel: SecureChannel } | { stale: true } | { refused: boolean; error: unknown }> {
   let error: unknown;
   let refused = false;
   for (const open of routes) {
     let socket: SocketLike;
     try { socket = await open(); } catch (failure) { error = failure; continue; }
+    // B-087: a link came up meanwhile (the other PC dialed in while this slow dial was on its way): no second
+    // handshake – it would only replace that link and cut the calls it carries.
+    if (stale?.()) { socket.close(); return { stale: true }; }
     let answered = false;
     let closedUnanswered = false;
     socket.onMessage(() => { answered = true; });

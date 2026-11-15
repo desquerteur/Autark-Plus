@@ -115,61 +115,6 @@ test('members: add/remove posts quiet status lines; lead is reassigned when remo
   assert.equal(h.chats.lead(chat.id), 'ag_tom');
 });
 
-test('B-075 streaming: the streamed body is written into the row (message.updated, no index), finish persists and delivers', () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_tom', 'ag_lea'], createdBy: 'human' });
-  const started = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_1', { model: 'opus-5.5' });
-  assert.equal(started.state, 'streaming');
-  h.chats.appendDelta(started.id, 'Hello ');
-  h.chats.appendDelta(started.id, '@Lea Sophie');
-  assert.equal(h.db.get<{ body: string }>('SELECT body FROM messages WHERE id = ?', [started.id])!.body, 'Hello @Lea Sophie', 'the row holds it');
-  assert.deepEqual(h.of('message.updated').map(m => [m.state, m.body]), [['streaming', 'Hello '], ['streaming', 'Hello @Lea Sophie']]);
-  assert.equal(h.chats.message(started.id)!.body, 'Hello @Lea Sophie');
-  assert.deepEqual(h.chats.search('Hello'), [], 'out of the index while it streams');
-  assert.equal(h.chats.summary(chat.id).unread, 0, 'streaming messages are not unread yet');
-  assert.deepEqual(h.chats.summary(chat.id).working, ['ag_tom'], 'its row says who works');
-  assert.deepEqual(h.wakeRows(), [], 'a streaming row wakes nobody');
-  const done = h.chats.finishAgentMessage(started.id, { body: 'Hello @Lea Sophie', state: 'final', meta: { effort: 'high' } });
-  assert.equal(done.meta.model, 'opus-5.5');
-  assert.equal(done.meta.effort, 'high');
-  assert.equal(done.meta.ms, undefined, 'no live values: no time worked');
-  assert.deepEqual(done.mentions, ['ag_lea']);
-  assert.equal(h.chats.summary(chat.id).unread, 1);
-  assert.deepEqual(h.chats.summary(chat.id).working, []);
-  assert.deepEqual(h.chats.search('Hello').map(hit => hit.message.id), [done.id], 'indexed once final');
-  assert.deepEqual(h.wakeRows().map(w => w.agent_id), ['ag_lea'], 'agent message wakes the mentioned agent only');
-  const writes = h.of('message.updated').length;
-  h.chats.appendDelta(started.id, 'late'); // ignored after finish
-  assert.equal(h.of('message.updated').length, writes);
-  assert.equal(h.chats.message(started.id)!.body, 'Hello @Lea Sophie');
-});
-
-test('B-047 D4: an answer finished after other lines moves to the end (new seq, search intact); one nothing came after keeps its seq', () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_tom', 'ag_lea'], createdBy: 'human' });
-  const quiet = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_0');
-  const kept = h.chats.finishAgentMessage(quiet.id, { body: 'Nothing came after me', state: 'final' });
-  assert.equal(kept.seq, quiet.seq);
-
-  const started = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_1');
-  const line = h.chats.status(chat.id, { type: 'note', text: 'Approved: npm test' }, { authorId: 'ag_tom', fromRun: 'run_1' });
-  const card = h.chats.send({ conversationId: chat.id, authorId: 'system', body: 'Run: npm test', kind: 'task', meta: { fromRun: 'run_1' } });
-  const done = h.chats.finishAgentMessage(started.id, { body: 'The trailer is rendered', state: 'final' });
-  assert.ok(done.seq > line.seq && done.seq > card.seq, 'below its approval and status line');
-  assert.equal(h.db.get<{ seq: number }>('SELECT seq FROM messages WHERE id = ?', [done.id])!.seq, done.seq, 'stored');
-  assert.equal(h.chats.messages(chat.id).at(-1)!.id, done.id);
-  assert.equal(h.of('message.updated').at(-1)!.seq, done.seq, 'clients get the new seq');
-  assert.deepEqual(h.chats.search('trailer rendered').map((hit) => hit.message.id), [done.id], 'the index row follows (rowid unchanged)');
-  assert.equal(line.meta.fromRun, 'run_1');
-
-  // A stopped (or failed) one moves too; the next seq stays unique.
-  const stopped = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_2');
-  h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Stop, please' });
-  const marker = h.chats.finishAgentMessage(stopped.id, { body: '', state: 'stopped', silent: true });
-  assert.equal(h.chats.messages(chat.id).at(-1)!.id, marker.id);
-  assert.equal(new Set(h.chats.messages(chat.id).map((message) => message.seq)).size, h.chats.messages(chat.id).length);
-});
-
 test('B-047 D4: postAgentMessage posts an answer at the end; a quiet one stays quiet unless it mentions the person; chat.send posts carry runId', () => {
   const h = setup();
   const chat = h.chats.create({ agentIds: ['ag_tom', 'ag_lea'], createdBy: 'human' });
@@ -186,22 +131,6 @@ test('B-047 D4: postAgentMessage posts an answer at the end; a quiet one stays q
   assert.equal(h.chats.messages(chat.id).at(-1)!.body, 'Update');
 });
 
-test('B-075 reconcileStreaming: this PC\'s rows stop (steps kept as lines), a silent one goes, another PC\'s run stays streaming', () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_tom', 'ag_lea'], createdBy: 'human' });
-  for (const id of ['run_1', 'run_2']) h.db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES (?, 'ag_tom', 'message', 'running')`, [id]);
-  const step = { kind: 'command' as const, verb: 'Ran', active: 'Running', target: 'npm test' };
-  const own = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_1', { live: { steps: [step], more: 0, startedAt: 1 } });
-  const quiet = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_2', {}, { silent: true });
-  const remote = h.chats.beginAgentMessage(chat.id, 'ag_lea', 'run_elsewhere'); // stands for a row synced from another PC
-  assert.equal(h.chats.reconcileStreaming(), 2);
-  const stopped = h.chats.message(own.id)!;
-  assert.equal(stopped.state, 'stopped');
-  assert.deepEqual([stopped.meta.live, stopped.meta.lines, stopped.meta.error], [undefined, [step], 'Interrupted']);
-  assert.equal(h.chats.message(quiet.id), undefined, 'the silent row only showed the work');
-  assert.ok(h.of('message.removed').some(m => m.id === quiet.id));
-  assert.equal(h.chats.message(remote.id)!.state, 'streaming', 'its home PC ends it');
-});
 
 test('search: German folding (ß/umlauts/case), bm25 order, snippet from the original text', () => {
   const h = setup();
@@ -253,27 +182,6 @@ test('model per chat from a human message: a hint for the addressed agent, a pin
   h.chats.send({ conversationId: chat.id, body: '@Tom again', authorId: 'human', model: 'auto' });
   assert.equal(h.chats.get(chat.id)!.settings.models, undefined);
   assert.equal(h.chats.get(chat.id)!.settings.modelHints, undefined);
-});
-
-test('B-075 working: who works comes from the chat\'s streaming rows (live: note, model, task) – activity without a row changes nothing', () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
-  const before = h.of('conversation.upserted').length;
-  h.bus.emit('agent.activity', { active: [{ agentId: 'ag_tom', runId: 'run_0', conversationId: chat.id, note: 'thinking', startedAt: 0 }] });
-  assert.deepEqual(h.chats.summary(chat.id).working, []);
-  assert.equal(h.of('conversation.upserted').length, before, 'no row, no change');
-  const row = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_1', { live: { steps: [], more: 0, startedAt: 5, taskId: 'task_1' } });
-  assert.deepEqual(h.of('conversation.upserted').at(-1)!.working, ['ag_tom']);
-  const activity = { active: [{ agentId: 'ag_tom', runId: 'run_1', conversationId: chat.id, note: 'running a command', modelName: 'Opus 5.5', effort: 'high' as const, startedAt: 0 }] };
-  h.bus.emit('agent.activity', activity);
-  const live = [{ runId: 'run_1', agentId: 'ag_tom', messageId: row.id, note: 'running a command', model: 'Opus 5.5', effort: 'high', taskId: 'task_1', startedAt: 5 }];
-  assert.deepEqual(h.chats.summary(chat.id).live, live);
-  assert.deepEqual(h.of('conversation.upserted').at(-1)!.live, live, 'the list hears it with the write');
-  const writes = h.of('message.updated').length;
-  h.bus.emit('agent.activity', activity);
-  assert.equal(h.of('message.updated').length, writes, 'no write when nothing changed');
-  h.chats.removeMessage(row.id, 'ag_tom');
-  assert.deepEqual([h.chats.summary(chat.id).working, h.chats.summary(chat.id).live], [[], undefined]);
 });
 
 test('summary: importantUnread counts the unread messages marked important (B-041 Home and briefing); left out when none', () => {

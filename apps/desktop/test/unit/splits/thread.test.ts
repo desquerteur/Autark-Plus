@@ -1,4 +1,4 @@
-// B-057 foundation: a split's thread key – `split:<splitId>` before chat, task and source (shared/model/origin.ts
+// B-057 foundation: a split's thread key – `split:<splitId>`, every other turn the agent's main thread (shared/model/origin.ts
 // threadKey; a split id or a SplitTurn such as ToolContext.split) – and the split.upserted event's topic.
 // Owns: these shape checks. Never: split lifecycle behaviour.
 
@@ -13,16 +13,14 @@ const turn: SplitTurn = {
   parentConversationId: 'cv_1', context: 'fork', firstTurn: true,
 };
 
-test('a split thread comes first, before chat, task and origin', () => {
+test('a split thread is its own; every other turn is the main thread', () => {
   assert.equal(splitThread('sp_1'), 'split:sp_1');
-  assert.equal(threadKey({ split: 'sp_1', conversationId: 'cv_1', taskId: 'tk_1', origin: { source: 'news', label: 'Task news' } }), 'split:sp_1');
-  assert.equal(threadKey({ split: turn, conversationId: 'cv_1' }), 'split:sp_1', 'a SplitTurn (ToolContext.split) names its split');
-  assert.equal(threadKey({ split: undefined, conversationId: 'cv_1' }), 'cv_1');
-  assert.equal(threadKey({ split: '', taskId: 'tk_1' }), 'task:tk_1');
-  assert.equal(threadKey({ origin: { source: 'news', label: 'Task news' } }), 'src:news');
-  assert.equal(threadKey({}), '');
+  assert.equal(threadKey({ split: 'sp_1' }), 'split:sp_1');
+  assert.equal(threadKey({ split: turn }), 'split:sp_1', 'a SplitTurn (ToolContext.split) names its split');
+  assert.equal(threadKey({ split: undefined }), 'main');
+  assert.equal(threadKey({ split: '' }), 'main');
   assert.ok(isSplitThread(threadKey({ split: 'sp_1' })));
-  assert.ok(!isSplitThread('cv_1') && !isSplitThread('task:tk_1') && !isSplitThread('src:news'));
+  assert.ok(!isSplitThread('main'));
 });
 
 test('limits and terminal states', () => {

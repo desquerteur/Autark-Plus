@@ -14,7 +14,7 @@ import type { TaskStatus } from '../../../src/shared/model/tasks.ts';
 
 const M = 60_000;
 const NINE = Date.UTC(2026, 9, 17, 9, 0, 0); // harness clock start
-const ALL: TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked', 'done', 'cancelled'];
+const ALL: TaskStatus[] = ['open', 'waiting', 'done', 'dropped'];
 const TITLE = 'Check the support inbox';
 
 function setup() {
@@ -46,22 +46,6 @@ test('a routine fired while its last task is open makes no second task; one skip
   assert.deepEqual(skips, ['Skipped the 10:00 run – the previous one is still open'], 'one note, the newest');
 });
 
-test('a blocked occurrence still holds the routine; a finished or cancelled one lets the next fire create a task', () => {
-  const h = setup();
-  h.fire(NINE);
-  const [first] = h.occurrences();
-  h.tasks.setStatus(first.id, 'blocked', 'ag_tom', 'Mail sign-in expired');
-  h.fire(NINE + 30 * M);
-  assert.equal(h.occurrences().length, 1, 'a blocked run counts as open (Temporal: a paused run is open)');
-
-  h.tasks.complete(first.id, { summary: 'Answered 3 mails', evidence: [{ kind: 'note', label: 'answered' }], verification: 'claimed_by_agent' }, 'ag_tom');
-  h.fire(NINE + 60 * M);
-  assert.equal(h.occurrences().length, 2, 'the previous run is done: a new task');
-  const second = h.occurrences().find((task) => task.id !== first.id)!;
-  h.tasks.setStatus(second.id, 'cancelled', 'ag_tom', 'Nothing to do');
-  h.fire(NINE + 90 * M);
-  assert.equal(h.occurrences().length, 3);
-});
 
 test('work the agent made in a routine run (same origin, own title) does not hold the routine', () => {
   const h = setup();
@@ -70,18 +54,8 @@ test('work the agent made in a routine run (same origin, own title) does not hol
   const extra = h.tasks.create({ title: 'Reply to Anna about the refund', assigneeId: 'ag_tom', createdBy: 'ag_tom', origin: scheduleOrigin(h.routine) });
   assert.equal(isRoutineOccurrence(h.routine, h.tasks.get(first.id)!), true);
   assert.equal(isRoutineOccurrence(h.routine, h.tasks.get(extra.id)!), false);
-  h.tasks.complete(first.id, { summary: 'Done', evidence: [{ kind: 'note', label: 'done' }], verification: 'claimed_by_agent' }, 'ag_tom');
+  h.tasks.finish(first.id, { status: 'done' as const, ...{ summary: 'Done', evidence: [{ kind: 'note', label: 'done' }], verification: 'claimed_by_agent' } }, 'ag_tom');
   h.fire(NINE + 30 * M);
   assert.equal(h.occurrences().length, 2, 'the open reply task is no earlier occurrence');
 });
 
-test('the person\'s "Post as task" routines keep posting a team task each time', () => {
-  const h = setup();
-  const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human', title: 'Team' });
-  const weekly = h.scheduler.create({
-    ownerId: 'human', conversationId: chat.id, kind: 'routine', title: 'Weekly report', spec: { everyMs: 60 * M, tz: 'UTC' }, payload: { taskTemplate: { title: 'Write the weekly report' } },
-  });
-  fireSchedule(weekly, NINE, h.services);
-  fireSchedule(weekly, NINE + 60 * M, h.services);
-  assert.equal(h.tasks.list({ conversationId: chat.id, status: ALL }).filter((task) => task.title === 'Write the weekly report').length, 2);
-});

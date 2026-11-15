@@ -1,21 +1,22 @@
-// Context ledger (B-048 E1, back 01.11.2026): every unit of an agent's working context in a chat has a short, stable id –
-// m<seq> a chat message (its seq), t<n> a tool call with its output (ours or engine-native), s<n> a loaded
+// Context ledger (B-048 E1, back 01.11.2026): every unit of an agent's working context in a thread (13.11.2026: its main
+// thread spans every chat) has a short, stable id – m<n> a chat message it saw, t<n> a tool call with its output (ours or engine-native), s<n> a loaded
 // skill text, r<n> a reasoning summary, a<n> the agent's own text (commentary or answer), f<n> file content
-// read. <n> counts per (agent, chat) across t/s/r/a/f and is never reused. A row keeps its title and its
+// read. <n> counts per (agent, thread) – messages on their own, t/s/r/a/f together – and is never reused. A row keeps its title and its
 // condensed text for good, so an id never dangles; the original (a message, a run item, a blob) is kept
-// at least 14 days after it was condensed or hidden, within 64 MB per (agent, chat).
+// at least 14 days after it was condensed or hidden, within 64 MB per (agent, thread).
 // B-049 F9: a NESTED item is a call a code-mode script ran inside one engine call (Codex `exec`: the model saw only
 // the script and what it printed, never this call's output) – its engine call id starts with "exec-" (Codex names
 // every call made inside an exec script so; checked against the rollouts and codex-cli 0.165). It stays in the ledger
 // (context.restore returns its output) but costs nothing in the live context and is never replayed on its own.
-// Owns: the shapes, the id rules, the token estimate (about four characters per token), the live-context cost (a
+// Owns: the shapes, the id rules, the token estimate (about three characters per token, B-080 wave 3), the live-context cost (a
 // nested item 0), the nested-call rule, the title cap and the restore stamp of a condensed item. Never: storage or
 // capture (runtime/context/ledger/*).
 
 export type LedgerKind = 'message' | 'tool' | 'skill' | 'reasoning' | 'assistant' | 'file';
 export type LedgerState = 'keep' | 'condensed' | 'hidden';
 /** Who set a mark: the subconscious, the agent itself, or a restore. */
-export type MarkBy = 'subconscious' | 'agent' | 'restore';
+/** 'window' (B-080): the fit of the model's window hid the oldest tool work (context/ledger/window.ts). */
+export type MarkBy = 'subconscious' | 'agent' | 'restore' | 'window';
 
 /** Id letter per kind. */
 export const KIND_PREFIX: Readonly<Record<LedgerKind, string>> = { message: 'm', tool: 't', skill: 's', reasoning: 'r', assistant: 'a', file: 'f' };
@@ -46,7 +47,7 @@ export interface LedgerItem {
   /** Monotonic position per (agent, chat). */
   order: number;
   createdAt: number;
-  /** Estimate of what the item costs in context as captured (characters / 4). */
+  /** Estimate of what the item costs in context as captured (characters / 3, CHARS_PER_TOKEN; rows from before B-080 wave 3 keep their / 4). */
   tokens: number;
   title: string;
   state: LedgerState;
@@ -67,8 +68,6 @@ export interface LedgerItem {
 /** What a capture hands to record(). */
 export interface NewLedgerItem {
   kind: LedgerKind;
-  /** m items: the chat message's seq (the id is m<seq>). */
-  seq?: number;
   runId?: string;
   title?: string;
   /** The text as the agent holds it – estimates `tokens` when that is not given. */
@@ -94,8 +93,6 @@ export interface LedgerMark {
    * beyond that the PIN_TURNS pin applies); false ends a pin for good (context.restore keep: false).
    */
   keep?: boolean;
-  /** With by 'subconscious': the mark comes from a run on someone's word (the person's message, the main AI's own call), which a pin does not stop. */
-  onWord?: boolean;
 }
 
 /** One entry of the view – what the next native rebuild contains, in order. */
@@ -120,9 +117,18 @@ export interface LedgerViewItem {
 
 export type LedgerView = LedgerViewItem[];
 
-/** The token estimate used everywhere in the ledger: about four characters per token. */
+/**
+ * B-080 wave 3: the one unit every size of the platform counts in – the ledger's rows, the fit's room, the shrink guard, pastFit
+ * and the subconscious's savable share – so they compare like with like against the engine's own count. Measured on the
+ * 08.–09.11.2026 histories (German, JSON, code): the engines counted 3.3–3.6 characters per token; chars/4 undercounted by
+ * 11–22 %, so the 80 % fit landed at 92–96 % of the window and Codex compacted the whole thread at once. 3 leaves room for
+ * Codex's own instructions and tool schemas. runtime/context/ledger/window.ts tokensOf counts in it too.
+ */
+export const CHARS_PER_TOKEN = 3;
+
+/** The token estimate used everywhere in the ledger: about three characters per token (CHARS_PER_TOKEN). */
 export function estimateTokens(text: string | undefined): number {
-  return text ? Math.ceil(text.length / 4) : 0;
+  return text ? Math.ceil(text.length / CHARS_PER_TOKEN) : 0;
 }
 
 /** B-049 F9: the engine call id prefix of a call made inside a code-mode script (Codex `exec`). */

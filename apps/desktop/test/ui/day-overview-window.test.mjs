@@ -164,14 +164,13 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
   // ---- My day: seed real things
   const manager = (await rpc.call('agents.list')).find((agent) => agent.template === 'manager');
   const chat = await rpc.call('chats.create', { title: 'Launch plan', agentIds: [manager.id] });
-  const stuckTask = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Renew the domain', assigneeKind: 'agent', assigneeId: manager.id });
-  await rpc.call('tasks.setStatus', { id: stuckTask.id, status: 'blocked', note: 'No login for the registrar' });
-  await rpc.call('tasks.create', { conversationId: chat.id, title: 'Approve the logo', assigneeKind: 'human' });
+  const stuckTask = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Renew the domain', to: manager.id });
+  await rpc.call('tasks.create', { conversationId: chat.id, title: 'Approve the logo' });
   const notes = await rpc.call('chats.create', { title: 'Press', agentIds: [manager.id] });
-  const finished = await rpc.call('tasks.create', { conversationId: notes.id, title: 'Write the launch note', assigneeKind: 'agent', assigneeId: manager.id });
-  // B-078 D10: My day's Work block is the report – the agent's own tasks.complete with alsoHandled (the demo engine runs the tool)
+  const finished = await rpc.call('tasks.create', { conversationId: notes.id, title: 'Write the launch note', to: manager.id });
+  // B-078 D10: My day's Work block is the report – the agent's own tasks.finish with alsoHandled (the demo engine runs the tool)
   const handled = 'Booked the room for the launch webinar';
-  await rpc.call('messages.send', { conversationId: notes.id, body: `Done [[tool:tasks.complete ${JSON.stringify({ taskId: finished.id, summary: 'The draft is in the chat', alsoHandled: [handled] })}]]` });
+  await rpc.call('messages.send', { conversationId: notes.id, body: `Done [[tool:tasks.finish ${JSON.stringify({ taskId: finished.id, status: 'done', summary: 'The draft is in the chat', alsoHandled: [handled] })}]]` });
   const now = Date.now();
   await rpc.call('calendar.add', { kind: 'event', text: 'Call with the tax advisor', startAt: now + 60 * 60_000, endAt: now + 90 * 60_000 });
 

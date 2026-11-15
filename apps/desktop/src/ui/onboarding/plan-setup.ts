@@ -2,10 +2,13 @@
 // Install a missing CLI first, then accounts.add creates a separate sign-in profile. Existing accounts stay as
 // they are. Wait for this account's sign-in through events and a re-check on window focus (one 5-minute timer,
 // no polling), then report that it signed in. No model turn is sent, even when another account already works.
-// A newer flow cancels the running one: it stops at its next step and shows nothing.
+// A newer flow cancels the running one: it stops at its next step and shows nothing. A sign-in started from the phone
+// opens its sheet (settings/away-sign-in.ts) and gets 15 minutes.
 // Owns: this flow, its steps and texts. Never: renders, writes settings, reads or logs a token or the sign-in address.
 
+import type { AwaySignIn } from '../../shared/api/methods-providers.ts';
 import type { Account, DetectionReport } from '../../shared/model/providers.ts';
+import { openAwaySignIn } from '../settings/away-sign-in.ts';
 
 export type PlanProvider = 'codex' | 'claude';
 
@@ -17,6 +20,8 @@ const CLI: Record<PlanProvider, string> = { codex: 'Codex', claude: 'Claude Code
 
 /** How long step 3 waits for the browser sign-in. */
 export const SIGN_IN_WAIT_MS = 5 * 60_000;
+/** B-091: … and for a sign-in started from the phone (its device code expires after 15 minutes). */
+export const AWAY_WAIT_MS = 15 * 60_000;
 export const SIGN_IN_TEXT = 'Finish signing in in your browser…';
 export const SIGN_IN_GAVE_UP = 'Sign-in did not finish – try again.';
 
@@ -32,7 +37,7 @@ export type PlanResult =
 /** The runtime calls the flow makes (plan-actions.tsx wires them to rpc.call). */
 export interface PlanRpc {
   install(provider: PlanProvider): Promise<unknown>;
-  add(provider: PlanProvider): Promise<Account & { signInUrl?: string }>;
+  add(provider: PlanProvider): Promise<Account & { signInUrl?: string } & AwaySignIn>;
   /** accounts.detect: the runtime checks the open sign-ins again (events bring the change). */
   recheck(): Promise<unknown>;
 }
@@ -78,7 +83,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
   };
 
   /** Step 3: resolves with the account once it is settled (works, or the Free plan), 'gone' when it was removed, else 'timeout' / 'cancelled'. */
-  const waitSignedIn = (id: string) => new Promise<Account | 'timeout' | 'gone' | 'cancelled'>((resolve) => {
+  const waitSignedIn = (id: string, ms: number) => new Promise<Account | 'timeout' | 'gone' | 'cancelled'>((resolve) => {
     let done = false;
     let seen = false;
     const stops: Array<() => void> = [];
@@ -90,7 +95,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
       resolve(value);
     };
     abortWait = () => finish('cancelled');
-    stops.push(env.timer(SIGN_IN_WAIT_MS, () => finish('timeout')));
+    stops.push(env.timer(ms, () => finish('timeout')));
     stops.push(env.focus(() => { void env.rpc.recheck().catch(() => undefined); }));
     const off = env.accounts.subscribe((list) => {
       const account = list.find((entry) => entry.id === id);
@@ -105,19 +110,23 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
   const signIn = async (): Promise<Account | PlanResult> => {
     let account: Account;
     let url: string | undefined;
+    let away: AwaySignIn = {};
     show({ step: 'sign-in', text: SIGN_IN_TEXT });
     try {
-      const { signInUrl, ...rest } = await env.rpc.add(provider);
+      const { signInUrl, code, paste, ...rest } = await env.rpc.add(provider);
       account = rest;
       url = signInUrl;
+      away = { code, paste };
     } catch (error) { return cancelled ? CANCELLED : fail('sign-in', 'sign-in', messageOf(error, 'Could not start the sign-in – try again.')); }
     if (cancelled) return CANCELLED;
     // the account as the signal holds it now (an event may have brought its sign-in already)
     const fresh = env.accounts.peek().find((entry) => entry.id === account.id) ?? account;
     if (settled(fresh)) return fresh;
+    // started from the phone: its sheet opens, and the device code lives 15 minutes
+    const onPhone = openAwaySignIn(fresh.id, { signInUrl: url, ...away });
     show({ step: 'sign-in', text: SIGN_IN_TEXT, url });
     // 3. the browser
-    const waited = await waitSignedIn(fresh.id);
+    const waited = await waitSignedIn(fresh.id, onPhone ? AWAY_WAIT_MS : SIGN_IN_WAIT_MS);
     if (waited === 'cancelled' || cancelled) return CANCELLED;
     if (waited === 'timeout') return fail('sign-in', 'sign-in', SIGN_IN_GAVE_UP);
     if (waited === 'gone') return fail('sign-in', 'sign-in', 'The sign-in was removed – try again.');

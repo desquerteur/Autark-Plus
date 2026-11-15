@@ -1,0 +1,29 @@
+// Owns: executable checks that the Play install rule and the phone-use disclosure keep their promises, without a device:
+// Play installs never self-update; the disclosure names what is read, where it goes, the password limit and the way out
+// in both languages. Never: claims the screen shows (that needs a phone).
+package com.teydralab.autark.android.phoneuse;
+
+public final class DisclosureTest {
+    private static int assertions;
+
+    public static void main(String[] args) {
+        check(com.teydralab.autark.android.InstallSourceProbe.selfUpdates(null));
+        check(com.teydralab.autark.android.InstallSourceProbe.selfUpdates("com.google.android.packageinstaller"));
+        check(!com.teydralab.autark.android.InstallSourceProbe.selfUpdates("com.android.vending"));
+        for (boolean german : new boolean[] {false, true}) {
+            String body = DisclosureText.body(german);
+            for (String needed : german
+                    ? new String[] {"AccessibilityService", "Bildschirmfotos", "Passwortfeldern", "eigenen PC", "Teydra Lab", "Hintergrund", "Benachrichtigungsleiste", "Bankmeldungen", "KI-Modell", "auch private", "Pause", "Weiter", "✕", "Bedienungshilfen"}
+                    : new String[] {"Accessibility Service", "screenshots", "password fields", "your own PC", "Teydra Lab", "background", "notification shade", "bank alerts", "AI model", "private content", "Pause", "Continue", "✕", "Accessibility"}) {
+                check(body.contains(needed));
+            }
+            // Only what is checked: no claim about the microphone, the camera or a locked screen (owner 11.11.2026).
+            for (String unchecked : new String[] {"Mikrofon", "Kamera", "gesperrt", "microphone", "camera", "locked", "30 Sekunden", "30 seconds"}) check(!body.contains(unchecked));
+            check(!DisclosureText.title(german).isEmpty() && !DisclosureText.agree(german).isEmpty() && !DisclosureText.decline(german).isEmpty());
+        }
+        check(DisclosureText.isGerman("de") && DisclosureText.isGerman("DE") && !DisclosureText.isGerman("en") && !DisclosureText.isGerman(null));
+        System.out.println(assertions + " Play install-rule and disclosure assertions passed.");
+    }
+
+    private static void check(boolean value) { assertions++; if (!value) throw new AssertionError("Unexpected result " + assertions); }
+}

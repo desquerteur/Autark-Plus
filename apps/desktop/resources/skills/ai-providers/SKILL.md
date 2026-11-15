@@ -48,9 +48,9 @@ need. Reading it again afterwards shows the same entry, or the reason above it w
 
 Plans come through their own sign-in and stay detected, they are not in the file: `wf call accounts.detect` finds what is on
 this PC, `wf call accounts.add '{"provider":"codex"}'` starts the sign-in. `wf call accounts.add` with a key or address also works
-for an API connection and writes the same entry. With two plans of one provider the upper one in Settings › Models runs
-first; `wf call accounts.update '{"id":"<account>","rotation":true}'` lets another one take over when it runs out (off by
-default, as providers' terms differ on rotating logins), and `priority` sets the order.
+for an API connection and writes the same entry. Every signed-in plan of a provider takes turns: the one whose week resets first runs
+first, one at its limit steps aside until it is free again. `priority` (Move up / down in Settings › Models) orders plans
+without a reading and keys.
 
 ## Which protocol
 
@@ -121,11 +121,12 @@ How I think about the pick:
 - A decision model answers typed questions (a choice, a score, yes or no) with a confidence, small and fast – for example
   TypeSafe Jev or Liquid d1 over the `decision` protocol, nimble or tev1 on a local server. Without one, a small chat model
   of what is connected stands in (Settings and `app.status` name it).
-- Search by meaning (`routing.embeddings`, what `vector.embed` and `vector.search` use) runs on this PC's MiniLM-L12
-  multilingual while it is `"auto"`. A connected embedding model takes over once `routing.embeddings` names it
-  (`"<connection>:<model>"`; the tool `models.list` with `category` `"embeddings"` lists the ids) – for example an OpenAI
-  key's `text-embedding-3-small`, DeepInfra's `Qwen/Qwen3-Embedding-8B`, `bge-m3` on Ollama. Vectors of two models do not
-  compare, so changing it embeds everything again.
+- Search by meaning (`routing.embeddings`, what `vector.embed` and `vector.search` use, and `knowledge.find` beside its
+  words) runs only on a model a person chose: `"local"` is this PC's MiniLM-L12 multilingual (about 0.4–0.5 GB of RAM while
+  it runs), `"<connection>:<model>"` a connected embedding model (the tool `models.list` with `category` `"embeddings"`
+  lists the ids) – for example an OpenAI key's `text-embedding-3-small`, DeepInfra's `Qwen/Qwen3-Embedding-8B`, `bge-m3` on
+  Ollama. While it is `"auto"` or `"off"` nothing is embedded and finding goes by words, which ranked the right skill first
+  more often than MiniLM on this app's own data. Vectors of two models do not compare, so changing it embeds everything again.
 - Work deserves the strongest model the person is paying for anyway, which is why a plan's pick for each turn is often the
   right answer. For media, I look at the price per image or minute next to what the person wants to make.
 

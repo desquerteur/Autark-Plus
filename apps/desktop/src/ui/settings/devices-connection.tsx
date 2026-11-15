@@ -2,7 +2,8 @@
 // (devices.findable) and the meeting server devices in other networks find each other over (devices.relay, its state in
 // the hint). B-078 (D5): no phone switch and no "reach over" choice – a phone gets in exactly while its accepted row
 // exists (Remove ends it); pwa.bind for LAN/Tailscale browsers stays a settings.json key the AI sets (skill phone-access).
-// The same keys of settings.json the AI changes. Owner only: the group is not shown to a phone.
+// The same keys of settings.json the AI changes. B-084: on my phone too – a 'settings' device on a secure transport
+// writes the 'devices' section (rpc/handlers/system.ts).
 // Owns: these rows. Never: lets a device in without the person's Accept, or shows a key.
 
 import { relayAddress, type RelayState } from '../../shared/model/relay.ts';

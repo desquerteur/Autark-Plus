@@ -9,8 +9,9 @@
 // (snoozeEnd), else the end its wait records (waitingOn.until, snoozedUntil – the offline list,
 // the wf CLI); tasks/timers.ts snoozeChanged keeps that record in step when the person
 // pauses, resumes or deletes the ring. A snooze without a recorded end reads as plain "Snoozed".
-// "Needs you" (B-041, one rule for the badge, My day's Needs-you group and the morning briefing):
-// what rang, what is overdue, and what an agent, the host or a colleague asks of the person – never a "Later" one.
+// "Needs you" (one rule for the badge, My day's Needs-you group and the morning briefing): what rang (an open timer
+// to-do whose time passed), what is overdue, and what an agent, the host or a colleague asks of the person – never a
+// "Later" one. A to-do waiting for a ring waits on something outside (shared/model/tasks.ts TaskWait) with these whys.
 // Owns: these pure rules. Never: reads a clock, the store or the database – callers pass data and
 // the time in.
 
@@ -19,8 +20,9 @@ import type { Schedule, Task } from './tasks.ts';
 
 /** A timer further ahead than this waits under "Later". */
 export const LATER_MS = 12 * 60 * 60_000;
-/** waitingOn.reason of a snoozed to-do (tasks/human.ts snooze); a repeating timer waits with 'Repeats'. */
+/** waitingOn.why of a snoozed to-do (tasks/human.ts snooze) and of a repeating timer ticked off until its next ring. */
 export const SNOOZED_REASON = 'Snoozed';
+export const REPEATS_REASON = 'Repeats';
 
 type Listed = Pick<Task, 'assigneeKind' | 'status' | 'waitingOn' | 'widget' | 'dueAt'>;
 /** A listed to-do with who wrote it (a missing author counts as someone else) and its id (for approval pairs). */
@@ -41,11 +43,11 @@ export function timerAt(task: Pick<Task, 'widget'>): number | undefined {
 
 /** Waits for a ring: snoozed, or a repeating timer ticked off until its next time. */
 export function waitsForRing(task: Pick<Task, 'assigneeKind' | 'status' | 'waitingOn'>): boolean {
-  return task.assigneeKind === 'human' && task.status === 'waiting' && task.waitingOn?.kind === 'schedule';
+  return task.assigneeKind === 'human' && task.status === 'waiting' && task.waitingOn?.on === 'outside';
 }
 
 export function isSnoozed(task: Pick<Task, 'assigneeKind' | 'status' | 'waitingOn'>): boolean {
-  return waitsForRing(task) && task.waitingOn?.reason === SNOOZED_REASON;
+  return waitsForRing(task) && task.waitingOn?.why === SNOOZED_REASON;
 }
 
 /**
@@ -73,16 +75,17 @@ export function snoozeEnd(schedules: readonly Schedule[], taskId: string): numbe
   return end;
 }
 
-/** On the list (the rule of repo.todos): open, ringing or in progress – or waiting for a ring (under "Later"). */
+/** On the list (the rule of repo.todos): open – or waiting for a ring (under "Later"). */
 export function onForYouList(task: Pick<Task, 'assigneeKind' | 'status' | 'waitingOn'> & { assigneeId?: string }): boolean {
   // F-52: a to-do with an assignee id belongs to another person (the caller's own have none, or 'human').
   if (task.assigneeId !== undefined && task.assigneeId !== 'human') return false;
-  return task.assigneeKind === 'human' && (task.status === 'open' || task.status === 'needs_you' || task.status === 'working' || waitsForRing(task));
+  return task.assigneeKind === 'human' && (task.status === 'open' || waitsForRing(task));
 }
 
-/** Rings now: its timer rang (schedules/fire.ts sets needs_you) or it otherwise needs the person now. */
-export function isRinging(task: Pick<Task, 'assigneeKind' | 'status'>): boolean {
-  return task.assigneeKind === 'human' && task.status === 'needs_you';
+/** Rings now: an open timer to-do whose time came. */
+export function isRinging(task: Pick<Task, 'assigneeKind' | 'status' | 'widget'>, now: number): boolean {
+  const at = timerAt(task);
+  return task.assigneeKind === 'human' && task.status === 'open' && at !== undefined && at <= now;
 }
 
 /**
@@ -92,7 +95,7 @@ export function isRinging(task: Pick<Task, 'assigneeKind' | 'status'>): boolean 
  */
 export function isLater(task: Listed, now: number, dayEnd: number = endOfToday(now)): boolean {
   if (waitsForRing(task)) return true;
-  if (isRinging(task)) return false;
+  if (isRinging(task, now)) return false;
   const at = timerAt(task);
   if (at !== undefined) return at - now > LATER_MS;
   return task.dueAt !== undefined && task.dueAt >= dayEnd;
@@ -105,7 +108,7 @@ export function isLater(task: Listed, now: number, dayEnd: number = endOfToday(n
  * timer that has not rung waits under Today or Later. My day adds the to-do whose block runs now.
  */
 export function needsYou(task: Counted, now: number, dayEnd: number = endOfToday(now)): boolean {
-  if (isRinging(task)) return true;
+  if (isRinging(task, now)) return true;
   if (waitsForRing(task)) return false;
   if (task.dueAt !== undefined && task.dueAt < now) return true;
   if (isLater(task, now, dayEnd) || timerAt(task) !== undefined) return false;

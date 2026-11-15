@@ -32,7 +32,7 @@ test('claude initialize: field names of models and account (opt-in probe)', { sk
   const tempDir = path.join(root, 'test-results', 'claude-probe');
   await mkdir(tempDir, { recursive: true });
   const supervisor = new Supervisor({});
-  const account: Account = { id: 'live_probe', provider: 'claude', label: 'Claude', auth: 'cli', home, state: 'unknown', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 0 };
+  const account: Account = { id: 'live_probe', provider: 'claude', label: 'Claude', auth: 'cli', home, state: 'unknown', priority: 0, enabled: true, detected: false, createdAt: 0 };
   const raw = await new ClaudeStatus({ supervisor, tempDir }).read(exe, account);
   await supervisor.killAll();
 

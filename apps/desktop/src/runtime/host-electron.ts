@@ -3,11 +3,13 @@
 // Owns: the runtime side of the host bridge – request ids, timeouts, power listeners and the
 // Host object built on top (restart and the longer boot wait are asks to main's RuntimeHost;
 // video keyframes, MM4, and – B-058 – decoded sound and prepared images are jobs of main's media
-// analyzer, waited for as long as its queue can take).
+// analyzer, waited for as long as its queue can take; a dictation for the Codex plan's voice is a WebRTC job of main's
+// hidden voice window, waited for as long as the take plays). B-080: an install of a build is an ask to main (app.install,
+// answered before main acts); an open of a file waits as long as Windows' app chooser or the app's first start takes.
 // Never: imports electron (the parent port is passed in).
 
 import type { Host, HostCapture } from './host.ts';
-import { AUDIO_DECODE_LIMITS, IMAGE_LIMITS, KEYFRAME_LIMITS } from '../shared/api/host-bridge.ts';
+import { AUDIO_DECODE_LIMITS, IMAGE_LIMITS, KEYFRAME_LIMITS, RTC_LIMITS } from '../shared/api/host-bridge.ts';
 import type { AppInfo, HostOp, HostOps, HostResponse, PowerEvent } from '../shared/api/host-bridge.ts';
 import { WorkforceError } from '../shared/errors.ts';
 import { SIDE_WAIT_MAX_MS } from '../shared/model/side-browser.ts'; // B-055
@@ -26,8 +28,12 @@ export const ANALYZER_MS = [KEYFRAME_LIMITS, AUDIO_DECODE_LIMITS, IMAGE_LIMITS].
 
 const TIMEOUTS: Partial<Record<HostOp, number>> = {
   screenshot: 20_000, notify: 10 * 60_000,
+  openPath: 10 * 60_000, // B-080: Windows answers an open once its app chooser or the app's first start is done (an editor took 29 s)
   'media.analyze': ANALYZER_MS, 'media.audio': ANALYZER_MS, 'media.image': ANALYZER_MS,
   sideBrowser: SIDE_WAIT_MAX_MS + 15_000, // B-055: a browser.wait or a 20-step batch in the side browser
+  // Owner 07.11.2026: the offer waits for the analyzer's decode, then for the page; the answer for the whole take in real time.
+  'voice.rtcOffer': ANALYZER_MS + RTC_LIMITS.offerMs,
+  'voice.rtcAnswer': RTC_LIMITS.connectMs + RTC_LIMITS.leadMs + RTC_LIMITS.maxMs + RTC_LIMITS.tailMs + 15_000,
 };
 
 export class HostBridgeClient {
@@ -113,6 +119,9 @@ export function createElectronHost(bridge: HostBridgeClient, app: AppInfo): Host
     sideView: { // B-076: main/side-driver/caster.ts (a side tab watched from another PC or a phone)
       cast: (args) => bridge.call('sideCast', args), input: (args) => bridge.call('sideInput', args), nav: (args) => bridge.call('sideNav', args),
     },
+    voiceRtc: { // owner 07.11.2026: main/voice-rtc.ts (a dictation heard by the Codex plan over WebRTC)
+      offer: (args) => bridge.call('voice.rtcOffer', args), answer: (args) => bridge.call('voice.rtcAnswer', args), close: (args) => bridge.call('voice.rtcClose', args),
+    },
     onPower: (listener) => bridge.onPower(listener),
     idleSeconds: async () => (await bridge.call('idleSeconds', {})).seconds,
     keepAwake: (reason) => {
@@ -125,10 +134,12 @@ export function createElectronHost(bridge: HostBridgeClient, app: AppInfo): Host
     // Best effort: an older main without the op keeps its normal boot timeout.
     extendBoot: async (reason) => { await bridge.call('runtime.booting', { reason }).catch(() => undefined); },
     openCompany: (input) => bridge.call('company.open', input), // B-072: main/companies.ts
+    install: async (installer) => { await bridge.call('app.install', { installer }); }, // B-080: main answers, then drains and installs
     app: {
       version: app.version, packaged: app.packaged, resourcesDir: app.resourcesDir, dataDir: app.dataDir, executable: app.executable,
       ...(app.companies ? { companies: app.companies } : {}), // B-072: where the companies on this PC live
       ...(app.start ? { start: app.start } : {}), // B-078: the "+" menu's --start=mine|employee
+      ...(app.pid ? { pid: app.pid } : {}), // B-080: the app's process – a start under it followed no install
     },
   };
 }

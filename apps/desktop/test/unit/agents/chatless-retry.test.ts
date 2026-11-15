@@ -20,6 +20,8 @@ import { WakeQueueImpl } from '../../../src/runtime/wakes/queue.ts';
 const MIN = 60_000;
 const NOW = 1_000_000;
 const MAIL = { source: 'app:box', label: 'New mail in me@example.test' };
+// Read back from the queue, a mail wake without runtime-authored identity carries the legacy one (no exact messages).
+const LEGACY_MAIL = { ...MAIL, mailProvenance: { appId: 'box', messageIds: [] as string[] } };
 
 function wake(id: string, patch: Partial<Wake> = {}): Wake {
   return { id, agentId: 'ag_tom', reason: 'event', dueAt: 10, createdAt: 10, attempts: 1, origin: MAIL, note: 'New mail', ...patch };
@@ -35,10 +37,10 @@ function rig(execute: (request: TurnRequest) => Promise<TurnOutcome>) {
       done: (ids: string[]) => settled.push(`done:${ids.join(',')}`),
       release: (ids: string[], dueAt?: number) => settled.push(`release:${ids.join(',')}${dueAt === undefined ? '' : `@${dueAt}`}`),
     },
-    runs: { get: () => ({ status: 'running' }), finish() {} },
+    runs: { get: () => ({ status: 'running' }), finish() {}, items: () => [] },
   } as unknown as RuntimeServices;
   const live = { awake() {}, status() {}, emit() {} } as unknown as LiveStatus;
-  const turns = new RunningTurns({ services: () => services, executor: { execute }, supervisor: { admit: async () => () => {} } }, live, () => {});
+  const turns = new RunningTurns({ services: () => services, executor: { execute } }, live, () => {});
   const run = async (wakes: Wake[]) => {
     const [group] = groupWakes(wakes);
     turns.start(services, { id: 'ag_tom' } as Agent, group!);
@@ -77,11 +79,11 @@ test('a run with a task or chat, and a stopped run end their wakes as before', a
   const fail = async (request: TurnRequest): Promise<TurnOutcome> => ({ runId: request.runId, status: 'failed' });
 
   const task = rig(fail);
-  await task.run([wake('wk_1', { taskId: 'tk_1', reason: 'task' })]);
+  await task.run([wake('wk_1', { taskId: 'tk_1', reason: 'task', origin: undefined })]);
   assert.deepEqual(task.settled, ['done:wk_1']);
 
   const chat = rig(fail);
-  await chat.run([wake('wk_1', { conversationId: 'cv_1', reason: 'message' })]);
+  await chat.run([wake('wk_1', { conversationId: 'cv_1', reason: 'message', origin: undefined })]);
   assert.deepEqual(chat.settled, ['done:wk_1']);
 
   let stopped!: ReturnType<typeof rig>;
@@ -100,14 +102,13 @@ test('with the real queue the note survives more than three failures, backoff ca
   const queue = new WakeQueueImpl({ db, clock });
   const live = { awake() {}, status() {}, emit() {} } as unknown as LiveStatus;
   const services = {
-    clock, wakes: queue, tasks: { get: () => undefined },
+    clock, wakes: queue, tasks: { get: () => undefined }, runs: { get: () => ({ status: 'running' }), finish() {}, items: () => [] },
     log: { info() {}, warn() {}, error() {}, debug() {} },
   } as unknown as RuntimeServices;
   let succeeded = false;
   const turns = new RunningTurns({
     services: () => services,
     executor: { execute: async (request) => ({ runId: request.runId, status: succeeded ? 'done' : 'failed' }) },
-    supervisor: { admit: async () => () => {} },
   }, live, () => {});
   const run = async (claimed: Wake[]) => {
     turns.start(services, { id: 'ag_tom' } as Agent, groupWakes(claimed)[0]!);
@@ -120,7 +121,7 @@ test('with the real queue the note survives more than three failures, backoff ca
     const [only] = claimed;
     assert.equal(only!.attempts, round);
     assert.equal(only!.note, 'New mail in me@example.test: 1 new message.');
-    assert.deepEqual(only!.origin, MAIL);
+    assert.deepEqual(only!.origin, LEGACY_MAIL);
     const at = retryAt({ attempts: only!.attempts }, clock.now());
     assert.equal(at, clock.now() + Math.min(30, 2 ** round) * MIN);
     await run(claimed);

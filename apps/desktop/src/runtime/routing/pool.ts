@@ -2,7 +2,9 @@
 // and not excluded → capability needs → not "never" for the category → inside the agent's policy band –, the mode's
 // minimum tier as a preference (models below it only when none at or above it is connected), the accounts that can
 // run each model now (its provider and listed accounts, healthy for that model – accounts.candidates gets it –, not
-// excluded), and pay-per-use API keys only as a spill-over (unless Settings allow them or nothing else is left).
+// excluded), and pay-per-use API keys only as a spill-over (unless Settings allow them or nothing else is left) – a key
+// holding a plan's monthly API credits (B-083 Account.credits) is no pay-per-use key (score.ts isPaid): it competes like a plan,
+// and accounts.candidates (accounts/candidates.ts) lists it before the same model's paying keys, whatever their priority.
 // Owns: these filters, their order and why a single model is unusable (for pins).
 // Never: scores or picks a model, reads the policy itself, or changes state.
 

@@ -1,5 +1,8 @@
 // Identifier helpers shared by every layer.
-// Owns: the id format (`<prefix>_<time><random>`, lexicographically time-sortable).
+// Owns: the id format. What an agent names (chats, agents, tasks, people …) is `<prefix>_<8 random>` (`ch_7f3kq9xm`,
+// owner 13.11.2026: short, one name everywhere); bulk records nobody names (messages, runs, run items, wakes, tokens …)
+// keep `<prefix>_<time><random>`, lexicographically time-sortable. 8 random characters keep two PCs that create offline
+// from colliding (32^8 ≈ 10^12).
 // Never: depends on Node, DOM or Electron APIs other than the global Web Crypto.
 
 export type IdPrefix =
@@ -58,15 +61,18 @@ function randomPart(length: number): string {
   return out;
 }
 
-/** Creates a new id such as `task_01jab3k9z7mx2c4q`. Sortable by creation time. */
+/** Prefixes of what agents and people name – these ids are short. */
+const SHORT: ReadonlySet<IdPrefix> = new Set<IdPrefix>(['sp', 'ag', 'ch', 'task', 'sch', 'kn', 'acc', 'sec', 'br', 'src', 'area', 'per', 'cev', 'cal', 'call', 'sgr', 'spl']);
+
+/** Creates a new id: `ch_7f3kq9xm` for what agents name, else time-sortable `msg_01jab3k9z7mx2c4q`. */
 export function newId(prefix: IdPrefix, now: number = Date.now()): string {
-  return `${prefix}_${encodeTime(now)}${randomPart(8)}`;
+  return SHORT.has(prefix) ? `${prefix}_${randomPart(8)}` : `${prefix}_${encodeTime(now)}${randomPart(8)}`;
 }
 
 /** True when `value` looks like an id with the given prefix. */
 export function isId(value: unknown, prefix?: IdPrefix): value is string {
   if (typeof value !== 'string' || value.length > 64) return false;
-  const match = /^([a-z]{2,4})_[0-9a-z]{10,40}$/.exec(value);
+  const match = /^([a-z]{2,4})_[0-9a-z]{8,40}$/.exec(value);
   return Boolean(match && (!prefix || match[1] === prefix));
 }
 

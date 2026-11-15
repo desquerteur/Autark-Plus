@@ -2,7 +2,11 @@
 // A failed attempt leaves a durable entry; repeated failures wait 1, 2, 4 … 30 minutes.
 // One timer waits for the next retry and the earliest usable account; account/model/online events
 // can bring recovery forward. Entries survive restarts and long absences until the chat moves on.
-// Task turns use ownership.ts instead. Owns: those entries, events, timer and quiet retry line.
+// Task turns use ownership.ts instead. B-080 wave 3: noteChatOutage answers with the attempt number at that cursor, so the
+// turn writes one quiet Paused line per outage (agents/outage-line.ts pausedLine, on the first) instead of a red bubble.
+// B-083: the entry's cursor is at least the agent's read cursor there (a cursor that moved on meanwhile keeps the retry),
+// and only a wake that is claimed or due now stands in for the retry (one due hours later does not).
+// Owns: those entries, events, timer and quiet retry line.
 // Never: retries unknown tool effects or setup/cancelled errors, polls, or runs the agent itself.
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -16,7 +20,7 @@ import { DueTimer, REAL_DUE_TIMERS } from '../people/due-timer.ts';
 import type { Timers } from '../people/join.ts';
 
 export const REDELIVERY_LINE = 'Retrying interrupted work';
-export const REDELIVERY_NOTE = 'Retrying the interrupted turn: I continue from what is already done and include any new messages.';
+export const REDELIVERY_NOTE = 'My last turn here was cut off before it answered; this is the next try.';
 const NS = 'redelivery';
 /** The split service's existing wait horizon; pending chat retries do not expire. */
 export const REDELIVERY_MAX_AGE_MS = 86_400_000;
@@ -43,28 +47,31 @@ export function redeliverable(error: Pick<WorkforceErrorData, 'code' | 'details'
 }
 
 /**
- * A chat turn ended with `error`: remembers its next retry; true when it did. `cursor` is the
- * agent's chat cursor the turn started from (unchanged by the failure).
+ * A chat turn ended with `error`: remembers its next retry. Returns the attempt number at that cursor and input (1: the
+ * first failure there – B-080 wave 3: the turn's one Paused line), 0 when nothing is queued. `cursor` is the agent's chat
+ * cursor the turn started from (unchanged by the failure); B-083: the entry keeps at least the current read cursor.
  */
-export function noteChatOutage(services: Services, input: { agentId: string; conversationId: string; runId: string; cursor: number; error?: WorkforceErrorData; toolCalls: number }): boolean {
+export function noteChatOutage(services: Services, input: { agentId: string; conversationId: string; runId: string; cursor: number; error?: WorkforceErrorData; toolCalls: number }): number {
   try {
     const kv = new KvRepo(services.db);
     const key = `${input.agentId}:${input.conversationId}`;
     const prior = kv.get<Entry>(NS, key);
-    if (prior?.runId === input.runId) return true;
+    if (prior?.runId === input.runId) return prior.attempts ?? 1;
     if (!redeliverable(input.error) || (input.toolCalls > 0 && !effectsKnown(services, input.runId, input.toolCalls))) {
       if (prior) kv.delete(NS, key); // a newer attempt supersedes the older pending failure
-      return false;
+      return 0;
     }
-    const newest = newestInput(services, input.agentId, input.conversationId, input.cursor);
+    const read = services.chats.members(input.conversationId).find((member) => member.memberId === input.agentId && !member.leftAt)?.readSeq ?? 0;
+    const cursor = Math.max(input.cursor, read); // B-083: a cursor that moved on meanwhile would drop the retry (waiting)
+    const newest = newestInput(services, input.agentId, input.conversationId, cursor);
     const now = services.clock.now();
-    const attempts = prior?.cursor === input.cursor && newest <= (prior.input ?? Number.MAX_SAFE_INTEGER) ? (prior.attempts ?? 1) + 1 : 1;
+    const attempts = prior?.cursor === cursor && newest <= (prior.input ?? Number.MAX_SAFE_INTEGER) ? (prior.attempts ?? 1) + 1 : 1;
     const delay = Math.max(Math.min(60_000 * 2 ** Math.min(attempts - 1, 5), 30 * 60_000), input.error?.retryAfterMs ?? 0);
-    kv.set(NS, key, { agentId: input.agentId, conversationId: input.conversationId, cursor: input.cursor, input: newest, runId: input.runId, at: now, attempts, nextAt: now + delay } satisfies Entry, now);
-    return true;
+    kv.set(NS, key, { agentId: input.agentId, conversationId: input.conversationId, cursor, input: newest, runId: input.runId, at: now, attempts, nextAt: now + delay } satisfies Entry, now);
+    return attempts;
   } catch (error) {
     services.log.warn('chat outage not noted', { runId: input.runId, error: String(error) });
-    return false;
+    return 0;
   }
 }
 
@@ -137,7 +144,8 @@ export class ChatRedelivery {
         if (entry.used) continue;
         if (s.org.get(entry.agentId)?.status === 'paused') continue;
         if (!recovered && (entry.nextAt ?? 0) > now) continue;
-        if (s.wakes.list(entry.agentId).some((wake) => wake.conversationId === entry.conversationId)) { kv.delete(NS, key); continue; } // a turn there comes anyway
+        // A turn there comes anyway – B-083: a wake claimed or due now; one due hours later does not stand in for the retry.
+        if (s.wakes.list(entry.agentId).some((wake) => wake.conversationId === entry.conversationId && (wake.claimedAt !== undefined || wake.dueAt <= now))) { kv.delete(NS, key); continue; }
         s.db.tx(() => {
           kv.set(NS, key, { ...entry, used: true } satisfies Entry, now);
           s.chats.status(entry.conversationId, { type: 'note', text: REDELIVERY_LINE, details: { redelivery: true, runId: entry.runId } }, { authorId: entry.agentId });

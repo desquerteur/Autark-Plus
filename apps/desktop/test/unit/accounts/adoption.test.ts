@@ -1,12 +1,14 @@
 // Detection → accounts (PR5, accounts/adoption.ts + dismissed.ts): a login in the default CLI home
 // and a running local server become 'detected' accounts once (detecting again is idempotent);
 // removing one dismisses it – detection, also after a restart, no longer adds it and the report
-// marks it – until "Add again" (accounts.add {detected} for a login, adding the server's URL).
+// marks it – until "Add again" (accounts.add {detected} for a login, adding the server's URL). A Codex login runs in a
+// home of its own (<accounts>/codex/<id>, cli-homes.ts found); removing it deletes that home, never the default one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DismissedLogins, dismissalKey } from '../../../src/runtime/accounts/dismissed.ts';
-import { harness } from './harness.ts';
+import * as path from 'node:path';
+import { ACCOUNTS, harness } from './harness.ts';
 
 const OLLAMA = 'http://127.0.0.1:11434/v1';
 
@@ -23,7 +25,7 @@ test('adoption: the default-home Codex login and the local Ollama server are add
   await h.settle();
   const codex = h.service.list().find((account) => account.provider === 'codex')!;
   const server = h.service.list().find((account) => account.provider === 'ollama')!;
-  assert.deepEqual([codex.auth, codex.home, codex.detected, codex.state, codex.plan], ['cli', undefined, true, 'ok', 'pro']);
+  assert.deepEqual([codex.auth, codex.home, codex.detected, codex.state, codex.plan], ['cli', path.join(ACCOUNTS, 'codex', codex.id), true, 'ok', 'pro']);
   assert.deepEqual([server.auth, server.baseUrl, server.detected], ['local', OLLAMA, true]);
   assert.equal(h.service.list().length, 2, 'Claude Code is installed but not signed in: nothing to adopt');
   assert.deepEqual(h.checks, [codex.id], 'one check for the adopted plan');
@@ -51,8 +53,9 @@ test('lastDetection: the newest report without a scan – every rescan replaces 
 test('dismissal: a removed detected login or server stays away – also after a restart – until "Add again"', async () => {
   const h = harness({ fetch: ollama });
   await h.service.detect();
+  const found = h.service.list().find((account) => account.provider === 'codex')!;
   for (const account of h.service.list()) await h.service.remove(account.id);
-  assert.deepEqual(h.removed, [], 'the default CLI home and a server are never deleted');
+  assert.deepEqual(h.removed, [found.home], "only the Codex login's own home – never the default CLI home or a server");
   assert.deepEqual(new DismissedLogins(h.db, () => 0).list(), ['codex:default', `ollama:${OLLAMA}`]);
   const scans = h.calls.length;
   const last = h.service.lastDetection();
@@ -72,7 +75,7 @@ test('dismissal: a removed detected login or server stays away – also after a 
 
   // "Add again": the login through accounts.add {detected}, the server by adding its URL.
   const again = await h.service.add({ provider: 'codex', detected: true });
-  assert.deepEqual([again.provider, again.auth, again.home, again.detected], ['codex', 'cli', undefined, true]);
+  assert.deepEqual([again.provider, again.auth, again.home, again.detected], ['codex', 'cli', path.join(ACCOUNTS, 'codex', again.id), true]);
   await h.service.add({ provider: 'ollama', baseUrl: OLLAMA, label: 'Ollama' });
   report = await h.service.detect(true);
   assert.equal(h.service.list().length, 2, 'nothing is doubled');
@@ -89,9 +92,11 @@ test('"Add again" needs a sign-in found on this PC', async () => {
 });
 
 test('dismissal keys: a default-home login and a local server; isolated homes, keys and environment keys never', () => {
-  const base = { home: undefined, baseUrl: undefined };
+  const base = { home: undefined, baseUrl: undefined, detected: false };
   assert.equal(dismissalKey({ ...base, provider: 'claude', auth: 'cli' }), 'claude:default');
   assert.equal(dismissalKey({ ...base, provider: 'claude', auth: 'cli', home: '/data/accounts/claude/acc_1' }), undefined);
+  assert.equal(dismissalKey({ ...base, provider: 'codex', auth: 'cli', home: '/data/accounts/codex/acc_2', detected: true }), 'codex:default', 'a found Codex login in its own home');
+  assert.equal(dismissalKey({ ...base, provider: 'codex', auth: 'cli', home: '/data/accounts/codex/acc_3', detected: false }), undefined);
   assert.equal(dismissalKey({ ...base, provider: 'lmstudio', auth: 'local', baseUrl: 'http://127.0.0.1:1234/v1' }), 'lmstudio:http://127.0.0.1:1234/v1');
   assert.equal(dismissalKey({ ...base, provider: 'openai', auth: 'api_key' }), undefined);
   assert.equal(dismissalKey({ ...base, provider: 'openai', auth: 'env' }), undefined);

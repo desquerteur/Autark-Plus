@@ -1,19 +1,18 @@
 // Process supervisor: every child process the runtime starts is a *lease*.
-// Owns: spawning (below-normal priority, hidden windows), idle kill timers, kill trees
-// (Windows `taskkill /T /F`, POSIX process groups) and admission control from the PC's real memory headroom (B-078 T10:
-// commit headroom and cores, system/headroom.ts – no longer free physical RAM alone) (B-057: background work –
-// split turns – waits behind the agents' own turns, which may borrow one slot when only background work holds them).
+// Owns: spawning (below-normal priority, hidden windows), idle kill timers and kill trees
+// (Windows `taskkill /T /F`, POSIX process groups).
+// 07.11.2026: no admission any more – the RAM-based heavy slots (headroom.ts, "waiting for capacity") are gone; how many
+// turns run is the dispatcher's one rule (agents/dispatcher.ts: every agent's own turn at once, splits share its cap).
 // Login guard 03.11.: a lease can end gently (releaseAfter: the process exits by itself, its tree is killed only after a
 // grace) and a group runs one lease at a time (spawnAlone; none starts any more once killAll ran) – for CLIs that may be
 // saving a sign-in (accounts/cli.ts).
 // I02: an optional env decorator (`env`) is applied to every spawned env – composition gives it the
 // safe git env (git/safe-env.ts), so no engine, CLI or sign-in process runs repository hooks.
-// Never: decides *what* to run (engines/accounts do) or polls – timers are per lease and reset by activity.
+// Never: decides *what* or *how many* to run (engines/accounts and the dispatcher do) or polls – timers are per lease and reset by activity.
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as nodeOs from 'node:os';
 import type { Readable, Writable } from 'node:stream';
-import { heavySlotsFor, readMemory, type MemorySnapshot } from './headroom.ts';
 
 /** The part of ChildProcess the runtime uses (fakes in tests implement just this). */
 export interface ChildLike {
@@ -41,8 +40,6 @@ export type SpawnFn = (command: string, args: string[], options: SpawnOptions) =
 
 export interface OsLike {
   freemem(): number;
-  /** B-078 T10: the PC's real headroom (headroom.ts readMemory); without it maxHeavy reads freemem alone. */
-  memory?(): MemorySnapshot;
   cpuCount(): number;
   setPriority(pid: number, priority: number): void;
   platform: NodeJS.Platform;
@@ -76,12 +73,9 @@ export interface SpawnInput {
   idleMs?: number; onIdle?: () => void; group?: string;
 }
 
-const MB = 1024 * 1024;
-
 export function defaultOs(): OsLike {
   return {
     freemem: () => nodeOs.freemem(),
-    memory: () => readMemory(process.platform),
     cpuCount: () => nodeOs.availableParallelism?.() ?? nodeOs.cpus().length,
     setPriority: (pid, priority) => nodeOs.setPriority(pid, priority),
     platform: process.platform,
@@ -108,14 +102,6 @@ export class Supervisor {
   private readonly envFn?: SupervisorDeps['env'];
   private readonly active = new Map<number, Lease>();
   private sequence = 0;
-  private heavySlots = 0;
-  /** B-057: how many of the held heavy slots are background work (split turns). */
-  private backgroundSlots = 0;
-  /** B-057: an agent's own turn holds the one slot beyond maxHeavy (see admit). */
-  private borrowed = false;
-  private waiters: Array<() => void> = [];
-  /** B-057: background waiters (split turns) – woken only when no other waiter waits. */
-  private later: Array<() => void> = [];
   /** Set by killAll (shutdown): a spawnAlone still waiting starts nothing – the runtime's exit would kill it at once. */
   private stopping = false;
 
@@ -204,71 +190,6 @@ export class Supervisor {
 
   leases(): LeaseInfo[] {
     return [...this.active.values()].map(({ id, owner, kind, pid, startedAt, lastActiveAt }) => ({ id, owner, kind, pid, startedAt, lastActiveAt }));
-  }
-
-  /** Current capacity for heavy work (turns that run engine processes), from the PC's real headroom (headroom.ts). */
-  maxHeavy(): number {
-    const memory = this.os.memory?.() ?? { availableMb: this.os.freemem() / MB, exact: this.os.platform === 'linux' };
-    return heavySlotsFor(memory, this.os.cpuCount());
-  }
-
-  /** True when a heavy slot is free right now. */
-  canAdmit(): boolean {
-    return this.heavySlots < this.maxHeavy();
-  }
-
-  /**
-   * Waits for a heavy slot (event-driven: woken when a slot is released, no polling).
-   * Returns the release function. Rejects when the signal aborts.
-   * B-057 S12: `background` (a split's turn) waits behind every other waiter – a freed slot goes to the agents' own
-   * turns (the person's replies) first, and a background turn never takes a slot while one of those waits. An agent's
-   * own turn never waits behind background work alone: when no slot is free and every held slot is background work, it
-   * takes one slot beyond maxHeavy (one such borrowed slot at a time; released like any other). Background never borrows.
-   */
-  async admit(signal?: AbortSignal, options: { background?: boolean } = {}): Promise<() => void> {
-    const background = options.background === true;
-    let borrowed = false;
-    while (!this.canAdmit() || (background && this.waiters.length > 0)) {
-      if (!background && this.mayBorrow()) { borrowed = true; break; } // B-057 S12: the person is never blocked by split work
-      signal?.throwIfAborted();
-      await new Promise<void>((resolve, reject) => {
-        const queue = () => (background ? this.later : this.waiters);
-        const wake = () => { signal?.removeEventListener('abort', onAbort); resolve(); };
-        const onAbort = () => {
-          if (background) this.later = this.later.filter((w) => w !== wake);
-          else this.waiters = this.waiters.filter((w) => w !== wake);
-          reject(signal!.reason);
-        };
-        queue().push(wake);
-        signal?.addEventListener('abort', onAbort, { once: true });
-      });
-    }
-    this.heavySlots++;
-    if (background) this.backgroundSlots++;
-    if (borrowed) this.borrowed = true;
-    let done = false;
-    return () => {
-      if (done) return;
-      done = true;
-      this.heavySlots--;
-      if (background) this.backgroundSlots--;
-      if (borrowed) this.borrowed = false;
-      const next = this.waiters.shift() ?? this.later.shift();
-      next?.();
-    };
-  }
-
-  /** B-057 S12: the one slot beyond maxHeavy is free and every held slot is background work (split turns). */
-  private mayBorrow(): boolean {
-    return !this.borrowed && this.heavySlots > 0 && this.backgroundSlots === this.heavySlots;
-  }
-
-  /** Re-checks waiters (call after RAM was freed outside the supervisor, e.g. a lease ended); the agents' own turns first. */
-  nudge(): void {
-    const waiting = [...this.waiters, ...this.later];
-    this.waiters = [];
-    this.later = [];
-    for (const wake of waiting) wake();
   }
 
   async killAll(): Promise<void> {

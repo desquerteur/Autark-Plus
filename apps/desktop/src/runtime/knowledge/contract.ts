@@ -9,7 +9,7 @@ declare module '../contracts/models.ts' {
     memoryBrowse(folder?: string): MemoryFolder;
     /** One file; undefined when there is none. */
     memoryRead(path: string): MemoryFile | undefined;
-    /** Creates or updates a file (same folder and title = that file); it is embedded by this (services.vectors). */
+    /** Creates or updates a file (same folder and title = that file); findable at once (and embedded where an embedding model is chosen, services.vectors). */
     memoryWrite(input: MemoryWriteInput & { by?: string }): MemoryWriteResult;
     /** Deletes a file with its vectors and old versions. */
     memoryForget(path: string): { removed: boolean };

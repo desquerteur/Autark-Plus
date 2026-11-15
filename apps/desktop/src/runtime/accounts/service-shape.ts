@@ -7,7 +7,7 @@ import type { Bus } from '../bus.ts';
 import type { Db } from '../db/database.ts';
 import type { Account, ProviderId } from '../../shared/model/providers.ts';
 import type { Supervisor } from '../system/supervisor.ts';
-import type { ResetOutcome } from '../../shared/api/methods-providers.ts';
+import type { AwaySignIn, ResetOutcome } from '../../shared/api/methods-providers.ts';
 import type { ExecutableFinder } from './executables.ts';
 import type { DetectDeps } from './detect.ts';
 import type { SignInDeps } from './sign-in.ts';
@@ -16,7 +16,7 @@ import type { EndpointTestInput } from './endpoint-test.ts';
 import type { ProviderSettings } from './provider-file.ts';
 
 export interface AddAccountInput {
-  provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; rotation?: boolean;
+  provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string;
   /** PR5: use the provider key in this environment variable (ENV_KEY_PROVIDERS) – read when needed, never stored. */
   envVar?: string;
   /** PR5 "Add again": the dismissed login in the provider's default CLI home that detection found on this PC. */
@@ -28,9 +28,14 @@ export interface AddAccountInput {
 declare module '../contracts/models.ts' {
   interface AccountService {
     /** Addition (PR5): `envVar` connects a key from the environment, `detected` adds a dismissed login found on this PC again. B-051: `signInUrl` = the page a CLI sign-in printed (never stored). */
-    add(input: AddAccountInput): Promise<Account & { signInUrl?: string }>;
-    /** B-051 L4: `page` – also the sign-in page the CLI printed (the person's own UI only; agent tools never ask for it). */
-    login(id: string, options?: { page?: boolean }): Promise<{ started: boolean; url?: string }>;
+    add(input: AddAccountInput, options?: { away?: boolean }): Promise<Account & { signInUrl?: string } & AwaySignIn>;
+    /**
+     * B-051 L4: `page` – also the sign-in page the CLI printed (the person's own UI only; agent tools never ask for it).
+     * B-091 `away`: the person is on another device (their phone) and finishes the sign-in there (`code`/`paste`, sign-in.ts).
+     */
+    login(id: string, options?: { page?: boolean; away?: boolean }): Promise<{ started: boolean; url?: string } & AwaySignIn>;
+    /** B-091 (optional so simple fakes stay valid): the code the sign-in page showed, handed to the running away sign-in. */
+    loginCode?(id: string, code: string): Promise<{ ok: boolean }>;
     /** B-044 (optional so simple fakes stay valid): redeems one banked Codex reset after the person confirmed (resets.ts). */
     useReset?(id: string, creditId?: string): Promise<ResetOutcome>;
     /** B-044 (optional like useReset): the model ids an API endpoint lists before it is saved (endpoint-test.ts). */
@@ -47,6 +52,8 @@ export interface AccountServiceDeps {
   settings?: ProviderSettings;
   detectDeps?: Partial<DetectDeps>;
   env?: NodeJS.ProcessEnv;
+  /** The user's home folder, where the CLIs' default homes are (default os.homedir(); tests: a folder without logins). */
+  homeDir?: string;
   version?: string; // what ACP sign-in probes report as the client version
   mkdir?: (dir: string) => Promise<void>;
   rmdir?: (dir: string) => Promise<void>;

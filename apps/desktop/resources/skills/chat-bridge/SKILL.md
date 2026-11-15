@@ -11,7 +11,7 @@ metadata:
 The app needs no connector for a channel: a process next to it carries messages both ways through one chat's connector
 token. People on the channel appear in the chat as members, and the chat's answers go back out. That is all a bridge is.
 
-The worked example is `whatsapp-bridge.mjs` in the skill `whatsapp-bridge` (`skills.load whatsapp-bridge` answers its
+The worked example is `whatsapp-bridge.mjs` in the skill `whatsapp-bridge` (`knowledge.open whatsapp-bridge` answers its
 folder): about 120 lines, and the part that speaks to the app stays the same for every channel. Skill `app-data-model` has
 the fields and limits.
 

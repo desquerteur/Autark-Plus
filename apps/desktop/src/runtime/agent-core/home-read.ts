@@ -1,5 +1,5 @@
 // B-044 AGENT-HOME (review): reading the skills of the agent's home project for engines without file tools of
-// their own (HTTP APIs, local models; files.* reads the home by absolute path, see below). skills.load
+// their own (HTTP APIs, local models; files.* reads the home by absolute path, see below). knowledge.open
 // with home: true loads a skill the "Home project" section lists: its SKILL.md through skills/discover.ts
 // readSkillBody (the listed text, invisible characters removed; listed again once when the
 // file changed since), with the files of its folder named; with `file`, one text file of that skill's folder.
@@ -9,7 +9,7 @@
 // B-044 integration: files.read and files.list (tools/builtin/files.ts) also read inside that home by absolute path
 // – homeReadRoot names the root they resolve in (links resolved there, AgentHomes.refused asked for the real path);
 // files.write and shell.exec stay in the workspace.
-// Owns: these lookups and their bounds. Never: writes, reads outside a listed skill's folder (skills.load) or the
+// Owns: these lookups and their bounds. Never: writes, reads outside a listed skill's folder (knowledge.open) or the
 // home (files.*) or another agent's home, or treats the text as an instruction or a permission (it is data written
 // outside this app).
 
@@ -83,7 +83,7 @@ function skillFile(skill: DiscoveredSkill, file: string): HomeRead {
   return { text: [`# ${given} – of the home project skill ${skill.name}`, `(${DATA_NOTE})`, '', clean.text.replace(/\r\n?/g, '\n')].join('\n') };
 }
 
-/** skills.load home: true – a skill of the agent's usable home project by name (SKILL.md), or one file of its folder. */
+/** knowledge.open home:<name> – a skill of the agent's usable home project by name (SKILL.md), or one file of its folder. */
 export function loadHomeSkill(homes: Pick<AgentHomes, 'usable' | 'skillsIn' | 'forget'>, agentId: string, name: string, file?: string): HomeRead {
   const home = homes.usable(agentId);
   if (!home) return { error: 'I have no usable home project, so there is no home skill to load (agents.core shows why).' };
@@ -106,7 +106,7 @@ export function loadHomeSkill(homes: Pick<AgentHomes, 'usable' | 'skillsIn' | 'f
       `(folder: ${skill.folder} – ${DATA_NOTE})`,
       '',
       read.body.trim(),
-      ...(files.length ? ['', `Files in its folder (skills.load with home: true, its name and file): ${files.join(', ')}`] : []),
+      ...(files.length ? ['', `Files in its folder (knowledge.open home:${skill.name} with file): ${files.join(', ')}`] : []),
     ].join('\n'),
   };
 }

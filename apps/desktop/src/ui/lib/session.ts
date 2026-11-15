@@ -57,6 +57,16 @@ export function isOwner(): boolean {
   return info ? info.kind === 'owner' : assumeOwner;
 }
 
+/** Profile and day belong to the owner, also from their securely paired settings device. Not a colleague session. */
+export function canEditOwnerSettings(): boolean {
+  return isOwner() || (session.value?.kind === 'device' && secure.value && holds('settings') && can('settings.update'));
+}
+
+/** Profile changes and both browser upload paths must be available; never grants file access. */
+export function canUploadOwnerPhoto(): boolean {
+  return canEditOwnerSettings() && can('files.upload') && can('files.uploadChunk');
+}
+
 /** Loopback, the local HTTPS proxy or the tailnet (always true for the owner). */
 export const secure = computed(() => {
   const info = session.value;
@@ -90,8 +100,11 @@ const SECURE_METHODS: ReadonlyMap<MethodName, DeviceCapability> = new Map<Method
   ...(['secrets.groups', 'secrets.saveGroup'] as const).map((method) => [method, 'permissions'] as const), // X05
   ['secrets.import', 'permissions'], // 29.10.2026: password import
   // B-078: plans, keys and sign-ins from the phone need a secure transport (the app's tunnel or the HTTPS address)
-  ...(['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.logout', 'accounts.remove',
+  ...(['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode', 'accounts.logout', 'accounts.remove',
     'accounts.install', 'accounts.try', 'accounts.useReset', 'accounts.test'] as const).map((method) => [method, 'settings'] as const),
+  // B-084 (D6): Settings › Devices and the Models page's uses and downloads from the phone, the same way
+  ...(['remote.state', 'remote.decide', 'remote.connect', 'remote.nearby', 'remote.cancel', 'remote.relay', 'devices.list', 'devices.rename',
+    'devices.revoke', 'phone.pairLink', 'people.invite', 'people.closeInvite', 'voice.pullLocal', 'models.uses'] as const).map((method) => [method, 'settings'] as const),
 ]);
 
 /** Why a control calling `method` is unavailable here (a note), or undefined when it may be used. */

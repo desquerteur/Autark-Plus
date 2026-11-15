@@ -2,14 +2,14 @@
 // code-mode script (Codex: `text(await tools.tools__call({name:"context.restore", …}))`) left the script's output – the whole original again –
 // in full: a rebuilt history held the file twice (q-r2d s14), and the restore counted as a cost that held back later hides (s15/s16). A
 // pinned item (the main AI's restore) was left out of the list of the run the main AI asked to take it out (s15), and the person was told it
-// was gone. Real ledger, real journal; the brains' tools as the flow calls them.
+// was gone. Real ledger, real journal; the subconscious's tools as the flow calls them.
 // Owns: these assertions only.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ledgerSetup } from './ledger-fixture.ts';
 import { contextTools } from '../../../src/runtime/subconscious/context-tools.ts';
-import type { FlowRun, RunKind } from '../../../src/runtime/subconscious/tools.ts';
+import type { FlowRun } from '../../../src/runtime/subconscious/tools.ts';
 import { restoreItems } from '../../../src/runtime/context/ledger/restore.ts';
 import { rebuildItems } from '../../../src/runtime/agents/rebuild-items.ts';
 
@@ -36,14 +36,14 @@ async function fileThenThree(h: Setup): Promise<void> {
     h.clock.advance(1000);
   }
   await h.journal.settled();
-  h.ledger.mark(h.tom.id, h.chat.id, [{ itemId: 'f1', state: 'condensed', condensed: 'Kundenakte Probe: Zeilen mit Inhalt.', reason: 'after-turn run', by: 'subconscious' }]);
-  h.ledger.rebuilt(h.tom.id, h.chat.id, Math.max(...h.ledger.items(h.tom.id, h.chat.id).map((item) => item.order)));
+  h.ledger.mark(h.tom.id, 'main', [{ itemId: 'f1', state: 'condensed', condensed: 'Kundenakte Probe: Zeilen mit Inhalt.', reason: 'asked run', by: 'subconscious' }]);
+  h.ledger.rebuilt(h.tom.id, 'main', Math.max(...h.ledger.items(h.tom.id, 'main').map((item) => item.order)));
 }
 
 /** The main AI's restore of f1 inside a script, as Codex code mode runs it: the nested call (an "exec-" id) and the script around it. */
 async function restoreInScript(h: Setup, extra = ''): Promise<string> {
   const run = h.turn(h.say('Welche Zeile stand am Anfang der Akte?').seq);
-  const output = restoreItems(h.services, h.tom.id, h.chat.id, { ids: ['f1'] });
+  const output = restoreItems(h.services, h.tom.id, 'main', { ids: ['f1'] });
   h.ourCall(run, 'context.restore', { ids: ['f1'] }, output, 'exec-restore-1');
   script(h, run, 'call_script_1', RESTORE_SOURCE.replace('t1', 'f1'), `Script completed\nWall time 0.1 seconds\nOutput:\n${output}${extra}`);
   h.done(run);
@@ -51,8 +51,8 @@ async function restoreInScript(h: Setup, extra = ''): Promise<string> {
   return run;
 }
 
-const byId = (h: Setup) => new Map(h.ledger.items(h.tom.id, h.chat.id).map((item) => [item.itemId, item]));
-const scriptItem = (h: Setup) => h.ledger.items(h.tom.id, h.chat.id).find((item) => item.title.startsWith('exec: '))!;
+const byId = (h: Setup) => new Map(h.ledger.items(h.tom.id, 'main').map((item) => [item.itemId, item]));
+const scriptItem = (h: Setup) => h.ledger.items(h.tom.id, 'main').find((item) => item.title.startsWith('exec: '))!;
 
 test('a script that only restored is condensed like a direct restore: the rebuilt history holds the original once', async () => {
   const h = ledgerSetup();
@@ -63,7 +63,7 @@ test('a script that only restored is condensed like a direct restore: the rebuil
     assert.equal(item.state, 'condensed', 'its output was the whole file again');
     assert.match(item.condensed ?? '', /^Restored f1 – kept in my context for the next 3 turns\. They are back in place in my context\.$/);
     assert.equal(byId(h).get('f1')?.state, 'keep');
-    const history = rebuildItems(h.ledger.view(h.tom.id, h.chat.id), 0).items;
+    const history = rebuildItems(h.ledger.view(h.tom.id, 'main')).items;
     const holding = history.filter((entry) => (entry.call?.output ?? entry.text).includes('Zeile mit Inhalt der Akte.\nZeile mit Inhalt der Akte.'));
     assert.deepEqual(holding.map((entry) => entry.itemId), ['f1'], 'the file is in the history once, in its place');
   } finally { h.cleanup(); }
@@ -83,18 +83,18 @@ test('a restore alone rebuilds nothing; the next mark of the subconscious brings
   try {
     await fileThenThree(h);
     await restoreInScript(h);
-    const alone = h.ledger.needsRebuild(h.tom.id, h.chat.id)!;
+    const alone = h.ledger.needsRebuild(h.tom.id, 'main')!;
     assert.equal(alone.marked, false, 'a restore moves its item back; it takes nothing off');
     assert.ok(Math.abs(alone.saves) < 500, `the restore and its condensed result about balance: ${alone.saves}`);
-    h.ledger.mark(h.tom.id, h.chat.id, [{ itemId: 't2', state: 'hidden', reason: 'before-turn run', by: 'subconscious', onWord: true }]);
-    const withHide = h.ledger.needsRebuild(h.tom.id, h.chat.id)!;
+    h.ledger.mark(h.tom.id, 'main', [{ itemId: 't2', state: 'hidden', reason: 'asked run', by: 'subconscious' }]);
+    const withHide = h.ledger.needsRebuild(h.tom.id, 'main')!;
     assert.equal(withHide.marked, true);
     assert.ok(withHide.saves > 0, `a small hide after a restore is worth a rebuild: ${withHide.saves}`);
   } finally { h.cleanup(); }
 });
 
-function runOf(h: Setup, kind: RunKind): FlowRun {
-  return { services: h.services, agent: h.tom, conversationId: h.chat.id, thread: h.chat.id, kind, signal: new AbortController().signal, hits: new Map(), searches: [], show: () => {}, route: () => {}, finish: () => {} } as unknown as FlowRun;
+function runOf(h: Setup): FlowRun {
+  return { services: h.services, agent: h.tom, conversationId: h.chat.id, thread: 'main', signal: new AbortController().signal, hits: new Map(), searches: [], show: () => {}, finish: () => {} } as unknown as FlowRun;
 }
 const tool = (name: string) => contextTools.find((entry) => entry.name === name)!;
 
@@ -109,7 +109,7 @@ async function twoMore(h: Setup): Promise<void> {
   await h.journal.settled();
 }
 
-test('a pinned item: the run after a turn leaves it, a run on the person\'s or the main AI\'s word sees it and takes it out', async () => {
+test('a pinned item: the main AI\'s own call sees it and takes it out', async () => {
   const h = ledgerSetup();
   try {
     await fileThenThree(h);
@@ -117,15 +117,10 @@ test('a pinned item: the run after a turn leaves it, a run on the person\'s or t
     await twoMore(h);
     assert.ok(byId(h).get('f1')?.pinnedUntil !== undefined, 'the restore pinned it');
 
-    const tidy = String(await tool('context.list').run({}, runOf(h, 'after-turn')));
-    assert.doesNotMatch(tidy, /\nf1 /, 'the subconscious\'s own tidying never meets it');
-    assert.match(String(await tool('context.hide').run({ ids: ['f1'] }, runOf(h, 'after-turn'))), /left as they are: f1 \(pinned\)/);
-    assert.equal(byId(h).get('f1')?.state, 'keep');
-
-    for (const kind of ['asked', 'before-turn'] as const) assert.match(String(await tool('context.list').run({}, runOf(h, kind))), /\nf1 file \d+t \(the main AI brought it back\) File akten\/probe\.md/, kind);
-    assert.match(String(await tool('context.hide').run({ ids: ['f1'] }, runOf(h, 'asked'))), /^hidden: f1/);
+    assert.match(String(await tool('context.list').run({}, runOf(h))), /\nf1 file \d+t \(the main AI brought it back\) File akten\/probe\.md/);
+    assert.match(String(await tool('context.hide').run({ ids: ['f1'] }, runOf(h))), /^hidden: f1/);
     assert.equal(byId(h).get('f1')?.state, 'hidden', 'the main AI asked: its own hold does not stop it');
-    const history = rebuildItems(h.ledger.view(h.tom.id, h.chat.id), 0).items;
+    const history = rebuildItems(h.ledger.view(h.tom.id, 'main')).items;
     assert.ok(!history.some((entry) => (entry.call?.output ?? entry.text).includes('Zeile mit Inhalt der Akte.')), 'nothing of the file is left in the history');
   } finally { h.cleanup(); }
 });

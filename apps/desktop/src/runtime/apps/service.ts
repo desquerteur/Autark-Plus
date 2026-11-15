@@ -12,6 +12,7 @@
 // Owns: the live state per connector, the tool host, sign-ins. Never: logs or returns a token, header or env value,
 // writes mcp.json / mail.json after the one-time move, or polls.
 
+import { mailGeneration } from './mail-identity.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { AppStatus, ConnectedApp } from '../../shared/model/apps.ts';
@@ -80,6 +81,7 @@ export class Apps implements AppsService {
       connect: deps.connect, clientInfo: deps.clientInfo, oauth: deps.oauth,
       resolve: (text, host) => this.resolve(text, host),
       mailServers: (connector) => this.mail.serversOf(connector),
+      identity: (connector, servers) => mailGeneration(deps.kv, connector, servers),
       connector: (id) => this.items.get(id)?.connector,
       onToolsChanged: (id) => this.relist(id),
       onNewMail: (id, info) => this.mail.notice(id, info),
@@ -93,7 +95,7 @@ export class Apps implements AppsService {
     });
     this.host = {
       state: (appId) => { const item = this.items.get(appId); return item ? { connector: item.connector, status: item.status, ...(item.error ? { error: item.error } : {}) } : undefined; },
-      call: (appId, tool, args, signal) => this.call(appId, tool, args, signal),
+      call: (appId, tool, args, signal, generation) => this.call(appId, tool, args, signal, false, generation),
     };
   }
 
@@ -126,6 +128,8 @@ export class Apps implements AppsService {
     await this.connections.closeAll();
     if (this.statusTimer !== undefined) { this.timers.clear(this.statusTimer); this.statusTimer = undefined; this.writeStatus(); }
   }
+
+  mailGeneration(id: string): string | undefined { return this.items.get(id)?.connector.mailGeneration; }
 
   list(): ConnectedApp[] {
     return [...this.items.values()].map((item) => {
@@ -181,6 +185,8 @@ export class Apps implements AppsService {
       const prev = this.items.get(connector.id);
       if (prev && prev.connector.fingerprint === connector.fingerprint && prev.connector.name === connector.name) continue;
       if (prev) this.drop(prev, false);
+      // Establish durable config incarnation now; publish only after effective servers resolve.
+      mailGeneration(this.d.kv, connector);
       const cached = this.d.kv.get<{ fingerprint?: string; tools?: McpToolDef[] }>(`tools:${connector.id}`);
       const tools = cached?.fingerprint === connector.fingerprint && Array.isArray(cached.tools) ? cached.tools.filter((tool) => tool && typeof tool.name === 'string') : [];
       const item: Item = { connector, status: connector.enabled ? 'ok' : 'off', tools, registered: [], gen: 0 };
@@ -197,6 +203,9 @@ export class Apps implements AppsService {
       this.items.delete(item.connector.id);
       this.changed(item.connector.id);
     }
+    for (const key of this.d.kv.keys('mailidentity:')) {
+      if (!seen.has(key.slice('mailidentity:'.length))) this.d.kv.delete(key);
+    }
     // a changed entry already scheduled it (changed()); unchanged files write nothing – the folder's own change event after
     // writing status.json would otherwise rewrite it every ~2 s while idle
     if (atStart || this.problems.join('\n') !== problemsBefore) this.scheduleStatus();
@@ -205,6 +214,7 @@ export class Apps implements AppsService {
   /** Ends everything a connector holds; `removed`: its sign-in grant and tool cache go too. */
   private drop(item: Item, removed: boolean): void {
     const id = item.connector.id;
+    item.connector.mailGeneration = undefined;
     item.gen += 1;
     this.endSignIn(id);
     const relist = this.relistTimers.get(id);
@@ -213,6 +223,7 @@ export class Apps implements AppsService {
     this.unregister(item);
     void this.connections.close(id);
     if (!removed) return;
+    this.d.kv.delete(`mailidentity:${id}`);
     this.d.kv.delete(`tools:${id}`);
     this.d.kv.delete(`mailmark:${id}`);
     void this.d.oauth.forget(id).catch(() => this.d.services.log?.warn('connector sign-in was not revoked', { appId: id }));
@@ -313,19 +324,22 @@ export class Apps implements AppsService {
 
   // ------------------------------------------------------------------ the tool host
 
-  private async call(appId: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal, retried = false): Promise<McpCallResult> {
+  private async call(appId: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal, retried = false, generation?: string): Promise<McpCallResult> {
     const item = this.items.get(appId);
     if (!item) throw new WorkforceError('not_found', 'This connector is no longer in its file.');
     if (!item.connector.enabled) throw new WorkforceError('unavailable', `${item.connector.name} is turned off.`);
+    const check = () => { if (generation !== undefined && (!generation || this.items.get(appId) !== item || item.connector.transport !== 'mail' || item.connector.mailGeneration !== generation)) throw new WorkforceError('unavailable', 'Mailbox incarnation changed.'); };
+    check();
     try {
-      const result = await this.connections.use(item.connector, (conn) => conn.callTool(tool, args, signal ? { signal } : undefined));
+      const result = await this.connections.use(item.connector, (conn) => { check(); return conn.callTool(tool, args, signal ? { signal } : undefined); });
+      check();
       item.renewed = false;
       if (item.status === 'error' || item.status === 'signin') this.set(item, { status: 'ok' });
       return result;
     } catch (error) {
       if (error instanceof McpAuthRequired || error instanceof ReconnectNeeded) {
         await this.connections.close(appId);
-        if (!retried && this.renewOnce(item, error)) return this.call(appId, tool, args, signal, true);
+        if (!retried && this.renewOnce(item, error)) return this.call(appId, tool, args, signal, true, generation);
         if (item.status !== 'waiting') this.set(item, { status: 'signin', error: signInText(item.connector) });
       } else if (error instanceof McpTransportError) {
         await this.connections.close(appId); // the next call opens a new connection

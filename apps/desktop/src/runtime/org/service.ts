@@ -12,7 +12,7 @@
 // area is hired.
 
 import type { Bus } from '../bus.ts';
-import type { Clock, Logger, OrgService } from '../contracts.ts';
+import type { Clock, OrgService } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
@@ -21,6 +21,7 @@ import type { AgentActivity } from '../../shared/model/runs.ts';
 import { AgentRepo } from '../store/agents.ts';
 import { avatarFiles } from './avatar-files.ts';
 import { hiredAgent, type CreateInput } from './hire.ts';
+import type { StandardKind } from './standard.ts';
 import { patchedAgent, STATUSES } from './patch.ts';
 import { restoredAgent } from './restore.ts';
 import { loadTemplates } from './templates.ts';
@@ -30,7 +31,6 @@ import { cleanText } from './validate.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import { activePerson, personManagerId } from '../people/repo.ts';
 import { reportsUpTo } from '../people/manager.ts';
-import { rememberAgentDefault } from './prompt-updates.ts';
 
 export interface OrgDeps {
   db: Db;
@@ -39,15 +39,9 @@ export interface OrgDeps {
   templatesDir: string; // <resources>/agents
   /** Live activity source (the dispatcher). Default: derived from agents with status 'working'. */
   activity?: () => AgentActivity[];
-  /**
-   * B-044/B-047: the standard SYSTEM.md above every new agent's instructions (org/hire.ts; compose/services.ts renders
-   * prompts/agent-default.md with the person's name plus `values`: the hire's creator and role).
-   */
-  standingRules?: (values?: Readonly<Record<string, string>>) => string | undefined;
-  /** The unrendered standard a hire starts with, remembered for future app updates. */
-  standingTemplate?: () => string;
-  /** B-047: where a hire reports what it had to leave out (absent: nowhere). */
-  log?: Pick<Logger, 'warn'>;
+  /** The new agent's SYSTEM.md template (org/hire.ts; compose/services.ts renders prompts/system-md.md with the person's name plus `values`: the hire's role). */
+  /** The standard SYSTEM.md of `kind` rendered for a hire (org/standard.ts; `values`: its role). */
+  systemMd?: (values: Readonly<Record<string, string>>, kind: StandardKind) => string | undefined;
   /** The person's company name (settings.json profile.company) – the company space's name; absent: "Company". */
   companyName?: () => string | undefined;
 }
@@ -156,14 +150,9 @@ export class Org implements OrgService {
       space: (spaceId) => this.spaceBook.get(spaceId),
       spaceForKind: (kind, near) => this.spaceBook.forKind(kind, near),
       now: () => this.deps.clock.now(),
-      standingRules: (values) => this.deps.standingRules?.(values),
-      warn: (message, details) => this.deps.log?.warn(message, details),
+      systemMd: (values, kind) => this.deps.systemMd?.(values, kind),
     });
-    this.deps.db.tx(() => {
-      this.agents.save(agent);
-      const standard = this.deps.standingTemplate?.();
-      if (standard) rememberAgentDefault(this.deps.db, agent.id, standard, agent.instructions, this.deps.clock.now());
-    });
+    this.agents.save(agent);
     const saved = this.require(agent.id);
     this.coreFiles?.created(saved);
     this.deps.bus.emit('agent.upserted', saved);

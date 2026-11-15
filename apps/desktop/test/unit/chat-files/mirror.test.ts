@@ -43,12 +43,8 @@ test('finished lines are appended (a streamed answer once it finishes); chat.jso
   const chat = f.chats.create({ title: 'Launch plan', agentIds: ['ag_ada'], createdBy: HUMAN_ID });
   const hello = f.chats.send({ conversationId: chat.id, body: 'Hello @Ada', authorId: HUMAN_ID, authorKind: 'human' });
   const quiet = f.chats.send({ conversationId: chat.id, body: 'fyi', authorId: HUMAN_ID, authorKind: 'human', silent: true });
-  const answer = f.chats.beginAgentMessage(chat.id, 'ag_ada', 'run_0123456789', { model: 'gpt-x' });
-  await mirror.settled();
+  const answer = f.chats.postAgentMessage(chat.id, 'ag_ada', 'run_0123456789', { body: 'On it.', meta: { model: 'gpt-x' } });
   const folder = `launch-plan-${idSuffix(chat.id)}`;
-  assert.deepEqual(folders(root), [folder]);
-  assert.ok(!lines(shard(root, folder, '2026-10')).some((line) => line.id === answer.id), 'a streaming answer is not written yet');
-  f.chats.finishAgentMessage(answer.id, { body: 'On it.', state: 'final' });
   await mirror.settled();
   const written = lines(shard(root, folder, '2026-10'));
   assert.deepEqual(written.filter((line) => line.kind === 'text').map((line) => [line.id, line.author.name, line.level, line.body]), [

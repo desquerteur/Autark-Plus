@@ -4,17 +4,15 @@
 // (ui/tasks/AppTodo.tsx) and the app's wf.complete(data) finishes it through blocks.answer.
 // Used by the runtime (tasks/human.ts ingestApps, the receipt text) and every list renderer.
 // Owns: the widget built from a fence's attributes, the guard that reads a stored widget as one,
-// the frame attributes the list renders with, and the default title and reason.
+// the frame attributes the list renders with, and the default title.
 // Never: copies the app's HTML into the task, validates it as a catalog block, or lets an app
 // claim an approval or a credential (parse.ts AppReason).
 
-import type { AppTodoWidget, HumanReason } from '../model/tasks.ts';
+import type { AppTodoWidget } from '../model/tasks.ts';
 import { APP_PERMISSIONS, type AppAttrs } from './parse.ts';
 
 /** Title of a mini-app to-do whose fence has no title="…". */
 export const APP_TODO_TITLE = 'Mini-app';
-/** Why a mini-app needs the person when the fence gives no reason=. */
-export const APP_TODO_REASON: HumanReason = 'taste';
 
 /** The widget stored for fence `index` of message `messageId`. */
 export function appTodoWidget(messageId: string, index: number, attrs: AppAttrs): AppTodoWidget {

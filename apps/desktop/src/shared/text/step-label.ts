@@ -119,7 +119,7 @@ function plainName(name: string): string {
 
 const label = (kind: StepKind, verb: string, active: string, target: string): StepLabel => ({ kind, verb, active, target: oneLine(target) });
 
-const COMMAND = new Set(['shell', 'bash', 'execute', 'exec', 'exec_command', 'local_shell', 'run_shell_command', 'powershell', 'shell.exec', 'secrets.run']);
+const COMMAND = new Set(['shell', 'bash', 'execute', 'exec', 'exec_command', 'local_shell', 'run_shell_command', 'powershell', 'shell.exec']);
 const READ = new Set(['read', 'read_file', 'files.read', 'notebookread', 'view']);
 const EDIT = new Set(['edit', 'multiedit', 'edit_file', 'apply_patch', 'notebookedit', 'str_replace_based_edit_tool', 'replace']);
 const WRITE = new Set(['write', 'write_file', 'files.write']);
@@ -128,7 +128,7 @@ const LIST = new Set(['ls', 'list', 'files.list', 'list_directory']);
 const WEB_SEARCH = new Set(['web_search', 'websearch', 'web.search', 'google_web_search']);
 const WEB_OPEN = new Set(['web_fetch', 'webfetch', 'web.fetch', 'fetch']);
 const PLAN = new Set(['todowrite', 'update_plan', 'exitplanmode']);
-const AGENT = new Set(['task', 'agent', 'agents.delegate', 'agents.handoff']);
+const AGENT = new Set(['task', 'agent', 'tasks.give']);
 
 /** A tool's own words for a call that names no target: [past, present, object] ("Ran" / "Running" "a
  *  command"). Names as engines report them: dotted, underscored or spaced ("browser.show", "Browser show"). */
@@ -163,12 +163,12 @@ export function isCommandText(step: StepLabel): boolean {
   return step.kind === 'command' && step.verb !== '' && step.target !== '' && step.target !== 'a command';
 }
 
-/** B-057: the split tools – "Split into 3 parts" / "Splitting into 3 parts", "Read split results", "Stopped splits",
- *  "Merged split part #2" / "Discarded split part #2" (by its action, else its summary "Discard part #2 …").
+/** B-057: the split tools – "Split into 3 parts" / "Splitting into 3 parts", "Read split results",
+ *  "Merged split part #2" / "Discarded split part #2" (by its action, else its summary "Discard part #2 …"); B-083 "Told my origin" / "Told my parts".
  *  The count comes from the call's parts, else from its summary ("Split into 3 parts: …"). */
 function splitStep(n: string, a: Record<string, unknown>, told: string | undefined): StepLabel | undefined {
   if (n === 'agents.split_results') return label('agent', 'Read', 'Reading', 'split results');
-  if (n === 'agents.split_stop') return label('agent', 'Stopped', 'Stopping', 'splits');
+  if (n === 'agents.split_tell') return label('agent', 'Told', 'Telling', a.to === 'origin' ? 'my origin' : 'my parts'); // B-083
   if (n === 'agents.split_merge') {
     const discard = a.action === 'discard' || (a.action === undefined && /^\s*discard\b/i.test(told ?? ''));
     const part = `split part${Number.isInteger(a.idx) && (a.idx as number) > 0 ? ` #${a.idx}` : ''}`;

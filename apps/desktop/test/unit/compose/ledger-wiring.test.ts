@@ -19,8 +19,8 @@ test('services.ts sets and starts the ledger; the journal keeps captured runs\' 
   assert.match(services, /new SessionSweep\(\{/);
 });
 
-test('a turn attempt attaches its run to the ledger with the routed engine, model and the input\'s last seq', () => {
-  assert.match(source('src/runtime/agents/turn-attempt.ts'), /services\.ledger\.capture\(\{ runId: request\.runId, agentId: plan\.agent\.id, conversationId: plan\.conversationId, engine: turn\.engine\.id, model: turn\.route\.modelId, seenSeq: turn\.lastSeq, first: journal \}\)/);
+test('a turn attempt attaches its run to the ledger of its thread with the routed engine, model and the input\'s seqs', () => {
+  assert.match(source('src/runtime/agents/turn-attempt.ts'), /services\.ledger\.capture\(\{ runId: request\.runId, agentId: plan\.agent\.id, thread: plan\.thread, conversationId: plan\.conversationId \?\? '', engine: turn\.engine\.id, model: turn\.route\.modelId, seenSeq: turn\.lastSeq, fromSeq: turn\.session \? plan\.memberCursor : 0, first: journal \}\)/);
 });
 
 test('context.restore is built in and on demand: found through tools.find, in no core set', () => {

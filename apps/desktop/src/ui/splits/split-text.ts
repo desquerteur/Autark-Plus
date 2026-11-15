@@ -1,6 +1,7 @@
 // Splits as the person reads them (B-057 S18, shared/model/splits.ts): the words and pure rules of every split row –
 // the parent's step line "Split · 3 of 5 done", a group's live line "3 of 5 parts working", a part "#3 title", its
-// model · effort slot (the run's when it ran, else what the agent asked for), its status icon kind and duration – and
+// model · effort slot (the run's when it ran, else what the agent asked for; B-083: the part page adds "T 0.3" when it
+// has a temperature), its status icon kind and duration – and
 // the selectors the views share: the groups under an agent in the team sidebar (active and recently finished), the
 // groups of one parent run (which one belongs to which agents.split call), the running groups of a chat (one live
 // block each) and the running splits per agent from the live activity (never the agent's main ring).
@@ -11,6 +12,7 @@ import type { AgentActivity } from '../../shared/model/runs.ts';
 import { SPLIT_TERMINAL } from '../../shared/model/splits.ts';
 import type { SplitGroupView, SplitStatus, SplitView } from '../../shared/model/splits.ts';
 import { EFFORT_LABEL, partsWorking } from '../chat/live-text.ts';
+import { durationText } from '../../shared/text/run-notes.ts';
 
 /** The parent's tool call that splits its work (runtime/tools/builtin/agents-split.ts). */
 export const SPLIT_TOOL = 'agents.split';
@@ -85,10 +87,10 @@ const REQUESTED: Record<string, string> = { cheap: 'Cheaper model', strong: 'Str
  * gets the model only when it ends) – what the live activity says it runs on, else what the agent asked for ("Cheaper
  * model · Low", an explicit model's name); '' for the parent's own model before it ran.
  */
-export function splitModelText(split: Pick<SplitView, 'model' | 'effort' | 'run'>, nameOf: (id: string) => string | undefined,
+export function splitModelText(split: Pick<SplitView, 'model' | 'effort' | 'run' | 'temperature'>, nameOf: (id: string) => string | undefined,
   live?: Pick<AgentActivity, 'model' | 'modelName' | 'effort'>): string {
   const parts = splitModelParts(split, nameOf, live);
-  return [parts.name, parts.effort].filter(Boolean).join(' · ');
+  return [parts.name, parts.effort, split.temperature !== undefined ? `T ${split.temperature}` : ''].filter(Boolean).join(' · '); // B-083: the part's temperature
 }
 
 /** The two words of the model · effort slot ('' when unknown) – a narrow row shows the effort alone (splits.css). */
@@ -107,12 +109,8 @@ export function liveOfSplit(active: readonly AgentActivity[], splitId: string): 
   return active.find((entry) => entry.split?.id === splitId);
 }
 
-/** How long something took: "4 s", "2 min 5 s", "1 h 3 min"; '' before it started (the agent's run list says the same). */
-export function elapsedText(startedAt: number | undefined, endedAt: number | undefined, now = Date.now()): string {
-  if (!startedAt) return '';
-  const s = Math.max(0, Math.round(((endedAt ?? now) - startedAt) / 1000));
-  return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
-}
+/** How long something took: "4 s", "2 min 5 s", "1 h 3 min"; '' before it started (the agent's log says the same). */
+export const elapsedText = durationText;
 
 /** A split's duration once it ended (a running one shows its spinner instead – no ticking clock). */
 export function splitDuration(split: Pick<SplitView, 'status' | 'startedAt' | 'endedAt' | 'run'>): string {
@@ -166,21 +164,6 @@ export function groupForCall(ofRun: readonly SplitGroupView[], callAt: number, r
   if (named) return ofRun.find((group) => group.id === named);
   const after = ofRun.find((group) => group.createdAt >= callAt);
   return after ?? (resultText !== undefined ? ofRun[ofRun.length - 1] : undefined);
-}
-
-/** When a live block's group started (its place among the chat's live blocks, fixed once shown). */
-export function groupStart(group: Pick<SplitGroupView, 'startedAt' | 'createdAt'>): number {
-  return group.startedAt ?? group.createdAt;
-}
-
-/**
- * The running groups of a chat (one live block each), in start order: groups made in this chat, and groups whose
- * split runs report this chat in the live activity.
- */
-export function chatGroups(groups: Iterable<SplitGroupView>, conversationId: string, active: readonly AgentActivity[] = []): SplitGroupView[] {
-  const named = new Set(active.filter((entry) => entry.split && entry.conversationId === conversationId).map((entry) => entry.split!.groupId));
-  return [...groups].filter((group) => isLiveGroup(group) && (group.conversationId === conversationId || named.has(group.id)))
-    .sort((a, b) => groupStart(a) - groupStart(b));
 }
 
 /** Running split runs per agent (live activity entries with `split`); the agent's main turn is not counted. */

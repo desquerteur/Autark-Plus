@@ -1,7 +1,7 @@
 // PCs on this network, without anyone typing an address: while this PC accepts connection requests
 // (settings.devices.findable) a UDP socket on port 47813 answers the LAN probe {q:'wf-hello',v:1,n}
 // from the LAN, link-local or loopback (lanSource) with its public identity – device id, name,
-// fingerprint, Remote ID and peer addresses. The asking PC sends one probe to 255.255.255.255 and
+// fingerprint, Remote ID, peer addresses and (B-084) its chain to the person code. The asking PC sends one probe to 255.255.255.255 and
 // each IPv4 interface's directed broadcast and collects answers for at most 1.5 s (Settings ›
 // Devices lists them; "Connect" by Remote ID looks here first). An answer is only a hint where to
 // try: the connect request proves the key (remote/sas.ts) and the person compares the code.
@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { networkInterfaces } from 'node:os';
 import { validAddress } from './pair-proof.ts';
+import { chainEnd } from '../remote/code.ts';
 import { remoteIdOf } from '../remote/id.ts';
 
 export const DISCOVERY_PORT = 47813;
@@ -23,8 +24,11 @@ export const DISCOVER_MS = 1500;
 export const MAX_HELLO_ANSWERS = 32;
 const MAX_MESSAGE = 4096;
 
-/** A PC that answered a hello probe (its Remote ID checked against its fingerprint). */
-export interface Candidate { deviceId: string; name: string; fingerprint: string; addresses: string[]; remoteId: string }
+/**
+ * A PC that answered a hello probe (its own Remote ID checked against its fingerprint); `chain`: its chain to my person
+ * code's root (remote/code.ts), kept only when it ends at that fingerprint.
+ */
+export interface Candidate { deviceId: string; name: string; fingerprint: string; addresses: string[]; remoteId: string; chain?: unknown }
 
 /** This PC's identity for a hello answer – or nothing (not accepting requests). */
 export type HelloAnswer = () => Candidate | undefined;
@@ -94,7 +98,8 @@ export function parseAnswer(message: Buffer, nonce: string): Candidate | undefin
   if (typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) return undefined;
   if (value.remoteId !== remoteIdOf(fingerprint)) return undefined;
   const list = Array.isArray(addresses) ? addresses.filter((item): item is string => typeof item === 'string' && validAddress(item)).slice(0, 8) : [];
-  return { deviceId, name: name.trim(), fingerprint, addresses: list, remoteId: value.remoteId as string };
+  const chain = value.chain !== undefined && chainEnd(value.chain) === fingerprint ? { chain: value.chain } : {};
+  return { deviceId, name: name.trim(), fingerprint, addresses: list, remoteId: value.remoteId as string, ...chain };
 }
 
 /**

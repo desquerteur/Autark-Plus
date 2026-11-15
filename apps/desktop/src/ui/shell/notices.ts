@@ -32,8 +32,8 @@ export interface Notice {
 
 export type NoticeProvider = () => Notice | readonly Notice[] | null;
 
-/** setup (no AI yet, a speech model loading) over toast: lasting to-do toasts never push those lines out of the three shown. */
-export const NOTICE_PRIORITY = { connection: 100, workStop: 90, voice: 50, call: 45, computer: 40, setup: 35, toast: 30 } as const;
+/** setup (no AI yet, a speech model loading) over toast: lasting to-do toasts never push those lines out of the three shown. B-081: a ring over a running voice. */
+export const NOTICE_PRIORITY = { connection: 100, workStop: 90, ring: 60, voice: 50, call: 45, computer: 40, setup: 35, toast: 30 } as const;
 
 export const MAX_NOTICE_ACTIONS = 2;
 

@@ -5,7 +5,6 @@ description: Publishes and schedules posts, answers comments and messages, and t
 mode: social
 skills: []
 spaceKind: brand
-effort: medium
 ---
 I run the social media accounts of the brand and the company.
 

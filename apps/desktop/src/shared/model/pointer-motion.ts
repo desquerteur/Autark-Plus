@@ -1,8 +1,9 @@
 // Pointer motion paths (B-055): how an agent's mouse pointer travels to a target. One pure model is
 // shared by the PC helper (runtime/computer), the browsers (CDP mouseMoved steps), the named cursors
 // drawn over browsers and the feedback tour's big cursor, so every visible cursor moves the same way.
-//   instant – jumps (fastest; batches and decision-model runs).
-//   glide   – a short eased glide (Fitts' law, ≤ 420 ms, almost straight): the default, visible and cheap.
+//   instant – jumps (fastest; when a caller passes it: computer use, an agent's own browser, decision-model runs –
+//             the person's side browser glides instead, B-081).
+//   glide   – a short eased glide (Fitts' law, ≤ 300 ms, almost straight): the default, visible, quick and cheap.
 //   human   – how a hand moves a mouse: bell-shaped speed that peaks early, a slight arc, an overshoot
 //             or undershoot with one corrective sub-movement on long moves, a little tremor (recordings).
 // Owns: the styles, the duration rule, the path shape and its seeded noise. Never: timers, input, DOM
@@ -57,7 +58,8 @@ const finiteOr = (value: number | undefined, fallback: number) => (typeof value 
 export function motionDuration(distance: number, style: MotionStyle, targetSize = 24, pace = 1): number {
   if (style === 'instant' || !(distance >= 1) || !Number.isFinite(distance)) return 0;
   const index = Math.log2(distance / Math.max(4, finiteOr(targetSize, 24)) + 1);
-  const ms = style === 'glide' ? Math.min(420, 90 + 70 * index) : Math.min(1400, 180 + 140 * index);
+  // glide (B-081): 100 px about 180 ms, 300 px about 250 ms, 600 px about 295 ms, from about 650 px 300 ms (24 px targets)
+  const ms = style === 'glide' ? Math.min(300, 60 + 50 * index) : Math.min(1400, 180 + 140 * index);
   return Math.round(ms * clamp(finiteOr(pace, 1), 0.25, 4));
 }
 

@@ -1,16 +1,18 @@
 // The chat header's live line texts (ChatHeader.tsx, LiveLine.tsx): who works in this chat and what,
-// B-075: from the chat's rows – its runs at work as the summary lists them (liveRuns: ConversationSummary.live, the
-// rows in state 'streaming' with their meta.live), the same on every device (a bare tool name reads as what the agent does, format.ts workNote), in
+// from the chat's live bar – its work as the summary lists it (liveRuns: ConversationSummary.live, runtime/chat/live.ts;
+// a split part carries `split`, so a group folds into one entry), the same in every window and on the phone (a bare tool name reads as what the agent does, format.ts workNote), in
 // three lengths for the sub line's widths (chat.css) – the full line, a narrow window's line and a
 // phone's line. A width picks the length, never a state, so a call starting never changes the text.
 // B-048 E4.5: the line opens the working popover (WorkingPopover.tsx) – one row per member working
 // here (workingRows: who, model · effort, live note, task; ordered by start like the live blocks) –
 // and a live run's model line ("Opus 5.5 · High", modelLine – the short model name) is also the live block's byline.
+// B-083: the turn's temperature follows it when it has one ("Opus 5.5 · High · T 0.3", withTemperature) – "T ≈0.3" with a
+// title where the model samples at its own setting and the value is carried as the agent's stance.
 // Owns: the texts. Never: markup, widths or a name or model the rows do not give.
 
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import type { Effort } from '../../shared/model/providers.ts';
-import type { AgentActivity } from '../../shared/model/runs.ts';
+import { STANCE_MARK, shownTemperature, type AgentActivity } from '../../shared/model/runs.ts';
 import { workNote } from '../lib/format.ts';
 
 /** One activity entry: an agent running somewhere, with its live note (B-057: `split` on a split's run). */
@@ -18,11 +20,12 @@ export type LiveEntry = { agentId: string; conversationId?: string; note: string
 type Chat = Pick<ConversationSummary, 'id' | 'working'>;
 type NameOf = (id: string) => string | undefined;
 
-/** B-075: the chat's runs at work as entries – from its rows (the summary's `live`: note, model · effort, task, start). */
+/** The chat's live bar as activity entries (the summary's `live`: what it does now – its step, else its note –, model · effort, task, part, start). */
 export function liveRuns(chat: Pick<ConversationSummary, 'id' | 'live'>): AgentActivity[] {
   return (chat.live ?? []).map((run) => ({
-    agentId: run.agentId, runId: run.runId, conversationId: chat.id, note: run.note ?? '', startedAt: run.startedAt,
+    agentId: run.agentId, runId: run.runId, conversationId: chat.id, note: run.step ?? run.note ?? '', startedAt: run.startedAt,
     ...(run.model ? { modelName: run.model } : {}), ...(isEffort(run.effort) ? { effort: run.effort } : {}), ...(run.taskId ? { taskId: run.taskId } : {}),
+    ...(run.temperature !== undefined ? { temperature: run.temperature, temperatureSent: run.temperatureSent === true } : {}), ...(run.split ? { split: run.split } : {}),
   }));
 }
 
@@ -107,8 +110,8 @@ export function shortModelName(name: string): string {
 const bareId = (id: string) => id.slice(id.indexOf(':') + 1);
 
 /**
- * What a live run runs on: "Opus 5.5 · High" from its live values (B-075 meta.live: the runtime sets them at route
- * time and after a failover or rebuild); without them, its message's meta (model display name, effort); '' while it routes.
+ * What a live run runs on: "Opus 5.5 · High" from its live values (the runtime sets them at route time and after a
+ * failover or rebuild); without them, its message's meta (model display name, effort); '' while it routes.
  */
 export function modelLine(route: { model?: string; modelName?: string; effort?: string } | undefined, meta?: { model?: unknown; effort?: unknown }): string {
   const own = route?.modelName?.trim() || (route?.model ? bareId(route.model) : '');
@@ -117,6 +120,31 @@ export function modelLine(route: { model?: string; modelName?: string; effort?: 
   if (!name) return '';
   const short = shortModelName(name);
   return isEffort(effort) ? `${short} · ${EFFORT_LABEL[effort]}` : short;
+}
+
+/** The shown form of a temperature (shared/model/runs.ts shownTemperature): "0.3", "≈0.3". */
+const SHOWN = new RegExp(`^${STANCE_MARK}?\\d{1,2}(?:\\.\\d{1,2})?$`);
+
+/** B-083: a turn's temperature as the chat writes it – "T 0.3", "T ≈0.3" (the model samples at its own setting); '' without one. */
+export function temperatureTag(shown: unknown): string {
+  return typeof shown === 'string' && SHOWN.test(shown) ? `T ${shown}` : '';
+}
+
+/** Its title: "Temperature 0.3", or – marked ≈ – that the value is carried as stance. '' without one. */
+export function temperatureTitle(shown: unknown): string {
+  if (typeof shown !== 'string' || !temperatureTag(shown)) return '';
+  return shown.startsWith(STANCE_MARK) ? `Temperature ${shown.slice(STANCE_MARK.length)}, carried as stance – this model samples at its own setting` : `Temperature ${shown}`;
+}
+
+/** An activity entry's or a run's temperature in its shown form (undefined without one). */
+export function shownOf(value: { temperature?: number; temperatureSent?: boolean } | undefined): string | undefined {
+  return value?.temperature !== undefined ? shownTemperature(value.temperature, value.temperatureSent) : undefined;
+}
+
+/** A model line with the turn's temperature after it ("Opus 5.5 · High · T 0.3"); the line alone without one or without a model. */
+export function withTemperature(line: string, shown: unknown): string {
+  const tag = temperatureTag(shown);
+  return line && tag ? `${line} · ${tag}` : line;
 }
 
 /** A row's live note: what the agent does ("bash" → "Running a command", "waiting for approval" → "Waiting for approval"), else "Working". */
@@ -132,7 +160,7 @@ export interface WorkingRow {
   agentId: string;
   runId?: string;
   name: string;
-  /** modelLine; '' while routing (the slot stays). B-057: a split group row's goal (its parts run on several models). */
+  /** modelLine (B-083: with the temperature); '' while routing (the slot stays). B-057: a split group row's goal (its parts run on several models). */
   model: string;
   note: string;
   taskId?: string;
@@ -145,11 +173,10 @@ export interface WorkingGroup { id: string; agentId: string; startedAt: number; 
 
 /**
  * The popover's rows: every run of this chat in start order (like the live blocks, so nothing
- * reorders), then agents the chat summary marks working without an entry yet. `metaOf` gives a run's
- * streaming message meta for its model before the activity has it. B-057: one row per running split
+ * reorders), then agents the chat summary marks working without an entry yet. B-057: one row per running split
  * group (`groups`, and groups whose split runs report this chat) – never one per split.
  */
-export function workingRows(chat: Chat, entries: ReadonlyArray<AgentActivity>, nameOf: NameOf, metaOf?: (runId: string) => { model?: unknown; effort?: unknown } | undefined, groups: ReadonlyArray<WorkingGroup> = []): WorkingRow[] {
+export function workingRows(chat: Chat, entries: ReadonlyArray<AgentActivity>, nameOf: NameOf, groups: ReadonlyArray<WorkingGroup> = []): WorkingRow[] {
   const mine = entries.filter((entry) => entry.conversationId === chat.id);
   const runs = mine.filter((entry) => !entry.split);
   const listed = new Map(groups.map((group) => [group.id, group]));
@@ -159,10 +186,12 @@ export function workingRows(chat: Chat, entries: ReadonlyArray<AgentActivity>, n
     listed.set(entry.split.groupId, { id: entry.split.groupId, agentId: entry.agentId, startedAt: Math.min(...parts.map((part) => part.startedAt)), note: partsWorking(parts.length, entry.split.of) });
   }
   const timed: Array<{ at: number; row: WorkingRow }> = [
-    ...runs.map((entry) => ({ at: entry.startedAt, row: {
-      key: entry.runId, agentId: entry.agentId, runId: entry.runId, name: nameOf(entry.agentId) ?? 'Agent',
-      model: modelLine(entry, metaOf?.(entry.runId)), note: noteText(entry.note), ...(entry.taskId ? { taskId: entry.taskId } : {}),
-    } })),
+    ...runs.map((entry) => {
+      return { at: entry.startedAt, row: {
+        key: entry.runId, agentId: entry.agentId, runId: entry.runId, name: nameOf(entry.agentId) ?? 'Agent',
+        model: withTemperature(modelLine(entry), shownOf(entry)), note: noteText(entry.note), ...(entry.taskId ? { taskId: entry.taskId } : {}),
+      } };
+    }),
     ...[...listed.values()].map((group) => ({ at: group.startedAt, row: {
       key: `split:${group.id}`, agentId: group.agentId, groupId: group.id, name: nameOf(group.agentId) ?? 'Agent', model: group.goal ?? '', note: group.note,
     } })),

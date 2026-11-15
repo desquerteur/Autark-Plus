@@ -1,11 +1,11 @@
-// The ONE menu of a task (Work rows, the open task's name dropdown, the task bubble in a chat): Open · Open in
-// chat · Give to me · Send to… (any unfinished work: agents, teams, people) · Resume · Done · Reopen · Cancel · Delete. Text only.
-// Owns: which items a task offers and what each one sends. Never: draws the menu (lib/context-menu.tsx) or
-// settles agent work as verified.
+// The ONE menu of a task (Work rows, the open task's name dropdown, the task bubble in a chat): Open · Open in chat ·
+// Give to… (me, "Team – Autark picks", the agents and – in the owner's session – the people; tasks.give) · Resume ·
+// Done · Reopen · Drop · Delete. Text only.
+// Owns: which items a task offers and what each one sends. Never: draws the menu (lib/context-menu.tsx) or settles agent
+// work as verified.
 
 import type { MenuSection } from '../lib/popover.tsx';
 import type { TaskView } from '../../shared/model/tasks.ts';
-import type { QuickTaskTarget } from '../../shared/model/task-center.ts';
 import { newId } from '../../shared/ids.ts';
 import { confirm } from '../lib/dialog.tsx';
 import { rpc } from '../lib/rpc.ts';
@@ -14,7 +14,7 @@ import { toastError } from '../lib/toasts.ts';
 import { recipientGroups } from './center-model.ts';
 import { recipientPeople } from './RecipientMenu.tsx';
 import { canOpenChat, closeTask, openTaskDetail, openTaskInChat, selectedTaskId } from './jump.ts';
-import { hasNoOwner, isFinished, ownerOf } from './model.ts';
+import { isFinished, ownerOf } from './model.ts';
 import { putTask } from './task-cache.ts';
 import { canResume } from './waiting.ts';
 
@@ -27,9 +27,9 @@ async function run(call: () => Promise<TaskView | void>, failTitle: string): Pro
   }
 }
 
-async function cancelTask(task: TaskView): Promise<void> {
-  if (!(await confirm({ title: 'Cancel this task?', body: task.title, confirmLabel: 'Cancel task' }))) return;
-  await run(() => rpc.call('tasks.setStatus', { id: task.id, status: 'cancelled' }), 'Could not cancel');
+async function dropTask(task: TaskView): Promise<void> {
+  if (!(await confirm({ title: 'Drop this task?', body: task.title, confirmLabel: 'Drop task' }))) return;
+  await run(() => rpc.call('tasks.finish', { id: task.id, status: 'dropped' }), 'Could not drop it');
 }
 
 async function deleteTask(task: TaskView): Promise<void> {
@@ -42,28 +42,28 @@ async function deleteTask(task: TaskView): Promise<void> {
   }, 'Could not delete');
 }
 
-const route = (task: TaskView, target?: QuickTaskTarget) => run(() => rpc.call('tasks.route', { id: task.id, ...(target ? { target } : {}) }), 'Could not find an owner');
-
-/** A person (F-52, the owner's session only) gets the work as their own: the owner field changes, nothing routes. */
-const giveToPerson = (task: TaskView, personId: string) => run(() => rpc.call('tasks.update', { id: task.id, patch: { assigneeKind: 'human', assigneeId: personId } }), 'Could not send it');
+const give = (task: TaskView, to: string) => run(() => rpc.call('tasks.give', { id: task.id, to }), 'Could not give it');
 
 /**
- * "Send to…" for every unfinished task (B-078: the reassigning the detail's Owner box did): "Find an owner" for work
- * nobody has yet, then the agents, teams and – in the owner's session – the active people; the current owner is left out.
+ * "Give to…" for every unfinished task: me, "Team – Autark picks" one owner now, then the agents and – in the owner's
+ * session – the active people; the current owner is left out.
  */
-function sendTo(task: TaskView): MenuSection[] {
+function giveTo(task: TaskView): MenuSection[] {
   if (isFinished(task.status)) return [];
   const owner = ownerOf(task);
+  const mine = owner.kind === 'human';
   const groups = recipientGroups(agents.value, recipientPeople(true));
-  const current = (target: QuickTaskTarget) => 'id' in owner && owner.kind === target.kind && owner.id === target.id;
-  const item = (recipient: { label: string; hint?: string; target: QuickTaskTarget }) => ({
-    label: recipient.label, hint: recipient.hint,
-    onSelect: () => void (recipient.target.kind === 'person' ? giveToPerson(task, recipient.target.id) : route(task, recipient.target)),
-  });
-  const pick = (list: ReadonlyArray<{ label: string; hint?: string; target: QuickTaskTarget }>) => list.filter((recipient) => !current(recipient.target)).map(item);
+  const current = (id: string) => 'id' in owner && owner.id === id;
+  const pick = (list: ReadonlyArray<{ label: string; hint?: string; target: { kind: string; id: string } }>) => list
+    .filter((recipient) => recipient.target.kind === 'agent' || recipient.target.kind === 'person')
+    .filter((recipient) => !current(recipient.target.id))
+    .map((recipient) => ({ label: recipient.label, hint: recipient.hint, onSelect: () => void give(task, recipient.target.id) }));
   const sections: MenuSection[] = [
-    { title: 'Send to…', items: [...(hasNoOwner(task) ? [{ label: 'Find an owner', onSelect: () => void route(task) }] : []), ...pick(groups.agents)] },
-    { title: 'Teams', items: pick(groups.teams) },
+    { title: 'Give to…', items: [
+      ...(mine ? [] : [{ label: 'Me', onSelect: () => void give(task, 'human') }]),
+      { label: 'Team – Autark picks', onSelect: () => void give(task, 'team') },
+      ...pick(groups.agents),
+    ] },
     { title: 'People', items: pick(groups.people) },
   ];
   return sections.filter((section) => section.items.length > 0);
@@ -77,12 +77,11 @@ export function taskMenu(task: TaskView): MenuSection[] {
       { label: 'Open', onSelect: () => openTaskDetail(task.id) },
       ...(canOpenChat(task.conversationId) ? [{ label: 'Open in chat', onSelect: () => openTaskInChat(task) }] : []),
     ] },
-    ...(finished ? [] : [{ items: mine ? [] : [{ label: 'Give to me', onSelect: () => void run(() => rpc.call('tasks.makeMine', { id: task.id }), 'Could not give it to you') }] }]),
-    ...sendTo(task),
+    ...giveTo(task),
     { items: [
-      ...(canResume(task) ? [{ label: 'Resume', onSelect: () => void run(() => rpc.call('tasks.setStatus', { id: task.id, status: 'working' }), 'Could not resume') }] : []),
-      ...(!finished && mine && !task.widget ? [{ label: 'Done', onSelect: () => void run(() => rpc.call('tasks.complete', { id: task.id, clientId: newId('up') }), 'Could not complete') }] : []),
-      ...(finished ? [{ label: 'Reopen', onSelect: () => void run(() => rpc.call('tasks.setStatus', { id: task.id, status: 'open' }), 'Could not reopen') }] : [{ label: 'Cancel', onSelect: () => void cancelTask(task) }]),
+      ...(canResume(task) ? [{ label: 'Resume', onSelect: () => void run(() => rpc.call('tasks.update', { id: task.id, patch: { status: 'open' } }), 'Could not resume') }] : []),
+      ...(!finished && mine && !task.widget ? [{ label: 'Done', onSelect: () => void run(() => rpc.call('tasks.finish', { id: task.id, clientId: newId('up') }), 'Could not complete') }] : []),
+      ...(finished ? [{ label: 'Reopen', onSelect: () => void run(() => rpc.call('tasks.update', { id: task.id, patch: { status: 'open' } }), 'Could not reopen') }] : [{ label: 'Drop', onSelect: () => void dropTask(task) }]),
       { label: 'Delete', danger: true, onSelect: () => void deleteTask(task) },
     ] },
   ];

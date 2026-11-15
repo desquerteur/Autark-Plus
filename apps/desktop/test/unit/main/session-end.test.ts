@@ -3,17 +3,19 @@
 // as well). Windows: one hidden native window (never shown, no taskbar
 // entry) receives 'session-end' also while the person's window is closed to the tray, and every
 // BrowserWindow reports it too; the mark {state:'quit', by:'system'} is on disk at once, the quit that
-// follows keeps it, and the next launcher start resumes without counting an unexpected end.
+// follows keeps it, and the next launcher start resumes without counting an unexpected end. B-080 wave 3: the same moment
+// writes one main.log line at once (sessionEnded, main-log.ts lineNow), so a restart does not read like a crash.
 // Owns: these assertions only. Never: Electron or the real profile.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RunStateMarks, decideLaunch, readRunState, writeRunState } from '../../../src/main/launcher.ts';
-import { watchSessionEnd, type SessionEndElectron } from '../../../src/main/session-end.ts';
+import { SESSION_END_LINE, sessionEnded, watchSessionEnd, type SessionEndElectron } from '../../../src/main/session-end.ts';
+import { openMainLog } from '../../../src/main/main-log.ts';
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'wf-session-end-'));
 after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -90,9 +92,26 @@ test('the system mark is on disk at once, survives the quit that follows, and th
   marks.quit('person'); // before-quit of the ending process
   assert.equal(readRunState(dir)?.by, 'system');
   // Fast Startup: the boot time does not reset – without the mark this would be an unexpected end.
-  const next = decideLaunch({ previous: readRunState(dir), source: 'task', nextDue: null, now: now + 8 * 3_600_000, bootAt: now - 86_400_000, pid: 6 });
+  const next = decideLaunch({ previous: readRunState(dir), source: 'task', now: now + 8 * 3_600_000, bootAt: now - 86_400_000, pid: 6 });
   assert.deepEqual(next, { start: true, reason: 'resume', handoff: true }, 'the sign-in start goes on');
   assert.equal(next.notice, undefined, 'no "Restarted after an unexpected close"');
-  const detached = decideLaunch({ previous: readRunState(dir), source: 'person', nextDue: null, now: now + 8 * 3_600_000, bootAt: now - 86_400_000, pid: 7 });
+  const detached = decideLaunch({ previous: readRunState(dir), source: 'person', now: now + 8 * 3_600_000, bootAt: now - 86_400_000, pid: 7 });
   assert.equal(detached.write?.ends, undefined, 'no unexpected end counted by the detached start either');
+});
+
+test('B-080 wave 3: the end of the session writes its main.log line at once – the quit mark first, as before', () => {
+  const dir = path.join(tmp, 'session-line');
+  const now = Date.UTC(2026, 10, 8, 18, 39);
+  writeRunState(dir, { state: 'running', at: now - 60_000, pid: 5 });
+  const marks = new RunStateMarks(dir, undefined, () => now);
+  const log = openMainLog(path.join(dir, 'logs'));
+  const f = fakes('win32');
+  watchSessionEnd(f.electron, sessionEnded(marks, log));
+  f.windows[0].events.emit('session-end', { reasons: ['shutdown'] });
+  // Read in the same tick: nothing waits for a stream to flush.
+  assert.deepEqual(readRunState(dir), { state: 'quit', by: 'system', at: now });
+  const text = readFileSync(path.join(dir, 'logs', 'main.log'), 'utf8');
+  assert.match(text, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z \[main\] the system ends the session \(restart, shutdown or sign-out\)\n$/);
+  assert.equal(SESSION_END_LINE, 'the system ends the session (restart, shutdown or sign-out)');
+  log.close();
 });

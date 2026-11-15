@@ -1,8 +1,8 @@
 // Origin (B-054, owner 29.10.2026 "Läufe und To-dos gehören keinem Chat"): why a wake, a run or a task exists.
 // A chat is only one possible origin; a task, a mail, a schedule, a connector or the To-do area are others, and
 // nothing downstream asks "which chat?" – a new event source needs no special code.
-// Owns: the Origin shape, the well-known source keys and the thread key (one native session per chat, per task or
-// per source). Never: written by an agent – runtime code sets the origin; never a person, a secret or message text.
+// Owns: the Origin shape, the well-known source keys and the thread key (13.11.2026: one context per agent – the
+// main thread; a split's part has its own). Never: written by an agent – runtime code sets the origin; never a person, a secret or message text.
 
 import { splitThread } from './splits.ts'; // B-057: a split's own thread
 
@@ -12,6 +12,10 @@ export interface Origin {
   source: string;
   /** Short human label ("New mail in office@…", "To-do area", "Routine \"Morning check\""). */
   label: string;
+  /** Staged mail capability, set by trusted runtime code, never from message text. Not yet issued by MailWaker. */
+  mailScope?: { appId: string; generation?: string; messageIds: string[] };
+  /** Durable mail event identity, not an execution capability. Empty ids mean untrusted/legacy mail. */
+  mailProvenance?: { appId: string; generation?: string; messageIds: string[] };
 }
 
 /** Well-known origins with a fixed label. Keyed sources (app:, schedule:) are built by their owners. */
@@ -36,18 +40,34 @@ export function cleanOrigin(origin: Origin | undefined): Origin | undefined {
   const source = origin?.source?.trim();
   if (!source) return undefined;
   const label = (origin?.label ?? '').trim().slice(0, ORIGIN_LABEL_MAX) || source;
-  return { source, label };
+  const out: Origin = { source, label };
+  for (const key of ['mailProvenance', 'mailScope'] as const) {
+    const value = origin?.[key];
+    if (!value) continue;
+    const appId = typeof value.appId === 'string' ? value.appId : '';
+    const ids = Array.isArray(value.messageIds) ? value.messageIds : [];
+    // Invalid identities lose authority, not their mail-origin marker. No partial widening.
+    const valid = source === appSource(appId) && ids.length <= 50 && ids.every(id =>
+      typeof id === 'string' && /^INBOX\/[1-9]\d{0,9}\/[1-9]\d{0,9}$/.test(id));
+    const generation = typeof value.generation === 'string' && /^[0-9a-f-]{36}$/.test(value.generation) ? value.generation : undefined;
+    out[key] = { appId, ...(generation ? { generation } : {}), messageIds: valid ? [...new Set(ids)].sort() : [] };
+  }
+  return out;
 }
 
+/** Exact scope partition, also used when a caller supplies an explicit coalesce key. */
+export function mailOriginKey(origin: Origin | undefined): string {
+  if (!origin?.mailProvenance && !origin?.mailScope) return '';
+  return JSON.stringify([origin.source, origin.mailProvenance ?? null, origin.mailScope ?? null]);
+}
+
+/** The thread of an agent's own turns: wherever a wake comes from (a chat, a task, a mail), it is one context. */
+export const MAIN_THREAD = 'main';
+
 /**
- * The thread a turn belongs to: its native session and turn state are keyed by it. A chat keeps its chat id (old
- * sessions resume unchanged); a chat-free task gets `task:<id>`; a chat-free, task-free wake gets `src:<source>`.
- * B-057: a split's turn (`split`: its split id, or a SplitTurn – ToolContext.split) is checked first and gets
- * `split:<splitId>` (shared/model/splits.ts).
+ * The thread a turn belongs to: its native session, turn state and context ledger are keyed by it. A split's part
+ * (`split`: its split id, or a SplitTurn – ToolContext.split) has `split:<splitId>`; every other turn is MAIN_THREAD.
  */
-export function threadKey(p: { conversationId?: string; taskId?: string; origin?: Origin; split?: string | { splitId: string } }): string {
-  if (p.split) return splitThread(typeof p.split === 'string' ? p.split : p.split.splitId);
-  if (p.conversationId) return p.conversationId;
-  if (p.taskId) return `task:${p.taskId}`;
-  return p.origin?.source ? `src:${p.origin.source}` : '';
+export function threadKey(p: { split?: string | { splitId: string } }): string {
+  return p.split ? splitThread(typeof p.split === 'string' ? p.split : p.split.splitId) : MAIN_THREAD;
 }
