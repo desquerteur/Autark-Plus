@@ -48,7 +48,10 @@ export interface ListenSetup {
 }
 
 export async function listenSetup(options: ListenSetup) {
+  // Since 10.11. an OpenRouter turn first reads GET /models for the model's reasoning efforts (compatible.ts); the listed
+  // models carry no reasoning metadata, so the engine sends no effort.
   const server = await serve((req, res) => {
+    if (req.method === 'GET' && req.path === '/v1/models') { sendJson(res, 200, { data: options.models(base).map((entry) => ({ id: entry.model })) }); return; }
     if (!req.path.startsWith(CHAT_PATH)) { sendJson(res, 404, { error: { message: 'not here' } }); return; }
     (options.respond ?? ((_req, out) => answer('A calm solo piano.')(out)))(req, res);
   });

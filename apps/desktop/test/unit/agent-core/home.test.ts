@@ -75,7 +75,8 @@ test('a home is any existing local folder; a relative folder is inside the works
   const { f, writer, project } = setup();
   try {
     assert.equal(f.core.setHome(writer.id, f.data)?.path, f.data, 'the data folder too: agents may do everything');
-    assert.throws(() => f.core.setHome(writer.id, '\\\\server\\share\\code'), /network/);
+    // A network path is one only on Windows (\\host\share); on Linux and macOS a share is a mounted folder.
+    if (process.platform === 'win32') assert.throws(() => f.core.setHome(writer.id, '\\\\server\\share\\code'), /network/);
     assert.throws(() => f.core.setHome(writer.id, path.join(f.temp.dir, 'nope')), /does not exist/);
     assert.throws(() => f.core.setHome(writer.id, '~/code'), /absolute/);
     mkdirSync(path.join(f.workspace, 'site'), { recursive: true });

@@ -34,7 +34,10 @@ test('both settings views use the gate; host-window controls keep their desktop 
     assert.ok(source.includes('disabled={locked}'), name);
   }
   const general = readFileSync(new URL('../../../src/ui/settings/GeneralPage.tsx', import.meta.url), 'utf8');
-  assert.ok(general.includes('{bridge && ('), 'PC login/tray controls are not mistaken for phone OS settings');
+  // Owner 12.11.: my secure phone changes the PC's login/tray behaviour too, labelled "On your PC:"; a locked phone does not see them.
+  assert.ok(general.includes('const remote = !bridge && !locked;'), 'PC rows reach only an unlocked phone');
+  assert.ok(general.includes('{(bridge || remote) && ('), 'PC login/tray controls show on the PC or an authorised phone');
+  assert.ok(general.includes('On your PC: '), 'PC login/tray controls are not mistaken for phone OS settings');
 });
 
 test('photo change needs profile authority plus small and chunked upload methods; removal does not', () => {

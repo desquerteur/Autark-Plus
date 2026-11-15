@@ -132,14 +132,14 @@ test('templates: the shipped files load; a missing folder renders empty sections
   assert.deepEqual(loadTemplates(path.join(RESOURCES, 'missing-prompts')), { identity: '', skills: '' });
 });
 
-test('How I work: {{user_name}} only, about 8,500 characters, the same in every mode; the manager standard adds only "## Leading"', () => {
+test('How I work: {{user_name}} only, about 9,000 characters, the same in every mode; the manager standard adds only "## Leading"', () => {
   const keys = new Set([...ownHowIWork(STANDARD).how.matchAll(/\{\{[#^/]?([a-z_]+)\}\}/g)].map((match) => match[1]));
   assert.deepEqual([...keys], ['user_name'], 'no tool flags: it names abilities, not tools');
-  assert.ok(HOW.length <= 8700, `How I work: ${HOW.length} characters`);
+  assert.ok(HOW.length <= 9200, `How I work: ${HOW.length} characters`); // 15.11.: + tidy workplace, outreach with clarity
   const manager = standard('manager');
   const leading = manager.slice(manager.indexOf('## Leading'), manager.indexOf('## My role'));
   assert.ok(leading.length > 500 && manager.replace(leading, '') === STANDARD, 'standard-manager = standard-agent + "## Leading"');
-  assert.ok(HOW.startsWith('# How I work\nThis company is my own work – Alexandra, my colleagues, this PC, the app I live in – and I want something good to come out of it.'));
+  assert.ok(HOW.startsWith('# How I work\nThis company is my own work – Alexandra, my colleagues, this PC, the Autark system I live in – and I want something good to come out of it.'));
 });
 
 /** Owner 04.11.2026 (B-075): the AI's own voice; 13.11.2026: the person by name or "the person". */
@@ -166,13 +166,13 @@ test('How I work keeps each stance once: carrying work in one turn and why, what
   const trust = HOW.slice(HOW.indexOf('## Trust and memory'));
   for (const kept of ['A request starts work, not a conversation.', 'I find out instead of asking', 'I decide instead of asking', 'what they already answered, I carry on with.',
     'Depth follows the goal, not the wording', 'Ideas from Alexandra are direction, not a checklist', '"I cannot" means technically impossible',
-    'Work that needs hands or presence is still mine', 'Their own to-dos stay theirs', 'Before a step I ask what its hardest part asks of whoever does it']) {
+    'Work that needs hands or presence is still mine', 'Their own to-dos stay theirs', "Model and effort are my subconscious's call"]) {
     assert.ok(judgment.includes(kept), `judgment: ${kept}`);
   }
   for (const kept of ['One turn carries the work as far as it goes – each new turn reads my whole context again; it ends when the work is done or only waits.',
-    'what I promise in a chat becomes a task or a schedule, because a sentence in a chat wakes nobody later', 'My parallel work runs through my parts.',
+    'what I promise in a chat becomes a task or a schedule, because a sentence in a chat wakes nobody later', 'A part starts fresh from my brief, like a new session',
     'my time goes into the work, not into proving it', 'Asked what I know or did, I give the task\'s findings and state.',
-    'Before something I cannot undo, I check target, amount and recipient myself', 'go out under Alexandra\'s name: I make them worth it and send them myself']) {
+    'Before something I cannot undo, I check target, amount and recipient myself', 'go out under Alexandra\'s name: I send them myself and make them worth it, once things are clear inside']) {
     assert.ok(carrying.includes(kept), `carrying work: ${kept}`);
   }
   for (const kept of ['<chat to="ch_…">text</chat>', '`push`', '`quiet`', 'A stop from Alexandra I keep – the work rests until they pick it up again']) assert.ok(chats.includes(kept), `chats: ${kept}`);

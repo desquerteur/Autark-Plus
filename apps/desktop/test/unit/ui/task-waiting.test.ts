@@ -6,9 +6,12 @@ import assert from 'node:assert/strict';
 import type { TaskView } from '../../../src/shared/model/tasks.ts';
 import { PAUSED_REASON } from '../../../src/shared/model/tasks.ts';
 import { canResume, nextLookLine, stateLine, waitingLine } from '../../../src/ui/tasks/waiting.ts';
+import { time } from '../../../src/ui/lib/format.ts';
 
 const SINCE = new Date(2026, 10, 13, 10, 14).getTime();
 const NOW = new Date(2026, 10, 13, 12, 0).getTime();
+/** The clock in the host's locale ("10:14", on an en-US host "10:14 AM"): the line follows the device. */
+const AT = time(SINCE);
 const names = (id: string) => ({ ag_ida: 'Ida', per_mara: 'Mara' } as Record<string, string>)[id] ?? id;
 
 function task(extra: Partial<TaskView> = {}): TaskView {
@@ -20,11 +23,11 @@ function task(extra: Partial<TaskView> = {}): TaskView {
 
 test('the wait line names who or what, since when and why; a pause is the person\'s', () => {
   assert.equal(waitingLine(task(), names), null);
-  assert.equal(waitingLine(task({ status: 'waiting', waitingOn: { on: 'who', who: 'human', why: '7:30 oder nachmittags?', since: SINCE } }), names, NOW), 'Waiting on you since 10:14 · 7:30 oder nachmittags?');
-  assert.equal(waitingLine(task({ status: 'waiting', waitingOn: { on: 'who', who: 'per_mara', why: 'Freigabe', since: SINCE } }), names, NOW), 'Waiting on Mara since 10:14 · Freigabe');
-  assert.match(waitingLine(task({ status: 'waiting', waitingOn: { on: 'outside', why: 'Handy-Lauf', since: SINCE, until: NOW + 3600_000 } }), names, NOW)!, /^Until .* since 10:14 · Handy-Lauf$/);
+  assert.equal(waitingLine(task({ status: 'waiting', waitingOn: { on: 'who', who: 'human', why: '7:30 oder nachmittags?', since: SINCE } }), names, NOW), `Waiting on you since ${AT} · 7:30 oder nachmittags?`);
+  assert.equal(waitingLine(task({ status: 'waiting', waitingOn: { on: 'who', who: 'per_mara', why: 'Freigabe', since: SINCE } }), names, NOW), `Waiting on Mara since ${AT} · Freigabe`);
+  assert.match(waitingLine(task({ status: 'waiting', waitingOn: { on: 'outside', why: 'Handy-Lauf', since: SINCE, until: NOW + 3600_000 } }), names, NOW)!, new RegExp(`^Until .* since ${AT} · Handy-Lauf$`));
   const paused = task({ status: 'waiting', waitingOn: { on: 'who', who: 'human', why: PAUSED_REASON, since: SINCE } });
-  assert.equal(waitingLine(paused, names, NOW), 'Paused by you since 10:14');
+  assert.equal(waitingLine(paused, names, NOW), `Paused by you since ${AT}`);
   assert.equal(canResume(paused), true);
   assert.equal(canResume(task({ status: 'waiting', waitingOn: { on: 'who', who: 'human', why: 'x', since: SINCE } })), false);
 });

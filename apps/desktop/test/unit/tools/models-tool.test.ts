@@ -320,6 +320,7 @@ test('B-047 D6 / B-048 E8: How I work names another model as another way in ever
   // 14.11.: How I work stands in each agent's SYSTEM.md, starting from the standard – the same text for every mode.
   const standard = readFileSync(path.join(RESOURCES, 'prompts', 'standard-agent.md'), 'utf8');
   assert.ok(standard.includes('I take another – tool, source, mode, colleague or model – and fix the broken path'), 'a model is another way; how to pick one is the Routing CORE');
-  assert.ok(standard.includes('\n- Before a step I ask '), 'B-083: the Routing CORE (its wording lives in resources/prompts/standard-*.md)');
+  // Owner 15.11.2026: model and effort are the subconscious's call (subconscious/route-turn.ts); How I work keeps one line.
+  assert.ok(standard.includes("\n- Model and effort are my subconscious's call"), 'the model line points to the subconscious');
   assert.doesNotMatch(offered, /## Models\n/);
 });

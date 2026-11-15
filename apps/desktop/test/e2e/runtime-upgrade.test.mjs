@@ -44,9 +44,10 @@ test('an old profile upgrades over the real runtime: agents, chat, tasks, to-do,
     const vid = agents.find((agent) => agent.id === FIXTURE.videoId);
     assert.equal(mira?.name, 'Mira');
     assert.equal(mira?.mode, 'manager');
-    // B-078 D15: the standard head is always present – the startup repair puts it on top, her own text stays under '## My role'.
-    assert.match(mira?.instructions ?? '', /^This is my SYSTEM\.md[^]*\n# How I work\n/, 'the standard head is on top');
-    assert.match(mira?.instructions ?? '', /\n## My role\n[^#]*Keep the team small\./, 'her own text survives under My role');
+    // Since 14.11.2026 SYSTEM.md is the agent's whole prompt (bridge/kontext-1311.ts, org/standard.ts): a file without a
+    // standard gets today's "# How I work" on top, her own text stays as it was below it, the standard sits in the comment.
+    assert.match(mira?.instructions ?? '', /^# How I work\n/, 'her prompt starts with How I work');
+    assert.match(mira?.instructions ?? '', /\n\nKeep the team small\.\n[^]*<!-- Autark standard: manager/, 'her own text survives above the standard comment');
     assert.equal(vid?.managerId, FIXTURE.managerId, 'the org survives');
     assert.equal(vid?.mode, 'video');
 

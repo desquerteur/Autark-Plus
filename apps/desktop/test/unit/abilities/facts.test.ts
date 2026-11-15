@@ -63,7 +63,8 @@ test('read from the services: a Codex plan sees images and makes them, nothing e
   assert.equal(a['hear-speech'].state, 'setup');
   assert.equal(a['hear-speech'].action?.target, 'fastconformer-de-int8', 'the model recommended for German');
   assert.deepEqual([a['use-web'].state, a['use-web'].note], ['ready', undefined]);
-  assert.equal(a['use-pc'].note, undefined, 'computer use is granted');
+  // Computer use exists on Windows only (abilities/facts.ts pc); elsewhere it reads "Not available here".
+  assert.equal(a['use-pc'].note, process.platform === 'win32' ? undefined : 'Not available here', 'computer use is granted where it exists');
   assert.equal(a.speak.state, 'ready', 'the local voice downloads itself on first use');
   assert.deepEqual([a['make-video'].state, a['make-video'].action?.target], ['off', 'fal']);
 });
