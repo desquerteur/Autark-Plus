@@ -32,6 +32,7 @@ import { messageLevel, type Member, type Message } from '../../shared/model/chat
 import { isExternalAgent } from '../bridges/external-agents.ts';
 import { externalAgentName } from '../../shared/model/external-agents.ts';
 import { waitIn } from '../tasks/transitions.ts';
+import { markAddressed } from './addressed.ts'; // privacy fix 15.11.2026: which person's lines reached whom
 import { isDirect } from './direct.ts';
 import { LoopGuard, type LoopGuardOptions } from './loop-guard.ts';
 import { isPersonMention } from './mentions.ts';
@@ -170,6 +171,7 @@ export class DeliveryRouter {
       this.s.log?.warn('running turns unknown', { conversationId: message.conversationId, error: String(error) });
       return [];
     }
+    markAddressed(this.s, message, running);
     for (const agentId of running) this.urge(agentId, message.conversationId);
     return running;
   }
@@ -212,6 +214,8 @@ export class DeliveryRouter {
       });
       if (waiting) this.opened(waiting, message.authorId);
     }
+    // A person's line is the woken agents' own – a provisional wake's not yet: the pick may choose another (settle marks).
+    if (options.dueAt === undefined) markAddressed(this.s, message, agentIds);
     // A provisional wake never interrupts; external authors do only when trusted (else never important); a steered agent was asked already.
     if (options.dueAt !== undefined) return;
     if (!options.urgent) {
@@ -300,13 +304,17 @@ function nameList(names: string[]): string {
  * un-quiet one → dispatcher.steer (folded at the next step, from another chat too – B-080: a colleague's line as well, as
  * wakeAll folds it locally; 'important' stays for people's lines), only quiet ones → the wake alone.
  */
-export function deliverHandedOver(s: Pick<RuntimeServices, 'chats' | 'dispatcher' | 'log'>, agentId: string, conversationId: string): void {
+export function deliverHandedOver(s: Pick<RuntimeServices, 'chats' | 'dispatcher' | 'log'> & Partial<Pick<RuntimeServices, 'db' | 'clock'>>, agentId: string, conversationId: string): void {
   let level: 'important' | 'normal' | undefined;
   try {
-    const member = s.chats.members(conversationId).find(m => m.memberId === agentId && !m.leftAt);
+    const members = s.chats.members(conversationId);
+    const member = members.find(m => m.memberId === agentId && !m.leftAt);
     if (!member) return;
+    const pair = members.filter(m => !m.leftAt).length === 2;
     for (const line of s.chats.messages(conversationId, { afterSeq: member.readSeq, limit: 200 })) {
       if (line.kind !== 'text' || line.authorId === agentId) continue;
+      // The writer's PC picked this agent; here only what is sure is its own: our 1:1 or its @mention (privacy fix 15.11.).
+      if (line.silent !== true && (pair || line.mentions.includes(agentId))) markAddressed(s, line, [agentId]);
       const lineLevel = messageLevel(line);
       if (lineLevel === 'important' && line.authorKind === 'human') level = 'important';
       else if (lineLevel !== 'silent' && !level) level = 'normal';

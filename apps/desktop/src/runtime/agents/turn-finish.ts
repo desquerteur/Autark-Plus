@@ -10,8 +10,10 @@
 // text outside blocks plus the blocks to the call's chat – spoken and posted in the call's chat; engine files (generated
 // images) beside it or into the wake's chat; and one safety net – a person's line woke the turn (its input or a line folded
 // in) and the turn addressed nothing at all: its final text outside blocks goes as a normal message into the chat of that
-// person's newest line, counted by log.info('unaddressed answer posted'). Every final text (and a failed or stopped turn's
-// partial text) is journaled as the run item 'Answer' (visibility 'internal' when nothing of it reached a chat).
+// person's newest line, counted by log.info('unaddressed answer posted') – only a line delivery gave this agent as its own
+// (chat/addressed.ts; 15.11.2026 privacy fix: a colleague given a task in the person's chat had posted its closing text
+// there). Every final text (and a failed or stopped turn's partial text) is journaled as the run item 'Answer' (visibility
+// 'internal' when nothing of it reached a chat).
 // A turn the person stopped posts what it had written as a 'stopped' message (nothing when it wrote nothing); B-080: every
 // other interrupt (an important line, a shutdown) posts nothing, also with partial text – it stays in the run journal.
 // Ownership outcome of a task turn: a human Stop → 'stopped' (the task pauses, no retry); an important message or shutdown
@@ -43,6 +45,7 @@ import { shownTemperature, type RunStatus } from '../../shared/model/runs.ts';
 import { repairNotesOf } from '../../shared/blocks/parse.ts';
 import { takeTurnRead } from '../chat/turn-reads.ts';
 import { awaitsAnswer, journalAnswer } from './publishing.ts';
+import { addressedSeqs } from '../chat/addressed.ts';
 import { chatBlocks, todos, type ChatOutbox } from './chat-out.ts';
 import { isOutage } from './outages.ts';
 import { outageLine, pausedLine } from './outage-line.ts';
@@ -268,7 +271,8 @@ function isMember(services: RuntimeServices, conversationId: string, agentId: st
 /**
  * The safety net's chat: where the newest person's line this turn received stands – a new line of its wake's chat
  * (memberCursor, cursor] – every unseen one when the input moved no cursor – or one folded in from another chat – when the
- * agent is a member there; undefined: none.
+ * agent is a member there; undefined: none. Only a line delivery gave this agent as its own counts (chat/addressed.ts):
+ * one it merely read – to the manager before it joined, to another responder, to a colleague – never makes its text public.
  */
 export function personChat(services: RuntimeServices, plan: Pick<TurnPlan, 'agent' | 'conversationId' | 'memberCursor'>, request: Pick<TurnRequest, 'control'>, cursor: number): string | undefined {
   const agentId = plan.agent.id;
@@ -281,7 +285,8 @@ export function personChat(services: RuntimeServices, plan: Pick<TurnPlan, 'agen
   let newest: { chatId: string; at: number } | undefined;
   for (const [chatId, from, to] of ranges) {
     if (to <= from || !isMember(services, chatId, agentId)) continue;
-    const line = services.chats.messages(chatId, { afterSeq: from, limit: 200 }).filter((message) => message.seq <= to && awaitsAnswer(message, agentId)).at(-1);
+    const own = addressedSeqs(services, agentId, chatId);
+    const line = services.chats.messages(chatId, { afterSeq: from, limit: 200 }).filter((message) => message.seq <= to && own.has(message.seq) && awaitsAnswer(message, agentId)).at(-1);
     if (line && (!newest || line.createdAt >= newest.at)) newest = { chatId, at: line.createdAt }; // a tie: the line folded in later
   }
   return newest?.chatId;

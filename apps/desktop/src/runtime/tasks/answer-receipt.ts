@@ -20,10 +20,11 @@ import { isHumanActor } from '../../shared/model/people.ts';
 import type { Message } from '../../shared/model/chat.ts';
 import type { Task, TaskResult } from '../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../contracts.ts';
+import { markAddressed } from '../chat/addressed.ts';
 import { chatWakeKey } from '../chat/delivery-route.ts';
 import { answerLines, type AnswerFile } from './answer-files.ts';
 
-export type ReceiptDeps = Pick<RuntimeServices, 'chats' | 'wakes'> & Partial<Pick<RuntimeServices, 'org' | 'dispatcher' | 'log'>>;
+export type ReceiptDeps = Pick<RuntimeServices, 'chats' | 'wakes'> & Partial<Pick<RuntimeServices, 'org' | 'dispatcher' | 'log' | 'db' | 'clock'>>;
 
 export interface AnswerPost {
   /** The to-do's (or the asking message's) chat; absent for a chat-free to-do. */
@@ -58,9 +59,10 @@ export function authorOf(message: Message | undefined, task: Task | undefined): 
 export function postAnswer(s: ReceiptDeps, post: AnswerPost): void {
   const human = isHumanActor(post.by); // F-52: a person's answer is theirs (never the owner's)
   let chat = post.conversationId;
+  let line: Message | undefined;
   // Review fix: a line that cannot be posted (the person left that chat, the chat is gone) still reaches the asking agent
   // – as a chat-free answer with the line as its note, not as silence.
-  if (chat) try { s.chats.send({
+  if (chat) try { line = s.chats.send({
     conversationId: chat, body: post.text, kind: 'answer', authorId: post.by, authorKind: human ? 'human' : 'agent',
     replyTo: post.message?.id, taskId: post.task?.id,
     clientId: post.clientId ? `ans:${post.clientId}` : `ans:${post.receiptKey}`,
@@ -82,6 +84,7 @@ export function postAnswer(s: ReceiptDeps, post: AnswerPost): void {
     return;
   }
   // As for a line the person typed: the chat's wake, or the open task the to-do is a step of (its own wake merges in).
+  if (line) markAddressed(s, line, [author]); // the answer is the asking agent's own (privacy fix 15.11.2026, chat/addressed.ts)
   s.wakes.wake({ agentId: author, reason: 'message', conversationId: chat, ...(parent ? { taskId: parent } : {}), coalesceKey: parent ? `task:${parent}` : chatWakeKey(chat) });
   if (human && typeof s.dispatcher?.steer === 'function') {
     s.dispatcher.steer(author, chat).catch((error: unknown) => s.log?.warn('answer fold failed', { agentId: author, error: String(error) }));
