@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
-import { PLAN_TRANSCRIBE_URL, planReady, planTranscribe } from '../../../src/runtime/voice/plan-transcribe.ts';
+import { PLAN_TRANSCRIBE_URL, planMissing, planReady, planTranscribe } from '../../../src/runtime/voice/plan-transcribe.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { quietLog, toneWav } from './local-fixture.ts';
 
@@ -17,11 +17,11 @@ const FILE_ID = 'e'.repeat(64);
 
 interface Call { url: string; headers: Record<string, string>; body: FormData }
 
-function setup(options: { login?: object | null; signedIn?: boolean; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean } = {}) {
+function setup(options: { login?: object | null; signedIn?: boolean; state?: string; enabled?: boolean; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean } = {}) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'plan-transcribe-'));
   const writeLogin = (login: object) => writeFileSync(path.join(home, 'auth.json'), JSON.stringify(login));
   if (options.login !== null) writeLogin(options.login ?? { auth_mode: 'chatgpt', tokens: { access_token: 'tok-first', account_id: 'acct-1' } });
-  const account = { id: 'acc_c', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'prolite', home, state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
+  const account = { id: 'acc_c', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'prolite', home, state: options.state ?? 'ok', priority: 0, enabled: options.enabled ?? true, detected: false, createdAt: 1 };
   const wav = toneWav(1);
   const requests: string[] = [];
   const refreshes: unknown[] = [];
@@ -132,4 +132,31 @@ test('planReady: a signed-in plan login, no file read', () => {
     assert.equal(planReady(t.services), true);
     assert.equal(planReady(setup({ signedIn: false }).services), false);
   } finally { t.done(); }
+});
+
+// 16.11.2026: a dictation on the notebook went to this PC's small model because the plan account stood at 'error'
+// after a model list timed out; the dictation endpoint is no Codex turn, so only a gone or switched-off login is skipped.
+test('a plan login in a passing state (limit, timed-out model list, not yet probed) still writes the dictation down', async () => {
+  for (const state of ['cooling', 'error', 'unknown']) {
+    const t = setup({ state });
+    try {
+      assert.equal(planReady(t.services), true, state);
+      const heard = await planTranscribe(t.services, t.ref, 'de', t.fetch);
+      assert.equal(heard.text, 'Hallo Welt.', state);
+      assert.equal(t.calls.length, 1, state);
+      assert.equal(t.calls[0].url, PLAN_TRANSCRIBE_URL, state);
+    } finally { t.done(); }
+  }
+});
+
+test('a gone or switched-off plan login is skipped without a request, and the log line says which', async () => {
+  for (const [options, reason] of [[{ state: 'needs_login' }, 'needs_login'], [{ state: 'disabled' }, 'disabled'], [{ enabled: false }, 'disabled'], [{ signedIn: false }, 'no_plan_login']] as const) {
+    const t = setup(options);
+    try {
+      assert.equal(planReady(t.services), false, reason);
+      assert.equal(planMissing(t.services), reason);
+      await assert.rejects(planTranscribe(t.services, t.ref, 'de', t.fetch), (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable');
+      assert.equal(t.calls.length, 0, reason);
+    } finally { t.done(); }
+  }
 });

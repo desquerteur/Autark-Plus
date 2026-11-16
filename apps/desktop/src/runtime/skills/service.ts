@@ -30,6 +30,7 @@ import type { ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { parseFrontMatter } from './frontmatter.ts';
 import { derivedFromOf, mergeDerived, modeKeys, oneLine, skillAlways, skillModes, skillText } from './skill-file.ts';
+import { createSkill, editSkill, isEditorFile, openSkill, skillId } from './editor.ts';
 import { fallbackDescription } from '../../shared/text/external.ts';
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -92,6 +93,34 @@ export class SkillLibrary implements SkillService {
     } catch {
       return undefined;
     }
+  }
+
+  /** Settings always resolves a copy against fresh discovery, never a client path or a name route. */
+  catalog(): SkillInfo[] {
+    this.cache = undefined;
+    return this.entries().filter(entry => isEditorFile(entry.file)).map(entry => entry.info).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  open(id: string) { return openSkill(this.editorEntry(id)); }
+
+  edit(id: string, revision: string, body: string) {
+    const result = editSkill(this.editorEntry(id), revision, body);
+    this.invalidate();
+    return { ...result, info: this.editorEntry(id).info };
+  }
+
+  create(name: string, description: string) {
+    if (this.catalog().some(info => info.name === name)) throw new WorkforceError('conflict', 'A skill with this name exists already. Choose another name.');
+    const id = createSkill(path.join(this.options.paths.workspace, 'skills'), name, description);
+    this.invalidate();
+    return this.open(id);
+  }
+
+  private editorEntry(id: string): Entry {
+    this.cache = undefined;
+    const entry = this.entries().find(entry => entry.info.id === id);
+    if (!entry) throw new WorkforceError('conflict', 'This skill is missing or its location changed. Keep your text and reopen it.');
+    return entry;
   }
 
   save(input: SkillSaveInput): SkillInfo {
@@ -278,7 +307,7 @@ export class SkillLibrary implements SkillService {
         const given = typeof data.description === 'string' ? data.description.replace(/\s+/g, ' ').trim() : '';
         const description = given || fallbackDescription(body); // B-078: a hand-written SKILL.md without one is still found
         const info: SkillInfo = {
-          name, description, source: root.source, ownerAgentId: root.ownerAgentId,
+          id: skillId(file), readOnly: root.readOnly, name, description, source: root.source, ownerAgentId: root.ownerAgentId,
           path: path.dirname(file), modes: skillModes(data), updatedAt: Math.round(mtime),
         };
         if (root.main) info.main = true;

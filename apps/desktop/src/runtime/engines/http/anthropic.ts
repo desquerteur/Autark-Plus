@@ -132,7 +132,7 @@ export class AnthropicEngine extends HttpEngine {
           }
           case 'content_block_stop': {
             const block = blocks[index];
-            if (block?.type === 'tool_use') block.input = tryJson(json.get(index) || '{}') ?? {};
+            if (block?.type === 'tool_use' && json.has(index)) block.input = tryJson(json.get(index)!);
             if (block?.type === 'thinking') emit({ type: 'reasoning_end', id: thought(index) });
             break;
           }
@@ -153,8 +153,10 @@ export class AnthropicEngine extends HttpEngine {
       if (!stopReason) throw new HttpEngineError({ code: 'internal', message: 'The model response did not complete.' });
       if (stopReason === 'refusal') throw new HttpEngineError({ code: 'forbidden', message: 'The model declined this request.' }, usage);
       const assistant = blocks.filter(Boolean);
-      messages.push({ role: 'assistant', content: assistant });
-      const calls = assistant.filter((b) => b.type === 'tool_use').map((b) => ({ id: str(b.id) ?? '', name: str(b.name) ?? '', args: b.input ?? {} }));
+      // Messages history requires an object input. A placeholder pairs the rejected call with its error result;
+      // execution still receives the original parsed value, so invalid JSON cannot become a default action.
+      messages.push({ role: 'assistant', content: assistant.map((b) => b.type === 'tool_use' && !isRecord(b.input) ? { ...b, input: {} } : b) });
+      const calls = assistant.filter((b) => b.type === 'tool_use').map((b) => ({ id: str(b.id) ?? '', name: str(b.name) ?? '', args: b.input }));
       if (stopReason === 'pause_turn') {
         // Server paused a long turn: continue by re-sending (no new user content needed).
         return { text, calls: [], done: false, continue: true, usage };

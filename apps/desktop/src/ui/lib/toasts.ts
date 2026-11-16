@@ -1,5 +1,5 @@
 // Quiet in-window toasts (attention items and action errors). Max 3 at once (the oldest goes first); they expire,
-// except one pushed with ttl 0 – a to-do, a blocker or an important message – which stays until Open or Dismiss,
+// except one pushed with ttl 0 – a to-do, a blocker or an important message that has something to open – which stays until Open or Dismiss,
 // or until the person reaches where Open leads or the to-do is finished another way (lib/store-events.ts).
 // They show as lines of the status line (shell/StatusLine.tsx). B-082: a toast may carry one `action` (its button, e.g.
 // a kept recording's "Transcribe again"); such a toast is the last one a newer toast pushes out.
@@ -46,10 +46,17 @@ export function dismissToastsWhere(test: (toast: Toast) => boolean): void {
 /** Kinds that ask something of the person: their toast stays until Open or Dismiss. */
 const LASTING: ReadonlySet<EventMap['notify']['kind']> = new Set(['todo', 'blocker', 'important']);
 
-/** A runtime notification as a toast: to-dos, blockers and important messages stay, replies and results expire. */
+/**
+ * Feedback 16.11.2026 (F09): an important notice with nothing to open – no chat, no to-do (e.g. "office-pc is now
+ * linked") – asks nothing of the person, so it stays a while longer than a reply and then goes by itself.
+ */
+export const NOTICE_ONLY_MS = 20_000;
+
+/** A runtime notification as a toast: to-dos, blockers and important messages stay (one with nothing to open expires late), replies and results expire. */
 export function toastNotification(note: EventMap['notify']): void {
   const toast = { title: note.title, body: note.body, conversationId: note.conversationId, ...(note.taskId ? { taskId: note.taskId } : {}) };
-  pushToast(toast, LASTING.has(note.kind) ? 0 : undefined);
+  const opens = Boolean(note.conversationId || note.taskId);
+  pushToast(toast, LASTING.has(note.kind) ? (opens ? 0 : NOTICE_ONLY_MS) : undefined);
 }
 
 /** Shows a short error toast for a failed action. */

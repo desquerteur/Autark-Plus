@@ -225,7 +225,14 @@ test('the line about the coming turn: my last model (any chat), the start model 
   });
   const ada = agent(AGENT, 'Ada', { modelPolicy: { pin: OPUS, pinBy: { name: 'Stanislaus', at: Date.UTC(2026, 10, 8, 12) } } });
   assert.equal(turnFacts(h.services, ada, chat.id),
-    "The main AI's coming turn: runs on GPT-6.1 Sol · effort low · temperature 0.4; start model Claude Opus 5.5 (set by Stanislaus, 2026-11-08); Stanislaus suggests Claude Opus 5.5 · effort high · temperature 0.3 in this chat – what they think fits now; it runs when I set it.");
+    "The main AI's coming turn: runs on GPT-6.1 Sol · effort low · temperature 0.4; start model Claude Opus 5.5 (set by Stanislaus, 2026-11-08); Stanislaus picked Claude Opus 5.5 · effort high · temperature 0.3 in this chat after their newest message – what they want now, left only for a clear reason; it runs when I set it.");
+  // F22 (16.11.2026): picked before their line – for it; their next line without a new pick – a value that stayed
+  h.clock.advance(60_000);
+  h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Schreib den Vertrag' });
+  assert.match(turnFacts(h.services, ada, chat.id), /; Stanislaus picked Claude Opus 5\.5 · effort high · temperature 0\.3 in this chat for their newest message – what they want now, left only for a clear reason; it runs when I set it\.$/);
+  h.clock.advance(60_000);
+  h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Und noch die Rechnung' });
+  assert.match(turnFacts(h.services, ada, chat.id), /; Stanislaus suggested Claude Opus 5\.5 · effort high · temperature 0\.3 in this chat earlier and left it standing – a hint from before, the work decides; it runs when I set it\.$/);
   const self = agent(AGENT, 'Ada', { modelPolicy: { pin: SOL, pinBy: { name: 'Ada', at: Date.UTC(2026, 10, 7, 9), self: true } } });
   assert.match(turnFacts(h.services, self, chat.id), /start model GPT-6\.1 Sol \(set by itself, 2026-11-07\); /);
   const fixed = agent(AGENT, 'Ada', { modelPolicy: { pin: OPUS, effort: 'high', pinBy: { name: 'Stanislaus', at: Date.UTC(2026, 10, 8, 12) } } });

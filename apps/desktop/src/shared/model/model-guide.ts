@@ -61,6 +61,10 @@ declare module './chat.ts' {
     /** B-083: the person's suggested temperature per member agent (agentId → 0..1), like the model information for the
      *  agent on the person's line – it reaches a model only through the agent's own model.set. */
     temperatures?: Record<string, number>;
+    /** F22 (owner 16.11.2026): when this agent's suggestion (models, modelHints, efforts, temperatures) last changed (agentId →
+     *  epoch ms) – set by the runtime only (chat/suggestion-fresh.ts), gone with the agent's last value; it tells a pick made
+     *  for the person's message from one that only stayed. */
+    suggestedAt?: Record<string, number>;
   }
 }
 

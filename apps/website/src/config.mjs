@@ -73,9 +73,9 @@ export const release = {
   // Shown before the live check answers, and to crawlers. Refreshed by the
   // build from the GitHub API when the network is available.
   fallback: {
-    windows: { version: '0.3.4', date: '2026-11-08', sizeMb: 132 },
-    mac: { version: '0.3.4', date: '2026-11-08', sizeMb: 272 },
-    linux: { version: '0.3.4', date: '2026-11-08', sizeMb: 158 },
+    windows: { version: '0.3.7', date: '2026-11-15', sizeMb: 133 },
+    mac: { version: '0.3.7', date: '2026-11-15', sizeMb: 272 },
+    linux: { version: '0.3.7', date: '2026-11-15', sizeMb: 158 },
     // The phone app is a small shell that shows the PC's own interface; its version runs on its own.
     android: { version: '0.3.8', date: '2026-11-08', sizeMb: 4 },
   },

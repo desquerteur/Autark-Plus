@@ -1,64 +1,13 @@
 # OpenAutark
 
-## Give a manager a goal. See the team, the tasks, and the result.
-
-**Autark** is an open-source desktop app for an ongoing AI team: colleagues with roles, memory and tasks,
-coordinated by a personal manager. Chat with the manager, follow the work, and inspect what comes back.
-It connects to supported AI plans through Claude Code and Codex, API keys or local model servers.
-
-Stanislaus Hees, a 14-year-old builder in Austria, created OpenAutark after getting frustrated with switching
-between coding assistants. The idea is to give work to a team that keeps its responsibilities between conversations,
-not to keep moving answers between chat windows.
-
-**Start here:** [Product and how it works](https://openautark.com/product/) ·
-[Downloads](https://openautark.com/download/) · [Installation instructions](#installing) ·
-[Model access, permissions and data](https://openautark.com/access/).
-Bring your own supported model access. Start with a small task using public example data, then inspect its tasks and result.
-Cloud models receive the prompts sent to them; running the app on your PC does not make cloud inference local.
-Agents can act with the access you give them: this is not a sandbox or a guarantee that every action waits for approval.
-
-Downloads and repository source are separate artifacts. Consult each release's notes and checksums;
-a version label alone does not establish that a published binary was built from the source tag you are reading.
+**Autark** is a desktop app that runs a small AI company for you: a personal manager as your right hand, teams of agents,
+chats and tasks, "My Day" with your calendar, a browser beside the chat, your phone, and your other PCs as one. The agents
+work through the AI plans you already have (Claude Code, Codex and others), API keys or local model servers. Everything
+runs on your own PC; nothing goes through a service of ours except the meeting point that connects your devices.
 
 This repository is Autark's public home: the source code of the desktop app, the Android app, the website and the
 meeting server, the downloads and their checksums, the release workflows, and the public skill library that Autark's
 agents share with each other. Autark is open source under the Apache License 2.0.
-
-## Try a task with a checkable answer
-
-Install Autark, connect your supported model account, and use a test workspace without sensitive files or accounts.
-Then give your manager this task. The offers are fictional; no web research or sign-up is needed.
-
-```text
-Help me choose a booking tool for a four-person team. We need CSV export and can spend at most EUR 45/month.
-Offline use would be nice, but is not required.
-
-Fictional offers:
-A: EUR 40/month, five team members, CSV export, no offline mode.
-B: EUR 25/month, three team members, CSV export, no offline mode.
-C: EUR 30/month, five team members, offline mode, no CSV export.
-
-Have one colleague compare costs and requirements and another independently check the recommendation.
-Bring their findings back to me here as one decision with a comparison table and any open questions.
-Use only these facts. Do not browse, contact anyone, sign up, or buy anything.
-```
-
-**What to inspect:** the assigned tasks, each colleague's actual result, and the manager's reply in your chat.
-Offer A meets all the requirements; B fails team size and C fails CSV export. A plausible answer alone is not proof
-that the colleagues did the work: inspect the task history too.
-
-For a second check, change the budget to EUR 32/month. Now none of the offers meets every requirement.
-Does the team explain the conflict, or quietly drop a requirement? There is no promised runtime or parallelism here.
-[Report what happened](https://github.com/teydra/OpenAutark/issues/new?template=first-run.md), including failures.
-
-## Coverage and interviews
-
-- [The Register, 10 November 2026](https://www.theregister.com/ai-and-ml/2026/11/10/14-year-old-creates-tool-for-ai-agents-to-band-together-like-a-team/5308841):
-  reporting on the project and its founder, including criticism of the security boundaries.
-- [AI Business, 9 November 2026](https://aibusiness.vc/startups/openautark-teydra-lab-ai-agent-team-on-your-own-computer):
-  a company-submitted written Partner Story, not an independent product test.
-
-These are published articles, not endorsements or evidence that every workflow succeeds.
 
 ## Download
 

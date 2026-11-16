@@ -168,6 +168,16 @@ export interface WorkingRow {
   groupId?: string;
 }
 
+/** F20: the run a row's Stop ends – a single agent's own run; a split group or an agent without a known run has none. */
+export function stoppableRun(row: Pick<WorkingRow, 'runId' | 'groupId'>, mayCancel: boolean): string | undefined {
+  return mayCancel && !row.groupId && row.runId ? row.runId : undefined;
+}
+
+/** F20 (Mika): the run the live line's own Stop ends – only while exactly one agent works here and it can be stopped. */
+export function lineStopRun(rows: ReadonlyArray<Pick<WorkingRow, 'runId' | 'groupId'>>, mayCancel: boolean): string | undefined {
+  return rows.length === 1 ? stoppableRun(rows[0], mayCancel) : undefined;
+}
+
 /** B-057: a running split group of this chat as the popover lists it (splits/split-model.ts liveGroupsOf). */
 export interface WorkingGroup { id: string; agentId: string; startedAt: number; note: string; goal?: string }
 

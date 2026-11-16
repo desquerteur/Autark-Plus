@@ -1324,6 +1324,13 @@ chat's area, one change at a time, variants as tabs, a call with `chat.call` whe
 browser, the ones that offer its browser tools; `web-dev-workflow` §4 offers it when a look comes down to taste) and
 work skills (video, web, research, writing, social, bookkeeping …).
 
+The person's Settings editor (`skills/editor.ts`, `rpc/handlers/skill-editor.ts`, `ui/settings/SkillEditor.tsx`)
+uses `skills.catalog/open/edit/create` for the owner and securely paired Settings devices. A copy's ID hashes its
+enumerated file path; no caller path is accepted. Editing replaces only the body and preserves the original frontmatter
+bytes; a revision over the full file and file identity detects intervening changes, deletion and relocation. Creation is
+exclusive, imported/shipped copies stay read-only, redirected locations are refused. Synchronous compare+rename is
+optimistic conflict detection, not OS compare-and-swap against external writers. The name-based agent API remains separate.
+
 ### 7.4 The secrets catalog
 
 * Values live encrypted in the vault (`secrets/service.ts`, OS keychain via `Host`); agents only ever see handles

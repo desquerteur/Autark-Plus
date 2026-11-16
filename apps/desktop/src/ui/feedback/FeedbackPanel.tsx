@@ -7,6 +7,7 @@
 // clears it. After Send/Save the form says what happened in one line (a sent report with its short number); when
 // the send was not confirmed, the action cell of that line reads "Send again" (not Close) and sends the same saved
 // report. The message slot beside the action is always reserved (role=alert), so nothing moves when an error comes.
+// Feedback 16.11.2026 (F10): a confirmed "Sent." closes the form by itself after SENT_CLOSE_MS (delivery.ts).
 // Owns: the form, uploading its image and submitting. Never: starts an app change, requests a login, opens a
 // browser or discards a failed submission.
 
@@ -20,7 +21,7 @@ import { Spinner } from '../lib/ui.tsx';
 import { canCaptureWindow, dataUrlToBlob, useDictation } from './bridge.ts';
 import { appendDraftText, clearDraft, feedbackDraft, paintSettled, shotTaking, takeShot, updateDraft } from './draft.ts';
 import type { FeedbackDraft } from './draft.ts';
-import { canSendAgain, doneText, sendAgainLabel, sendLabel, sendReport, SHOT_HINT, SHOT_LABEL, SHOT_MISSING, useFeedbackSending } from './delivery.ts';
+import { SENT_CLOSE_MS, canSendAgain, closesBySelf, doneText, sendAgainLabel, sendLabel, sendReport, SHOT_HINT, SHOT_LABEL, SHOT_MISSING, useFeedbackSending } from './delivery.ts';
 import { talkError, talkState } from './FeedbackButton.tsx';
 import { FeedbackPrivacyNote } from './FeedbackPrivacy.tsx';
 import { PAINT_UNREADY, REPORT_IMAGE_NAME, reportImage } from './paint.ts';
@@ -83,6 +84,20 @@ export function FeedbackForm(props: { onClose: () => void }) {
     });
     return () => cancelAnimationFrame(frame);
   }, []);
+
+  // F10: a confirmed "Sent." is read in a glance – the form goes by itself (Close still works at once).
+  const autoClose = closesBySelf(done, error);
+  useEffect(() => {
+    if (!autoClose) return;
+    const timer = setTimeout(() => {
+      props.onClose();
+      // Mika: focus back on the feedback button (the popover hands it back only on Escape), never lost in the page.
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body || !document.activeElement?.isConnected) document.querySelector<HTMLElement>('.feedback-toggle')?.focus({ preventScroll: true });
+      });
+    }, SENT_CLOSE_MS);
+    return () => clearTimeout(timer);
+  }, [autoClose]);
 
   const submit = async () => {
     if (submitting.current || !feedbackDraft.peek().text.trim()) return;

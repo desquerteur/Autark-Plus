@@ -4,6 +4,7 @@
 // Owns: interface shapes only. Keep methods few and meaningful; add, never silently change.
 
 import type { ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
+import type { SkillDocument } from '../../shared/api/methods-skills.ts';
 import type { Agent } from '../../shared/model/org.ts';
 
 export interface SkillSaveInput {
@@ -32,6 +33,11 @@ export interface SkillImportInput {
 
 declare module './models.ts' {
   interface SkillService {
+    /** Exact-copy editor; optional for runtimes/fakes without a filesystem skill library. */
+    catalog?(): SkillInfo[];
+    open?(id: string): SkillDocument;
+    edit?(id: string, revision: string, body: string): SkillDocument;
+    create?(name: string, description: string): SkillDocument;
     /** Addition (CTX4): `modes` replaces the skill's modes ([] = every mode); absent keeps them. */
     save(input: SkillSaveInput): SkillInfo;
     /**

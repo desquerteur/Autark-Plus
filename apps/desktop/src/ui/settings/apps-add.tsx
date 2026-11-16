@@ -2,8 +2,9 @@
 // is below it; nothing found offers the AI, which also searches the MCP registry), each with Connect, and three rows that open a
 // dialog: an MCP server by address or command (with env or header Name | Value rows, a secret value masked), a pasted mcpServers block (Claude
 // Desktop, Claude Code, Cursor) in a fixed-height box with one fixed check line, and a mailbox. A token dialog serves a catalog
-// entry that needs a key and a connected app that asks for one. Each writes the connector files (apps-files.ts; secret-looking
-// values go into Secrets after the file checked out); the runtime connects, a server that signs in opens the browser, and the
+// entry that needs a key and a connected app that asks for one. MCP additions are preflighted, their keys saved to Secrets,
+// then sent through apps.add as handles; the desktop-only mailbox form remains on its existing file path. The runtime connects, and
+// a server that signs in opens the PC browser. The
 // Connected row shows how it went.
 // Owns: these rows and dialogs. Never: keeps a typed token or password after saving, writes one into a file, or logs it.
 
@@ -12,13 +13,14 @@ import { newId } from '../../shared/ids.ts';
 import type { ConnectedApp } from '../../shared/model/apps.ts';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { openExternal } from '../lib/platform.ts';
-import { errorText } from '../lib/rpc.ts';
+import { errorText, rpc } from '../lib/rpc.ts';
+import { can, isOwner } from '../lib/session.ts';
 import { Button } from '../lib/ui.tsx';
 import { setUpWithAi } from '../team/set-up-with-ai.ts';
 import { ActionButton, Group, Row, Segmented, useBusy } from './controls.tsx';
 import { APP_CATALOG, catalogConnected, searchCatalog, type CatalogEntry } from './apps-catalog.ts';
 import {
-  addServers, editConnectors, fileOf, holdsSecret, mailEntry, namedValues, nameFromAddress, pastedServers, pasteLine, splitCommand, storeKey, withEntry, withToken,
+  addServers, editConnectors, entryUsesSecretReference, fileOf, hasSecretReference, holdsSecret, mailEntry, namedValues, nameFromAddress, pastedServers, pasteLine, secretSpots, splitCommand, storeKey, withEntry, withToken,
   type MailFields,
 } from './apps-files.ts';
 import type { KvRow } from './secret-groups.ts';
@@ -41,14 +43,12 @@ function TokenForm(props: { target: TokenTarget; onClose: () => void }) {
   const [busy, run] = useBusy();
   const save = () => void run(async () => {
     setError('');
+    if (!can('secrets.save')) { setError('Saving a token requires Settings › Secrets access.'); return; }
     try {
       if (target.kind === 'catalog') await addMcp(name, { url: target.entry.url, headers: { Authorization: `Bearer ${token.trim()}` } }); // addServers stores it after the file checked out
       else {
-        const file = fileOf(target.app);
-        await editConnectors(file, async (text) => {
-          withToken(file, text, name, ''); // the file and the entry check out before the token is stored
-          return withToken(file, text, name, await storeToken(name, token.trim()));
-        });
+        const secretId = await storeToken(name, token.trim());
+        await rpc.call('apps.setToken', { id: target.app.id, name: target.app.name, transport: 'http', secretId });
       }
       props.onClose();
     } catch (failure) { setError(errorText(failure)); }
@@ -60,7 +60,7 @@ function TokenForm(props: { target: TokenTarget; onClose: () => void }) {
       <DialogActions message={error || 'Goes into Secrets; the file holds only its handle'} tone={error ? 'error' : 'muted'}>
         {hint && <Button variant="ghost" onClick={() => openExternal(hint.createUrl)}>Create one</Button>}
         <Button variant="secondary" onClick={props.onClose}>Cancel</Button>
-        <Button variant="primary" busy={busy} disabled={!token.trim()} onClick={save}>Connect</Button>
+        <Button variant="primary" busy={busy} disabled={!token.trim() || !can('secrets.save')} onClick={save}>Connect</Button>
       </DialogActions>
     </>
   );
@@ -103,8 +103,10 @@ function ServerForm(props: { onClose: () => void }) {
   const [busy, run] = useBusy();
   const target = address.trim();
   const { values, blocked: rowsBlocked } = namedValues(kind, rows);
-  const blocked = !target ? (kind === 'url' ? 'Enter the MCP address the server names for AI tools' : 'Enter the command that starts the server')
-    : kind === 'url' && !/^https?:\/\/\S+$/i.test(target) ? 'Enter an address that starts with https:// (or http:// on your network)' : rowsBlocked;
+  const needsSecret = Boolean(token.trim()) || rows.some((row) => holdsSecret(row.name, row.value, kind === 'url') || hasSecretReference(row.value));
+  const blocked = !isOwner() && kind === 'command' ? 'Local command servers can only be added on the PC; they execute host processes.'
+    : !target ? (kind === 'url' ? 'Enter the MCP address the server names for AI tools' : 'Enter the command that starts the server')
+    : kind === 'url' && !/^https?:\/\/\S+$/i.test(target) ? 'Enter an address that starts with https:// (or http:// on your network)' : rowsBlocked || (needsSecret && !can('secrets.save') ? 'Saving secret values requires Settings › Secrets access' : '');
   const save = () => void run(async () => {
     if (blocked) return;
     setError('');
@@ -119,7 +121,7 @@ function ServerForm(props: { onClose: () => void }) {
   });
   return (
     <>
-      <Segmented label="How it runs" value={kind} options={SERVER_KINDS} onChange={setKind} />
+      <Segmented label="How it runs" value={kind} options={isOwner() ? SERVER_KINDS : [SERVER_KINDS[0]]} onChange={setKind} />
       <label class="field-label" for="apps-address">{kind === 'url' ? 'Address' : 'Command'}</label>
       <input id="apps-address" class="input" autocomplete="off" spellcheck={false} placeholder={kind === 'url' ? 'https://…' : 'npx -y @modelcontextprotocol/server-filesystem C:/Docs'} value={address} onInput={(event) => setAddress(valueOf(event))} />
       <label class="field-label" for="apps-name">Name (optional)</label>
@@ -143,6 +145,10 @@ function PasteForm(props: { onClose: () => void }) {
   const [error, setError] = useState('');
   const [busy, run] = useBusy();
   const { servers, error: invalid } = pastedServers(text);
+  const localCommandsBlocked = !isOwner() && servers.some((server) => typeof server.entry.command === 'string');
+  const needsSecrets = servers.some((server) => secretSpots(server.entry).length > 0 || entryUsesSecretReference(server.entry));
+  const blocked = localCommandsBlocked ? 'Pasted local commands can only be added on the PC; they execute host processes.'
+    : needsSecrets && !can('secrets.save') ? 'Saving pasted keys requires Settings › Secrets access' : '';
   const save = () => void run(async () => {
     setError('');
     try {
@@ -156,9 +162,9 @@ function PasteForm(props: { onClose: () => void }) {
       <textarea id="apps-paste" class="set-textarea mono apps-paste" spellcheck={false} autocomplete="off"
         placeholder={'{\n  "mcpServers": {\n    "files": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Docs"] }\n  }\n}'}
         value={text} onInput={(event) => { setText((event.currentTarget as HTMLTextAreaElement).value); setError(''); }} />
-      <DialogActions message={error || invalid || pasteLine(servers)} tone={error || (invalid && text.trim()) ? 'error' : 'muted'}>
+      <DialogActions message={error || invalid || blocked || pasteLine(servers)} tone={error || (invalid && text.trim()) || blocked ? 'error' : 'muted'}>
         <Button variant="secondary" onClick={props.onClose}>Cancel</Button>
-        <Button variant="primary" busy={busy} disabled={Boolean(invalid)} onClick={save}>Add</Button>
+        <Button variant="primary" busy={busy} disabled={Boolean(invalid || blocked)} onClick={save}>Add</Button>
       </DialogActions>
     </>
   );
@@ -224,15 +230,15 @@ export function AddApps(props: { apps: readonly ConnectedApp[] }) {
           </Row>
         )}
       </div>
-      <Row label="Add by address" hint="Any MCP server, by its web address or a command on this PC" reserve>
+      <Row label="Add by address" hint={isOwner() ? 'Web servers connect remotely; commands and OAuth sign-in run on this PC' : 'Add HTTP servers from the phone; local commands and OAuth sign-in run on the PC'}>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('server')} /></span>
       </Row>
-      <Row label="Paste JSON" hint="An mcpServers block from Claude Desktop, Claude Code or Cursor, as it is" reserve>
+      <Row label="Paste JSON" hint="An mcpServers block; commands run on this PC and OAuth sign-in opens there">
         <span class="account-slot"><ActionButton label="Paste" onClick={() => setForm('paste')} /></span>
       </Row>
-      <Row label="Add email" hint="A mailbox agents read, sort, draft and send from; new mail wakes an agent" reserve>
+      {isOwner() && can('files.writePath') && <Row label="Add email" hint="A mailbox agents read, sort, draft and send from; new mail wakes an agent" reserve>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('mail')} /></span>
-      </Row>
+      </Row>}
       <TokenDialog target={token} onClose={() => setToken(null)} />
       <Dialog open={form !== null} onClose={() => setForm(null)} title={form ? FORM_TITLES[form] : undefined} width={520} class="secret-edit anchored">
         {form === 'server' && <ServerForm onClose={() => setForm(null)} />}

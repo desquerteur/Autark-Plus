@@ -26,7 +26,7 @@ export function FeedbackPrivacyDialog() {
       <div class="feedback-privacy-details">
         <p><a href="https://openautark.com/privacy/" target="_blank" rel="noopener noreferrer">Privacy notice on openautark.com</a></p>
         <p><strong>Who receives it.</strong> Teydra Lab, operated by Meral Anna Hees,
-          Ludwig-Richter-Straße 4a/Top3, 5020 Salzburg, Austria.
+          Ludwig-Richter-Straße 4a/Top3, 5026 Salzburg, Austria.
           Contact: <a href="mailto:official@teydralab.com">official@teydralab.com</a>.</p>
         <p><strong>What is sent.</strong> Your feedback text, the screenshot you choose to include,
           the report ID and date, app version, operating system and the current app view.

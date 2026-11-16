@@ -77,13 +77,17 @@ export function searchSections(text: string, sections: readonly SectionInfo[] = 
   });
 }
 
+/** Skills also has a named Settings-device catalog, without the legacy chat/file capabilities. */
+const available = (section: SectionInfo, can: (method: MethodName) => boolean): boolean =>
+  section.requires.every(can) || (section.id === 'skills' && can('skills.catalog'));
+
 /** The pages this session may use, in order. */
 export function visibleSections(can: (method: MethodName) => boolean): SectionInfo[] {
-  return SECTIONS.filter((section) => section.requires.every(can));
+  return SECTIONS.filter((section) => available(section, can));
 }
 
 /** The page #/settings/<id> shows on this connection: itself where the session may use it, else the first it may. */
 export function resolveVisibleSection(id: string | undefined, can: (method: MethodName) => boolean): SectionInfo {
   const wanted = sectionById(id);
-  return wanted.requires.every(can) ? wanted : visibleSections(can)[0] ?? wanted;
+  return available(wanted, can) ? wanted : visibleSections(can)[0] ?? wanted;
 }

@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dismissToast, dismissToastsWhere, pushToast, toastNotification, toasts } from '../../../src/ui/lib/toasts.ts';
+import { NOTICE_ONLY_MS, dismissToast, dismissToastsWhere, pushToast, toastNotification, toasts } from '../../../src/ui/lib/toasts.ts';
 
 const titles = () => toasts.value.map((toast) => toast.title);
 
@@ -57,4 +57,15 @@ test('dismissToastsWhere drops only the toasts it picks (a chat opened, a to-do 
   assert.deepEqual(titles(), ['Blocker in chat 2'], 'to-do 1 answered on the phone');
   dismissToastsWhere((toast) => toast.taskId === 'task_2');
   assert.deepEqual(titles(), []);
+});
+
+test('feedback F09: an important notice with nothing to open goes by itself after a while; one with a chat stays', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  toasts.value = [];
+  toastNotification({ kind: 'important', title: 'office-pc is now linked', body: 'Remove it in Settings › Devices.' });
+  toastNotification({ kind: 'important', title: 'Max posted on X', body: '', conversationId: 'ch_1' });
+  t.mock.timers.tick(6000);
+  assert.deepEqual(titles(), ['office-pc is now linked', 'Max posted on X'], 'longer than a reply');
+  t.mock.timers.tick(NOTICE_ONLY_MS - 6000);
+  assert.deepEqual(titles(), ['Max posted on X'], 'the plain notice went, the one with a chat stays');
 });

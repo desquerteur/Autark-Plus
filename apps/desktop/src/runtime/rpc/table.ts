@@ -26,6 +26,7 @@ export type ScopeRule =
   | 'owner' // owner only (default)
   | 'any' // owner + every authenticated device (still filtered by the handler if needed)
   | { capability: DeviceCapability; secure?: true; external?: true } // owner + devices holding this capability (on a secure transport when marked); `external` is set by the table (addExternal)
+  | { allCapabilities: readonly DeviceCapability[]; secure?: true } // owner + devices holding every listed capability
   | { person: true; base: ScopeRule }; // F-52: also open to people (set by the table, addPerson); `base` rules everyone else
 
 /** Per-call context handed to handlers. */
@@ -59,7 +60,7 @@ export class HandlerTable {
   /** Registers one method. A method may be registered only once (duplicates are a bug). */
   add<M extends MethodName>(method: M, handler: Handler<M>, scope: ScopeRule = 'owner'): void {
     if (this.entries.has(method)) throw new Error(`RPC method registered twice: ${method}`);
-    if (typeof scope === 'object' && ('person' in scope || scope.external)) throw new Error(`Only addExternal / addPerson open a method to external agents or people: ${method}`);
+    if (typeof scope === 'object' && ('person' in scope || ('external' in scope && scope.external))) throw new Error(`Only addExternal / addPerson open a method to external agents or people: ${method}`);
     this.entries.set(method, { handler: handler as unknown as Handler<MethodName>, scope });
     this.merged.delete(method); // a variant registered first may have been merged without it
   }
@@ -92,7 +93,7 @@ export class HandlerTable {
     let both = this.merged.get(method);
     if (!both) {
       const refuse: Handler<MethodName> = () => { throw new Error(`No owner handler for ${method}`); };
-      const base: HandlerEntry = entry && external && typeof entry.scope === 'object' && !('person' in entry.scope)
+      const base: HandlerEntry = entry && external && typeof entry.scope === 'object' && 'capability' in entry.scope
         ? { scope: { ...entry.scope, external: true }, handler: (params, ctx) => (ctx.scope.kind === 'external' ? external(params, ctx) : entry.handler(params, ctx)) }
         : entry ?? { scope: 'owner', handler: refuse };
       both = person
@@ -121,12 +122,13 @@ export function scopeDenial(rule: ScopeRule, scope: ClientScope): 'scope' | 'ins
   if (typeof rule === 'object' && 'person' in rule) return scope.kind === 'person' ? undefined : scopeDenial(rule.base, scope); // F-52
   if (scope.kind === 'person') return 'scope'; // F-52: only person variants
   if (scope.kind === 'owner') return undefined;
-  if (scope.kind === 'external') return typeof rule === 'object' && rule.external ? undefined : 'scope'; // C8: only external variants
+  if (scope.kind === 'external') return typeof rule === 'object' && 'external' in rule && rule.external ? undefined : 'scope'; // C8: only external variants
   if (scope.kind !== 'device') return 'scope'; // peers/agents never use the client RPC surface
   if (rule === 'owner') return 'scope';
   if (rule === 'any') return undefined;
-  if (!('capability' in rule) || !scope.capabilities.includes(rule.capability)) return 'scope';
-  if ((rule.secure || SECURE_ONLY.has(rule.capability)) && scope.secure !== true) return 'insecure';
+  const required = 'allCapabilities' in rule ? rule.allCapabilities : [rule.capability];
+  if (!required.every((capability) => scope.capabilities.includes(capability))) return 'scope';
+  if ((rule.secure || required.some((capability) => SECURE_ONLY.has(capability))) && scope.secure !== true) return 'insecure';
   return undefined;
 }
 

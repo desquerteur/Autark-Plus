@@ -11,6 +11,8 @@ import { NativeHistory } from '../privacy/native-history.ts';
 export function createDataLifecycle(s: RuntimeServices, knowledge: KnowledgeStore): { stop(): void } {
   // Accounts and engines are built later: late-bound.
   const history = new NativeHistory({
+    homeAllowed: a => s.accounts?.homeAllowed?.(a) ?? true,
+    withHome: (a, work) => s.accounts?.withHome?.(a, 'purge', work) ?? work(),
     db: s.db, clock: s.clock, log: s.log, accountsRoot: s.paths.accounts,
     accounts: () => s.accounts?.list() ?? [], engine: (id) => { try { return s.engines?.get(id); } catch { return undefined; } },
   });

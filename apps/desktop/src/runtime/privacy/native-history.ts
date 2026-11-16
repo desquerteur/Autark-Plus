@@ -17,6 +17,8 @@ export interface NativeHistoryDeps {
   clock: Clock;
   log?: Logger;
   accounts: () => Account[];
+  homeAllowed?: (account: Account) => boolean;
+  withHome?: <T>(account: Account, work: () => Promise<T>) => Promise<T>;
   engine: (id: EngineId) => Engine | undefined;
   /** <data>/accounts – this app's isolated CLI homes. */
   accountsRoot: string;
@@ -54,7 +56,12 @@ export class NativeHistory {
   }
 
   /** Deletes every Claude Code history of one isolated account home of this app (the person's explicit action). */
-  async purgeClaude(accountId: string): Promise<PurgeResult> {
+  purgeClaude(accountId: string): Promise<PurgeResult> {
+    const a = this.purgeable().find(a => a.id === accountId);
+    if (!a) return Promise.reject(new WorkforceError('bad_request', "Only Claude Code accounts this app signed in itself (its own account folder on this PC) can be cleared here."));
+    return this.d.withHome?.(a, () => this.purgeOwned(accountId)) ?? this.purgeOwned(accountId);
+  }
+  private async purgeOwned(accountId: string): Promise<PurgeResult> {
     const account = this.purgeable().find((candidate) => candidate.id === accountId);
     if (!account) throw new WorkforceError('bad_request', "Only Claude Code accounts this app signed in itself (its own account folder on this PC) can be cleared here.");
     const engine = this.d.engine('claude');
@@ -74,7 +81,7 @@ export class NativeHistory {
   private purgeable(): Account[] {
     let accounts: Account[] = [];
     try { accounts = this.d.accounts(); } catch { return []; }
-    return accounts.filter((account) => account.provider === 'claude' && !account.detected && !account.deviceId && account.home !== undefined && inside(account.home, this.d.accountsRoot));
+    return accounts.filter((account) => account.provider === 'claude' && (this.d.homeAllowed?.(account) ?? true) && !account.detected && !account.deviceId && account.home !== undefined && inside(account.home, this.d.accountsRoot));
   }
 
   private running(accountId: string): boolean {

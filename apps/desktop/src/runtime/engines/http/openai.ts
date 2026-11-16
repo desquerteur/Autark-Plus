@@ -113,7 +113,8 @@ export class OpenAiEngine extends HttpEngine {
         const { id: _id, status: _status, ...rest } = item;
         return rest;
       }));
-      const calls = output.filter((item) => item.type === 'function_call').map((item) => ({ id: str(item.call_id) ?? '', name: str(item.name) ?? '', args: tryJson(str(item.arguments) ?? '{}') ?? {} }));
+      // Preserve invalid/missing arguments so the shared loop returns an error rather than executing {}.
+      const calls = output.filter((item) => item.type === 'function_call').map((item) => ({ id: str(item.call_id) ?? '', name: str(item.name) ?? '', args: tryJson(str(item.arguments) ?? '') }));
       const u = isRecord(final.usage) ? final.usage : {};
       return { text, calls, done: calls.length === 0, usage: { inputTokens: num(u.input_tokens) ?? 0, outputTokens: num(u.output_tokens) ?? 0 }, structured: input.outputSchema ? tryJson(text.trim()) : undefined };
     };

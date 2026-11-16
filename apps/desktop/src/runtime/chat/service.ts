@@ -16,7 +16,7 @@
 // reconcile also runs the clean-up's orphan reconcile. B-047 D4 (publishing): a run's answer is
 // posted at the end of the chat (chat/publish-message.ts: quiet unless it @mentions the person, B-050 K4 its level);
 // an agent's <chat> block posts carry their run's runId (agents/chat-out.ts). B-050: a human text message carries the addressed agent's
-// model choice as meta.modelHint (chat/sticky-model.ts, K6), and the default 1:1 (settings.direct,
+// model choice as meta.modelHint (chat/sticky-model.ts, K6; F22: a changed suggestion is stamped, chat/suggestion-fresh.ts), and the default 1:1 (settings.direct,
 // chat/direct.ts) never takes a title from its first message (K2). A draft change never does: the
 // composer clears its draft right before messages.send, so a file leaving the draft may be on
 // its way into a message (an upload taken out of the composer stays in the media library).
@@ -53,6 +53,7 @@ import { postAgentMessage, type AnswerFinal } from './publish-message.ts';
 import { canReclaim, chatFileIds, messageFileIds, queueReclaim } from './reclaim.ts';
 import { unmarked, withSpeech } from './speech-meta.ts';
 import { addressedAgents, applyStickyModel, cleanSettings, modelTag } from './sticky-model.ts';
+import { stampSuggestions } from './suggestion-fresh.ts';
 import { buildSummaries, isHidden } from './summary.ts';
 import { ChatLive } from './live.ts';
 import { isPersonId } from '../../shared/model/people.ts';
@@ -121,7 +122,7 @@ export class ChatServiceImpl implements ChatService {
     const renamed = patch.title !== undefined && patch.title.trim() && patch.title.trim() !== conversation.title;
     if (patch.pinned !== undefined) conversation.pinned = patch.pinned;
     const image = conversation.settings.image;
-    if (patch.settings) conversation.settings = cleanSettings({ ...conversation.settings, ...patch.settings });
+    if (patch.settings) conversation.settings = cleanSettings(stampSuggestions(conversation.settings, { ...conversation.settings, ...patch.settings }, now)); // F22: a changed suggestion is stamped, a sent stamp ignored
     if (renamed) { conversation.title = patch.title!.trim(); conversation.titleNamed = true; conversation.settings = { ...conversation.settings, namedBy: by }; }
     conversation.updatedAt = now;
     this.convs.update(conversation);

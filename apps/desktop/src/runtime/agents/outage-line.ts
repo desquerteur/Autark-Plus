@@ -14,8 +14,22 @@ import type { TaskView } from '../../shared/model/tasks.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
 
+/**
+ * Feedback 16.11.2026 (F24): with other PCs linked, the PC whose accounts are out – the person reads the line on another
+ * PC whose own quota rail may show plenty left, so "every account is limited" read as wrong. One PC alone: no name.
+ */
+export function pausedWhere(services: Partial<Pick<RuntimeServices, 'devices'>>): string | undefined {
+  try {
+    const devices = services.devices;
+    if (!devices) return undefined;
+    const others = devices.list().some((device) => !device.self && device.kind === 'pc' && device.status !== 'revoked');
+    const name = devices.self().name.trim();
+    return others && name ? excerpt(name, 40) : undefined;
+  } catch { return undefined; }
+}
+
 /** `runId`: the run that met the outage (meta.fromRun). */
-export function outageLine(services: Pick<RuntimeServices, 'chats'>, task: Pick<TaskView, 'id' | 'conversationId'>, reason: string | undefined, runId?: string): void {
+export function outageLine(services: Pick<RuntimeServices, 'chats'> & Partial<Pick<RuntimeServices, 'devices'>>, task: Pick<TaskView, 'id' | 'conversationId'>, reason: string | undefined, runId?: string): void {
   if (!task.conversationId) return; // no chat, no status line
   let said = false;
   try {
@@ -30,10 +44,11 @@ export function outageLine(services: Pick<RuntimeServices, 'chats'>, task: Pick<
  * B-080 wave 3: one quiet "Paused: <reason> – continues by itself" status line in `conversationId` – by the system for a
  * task (outageLine), by `authorId` (the agent) for a chat turn; `runId` becomes meta.fromRun. Never throws (cosmetic).
  */
-export function pausedLine(services: Pick<RuntimeServices, 'chats'>, conversationId: string, reason: string | undefined, of: { taskId?: string; runId?: string; authorId?: string }): void {
+export function pausedLine(services: Pick<RuntimeServices, 'chats'> & Partial<Pick<RuntimeServices, 'devices'>>, conversationId: string, reason: string | undefined, of: { taskId?: string; runId?: string; authorId?: string }): void {
   try {
+    const where = pausedWhere(services);
     services.chats.status(conversationId, {
-      type: 'note', text: `Paused: ${excerpt(reason ?? 'no model could be reached', 90)} – continues by itself`, details: { ...(of.taskId ? { taskId: of.taskId } : {}), outage: true },
+      type: 'note', text: `Paused${where ? ` on ${where}` : ''}: ${excerpt(reason ?? 'no model could be reached', 90)} – continues by itself`, details: { ...(of.taskId ? { taskId: of.taskId } : {}), outage: true },
     }, { authorId: of.authorId ?? SYSTEM_ID, ...(of.taskId ? { taskId: of.taskId } : {}), ...(of.runId ? { fromRun: of.runId } : {}) });
   } catch { /* cosmetic */ }
 }

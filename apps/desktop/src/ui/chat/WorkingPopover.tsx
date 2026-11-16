@@ -7,18 +7,21 @@
 // working") that opens to its split rows. The rows come from the chat's live bar (the summary's `live`, chat/live.ts).
 // "Stop all agent work" (shell/work-stop.ts) stays its last entry for whoever may stop. On a
 // phone the popover is a bottom sheet (mobile.css).
-// Owns: the popover's markup and which rows are open. Never: stops one agent, invents a model or
+// Feedback 16.11.2026 (F20, owner – supersedes "no Stop in the chat" of 21.10.): each agent's row has its own Stop for
+// whoever may cancel runs – it ends only that agent's current run (runs.cancel), so in a group the others keep working.
+// Owns: the popover's markup and which rows are open. Never: stops other agents than the row's, invents a model or
 // steps the runtime did not report, or polls.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import { AgentAvatar, Icon, Popover, Spinner } from '../lib/ui.tsx';
+import { StopRun } from './StopRun.tsx';
 import { agentMap, tasks } from '../lib/store.ts';
 import { go } from '../lib/router.ts';
 import { can } from '../lib/session.ts';
 import { openTaskDetail } from '../tasks/jump.ts';
 import { stopAllWork, workAction, workStop } from '../shell/work-stop.ts';
-import { liveRuns, workingRows, type WorkingRow } from './live-text.ts';
+import { liveRuns, stoppableRun, workingRows, type WorkingRow } from './live-text.ts';
 import { SplitList } from '../splits/SplitRows.tsx'; // B-057
 import { splitGroups, watchSplits } from '../splits/split-model.ts';
 
@@ -87,6 +90,7 @@ export function WorkingPopover(props: { chat: Chat; anchor: HTMLElement | null; 
 
 function Row(props: { row: WorkingRow; open: boolean; onToggle: () => void; onLeave: () => void }) {
   const { row, open } = props;
+  const runId = stoppableRun(row, can('runs.cancel'));
   const toAgent = () => { props.onLeave(); go.agent(row.agentId); };
   const task = row.taskId ? tasks.value.find((item) => item.id === row.taskId) : undefined;
   const note = <span class="working-row-note">{row.note}</span>;
@@ -97,6 +101,7 @@ function Row(props: { row: WorkingRow; open: boolean; onToggle: () => void; onLe
         <div class="working-row-head">
           <button type="button" class="working-row-name" onClick={toAgent}>{row.name}</button>
           <span class="working-row-model tabular" title={row.model || undefined}>{row.model}</span>
+          {runId && <StopRun runId={runId} name={row.name} class="working-row-stop" />}
         </div>
         {row.groupId
           ? <button type="button" class="working-row-toggle" aria-expanded={open} onClick={props.onToggle}>

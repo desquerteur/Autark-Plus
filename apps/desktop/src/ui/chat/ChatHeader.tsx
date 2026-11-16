@@ -22,8 +22,10 @@ import { back, go } from '../lib/router.ts';
 import { chatAreaOpen, chatPanel, setChatPanel, toggleChatArea, toggleChatPanel, type ChatPanel } from '../lib/shell-state.ts';
 import { LiveLine } from './LiveLine.tsx';
 import { WorkingPopover, useWorkingPanel } from './WorkingPopover.tsx';
+import { StopRun } from './StopRun.tsx';
 import { clock12 } from '../lib/format.ts';
-import { liveNames, liveRuns, liveShort, liveStatus, type LiveEntry } from './live-text.ts';
+import { lineStopRun, liveNames, liveRuns, liveShort, liveStatus, workingRows, type LiveEntry } from './live-text.ts';
+import { can } from '../lib/session.ts';
 import { useCallCell } from './call/CallHeader.tsx';
 import { chatMenu } from './chat-actions.ts';
 import { chatAttention } from '../workspace/attention.ts';
@@ -46,6 +48,10 @@ function ChatTitle(props: { chat: ConversationSummary }) {
   const resting = status ? '' : chatSubtitle(chat);
   const open = chatPanel.value === 'details';
   const working = useWorkingPanel(chat.id);
+  // F20 (Mika): exactly one stoppable agent working here – its Stop sits at the live line's end, one click; several: the popover's rows.
+  const rows = status ? workingRows(chat, liveRuns(chat), nameOf) : [];
+  const lineStop = lineStopRun(rows, can('runs.cancel'));
+  const lineRow = lineStop ? rows[0] : undefined;
   const menu = useContextMenu(() => chatMenu(chat));
   const page = partnerPage(partner);
   const onAvatar = page ? () => (page.kind === 'agent' ? go.agent(page.id) : go.person(page.id)) : () => toggleChatPanel(chat.id, 'details');
@@ -63,6 +69,7 @@ function ChatTitle(props: { chat: ConversationSummary }) {
           {status
             ? <LiveLine text={status} short={liveShort(chat, solo, entries, nameOf)} names={liveNames(chat, solo, entries, nameOf)} open={working.open} onToggle={working.toggle} />
             : resting && <span class="chat-resting">{resting}</span>}
+          {lineRow && lineStop && <StopRun key={lineStop} runId={lineStop} name={lineRow.name} class="chat-live-stop" />}
         </div>
       </div>
       <WorkingPopover chat={chat} anchor={working.anchor.current} open={working.open} onClose={working.close} />

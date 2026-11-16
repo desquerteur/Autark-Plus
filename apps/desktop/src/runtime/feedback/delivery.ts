@@ -108,7 +108,8 @@ export async function deliver(s: RuntimeServices, report: FeedbackReport, diagno
       entry = { v: 1, requestId, project: config.project, recipient: config.publicKey, sealed: sealed.toString('base64') };
       kv.set(OUTBOX, report.id, entry, s.clock.now()); // before external I/O
     }
-    await dropSealed(config, entry.requestId, Buffer.from(entry.sealed!, 'base64'), run);
+    // exp counts from the report's own time, so a retry sends the very same letter (a months-old report: without exp).
+    await dropSealed(config, entry.requestId, Buffer.from(entry.sealed!, 'base64'), run, () => report.createdAt);
     const receipt: OutboxEntry = { ...entry, deliveredAt: s.clock.now() };
     delete receipt.sealed; // delivered: only the receipt stays
     entry = receipt;

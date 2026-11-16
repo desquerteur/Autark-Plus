@@ -45,3 +45,4 @@
 @import "./splits.css"; /* B-057: split rows, the sidebar's split rows, a split's page */
 @import "./remote.css";
 @import "./repair.css"; /* 23.10.: repair screen after a broken upgrade or a crash loop */
+@import "./skill-editor.css"; /* Settings › Skills editor (SkillEditor.tsx) */

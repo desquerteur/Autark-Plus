@@ -171,6 +171,7 @@ test('stale: readings older than two minutes or with a passed reset are flagged;
   assert.equal(summary.weeklyRemainingPercent, 70);
   assert.equal(usageSummaries([plan('acc_a', 'claude', { limits })], T0 + MIN)[0].limits?.stale, false);
   assert.deepEqual(usageSummaries([plan('acc_k', 'openrouter', { auth: 'api_key' })], T0), [], 'only plans');
+  assert.deepEqual(usageSummaries([plan('acc_off', 'claude', { enabled: false, state: 'disabled', limits })], T0 + MIN), [], 'feedback F24: a switched-off plan is not on the rail');
 
   // A signed-out plan is not checked by the cadence, yet its readings turning stale reach the UI once.
   const h = harness();

@@ -96,11 +96,16 @@ export class LoginSync {
     this.deps = deps;
   }
 
+  private syncAllowed(account: Account): boolean { return this.s.accounts.homeSyncAllowed?.(account) ?? true; }
+  private withHome<T>(account: Account, work: () => Promise<T>): Promise<T> {
+    if (!this.syncAllowed(account)) return Promise.reject(new WorkforceError('conflict', 'Claude login sync is fenced (including after handoff).'));
+    return this.s.accounts.withHome?.(account, 'mesh', work) ?? work();
+  }
   private get platform(): NodeJS.Platform { return this.deps.platform ?? process.platform; }
 
   /** The CLI plans whose login is a file this PC knows. */
   private plans(): Account[] {
-    return this.s.accounts.list().filter((account) => account.auth === 'cli' && loginFiles(account.provider, this.platform).length > 0);
+    return this.s.accounts.list().filter((account) => account.auth === 'cli' && this.syncAllowed(account) && loginFiles(account.provider, this.platform).length > 0);
   }
 
   private homeOf(account: Account): string | undefined {
@@ -166,7 +171,8 @@ export class LoginSync {
   }
 
   /** The login of `account` as it would travel; undefined when there is none (no file, emptied, half written, kept in the Keychain). */
-  private async read(account: Account): Promise<{ login: Login; digest: string } | undefined> {
+  private read(account: Account): Promise<{ login: Login; digest: string } | undefined> { return this.withHome(account, () => this.readOwned(account)); }
+  private async readOwned(account: Account): Promise<{ login: Login; digest: string } | undefined> {
     const home = this.homeOf(account);
     const names = account.auth === 'cli' ? loginFiles(account.provider, this.platform) : [];
     if (!home || !names.length) return undefined;
@@ -196,7 +202,14 @@ export class LoginSync {
   private async post(peer: string, logins: Login[]): Promise<boolean> {
     if (!logins.length) return true;
     try {
-      await this.s.devices.call(peer, 'sync.login', { logins });
+      const allowed = logins.filter(login => { const a = this.targetOf(login); return a && this.syncAllowed(a); });
+      const send = (index: number): Promise<unknown> => {
+        if (index === allowed.length) return this.s.devices.call(peer, 'sync.login', { logins: allowed });
+        const a = this.targetOf(allowed[index]);
+        if (!a) throw new WorkforceError('conflict', 'Login sync target changed.');
+        return this.withHome(a, () => send(index + 1));
+      };
+      if (allowed.length) await send(0);
       return true;
     } catch (error) {
       this.s.log.info('logins not sent', { peer, count: logins.length, error: code(error) });
@@ -237,7 +250,7 @@ export class LoginSync {
 
   /** The plan here a login belongs to: the same account, else the same login (provider and e-mail; any, for a CLI with one sign-in per PC). */
   private targetOf(login: Login): Account | undefined {
-    const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && account.provider === login.provider);
+    const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && this.syncAllowed(account) && account.provider === login.provider);
     return plans.find((account) => account.id === login.account)
       ?? plans.find((account) => !ownHomes(account.provider) || (Boolean(login.email) && account.email === login.email));
   }
@@ -248,7 +261,12 @@ export class LoginSync {
     return run;
   }
 
-  private async apply(login: Login): Promise<boolean> {
+  private apply(login: Login): Promise<boolean> {
+    const target = this.targetOf(login);
+    if (!target) return Promise.resolve(false);
+    return this.withHome(target, () => this.applyOwned(login));
+  }
+  private async applyOwned(login: Login): Promise<boolean> {
     const target = this.targetOf(login);
     const home = target && this.homeOf(target);
     const names = target ? loginFiles(target.provider, this.platform) : [];

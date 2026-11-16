@@ -125,6 +125,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'catalog.status',
     'accounts.useReset', 'accounts.test', // B-044 (owner)
     'accounts.try', // B-051 (owner): one tiny real turn on one account (handler: accounts/try-rpc.test.ts)
+    'accounts.transfer', // Claude handoff between this PC's companies (owner, PC-local: rpc/scope-matrix.test.ts)
     'models.uses', // what each use resolves to now (models/uses.test.ts) – the owner and the secure phone, like accounts.*
     'spend.list',
     'secrets.list', 'secrets.save', 'secrets.delete', 'secrets.capture',

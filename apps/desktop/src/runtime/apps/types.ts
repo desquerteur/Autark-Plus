@@ -241,7 +241,11 @@ export interface AppsService {
   list(): ConnectedApp[];
   mailGeneration?(id: string): string | undefined;
   /** Connects again; an MCP server that needs a sign-in opens it in the system browser. */
-  reconnect(id: string): Promise<ConnectedApp>;
+  reconnect(id: string, expected?: { id: string; name: string; transport: 'http' | 'stdio' | 'mail' }): Promise<ConnectedApp>;
+    /** Checks a complete MCP add batch against the current files without writing or connecting. */
+    validateAdd(entries: Array<{ name: string; entry: Record<string, unknown> }>): void;
+  mutate(mutation: import('./connectors.ts').ConnectorMutation): void;
   /** Ids of the connectors whose tools agents get right now (for the environment line). */
   usableBy(agentId: string): string[];
 }
+

@@ -4,14 +4,18 @@
 // A fetch runs once at app start (receiving PCs only), when the inbox opens (Settings › Feedback › Inbox) and on Refresh / wf feedback
 // receive – never on a timer. A letter this key cannot open (an earlier key, damaged) is kept as it came under
 // unreadable/ and counted, so it never blocks the mailbox; ids no sender of ours makes are left alone.
+// Feedback 16.11.2026 (owner): the team marks a report done or not relevant (mark); a marked report goes by itself
+// FEEDBACK_HANDLED_KEEP_MS later – checked whenever the inbox is listed or fetched (start, open, Refresh), still no timer.
+// Spam guard: at most UNREADABLE_KEEP letters are kept under unreadable/ (each lives UNREADABLE_KEEP_MS); a flood of
+// letters nobody of ours sealed is counted and deleted in the mailbox instead of filling this PC.
 // Owns: the fetch order (open → write → delete), checking each opened letter (untrusted input), the local files.
 // Never: deletes a letter before its file is written, logs a key, a token or a letter's text, or polls.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
 import type { FeedbackKind } from '../../shared/model/system.ts';
-import { FEEDBACK_IMAGE_TYPES, type FeedbackImageType, type FeedbackInboxFetch, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
+import { FEEDBACK_HANDLED_KEEP_MS, FEEDBACK_IMAGE_TYPES, type FeedbackHandled, type FeedbackImageType, type FeedbackInboxFetch, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { KvRepo } from '../store/kv.ts';
@@ -30,6 +34,9 @@ export const UNREADABLE_DIR = 'unreadable';
 export const SETUP_KEY = { ns: 'feedback', key: 'receiver' } as const;
 /** Letters one fetch takes at most (the mailbox is writable by anyone with the build: a flood must not stall the PC). */
 export const MAX_PER_FETCH = 200;
+/** Unopenable letters kept on this PC at most, and how long each stays (a rotated key's last letters, not a flood). */
+export const UNREADABLE_KEEP = 20;
+export const UNREADABLE_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 const LIST_MAX = 500;
 const KINDS: readonly FeedbackKind[] = ['bug', 'idea', 'change', 'praise'];
 const EXT: Record<FeedbackImageType, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
@@ -79,6 +86,10 @@ export function itemOf(id: string, value: unknown, receivedAt: number): { item: 
   return { item };
 }
 
+function countFiles(dir: string, ext: string): number {
+  try { return readdirSync(dir).filter((name) => name.endsWith(ext)).length; } catch { return 0; }
+}
+
 function writeAtomic(file: string, data: string | Buffer): void {
   const temp = `${file}.tmp`;
   writeFileSync(temp, data, { mode: 0o600 });
@@ -107,8 +118,13 @@ export class FeedbackInbox {
     return path.join(this.deps.services().paths.data, INBOX_DIR);
   }
 
-  /** The stored reports, newest first. */
+  /** The stored reports, newest first; marked reports past their keep time go first (purge). */
   list(): FeedbackInboxItem[] {
+    this.purge();
+    return this.stored();
+  }
+
+  private stored(): FeedbackInboxItem[] {
     let names: string[];
     try { names = readdirSync(this.dir()); } catch { return []; }
     const items: FeedbackInboxItem[] = [];
@@ -138,6 +154,36 @@ export class FeedbackInbox {
     } catch {
       throw new WorkforceError('not_found', 'This report has no screenshot.');
     }
+  }
+
+  /** Marks a stored report done or not relevant – or clears the mark (null). */
+  mark(id: string, as: FeedbackHandled | null): FeedbackInboxItem {
+    const item = this.read(checkId(id));
+    if (!item) throw new WorkforceError('not_found', 'This report is not in the inbox.');
+    const { handled: _old, ...rest } = item;
+    const next: FeedbackInboxItem = as ? { ...rest, handled: { as, at: this.deps.services().clock.now() } } : rest;
+    writeAtomic(path.join(this.dir(), `${id}.json`), `${JSON.stringify(next, null, 2)}\n`);
+    return next;
+  }
+
+  /**
+   * Removes marked reports whose keep time passed and unopenable letters past UNREADABLE_KEEP_MS (oldest beyond
+   * UNREADABLE_KEEP too); answers how many reports went. Never touches an unmarked report.
+   */
+  purge(): number {
+    const now = this.deps.services().clock.now();
+    let removed = 0;
+    for (const item of this.stored()) {
+      if (item.handled && now - item.handled.at >= FEEDBACK_HANDLED_KEEP_MS) { this.remove(item.id); removed += 1; }
+    }
+    const kept = path.join(this.dir(), UNREADABLE_DIR);
+    let letters: Array<{ file: string; at: number }> = [];
+    try {
+      letters = readdirSync(kept).filter((name) => name.endsWith('.wfb')).map((name) => ({ file: path.join(kept, name), at: statSync(path.join(kept, name)).mtimeMs }));
+    } catch { letters = []; }
+    letters.sort((a, b) => b.at - a.at);
+    letters.forEach((letter, index) => { if (index >= UNREADABLE_KEEP || now - letter.at >= UNREADABLE_KEEP_MS) rmSync(letter.file, { force: true }); });
+    return removed;
   }
 
   /** Deletes a stored report and its screenshot on this PC. */
@@ -176,6 +222,7 @@ export class FeedbackInbox {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     let added = 0;
     let unreadable = 0;
+    let keptUnreadable = countFiles(path.join(dir, UNREADABLE_DIR), '.wfb');
     let taken = 0;
     let more = false;
     let pageToken: string | undefined;
@@ -191,9 +238,13 @@ export class FeedbackInbox {
         let opened: ReturnType<typeof itemOf>;
         try { opened = itemOf(id, JSON.parse(openReport(privateKey, sealed).toString('utf8')), s.clock.now()); } catch { opened = undefined; }
         if (!opened) {
-          // Sealed for another (an earlier) key or damaged: kept on this PC as it came, so it never blocks the mailbox.
-          mkdirSync(path.join(dir, UNREADABLE_DIR), { recursive: true, mode: 0o700 });
-          writeAtomic(path.join(dir, UNREADABLE_DIR, `${id}.wfb`), sealed);
+          // Sealed for another (an earlier) key or damaged: kept on this PC as it came, so it never blocks the mailbox –
+          // up to UNREADABLE_KEEP of them; beyond that (a flood) only counted and deleted in the mailbox.
+          if (keptUnreadable < UNREADABLE_KEEP) {
+            mkdirSync(path.join(dir, UNREADABLE_DIR), { recursive: true, mode: 0o700 });
+            writeAtomic(path.join(dir, UNREADABLE_DIR, `${id}.wfb`), sealed);
+            keptUnreadable += 1;
+          }
           await mailbox.remove(id);
           unreadable += 1;
           continue;
@@ -205,7 +256,7 @@ export class FeedbackInbox {
       }
       pageToken = more ? undefined : page.next;
     } while (pageToken);
-    const total = this.list().length;
+    const total = this.list().length; // list() purges marked reports past their keep time
     s.log.info('feedback inbox fetched', { added, unreadable, more }); // counts only
     return { added, unreadable, more, total };
   }

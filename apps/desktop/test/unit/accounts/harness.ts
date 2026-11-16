@@ -25,6 +25,7 @@ export const ENV_KEY = 'sk-env-test-0123456789abcdef';
 const SIGN_INS = new Set(['login', 'auth login --claudeai', 'login --device-auth']);
 
 export interface HarnessOptions {
+  homeOwners?: import('../../../src/runtime/accounts/home-owner.ts').HomeOwners;
   env?: NodeJS.ProcessEnv;
   /** Executables the finder knows (null = not installed). */
   clis?: Record<string, string | null>;
@@ -64,6 +65,7 @@ export function harness(options: HarnessOptions = {}) {
     setImmediate(() => { call.child.stdout.write(out); setImmediate(() => call.child.exit(args === 'login status' && !login.codex ? 1 : 0)); });
   });
   const supervisor = testSupervisor(spawn);
+  if (options.homeOwners) supervisor.setHomeOwners(options.homeOwners);
   const clis: Record<string, string | null> = { codex: '/bin/codex', claude: '/bin/claude', ...options.clis };
   const env: NodeJS.ProcessEnv = options.env ?? {};
   const vault = new Map<string, string>();
@@ -94,7 +96,7 @@ export function harness(options: HarnessOptions = {}) {
   const removed: string[] = [];
   const offline = async (): Promise<Response> => { throw new Error('offline'); };
   service = new AccountServiceImpl({
-    db, bus, clock, paths: { accounts: options.accounts ?? ACCOUNTS }, env, homeDir: options.homeDir ?? path.resolve('data', 'home'), finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0,
+    db, bus, clock, homeOwners: options.homeOwners, paths: { accounts: options.accounts ?? ACCOUNTS }, env, homeDir: options.homeDir ?? path.resolve('data', 'home'), finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0,
     engines: () => ({ get: engine, all: () => [], disposeIdle: async () => {} }),
     mkdir: async (dir) => { made.push(dir); }, rmdir: async (dir) => { removed.push(dir); },
     detectDeps: { fetch: options.fetch ?? offline, probeTimeoutMs: 1 },
@@ -102,7 +104,7 @@ export function harness(options: HarnessOptions = {}) {
   const upserts: Account[] = [];
   bus.on('account.upserted', (account) => upserts.push(account));
   const settle = async () => { for (let i = 0; i < 10; i++) await tick(); await service!.monitor.idle(); };
-  return { db, bus, clock, login, signIns, calls, clis, env, vault, checks, answers, made, removed, upserts, settle, service, repo: new AccountRepo(db) };
+  return { db, bus, clock, login, signIns, calls, clis, env, vault, checks, answers, made, removed, upserts, settle, supervisor, service, repo: new AccountRepo(db) };
 }
 
 /** A stored account row (as a restore or another path could write it). */

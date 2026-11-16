@@ -35,6 +35,13 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['id']);
     return inbox(ctx).remove(reportId(o));
   });
+  table.add('feedback.inboxMark', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['id', 'as']);
+    const as = o.as;
+    if (as !== null && as !== 'done' && as !== 'irrelevant') bad('as', '"done", "irrelevant" or null');
+    return inbox(ctx).mark(reportId(o), as as 'done' | 'irrelevant' | null);
+  });
   table.add('feedback.inboxScreenshot', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id']);

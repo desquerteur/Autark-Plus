@@ -15,7 +15,7 @@ import type { SpanMark } from '../../shared/voice/marks.ts';
 import type { CatalogStatus } from '../models/catalog.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
-import type { FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackHandled, FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 
 export interface PwaApi {
   state(): Promise<PwaState>;
@@ -58,6 +58,8 @@ export interface FeedbackApi {
     list(): FeedbackInboxItem[];
     fetch(): Promise<FeedbackInboxFetch>;
     remove(id: string): { ok: true };
+    /** Feedback 16.11.2026: done / not relevant (null clears); removed FEEDBACK_HANDLED_KEEP_MS later. */
+    mark(id: string, as: FeedbackHandled | null): FeedbackInboxItem;
     screenshot(id: string): { mime: FeedbackImageType; dataBase64: string };
   };
   /** B-055: wf feedback setup (owner only; runtime/feedback/setup.ts). */

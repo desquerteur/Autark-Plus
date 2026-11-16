@@ -44,7 +44,10 @@ import { systemEnvironment } from '../settings/defaults.ts';
 import { canListen, listenerReady, listenTranscript } from './listen-transcribe.ts';
 import { endpointHeard, partialNote, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
 import type { Listener } from '../decision/engine-runner.ts';
-import { planReady, planTranscribe, type PlanTranscription } from './plan-transcribe.ts';
+import { planMissing, planReady, planTranscribe, type PlanTranscription } from './plan-transcribe.ts';
+import { correctDictation } from './correct-dictation.ts';
+import { helperOf } from '../day/helper.ts';
+import type { StructuredRunner } from '../decision/types.ts';
 
 export { audioExtension, LANGUAGES_FIELD, languageCode, MAX_AUDIO_BYTES, PIECE_MS } from './transcribe-endpoint.ts';
 export type { FetchFn, Heard, HeardPart } from './transcribe-endpoint.ts';
@@ -71,6 +74,8 @@ export interface TranscriberDeps {
   pieceMs?: number;
   /** B-088: the plan's transcription of a dictation (default: plan-transcribe.ts, when a plan login is here; tests). */
   plan?: PlanTranscription;
+  /** 16.11.2026: the text model that corrects this PC's model's dictation (default: the helper route, day/helper.ts; false: none; tests). */
+  correct?: StructuredRunner | false;
 }
 
 /** voice.transcribe's input (B-082: `before` – text heard earlier in this take, context; `live` – a spoken conversation line). */
@@ -164,6 +169,8 @@ export class Transcriber implements VoiceApi, SpeechToText {
     const decodes = local?.hostDecodes() ?? false;
     const hearLocal = () => local!.hear({ fileId: input.fileId, mime: ref.mime, name: ref.name, language: input.language, dictation });
     const plan = dictation ? this.deps.plan ?? (planReady(s) ? planTranscribe : undefined) : undefined;
+    // A dictation without the plan says why: a weak transcript is otherwise unexplained (16.11.2026).
+    if (dictation && !plan) s.log?.info('plan transcription skipped', { reason: planMissing(s) }); // ?.: service stubs without a log
     if (plan) { // B-088: whenever the plan's login is here, one request; its text is the text
       const asked = Date.now();
       try {
@@ -190,7 +197,15 @@ export class Transcriber implements VoiceApi, SpeechToText {
       if (heard) {
         // No words heard is no failure to fall back after (silence must not go on to a paid service).
         if (!heard.text && !dictation) throw new WorkforceError('unavailable', 'The transcription returned no usable text.');
-        return dictation && heard.text ? { ...heard, text: markUncertainWords(heard.text, heard.words) } : heard;
+        if (!dictation || !heard.text) return heard;
+        const marked = markUncertainWords(heard.text, heard.words);
+        if (input.live) return { ...heard, text: marked }; // a spoken conversation line waits for no second model
+        // 16.11.2026: this PC's small model mishears names and terms; a text model reads it once with the chat in mind
+        const asked = Date.now();
+        const corrected = await correctDictation(this.corrector(s), marked, this.dictationContext(s, input.chatId, input.before), serviceLanguage(input.language, this.systemLocale()));
+        s.log?.info('local dictation correction', { corrected: corrected !== undefined, ms: Date.now() - asked }); // never the words
+        // the corrected text no longer matches the model's word times, so they do not go along with it
+        return corrected ? { text: corrected, ...(heard.partial ? { partial: heard.partial } : {}) } : { ...heard, text: marked };
       }
     }
     const status = functionStatus(s, 'stt');
@@ -249,6 +264,13 @@ export class Transcriber implements VoiceApi, SpeechToText {
     let vocabulary: string | undefined;
     try { vocabulary = vocabularyPrompt(s.settings.get().voice?.vocabulary); } catch { vocabulary = undefined; }
     return { ...(before?.trim() ? { before: before.trim() } : {}), ...(lastReply ? { lastReply } : {}), ...(vocabulary ? { vocabulary } : {}) };
+  }
+
+  /** The text model that corrects a local dictation, or undefined (none connected, or switched off in tests). */
+  private corrector(s: RuntimeServices): StructuredRunner | undefined {
+    if (this.deps.correct === false) return undefined;
+    if (this.deps.correct) return this.deps.correct;
+    try { return helperOf(s); } catch { return undefined; }
   }
 
   private systemLocale(): string | undefined {

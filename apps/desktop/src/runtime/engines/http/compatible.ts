@@ -165,9 +165,11 @@ export class CompatibleEngine extends HttpEngine {
         }
       }
       if (!finish && !text && !calls.size) throw new HttpEngineError({ code: 'internal', message: 'The model response did not complete.' });
-      const list = [...calls.values()].map((c, i) => ({ id: c.id || `call_${i}`, name: c.name, args: tryJson(c.args || '{}') ?? {} }));
+      const rawCalls = [...calls.values()];
+      const list = rawCalls.map((c, i) => ({ id: c.id || `call_${i}`, name: c.name, args: tryJson(c.args) }));
       const assistant: Record<string, unknown> = { role: 'assistant', content: text || null };
-      if (list.length) assistant.tool_calls = list.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }));
+      // Keep the actual argument string in history, including malformed JSON; the loop returns its error.
+      if (list.length) assistant.tool_calls = list.map((c, i) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: rawCalls[i].args } }));
       messages.push(assistant);
       if (finish === 'length' && !list.length) throw new HttpEngineError({ code: 'internal', message: 'The model response was cut off.' }, usage);
       return { text, calls: list, done: list.length === 0, usage, structured: input.outputSchema ? tryJson(text.trim()) : undefined };

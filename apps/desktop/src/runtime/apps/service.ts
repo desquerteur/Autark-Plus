@@ -9,19 +9,19 @@
 // 'signin' and how to start it). A server that allows no sign-in, a refused key or a refused mail login say so ('signin').
 // A call that meets an expired sign-in tries once more on a refreshed access token. Every change writes status.json
 // and emits 'apps.changed' {id}. Mailboxes are held open and wake their agent on new mail (mail-upkeep.ts, mail-wake.ts).
-// Owns: the live state per connector, the tool host, sign-ins. Never: logs or returns a token, header or env value,
-// writes mcp.json / mail.json after the one-time move, or polls.
+// Owns: the live state per connector, the tool host, sign-ins and the structured mutation apply step. Never: logs or returns a
+// token, header or env value, serializes the lossy read projection back to the connector files, or polls.
 
 import { mailGeneration } from './mail-identity.ts';
-import { SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { AppStatus, ConnectedApp } from '../../shared/model/apps.ts';
 import type { Timers } from '../schedules/scheduler.ts';
 import type { ToolDef } from '../tools/types.ts';
-import { CONNECTORS_DIR, ensureFiles, migrateRecords, readConnectors, STATUS_FILE, writeStatus } from './connectors.ts';
+import { CONNECTORS_DIR, ensureFiles, migrateRecords, mutateConnectors, readConnectors, STATUS_FILE, writeStatus, type ConnectorMutation } from './connectors.ts';
 import { AppConnections } from './connections.ts';
 import type { AppsDeps } from './deps.ts';
 import { MailUpkeep } from './mail-upkeep.ts';
+import { type AttemptMode, type Item, realTimers, resolveHandles } from './service-parts.ts';
 import { addressOf, clip, errorText, hasAuthorization, signInText } from './texts.ts';
 import { cleanServerText } from './tools-schema.ts';
 import { appToolDefs } from './tools.ts';
@@ -30,35 +30,9 @@ import {
   type AppsService, type AppToolHost, type Connector, type MailMark, type McpCallResult, type McpToolDef, type OAuthStart,
 } from './types.ts';
 
-interface Item {
-  connector: Connector;
-  status: AppStatus;
-  error?: string;
-  tools: McpToolDef[];
-  registered: string[];
-  signIn?: OAuthStart;
-  /** The newest attempt: an older one's result is dropped. */
-  gen: number;
-  /** The refused access token was dropped once since the last success. */
-  renewed?: boolean;
-}
-
-interface AttemptMode {
-  /** A 401 may open the browser sign-in. */
-  signIn: boolean;
-  /** Right after a completed sign-in: a 401 again ends in 'signin'. */
-  afterSignIn?: boolean;
-}
-
 /** A server's tools/list_changed lists the tools again after this pause (a burst ends in one listing). */
 export const RELIST_MS = 2_000;
 const TOOL_NAMES_SHOWN = 40;
-const HANDLE = /secret:\/\/([A-Za-z0-9_-]{1,128})/g;
-
-const realTimers: Timers = {
-  set: (fn, ms) => { const handle = setTimeout(fn, ms); handle.unref?.(); return handle; },
-  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
 
 export class Apps implements AppsService {
   readonly host: AppToolHost;
@@ -149,16 +123,44 @@ export class Apps implements AppsService {
     return [...this.items.values()].filter((item) => (item.status === 'ok' || item.status === 'connecting') && item.registered.length > 0).map((item) => item.connector.id);
   }
 
-  async reconnect(id: string): Promise<ConnectedApp> {
+  async reconnect(id: string, expected?: { id: string; name: string; transport: 'http'|'stdio'|'mail' }): Promise<ConnectedApp> {
     const item = this.items.get(id);
     if (!item) throw new WorkforceError('not_found', `No connector "${id}" – see <data>/connectors/status.json for the ids.`, { details: { id } });
-    if (!item.connector.enabled) throw new WorkforceError('conflict', `${item.connector.name} is turned off ("disabled": true in its file).`);
+    const current = readConnectors(this.d.dataDir);
+    const live = current.connectors.find((connector) => connector.id === id);
+    if (!live || current.problems.length || live.fingerprint !== item.connector.fingerprint || live.name !== item.connector.name || live.transport !== item.connector.transport ||
+        (expected && (expected.id !== live.id || expected.name !== live.name || expected.transport !== live.transport))) {
+      throw new WorkforceError('conflict', 'Connector changed; refresh the list.');
+    }
+    if (!live.enabled || !item.connector.enabled) throw new WorkforceError('conflict', `${item.connector.name} is turned off ("disabled": true in its file).`);
     this.endSignIn(id);
     await this.connections.retire(id); // a running agent call ends on the old connection
+    if (this.items.get(id) !== item) throw new WorkforceError('conflict', 'Connector changed; refresh the list.');
+    const afterRetire = readConnectors(this.d.dataDir).connectors.find((connector) => connector.id === id);
+    if (!afterRetire?.enabled || afterRetire.fingerprint !== item.connector.fingerprint) throw new WorkforceError('conflict', 'Connector changed; refresh the list.');
     await this.attempt(id, { signIn: true });
     const app = this.list().find((entry) => entry.id === id);
     if (!app) throw new WorkforceError('not_found', 'The connector was removed.');
     return app;
+  }
+
+  mutate(mutation: ConnectorMutation): void {
+    try { mutateConnectors(this.d.dataDir, mutation); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : 'Connector change was rejected.';
+      const code = /change|no longer exists|refresh/i.test(message) ? 'conflict' : 'bad_request';
+      throw new WorkforceError(code, message, { cause: error });
+    }
+    this.apply(false);
+  }
+
+  validateAdd(entries: Array<{ name: string; entry: Record<string, unknown> }>): void {
+    try { mutateConnectors(this.d.dataDir, { kind: 'add', entries }, { validateOnly: true }); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : 'Connector change was rejected.';
+      const code = /change|no longer exists|refresh/i.test(message) ? 'conflict' : 'bad_request';
+      throw new WorkforceError(code, message, { cause: error });
+    }
   }
 
   /** Test seam and shutdown: resolves once background work (connects, sign-ins, listings) is done. */
@@ -395,16 +397,8 @@ export class Apps implements AppsService {
   // ------------------------------------------------------------------ helpers
 
   /** `text` with every secret://<id> handle filled in from the vault (the runtime's own use). */
-  private async resolve(text: string, host?: string): Promise<string> {
-    const ids = [...new Set([...text.matchAll(HANDLE)].map((match) => match[1]))];
-    if (!ids.length) return text;
-    const values = new Map<string, string>();
-    for (const id of ids) {
-      try { values.set(id, await this.d.services.secrets.use(id, SYSTEM_ID, host || undefined)); } catch {
-        throw new ReconnectNeeded(`secret://${id} is not in the secrets catalog – save it there first (secrets.save).`);
-      }
-    }
-    return text.replace(HANDLE, (match, id: string) => values.get(id) ?? match);
+  private resolve(text: string, host?: string): Promise<string> {
+    return resolveHandles(this.d.services.secrets, text, host);
   }
 
   private current(item: Item, gen: number): boolean {

@@ -9,9 +9,11 @@
 // - Tag (K6): a human text message carries the first addressed agent's current choice as
 //   meta.modelHint – the pin ({pinned: true}), else the hint, with the chat's effort; Auto = no tag.
 // SG: a pin never revives an old hint and a hint never keeps an old pin.
+// F22 (16.11.2026): a choice that changes stamps settings.suggestedAt[agent] with the message's time (chat/suggestion-fresh.ts).
 // Owns: those rules. Never: writes rows (the chat service persists the conversation and the message).
 
 import type { Conversation, ConversationSettings, Member, Message, ModelTag, SendMessageInput } from '../../shared/model/chat.ts';
+import { stampSuggestions } from './suggestion-fresh.ts';
 
 /** The agents a message addresses (see the header), first the one its tag is for; [] in a chat without agents. */
 export function addressedAgents(message: Pick<Message, 'mentions'>, members: readonly Member[]): string[] {
@@ -47,7 +49,7 @@ export function applyStickyModel(conversation: Conversation, message: Message, i
     }
     if (input.effort !== undefined) { if (input.effort === 'auto') delete efforts[id]; else efforts[id] = input.effort; }
   }
-  conversation.settings = cleanSettings({ ...conversation.settings, models, modelHints: hints, efforts });
+  conversation.settings = cleanSettings(stampSuggestions(conversation.settings, { ...conversation.settings, models, modelHints: hints, efforts }, message.createdAt));
   conversation.updatedAt = message.createdAt;
   return true;
 }
@@ -57,6 +59,7 @@ export function cleanSettings(settings: ConversationSettings): ConversationSetti
   if (out.models && !Object.keys(out.models).length) delete out.models;
   if (out.efforts && !Object.keys(out.efforts).length) delete out.efforts;
   if (out.modelHints && !Object.keys(out.modelHints).length) delete out.modelHints;
+  if (out.suggestedAt && !Object.keys(out.suggestedAt).length) delete out.suggestedAt;
   for (const key of Object.keys(out) as Array<keyof ConversationSettings>) if (out[key] === undefined) delete out[key];
   return out;
 }

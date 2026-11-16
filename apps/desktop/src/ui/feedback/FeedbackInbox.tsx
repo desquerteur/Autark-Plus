@@ -1,10 +1,11 @@
-// Owns: the team's local feedback inbox: fetch on opening or Refresh, select text and screenshot, remove a report;
+// Owns: the team's local feedback inbox: fetch on opening or Refresh, select text and screenshot, remove a report,
+// mark one done or not relevant (feedback 16.11.2026; the runtime removes a marked report 7 days later);
 // each report's meta line starts with the same short report number its sender saw (B-085).
 // Never: exposes keys, polls the mailbox or renders a report as HTML. The runtime permits inbox calls only to the owner.
 
 import { signal } from '@preact/signals';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { reportNumber, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
+import { FEEDBACK_HANDLED_KEEP_MS, reportNumber, type FeedbackHandled, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { errorText, rpc } from '../lib/rpc.ts';
@@ -30,17 +31,27 @@ export function FeedbackInboxEntry(props: { shown: boolean; onOpen: () => void }
   return <div class="feedback-inbox-entry">{receiving && <button type="button" class="button ghost small" onClick={props.onOpen}>Inbox</button>}</div>;
 }
 
-function ReportRow(props: { item: FeedbackInboxItem; selected: boolean; select: () => void; remove: () => void; busy: boolean }) {
+const HANDLED_LABEL: Record<FeedbackHandled, string> = { done: 'Done', irrelevant: 'Not relevant' };
+
+/** "Done · goes 23 Nov" – the mark and the day the runtime removes the report. */
+export function handledText(handled: NonNullable<FeedbackInboxItem['handled']>): string {
+  return `${HANDLED_LABEL[handled.as]} · goes ${new Date(handled.at + FEEDBACK_HANDLED_KEEP_MS).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+}
+
+function ReportRow(props: { item: FeedbackInboxItem; selected: boolean; select: () => void; remove: () => void; mark: (as: FeedbackHandled | null) => void; busy: boolean }) {
   const { item } = props;
   const menu = useContextMenu(() => [{ items: [
     { label: 'Read', onSelect: props.select },
+    ...(item.handled
+      ? [{ label: 'Clear mark', onSelect: () => props.mark(null), disabled: props.busy }]
+      : [{ label: 'Mark done', onSelect: () => props.mark('done'), disabled: props.busy }, { label: 'Not relevant', onSelect: () => props.mark('irrelevant'), disabled: props.busy }]),
     { label: 'Delete', onSelect: props.remove, disabled: props.busy },
   ] }]);
   return (
     <button type="button" class={`feedback-inbox-row${props.selected ? ' selected' : ''}`} aria-pressed={props.selected}
       title={item.text} onClick={props.select} {...menu}>
       <span>{item.text}</span>
-      <small>{new Date(item.createdAt).toLocaleString()}</small>
+      <small>{new Date(item.createdAt).toLocaleString()}{item.handled ? ` · ${HANDLED_LABEL[item.handled.as]}` : ''}</small>
     </button>
   );
 }
@@ -117,6 +128,22 @@ function InboxContent() {
       if (live.current) setBusy(false);
     }
   };
+  const mark = async (id: string, as: FeedbackHandled | null) => {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await rpc.call('feedback.inboxMark', { id, as });
+      await list();
+      if (live.current) setMessage(as ? `Marked ${HANDLED_LABEL[as].toLowerCase()}. It goes from this PC in 7 days.` : 'Mark cleared.');
+    } catch (err) {
+      if (live.current) { setFailed(true); setMessage(errorText(err)); }
+    } finally {
+      running.current = false;
+      if (live.current) setBusy(false);
+    }
+  };
   useEffect(() => { void refresh(); return () => { live.current = false; }; }, []);
 
   return (
@@ -124,12 +151,12 @@ function InboxContent() {
       <div class="feedback-inbox-content">
         <div class="feedback-inbox-list" aria-label="Feedback reports">
           {items.map((item) => <ReportRow key={item.id} item={item} selected={item.id === selected} busy={busy}
-            select={() => { selectedReport.value = item.id; }} remove={() => void remove(item.id)} />)}
+            select={() => { selectedReport.value = item.id; }} remove={() => void remove(item.id)} mark={(as) => void mark(item.id, as)} />)}
           {!items.length && <p class="feedback-inbox-empty">{busy ? 'Loading reports…' : 'No reports yet.'}</p>}
         </div>
         <section class="feedback-inbox-report" aria-label="Selected feedback">
           {current ? <>
-            <p class="feedback-inbox-meta">No. {reportNumber(current.id)} · {new Date(current.createdAt).toLocaleString()} · {current.appVersion} · {current.os}{current.fromAgent ? ' · Agent report' : ''}</p>
+            <p class="feedback-inbox-meta">No. {reportNumber(current.id)} · {new Date(current.createdAt).toLocaleString()} · {current.appVersion} · {current.os}{current.fromAgent ? ' · Agent report' : ''}{current.handled ? ` · ${handledText(current.handled)}` : ''}</p>
             <p class="feedback-inbox-text">{current.text}</p>
             <ReportScreenshot key={current.id} item={current} />
             {current.diagnostics && <details><summary>Diagnostics</summary><pre>{current.diagnostics}</pre></details>}
@@ -137,6 +164,12 @@ function InboxContent() {
         </section>
       </div>
       <DialogActions message={message} tone={failed ? 'error' : 'muted'}>
+        {current?.handled
+          ? <button type="button" class="button secondary" disabled={busy} onClick={() => void mark(current.id, null)}>Clear mark</button>
+          : <>
+            <button type="button" class="button secondary" disabled={busy || !current} onClick={() => current && void mark(current.id, 'irrelevant')}>Not relevant</button>
+            <button type="button" class="button secondary" disabled={busy || !current} onClick={() => current && void mark(current.id, 'done')}>Mark done</button>
+          </>}
         <button type="button" class="button secondary" disabled={busy || !current} onClick={() => current && void remove(current.id)}>Delete</button>
         <button type="button" class="button primary feedback-inbox-refresh" disabled={busy} onClick={() => void refresh()}>Refresh</button>
       </DialogActions>

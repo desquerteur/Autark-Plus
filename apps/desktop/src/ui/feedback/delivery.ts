@@ -47,6 +47,14 @@ export function canSendAgain(status: FeedbackReport['status'], sending: boolean 
   return sending === true && (status === 'local' || status === 'draft' || status === 'queued');
 }
 
+/** Feedback 16.11.2026 (F10): how long a confirmed "Sent." stays before the form closes by itself. */
+export const SENT_CLOSE_MS = 2500;
+
+/** Only a report the mailbox confirmed closes by itself; a saved or failed one waits for Close or Send again. */
+export function closesBySelf(report: Pick<FeedbackReport, 'status'> | null, error: string | null): boolean {
+  return report?.status === 'sent' && !error;
+}
+
 export function sendAgainLabel(busy: boolean): string {
   return busy ? 'Sending…' : 'Send again';
 }

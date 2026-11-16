@@ -71,7 +71,9 @@ export function fakeMailbox(options: { accountKey?: KeyObject; origin?: string }
       const fields = JSON.parse(String(init?.body)).fields;
       log.push(`create ${docId}`);
       if (docs.has(docId)) return json({ error: { code: 409, status: 'ALREADY_EXISTS' } }, 409);
-      if (Object.keys(fields).sort().join() !== 'sealed,v' || fields.v.integerValue !== '1') return json({ error: { status: 'PERMISSION_DENIED' } }, 403);
+      // As firestore.rules v2 (16.11.2026): v = 1 and sealed, optionally exp (a timestamp).
+      const keys = Object.keys(fields).sort().join();
+      if ((keys !== 'sealed,v' && keys !== 'exp,sealed,v') || fields.v.integerValue !== '1' || (fields.exp && typeof fields.exp.timestampValue !== 'string')) return json({ error: { status: 'PERMISSION_DENIED' } }, 403);
       docs.set(docId, Buffer.from(fields.sealed.bytesValue, 'base64'));
       if (state.create === 'lose') throw new TypeError('connection reset'); // stored, but the answer never arrives
       return json({ name: `projects/${PROJECT}/databases/(default)/documents/feedback/${docId}`, fields: { v: { integerValue: '1' } } });

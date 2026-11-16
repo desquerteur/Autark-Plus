@@ -1,8 +1,7 @@
 // Settings › Apps: the connected apps, read from <data>/connectors/mcp.json and mail.json (apps.list), each with its address and
-// status in one reserved line, one action in a fixed cell (Test, Connect again, the open sign-in page) and its on/off switch; a right
-// click offers its tools, a token, its file and Remove. Below them "Add an app" (apps-add.tsx). Every change is one edit of those
-// files (apps-files.ts), the same the AI makes through the skill connect-apps – "Set up with AI" opens that chat. Reloaded by
-// 'apps.changed' and on reconnect, no polling. A connection that may not write files sees the list and Connect again.
+// status in one reserved line, one action in a fixed cell and its on/off switch; the menu offers tools, a token, a desktop-only file
+// view and Remove. Structured apps.* calls mutate named entries; this UI does not give a phone files.writePath. The desktop-only
+// mailbox form still uses the existing editor. apps.changed reloads the list. Sign-in and stdio commands run on the PC.
 // Owns: these rows and the tools dialog. Never: holds a token, header value or vault id.
 
 import { useEffect, useState } from 'preact/hooks';
@@ -11,46 +10,48 @@ import { confirm, Dialog, DialogActions } from '../lib/dialog.tsx';
 import type { MenuItem } from '../lib/popover.tsx';
 import { openExternal } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
-import { can } from '../lib/session.ts';
+import { can, isOwner } from '../lib/session.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
 import { setUpWithAi } from '../team/set-up-with-ai.ts';
 import { act, ActionButton, Group, Note, Row, Toggle, useAsync, useBusy } from './controls.tsx';
 import { AddApps, TokenDialog } from './apps-add.tsx';
-import { appAction, appLine, editConnectors, fileOf, patchedEntry, switchPatch, toolCount, withoutEntry } from './apps-files.ts';
+import { appAction, appLine, toolCount } from './apps-files.ts';
 import { openInTab } from './open-file.ts';
 
 function AppRow(props: { app: ConnectedApp; onChanged: () => void; onTools: () => void; onToken: () => void }) {
   const { app } = props;
   const [busy, run] = useBusy();
-  const file = fileOf(app);
-  const editable = can('files.writePath');
-  const action = appAction(app);
+  const canToggle = can('apps.setEnabled');
+  const canRemove = can('apps.remove') && (app.transport !== 'mail' || isOwner());
+  const canToken = can('apps.setToken') && app.transport === 'http' && can('secrets.save');
+  const hostSignInNeeded = !isOwner() && app.status === 'waiting';
+  const action = hostSignInNeeded ? undefined : appAction(app);
   const press = () => {
-    if (action?.kind === 'page') { openExternal(app.signInUrl!); return; }
+    if (action?.kind === 'page') { if (isOwner()) openExternal(app.signInUrl!); return; }
     void run(async () => {
-      const tested = await rpc.call('apps.reconnect', { id: app.id });
+      const tested = await rpc.call('apps.reconnect', { id: app.id, name: app.name, transport: app.transport });
       if (action?.kind === 'test' && tested.status === 'ok') pushToast({ title: `${tested.name} works`, body: toolCount(tested.tools) });
       props.onChanged();
     });
   };
-  const setOn = (on: boolean) => void act(() => editConnectors(file, (text) => patchedEntry(file, text, app.name, switchPatch(on))), 'Could not save');
+  const setOn = (enabled: boolean) => void act(() => rpc.call('apps.setEnabled', { id: app.id, name: app.name, transport: app.transport, enabled }), 'Could not save');
   const remove = async () => {
     const ok = await confirm({ title: `Remove ${app.name}?`, body: 'Its tools leave every agent and its sign-in ends. A key it uses stays in Settings › Secrets.', confirmLabel: 'Remove', danger: true });
-    if (ok) await act(() => editConnectors(file, (text) => withoutEntry(file, text, app.name)), 'Could not remove it');
+    if (ok) await act(() => rpc.call('apps.remove', { id: app.id, name: app.name, transport: app.transport }), 'Could not remove it');
   };
   const menu = () => {
     const items: MenuItem[] = [{ label: 'Show tools', onSelect: props.onTools }];
-    if (editable && app.transport === 'http') items.push({ label: 'Add a token', onSelect: props.onToken });
-    if (editable) items.push({ label: `Open ${file}`, onSelect: () => void openInTab(`connectors/${file}`) });
-    return [{ items }, ...(editable ? [{ items: [{ label: 'Remove', danger: true, onSelect: () => void remove() }] }] : [])];
+    if (canToken) items.push({ label: 'Add a token', onSelect: props.onToken });
+    if (isOwner() && can('files.writePath')) { const file = app.transport === 'mail' ? 'mail.json' : 'mcp.json'; items.push({ label: `Open ${file}`, onSelect: () => void openInTab(`connectors/${file}`) }); }
+    return [{ items }, ...(canRemove ? [{ items: [{ label: 'Remove', danger: true, onSelect: () => void remove() }] }] : [])];
   };
   return (
-    <Row class="apps-row" label={app.name} hint={appLine(app)} reserve menu={menu}>
+    <Row class="apps-row" label={app.name} hint={hostSignInNeeded ? `${app.address} · Sign in in the PC browser` : appLine(app)} reserve menu={menu}>
       <span class="account-slot">
         {action && (action.kind === 'page' || can('apps.reconnect')) && <ActionButton label={action.label} busy={busy || action.wait} onClick={press} />}
       </span>
-      {editable && <Toggle label={`${app.name} on`} checked={app.status !== 'off'} onChange={setOn} />}
+      {canToggle && <Toggle label={`${app.name} on`} checked={app.status !== 'off'} onChange={setOn} />}
     </Row>
   );
 }
@@ -94,7 +95,7 @@ export function AppsPage() {
       </Group>
       <ToolsDialog app={apps.find((app) => app.id === toolsOf)} onClose={() => setToolsOf(undefined)} />
       <TokenDialog target={tokenFor ? { kind: 'app', app: tokenFor } : null} onClose={() => setTokenFor(null)} />
-      {can('files.writePath') && list.data && <AddApps apps={apps} />}
+      {can('apps.add') && list.data && <AddApps apps={apps} />}
     </>
   );
 }

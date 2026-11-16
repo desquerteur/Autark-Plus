@@ -3,7 +3,8 @@
 // Each line has the delta's form (13.11.2026: its label names chat and author – context/render.ts lineLabel) –
 // "[ch_… \"Title\" · Name · HH:MM #57] (important) text", a quiet one "… · Name (quiet) · …"
 // (B-050 K5, shared/model/chat.ts messageLevel), a text message about a task ending with " [task <id>]", a person's
-// line naming their model suggestion in its label ("· suggests …", render.ts suggestionTag: it is a new line) – stamped in the person's
+// line naming their model suggestion in its label ("· picked … for this message" or "· earlier suggested …", F22: render.ts
+// suggestionTag; it is a new line) – stamped in the person's
 // zone and named by context/render.ts authorName (the person by the profile name, "(agent)" on an
 // org member called like the person, "(external agent)" / "(external contact)" for 'ext:'
 // members, C8) – and its body is neutralized like the delta's: no body line can start with a

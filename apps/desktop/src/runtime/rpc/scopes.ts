@@ -58,7 +58,7 @@ const BUS_ONLY: ReadonlySet<string> = new Set(['task.changed', 'phoneUse.reply',
 /** B-078: accounts on the phone (accounts.* is 'settings' on a secure transport, rpc/handlers/providers.ts). */
 const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed']);
 /** B-084 (D6): Settings › Devices on the phone (remote.* / devices.* are 'settings' on a secure transport). */
-const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed']);
+const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed', 'apps.changed']);
 
 /** True for a syntactically valid topic ('chats' … or 'chat:<id>' / 'runs:<agentId>' / 'browser:<agentId>'). */
 export function isTopic(value: unknown): value is Topic {

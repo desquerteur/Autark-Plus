@@ -17,6 +17,12 @@ import { Bus } from '../bus.ts';
 import { openDatabase, upgradePending } from '../db/upgrade.ts';
 import { systemClock } from '../system/clock.ts';
 import { databasePath, enginePromptDir } from '../system/paths.ts';
+import { HomeOwners, canonicalDirectory, conflict } from '../accounts/home-owner.ts';
+import type { TransferCommand } from '../accounts/company-transfer.ts';
+import { callCompany, companyFolder } from '../root/companies.ts';
+import { isCompanyId, parseRuntimeFile, RUNTIME_FILE } from '../../shared/model/companies.ts';
+import { readFileSync, mkdirSync } from 'node:fs';
+import { companyRole } from '../tools/builtin/companies.ts';
 import { Supervisor } from '../system/supervisor.ts';
 import { SettingsStore } from '../settings/service.ts';
 import { watchRemovedChats } from '../root/side-tabs.ts';
@@ -164,6 +170,18 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   onArrival(s.files, (id) => media.arrived(id)); // B-080 F4: bytes a pull brought later are probed then
 
   const supervisor = new Supervisor({ log });
+  const companyInfo = host.app.companies;
+  let homeOwners: HomeOwners | undefined;
+  if (companyInfo) {
+    mkdirSync(paths.accounts, { recursive: true });
+    const data = canonicalDirectory(paths.data);
+    const first = canonicalDirectory(companyInfo.first);
+    const company = data === first ? 'first' : path.basename(data);
+    const expected = company === 'first' ? first : companyFolder(host.app, company);
+    if (!expected || canonicalDirectory(expected) !== data) conflict('Unrecognized company store for Claude ownership.');
+    homeOwners = new HomeOwners(path.join(companyInfo.dir, '.claude-home-ownership'), { company, data: paths.data, accounts: paths.accounts });
+    supervisor.setHomeOwners(homeOwners);
+  }
   const finder = new ExecutableFinder();
   // One prompt set for the runtime – the shipped prompts and the person's own versions in <data>/prompts (any prompt).
   const prompts = new PromptTemplates(() => path.join(paths.resources, 'prompts'), () => log, { data: () => paths.data });
@@ -217,7 +235,7 @@ export async function createCore(options: CoreOptions): Promise<Core> {
 
   // Accounts own CLI homes + API keys; keys go through the vault (agents never see them).
   const accounts = new AccountServiceImpl({
-    db, bus, clock, paths, log, finder, supervisor, demo: options.fakeEngine,
+    db, bus, clock, paths, log, finder, supervisor, homeOwners, demo: options.fakeEngine,
     version: options.version, // PR8: the client version ACP sign-in probes report
     enginePrompts: enginePromptDir(paths), // B-049 F3: Gemini CLI's own prompt replaced by ours (engines/acp/providers.ts)
     engines: () => s.engines,
@@ -229,6 +247,20 @@ export async function createCore(options: CoreOptions): Promise<Core> {
     },
   });
   s.accounts = accounts;
+  if (homeOwners) {
+    const peer = (company: string) => {
+      if (companyRole(s) !== 'owner') return conflict('Company handoff is available only to local owners.');
+      if (company !== 'first' && !isCompanyId(company)) return conflict('Invalid company id.');
+      const dir = companyFolder(host.app, company === 'first' ? null : company);
+      if (!dir) return conflict('Company is not local.');
+      const data = canonicalDirectory(dir);
+      const runtime = parseRuntimeFile(readFileSync(path.join(data, RUNTIME_FILE), 'utf8'));
+      if (!runtime) return conflict('Peer runtime is not ready.');
+      try { process.kill(runtime.pid, 0); } catch { return conflict('Peer runtime is not running.'); }
+      return { data, pid: runtime.pid };
+    };
+    accounts.configureTransfers({ peer, call: (company, command: TransferCommand) => callCompany(peer(company).data, 'accounts.transfer', command, { timeoutMs: 15_000 }) });
+  }
   const engines = createEngineRegistry({
     supervisor, finder, paths, version: options.version, fake: options.fakeEngine,
     apiKey: (account) => accounts.apiKey(account.id),

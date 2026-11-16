@@ -31,6 +31,10 @@
 // or rotates mid-turn.
 
 import os from 'node:os';
+import { existsSync } from 'node:fs';
+import { probeClaudeQuiescence } from './claude-quiescence.ts';
+import { CompanyTransfers, type TransferCommand, type TransferResult, type TransferDeps } from './company-transfer.ts';
+import { conflict } from './home-owner.ts';
 import type { AccountService as AccountServiceContract } from '../contracts.ts';
 import { DECISION_PROVIDER, MEDIA_ONLY_PROVIDERS, type Account, type AccountLimits, type DetectionReport, type EngineId, type ProviderId, type UsageSummary } from '../../shared/model/providers.ts';
 import { AccountRepo } from './repo.ts';
@@ -82,6 +86,7 @@ export class AccountServiceImpl implements AccountServiceContract {
   private checking = false;
   /** Throwaway account id → the typed key while an endpoint test runs (endpoint-test.ts). */
   private readonly testKeys = new Map<string, string>();
+  private transfers?: CompanyTransfers;
   private disposed = false; // set by dispose(): a check that ends during shutdown stores nothing
   /** Accounts the person is signing out of right now (logout()). */
   private readonly signingOut = new Set<string>();
@@ -135,6 +140,19 @@ export class AccountServiceImpl implements AccountServiceContract {
   private now(): number { return this.deps.clock.now(); }
   private env(): NodeJS.ProcessEnv { return this.deps.env ?? process.env; }
 
+  configureTransfers(ports: Pick<TransferDeps, 'peer' | 'call'> & Partial<Pick<TransferDeps, 'externalQuiet'>>): void {
+    if (!this.deps.homeOwners) return;
+    for (const a of this.repo.list()) if (a.home && existsSync(a.home)) this.deps.homeOwners.register(a);
+    this.transfers = new CompanyTransfers({ externalQuiet: () => probeClaudeQuiescence(this.deps.supervisor, this.deps.homeOwners!.runtime.boot), ...ports, owners: this.deps.homeOwners, get: id => this.get(id), save: a => this.save(a), forget: id => { const a = this.require(id); this.forget(a); } });
+  }
+  transfer(command: TransferCommand): Promise<TransferResult> {
+    if (!this.transfers) return Promise.reject(new WorkforceError('unavailable', 'This runtime does not support local company handoff.'));
+    return this.transfers.run(command);
+  }
+  homeSyncAllowed(account: Account): boolean { return this.homeAllowed(account) && !this.deps.supervisor.homeProtected(account); }
+  homeAllowed(account: Account): boolean { return this.deps.supervisor.homeAllowed(account); }
+  withHome<T>(account: Account, kind: string, work: () => Promise<T>): Promise<T> { return this.deps.supervisor.withClaudeHome(account, kind, work); }
+  private assertHome(account: Account): void { if (!this.homeAllowed(account)) conflict('Claude home is fenced or belongs to another company.'); }
   list(): Account[] { return this.repo.list(); }
   get(id: string): Account | undefined { return this.repo.get(id); }
 
@@ -145,6 +163,7 @@ export class AccountServiceImpl implements AccountServiceContract {
   }
 
   private save(account: Account): Account {
+    if (account.home && existsSync(account.home)) this.deps.homeOwners?.register(account);
     this.repo.save(account);
     this.deps.bus.emit('account.upserted', account);
     return account;
@@ -194,6 +213,7 @@ export class AccountServiceImpl implements AccountServiceContract {
   /** `credits` (B-083): the account holds a plan's monthly API credits – charged and routed like a plan (shared/model/charge.ts). */
   update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'enabled' | 'credits'>>): Account {
     const account = this.require(id);
+    if (patch.enabled === true) this.assertHome(account);
     const next: Account = { ...account };
     if (typeof patch.label === 'string' && patch.label.trim()) {
       next.label = patch.label.trim().slice(0, 80);
@@ -219,6 +239,9 @@ export class AccountServiceImpl implements AccountServiceContract {
    * B-091 `away`: the person started it on their phone and finishes it there (Codex: `code`, Claude Code: `paste` → loginCode).
    */
   async login(id: string, options: { page?: boolean; away?: boolean } = {}): Promise<{ started: boolean; url?: string } & AwaySignIn> {
+    return this.withHome(this.require(id), 'login', () => this.loginOwned(id, options));
+  }
+  private async loginOwned(id: string, options: { page?: boolean; away?: boolean } = {}): Promise<{ started: boolean; url?: string } & AwaySignIn> {
     const account = this.require(id);
     const result = AcpPlans.handles(account.provider) ? await this.acp.login(account) : await this.signIns.login(account, options.page === true, options.away === true);
     this.homes.started(account);
@@ -226,13 +249,15 @@ export class AccountServiceImpl implements AccountServiceContract {
   }
 
   /** B-091: the code the Claude sign-in page showed the person, into the running away sign-in; ok = the account works now. */
-  async loginCode(id: string, code: string): Promise<{ ok: boolean }> {
-    this.require(id);
+  async loginCode(id: string, code: string): Promise<{ ok: boolean }> { return this.withHome(this.require(id), 'login-code', () => this.loginCodeOwned(id, code)); }
+  private async loginCodeOwned(id: string, code: string): Promise<{ ok: boolean }> {
+    this.assertHome(this.require(id));
     return this.signIns.code(id, code);
   }
 
   /** Signs out through the CLI (Codex, Claude Code); ACP plans have none Workforce could start. It stays signed out here: no login from a linked PC comes back. */
-  async logout(id: string): Promise<void> {
+  async logout(id: string): Promise<void> { return this.withHome(this.require(id), 'logout', () => this.logoutOwned(id)); }
+  private async logoutOwned(id: string): Promise<void> {
     const account = this.require(id);
     if (AcpPlans.handles(account.provider)) this.acp.logout(account);
     this.signingOut.add(id); // a check meanwhile sees the CLI signed out: the person's own, no sign-in work (check)
@@ -243,10 +268,15 @@ export class AccountServiceImpl implements AccountServiceContract {
     } finally { this.signingOut.delete(id); }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string): Promise<void> { return this.withHome(this.require(id), 'remove', () => this.removeOwned(id)); }
+  private async removeOwned(id: string): Promise<void> {
     const account = this.require(id);
+    this.assertHome(account);
+    if (this.deps.supervisor.homeProtected(account)) conflict('Handoff homes are preserved. Use the supported drained rollback/detach protocol, never delete the source home.');
     if (this.file?.has(id)) { this.file.remove(id); return; } // the file's sync takes the account out; its key stays in the catalog
     await this.signIns.cancel(id);
+    this.assertHome(account); // destructive admission prevents prepare until the whole async delete ends
+    if (this.deps.supervisor.homeProtected(account)) conflict('Handoff source/target homes cannot be deleted.');
     // the account's own typed key goes with it; a catalog entry it only names (a handle) stays the person's
     if (account.secretId && !handleId(account.secretId)) { try { this.deps.secrets.remove(account.secretId); } catch { /* already gone */ } }
     await this.homes.remove(account); // only exactly <accounts>/<its provider>/<its id>
@@ -315,7 +345,8 @@ export class AccountServiceImpl implements AccountServiceContract {
    * `details`: Codex reads its banked resets' credit details too (else the count, monitor.ts).
    * An environment key that is not set is 'needs_login'; a set one without an engine (model data) is 'ok'.
    */
-  async check(id: string, background = false, details = false): Promise<Account> {
+  async check(id: string, background = false, details = false): Promise<Account> { return this.withHome(this.require(id), 'check', () => this.checkOwned(id, background, details)); }
+  private async checkOwned(id: string, background = false, details = false): Promise<Account> {
     const account = this.require(id);
     const env = account.auth === 'env' && account.enabled ? envKey(account, this.env()) !== undefined : undefined;
     if (env === false) return this.save({ ...account, state: 'needs_login', checkedAt: this.now() });

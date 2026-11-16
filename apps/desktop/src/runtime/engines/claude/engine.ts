@@ -149,7 +149,8 @@ export class ClaudeEngine implements Engine {
     });
   }
 
-  async listModels(account: Account): Promise<EngineModel[]> {
+  listModels(account: Account): Promise<EngineModel[]> { return this.deps.supervisor.withClaudeHome(account, 'catalog', () => this.listOwned(account)); }
+  private async listOwned(account: Account): Promise<EngineModel[]> {
     const exe = account.state === 'needs_login' ? null : await this.deps.finder.find('claude');
     const probe = exe ? await this.status.probe(exe, account) : undefined;
     // No answer and no earlier list: the static list would drop the CLI's own models (1M variants,
@@ -201,7 +202,8 @@ export class ClaudeEngine implements Engine {
 
   private switched(turn: LiveTurn, model: string): void { turn.model = model; turn.emit({ type: 'model', model, effort: turn.effort }); }
 
-  async run(input: EngineTurnInput): Promise<EngineTurnResult> {
+  run(input: EngineTurnInput): Promise<EngineTurnResult> { return this.deps.supervisor.withClaudeHome(input.account, 'turn', () => this.runOwned(input)); }
+  private async runOwned(input: EngineTurnInput): Promise<EngineTurnResult> {
     const exe = await this.deps.finder.find('claude');
     if (!exe) return { text: '', stop: 'error', error: ERR.unavailable('Claude Code is not installed.') };
     let resume = input.session?.ref;
@@ -353,13 +355,13 @@ export class ClaudeEngine implements Engine {
   }
 
   /** The ledger's history as a fresh transcript for the probed tier; the next turn resumes it (rebuilder.ts). */
-  rebuild(input: EngineRebuildInput): Promise<EngineRebuildResult> { return this.rebuilds.rebuild(input); }
+  rebuild(input: EngineRebuildInput): Promise<EngineRebuildResult> { return this.deps.supervisor.withClaudeHome(input.account, 'rebuild', () => this.rebuilds.rebuild(input)); }
 
   /** The CLI version the rebuild probe is kept for. */
   rebuildVersion(): Promise<string | undefined> { return this.rebuilds.cliVersion(); }
 
   /** The model-free probe of the rebuild tiers in `cwd`. */
-  probeRebuild(account: Account, cwd: string): Promise<RebuildProbe> { return this.rebuilds.probe(account, cwd); }
+  probeRebuild(account: Account, cwd: string): Promise<RebuildProbe> { return this.deps.supervisor.withClaudeHome(account, 'probe', () => this.rebuilds.probe(account, cwd)); }
 
   /** B-057 (fork.ts): reserves a forked session of the parent; its first turn resumes the parent with --fork-session. */
   fork(input: EngineForkInput): Promise<EngineForkResult> { return this.forks.fork(input, this.folders.get(input.parentRef)); }
@@ -368,7 +370,7 @@ export class ClaudeEngine implements Engine {
   deleteSession(account: Account, ref: string): Promise<'deleted' | 'missing'> {
     this.folders.delete(ref);
     this.forks.drop(ref); // B-057: a split's fork that never ran
-    return this.rebuilds.delete(account, ref);
+    return this.deps.supervisor.withClaudeHome(account, 'session-delete', () => this.rebuilds.delete(account, ref));
   }
 
   /** Remembers the folder of a session's turn (at most MAX_FOLDERS sessions, the oldest go first). */
@@ -408,7 +410,8 @@ export class ClaudeEngine implements Engine {
    * (purge.ts). The account is held from this call on (set before the first await): a turn of it waits
    * until the purge ended, so it never resumes or writes a transcript the purge is deleting.
    */
-  purgeHistories(account: Account): Promise<{ purged: boolean; message?: string }> {
+  purgeHistories(account: Account): Promise<{ purged: boolean; message?: string }> { return this.deps.supervisor.withClaudeHome(account, 'purge', () => this.purgeOwned(account)); }
+  private purgeOwned(account: Account): Promise<{ purged: boolean; message?: string }> {
     if (this.purging.has(account.id)) return Promise.reject(Object.assign(new Error("Claude Code is already deleting this account's histories."), { code: 'conflict' }));
     const job = (async () => {
       const exe = await this.deps.finder.find('claude');

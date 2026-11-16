@@ -21,7 +21,7 @@ import type { Account, EngineId } from '../../../shared/model/providers.ts';
 import type { AccountCheck, CacheTokens, Engine, EngineCaps, EngineEvent, EngineModel, EngineTurnInput, EngineTurnResult } from '../types.ts';
 import type { ToolOutput } from '../../tools/types.ts';
 import { hasTrace, type TraceCall } from '../../../shared/model/subconscious.ts';
-import { ToolNames, addCache, safeCall, outputText } from '../shared.ts';
+import { ToolNames, addCache, safeCall, outputText, isRecord } from '../shared.ts';
 import { HttpEngineError, LOCAL_PROVIDERS, MAX_TOOL_ITERATIONS, endpointFor, readJson, redact, statusError, turnError, type FetchFn } from './common.ts';
 
 /** A call the model chose before a steered message arrived is not started; the model re-checks it with the message. */
@@ -232,6 +232,8 @@ export abstract class HttpEngine implements Engine {
           let output: ToolOutput;
           if (!name) output = { content: [{ type: 'text', text: `Unknown tool: ${call.name}` }], isError: true };
           else if (this.steering.get(input.runId)?.length) output = { content: [{ type: 'text', text: NOT_RUN_STEERED }], isError: true }; // decided before the new message
+          // A malformed call is not a no-argument action: let the model correct it before any tool runs.
+          else if (!isRecord(call.args)) output = { content: [{ type: 'text', text: 'Tool arguments must be a valid JSON object. Correct the arguments and try again.' }], isError: true };
           else {
             safeEmit({ type: 'tool_start', callId: call.id, name, args: call.args, own: false });
             output = await safeCall(input.callTool, name, call.args, call.id);

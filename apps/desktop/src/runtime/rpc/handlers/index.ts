@@ -9,6 +9,7 @@ import { register as org } from './org.ts';
 import { register as chats } from './chats.ts';
 import { register as tasks } from './tasks.ts';
 import { register as knowledge } from './knowledge.ts';
+import { register as skillEditor } from './skill-editor.ts';
 import { register as files } from './files.ts';
 import { register as filesPath } from './files-path.ts'; // the pane's file tab: read, write and list by path
 import { register as providers } from './providers.ts';
@@ -51,7 +52,7 @@ import { register as session } from './session.ts';
  * then the rest (portability.ts also registers agents.export/derive and system.backup/restore),
  * then session.ts (session.info reads the finished table at call time).
  */
-export const HANDLER_MODULES: readonly HandlerModule[] = [system, org, chats, tasks, knowledge, files, filesPath, providers, security, devices, app, media, portability, bridges, browser, sideView, work, remote, relay, taskCenter, references, teamStart, calls, repair, people, providerHistory, notes, agentCore, calendar, day, chatFiles, connectedApps, feedbackInbox, splits, abilities, pages, companies, sideTabs, phoneUse, rpcMethods, session];
+export const HANDLER_MODULES: readonly HandlerModule[] = [system, org, chats, tasks, knowledge, skillEditor, files, filesPath, providers, security, devices, app, media, portability, bridges, browser, sideView, work, remote, relay, taskCenter, references, teamStart, calls, repair, people, providerHistory, notes, agentCore, calendar, day, chatFiles, connectedApps, feedbackInbox, splits, abilities, pages, companies, sideTabs, phoneUse, rpcMethods, session];
 
 export function createHandlerTable(): HandlerTable {
   const table = new HandlerTable();

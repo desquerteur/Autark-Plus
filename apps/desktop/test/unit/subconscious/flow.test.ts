@@ -266,7 +266,7 @@ test('v1: the agent\'s card follows the subconscious\'s own text in every step �
     '## Now',
     '- It runs on codex · GPT-6.1 Sol · effort high.',
     '- Its task: "Intro schneiden" (open).',
-    '- Alex suggests Luna · effort low for it in this chat.',
+    '- Alex picked Luna · effort low for it in this chat for their newest message – what they want now.', // F22: sent with the line
     '- Its context: about 42k tokens per model call.',
   ].join('\n'));
   assert.ok(!first.system.includes('Ich schneide die Videos') && !first.system.includes('# How I work') && !first.system.includes('<main-ai-prompt>'), 'its role text and the main AI\'s prompt stay out');

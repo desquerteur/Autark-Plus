@@ -2,6 +2,8 @@
 // default account labels per provider (split from service.ts, B-044 integration).
 // Owns: these shapes and labels. Never: behaviour – the service is accounts/service.ts.
 
+import type { HomeOwners } from './home-owner.ts';
+import type { TransferCommand, TransferResult } from './company-transfer.ts';
 import type { Clock, EngineRegistry, Logger, Paths } from '../contracts.ts';
 import type { Bus } from '../bus.ts';
 import type { Db } from '../db/database.ts';
@@ -27,6 +29,11 @@ export interface AddAccountInput {
 
 declare module '../contracts/models.ts' {
   interface AccountService {
+    transfer?(command: TransferCommand): Promise<TransferResult>;
+    homeSyncAllowed?(account: Account): boolean;
+    homeAllowed?(account: Account): boolean;
+    withHome?<T>(account: Account, kind: string, work: () => Promise<T>): Promise<T>;
+
     /** Addition (PR5): `envVar` connects a key from the environment, `detected` adds a dismissed login found on this PC again. B-051: `signInUrl` = the page a CLI sign-in printed (never stored). */
     add(input: AddAccountInput, options?: { away?: boolean }): Promise<Account & { signInUrl?: string } & AwaySignIn>;
     /**
@@ -44,6 +51,7 @@ declare module '../contracts/models.ts' {
 }
 
 export interface AccountServiceDeps {
+  homeOwners?: HomeOwners;
   /** `data` → the empty engine folder CLIs start in (system/paths.ts engineCwd); without it temp, else the OS temp. */
   db: Db; bus: Bus; clock: Clock; paths: Pick<Paths, 'accounts'> & Partial<Pick<Paths, 'data' | 'temp'>>; log?: Logger;
   engines: () => EngineRegistry; // lazy: the registry also depends on this service (apiKey)

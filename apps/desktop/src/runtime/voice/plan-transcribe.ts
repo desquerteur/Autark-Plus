@@ -26,6 +26,7 @@ import type { FileRef } from '../../shared/model/system.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { defaultHome } from '../accounts/cli-homes.ts';
 import { codexImageAccount } from '../media/codex-image.ts';
+import { chargeOf } from '../models/pricing.ts';
 import { endpointHeard, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
 
 export const PLAN_TRANSCRIBE_URL = 'https://chatgpt.com/backend-api/transcribe';
@@ -38,9 +39,34 @@ const AUTH_FILE_MAX_BYTES = 256 * 1024;
 /** The plan's transcription of one take (this module's default; tests replace it). */
 export type PlanTranscription = (s: RuntimeServices, ref: FileRef, language: string | undefined, fetch?: FetchFn) => Promise<Heard>;
 
+/** Account states in which the plan's dictation is still worth one request (16.11.2026, owner: "der transkriptions-Service
+ * ist schlecht"): the dictation endpoint is no Codex turn, so a Codex limit ('cooling') does not stop it (measured
+ * 10.11.2026 at 100 % weekly), and a model list that timed out ('error') or a state not probed yet after start or
+ * sleep ('unknown') says nothing about the login. Only a login that is gone ('needs_login') or switched off is skipped.
+ * Before, only 'ok' counted: a laptop waking up dictated with this PC's small model although the plan was there. */
+const PLAN_TRIES: ReadonlySet<Account['state']> = new Set(['cooling', 'error', 'unknown']);
+
+/** The plan login a dictation uses: a ready one first, else one only in a passing state; undefined when none is signed in. */
+export function planAccount(s: Pick<RuntimeServices, 'accounts'>): Account | undefined {
+  const ready = codexImageAccount(s);
+  if (ready) return ready;
+  let accounts: Account[];
+  try { accounts = s.accounts.candidates('codex'); } catch { return undefined; }
+  return accounts.find((account) => account.provider === 'codex' && account.enabled && PLAN_TRIES.has(account.state) && chargeOf(account) === 'plan');
+}
+
 /** A signed-in ChatGPT plan login (Codex) is here: the one thing the default way needs (cheap: no file read, no network). */
 export function planReady(s: Pick<RuntimeServices, 'accounts'>): boolean {
-  return codexImageAccount(s) !== undefined;
+  return planAccount(s) !== undefined;
+}
+
+/** Why a dictation went without the plan, for the log line (no names, no ids). */
+export function planMissing(s: Pick<RuntimeServices, 'accounts'>): 'no_plan_login' | 'needs_login' | 'disabled' {
+  let accounts: Account[];
+  try { accounts = s.accounts.candidates('codex').filter((account) => account.provider === 'codex' && chargeOf(account) === 'plan'); } catch { return 'no_plan_login'; }
+  if (accounts.some((account) => account.enabled && account.state === 'needs_login')) return 'needs_login';
+  if (accounts.length) return 'disabled';
+  return 'no_plan_login';
 }
 
 interface PlanLogin { token: string; accountId: string | undefined }
@@ -73,7 +99,7 @@ async function refresh(s: RuntimeServices, account: Account): Promise<boolean> {
 
 /** The take written down by the plan's dictation; throws a user-safe error so the caller goes on with this PC's model. */
 export const planTranscribe: PlanTranscription = async (s, ref, language, fetchFn) => {
-  const account = codexImageAccount(s);
+  const account = planAccount(s);
   if (!account) throw new WorkforceError('unavailable', 'No ChatGPT plan login is signed in here.');
   const upload = await uploadOf(s, ref, uploadWay(s, ref));
   const fetchUsed = fetchFn ?? fetch;

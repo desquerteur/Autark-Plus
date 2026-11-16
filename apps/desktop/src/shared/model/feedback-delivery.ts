@@ -46,7 +46,14 @@ export interface FeedbackInboxItem {
   fromAgent?: boolean;
   diagnostics?: string;
   screenshot?: { mime: FeedbackImageType; size: number };
+  /** Feedback 16.11.2026: marked by the team – done (built) or not relevant; removed FEEDBACK_HANDLED_KEEP_MS after `at`. */
+  handled?: { as: FeedbackHandled; at: number };
 }
+
+/** How the team closed a report in its inbox. */
+export type FeedbackHandled = 'done' | 'irrelevant';
+/** A marked report stays this long on the team's PC, then goes by itself (owner 16.11.2026: "nach ein paar Tagen"). */
+export const FEEDBACK_HANDLED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** What one fetch did: `added` new reports, `unreadable` letters this PC's key cannot open (left in the mailbox). */
 export interface FeedbackInboxFetch {
@@ -81,6 +88,8 @@ declare module '../api/methods.ts' {
     /** Fetches the mailbox now (opened, stored on this PC, then deleted in the mailbox). */
     'feedback.inboxFetch': { params: void; result: FeedbackInboxFetch };
     'feedback.inboxRemove': { params: { id: string }; result: { ok: true } };
+    /** Marks a stored report done or not relevant (null clears it); a marked one is removed 7 days later. */
+    'feedback.inboxMark': { params: { id: string; as: FeedbackHandled | null }; result: FeedbackInboxItem };
     'feedback.inboxScreenshot': { params: { id: string }; result: { mime: FeedbackImageType; dataBase64: string } };
     /** wf feedback setup: keys into the vault, receiver.json, the rules to paste. */
     'feedback.setup': { params: { project: string; apiKey: string; serviceAccountPath: string; rotate?: boolean }; result: FeedbackSetupResult };

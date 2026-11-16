@@ -14,6 +14,7 @@ import { register as agentCore } from '../../../src/runtime/rpc/handlers/agent-c
 import { register as providers } from '../../../src/runtime/rpc/handlers/providers.ts';
 import { register as chatFiles } from '../../../src/runtime/rpc/handlers/chat-files.ts';
 import { register as filesPath } from '../../../src/runtime/rpc/handlers/files-path.ts';
+import { register as skillEditor } from '../../../src/runtime/rpc/handlers/skill-editor.ts';
 import type { ClientScope, DeviceCapability } from '../../../src/shared/api/protocol.ts';
 import { s1Table } from './s1-helpers.ts';
 
@@ -22,7 +23,8 @@ const S1_GROUPS = ['system', 'events', 'settings', 'ui', 'spaces', 'agents', 'ru
 
 const SHARED_DIR = path.resolve(import.meta.dirname, '../../../src/shared');
 /** A module augmentation of Methods in another shared file (methods.ts is at its size limit – O5). */
-const AUGMENTATION = /^declare module '[^']*api\/methods\.ts' \{([\s\S]*?)^\}/m;
+// an augmentation names the contract file from anywhere in src/shared, or as './methods.ts' from inside shared/api (methods-skills.ts)
+const AUGMENTATION = /^declare module '(?:[^']*api\/|\.\/)methods\.ts' \{([\s\S]*?)^\}/m;
 
 /** Method names of methods.ts and of every shared file that augments its Methods. */
 function contractMethods(): string[] {
@@ -44,6 +46,7 @@ function portabilityMethods(): Set<string> {
   providers(table);
   chatFiles(table); // chats.direct/export live with the default 1:1 and the chat folders
   filesPath(table); // files.readPath/writePath/listPath live with the pane's file tab
+  skillEditor(table); // skills.catalog/open/edit/create live with the Settings skill editor
   return new Set(table.methods());
 }
 

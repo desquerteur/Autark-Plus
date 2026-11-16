@@ -1,10 +1,9 @@
-// Settings › Apps writes what the AI writes: one entry of <data>/connectors/mcp.json or mail.json (skill connect-apps). The
-// runtime's watcher applies the change within a second; `apps.changed` brings the rows up to date. A key or password goes into
-// the secrets catalog first and the file holds only its handle secret://<id>. Everything else in the file stays as it is.
+// MCP settings use named apps.* RPCs (the same app controls on PC and a secure phone); the existing desktop-only mailbox
+// editor still writes its file through files.*. AI/configuration imports may continue using the broader file path. The runtime
+// watcher applies changes and `apps.changed` brings the rows up to date. Secret values go into the catalog; the file holds handles.
 // A pasted Claude Desktop/Code/Cursor config goes in as it is (pastedServers); only values that hold a secret (isSecretPair, an
 // Authorization header) move into the catalog, a plain setting like NODE_ENV stays readable in the file.
-// Owns: the pure edits of those two files, the entries the forms and a paste make, which values are secrets, a row's words, and
-// the one read-edit-write through files.*.
+// Owns: pure editor transforms, entries forms/paste make, secret extraction, and the legacy desktop mailbox edit.
 // Never: holds a value after handing it to secrets.save, writes a key into a file, or connects anything itself (the runtime does).
 
 import type { AppStatus, ConnectedApp, MailServer } from '../../shared/model/apps.ts';
@@ -194,6 +193,13 @@ export function pastedServers(text: string): { servers: PastedServer[]; error: s
 /** One value of an entry that goes into Secrets: env or headers, its key, the scheme kept in front ("Bearer "), the value itself. */
 export interface SecretSpot { field: 'env' | 'headers'; key: string; prefix: string; value: string }
 
+/** A raw secret handle will be resolved by the host, so adding it requires Secrets capability too. */
+export const hasSecretReference = (value: string): boolean => /secret:\/\/[A-Za-z0-9_-]{1,128}/i.test(value);
+
+export function entryUsesSecretReference(entry: Json): boolean {
+  return (['env', 'headers'] as const).some((field) => isRecord(entry[field]) && Object.values(entry[field]).some((value) => typeof value === 'string' && hasSecretReference(value)));
+}
+
 const SCHEME = /^(?:Bearer|Token|Basic)\s+/i;
 
 /** Whether a header (`header`) or env value goes into Secrets: any Authorization header, else what isSecretPair calls a secret. */
@@ -224,6 +230,15 @@ export async function movedSecrets(name: string, entry: Json, store: Store = sto
     const auth = spot.key.toLowerCase() === 'authorization';
     const id = await store(auth ? `${name} token` : `${name} ${spot.key}`, auth ? 'token' : kindForName(spot.key), spot.value, `Connects the app ${name} (Settings › Apps).`);
     out[spot.field] = { ...(out[spot.field] as Json), [spot.key]: `${spot.prefix}secret://${id}` };
+  }
+  return out;
+}
+
+/** A validation-only copy: the runtime checks the exact shape without receiving a pasted secret value. */
+function preflightEntry(entry: Json): Json {
+  const out: Json = { ...entry };
+  for (const spot of secretSpots(entry)) {
+    out[spot.field] = { ...(out[spot.field] as Json), [spot.key]: `${spot.prefix}secret://preflight` };
   }
   return out;
 }
@@ -269,12 +284,10 @@ export async function editConnectors(file: ConnectorFile, change: (text: string)
   await rpc.call('files.writePath', { path, text: await change(now.text ?? ''), ...(now.stamp ? { base: now.stamp } : {}) });
 }
 
-/** Adds servers to mcp.json: the file is checked first, then their secrets go into the catalog and the entries hold the handles. */
-export function addServers(servers: readonly PastedServer[]): Promise<void> {
-  return editConnectors('mcp.json', async (text) => {
-    checkFile('mcp.json', text);
-    const moved: PastedServer[] = [];
-    for (const server of servers) moved.push({ name: server.name, entry: await movedSecrets(server.name, server.entry) });
-    return withEntries('mcp.json', text, moved);
-  });
+/** Preflight the entire batch without secret bytes; then store secret values and send only handles to apps.add. */
+export async function addServers(servers: readonly PastedServer[]): Promise<void> {
+  await rpc.call('apps.validateAdd', { entries: servers.map((server) => ({ name: server.name, entry: preflightEntry(server.entry) })) });
+  const moved: PastedServer[] = [];
+  for (const server of servers) moved.push({ name: server.name, entry: await movedSecrets(server.name, server.entry) });
+  await rpc.call('apps.add', { entries: moved });
 }

@@ -16,6 +16,7 @@ import '../contracts/open-fs.ts';
 import { dayText } from '../knowledge/age.ts';
 import { profileZone } from '../context/time.ts';
 import { chatChoice } from '../routing/policies.ts';
+import { suggestionNow } from '../chat/suggestion-fresh.ts';
 import { standingWords } from './route-turn.ts';
 import type { FlowRun, FlowTool } from './tools.ts';
 
@@ -68,6 +69,12 @@ function routeText(services: RuntimeServices, value: { model?: string; effort?: 
   return [model, value.effort ? `effort ${value.effort}` : '', value.temperature !== undefined ? `temperature ${value.temperature}` : ''].filter(Boolean).join(' · ');
 }
 
+/** F22 (16.11.2026): the person's suggestion on the card – picked for their newest message, or a value that stayed. */
+function suggestedLine(person: string, suggested: string, when: ReturnType<typeof suggestionNow>): string {
+  if (when === 'earlier') return `- ${person} suggested ${suggested} for it in this chat earlier; it stayed since – a hint, the work decides.`;
+  return `- ${person} picked ${suggested} for it in this chat ${when === 'now' ? 'for their newest message' : 'after their newest message'} – what they want now.`;
+}
+
 /**
  * The card of the agent a run works beside, redacted. Stable first, so a run's steps and the agent's runs share a cached prefix: who it is
  * (name, role, team, the mode of the turn that asks) and the person's standing words as it keeps them – "What I have here" of its SYSTEM.md
@@ -89,7 +96,7 @@ export function agentCard(services: RuntimeServices, agent: Agent, now: { mode: 
   const moving = [
     on ? `- It runs on ${[on.engine, routeText(services, { model: on.model, effort: on.effort })].filter(Boolean).join(' · ')}.` : '',
     task ? `- Its task: "${task.title}" (${task.status}).` : '',
-    suggested ? `- ${person} suggests ${suggested} for it in this chat.` : '',
+    suggested ? suggestedLine(person, suggested, safe(() => suggestionNow(services, now.conversationId, agent.id), 'earlier' as const)) : '', // F22
     sized ? `- Its context: about ${Math.round(sized.inputTokens! / sized.modelCalls! / 1000)}k tokens per model call.` : '',
   ].filter(Boolean);
   const text = [

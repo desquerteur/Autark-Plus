@@ -57,14 +57,18 @@ export function isStale(limits: AccountLimits, now: number, staleMs = STALE_MS):
   return now - limits.readAt > staleMs || limits.windows.some((window) => window.resetsAt !== undefined && window.resetsAt <= now);
 }
 
-/** Quota rail entries: every plan with its short name (B-078, shared/model/plan-names.ts), weekly headroom, all windows and the stale flag. */
+/**
+ * Quota rail entries: every enabled plan with its short name (B-078, shared/model/plan-names.ts), weekly headroom, all
+ * windows and the stale flag. Feedback 16.11.2026 (F24): a switched-off plan runs no turn here, so its last reading
+ * (headroom it cannot give) is not shown – the rail said "plenty left" while every turn here waited.
+ */
 export function usageSummaries(accounts: Account[], now: number, staleMs = STALE_MS): UsageSummary[] {
   const active = new Set<string>();
   for (const engine of ['codex', 'claude'] as EngineId[]) {
     const first = selectCandidates(accounts, engine, now)[0];
     if (first) active.add(first.id);
   }
-  const plans = accounts.filter((account) => isPlanProvider(account.provider));
+  const plans = accounts.filter((account) => account.enabled && isPlanProvider(account.provider));
   const names = planNames(plans, PROVIDER_LABELS);
   return plans.map((account) => {
     const weekly = weeklyWindow(account.limits, now);

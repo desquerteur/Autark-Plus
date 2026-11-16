@@ -46,7 +46,7 @@ export interface EventMap {
   /** B-041: a member's connected calendars changed – read them with calendar.sources (topic 'system', owner only). */
   'calendar.sources': { ownerId: string };
   /** A connector was added, changed (status, tools) or removed – read them with apps.list
-   *  (topic 'system', owner only; `id` the connector that changed). */
+   *  (topic 'system', secure Settings devices; `id` the connector that changed). */
   'apps.changed': { id: string };
   /** A skill was saved or deleted (skills are plain SKILL.md folders); topic 'system' (owner). */
   'skills.changed': { name?: string };
@@ -148,7 +148,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'models.updated':
       return 'providers';
     case 'calendar.sources': // B-041: connected calendars – owner only (rpc/scopes.ts lets no device hear it)
-    case 'apps.changed': // connectors – owner only (rpc/scopes.ts lets no device hear it)
+    case 'apps.changed': // Connector state carries an id only; safe Settings devices may refresh their redacted list.
       return 'system';
     default:
       return 'system';

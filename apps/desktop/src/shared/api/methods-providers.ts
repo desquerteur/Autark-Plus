@@ -6,6 +6,7 @@
 
 import type { UseNow } from '../model/models-uses.ts';
 import type { Account, DetectionReport, Effort, ModelInfo, ModelPolicy, ProviderId, RouteDecision, UsageSummary } from '../model/providers.ts';
+import type { TransferCommand, TransferResult } from '../model/account-transfer.ts';
 
 /** B-044: the answer of a Codex reset redemption (the app server's ConsumeAccountRateLimitResetCreditOutcome). */
 export type ResetOutcome = 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed';
@@ -35,6 +36,7 @@ export interface ModelCatalogStatus {
 declare module '../api/methods.ts' {
   interface Methods {
     // ----------------------------------------------------------------- providers & routing
+    'accounts.transfer': { params: TransferCommand; result: TransferResult };
     'accounts.list': { params: void; result: Account[] };
     'accounts.detect': { params: { force?: boolean } | void; result: DetectionReport };
     'accounts.add': { params: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; envVar?: string; detected?: boolean }; result: Account & { signInUrl?: string } & AwaySignIn }; // apiKey: typed, or a handle secret://<id> of the catalog (the account then only names that entry); PR5: envVar = key variable name, detected = "Add again"; B-051: signInUrl = the page the CLI's sign-in printed (when it did within a few seconds)

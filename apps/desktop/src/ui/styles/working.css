@@ -17,6 +17,13 @@
 }
 .working-row-name:hover { text-decoration: underline; text-underline-offset: 2px; }
 .working-row-model { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; line-height: 16px; text-align: right; }
+/* Feedback F20 (Mika's pass): one agent's own Stop – icon and word (chat/StopRun.tsx), at a row's end and beside the live line. */
+.stop-run { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: var(--r-xs); color: var(--muted); font-size: 12px; line-height: 16px; white-space: nowrap; }
+.stop-run:hover:not(:disabled) { background: var(--hover); color: var(--danger); }
+.stop-run:disabled { cursor: default; opacity: .8; }
+.working-row-stop { height: 24px; }
+.chat-sub > .chat-live-stop { grid-column: 2; height: 16px; margin-left: 4px; }
+@media (pointer: coarse) { .working-row-stop { min-height: 44px; min-width: 44px; justify-content: center; } }
 .working-row-toggle {
   display: flex; align-items: center; gap: 7px; width: calc(100% + 6px); min-height: 22px; margin-left: -4px; padding: 0 4px;
   border-radius: 6px; color: var(--secondary); font-size: 12px; line-height: 1.5; text-align: left;

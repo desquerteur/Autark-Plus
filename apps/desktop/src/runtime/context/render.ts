@@ -8,8 +8,10 @@
 // "… · Name (quiet) · …" (sent without a notification); a text
 // message about a task ends with " [task <id>]"; 13.11.2026 (owner: the model the person picks in the chat is "einfach nur
 // da, wird der KI so erklärt"): a person's new line (renderMessages `suggestions`, the steered line) names their
-// suggestion for me in this chat in its label – "[… #57 · suggests <catalog name> · effort high · temperature 0.7]"
-// (routing/policies.ts chatChoice; information, never a route – skill chats says how I read it);
+// suggestion for me in this chat in its label (routing/policies.ts chatChoice; information, never a route – skill chats says
+// how I read it); F22 (owner 16.11.2026): picked since their previous line, for this one – "[… #57 · picked <catalog name> ·
+// effort high · temperature 0.7 for this message]" –, changed after it "picked … after this message", else (a value that
+// stayed, or an older chat without a stamp) "earlier suggested …" (chat/suggestion-fresh.ts);
 // recordings (audio/video) as "[Audio: name]" / "[Video: name]" with duration, the media
 // library's description and tags and the transcript, marked as data (addition MM1); B-058 G10: images as "[Image: name]"
 // with the library's description and tags, and – rendered without their image input (earlier lines, chat.read,
@@ -49,6 +51,7 @@ import { isPersonId } from '../../shared/model/people.ts';
 import { HINT_ID } from '../../shared/model/model-guide.ts';
 import { resolvePin } from '../routing/pins.ts';
 import { chatChoice } from '../routing/policies.ts';
+import { suggestedAt, suggestionWhen } from '../chat/suggestion-fresh.ts';
 import { temperatureText } from '../../shared/model/runs.ts';
 import { ultraNote } from './split-section.ts'; // B-057 S17: the note of a message that suggested Ultra
 import { uiBlocksOf } from '../../shared/blocks/parse.ts';
@@ -326,15 +329,21 @@ function modelLabel(ctx: RenderContext, id: string): string {
 
 /**
  * 13.11.2026: the person's suggestion for me in this chat (the composer chip, routing/policies.ts chatChoice) as a label
- * part of their line – "suggests GPT-6.1 Sol · effort high · temperature 0.7"; '' on other lines or without a suggestion.
+ * part of their line; '' on other lines or without a suggestion. F22 (16.11.2026): set for this line (since their
+ * previous one) "picked GPT-6.1 Sol · effort high · temperature 0.7 for this message", set after it "picked … after this
+ * message", else "earlier suggested …" – a value that stayed (chat/suggestion-fresh.ts suggestionWhen).
  */
-export function suggestionTag(ctx: RenderContext, message: Pick<Message, 'conversationId' | 'authorKind' | 'kind'>): string {
+export function suggestionTag(ctx: RenderContext, message: Pick<Message, 'conversationId' | 'authorKind' | 'authorId' | 'kind' | 'seq' | 'createdAt'>): string {
   if (message.authorKind !== 'human' || !isLine(message)) return '';
   let choice: ReturnType<typeof chatChoice>;
   try { choice = chatChoice(ctx.services, message.conversationId, ctx.agentId); } catch { return ''; } // the line stands without it
   const parts = [choice.pin ? modelLabel(ctx, choice.pin) : '', choice.effort ? `effort ${choice.effort}` : '',
     choice.temperature !== undefined ? `temperature ${temperatureText(choice.temperature)}` : ''].filter(Boolean);
-  return parts.length ? `suggests ${parts.join(' · ')}` : '';
+  if (!parts.length) return '';
+  let when: ReturnType<typeof suggestionWhen> = 'earlier';
+  try { when = suggestionWhen(ctx.services, suggestedAt(ctx.services, message.conversationId, ctx.agentId), message); } catch { /* the weaker reading */ }
+  const text = parts.join(' · ');
+  return when === 'now' ? `picked ${text} for this message` : when === 'after' ? `picked ${text} after this message` : `earlier suggested ${text}`;
 }
 
 /** One message's content without the author header ('' when there is nothing to show). */

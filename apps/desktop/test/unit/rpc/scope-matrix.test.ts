@@ -7,12 +7,14 @@ import assert from 'node:assert/strict';
 import { createHandlerTable } from '../../../src/runtime/rpc/handlers/index.ts';
 import { sessionInfo } from '../../../src/runtime/rpc/handlers/session.ts';
 import { allowedScope, scopeDenial } from '../../../src/runtime/rpc/table.ts';
+import { mayReceive } from '../../../src/runtime/rpc/scopes.ts';
 import type { ClientScope, DeviceCapability } from '../../../src/shared/api/protocol.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { OWNER, TestClient, rpcFixture } from './s1-helpers.ts';
 
 /** Owner-only methods and why they stay on the PC. Adding an owner-only method means adding it here. */
 const PC_LOCAL: Record<string, string> = {
+  'accounts.transfer': 'Claude credentials move between this PC’s companies (exclusive owner handoff)',
   'system.resources': 'PC diagnostics',
   'system.restartReadiness': 'desktop updater',
   'system.prepareRestart': 'desktop updater',
@@ -42,6 +44,7 @@ const PC_LOCAL: Record<string, string> = {
   'feedback.inboxList': 'team feedback inbox (B-055)',
   'feedback.inboxFetch': 'team feedback inbox (B-055)',
   'feedback.inboxRemove': 'team feedback inbox (B-055)',
+  'feedback.inboxMark': 'team feedback inbox (B-055; marks reports done / not relevant, 16.11.2026)',
   'feedback.inboxScreenshot': 'team feedback inbox (B-055)',
   'feedback.setup': 'writes the team feedback key into the vault (B-055)',
   // B-055 Q8: the person's named pointer – the owner at the app; people of the organisation through their person variant (their chats' browsers), never a phone.
@@ -94,7 +97,6 @@ const PC_LOCAL: Record<string, string> = {
   'secrets.fillChoices': 'the logins listed in this PC\'s own browser page menu (B-078)',
   'secrets.fillLogin': 'a login\'s values typed into this PC\'s own browser (B-078)',
   // Connectors: a sign-in opens in this PC's browser (apps.list is 'settings').
-  'apps.reconnect': 'opens an app\'s sign-in in this PC\'s browser (B-052)',
   // B-072: several companies on one PC, each with a data folder of its own.
   'companies.list': 'the data folders of the companies on this PC (B-072)',
   'companies.open': 'opens a company window on this PC (B-072)',
@@ -116,7 +118,7 @@ const MANAGE = ['agents.create', 'agents.update', 'agents.archive', 'agents.expo
 /** B-076: the file tabs' paths (read, write, list, media) – the whole disk – for 'manage' only on a secure transport. */
 const MANAGE_SECURE = ['files.readPath', 'files.writePath', 'files.listPath', 'files.uploadPath'];
 /** B-078 ("alles vom Handy"): plans, keys and sign-ins from the owner's phone app – its loopback tunnel is secure. */
-const SETTINGS_SECURE = ['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode' /* B-091 */, 'accounts.logout', 'accounts.remove',
+const SETTINGS_SECURE = ['apps.reconnect', 'apps.setEnabled', 'apps.remove', 'apps.validateAdd', 'apps.add', 'accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode' /* B-091 */, 'accounts.logout', 'accounts.remove',
   'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try',
   /* B-084 (D6): Settings › Devices and Models from the owner's phone app */
   'models.uses', 'devices.list', 'devices.rename', 'devices.revoke', 'remote.state', 'remote.connect', 'remote.cancel', 'remote.decide',
@@ -193,6 +195,52 @@ test('session.info lists exactly the methods the server allows for the caller', 
   assert.ok(todoInfo.allowedMethods.includes('todos.list') && !todoInfo.allowedMethods.includes('chats.list'));
 });
 
+test('apps methods and apps.changed are limited to secure Settings devices; subscriptions deliver only to that tier', async (t) => {
+  const table = createHandlerTable();
+  const methods = ['apps.list', 'apps.validateAdd', 'apps.add', 'apps.setEnabled', 'apps.remove', 'apps.reconnect'];
+  const settingsSecure = device([...FULL], true);
+  const settingsOnly = device(['settings'], true);
+  const settingsLan = device([...FULL], false);
+  const settingsMissingSecure = device(['todo', 'chat', 'tasks'], true);
+  for (const method of methods) {
+    assert.ok(allowedScope(table.get(method)!.scope, OWNER), `${method}: owner`);
+    assert.ok(allowedScope(table.get(method)!.scope, settingsSecure), `${method}: secure Settings device`);
+    assert.equal(scopeDenial(table.get(method)!.scope, settingsLan), 'insecure', `${method}: LAN`);
+    assert.equal(scopeDenial(table.get(method)!.scope, settingsMissingSecure), 'scope', `${method}: no Settings`);
+    assert.equal(scopeDenial(table.get(method)!.scope, { kind: 'person', personId: 'p', deviceId: 'd', tokenId: 't', secure: true }), 'scope', `${method}: person`);
+    assert.equal(scopeDenial(table.get(method)!.scope, { kind: 'external', memberId: 'm', conversationId: 'c', tokenId: 't' }), 'scope', `${method}: external`);
+    assert.equal(scopeDenial(table.get(method)!.scope, { kind: 'peer', deviceId: 'linked' }), 'scope', `${method}: peer`);
+    assert.equal(scopeDenial(table.get(method)!.scope, { kind: 'agent', agentId: 'a', runId: 'r' }), 'scope', `${method}: agent`);
+  }
+  assert.ok(allowedScope(table.get('apps.setEnabled')!.scope, settingsOnly));
+  assert.ok(!allowedScope(table.get('files.writePath')!.scope, settingsOnly), 'Apps settings do not grant the general file API');
+  const tokenRule = table.get('apps.setToken')!.scope;
+  assert.deepEqual(base(tokenRule), { allCapabilities: ['settings', 'permissions'], secure: true });
+  assert.equal(scopeDenial(tokenRule, settingsSecure), 'scope', 'token replacement also needs Secrets permission');
+  assert.equal(scopeDenial(tokenRule, device([...FULL, 'permissions'], false)), 'insecure', 'token replacement needs secure transport');
+  assert.ok(allowedScope(tokenRule, device([...FULL, 'permissions'], true)));
+  assert.equal(mayReceive(settingsSecure, 'system', 'apps.changed', { id: 'app-a' }), true);
+  assert.equal(mayReceive(settingsLan, 'system', 'apps.changed', { id: 'app-a' }), false);
+  assert.equal(mayReceive(settingsMissingSecure, 'system', 'apps.changed', { id: 'app-a' }), false);
+  assert.equal(mayReceive({ kind: 'person', personId: 'p', deviceId: 'd', tokenId: 't', secure: true }, 'system', 'apps.changed', { id: 'app-a' }), false);
+  assert.equal(mayReceive({ kind: 'peer', deviceId: 'linked' }, 'system', 'apps.changed', { id: 'app-a' }), false);
+
+  const f = rpcFixture({ table });
+  t.after(f.cleanup);
+  const recipients = [
+    { client: new TestClient(f.server, settingsSecure), receives: true, label: 'secure Settings' },
+    { client: new TestClient(f.server, settingsLan), receives: false, label: 'LAN' },
+    { client: new TestClient(f.server, settingsMissingSecure), receives: false, label: 'no Settings' },
+  ];
+  for (const { client } of recipients) await client.call('events.subscribe', { topics: ['system'] });
+  f.services.bus.emit('apps.changed', { id: 'app-a' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const recipient of recipients) assert.equal(recipient.client.events('apps.changed').length, recipient.receives ? 1 : 0, recipient.label);
+  const info = await recipients[0].client.call<{ allowedMethods: string[] }>('session.info');
+  for (const method of methods) assert.ok(info.allowedMethods.includes(method), method);
+  assert.ok(!info.allowedMethods.includes('apps.setToken'));
+});
+
 test('a refused call on plain LAN http says that the HTTPS address is needed', async (t) => {
   const f = rpcFixture({ table: createHandlerTable() });
   t.after(f.cleanup);
@@ -205,3 +253,6 @@ test('a refused call on plain LAN http says that the HTTPS address is needed', a
   assert.equal(plain.error?.details?.needsSecure, undefined);
   await assert.rejects(f.server.call('secrets.list', {}, device(['permissions'], false)), (error: unknown) => error instanceof WorkforceError && error.code === 'forbidden');
 });
+
+
+

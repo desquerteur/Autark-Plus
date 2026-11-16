@@ -36,6 +36,7 @@ import { coreInstructions } from '../agent-core/prompt.ts';
 import { splitAtHave } from '../org/hire.ts';
 import { priceText, sourceOf, specialistKinds, strengthOverview } from '../routing/model-facts.ts';
 import { chatChoice, effectivePolicy } from '../routing/policies.ts';
+import { suggestionNow } from '../chat/suggestion-fresh.ts';
 import { buildPool } from '../routing/pool.ts';
 import { resolvePin, settingsPin } from '../routing/pins.ts';
 import { resolveCategory } from '../routing/categories.ts';
@@ -57,7 +58,7 @@ The model follows the kind of work:
 
 The effort follows what is still open: low for what can be checked against what is given; medium for a clear step on a set way whose result shows at once; high – the normal for real work – wherever meaning, tone or a choice matters; xhigh for code across several parts, a bug of unknown cause, a design choice, edge cases that must hold, or a result the person was unhappy with; max where xhigh fell short. One level up when the message can be misread, a miss would be seen or cost real money, or several things must fit together; one down when it is one of many identical steps or its result is checked right away.
 
-What the person said about models or how to work – in this chat, in the agent's standing facts and agreements, or with the start model and effort they set – outweighs my weighing. The model this chat suggests is my start; I leave it for a clear reason.
+What the person said about models or how to work – in this chat, in the agent's standing facts and agreements, or with the start model and effort they set – outweighs my weighing. A model the person picked in this chat for their newest message is what they want now: my start, which I leave only for a clear reason. One they suggested earlier and left standing is a hint from before – the work decides.
 Staying on the model the agent runs on is my default, and the effort is what I turn first: another model first reads the whole context uncached at its own input price. What that costs right now is stated below – on a cold cache any model reads uncached, so the choice is free; on a warm one a switch is worth it only for a stretch of work that clearly needs another kind of model: real judgment coming after routine, or the reverse – a strong model about to carry on with plenty of routine that does not need it, which I move back down. One turn's nuance is no reason. A turn takes about 6 model calls, so the model's price counts six times over.
 
 A word search ran over the agent's knowledge – its memory, skills, references and documents – with the words of what wakes the turn; its hits stand below with how each begins. An entry I open reaches the main AI before it starts and stays in its context, paid again on every later call. So I open an entry only when I can say what it changes in this turn – a rule it has to follow, a fact it has to use, a way of working it would otherwise get wrong – and I say that with it. A hit on the same topic that changes nothing in what the turn does stays closed; most messages need none, and the main AI can still search for itself.
@@ -201,6 +202,15 @@ function routeParts(services: RuntimeServices, value: { modelId?: string; effort
 }
 
 /**
+ * F22 (owner 16.11.2026): the person's suggestion as the routing call reads it – picked since their line before their newest one
+ * (or after their newest one) is what they want now, one that stayed is a hint from before (chat/suggestion-fresh.ts).
+ */
+function suggestionFact(person: string, suggested: string, when: ReturnType<typeof suggestionNow>): string {
+  if (when === 'earlier') return `${person} suggested ${suggested} in this chat earlier and left it standing – a hint from before, the work decides; it runs when I set it`;
+  return `${person} picked ${suggested} in this chat ${when === 'now' ? 'for their newest message' : 'after their newest message'} – what they want now, left only for a clear reason; it runs when I set it`;
+}
+
+/**
  * B-083: the line the call reads about how the coming turn runs – the model of my last turn (any chat: one context), the start model with
  * the agent's fixed effort and who set it (without one of the agent's own, the Work model the person chose in Settings – review 14.11.),
  * and the person's suggestion in this chat; '' when nothing is known.
@@ -217,7 +227,7 @@ export function turnFacts(services: RuntimeServices, agent: Agent, conversationI
     const parts = [last?.model ? `runs on ${routeParts(services, { modelId: last.model, effort: last.effort, temperature: last.route?.temperature })}` : 'no turn yet', startText];
     const chip = chatChoice(services, conversationId, agent.id);
     const suggested = routeParts(services, { modelId: chip.pin, effort: chip.effort, temperature: chip.temperature });
-    if (suggested) parts.push(`${services.settings.get().profile?.name?.trim() || 'the person'} suggests ${suggested} in this chat – what they think fits now; it runs when I set it`); // 13.11.2026: the chip is information, never a route
+    if (suggested) parts.push(suggestionFact(services.settings.get().profile?.name?.trim() || 'the person', suggested, suggestionNow(services, conversationId, agent.id))); // 13.11.2026: the chip is information, never a route
     return `The main AI's coming turn: ${parts.join('; ')}.`;
   } catch {
     return '';
