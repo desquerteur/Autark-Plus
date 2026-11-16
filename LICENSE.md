@@ -1,6 +1,6 @@
 # License
 
-Copyright 2026 Teydra.
+Copyright 2026 Stanislaus Hees.
 
 ## The source code and the programs
 
