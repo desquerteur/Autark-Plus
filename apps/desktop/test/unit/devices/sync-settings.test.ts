@@ -149,7 +149,7 @@ test('an older single settings stamp counts for every section; then a change sta
   edit(a, { voice: { realtime: 'auto' } });
   assert.ok(a.stamps.get('settings/voice')!.at > 5000, 'the changed section is stamped now');
   assert.equal(a.stamps.get('settings/profile')?.at, 5000, 'the others keep theirs');
-  assert.deepEqual(Object.keys(a.sync.current().sections).sort(), ['profile', 'profile.notes', 'profile.pcAccess', 'routing', 'voice'], 'the link-up sends every section (and the units profile.notes, profile.pcAccess)');
+  assert.deepEqual(Object.keys(a.sync.current().sections).sort(), ['profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing', 'voice'], 'the link-up sends every section (and the units profile.notes, profile.pcAccess, profile.forEveryAgent)');
   off();
 });
 
@@ -177,7 +177,7 @@ test('B-078 with a 0.3.x PC: profile.notes travels as its own unit – the profi
   assert.deepEqual(copy.sections.profile.value, { name: 'Alex' });
   assert.equal(copy.sections.profile.h, hashOf({ name: 'Alex' }), 'the older PC sees no change of its own');
   assert.equal(copy.sections['profile.notes']!.value, 'German at work, du');
-  assert.deepEqual(Object.keys(copy.sections).sort(), ['library', 'profile', 'profile.notes', 'profile.pcAccess', 'routing'], '0.3.x skips library and the units (no settings sections there)');
+  assert.deepEqual(Object.keys(copy.sections).sort(), ['library', 'profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing'], '0.3.x skips library and the units (no settings sections there)');
   // The older PC's message: its profile without notes, stamped later – the name follows, the notes stay.
   const old: SettingsMessage = { sections: { profile: { at: 9_000_000, h: hashOf({ name: 'Stan' }), value: { name: 'Stan' } } } };
   a.sync.receive(old, 'dev_old', false);
@@ -221,6 +221,24 @@ test('B-085 with a 0.3.4 PC: profile.pcAccess travels as its own unit – an old
   for (const off of offs) off();
 });
 
+test('16.11.2026 with a 0.3.8 PC: profile.forEveryAgent travels as its own unit – an older copy of the profile never resets it', () => {
+  const [a, b] = makePcs(
+    { profile: { name: 'Alex', forEveryAgent: 'I sign with my name.' }, routing: { work: 'auto' } },
+    { profile: { name: 'Alex', forEveryAgent: '' }, routing: { work: 'auto' } },
+  );
+  const offs = [a.sync.attach(), b.sync.attach()];
+  const copy = a.sync.current();
+  assert.deepEqual(copy.sections.profile.value, { name: 'Alex' }, 'the profile looks as it does on 0.3.8');
+  assert.equal(copy.sections['profile.forEveryAgent']!.value, 'I sign with my name.');
+  const old: SettingsMessage = { sections: { profile: { at: 9_000_000, h: hashOf({ name: 'Stan' }), value: { name: 'Stan' } } } };
+  a.sync.receive(old, 'dev_old', false);
+  assert.deepEqual(profileOf(a), { name: 'Stan', forEveryAgent: 'I sign with my name.' });
+  a.clock.advance(10_000_000);
+  edit(a, { profile: { forEveryAgent: 'I answer in German.' } });
+  assert.equal(profileOf(b).forEveryAgent, 'I answer in German.', 'between two new PCs the text travels');
+  for (const off of offs) off();
+});
+
 test('B-080: a newer PC\'s key in a known section is left out of the patch; the rest of every section applies', () => {
   const local = { voice: { realtime: 'off', vocabulary: [] }, profile: { name: 'Alex' } } as unknown as Settings;
   assert.deepEqual(settingsPatch(local, { voice: { realtime: 'auto', vocabulary: [], dictation: 'local' }, profile: { name: 'Alex', mood: 'calm' } }),
@@ -251,7 +269,7 @@ test('B-080: a newer PC\'s key in a known section is left out of the patch; the 
  * OWN_UNITS entry (devices/sync/settings.ts) or, for a section no older PC has, this pin changes on purpose.
  */
 const SHARED_KEYS: Record<string, string[]> = {
-  profile: ['name', 'company', 'avatarFileId', 'language', 'timezone', 'notes', 'pcAccess'], // notes, pcAccess: OWN_UNITS
+  profile: ['name', 'company', 'avatarFileId', 'language', 'timezone', 'notes', 'pcAccess', 'forEveryAgent'], // notes, pcAccess, forEveryAgent: OWN_UNITS
   preferences: ['theme', 'sidebarOpen', 'sidebarWidth', 'workspaceOpen', 'workspaceWidth', 'enterSends', 'closeToTray', 'openAtLogin', 'autoDownloadUpdates'],
   notifications: ['enabled', 'sound', 'quietHours', 'pushFor'],
   voice: ['ttsVoice', 'vocabulary', 'realtime', 'talker', 'localStt', 'localTts'],

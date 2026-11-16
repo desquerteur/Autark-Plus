@@ -109,6 +109,18 @@ test('parseAnswer drops bad addresses; broadcastAddresses covers each IPv4 netwo
   assert.deepEqual(targets, ['255.255.255.255', '192.168.1.255', '169.254.255.255']);
 });
 
+test('F09: parseAnswer keeps the company name (trimmed, at most 80 characters); too long or blank is dropped, absent is fine', () => {
+  const answer = (company: unknown) => parseAnswer(Buffer.from(JSON.stringify({ a: 'wf-hello', v: 1, n: 'n', ...identity(), company })), 'n');
+  assert.equal(answer(' Teydra Lab ')?.company, 'Teydra Lab');
+  assert.equal(answer('x'.repeat(80))?.company, 'x'.repeat(80));
+  assert.equal(answer('x'.repeat(81))?.company, undefined, 'too long: the PC still answers, without it');
+  assert.ok(answer('x'.repeat(81)), 'the answer itself stays');
+  assert.equal(answer('   ')?.company, undefined);
+  assert.equal(answer(5)?.company, undefined);
+  assert.equal(answer(undefined)?.company, undefined, 'an older PC sends none');
+  assert.ok(Buffer.byteLength(JSON.stringify({ a: 'wf-hello', v: 1, n: 'n'.repeat(64), ...identity(), company: '€'.repeat(80) })) < 4096, 'within one message');
+});
+
 test('real sockets on 127.0.0.1: a directed hello is answered', async () => {
   const port = 47900 + Math.floor(Math.random() * 90);
   const loopback = () => {

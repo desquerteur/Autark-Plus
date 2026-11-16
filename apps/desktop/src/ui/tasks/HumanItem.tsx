@@ -251,7 +251,7 @@ export function HumanItem(props: HumanItemProps) {
           {browser ? <BrowserTodo task={task} target={browser} /> : <BrowserTodoNote task={task} />}
           {app ? <AppTodoBody task={task} widget={app} />
             : task.widget
-              ? <AskBlock block={task.widget} target={askTargetOf(task)} bare onAnswered={answered} />
+              ? <AskBlock block={task.widget} target={askTargetOf(task)} bare onAnswered={answered} authorId={task.createdBy} />
               : <PlainDone task={task} onAnswered={answered} />}
         </div>
       )}

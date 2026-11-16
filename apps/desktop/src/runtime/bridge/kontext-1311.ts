@@ -15,8 +15,9 @@
 // Tool names: the tools an agent learned to hold directly (tools/learned.ts) under a name the rebuild merged take the
 // tool that does it now (RENAMED_TOOLS), and so does every such name in a SYSTEM.md (a tool's name is a fact, not the
 // agent's voice); nothing else stores a tool's name or an argument spelling.
-// HUMAN.md (owner 15.11.2026, agent-core/human.ts): once per PC, every agent at home here whose folder has none gets it
-// with the default line in the app's language; a HUMAN.md that is there stays as it is.
+// HUMAN.md (owner 15.11.2026, agent-core/human.ts; 16.11.2026: the "I'm not a robot" line is set once for every agent,
+// settings profile.forEveryAgent): once per PC, a HUMAN.md of an agent at home here whose whole text is that default
+// line (German or English) is emptied, so the line stands once, for every agent; a HUMAN.md with anything else stays.
 // Owns: those conversions. Never: deletes a task row or drops a column (older PCs keep reading the rows), or changes a
 // SYSTEM.md below its role heading beyond the heading, an exact old shipped role text and merged tool names.
 
@@ -37,7 +38,8 @@ import { standardHead } from '../org/standard-upgrade.ts';
 import { loadPreviousBodies, modernRoleSuffix, type RoleUpgradeFacts } from '../org/role-upgrade.ts';
 import { LEARNED_NS } from '../tools/learned.ts';
 import { isCoreFolderName } from '../agent-core/layout.ts';
-import { seedHuman } from '../agent-core/human.ts';
+import { readHuman, writeHuman } from '../agent-core/human.ts';
+import { humanDefault } from '../../shared/model/agent-core.ts';
 
 const KV = 'bridge.kontext-1311';
 
@@ -294,17 +296,19 @@ export function renameInSystemMd(s: Pick<RuntimeServices, 'org' | 'db'>): number
   return changed;
 }
 
-/** The HUMAN.md part, once per PC: a missing HUMAN.md of an agent at home here gets the default line; returns how many. */
-export function humanMdPart(s: Pick<RuntimeServices, 'db' | 'org' | 'paths' | 'settings' | 'clock'>): number {
+/** The HUMAN.md part, once per PC: a HUMAN.md of an agent at home here that holds only the default line goes empty; returns how many. */
+export function humanMdPart(s: Pick<RuntimeServices, 'db' | 'org' | 'paths' | 'clock'>): number {
   const kv = new KvRepo(s.db);
-  if (kv.get<boolean>(KV, 'human-md')) return 0;
-  const language = s.settings.get().profile?.language;
-  let made = 0;
+  if (kv.get<boolean>(KV, 'human-md-every-agent')) return 0;
+  const lines = new Set([humanDefault('de'), humanDefault('en')]);
+  let emptied = 0;
   for (const agent of s.org.list({ includeArchived: true })) {
-    if (isCoreFolderName(agent.id) && !homeElsewhere(s, agent.id) && seedHuman(s.paths.data, agent.id, language)) made++;
+    if (!isCoreFolderName(agent.id) || homeElsewhere(s, agent.id) || !lines.has(readHuman(s.paths.data, agent.id))) continue;
+    writeHuman(s.paths.data, agent.id, '');
+    emptied++;
   }
-  kv.set(KV, 'human-md', true, s.clock.now());
-  return made;
+  kv.set(KV, 'human-md-every-agent', true, s.clock.now());
+  return emptied;
 }
 
 /** Runs every part of the bridge; a part that fails is logged and tried again at the next start. */

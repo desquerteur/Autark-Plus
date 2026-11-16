@@ -6,7 +6,7 @@
 import { CliError } from './errors.ts';
 
 const VALUE_OPTIONS = new Set(['data', 'limit', 'status', 'timeout', 'count', 'dir', 'project', 'api-key', 'service-account']); // B-055: the last three for wf feedback setup
-const FLAG_OPTIONS = new Set(['json', 'all', 'important', 'silent', 'wait', 'help', 'version', 'rotate']); // B-055: --rotate for wf feedback setup
+const FLAG_OPTIONS = new Set(['json', 'all', 'important', 'silent', 'wait', 'help', 'version', 'rotate', 'open']); // B-055: --rotate for wf feedback setup; 16.11.2026: --open for wf feedback list
 /** Options every command accepts. */
 const GLOBAL = new Set(['data', 'json', 'help', 'version']);
 

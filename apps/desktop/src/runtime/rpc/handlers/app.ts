@@ -9,10 +9,11 @@
 // Never: implements feedback/onboarding/voice behaviour (extras do), or uploads anything.
 
 import type { FeedbackKind } from '../../../shared/model/system.ts';
+import { FEEDBACK_AUDIO_MAX, FEEDBACK_CLIENT_DIAGNOSTICS_MAX, FEEDBACK_CLIENT_ID, FEEDBACK_CLIENT_MAX } from '../../../shared/model/feedback-delivery.ts';
 import { AUDIO_TAGGER, localSpeechIds } from '../../../shared/model/local-speech-models.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { readTheme } from '../../root/theme.ts';
-import { bad, input, oneOf, onlyKeys, optId, optText, text, type Obj } from '../params.ts';
+import { bad, input, oneOf, onlyKeys, optId, optOneOf, optText, text, type Obj } from '../params.ts';
 import type { Handler, HandlerTable } from '../table.ts';
 import { register as registerVoiceRetry } from './voice-retry.ts';
 
@@ -33,19 +34,45 @@ function optFileId(o: Obj, key: string): string | undefined {
   return o[key] === undefined || o[key] === null ? undefined : fileId(o, key);
 }
 
+/** feedback.create `audioFileIds`: up to FEEDBACK_AUDIO_MAX file ids, each once. */
+function optAudioIds(o: Obj): string[] | undefined {
+  const value = o.audioFileIds;
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > FEEDBACK_AUDIO_MAX || value.some((entry) => typeof entry !== 'string' || !SHA256.test(entry))) {
+    bad('audioFileIds', `a list of at most ${FEEDBACK_AUDIO_MAX} file ids`);
+  }
+  return value.length ? [...new Set(value as string[])] : undefined;
+}
+
+function optClientId(o: Obj): string | undefined {
+  const value = optText(o, 'clientId', { max: 64 });
+  if (value !== undefined && !FEEDBACK_CLIENT_ID.test(value)) bad('clientId', 'letters, digits, "_" or "-"');
+  return value;
+}
+
 export function register(table: HandlerTable): void {
   registerVoiceRetry(table); // B-082: voice.retranscribe (handlers/voice-retry.ts)
   // ---------------------------------------------------------------- feedback
+  // 16.11.2026: a person's report needs no kind; `client` and `clientDiagnostics` are taken generously and kept to
+  // FEEDBACK_CLIENT_MAX / FEEDBACK_CLIENT_DIAGNOSTICS_MAX by the service, so a long user agent never loses a report.
   table.add('feedback.create', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['kind', 'text', 'screenshotFileId', 'annotationFileId', 'view', 'conversationId']);
+    onlyKeys(o, ['kind', 'text', 'screenshotFileId', 'annotationFileId', 'audioFileIds', 'view', 'conversationId', 'clientId', 'client', 'clientDiagnostics']);
+    const audioFileIds = optAudioIds(o);
+    const clientId = optClientId(o);
+    const client = optText(o, 'client', { max: 4 * FEEDBACK_CLIENT_MAX, multiline: true });
+    const clientDiagnostics = optText(o, 'clientDiagnostics', { max: 5 * FEEDBACK_CLIENT_DIAGNOSTICS_MAX, multiline: true });
     return ctx.extras.feedback.create({
-      kind: oneOf(o, 'kind', FEEDBACK_KINDS),
+      kind: optOneOf(o, 'kind', FEEDBACK_KINDS),
       text: text(o, 'text', { max: 20_000, multiline: true }),
       screenshotFileId: optFileId(o, 'screenshotFileId'),
       annotationFileId: optFileId(o, 'annotationFileId'),
       view: optText(o, 'view', { max: 120 }),
       conversationId: optId(o, 'conversationId'),
+      ...(audioFileIds ? { audioFileIds } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...(client ? { client } : {}),
+      ...(clientDiagnostics ? { clientDiagnostics } : {}),
       author: HUMAN_ID,
     });
   }, CHAT);

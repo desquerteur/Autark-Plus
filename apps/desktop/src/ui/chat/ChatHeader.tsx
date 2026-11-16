@@ -6,8 +6,8 @@
 // mode, call/CallHeader.tsx) and Chat tabs (opens and closes the chat's area above the messages, ChatArea.tsx; pressed
 // while open, a dot while an agent's new tab waits there – workspace/attention.ts), so nothing moves when the title, the
 // live line, the area or a panel changes; the open details panel's name and its X sit in the row above that panel (no
-// second header inside it). Phone: Back as the lead and the cells [call][chat tabs] at the row's end (the details sheet
-// keeps its own top line). Who works and what comes from the chat's live bar (the summary's live runs, live-text.ts
+// second header inside it). Phone: Back as the lead and the cells [call][chat tabs][feedback] at the row's end (the
+// feedback cell as on every phone row, feedback/cell.tsx; the details sheet keeps its own top line). Who works and what comes from the chat's live bar (the summary's live runs, live-text.ts
 // liveRuns) – the same line on every device –, a running split group as one entry (B-057).
 // Owns: the chat header's data and title markup. Never: shows provider logos or invented titles.
 
@@ -22,13 +22,12 @@ import { back, go } from '../lib/router.ts';
 import { chatAreaOpen, chatPanel, setChatPanel, toggleChatArea, toggleChatPanel, type ChatPanel } from '../lib/shell-state.ts';
 import { LiveLine } from './LiveLine.tsx';
 import { WorkingPopover, useWorkingPanel } from './WorkingPopover.tsx';
-import { StopRun } from './StopRun.tsx';
 import { clock12 } from '../lib/format.ts';
-import { lineStopRun, liveNames, liveRuns, liveShort, liveStatus, workingRows, type LiveEntry } from './live-text.ts';
-import { can } from '../lib/session.ts';
+import { liveNames, liveRuns, liveShort, liveStatus, type LiveEntry } from './live-text.ts';
 import { useCallCell } from './call/CallHeader.tsx';
 import { chatMenu } from './chat-actions.ts';
 import { chatAttention } from '../workspace/attention.ts';
+import { feedbackCell } from '../feedback/cell.tsx';
 
 export const PANEL_TITLES: Record<ChatPanel, string> = { details: 'Chat details', thread: 'Thread' };
 
@@ -48,10 +47,7 @@ function ChatTitle(props: { chat: ConversationSummary }) {
   const resting = status ? '' : chatSubtitle(chat);
   const open = chatPanel.value === 'details';
   const working = useWorkingPanel(chat.id);
-  // F20 (Mika): exactly one stoppable agent working here – its Stop sits at the live line's end, one click; several: the popover's rows.
-  const rows = status ? workingRows(chat, liveRuns(chat), nameOf) : [];
-  const lineStop = lineStopRun(rows, can('runs.cancel'));
-  const lineRow = lineStop ? rows[0] : undefined;
+  // F21 (16.11.2026): each agent's Stop sits at its line in the live bar above the composer (LiveBar.tsx) and in the popover's rows – one Stop per run in view.
   const menu = useContextMenu(() => chatMenu(chat));
   const page = partnerPage(partner);
   const onAvatar = page ? () => (page.kind === 'agent' ? go.agent(page.id) : go.person(page.id)) : () => toggleChatPanel(chat.id, 'details');
@@ -69,7 +65,6 @@ function ChatTitle(props: { chat: ConversationSummary }) {
           {status
             ? <LiveLine text={status} short={liveShort(chat, solo, entries, nameOf)} names={liveNames(chat, solo, entries, nameOf)} open={working.open} onToggle={working.toggle} />
             : resting && <span class="chat-resting">{resting}</span>}
-          {lineRow && lineStop && <StopRun key={lineStop} runId={lineStop} name={lineRow.name} class="chat-live-stop" />}
         </div>
       </div>
       <WorkingPopover chat={chat} anchor={working.anchor.current} open={working.open} onClose={working.close} />
@@ -86,7 +81,7 @@ export function useChatHeader(chat: ConversationSummary): HeaderProps {
   const tabs = (id: string): HeaderCell => ({
     id, icon: 'globe', label: 'Chat tabs', pressed: open, expanded: open, badge: !open && chatAttention.value === chat.id ? 'dot' : undefined, onClick: () => toggleChatArea(chat.id),
   });
-  if (isMobile.value) return { zone: 'main', class: 'chat-header', lead: chatLead(), title, cells: [call, tabs('workspace')] };
+  if (isMobile.value) return { zone: 'main', class: 'chat-header', lead: chatLead(), title, cells: [call, tabs('workspace'), feedbackCell()] };
   return {
     zone: 'main', class: 'chat-header', title, near: [call, tabs('browser')], cells: [],
     panel: panel ? { title: PANEL_TITLES[panel], onClose: () => setChatPanel(chat.id, null) } : undefined,

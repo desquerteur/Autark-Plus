@@ -77,7 +77,8 @@ export interface ClaudeRebuilderDeps {
   uuid: () => string;
   now: () => number;
   transcriptsDir?: string;
-  accountsRoot?: string;
+  /** The app's own isolated homes lie below these (system/paths.ts homeRoots). */
+  accountsRoots?: readonly string[];
 }
 
 export class ClaudeRebuilder {
@@ -220,8 +221,8 @@ export class ClaudeRebuilder {
     return deleteTranscripts(this.files, ref, { transcriptsDir: this.transcriptsDir, home: account.home });
   }
 
-  /** One of the app's own isolated homes (<data>/accounts/…), never a detected login or ~/.claude. */
+  /** One of the app's own isolated homes (this PC's logins folder, or <data>/accounts where one stays), never a detected login or ~/.claude. */
   ownHome(account: Account): boolean {
-    return Boolean(this.deps.accountsRoot && account.home && !account.detected && inside(account.home, this.deps.accountsRoot));
+    return Boolean(account.home && !account.detected && this.deps.accountsRoots?.some((root) => inside(account.home!, root)));
   }
 }

@@ -1,6 +1,7 @@
 // Owns: the static half of PhoneConnection (B-084 split, kept out so that file stays under 300 lines) – pairing a new
 // phone key with a PC under its Remote ID (the PC's own connect request with role "phone", relay/RemotePair), reading
-// the pinned PCs back from storage or phoneUse.attach, putting one PC first, and whether two lists pin the same PCs.
+// the pinned PCs back from storage or phoneUse.attach (F29: with their direct addresses), putting one PC first, and
+// whether two lists pin the same PCs.
 // Never: keeps state, stores anything, or reaches a PC outside the pairing request.
 package com.teydralab.autark.android.relay;
 
@@ -49,7 +50,17 @@ final class PhonePairing {
             String fp = Json.str(row, "fingerprint"), pub = Json.str(row, "publicKey");
             if (fp == null || pub == null || !fp.matches("[0-9a-f]{64}")) continue;
             try { if (!Crypto.fingerprint(Crypto.fromB64url(pub)).equals(fp)) continue; } catch (IllegalArgumentException error) { continue; }
-            out.add(new PhoneConnection.Pc(fp, pub, Json.str(row, "name"), Json.str(row, "deviceId")));
+            out.add(new PhoneConnection.Pc(fp, pub, Json.str(row, "name"), Json.str(row, "deviceId"), addressesOf(row.get("addresses"))));
+        }
+        return out;
+    }
+
+    /** F29: a PC's direct addresses (http(s) base URLs DirectPipe can dial, at most 8); anything else is skipped. */
+    static List<String> addressesOf(Object value) {
+        List<String> out = new ArrayList<>();
+        if (!(value instanceof List)) return out;
+        for (Object item : (List<?>) value) {
+            if (item instanceof String && DirectPipe.url((String) item) != null && !out.contains(item) && out.size() < DirectPipe.MAX_ADDRESSES) out.add((String) item);
         }
         return out;
     }

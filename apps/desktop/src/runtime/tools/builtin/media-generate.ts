@@ -19,7 +19,7 @@ type ImageArgs = { prompt: string; size?: ImageSize; quality?: ImageQuality; nam
 const image = generationTool<ImageArgs>({
   name: 'media.image',
   kind: 'image',
-  description: `Creates an image from a description and stores it. ${STORED}`,
+  description: `Makes a real picture with an image model – what I draw in code (SVG, HTML, canvas) is a layout, not a picture. It runs on the image model in Settings, else on the person's ChatGPT plan through Codex, and stores the picture. ${STORED}`,
   inputSchema: {
     type: 'object',
     properties: {

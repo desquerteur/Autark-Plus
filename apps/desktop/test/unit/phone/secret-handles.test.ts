@@ -19,13 +19,14 @@ const host = {
 };
 const LINK = 'https://verify.example.com/session/abc123private';
 
-function setup() {
+/** `field`: what the phone says the field reads after typing (the Autark app from 0.3.15); absent = an older app. */
+function setup(field?: (typed: string) => string) {
   const db = new Db(':memory:');
   migrate(db);
   const vault = new SecretVault({ db, host, clock: new ManualClock() });
   const sent: Array<{ op: string; value: unknown }> = [];
   const phone = {
-    type: async (_serial: unknown, value: string) => { sent.push({ op: 'type', value }); },
+    type: async (_serial: unknown, value: string) => { sent.push({ op: 'type', value }); return field?.(value); },
     open: async (_serial: unknown, target: { url?: string; package?: string }) => { sent.push({ op: 'open', value: target }); return target.url ?? target.package; },
   };
   const services = { db, secrets: vault, devices: { self: () => ({ id: 'dev_self', name: 'Desk' }), list: () => [] } } as unknown as RuntimeServices;
@@ -53,6 +54,22 @@ test('phone.type without a handle types the text as given and adds no note', asy
   const out = await f.tools.get('phone.type')!.run({ text: 'Message hello' } as never, f.ctx);
   assert.deepEqual(f.sent, [{ op: 'type', value: 'Message hello' }], 'real text with the word Message stays whole');
   assert.ok(!/masked/.test(text(out)));
+});
+
+// Chat sweep 16.11.2026 (owner 12.11.: extra words in an email field, "Message" in WhatsApp): the field's text read back.
+test('phone.type shows what the field reads afterwards, so extra words beside mine show at once', async () => {
+  const f = setup((typed) => `Message${typed}`);
+  const out = await f.tools.get('phone.type')!.run({ text: 'Hallo' } as never, f.ctx);
+  assert.equal(text(out), 'Typed 5 characters. The field now reads: "MessageHallo".');
+});
+
+test('phone.type with a stored secret masks the value in the field it reads back', async () => {
+  const value = 'Zq7vR2mK9wL4tX8';
+  const f = setup((typed) => `anna@example.com ${typed}`);
+  const saved = await f.vault.save({ label: 'Mail login', kind: 'password', value });
+  const out = await f.tools.get('phone.type')!.run({ text: `secret://${saved.id}` } as never, f.ctx);
+  assert.ok(!text(out).includes(value), text(out));
+  assert.match(text(out), new RegExp(`The field now reads: "anna@example\\.com secret://${saved.id}"`));
 });
 
 test('phone.open opens a stored private link by its handle and never returns the value', async () => {

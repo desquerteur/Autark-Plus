@@ -1,7 +1,9 @@
 // Settings › Apps: the connected apps, read from <data>/connectors/mcp.json and mail.json (apps.list), each with its address and
-// status in one reserved line, one action in a fixed cell and its on/off switch; the menu offers tools, a token, a desktop-only file
-// view and Remove. Structured apps.* calls mutate named entries; this UI does not give a phone files.writePath. The desktop-only
-// mailbox form still uses the existing editor. apps.changed reloads the list. Sign-in and stdio commands run on the PC.
+// status in one reserved line, one action in a fixed cell and its on/off switch; the menu offers tools, a token, the file
+// view (mcp.json / mail.json in the pane) and Remove. Structured apps.* calls mutate named entries. apps.changed reloads the list.
+// Sign-in and stdio commands run on the PC: on the desktop the sign-in page opens in the system browser; 16.11.2026 on the
+// owner's phone (it manages the PC's files, files.writePath) it opens in the PC's pane, which the phone's sheet shows
+// (side.open), and a mailbox is removed from there too; a device without that keeps the line "Sign in in the PC browser".
 // Owns: these rows and the tools dialog. Never: holds a token, header value or vault id.
 
 import { useEffect, useState } from 'preact/hooks';
@@ -14,6 +16,7 @@ import { can, isOwner } from '../lib/session.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
 import { setUpWithAi } from '../team/set-up-with-ai.ts';
+import { openInPcPane, opensInPcPane } from '../workspace/phone-tabs.ts';
 import { act, ActionButton, Group, Note, Row, Toggle, useAsync, useBusy } from './controls.tsx';
 import { AddApps, TokenDialog } from './apps-add.tsx';
 import { appAction, appLine, toolCount } from './apps-files.ts';
@@ -23,12 +26,13 @@ function AppRow(props: { app: ConnectedApp; onChanged: () => void; onTools: () =
   const { app } = props;
   const [busy, run] = useBusy();
   const canToggle = can('apps.setEnabled');
-  const canRemove = can('apps.remove') && (app.transport !== 'mail' || isOwner());
+  const canRemove = can('apps.remove') && (app.transport !== 'mail' || can('files.writePath'));
   const canToken = can('apps.setToken') && app.transport === 'http' && can('secrets.save');
-  const hostSignInNeeded = !isOwner() && app.status === 'waiting';
+  const inPane = !isOwner() && opensInPcPane(); // the phone: the sign-in page opens in the PC's pane, shown in its sheet
+  const hostSignInNeeded = !isOwner() && !inPane && app.status === 'waiting';
   const action = hostSignInNeeded ? undefined : appAction(app);
   const press = () => {
-    if (action?.kind === 'page') { if (isOwner()) openExternal(app.signInUrl!); return; }
+    if (action?.kind === 'page') { if (isOwner()) openExternal(app.signInUrl!); else if (inPane) void openInPcPane(app.signInUrl!); return; }
     void run(async () => {
       const tested = await rpc.call('apps.reconnect', { id: app.id, name: app.name, transport: app.transport });
       if (action?.kind === 'test' && tested.status === 'ok') pushToast({ title: `${tested.name} works`, body: toolCount(tested.tools) });
@@ -43,7 +47,7 @@ function AppRow(props: { app: ConnectedApp; onChanged: () => void; onTools: () =
   const menu = () => {
     const items: MenuItem[] = [{ label: 'Show tools', onSelect: props.onTools }];
     if (canToken) items.push({ label: 'Add a token', onSelect: props.onToken });
-    if (isOwner() && can('files.writePath')) { const file = app.transport === 'mail' ? 'mail.json' : 'mcp.json'; items.push({ label: `Open ${file}`, onSelect: () => void openInTab(`connectors/${file}`) }); }
+    if (can('files.writePath') && can('system.root')) { const file = app.transport === 'mail' ? 'mail.json' : 'mcp.json'; items.push({ label: `Open ${file}`, onSelect: () => void openInTab(`connectors/${file}`) }); }
     return [{ items }, ...(canRemove ? [{ items: [{ label: 'Remove', danger: true, onSelect: () => void remove() }] }] : [])];
   };
   return (

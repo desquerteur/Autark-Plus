@@ -13,6 +13,9 @@
 // B-082: unsure places of dictated text are highlighted behind the field (composer/MarkLayer.tsx); a click or tap with
 // the caret in one opens its menu (composer/MarkMenu.tsx). The text itself stays plain. A kept take's chip has
 // "Transcribe again" (composer/voice.ts retryTake: the words go in at the caret).
+// F23: Plus › Record audio / Record video open composer/RecordBar.tsx in the same slot above the text (the take goes in
+// as a chip, a recording or video not bound to the 20 MB of other files; Send waits while a take records, attaches or
+// waits there); Photos & videos takes both; on a phone Take photo and Record video are the camera app's.
 // Owns: input handling and when to send (the send itself: composer/send.ts). Never: message rendering or chat settings UI.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -36,6 +39,8 @@ import { findToken, suggestionsFor, SuggestionList, useSuggestions } from './com
 import type { Suggestion } from './composer/Suggestions.tsx';
 import { ModelChip } from './composer/ModelChip.tsx';
 import { PlusMenu } from './composer/PlusMenu.tsx';
+import { useRecordSlot } from './composer/RecordBar.tsx';
+import { isMedia, uploadMedia } from './composer/record-take.ts';
 import { ScheduleBar } from './composer/ScheduleBar.tsx';
 import { leaveScheduleMode, openScheduleMode, scheduleDraft, scheduleModeFor } from './composer/schedule-mode.ts';
 import { scheduleSpec } from './composer/schedule-form.ts';
@@ -68,6 +73,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   const mode = scheduleModeFor(chat.id).value; // schedule mode (null = a normal composer)
   const scheduling = mode !== null;
   const suggest = useSuggestions();
+  const record = useRecordSlot(chat.id, (files) => void addFiles(files)); // F23: the RecordBar, the camera input
   const isDictating = dictating.value === chat.id;
   const transcribingHere = transcribing.value.has(chat.id); // the stopped take's text is still on its way
   const hasContent = text.trim().length > 0 || attachments.length > 0 || secrets.length > 0;
@@ -123,7 +129,8 @@ export function Composer(props: { chat: ConversationSummary }) {
     setUploading((current) => [...current, ...list.map((file) => file.name)]);
     for (const file of list) {
       try {
-        const attachment = await uploadFile(file, undefined, { conversationId: chat.id }); // F-52: a person's file goes into this chat
+        const attachment = isMedia(file) ? await uploadMedia(file, file.name, chat.id) // a recording or video: chunked, no 20 MB cap
+          : await uploadFile(file, undefined, { conversationId: chat.id }); // F-52: a person's file goes into this chat
         updateDraft(chat.id, { attachments: [...draft.value.attachments, attachment] });
       } catch (error) { toastError(error, 'Upload failed'); }
       setUploading((current) => { const index = current.indexOf(file.name); return index === -1 ? current : [...current.slice(0, index), ...current.slice(index + 1)]; });
@@ -147,7 +154,7 @@ export function Composer(props: { chat: ConversationSummary }) {
 
   /** `sentLevel`: the Plus menu's "Send as important" / "Send silently" (no slash command then). */
   const send = async (sentLevel?: MessageLevel) => {
-    if (sending || transcribing.peek().has(chat.id)) return; // never sends without the dictated words
+    if (sending || record.held || transcribing.peek().has(chat.id)) return; // never sends without the dictated words or the take
     setSending(true); // also while a dictation is transcribed first (a second tap sends nothing twice)
     try {
       // A take that came back as a recording or failed stays in the draft: the person sees it (and the toast) first.
@@ -234,7 +241,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   const sendMenu = useContextMenu(() => [{ items: sendMenuItems(sendActions) }]);
   // Schedule mode: the same round cell with a clock (a wider label would move the model and the mic)
   const primary = <button type="button" class="send-button" aria-label={scheduling ? 'Schedule' : 'Send'} title={scheduling ? 'Schedule' : undefined} {...sendMenu}
-    disabled={(scheduling ? !scheduleReady || transcribingHere : controls.primary === 'send-disabled') || sending || uploading.length > 0}
+    disabled={(scheduling ? !scheduleReady || transcribingHere : controls.primary === 'send-disabled') || sending || uploading.length > 0 || record.held}
     onClick={() => void (scheduling ? scheduleNow() : send())}><Icon name={scheduling ? 'clock' : 'arrow-up'} size={19} /></button>;
 
   return (
@@ -246,6 +253,7 @@ export function Composer(props: { chat: ConversationSummary }) {
         {mode && <ScheduleBar conversationId={chat.id} mode={mode} next={next} note={note} onLeave={() => leaveScheduleMode(chat.id)} />}
         {secretOpen && <ChatSecretBar key={chat.id} conversationId={chat.id} room={20 - secrets.length} onLeave={() => { setSecretOpen(false); fieldRef.current?.focus(); }}
           onAttach={(id) => updateDraft(chat.id, { secrets: [...(draft.peek().secrets ?? []), id] })} />}
+        {record.bar}
         {replyTo && <ReplyQuote conversationId={chat.id} messageId={replyTo} onCancel={() => { setReply(chat.id, null); fieldRef.current?.focus(); }} />}
         <SecretAttachments ids={secrets} onRemove={id => updateDraft(chat.id, { secrets: secrets.filter(entry => entry !== id) })} />
         <ComposerAttachments attachments={attachments} uploading={uploading}
@@ -280,6 +288,7 @@ export function Composer(props: { chat: ConversationSummary }) {
             pickImages: () => void pickFiles(true),
             secret: secrets.length < 20 ? () => setSecretOpen(true) : undefined,
             makeTask: () => void makeTask(),
+            ...record.actions,
             ...sendActions,
           }} />
           <div class="composer-spacer"><DictationWave state={waveState(chat.id)} /></div>
@@ -289,7 +298,8 @@ export function Composer(props: { chat: ConversationSummary }) {
         </div>
       </div>
       <input ref={fileRef} type="file" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
-      <input ref={imageRef} type="file" accept="image/*" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
+      <input ref={imageRef} type="file" accept="image/*,video/*" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
+      {record.input}
     </div>
   );
 }

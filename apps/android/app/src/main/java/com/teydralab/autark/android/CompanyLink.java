@@ -1,10 +1,12 @@
 // Owns: the one live link of the current company for the whole app process (B-084, decisions 7 and 8): its connection
 // (relay/PhoneConnection) behind the company's own local port (its own origin), the phone-use socket (phoneuse/UseLink),
-// the network callback pointed at it (relay/NetworkWake), the line of the ongoing notification (KeepAlive: "Connected to
-// <the page's PC> (+N)", N = the company's other PCs the phone is linked to as well, B-084 M1) and the PC picker – the
-// PCs of the company in the phone's order, which one the page uses and which are online; a pick makes the page use that
-// PC. Also where the company list and the entrance's gate secret are kept (SharedPreferences under Companies).
-// Events go to the activity on screen (MainActivity forwards them). Never: decides a pairing's record (Companies does),
+// the network callback pointed at it (relay/NetworkWake) and the PC picker – the PCs of the company in the phone's order,
+// which one the page uses and which are online; a pick makes the page use that PC. A PC that refused the page's token
+// (the page's 'refused', 16.11.2026) gives the page to the next PC of the company that has not refused in this link.
+// Also where the company list and the entrance's gate secret are kept (SharedPreferences under Companies).
+// Events go to the activity on screen (MainActivity forwards them); the connection's state shows in the page's status
+// line only (the KeepAlive notice is fixed). stop() ends the sockets on a thread of its own – Android refuses network
+// writes on the main thread (16.11.2026 crash on a company switch). Never: decides a pairing's record (Companies does),
 // touches the WebView, or keeps two companies' links at once.
 package com.teydralab.autark.android;
 
@@ -60,15 +62,7 @@ final class CompanyLink {
     /** Starts the company's connection on its port (any free one when taken) and its phone-use socket. */
     static CompanyLink open(Context context, String company, PhoneConnection.Paired paired, int port, String gate, Events events) throws IOException {
         Context app = context.getApplicationContext();
-        PhoneConnection[] self = new PhoneConnection[1];
-        PhoneConnection connection = new PhoneConnection(paired, (text, connected) -> {
-            PhoneConnection live = self[0];
-            String pc = live == null ? null : live.pcName();
-            int others = live == null ? 0 : live.linkedCount() - 1; // B-084 M1: the company's other PCs linked too
-            KeepAlive.update(app, connected && pc != null ? "Connected to " + pc + (others > 0 ? " (+" + others + ")" : "") : "Reconnecting…");
-            events.status(text, connected);
-        });
-        self[0] = connection;
+        PhoneConnection connection = new PhoneConnection(paired, events::status);
         connection.onLinked(events::linked);
         String origin = connection.start(port, gate);
         UseLink use = new UseLink(app, origin, gate, paired.token, paired.deviceId, (pcs) -> {
@@ -77,16 +71,24 @@ final class CompanyLink {
         });
         use.start();
         NetworkWake.register(app, connection);
-        KeepAlive.update(app, "Connecting…");
         return new CompanyLink(company, origin, connection, use);
     }
 
-    /** Ends the connection, the phone-use socket and the network callback's target. */
+    /** Ends the network callback's target and the local entrance at once (its port is free for the same company opened
+     *  again, e.g. after "Pair again"), the connection and phone-use socket on their own thread – nothing waits for it. */
     void stop(Context context) {
-        use.stop();
-        connection.stop();
         NetworkWake.register(context, null);
+        connection.closeEntrance();
+        Thread closer = new Thread(() -> {
+            try { use.stop(); connection.stop(); }
+            catch (RuntimeException error) { android.util.Log.w("Autark", "link stop failed: " + error.getClass().getName()); }
+        }, "autark-link-stop");
+        closer.setDaemon(true);
+        closer.start();
     }
+
+    /** The page's PC refused its token: the page goes to the next PC of the company that has not refused in this link. */
+    void refused() { connection.refused(); }
 
     /** The name of the PC the link goes to now, or null. */
     String pcName() { return connection.pcName(); }

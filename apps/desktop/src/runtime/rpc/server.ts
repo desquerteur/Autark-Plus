@@ -7,7 +7,7 @@
 // Every handler runs as its caller (rpc/caller.ts: the scope, and the address of a tokenless
 // call) so code further down can narrow what that caller's answer may do (DEV5B).
 // Owns: dispatch, per-connection state (topics, abort signal, in-flight cap), event fan-out
-// (incl. `run.item` → `runs:<agentId>`) and closing connections of revoked devices. The
+// (incl. `run.item` → `runs:<agentId>`, and `agent.activity` with the other PCs' runs added – F10) and closing connections of revoked devices. The
 // tokenless `POST /rpc` route is served by rpc/tokenless.ts on this server's table.
 // Roles: the owner and the owner's paired phones (scope kind 'device', the CEO's) see everything their
 // tier allows (scopes.ts); an employee's device (scope kind 'person') gets only what
@@ -25,8 +25,9 @@ import type { ClientScope, RpcEvent, RpcRequest, RpcResponse, Topic } from '../.
 import { WorkforceError, toErrorData } from '../../shared/errors.ts';
 import type { WorkforceErrorData } from '../../shared/errors.ts';
 import type { Device } from '../../shared/model/devices.ts';
-import type { Run, RunItem } from '../../shared/model/runs.ts';
+import type { AgentActivity, Run, RunItem } from '../../shared/model/runs.ts';
 import type { Logger, RuntimeServices } from '../contracts.ts';
+import { allActivity } from '../chat/live.ts';
 import { withCaller } from './caller.ts';
 import { parseFrame } from './connection.ts';
 import type { RpcConnection } from './connection.ts';
@@ -229,6 +230,8 @@ export class RpcServer {
     } else {
       topic = topicOf(event, data);
     }
+    // F10 (16.11.2026): windows and phones hear this PC's running runs with those of the person's other PCs (chat/live.ts).
+    if (event === 'agent.activity') data = { active: allActivity(this.deps.services().bus, (data as { active: AgentActivity[] }).active) };
     let frame: RpcEvent | undefined;
     for (const client of this.clients) {
       if (client.closed || !client.topics.has(topic)) continue;

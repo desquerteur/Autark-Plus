@@ -68,6 +68,10 @@ test('a schedule fires where its owner runs: a home that moves takes it along, a
   const due = (pc: Pc, id: string) => pc.h.db.get<{ next_at: number | null }>('SELECT next_at FROM schedules WHERE id = ?', [id])?.next_at ?? null;
   assert.deepEqual([due(a, routine.id) !== null, due(b, routine.id) !== null], [true, false], 'Tom\'s routine fires on his home, A');
   assert.deepEqual([due(a, tea.id) !== null, due(b, tea.id) !== null], [true, false], 'the person\'s on the CEO PC with the smallest id');
+  // F06 (16.11.2026): B keeps no due time in the row, yet shows the next run wherever it is read.
+  assert.equal(b.h.scheduler.get(routine.id)?.nextAt, b.h.clock.now() + 3_600_000, 'B shows when it runs next');
+  assert.deepEqual(b.h.scheduler.list({ ownerId: 'ag_tom' }).map((schedule) => schedule.nextAt), [b.h.clock.now() + 3_600_000]);
+  assert.equal(due(b, routine.id), null, 'shown, never written to the row');
 
   for (const pc of [a, b]) { pc.h.org.add({ ...tom, deviceId: 'dev_b' }); pc.h.bus.emit('agent.upserted', pc.h.org.get('ag_tom')!); }
   assert.deepEqual([due(a, routine.id) !== null, due(b, routine.id) !== null], [false, true], 'his home moved to B: B fires it');

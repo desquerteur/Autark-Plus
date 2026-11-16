@@ -4,8 +4,8 @@
 // chat/call/call-notices.ts), running voice conversations (Open/Talk, End) and realtime voice (Open, End) – B-085: a call
 // in the open chat shows on its call card (chat/call/CallCard.tsx) instead, a voice line stays only while it needs Talk –,
 // an agent using the computer (Watch – computer-notice.ts) and the toasts (lib/toasts.ts, newest first; most expire by
-// themselves, those for to-dos, blockers and important messages stay until Open, Dismiss or until their chat or My day
-// is open); other areas may register more
+// themselves – an important message after 20 s –, those for to-dos and blockers stay until Open, Dismiss or until their
+// chat or My day is open); other areas may register more
 // (shell/notices.ts). At most three lines at once; the rest follow as earlier ones go.
 // Owns: the line markup and the shell's own providers. Never: a notice's order (notices.ts).
 

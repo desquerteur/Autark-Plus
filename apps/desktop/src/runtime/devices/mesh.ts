@@ -35,6 +35,7 @@ import { validAddress, type PeerInfo } from './pair-proof.ts';
 import { DevicesRepo, publicDevice, type DeviceRecord } from './repo.ts';
 import { MAX_ADDRESSES, mergeAddresses, openChannel, firstOpen, seenText, type MeshMeeting } from './reach.ts';
 import type { Timers } from '../schedules/scheduler.ts';
+import type { DeviceLoad } from './load.ts';
 import { RpcPeer, type PeerHandler } from './rpc-peer.ts';
 import { FRESH_MS, MeshRetries, TRIGGER_MS, TRIGGER_STEP, pairedWithin, realTimers } from './mesh-retry.ts';
 
@@ -50,6 +51,7 @@ export interface MeshDeps {
   /** Opens a WebSocket to a peer runtime at its base URL (compose/peer-dial.ts maps it to ws(s)://…/peer). */
   dial(address: string): Promise<SocketLike>;
   timers?: Timers;
+  load?(): DeviceLoad; // this PC's load, answered with every ping (load.ts; devices.list shows it)
 }
 
 /** Two links attached this close together count as simultaneous dials (tie-break below). */
@@ -95,7 +97,7 @@ export class DeviceMesh implements DeviceService {
     this.repo = new DevicesRepo(deps.db);
     this.timers = deps.timers ?? realTimers;
     this.retries = new MeshRetries(this.timers, (deviceId) => { void this.connect(deviceId).catch(() => undefined); });
-    this.register('ping', async () => ({ ok: true, at: deps.clock.now() }), EVERY_LINK);
+    this.register('ping', async (_params, from) => ({ ok: true, at: deps.clock.now(), ...(deps.load && kindOf(this.repo.get(from)) === 'ceo' ? { load: deps.load() } : {}) }), EVERY_LINK); // load: my own PCs only
     this.register('device.caps', async () => this.self().caps, EVERY_LINK);
     this.register(ADDRESSES_METHOD, async (params, from) => this.received(params, from), EVERY_LINK);
   }
@@ -377,7 +379,7 @@ export class DeviceMesh implements DeviceService {
       if (keeps || once) this.retries.schedule(deviceId, keeps ? 0 : TRIGGER_STEP);
     });
     void peer.call('device.caps', null, { timeoutMs: 10_000 }).then(
-      (caps) => { if (caps && typeof caps === 'object') this.repo.patch(deviceId, { caps: caps as DeviceCaps }); },
+      (caps) => { if (caps && typeof caps === 'object') { this.repo.patch(deviceId, { caps: caps as DeviceCaps }); this.emit(deviceId); } }, // F25: windows and main hear its caps (its version)
       () => undefined,
     );
     this.sendAddresses(deviceId);

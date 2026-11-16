@@ -7,6 +7,7 @@
 //                 "Autark is installing 0.x and opens again by itself in about a minute" (installingText)
 //   error       → retry arrow only for a failed download/open of a verified available update;
 //                 background check failures stay in Settings › About ("Try again")
+// F25: an install that did not land (this start's notice) is the About hint beside the button.
 // Owns: these rules and texts. Never: performs the action (main's UpdateService.apply does).
 
 import type { UpdateState } from '../../shared/model/system.ts';
@@ -53,15 +54,20 @@ export interface AboutUpdateAction {
   hint?: string;
 }
 
-/** The button next to the update status in Settings › About (all of them call apply()). */
-export function aboutUpdateAction(state: UpdateState | null): AboutUpdateAction | null {
+/**
+ * The button next to the update status in Settings › About (all of them call apply()). F25 (16.11.2026): when this
+ * start's notice says the last install did not land (SystemInfo.notice `failed`), that text is the hint – the reason
+ * stays readable after its status line was dismissed.
+ */
+export function aboutUpdateAction(state: UpdateState | null, notice?: { text: string; failed?: true }): AboutUpdateAction | null {
   if (!state) return null;
+  const failed = notice?.failed ? notice.text : undefined;
   switch (state.status) {
-    case 'downloaded': return { label: 'Restart to update', primary: true };
+    case 'downloaded': return { label: 'Restart to update', primary: true, ...(failed ? { hint: failed } : {}) };
     case 'available': return state.automaticInstall
-      ? { label: 'Update', primary: true, hint: 'Downloads the update and restarts' }
+      ? { label: 'Update', primary: true, hint: failed ?? 'Downloads the update and restarts' }
       : { label: 'Download', primary: true, hint: 'Opens the download page – install the new version by hand' };
-    case 'error': return { label: 'Try again', primary: false };
+    case 'error': return { label: 'Try again', primary: false, ...(failed ? { hint: failed } : {}) };
     default: return null;
   }
 }

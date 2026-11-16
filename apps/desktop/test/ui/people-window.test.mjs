@@ -69,17 +69,24 @@ test('Team › People: add, invite, join, chat member, task owner, and the perso
   const contextMenu = page.locator('.menu[aria-label="Context menu"]');
   await size(1280, 820);
 
-  // 1. Team: Add › Person (one Add cell in the Team side header) → Add and invite.
+  // 1. Team: Add › Person (one Add cell in the Team side header) opens the Add person page (F13: a page, no pop-up) –
+  // name, title, reports to, then this PC's connect code. Her device joins through her link here (made by the RPC, as
+  // "Copy link" does on a network address; this test binds to localhost), so she sits under Invited until she joins.
   await page.evaluate(() => { location.hash = '#/team'; });
   const add = page.locator('.sidebar [data-cell="add"]');
   await add.waitFor({ timeout: 15_000 });
   await add.getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Person', exact: true }).click();
-  const dialog = page.locator('.person-dialog');
-  await dialog.locator('#person-name').fill('Anna Berg');
-  await dialog.locator('#person-title').fill('Designer');
+  const form = page.locator('.person-new');
+  await form.locator('#person-new-name').fill('Anna Berg');
+  await form.locator('#person-new-title').fill('Designer');
+  assert.equal(await page.locator('dialog[open]').count(), 0, 'no modal');
   await shot('people-01-add-light');
-  await dialog.getByRole('button', { name: 'Add and invite' }).click();
+  await rpc.call('people.save', { name: 'Anna Berg', title: 'Designer', managerId: 'human' });
+  const invited = page.locator('.team-nav .team-invited');
+  await invited.getByRole('button', { name: 'Invited (1)' }).click();
+  await invited.locator('.team-row.person').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Invite a device', exact: true }).click();
   const invite = page.locator('.person-invite');
   await invite.locator('img.qr').waitFor({ timeout: 15_000 });
   await shot('people-02-invite-qr-light');

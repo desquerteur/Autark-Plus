@@ -2,17 +2,20 @@
 // download where the app installs by itself, the data folder and settings.json (Open: the pane's file tab, a right click the
 // system's own app – most things are set there, best by asking the AI), Back up (system.backup into the data folder, or a chosen one) and Restore (a backup folder → confirm →
 // system.restore; Restart now applies it; afterwards its hint says what that start did), and the chat export (the same two
-// places). The rows about the PC show only in the desktop window. Another company on this PC (B-072) says that updates
-// install from the first company, in the same row, and its download toggle stays in place, disabled.
+// places). 16.11.2026: the owner's phone has the same rows (the runtime lets its secure session do them) – a backup and an
+// export go into the PC's data folder, "Back up to…"/"Choose…" (the PC's folder picker) stay in the desktop window, and Open
+// / Show in folder open the PC's folder in the phone's pane sheet (open-file.ts); the phone has no updater of its own, so a
+// waiting update's line says what the PC does with it (General's automatic download). F25 (16.11.2026): every company on this PC updates
+// itself (B-072's "updates install from the first company" is gone), and when this start's install did not land, that
+// line is the hint beside the button (shell/update-control.ts).
 // Owns: these rows. Never: claims a restore happened before the start that applied it.
 
 import { useEffect, useState } from 'preact/hooks';
-import type { CompanyEntry } from '../../shared/model/companies.ts';
 import type { RestoreStatus } from '../../shared/model/restore.ts';
 import type { UpdateState } from '../../shared/model/system.ts';
 import { confirm } from '../lib/dialog.tsx';
 import { fileSize, time } from '../lib/format.ts';
-import { bridge, platform } from '../lib/platform.ts';
+import { bridge } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
 import { conversations, preferences, systemInfo, updatePreferences, updateState } from '../lib/store.ts';
@@ -20,7 +23,7 @@ import { Button } from '../lib/ui.tsx';
 import { aboutUpdateAction, autoDownloadApplies, installingText } from '../shell/update-control.ts';
 import { act, Group, Row, Toggle, useAsync, useBusy } from './controls.tsx';
 import { lastRestoreText } from './feedback-text.ts';
-import { openInData, openInTab } from './open-file.ts';
+import { openInData, openInTab, openPathHere } from './open-file.ts';
 
 function updateText(state: UpdateState | null): string {
   if (!state) return 'Unavailable';
@@ -36,7 +39,13 @@ function updateText(state: UpdateState | null): string {
   }
 }
 
-const open = (path: string) => void act(() => rpc.call('files.openPath', { path }), 'Could not open it');
+const open = (path: string) => void openPathHere(path);
+
+/** On the phone (no updater here): what the PC does with a waiting update – it installs by itself when idle with automatic download on. */
+function pcUpdateLine(state: UpdateState | null, autoDownload: boolean): string | undefined {
+  if (!state || !['available', 'downloading', 'downloaded', 'error'].includes(state.status) || !autoDownloadApplies(state)) return undefined;
+  return autoDownload ? 'Your PC installs it by itself when idle' : 'Turn on Download updates automatically in General and your PC installs it when idle';
+}
 
 function FolderRows() {
   const root = useAsync(() => rpc.call('system.root'), []);
@@ -92,7 +101,7 @@ function BackupRows() {
           ? <Button variant="primary" class="small" disabled={!status?.canRestart} onClick={() => void act(() => rpc.call('system.restartRuntime'), 'Could not restart')}>Restart now</Button>
           : (
             <>
-              <input class="set-input" type="text" aria-label="Backup folder" placeholder="Backup folder" value={folder} spellcheck={false}
+              <input class="set-input" type="text" aria-label="Backup folder" placeholder={pickFolder ? 'Backup folder' : 'Backup folder on your PC'} value={folder} spellcheck={false}
                 onInput={(event) => setFolder((event.currentTarget as HTMLInputElement).value)}
                 onKeyDown={(event) => { if (event.key === 'Enter') void restore(); }} />
               {pickFolder && <Button variant="ghost" class="small" onClick={() => void choose()}>Choose…</Button>}
@@ -130,22 +139,15 @@ function ChatExportRow() {
   );
 }
 
-/** B-072: another company on this PC (its companies.list entry has an id) leaves updates to the first company. */
-function useOtherCompany(): boolean {
-  const list = useAsync<CompanyEntry[]>(async () => (platform === 'desktop' && can('companies.list') ? (await rpc.call('companies.list')).companies : []), []);
-  return Boolean(list.data?.some((company) => company.current && company.id !== null));
-}
-
 export function AboutPage() {
   const update = updateState.value;
   const updates = bridge?.updates;
-  const other = useOtherCompany();
-  const action = updates && !other ? aboutUpdateAction(update) : null;
-  const off = update?.status === 'development' || other;
-  const hint = other ? 'Updates install from the first company on this PC' : [updateText(update), action?.hint].filter(Boolean).join(' · ');
+  const action = updates ? aboutUpdateAction(update, systemInfo.value?.notice) : null; // F25: every company updates itself; a not-landed install says why
+  const off = update?.status === 'development';
+  const hint = [updateText(update), action?.hint, !updates && pcUpdateLine(update, preferences.value.autoDownloadUpdates)].filter(Boolean).join(' · ');
   return (
     <Group title="About" id="settings-about">
-      <Row label={`Version ${systemInfo.value?.version ?? update?.version ?? '–'}`} hint={hint} reserve>
+      <Row label={`Version ${systemInfo.value?.version ?? update?.version ?? '–'}`} hint={hint} reserve={updates ? true : 2}>{/* the phone: two lines, the PC's update line fits */}
         {updates && action && (
           <Button variant={action.primary ? 'primary' : 'secondary'} class="small" onClick={() => void act(async () => updates.apply(), 'Update failed')}>{action.label}</Button>
         )}
@@ -156,8 +158,8 @@ export function AboutPage() {
         </Row>
       )}
       {can('system.root') && <FolderRows />}
-      {platform === 'desktop' && can('system.backup') && <BackupRows />}
-      {platform === 'desktop' && can('chats.export') && <ChatExportRow />}
+      {can('system.backup') && <BackupRows />}
+      {can('chats.export') && <ChatExportRow />}
     </Group>
   );
 }

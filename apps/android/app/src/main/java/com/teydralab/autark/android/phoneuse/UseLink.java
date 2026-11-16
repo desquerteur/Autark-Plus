@@ -2,7 +2,8 @@
 // cookie, this phone's token), so it lives as long as the phone's connection, also while the app is in the background.
 // It calls phoneUse.attach (model, screen, whether phone use is on – again whenever that changes) and keeps the list of
 // my PCs the answer brings (the connection then pins all of them), hears phoneUse.request for this device only and
-// answers each with phoneUse.reply – one step at a time, on a thread of its own (StepThread). Every attach goes there too:
+// answers each with phoneUse.reply – one step at a time, on a thread of its own (StepThread), with the request's agent
+// (`by`) for the bubble; the AI's question (say with ask) holds the next steps until it is answered. Every attach goes there too:
 // a change arrives on Android's main thread (service on/off, the disclosure's "Agree"), which may not write to a socket
 // (10.11.2026). Hello and subscribe go out before a listener can see the socket, so attach never comes before them.
 // When phone use is off it answers 'off' and shows the enable notification; a build without phone use offers its
@@ -39,6 +40,8 @@ public final class UseLink implements WebSocketClient.Listener {
     private final String deviceId;
     private final Pcs pcs;
     private final StepThread steps = new StepThread((line) -> android.util.Log.w("autark", line));
+    /** My listener for the service turning on or off (one object, so stop() drops exactly mine). */
+    private final Runnable onService = this::changed;
     private final AtomicInteger ids = new AtomicInteger(1);
     private final Object lock = new Object();
     private volatile WebSocketClient socket;
@@ -56,15 +59,16 @@ public final class UseLink implements WebSocketClient.Listener {
     }
 
     public void start() {
-        UseService.onChange(this::changed);
+        UseService.onChange(onService);
         worker = new Thread(this::run, "autark-phone-use");
         worker.setDaemon(true);
         worker.start();
     }
 
+    /** Any thread (a company switch stops the old link on a thread of its own, CompanyLink.stop). */
     public void stop() {
         stopped = true;
-        UseService.onChange(null);
+        UseService.dropChange(onService);
         WebSocketClient ws = socket;
         if (ws != null) ws.close();
         synchronized (lock) { lock.notifyAll(); }
@@ -150,7 +154,7 @@ public final class UseLink implements WebSocketClient.Listener {
             PhoneUseUpgrade.prompt(context);
             reply = Json.map("id", id, "error", Json.map("code", "off", "message", offText(service != null)));
         } else {
-            try { reply = Json.map("id", id, "result", service.run(op, params, Json.str(request, "job"))); }
+            try { reply = Json.map("id", id, "result", service.run(op, params, Json.str(request, "job"), Json.str(request, "by"))); }
             catch (UseService.UseError error) { reply = Json.map("id", id, "error", Json.map("code", error.code, "message", String.valueOf(error.getMessage()))); }
             catch (RuntimeException error) { reply = Json.map("id", id, "error", Json.map("code", "conflict", "message", "The step failed on the phone: " + error.getClass().getSimpleName())); }
         }

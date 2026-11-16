@@ -3,7 +3,8 @@
 // and memory/ (the memory tree) among them –, the workspace's skills (workspace-skills/), its agents' own skills
 // (<workspace>/agents/<slug>/skills → workspace-agent-skills/<slug>/) and manifest.json (written
 // last: its presence marks a complete backup). Left out: CLI logins (accounts/ – sign in again on another PC), this PC's key (runtime.key), Electron's own
-// profile entries (the desktop's data folder is its userData: caches, browser state), logs, temp and engine folders,
+// profile entries (shared/model/electron-profile.ts: the desktop's data folder is its userData), logs, temp and engine folders, a removal mark,
+// runtime.json (the running runtime's port and owner token),
 // the agents' wf shim (bin/, the app writes it again), another company's workspace (<data>/workspace – like the first
 // company's, only its skills are carried), the chat mirror (written again from the database), the old overlay folder
 // custom/, earlier backups and restore leftovers, and at any depth the temp files of atomic writes and uploads (*.tmp,
@@ -17,6 +18,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WorkforceError } from '../../shared/errors.ts';
+import { REMOVED_FILE, RUNTIME_FILE } from '../../shared/model/companies.ts';
+import { isElectronProfileEntry } from '../../shared/model/electron-profile.ts';
 import type { Logger, Paths } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
 import { SCHEMA_VERSION } from '../db/migrate.ts';
@@ -32,26 +35,20 @@ export const WORKSPACE_SKILLS = 'workspace-skills';
 export const AGENT_SKILLS = 'workspace-agent-skills';
 /** The headless runtime's own encryption key (host-node.ts) – bound to this PC like the OS key, never copied or restored. */
 export const MACHINE_KEY_FILE = 'runtime.key';
+/** 16.11.2026: a company export's secrets file (portability/company.ts) – their values readable, never put into a data folder. */
+export const EXPORT_SECRETS = 'secrets.csv';
 /** Entries of <data> a backup never carries (the database is copied with VACUUM INTO). */
 const NOT_COPIED = new Set([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, BACKUPS_DIR, 'pre-upgrade', 'accounts', 'logs', 'tmp', 'engine-cwd', 'engine-prompts', 'engine-transcripts', 'chats', 'custom', 'bin', 'workspace',
-  'restore-from.json', 'restore-from.json.part', 'restore-failed.json', 'restore-result.json',
+  'restore-from.json', 'restore-from.json.part', 'restore-failed.json', 'restore-result.json', REMOVED_FILE, // a removal mark never travels into another company
+  RUNTIME_FILE, // the running runtime's port and owner token: never in an export, never another company's address
   MACHINE_KEY_FILE]); // this PC's own key (host-node.ts): another PC's key would make its carried-over identity unreadable
-/**
- * Electron's own profile entries: on the desktop the data folder IS Electron's userData (main/app-paths.ts), and Chromium
- * keeps these open (a copy fails on a locked file). They are caches and this PC's browser state, never Workforce data.
- */
-const ELECTRON_PROFILE = new Set(['blob_storage', 'Cache', 'Code Cache', 'Cookies', 'Cookies-journal', 'Crashpad', 'DawnGraphiteCache',
-  'DawnWebGPUCache', 'databases', 'DevToolsActivePort', 'Dictionaries', 'DIPS', 'DIPS-journal', 'DIPS-wal', 'GPUCache', 'GPUPersistentCache',
-  'GrShaderCache', 'IndexedDB', 'keyring-name', 'Local State', 'Local Storage', 'lockfile', 'Network', 'Network Persistent State', 'Partitions', 'Preferences',
-  'Service Worker', 'Session Storage', 'Shared Dictionary', 'shared_proto_db', 'ShaderCache', 'SingletonCookie', 'SingletonLock',
-  'SingletonSocket', 'TransportSecurity', 'Trust Tokens', 'VideoDecodeStats', 'WebStorage']);
 /**
  * The temp file of an atomic write, at any depth: <name>.tmp (next-due.json.tmp; device sync's <file>.<uuid>.tmp in
  * memory/, agents/, workspace/skills …) or <uuid>.part (a file upload in blobs/tmp) – renamed away while a backup runs.
  */
 export const isTempFile = (name: string): boolean => name.endsWith('.tmp') || name.endsWith('.part');
-/** An entry of <data> the backup leaves out: listed above, one of Chromium's own small databases (declarative_*.db), or a temp file. */
-const leftOut = (entry: string): boolean => NOT_COPIED.has(entry) || ELECTRON_PROFILE.has(entry) || /^declarative_[\w-]*\.db(?:-journal|-wal|-shm)?$/.test(entry) || isTempFile(entry);
+/** An entry of <data> the backup leaves out: listed above, one of Electron's own (Chromium keeps them open: a copy fails on a locked file), or a temp file. */
+const leftOut = (entry: string): boolean => NOT_COPIED.has(entry) || isElectronProfileEntry(entry) || isTempFile(entry);
 
 /**
  * Copies one entry (file or folder, recursively) into the snapshot without temp files or the folders in `skip`. A file

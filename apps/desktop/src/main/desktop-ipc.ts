@@ -25,6 +25,7 @@ export interface DesktopIpcParts<P extends PortLike> {
   clipboardWrite(text: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   titleBarLayout?(layout: TitleBarLayout): void;
+  titleBarDim?(dim: boolean): void;
   log(line: string): void;
 }
 
@@ -56,6 +57,7 @@ export function desktopIpcDeps<P extends PortLike>(parts: DesktopIpcParts<P>): I
     clipboardWrite: parts.clipboardWrite,
     openExternal: parts.openExternal,
     titleBarLayout: parts.titleBarLayout,
+    titleBarDim: parts.titleBarDim,
     online: () => link.power('online'), // B-044: the window's network came back (chat re-delivery in the runtime)
     log: parts.log,
   };

@@ -52,6 +52,8 @@ export interface ContextLedger {
   needsRebuild(agentId: string, conversationId: string, from?: number): RebuildNeed | undefined;
   /** A rebuild applied the marks of every item up to order `upTo`. */
   rebuilt(agentId: string, conversationId: string, upTo: number): void;
+  /** Addition (F26): a fork's record – `to` (a forked part's thread) starts as a copy of `from` up to the last item of `runId` (the splitting run; all of `from` when that run left none), only while `to` holds nothing; returns how many items it copied (0: `to` held its record already). */
+  fork?(agentId: string, from: string, to: string, runId: string): number;
   /** Addition: a turn attempt starts – messages the turn shows become m items, the run's journal items become ledger items. Never throws. */
   capture?(run: LedgerRun): void;
   /** Addition: the run is being captured – its long tool outputs are worth keeping whole (runs/journal.ts keepOutput, compose). */

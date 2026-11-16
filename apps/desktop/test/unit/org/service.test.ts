@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Org } from '../../../src/runtime/org/service.ts';
 import { initials, paletteIndex } from '../../../src/runtime/org/avatar.ts';
@@ -11,8 +11,9 @@ import { clock, memoryDb, recordingBus, RESOURCES } from '../store/helpers.ts';
 function setup(templatesDir = path.join(RESOURCES, 'agents')) {
   const recorder = recordingBus();
   const time = clock();
-  const org = new Org({ db: memoryDb(), bus: recorder.bus, clock: time, templatesDir });
-  return { org, time, ...recorder };
+  const db = memoryDb();
+  const org = new Org({ db, bus: recorder.bus, clock: time, templatesDir });
+  return { org, time, db, ...recorder };
 }
 
 const code = (expected: string) => (error: unknown) => error instanceof WorkforceError && error.code === expected;
@@ -144,17 +145,43 @@ test('update: validation, no reporting cycles, initials follow renames, null cle
 });
 
 test('archive moves reports up and keeps at least one agent', () => {
-  const { org, of } = setup();
+  const { org, of, db } = setup();
   const manager = org.ensureSeed()!;
   assert.throws(() => org.archive(manager.id), code('conflict'));
   const lead = org.create({ template: 'marketing-lead', createdBy: manager.id });
   const creator = org.create({ template: 'content-creator', createdBy: lead.id });
+  db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES ('run_lead', ?, 'message', 'done')`, [lead.id]); // it worked: Archived lists it
   org.archive(lead.id);
   assert.equal(org.get(creator.id)?.managerId, manager.id);
   assert.equal(org.list().length, 2);
   assert.equal(org.list({ includeArchived: true }).length, 3);
   assert.deepEqual(of('agent.removed'), [{ id: lead.id }]);
   assert.throws(() => org.create({ name: 'Z', managerId: lead.id, createdBy: 'human' }), code('conflict'));
+});
+
+test('F14: the list with archived agents leaves out one that left no trace; a run, a chat or a task keeps it', () => {
+  const { org, db } = setup();
+  const manager = org.ensureSeed()!;
+  const hire = (name: string) => org.create({ name, createdBy: 'human' });
+  const untouched = hire('Seed copy');
+  const ran = hire('Ran once');
+  const chatted = hire('In a chat');
+  const tasked = hire('Has a task');
+  db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES ('run_1', ?, 'message', 'done')`, [ran.id]);
+  db.run(`INSERT INTO conversations (id, title, created_by, created_at, updated_at) VALUES ('ch_1', '', 'human', 0, 0)`);
+  db.run(`INSERT INTO members (conversation_id, member_id, kind, joined_at) VALUES ('ch_1', ?, 'agent', 0)`, [chatted.id]);
+  db.run(`INSERT INTO tasks (id, conversation_id, title, assignee_kind, assignee_id, created_by, created_at, updated_at) VALUES ('task_1', 'ch_1', 'Do', 'agent', ?, 'human', 0, 0)`, [tasked.id]);
+  for (const agent of [untouched, ran, chatted, tasked]) org.archive(agent.id);
+  const listed = org.list({ includeArchived: true }).map((agent) => agent.name);
+  assert.deepEqual(listed, [manager.name, 'Ran once', 'In a chat', 'Has a task'], 'no "Archived" row for an agent that never did anything');
+  assert.equal(org.get(untouched.id)?.archivedAt !== undefined, true, 'its row stays (nothing is deleted)');
+  assert.equal(org.ensureSeed(), undefined, 'and it still counts: no second seed');
+});
+
+test('F14: a company started as my other device (--start=mine) gets no Manager of its own at start; every other start seeds', () => {
+  const main = readFileSync(new URL('../../../src/runtime/main.ts', import.meta.url), 'utf8');
+  assert.match(main, /\n {2}if \(options\.host\.app\.start !== 'mine'\) s\.org\.ensureSeed\(\);\n/);
+  assert.equal(main.match(/ensureSeed\(\)/g)?.length, 1, 'the one seed call');
 });
 
 test('setStatus emits agent.upserted and agent.activity (default and injected source)', () => {

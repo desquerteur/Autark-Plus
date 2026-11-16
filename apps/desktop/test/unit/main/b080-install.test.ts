@@ -118,7 +118,7 @@ function broker(patch: Partial<BrokerSetupDeps> = {}) {
   const files = new Set(['C:\\Users\\me\\AppData\\Local\\Programs\\Autark\\resources\\app.asar.unpacked\\resources\\broker\\install.ps1']);
   const deps: BrokerSetupDeps = {
     platform: 'win32', packaged: true, testMode: false, background: false, root: 'C:\\Users\\me\\AppData\\Local\\Programs\\Autark\\resources\\app.asar', exe: EXE,
-    env: { ProgramData: 'C:\\ProgramData', SystemRoot: 'C:\\Windows' }, exists: (file) => files.has(file), start: (command, args) => started.push({ command, args }), ...patch,
+    env: { ProgramData: 'C:\\ProgramData', SystemRoot: 'C:\\Windows' }, exists: (file) => files.has(file), start: (command, args) => { started.push({ command, args }); return undefined; }, ...patch,
   };
   return { deps, started, files };
 }

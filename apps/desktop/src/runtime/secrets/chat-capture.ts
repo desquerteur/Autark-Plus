@@ -1,7 +1,8 @@
 // Owns: secure chat capture and validation of human secret attachments. Owner 29.10.2026 (a catalog like a skill): a
 // value the person types into a chat goes straight into the secrets catalog like every new entry – named from its
 // description (first line), for every agent (a general store; the person narrows it in Settings), the route chosen
-// from that description; the chat link stays only so the message can attach it.
+// from that description; the chat link stays only so the message can attach it. Keys in a message's text and a marked
+// piece of one (secrets.fromMessage) are text-capture.ts's, registered with these.
 // Never: puts a typed value in a message or overwrites a captured value on a retried request.
 import type { RuntimeServices } from '../contracts.ts';
 import { createHash } from 'node:crypto';
@@ -9,6 +10,7 @@ import type { SecretInfo } from '../../shared/model/security.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { bad, id, ids, input, onlyKeys, optText, text } from '../rpc/params.ts';
 import type { HandlerTable } from '../rpc/table.ts';
+import { registerTextCapture } from './text-capture.ts';
 
 const pending = new WeakMap<object, Map<string, Promise<SecretInfo>>>();
 
@@ -45,6 +47,7 @@ export function registerChatCapture(table: HandlerTable): void {
       return result;
     } finally { calls.delete(key); }
   }, { capability: 'chat', secure: true });
+  registerTextCapture(table);
 }
 
 /** A phone cannot attach another chat's secret by guessing its id. No access is changed here. */

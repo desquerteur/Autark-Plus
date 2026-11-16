@@ -394,7 +394,7 @@ test("re-review 14.11.: the call names only what the router runs for this turn â
   const seeing = world({ models: [model(LUNA, 'small', 'GPT-6.1 Luna'), { ...model(SOL, 'frontier', 'GPT-6.1 Sol'), caps: { vision: true } }] });
   assert.deepEqual(enumOf(await call(seeing, { vision: true }, pick('GPT-6.1 Sol', 'high'))), ['GPT-6.1 Sol'], 'an image: only models that see');
   // Many models: per tier the PER_TIER smartest, so the middle and small kinds still show.
-  const many = [1, 2, 3, 4, 5, 6].map((n) => ({ ...model(`codex:f${n}`, 'frontier', `Frontier ${n}`), smarts: 90 + n }));
+  const many = [1, 2, 3, 4, 5, 6].map((n) => ({ ...model(`codex:f-${'abcdef'[n - 1]}`, 'frontier', `Frontier ${n}`), smarts: 90 + n })); // six families, not six versions of one
   const wide = world({ models: [...many, { ...model('codex:s1', 'strong', 'Strong 1'), smarts: 80 }, model(LUNA, 'small', 'GPT-6.1 Luna')] });
   assert.deepEqual(enumOf(await call(wide, {}, pick('Strong 1', 'medium'))), ['Frontier 6', 'Frontier 5', 'Frontier 4', 'Frontier 3', 'Strong 1', 'GPT-6.1 Luna']);
   // How a turn is paid: on the account the router runs the model on (a key holding a plan's credits before a paying one).
@@ -405,7 +405,7 @@ test("re-review 14.11.: the call names only what the router runs for this turn â
 
 test("review 14.11.: the models the person or the work stand on are always listed â€“ the start model past the cap or outside the band, the Work model, the chat's suggestion, the last turn's â€“ and naming the one the router runs anyway keeps only my effort", async () => {
   const enumOf = (call: Parameters<StructuredRunner>[0]) => (call.schema as { properties: { model: { enum: string[] } } }).properties.model.enum;
-  const smarter = [1, 2, 3, 4].map((n) => ({ ...model(`codex:f${n}`, 'frontier', `Frontier ${n}`), smarts: 95 + n }));
+  const smarter = [1, 2, 3, 4].map((n) => ({ ...model(`codex:f-${'abcd'[n - 1]}`, 'frontier', `Frontier ${n}`), smarts: 95 + n })); // four families
   const sol = { ...model(SOL, 'frontier', 'GPT-6.1 Sol'), smarts: 90 };
   // The start model, the 5th smartest of its tier: listed; naming it stores only the effort, so the router's step 1 runs it.
   const pinned = world({ models: [...smarter, sol, model(LUNA, 'small', 'GPT-6.1 Luna')], agent: { modelPolicy: { pin: SOL } } });

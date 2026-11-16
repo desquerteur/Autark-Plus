@@ -8,19 +8,16 @@ import { createHandlerTable } from '../../../src/runtime/rpc/handlers/index.ts';
 import { sessionInfo } from '../../../src/runtime/rpc/handlers/session.ts';
 import { allowedScope, scopeDenial } from '../../../src/runtime/rpc/table.ts';
 import { mayReceive } from '../../../src/runtime/rpc/scopes.ts';
+import { PREPARE_RESTART_MAIN_ONLY } from '../../../src/runtime/rpc/handlers/system.ts';
 import type { ClientScope, DeviceCapability } from '../../../src/shared/api/protocol.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { OWNER, TestClient, rpcFixture } from './s1-helpers.ts';
 
 /** Owner-only methods and why they stay on the PC. Adding an owner-only method means adding it here. */
 const PC_LOCAL: Record<string, string> = {
-  'accounts.transfer': 'Claude credentials move between this PC’s companies (exclusive owner handoff)',
   'system.resources': 'PC diagnostics',
   'system.restartReadiness': 'desktop updater',
-  'system.prepareRestart': 'desktop updater',
-  'system.backup': 'paths on this PC',
-  'system.restore': 'paths on this PC',
-  'system.root': 'the data folder of this PC and its map (B-044)',
+  'system.prepareRestart': "desktop updater – main's own link only (16.11.2026)",
   'files.open': 'opens a file on this PC',
   'files.openPath': 'opens a file on this PC',
   'pages.list': 'the views in the pages folder of this PC',
@@ -33,19 +30,13 @@ const PC_LOCAL: Record<string, string> = {
   'browser.unsubscribe': "live view of this PC's agent browsers (MP8)",
   'knowledge.forget': 'permanent deletion of knowledge – only the person on the PC (CTX5)',
   'secrets.openFolder': 'opens the secrets folder of this PC (B-044)',
-  'system.restoreStatus': 'backup paths on this PC (MM7)',
-  'system.restartRuntime': 'restarts the runtime on this PC (MM7)',
   'system.install': 'installs a build of Autark on this PC and restarts it (B-080)',
   'bridges.linkOwner': 'messenger bridges hold bot tokens (C9)',
   'bridges.unlinkOwner': 'messenger bridges hold bot tokens (C9)',
   'media.uses': 'stored files are deleted only on this PC (MM6)',
   'media.delete': 'stored files are deleted only on this PC (MM6)',
-  // B-055: the team's feedback inbox (other people's reports) and its setup (keys into the vault) stay on the team's PC.
-  'feedback.inboxList': 'team feedback inbox (B-055)',
-  'feedback.inboxFetch': 'team feedback inbox (B-055)',
-  'feedback.inboxRemove': 'team feedback inbox (B-055)',
-  'feedback.inboxMark': 'team feedback inbox (B-055; marks reports done / not relevant, 16.11.2026)',
-  'feedback.inboxScreenshot': 'team feedback inbox (B-055)',
+  // B-055: the team feedback setup (keys from a service-account file of this PC into the vault) stays on the team's PC;
+  // its inbox is the owner's phone's too since 16.11.2026 (SETTINGS_SECURE).
   'feedback.setup': 'writes the team feedback key into the vault (B-055)',
   // B-055 Q8: the person's named pointer – the owner at the app; people of the organisation through their person variant (their chats' browsers), never a phone.
   'pointers.point': "the person's named pointer on this PC's browsers and screen (B-055)",
@@ -53,6 +44,7 @@ const PC_LOCAL: Record<string, string> = {
   // F-52: managing people of the organisation and admitting their devices stays with the owner on the PC.
   'people.save': 'people administration (F-52)',
   'people.revoke': 'people administration (F-52)',
+  'people.remove': 'people administration (F14: one who never joined leaves for good)',
   'people.removeDevice': 'people administration (F-52)',
   'people.audit': 'people administration (F-52)',
   'people.chats': 'people administration (F-52)',
@@ -68,11 +60,6 @@ const PC_LOCAL: Record<string, string> = {
   'bridges.connectTelegram': 'messenger bridges hold bot tokens',
   'bridges.disconnect': 'messenger bridges hold bot tokens',
   'chats.delete': 'destructive: desktop only',
-  'chats.export': 'writes chat folders and their files to a folder of this PC (B-050 K8)',
-  'skills.delete': 'destructive: desktop only',
-  'modes.save': "the person's own modes – only on the PC (CTX8)",
-  'secrets.export': 'writes every chosen value in plain text into a file on this PC (04.11.2026)',
-  'modes.delete': "the person's own modes – only on the PC (CTX8)",
   'modes.openFolder': "opens the folder of the person's own modes in this PC's file manager (B-044)",
   'patterns.import': 'fetches a team pattern from a link or reads a picked file – only the person on the PC (F-51)',
   'patterns.refresh': 'fetches an imported team pattern again – only the person on the PC (F-51)',
@@ -80,18 +67,9 @@ const PC_LOCAL: Record<string, string> = {
   'repair.retry': 'restarts this PC\'s runtime from the repair screen',
   'repair.restore': 'replaces this PC\'s database with a pre-update copy',
   'repair.diagnostics': 'writes a diagnostics file on this PC',
-  'privacy.providerHistories': "this PC's provider accounts and their stored sessions (wave 2)",
-  'privacy.purgeProviderHistory': "deletes a Claude Code account's stored sessions through its CLI – only the person on the PC (wave 2)",
   // B-044 AGENT-HOME: an agent's home project is a folder of this PC.
   'agents.setHome': "an agent's home project is a folder of this PC (B-044)",
   'agents.openHome': "opens an agent's home project folder in this PC's file manager (B-044)",
-  // B-041 My day: connected calendars hold credentials of this PC (an ICS address in the vault, the Google sign-in).
-  'calendar.addIcs': 'an ICS address is a credential kept in this PC\'s vault (B-041)',
-  'calendar.updateSource': 'connected calendars are managed on this PC (B-041)',
-  'calendar.removeSource': 'connected calendars are managed on this PC (B-041)',
-  'calendar.sync': 'syncs this PC\'s connected calendars with their accounts (B-041)',
-  'calendar.google': 'the Google sign-in of this PC (B-041)',
-  'calendar.connectGoogle': 'opens the Google consent in this PC\'s browser (B-041)',
   // B-078 (D20): the owner sees a person's calendar on their page; Fill login types a login into this PC's own browser.
   'calendar.person': 'a person\'s calendar for the owner\'s person page, asked on their linked PC (B-078)',
   'secrets.fillChoices': 'the logins listed in this PC\'s own browser page menu (B-078)',
@@ -101,6 +79,9 @@ const PC_LOCAL: Record<string, string> = {
   'companies.list': 'the data folders of the companies on this PC (B-072)',
   'companies.open': 'opens a company window on this PC (B-072)',
   'companies.tool': 'runs an agent tool for another company of this PC, over loopback with its owner token (B-075)',
+  'companies.remove': 'takes a company off this PC: its folder goes to the recycle bin (16.11.2026)',
+  'companies.export': 'writes a company export into a folder on this PC (16.11.2026)',
+  'companies.import': 'makes an export folder on this PC a new company here (16.11.2026)',
 };
 
 /** The spec's tier lists (DEV2). */
@@ -116,15 +97,22 @@ const MANAGE = ['agents.create', 'agents.update', 'agents.archive', 'agents.expo
   // B-076: the phone's side pane is its PC's – its tabs and their view positions.
   'tabs.get', 'tabs.set', 'tabs.position', 'tabs.positions'];
 /** B-076: the file tabs' paths (read, write, list, media) – the whole disk – for 'manage' only on a secure transport. */
-const MANAGE_SECURE = ['files.readPath', 'files.writePath', 'files.listPath', 'files.uploadPath'];
+const MANAGE_SECURE = ['files.readPath', 'files.writePath', 'files.listPath', 'files.uploadPath',
+  /* 16.11.2026 ("vom Handy alles"): the data folder, the chat export, skills and modes, and a page opened in the PC's pane */
+  'system.root', 'chats.export', 'skills.delete', 'modes.save', 'modes.delete', 'side.open'];
 /** B-078 ("alles vom Handy"): plans, keys and sign-ins from the owner's phone app – its loopback tunnel is secure. */
 const SETTINGS_SECURE = ['apps.reconnect', 'apps.setEnabled', 'apps.remove', 'apps.validateAdd', 'apps.add', 'accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode' /* B-091 */, 'accounts.logout', 'accounts.remove',
   'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try',
   /* B-084 (D6): Settings › Devices and Models from the owner's phone app */
   'models.uses', 'devices.list', 'devices.rename', 'devices.revoke', 'remote.state', 'remote.connect', 'remote.cancel', 'remote.decide',
-  'remote.relay', 'remote.nearby', 'phone.pairLink', 'people.invite', 'people.closeInvite', 'voice.pullLocal'];
+  'remote.relay', 'remote.nearby', 'phone.pairLink', 'people.invite', 'people.closeInvite', 'voice.pullLocal',
+  /* 16.11.2026 ("vom Handy alles"): Settings › Calendar, About's backup, Models' provider histories and Feedback's inbox */
+  'calendar.addIcs', 'calendar.updateSource', 'calendar.removeSource', 'calendar.sync', 'calendar.google', 'calendar.connectGoogle',
+  'system.backup', 'system.restore', 'system.restoreStatus', 'system.restartRuntime', 'privacy.providerHistories', 'privacy.purgeProviderHistory',
+  'feedback.inboxList', 'feedback.inboxFetch', 'feedback.inboxRemove', 'feedback.inboxMark', 'feedback.inboxScreenshot', 'feedback.inboxAudio'];
 const PERMISSIONS = ['secrets.list', 'secrets.save', 'secrets.delete', 'secrets.deleteGroup', 'spend.list',
-  'secrets.groups', 'secrets.saveGroup' /* X05 */, 'secrets.folder' /* B-044 */, 'secrets.import' /* 29.10.2026 password import */];
+  'secrets.groups', 'secrets.saveGroup' /* X05 */, 'secrets.folder' /* B-044 */, 'secrets.import' /* 29.10.2026 password import */,
+  'secrets.export' /* 16.11.2026: from the owner's phone too; the file stays on the PC */];
 
 const FULL: DeviceCapability[] = ['todo', 'chat', 'tasks', 'settings', 'manage'];
 /** F-52: a method with a person variant keeps its rule for everyone else in `base`. */
@@ -239,6 +227,23 @@ test('apps methods and apps.changed are limited to secure Settings devices; subs
   const info = await recipients[0].client.call<{ allowedMethods: string[] }>('session.info');
   for (const method of methods) assert.ok(info.allowedMethods.includes(method), method);
   assert.ok(!info.allowedMethods.includes('apps.setToken'));
+});
+
+test("system.prepareRestart answers main's own link only; the window, the CLI and an agent's wf hear that system.install is the way", async (t) => {
+  const f = rpcFixture({ table: createHandlerTable() });
+  t.after(f.cleanup);
+  const pauses: unknown[][] = [];
+  Object.assign(f.extras.system, { prepareRestart: async (...args: unknown[]) => { pauses.push(args); } });
+  for (const scope of [OWNER, { kind: 'owner', agentId: 'ag_felix' }, device([...FULL, 'permissions'], true)] as ClientScope[]) {
+    const refused = await new TestClient(f.server, scope).request('system.prepareRestart', { to: '0.3.9' });
+    assert.equal(refused.error?.code, 'forbidden', JSON.stringify(scope));
+    if (scope.kind === 'owner') assert.equal(refused.error?.message, PREPARE_RESTART_MAIN_ONLY);
+  }
+  assert.deepEqual(pauses, [], 'no pause: the caller keeps its turn');
+  const main = new TestClient(f.server, { kind: 'owner', main: true });
+  assert.deepEqual(await main.call('system.prepareRestart', { to: '0.3.9' }), { ok: true });
+  assert.deepEqual(await main.call('system.prepareRestart', { cancel: true }), { ok: true });
+  assert.deepEqual(pauses, [[undefined, '0.3.9'], [true, undefined]]);
 });
 
 test('a refused call on plain LAN http says that the HTTPS address is needed', async (t) => {

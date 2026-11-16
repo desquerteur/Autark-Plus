@@ -6,7 +6,8 @@
 // due "now" are announced immediately (microtask batch). B-044: each arm reports the earliest due time to
 // `nextDue` (next-due.json, settled at stop); `pausedBy`: an agent never resumes the person's pause. B-054: only a
 // scheduled message requires a chat; a routine may have none (its tasks are then chat-free, fire.ts). B-080: a stopped
-// schedule without a recorded pause has ended (its runs are used up) – a new spec brings it back.
+// schedule without a recorded pause has ended (its runs are used up) – a new spec brings it back. F06 (16.11.2026):
+// list/get show an active schedule another PC fires with its next time (`shown`, never stored).
 // Owns: schedule CRUD, timing and firing. Never: runs agents (the dispatcher claims wakes).
 
 import { HUMAN_ID, newId } from '../../shared/ids.ts';
@@ -190,9 +191,12 @@ export class SchedulerImpl implements Scheduler {
     this.arm();
   }
 
-  list(filter?: { conversationId?: string; ownerId?: string; taskId?: string }): Schedule[] { return this.repo.list(filter); }
+  list(filter?: { conversationId?: string; ownerId?: string; taskId?: string }): Schedule[] { return this.repo.list(filter).map((schedule) => this.shown(schedule)); }
 
-  get(id: string): Schedule | undefined { return this.repo.get(id); }
+  get(id: string): Schedule | undefined {
+    const schedule = this.repo.get(id);
+    return schedule && this.shown(schedule);
+  }
 
   runNow(id: string): void {
     const schedule = this.require(id);
@@ -201,7 +205,20 @@ export class SchedulerImpl implements Scheduler {
     schedule.runs += 1;
     schedule.lastAt = now;
     this.repo.save(schedule);
-    this.s.bus.emit('schedule.upserted', schedule);
+    this.s.bus.emit('schedule.upserted', this.shown(schedule));
+  }
+
+  /**
+   * Feedback F06 (16.11.2026): a schedule as it is read. One PC fires each (devices/sync/tables.ts placeSchedules), so on
+   * every other PC an active schedule keeps no due time; read there, it carries the next time its spec gives – its
+   * display, never written to the row (firing stays with repo.nextAt/take on the PC that fires it).
+   */
+  private shown(schedule: Schedule): Schedule {
+    if (!schedule.active || schedule.nextAt !== undefined) return schedule;
+    if (schedule.spec.maxRuns !== undefined && schedule.runs >= schedule.spec.maxRuns) return schedule;
+    let next: number | undefined;
+    try { next = this.firstFire(schedule.spec, this.s.clock.now()); } catch { return schedule; } // a spec that no longer computes shows none
+    return next === undefined ? schedule : { ...schedule, nextAt: next };
   }
 
   next(spec: ScheduleSpec, after: number): number | undefined { return nextFire(spec, after); }

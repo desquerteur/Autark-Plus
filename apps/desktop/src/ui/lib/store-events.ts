@@ -3,7 +3,8 @@
 // Owns: event → signal mapping, the `chat:<id>` topic lifecycle, the one start notice (RC1), when a toast is
 // seen already (its chat or My day open), the For-you clock's timing (F04); My day's calendar, briefing and
 // handed-off events are applied by lib/day-store.ts (wireDay, called here). Who works for a chat arrives
-// with its summary (conversation.upserted, its `live` – the live bar); agent.activity still feeds `activity` for Team, tasks and the work stop.
+// with its summary (conversation.upserted, its `live` – the live bar); agent.activity still feeds `activity` for Team, tasks and the work stop
+// (F10: with the runs of the person's other PCs, each with its deviceId). F25: a start notice saying an update did not install stays until Dismiss.
 // Never: fetches big snapshots on every event (only on reconnect, see store.loadAll).
 
 import { effect } from '@preact/signals';
@@ -15,7 +16,7 @@ import {
 } from './store.ts';
 import { nextListChange, onForYouList } from '../tasks/todo-time.ts';
 import type { Topic } from '../../shared/api/protocol.ts';
-import { dismissToastsWhere, pushToast, toastNotification } from './toasts.ts';
+import { dismissToastsWhere, toastNotification, toastStartNotice } from './toasts.ts';
 import { wirePeople } from './people.ts';
 import { wireDay } from './day-store.ts';
 import { wireSplits } from '../splits/split-model.ts';
@@ -125,12 +126,13 @@ export function wireEvents(): void {
     toastNotification(note);
   });
 
-  // RC1: the start notice ("Updated to X · N tasks continued") once per start, also after a reload.
+  // RC1: the start notice ("Updated to X · N tasks continued") once per start, also after a reload. F25: one saying an
+  // update did not install stays until Dismiss (toastStartNotice).
   effect(() => {
     const notice = systemInfo.value?.notice;
     if (!notice || Date.now() - notice.at > NOTICE_FRESH_MS || shownNotice() === notice.id) return;
     rememberNotice(notice.id);
-    pushToast({ title: notice.text });
+    toastStartNotice(notice);
   });
 
   // Keep exactly the open chat's topic subscribed.

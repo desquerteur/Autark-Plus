@@ -1,6 +1,7 @@
 // Owns: the dialing side of Autark's peer handshake (devices/handshake.ts – ephemeral X25519, both device keys sign the
 // transcript, HKDF into one AES-256-GCM key per direction) and the encrypted JSON channel after it (devices/channel.ts:
-// [u64 counter][ciphertext‖tag], counters strictly increasing), over one meeting-server tunnel.
+// [u64 counter][ciphertext‖tag], counters strictly increasing), over one Pipe (F29 stage 1): a meeting-server tunnel, or
+// this phone's own socket straight to the PC's peer listener – the same handshake and frames either way.
 // Never: accepts a PC key other than the paired one, or a text frame after the handshake.
 package com.teydralab.autark.android.relay;
 
@@ -12,7 +13,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-public final class PeerChannel implements Tunnel.Listener {
+public final class PeerChannel implements Pipe.Listener {
     public interface Listener {
         void message(Map<String, Object> message);
         void closed();
@@ -20,7 +21,7 @@ public final class PeerChannel implements Tunnel.Listener {
 
     private static final int MAX_FRAME = 8 * 1024 * 1024;
 
-    private final Tunnel tunnel;
+    private final Pipe tunnel;
     private final BlockingQueue<Object> handshake = new ArrayBlockingQueue<>(4);
     private byte[] sendKey;
     private byte[] receiveKey;
@@ -30,10 +31,10 @@ public final class PeerChannel implements Tunnel.Listener {
     private volatile boolean closed;
     private volatile Listener listener;
 
-    private PeerChannel(Tunnel tunnel) { this.tunnel = tunnel; }
+    private PeerChannel(Pipe tunnel) { this.tunnel = tunnel; }
 
-    /** Runs the handshake as the dialing side; the PC must prove the key `pcPublicKey`. */
-    public static PeerChannel connect(Tunnel tunnel, byte[] seed, String deviceId, byte[] pcPublicKey, Listener listener) throws IOException {
+    /** Runs the handshake as the dialing side over `tunnel` (a tunnel or a direct pipe); the PC must prove the key `pcPublicKey`. */
+    public static PeerChannel connect(Pipe tunnel, byte[] seed, String deviceId, byte[] pcPublicKey, Listener listener) throws IOException {
         PeerChannel channel = new PeerChannel(tunnel);
         channel.listener = listener;
         tunnel.listen(channel);
@@ -77,6 +78,15 @@ public final class PeerChannel implements Tunnel.Listener {
     }
 
     public boolean isClosed() { return closed; }
+
+    /** True while this channel runs straight to the PC (not through the meeting server). */
+    public boolean direct() { return tunnel.direct(); }
+
+    /** A direct pipe pings now and ends when nothing answers (a tunnel's server link is probed by RelayLink). */
+    public void probe() { tunnel.probe(); }
+
+    /** A direct pipe silent past its PC's pings ends (the loop calls it after each pause). */
+    public void checkAlive() { tunnel.checkAlive(); }
 
     public synchronized void send(Map<String, Object> message) {
         if (closed) return;

@@ -21,9 +21,13 @@
 // limit, the network) the usual order follows: this PC's model (its weakest words marked), then the service, then a
 // listener, which hears a dictation with the chat's last agent message and the learned words as context, its unsure
 // places marked. The earlier real-time WebRTC hearing with the comparison (B-080/B-082) is no longer on this path.
+// Once the plan heard a page's dictation, the page sends its next pieces as Ogg Opus (ui/lib/ogg-opus.ts, a tenth of
+// the WAV): the plan takes it as it is, and after a plan failure this PC's model reads it through the app's decoder.
 // B-082: voice.transcribe converts inline marks once (marks.ts spansFromInline) and answers plain text with the unsure
 // places as spans beside it. `before` (text heard earlier in the same take) goes along as the listener's context.
-// `live` (a spoken conversation line) goes the same way and is never marked.
+// `live` (a spoken conversation line) goes the same way and is never marked. F27 (16.11.2026, "ein inkonsistentes
+// System"): the answer names who heard it (`by`) and whether the plan was asked first and gave no text (`planMissed`),
+// so the person learns why a dictation came back marked (ui/lib/dictation.ts).
 // Owns: that order, the transcript cache in the file's text column (secret-redacted, one agent transcription at a
 // time) and user-safe errors. Never: logs or returns the key or the provider's raw error body, or sends audio
 // anywhere but the one endpoint or listener.
@@ -39,10 +43,11 @@ import { reclaimerOf } from '../files/cleanup.ts';
 import { functionStatus } from '../models/functions.ts';
 import { FileRepo } from '../store/files.ts';
 import type { LocalSpeechModels, SpokenAudio } from '../../shared/model/local-speech-models.ts';
+import type { HeardBy } from '../../shared/api/methods-app.ts';
 import { readsTake, serviceLanguage, type LocalSpeech } from './local/service.ts';
 import { systemEnvironment } from '../settings/defaults.ts';
 import { canListen, listenerReady, listenTranscript } from './listen-transcribe.ts';
-import { endpointHeard, partialNote, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
+import { audioExtension, endpointHeard, partialNote, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
 import type { Listener } from '../decision/engine-runner.ts';
 import { planMissing, planReady, planTranscribe, type PlanTranscription } from './plan-transcribe.ts';
 import { correctDictation } from './correct-dictation.ts';
@@ -110,7 +115,7 @@ export class Transcriber implements VoiceApi, SpeechToText {
    * whether the answer arrived – and only the caller's fresh upload (a chat device may name any file here). The
    * clean-up keeps what a draft or a message uses; a failed take stays: the composer may attach it.
    */
-  async transcribe(input: TranscribeInput): Promise<Heard & { marks?: SpanMark[] }> {
+  async transcribe(input: TranscribeInput): Promise<Heard & { marks?: SpanMark[]; by: HeardBy; planMissed?: true }> {
     const heard = await this.run(input, true);
     try { this.release(input.fileId); } catch { /* the clean-up logs its own failures */ }
     const { text, marks } = spansFromInline(heard.text); // B-082: plain text, the unsure places beside it
@@ -159,7 +164,7 @@ export class Transcriber implements VoiceApi, SpeechToText {
     try { return new FileRepo(this.deps.services().db).cachedText(fileId) || undefined; } catch { return undefined; }
   }
 
-  private async run(input: TranscribeInput, dictation: boolean): Promise<Heard> {
+  private async run(input: TranscribeInput, dictation: boolean): Promise<Heard & { by: HeardBy; planMissed?: true }> {
     const s = this.deps.services();
     const ref = s.files.get(input.fileId);
     if (!ref) throw new WorkforceError('not_found', 'The recording was not found. Record again.');
@@ -171,16 +176,21 @@ export class Transcriber implements VoiceApi, SpeechToText {
     const plan = dictation ? this.deps.plan ?? (planReady(s) ? planTranscribe : undefined) : undefined;
     // A dictation without the plan says why: a weak transcript is otherwise unexplained (16.11.2026).
     if (dictation && !plan) s.log?.info('plan transcription skipped', { reason: planMissing(s) }); // ?.: service stubs without a log
+    let planMissed = false;
     if (plan) { // B-088: whenever the plan's login is here, one request; its text is the text
       const asked = Date.now();
+      const upload = { bytes: ref.size, format: audioExtension(ref.mime, ref.name) ?? 'other' }; // a compact piece is ogg (ui/lib/ogg-opus.ts)
       try {
         const heard = await plan(s, ref, serviceLanguage(input.language, this.systemLocale()), this.deps.fetch);
-        s.log.info('plan transcription heard', { ms: Date.now() - asked, chars: heard.text.length }); // measured, never the words
-        return heard;
+        s.log.info('plan transcription heard', { ms: Date.now() - asked, chars: heard.text.length, ...upload }); // measured, never the words
+        return { ...heard, by: 'plan' };
       } catch (error) {
-        s.log.info('plan transcription falls back', { code: error instanceof WorkforceError ? error.code : 'internal', ms: Date.now() - asked });
+        planMissed = true;
+        s.log.info('plan transcription falls back', { code: error instanceof WorkforceError ? error.code : 'internal', ms: Date.now() - asked, ...upload });
       }
     }
+    /** The answer of another way than the plan, named (and whether the plan was asked first). */
+    const by = (way: HeardBy, heard: Heard) => ({ ...heard, by: way, ...(planMissed ? { planMissed: true as const } : {}) });
     let failed: WorkforceError | undefined; // this PC's model could not hear the take
     if (model && !readsTake(model, ref.mime, ref.name, decodes)) {
       failed = new WorkforceError('bad_request', decodes ? "This PC's speech model cannot read this recording format." : "This PC's speech model reads WAV recordings only; this recording is compressed.");
@@ -197,25 +207,25 @@ export class Transcriber implements VoiceApi, SpeechToText {
       if (heard) {
         // No words heard is no failure to fall back after (silence must not go on to a paid service).
         if (!heard.text && !dictation) throw new WorkforceError('unavailable', 'The transcription returned no usable text.');
-        if (!dictation || !heard.text) return heard;
+        if (!dictation || !heard.text) return by('local', heard);
         const marked = markUncertainWords(heard.text, heard.words);
-        if (input.live) return { ...heard, text: marked }; // a spoken conversation line waits for no second model
+        if (input.live) return by('local', { ...heard, text: marked }); // a spoken conversation line waits for no second model
         // 16.11.2026: this PC's small model mishears names and terms; a text model reads it once with the chat in mind
         const asked = Date.now();
         const corrected = await correctDictation(this.corrector(s), marked, this.dictationContext(s, input.chatId, input.before), serviceLanguage(input.language, this.systemLocale()));
         s.log?.info('local dictation correction', { corrected: corrected !== undefined, ms: Date.now() - asked }); // never the words
         // the corrected text no longer matches the model's word times, so they do not go along with it
-        return corrected ? { text: corrected, ...(heard.partial ? { partial: heard.partial } : {}) } : { ...heard, text: marked };
+        return by('local', corrected ? { text: corrected, ...(heard.partial ? { partial: heard.partial } : {}) } : { ...heard, text: marked });
       }
     }
     const status = functionStatus(s, 'stt');
     const hint = serviceLanguage(input.language, this.systemLocale()); // no 'en' for speech of another language
-    if (status.choice && !status.off) return this.endpoint(s, ref, status.choice, hint, dictation);
+    if (status.choice && !status.off) return by('service', await this.endpoint(s, ref, status.choice, hint, dictation));
     if (!status.off && canListen(s, ref)) {
       try {
         const text = await listenTranscript(s, ref, hint, this.deps.listener, dictation ? this.dictationContext(s, input.chatId, input.before) : undefined);
         if (!text && !dictation) throw new WorkforceError('unavailable', 'The transcription returned no usable text.');
-        return { text };
+        return by('listener', { text });
       } catch (error) {
         if (!failed) throw error;
         s.log.info('listening fallback failed', { code: error instanceof WorkforceError ? error.code : 'internal' });

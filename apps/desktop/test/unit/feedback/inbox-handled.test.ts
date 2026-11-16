@@ -7,9 +7,9 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { FeedbackService } from '../../../src/runtime/feedback/service.ts';
-import { RECEIVER_KEY_ID, SERVICE_ACCOUNT_ID, SETUP_KEY, INBOX_DIR, UNREADABLE_DIR, UNREADABLE_KEEP } from '../../../src/runtime/feedback/inbox.ts';
+import { RECEIVER_KEY_ID, SERVICE_ACCOUNT_ID, SETUP_KEY, UNREADABLE_DIR, UNREADABLE_KEEP } from '../../../src/runtime/feedback/inbox.ts';
 import { generateReceiverKeys, sealReport } from '../../../src/runtime/feedback/seal.ts';
-import { FEEDBACK_HANDLED_KEEP_MS } from '../../../src/shared/model/feedback-delivery.ts';
+import { FEEDBACK_HANDLED_KEEP_MS, INBOX_DIR } from '../../../src/shared/model/feedback-delivery.ts';
 import { register as registerInbox } from '../../../src/runtime/rpc/handlers/feedback-inbox.ts';
 import { HandlerTable, type HandlerContext } from '../../../src/runtime/rpc/table.ts';
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
@@ -66,18 +66,21 @@ test('the RPC: feedback.inboxMark checks its params', async () => {
   await assert.rejects(call({ id: id(1), as: 'done' }), /not in the inbox/);
 });
 
-test('spam guard: unopenable letters are deleted in the mailbox, but at most UNREADABLE_KEEP are kept on the PC', async () => {
+test('spam guard: up to UNREADABLE_KEEP unopenable letters are kept on the PC and stay in the mailbox; a flood beyond is deleted there', async () => {
   const { box, letter, feedback, dir } = await team();
   const stranger = generateReceiverKeys().publicKey;
   for (let n = 1; n <= UNREADABLE_KEEP + 15; n++) letter(id(n), 'junk', stranger);
   const result = await feedback.inbox.fetch();
   assert.equal(result.unreadable, UNREADABLE_KEEP + 15);
-  assert.equal(box.docs.size, 0, 'the mailbox is cleared of them');
+  assert.equal(box.docs.size, UNREADABLE_KEEP, 'the kept ones stay for a team PC with the newer key, the flood beyond is deleted');
   assert.equal(readdirSync(path.join(dir, UNREADABLE_DIR)).length, UNREADABLE_KEEP, 'the PC keeps only a few');
+  const reads = box.log.filter((line) => line.startsWith('get')).length;
   await feedback.inbox.fetch();
+  assert.equal(box.log.filter((line) => line.startsWith('get')).length, reads, 'the kept copies mark them seen: not read again');
   letter(id(99), 'more junk', stranger);
   await feedback.inbox.fetch();
   assert.equal(readdirSync(path.join(dir, UNREADABLE_DIR)).length, UNREADABLE_KEEP, 'still capped');
+  assert.equal(box.docs.has(id(99)), false, 'beyond the cap: deleted in the mailbox');
   // Old kept letters go after their keep time.
   const old = path.join(dir, UNREADABLE_DIR, `${id(1)}.wfb`);
   assert.ok(existsSync(old));

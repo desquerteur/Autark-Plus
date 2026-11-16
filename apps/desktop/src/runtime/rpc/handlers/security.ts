@@ -1,11 +1,11 @@
 // RPC handlers: the spend journal and stored secrets.
 // Owns: param checks and scope rules. Phones reach secrets metadata and spend only with the opt-in
 // 'permissions' capability on a secure transport. Secure owner devices also edit/remove catalog
-// entries, including grouped fields; colleague sessions have no such variant. Plaintext export stays
+// entries, including grouped fields; colleague sessions have no such variant. The plaintext export file stays
 // on the PC. Every secret is for every agent (no access lists); secrets.save carries the purpose (`description`);
 // secrets.folder (same tier) names the metadata files without a value and their quiet notices;
-// secrets.openFolder opens <data>/secrets on the PC (secrets/files.ts). Owner 04.11.2026: secrets.export (PC only, like
-// secrets.delete) writes the chosen entries with their values into one CSV file (secrets/export.ts) – only its path and
+// secrets.openFolder opens <data>/secrets on the PC (secrets/files.ts). Owner 04.11.2026: secrets.export (the 'permissions'
+// tier like secrets.delete – 16.11.2026 from the owner's own phone too) writes the chosen entries with their values into one CSV file on this PC (secrets/export.ts) – only its path and
 // counts come back. B-078 (D20): secrets.fillChoices lists the catalog's logins for a page (its registrable domain
 // first, a suggestion only) and secrets.fillLogin hands one login's username and password to the owner's own desktop
 // browser (main/workspace-fill.ts types them into the page) – main's own link only (fromMain), never logged.
@@ -154,7 +154,7 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['ids']);
     const chosen = optIds(o, 'ids', MAX_IMPORT_ROWS);
     return exportSecrets(ctx.services, chosen ? { ids: chosen } : {});
-  });
+  }, PERMISSIONS);
 
   // ---------------------------------------------------------------- X05: grouped secrets (metadata only)
   table.add('secrets.groups', (_params, ctx) => { const held = heldByApp(ctx.services); return ctx.services.secrets.groups().map((group) => publicGroup(group, held)); }, PERMISSIONS);

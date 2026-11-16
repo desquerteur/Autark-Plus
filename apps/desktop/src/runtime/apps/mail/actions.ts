@@ -16,7 +16,6 @@ import { sendMail, SmtpError } from './smtp.ts';
 import { assertContactRecipients } from './contact-stop.ts';
 import type { MailSockets } from './socket.ts';
 import { AUTO_REPLY_ARG, automaticMail } from './loops.ts';
-import { SCOPED_REPLY_ARG } from '../../tools/mail-scope.ts';
 
 export interface MailContext { mailbox: Mailbox; target: MailTarget; sockets?: MailSockets; timeoutMs?: number }
 type Args = Record<string, unknown>;
@@ -206,7 +205,7 @@ async function compose(ctx: MailContext, args: Args, mode: 'draft' | 'send' | 'r
   let answered: MessageRef | undefined;
   if (mode === 'reply') {
     const orig = await original(ctx, args.id);
-    ({ to, cc } = replyRecipients(orig.parsed, own.address, args.all === true, args[SCOPED_REPLY_ARG] === true));
+    ({ to, cc } = replyRecipients(orig.parsed, own.address, args.all === true));
     if (!to.length) throw new MailError('The message has no address to reply to.');
     subject = replySubject(orig.parsed.subject);
     body = quoteOriginal(body, orig.parsed);

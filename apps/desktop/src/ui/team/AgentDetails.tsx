@@ -1,5 +1,6 @@
 // Agent page, working setup: the model – B-083 (owner 08.11.2026): row "Now" says what it really runs on (its live
-// run's model · effort and temperature – "T 0.3", "T ≈0.3" with a title where the model samples at its own setting – from
+// run's model · where it runs (F05: "Opus 5.5 · Claude Code") · effort and temperature – "T 0.3", "T ≈0.3" with a title
+// where the model samples at its own setting – from
 // the activity feed, else its last turn's from agents.runs, read once; a run that ends while
 // the page is open leaves its live values there), row "Start model" sets the model it starts its turns on ("Auto" =
 // chosen per task; chat models only, in catalog order) – a start value it changes itself when the work needs another,
@@ -7,7 +8,9 @@
 // the pane's file tab (SYSTEM.md, last-prompt.md; B-081: a missing SYSTEM.md opens in the editor, a missing
 // last-prompt.md on the not-found page), the agent folder with its skills (the agent and the AI write
 // SKILL.md files; here only their names and "Open folder") and the schedules it owns (each row has the schedule menu:
-// pause or resume, delete). Owner 15.11.2026: "From you" – the agent's HUMAN.md as one fixed-height field the person
+// pause or resume, delete) – F06: the active ones by their next run, the paused ones under one fixed "Paused (n)" toggle
+// at the end (opening it only adds rows below), ended one-shots not at all (tasks/schedule-state.ts; Chat details
+// still lists them as "Ended"). Owner 15.11.2026: "From you" – the agent's HUMAN.md as one fixed-height field the person
 // edits (saved when it loses focus, agents.setHuman); it stands last in the agent's prompt and nothing but the person
 // changes it; HUMAN.md also opens as a file. Nothing else is set here – whom it reports to, effort limits or budgets are things the AI
 // changes on request. Both model rows are always there, each with its one-line hint and its value slot, so nothing
@@ -21,13 +24,14 @@ import type { Agent } from '../../shared/model/org.ts';
 import { HUMAN_FILE, MAX_HUMAN_MD, SYSTEM_FILE, type AgentCoreInfo } from '../../shared/model/agent-core.ts';
 import type { ModelPolicy } from '../../shared/model/providers.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
-import { Select } from '../lib/ui.tsx';
+import type { Schedule } from '../../shared/model/tasks.ts';
+import { Icon, Select } from '../lib/ui.tsx';
 import type { SelectOption } from '../lib/ui.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { loadModels, models } from '../lib/store.ts';
 import { platform } from '../lib/platform.ts';
 import { isChatModel } from '../lib/model-fit.ts';
-import { modelShortName } from '../lib/model-name.ts';
+import { modelShortName, nameWithSource } from '../lib/model-name.ts';
 import { modelLine, shownOf, temperatureTitle, withTemperature } from '../chat/live-text.ts';
 import { AUTO } from '../lib/route-preview.ts';
 import { liveByAgent } from './org-state.ts';
@@ -38,6 +42,7 @@ import { fullDate } from '../lib/format.ts';
 import { toastError } from '../lib/toasts.ts';
 import { skillTitle } from './agent-core-model.ts';
 import { ensureSchedules, scheduleMenu, schedules } from '../tasks/schedules.ts';
+import { agentSchedules, scheduleState } from '../tasks/schedule-state.ts';
 
 function Section(props: { title: string; action?: ComponentChildren; children: ComponentChildren }) {
   return (
@@ -81,7 +86,7 @@ function NowRow(props: { agentId: string }) {
     if (live?.model) setLast({ model: live.model, modelName: live.modelName, effort: live.effort, temperature: live.temperature, temperatureSent: live.temperatureSent });
   }, [agentId, live?.model, live?.modelName, live?.effort, live?.temperature, live?.temperatureSent]);
   const shown = live?.model ? live : last;
-  const line = shown?.model ? modelLine({ ...shown, modelName: shown.modelName || modelShortName(shown.model) }) : '';
+  const line = shown?.model ? modelLine({ ...shown, modelName: nameWithSource(shown.modelName || modelShortName(shown.model) || '', shown.model) }) : '';
   const warmth = shownOf(shown); // B-083: "T 0.3" in the same label – the row keeps its height
   const choosing = Boolean(live && !live.model); // the last turn's route stays out of the value and its title
   const value = choosing ? 'Choosing a model' : withTemperature(line, warmth) || '–';
@@ -146,7 +151,7 @@ function HumanSection(props: { agentId: string; text: string; readOnly: boolean 
     <Section title="From you">
       <textarea class="input agent-human" rows={4} maxLength={MAX_HUMAN_MD} value={draft} readOnly={props.readOnly} aria-label="From you"
         placeholder="What this agent should always know from you" onInput={(event) => setDraft(event.currentTarget.value)} onBlur={() => void save()} />
-      <small class="agent-row-hint">Last in its instructions. Updates and the agent leave it as you wrote it.</small>
+      <small class="agent-row-hint">Near the end of its instructions; your lines for every agent (Settings › Security) come last. Updates never change it.</small>
     </Section>
   );
 }
@@ -173,7 +178,7 @@ function FolderSection(props: { agent: Agent }) {
     {folder && can('files.readPath') && (
       <Section title="Files">
         <FileRow folder={folder} name={SYSTEM_FILE} hint="Its instructions" create />
-        <FileRow folder={folder} name={HUMAN_FILE} hint="Your own lines to it, last in its instructions" create />
+        <FileRow folder={folder} name={HUMAN_FILE} hint="Your own lines to it, near the end of its instructions" create />
         <FileRow folder={folder} name="last-prompt.md" hint="The whole system prompt the app sent on its last turn" />
       </Section>
     )}
@@ -186,17 +191,32 @@ function FolderSection(props: { agent: Agent }) {
   );
 }
 
-function ScheduleRow(props: { item: ReturnType<typeof schedules.peek>[number] }) {
+function ScheduleRow(props: { item: Schedule }) {
   const { item } = props;
   const menu = useContextMenu(() => scheduleMenu(item));
-  return <Row label={item.title} hint={item.active ? (item.nextAt ? `Next ${fullDate(item.nextAt)}` : 'No next run') : 'Paused'} menu={menu} />;
+  const state = scheduleState(item);
+  const hint = state === 'next' ? `Next ${fullDate(item.nextAt!)}` : state === 'none' ? 'No next run' : 'Paused';
+  return <Row label={item.title} hint={hint} menu={menu} />;
 }
 
+/** F06: the active schedules by their next run; the paused ones under one fixed "Paused (n)" toggle at the end. */
 function SchedulesSection(props: { agentId: string }) {
+  const [open, setOpen] = useState(false);
   useEffect(() => { ensureSchedules(); }, []);
-  const own = schedules.value.filter((item) => item.ownerId === props.agentId).sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
-  if (!own.length) return null;
-  return <Section title="Schedules">{own.map((item) => <ScheduleRow key={item.id} item={item} />)}</Section>;
+  const { active, paused } = agentSchedules(schedules.value, props.agentId);
+  if (!active.length && !paused.length) return null;
+  return (
+    <Section title="Schedules">
+      {active.map((item) => <ScheduleRow key={item.id} item={item} />)}
+      {paused.length > 0 && (
+        <button type="button" class="agent-fold-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <Icon name={open ? 'caret-down' : 'caret-right'} size={12} />
+          <span>Paused ({paused.length})</span>
+        </button>
+      )}
+      {open && paused.map((item) => <ScheduleRow key={item.id} item={item} />)}
+    </Section>
+  );
 }
 
 export function AgentDetails(props: { agent: Agent }) {

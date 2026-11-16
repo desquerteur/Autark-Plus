@@ -14,7 +14,6 @@
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Device } from '../../shared/model/devices.ts';
-import type { CompanyEntry } from '../../shared/model/companies.ts';
 import type { ActionDescription, ToolContext, ToolDef } from './types.ts';
 import { DEVICE_ARG, DEVICE_PROPERTY } from './types.ts';
 import { companyFolder, listCompanies } from '../root/companies.ts';
@@ -97,16 +96,11 @@ export function onPc(action: ActionDescription, target: DeviceTarget): ActionDes
 
 /** B-075: the argument naming another company on this PC, on any call (registry.ts takes it off before validation). */
 export const COMPANY_ARG = 'company';
-/** The first company's folder as companies.list names it (its data folder has no company id). */
-export const FIRST_FOLDER = 'first';
 
 /** Another company on this PC a call runs in: its data folder, its name, and the name of the company that sends the call. */
 export interface CompanyTarget { dir: string; name: string; from: string }
 
 const THIS_COMPANY = /^this(?: company| one)?$/i;
-
-/** A company's folder as agents pass it: its id, or 'first' for the first one. */
-export const folderOf = (entry: Pick<CompanyEntry, 'id'>): string => entry.id ?? FIRST_FOLDER;
 
 /**
  * Resolves a `company` value – 'this', a folder from companies.list or a company's exact name (case and surrounding
@@ -118,14 +112,14 @@ export function resolveCompany(services: RuntimeServices, value: string): Compan
   if (THIS_COMPANY.test(wanted)) return null;
   const app = safe(() => services.host.app);
   const companies = (app && safe(() => listCompanies(app))) || [];
-  const byFolder = companies.filter((entry) => folderOf(entry) === wanted);
+  const byFolder = companies.filter((entry) => entry.folder === wanted);
   const matches = byFolder.length ? byFolder : companies.filter((entry) => entry.label.trim().toLowerCase() === wanted);
   const shown = value.trim().length > 60 ? `${value.trim().slice(0, 60)}…` : value.trim();
   if (!matches.length) {
     if (companies.length < 2) return { error: `There is no other company on this PC, so "${shown}" names none (companies.list).` };
-    return { error: `No company on this PC is called "${shown}". Companies here: ${companies.map((entry) => `${entry.label} (folder ${folderOf(entry)}${entry.current ? ', this one' : ''})`).join(', ')}.` };
+    return { error: `No company on this PC is called "${shown}". Companies here: ${companies.map((entry) => `${entry.label} (folder ${entry.folder}${entry.current ? ', this one' : ''})`).join(', ')}.` };
   }
-  if (matches.length > 1) return { error: `Several companies on this PC are called "${shown}": pass the folder instead (${matches.map(folderOf).join(', ')}).` };
+  if (matches.length > 1) return { error: `Several companies on this PC are called "${shown}": pass the folder instead (${matches.map((entry) => entry.folder).join(', ')}).` };
   const company = matches[0];
   const dir = app && companyFolder(app, company.id);
   if (company.current || !dir) return null;

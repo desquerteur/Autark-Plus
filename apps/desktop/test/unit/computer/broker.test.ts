@@ -1,11 +1,13 @@
 // Desktop broker (B-077): handshake, sealed typing and the driver choice against a fake broker on a test pipe
-// (the real worker is resources/broker/Worker.cs; this fake mirrors its handshake and Sealer.Open).
+// (the real worker is resources/broker/Worker.cs; this fake mirrors its handshake and Sealer.Open). F03 (16.11.2026): the
+// fact line while the secure desktop is out of reach, and main's word on the setup through the bus.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { brokerLease, brokerState, lockedDesktop, type BrokerAccess } from '../../../src/runtime/computer/broker.ts';
+import { brokerLease, brokerState, followBrokerSetup, lockedDesktop, secureDesktopLine, type BrokerAccess } from '../../../src/runtime/computer/broker.ts';
+import { Bus } from '../../../src/runtime/bus.ts';
 import { createHelper } from '../../../src/runtime/computer/drivers.ts';
 import { WindowsHelper } from '../../../src/runtime/computer/helper.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
@@ -140,4 +142,44 @@ test('drivers.ts takes the broker whenever it is reachable, else the PowerShell 
   assert.equal(lockedDesktop(), false); // Default desktop: unlocked
   await viaBroker.dispose();
   await broker.close();
+});
+
+const SCRIPT = 'C:\\Program Files\\Autark\\resources\\app.asar.unpacked\\resources\\broker\\install.ps1';
+
+test('F03: without the broker on Windows the fact line says why the secure desktop is out of reach and how one Yes changes it', () => {
+  const saved = { ...brokerState };
+  try {
+    Object.assign(brokerState, { via: 'powershell', desktop: undefined, setup: { state: 'declined', script: SCRIPT } });
+    const declined = secureDesktopLine('win32')!;
+    assert.match(declined, /^The Windows secure desktop \(UAC prompts, the locked screen\) is out of my reach on this PC: the desktop broker is not installed – Windows asked at this app's start and got no Yes\. /);
+    assert.ok(declined.includes(`I run powershell -ExecutionPolicy Bypass -File "${SCRIPT}"`), declined);
+    assert.match(declined, /Windows then asks the person once \(the prompt names Windows PowerShell; it installs the desktop broker\), and their Yes lets these same tools reach it\.$/);
+    brokerState.setup = { state: 'failed', code: 1, script: SCRIPT };
+    assert.match(secureDesktopLine('win32')!, /not installed – its setup at this app's start failed \(exit 1\)\. When I need it/);
+    brokerState.setup = { state: 'failed', script: SCRIPT };
+    assert.match(secureDesktopLine('win32')!, /its setup at this app's start failed\. When I need it/, 'no exit code: none named');
+
+    for (const [label, patch, platform] of [
+      ['installed', { setup: { state: 'installed', script: SCRIPT } }, 'win32'],
+      ['the broker serves', { via: 'broker', setup: { state: 'declined', script: SCRIPT } }, 'win32'],
+      ['no setup ran (background start, dev build)', { setup: undefined }, 'win32'],
+      ['not Windows', { setup: { state: 'declined', script: SCRIPT } }, 'linux'],
+    ] as const) {
+      Object.assign(brokerState, { via: 'powershell' }, patch);
+      assert.equal(secureDesktopLine(platform), undefined, label);
+    }
+  } finally { Object.assign(brokerState, { via: saved.via, desktop: saved.desktop, setup: saved.setup }); }
+});
+
+test("F03: main's word on the setup reaches brokerState through the bus (replayed to a restarted runtime)", () => {
+  const saved = brokerState.setup;
+  const bus = new Bus();
+  const off = followBrokerSetup(bus);
+  try {
+    bus.emit('broker.setup', { state: 'declined', script: SCRIPT });
+    assert.deepEqual(brokerState.setup, { state: 'declined', script: SCRIPT });
+    off();
+    bus.emit('broker.setup', { state: 'installed', script: SCRIPT });
+    assert.equal(brokerState.setup?.state, 'declined', 'unsubscribed');
+  } finally { brokerState.setup = saved; }
 });

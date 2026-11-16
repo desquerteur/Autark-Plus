@@ -1,9 +1,11 @@
 // B-078 (D6): phone use through the Android app – AppPhones sends one request per step on the bus and takes only the
 // asked phone's answer (20 s timeout, the run's cancel); drivers.ts sends a step to the app phone or to ADB.
+// Feedback 16.11.2026 F16: `by` names the agent, op 'say' (75 s for a question), the old-app text. Chat sweep 16.11.:
+// an attached app phone comes before ADB, and a type step brings back the field's text.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AppPhones, PHONE_USE_OFF, safeNode } from '../../../src/runtime/phone/app-driver.ts';
+import { AppPhones, FIELD_MAX, OLD_APP_SAY, PHONE_USE_OFF, safeNode } from '../../../src/runtime/phone/app-driver.ts';
 import { mergedPhones } from '../../../src/runtime/phone/drivers.ts';
 import type { PhoneUseRequest } from '../../../src/shared/api/methods-phone.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
@@ -89,6 +91,7 @@ test('drivers: a step without a serial goes to the app phone while ADB has none 
     uiTree: async () => ({}) as never,
     tap: async (serial: string | undefined) => { adbCalls.push(`tap ${serial}`); },
     swipe: async () => undefined, type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
+    say: async () => { adbCalls.push('say'); return { serial: '' }; },
     pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
   };
   const merged = mergedPhones(adb, phones);
@@ -96,6 +99,49 @@ test('drivers: a step without a serial goes to the app phone while ADB has none 
   await merged.tap('192.168.1.20:5555', 1, 1);
   assert.deepEqual(adbCalls, ['tap 192.168.1.20:5555'], 'an ADB serial goes to ADB');
   assert.equal(await merged.available(), true);
+});
+
+// Chat sweep 16.11.2026 (owner 10.11.: "Mach das über das Remote-System"): the paired Autark app comes first.
+test('drivers: without a serial a step goes to the attached app phone even while ADB has a ready phone; an ADB serial goes to ADB; no app phone → ADB', async () => {
+  const { bus, phones, requests, reply } = rig();
+  const adbCalls: string[] = [];
+  const adb = {
+    available: async () => true,
+    devices: async () => [{ serial: '192.168.1.20:5555', state: 'device' }] as never[],
+    screenshot: async () => ({}) as never, uiTree: async () => ({}) as never,
+    tap: async (serial: string | undefined) => { adbCalls.push(`tap ${serial}`); },
+    swipe: async () => undefined, type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
+    say: async () => ({ serial: '' }),
+    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
+  };
+  const merged = mergedPhones(adb, phones);
+  const tap = merged.tap(undefined, 5, 6);
+  await tick();
+  assert.equal(requests[0]?.op, 'tap', 'the app phone got the step');
+  reply('dev_phone0000001', requests[0].id, { result: {} });
+  await tap;
+  assert.deepEqual(adbCalls, []);
+  await merged.tap('192.168.1.20:5555', 1, 1);
+  assert.deepEqual(adbCalls, ['tap 192.168.1.20:5555'], 'an ADB serial goes to ADB');
+  bus.emit('phoneUse.attached', { deviceId: 'dev_phone0000001', on: false });
+  await merged.tap(undefined, 2, 2);
+  assert.deepEqual(adbCalls, ['tap 192.168.1.20:5555', 'tap undefined'], 'without an app phone the step goes to ADB');
+});
+
+test('type: the app\'s answer brings back what the field reads (cut to FIELD_MAX); an older app answers nothing', async () => {
+  const { phones, requests, reply } = rig();
+  const typed = phones.type(undefined, 'Hallo');
+  await tick();
+  reply('dev_phone0000001', requests[0].id, { result: { text: 'MessageHallo' } });
+  assert.equal(await typed, 'MessageHallo');
+  const long = phones.type(undefined, 'x');
+  await tick();
+  reply('dev_phone0000001', requests[1].id, { result: { text: 'y'.repeat(400) } });
+  assert.equal((await long)?.length, FIELD_MAX);
+  const old = phones.type(undefined, 'x');
+  await tick();
+  reply('dev_phone0000001', requests[2].id, { result: {} });
+  assert.equal(await old, undefined);
 });
 
 test('safeNode keeps order and parents honest and drops what uiautomator does not know', () => {
@@ -131,4 +177,96 @@ test('each step names its run as job, so the phone ✕ ends exactly that job; pa
   assert.equal('job' in requests[2], false, 'without a run no job field');
   reply('dev_phone0000001', requests[2].id, { result: {} });
   await bare;
+});
+
+// Feedback 16.11.2026 F16: the bubble names the agent, shows the AI's line and asks its question (✓ / ✕).
+test('each step names its agent as by (folded, at most 60 characters); without one there is no by field', async () => {
+  const { phones, requests, reply } = rig();
+  const tap = phones.tap(undefined, 1, 1, { job: 'run_abc', by: '  Felix\n Weber ' });
+  await tick();
+  assert.equal(requests[0].by, 'Felix Weber');
+  reply('dev_phone0000001', requests[0].id, { result: {} });
+  await tap;
+  const long = phones.key(undefined, 'back', { by: 'x'.repeat(80) });
+  await tick();
+  assert.equal(requests[1].by, 'x'.repeat(60));
+  reply('dev_phone0000001', requests[1].id, { result: { key: 'back' } });
+  await long;
+  const bare = phones.key(undefined, 'back', { job: 'run_abc' });
+  await tick();
+  assert.equal('by' in requests[2], false);
+  reply('dev_phone0000001', requests[2].id, { result: {} });
+  await bare;
+});
+
+test('say: a line goes as op say within the step limit; a question waits up to 75 s and brings back yes, no or none', async () => {
+  const { phones, requests, reply, timers } = rig();
+  const line = phones.say(undefined, '  Sending Anna\nthe photo ', false, { job: 'run_abc', by: 'Felix' });
+  await tick();
+  assert.deepEqual({ op: requests[0].op, args: requests[0].args, job: requests[0].job, by: requests[0].by }, { op: 'say', args: { text: 'Sending Anna the photo' }, job: 'run_abc', by: 'Felix' });
+  reply('dev_phone0000001', requests[0].id, { result: { ok: true } });
+  assert.deepEqual(await line, { serial: 'dev_phone0000001' });
+
+  const long = phones.say(undefined, 'y'.repeat(200), false);
+  await tick();
+  assert.equal((requests[1].args.text as string).length, 120, 'one bubble line at most');
+  assert.ok((requests[1].args.text as string).endsWith('…'));
+  timers.fire(20_000);
+  await assert.rejects(long, (error: unknown) => error instanceof WorkforceError && error.code === 'timeout' && /within 20 s/.test(error.message));
+
+  const asked = phones.say(undefined, 'May I use the phone for 2 minutes?', true, { job: 'run_abc' });
+  await tick();
+  assert.deepEqual(requests[2].args, { text: 'May I use the phone for 2 minutes?', ask: true });
+  timers.fire(60_000);
+  reply('dev_phone0000001', requests[2].id, { result: { answer: 'yes' } }); // still waiting after the step limit
+  assert.deepEqual(await asked, { serial: 'dev_phone0000001', answer: 'yes' });
+
+  const no = phones.say(undefined, 'Now?', true);
+  await tick();
+  reply('dev_phone0000001', requests[3].id, { result: { answer: 'no' } });
+  assert.equal((await no).answer, 'no');
+  const odd = phones.say(undefined, 'Now?', true);
+  await tick();
+  reply('dev_phone0000001', requests[4].id, { result: { answer: 'maybe' } });
+  assert.equal((await odd).answer, 'none', 'anything else is no answer');
+
+  const silent = phones.say(undefined, 'Now?', true);
+  await tick();
+  timers.fire(74_999);
+  timers.fire(75_000);
+  await assert.rejects(silent, (error: unknown) => error instanceof WorkforceError && error.code === 'timeout' && /within 75 s/.test(error.message));
+  await assert.rejects(phones.say(undefined, ' \n ', false), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
+});
+
+test('say on an app older than 0.3.15 ("Unknown step say.") reads as OLD_APP_SAY; the phone\'s other refusals pass through', async () => {
+  const { phones, requests, reply } = rig();
+  const old = phones.say(undefined, 'Hello', true);
+  await tick();
+  reply('dev_phone0000001', requests[0].id, { error: { code: 'bad_request', message: 'Unknown step say.' } });
+  await assert.rejects(old, (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable' && error.message === OLD_APP_SAY);
+  const ended = phones.say(undefined, 'Hello', false, { job: 'run_abc' });
+  await tick();
+  reply('dev_phone0000001', requests[1].id, { error: { code: 'ended', message: 'The person ended my phone use for this task with ✕.' } });
+  await assert.rejects(ended, (error: unknown) => error instanceof WorkforceError && error.message.includes('✕'));
+});
+
+test('drivers: say goes to the app phone even while ADB has a ready phone; an ADB serial hears that ADB has no bubble', async () => {
+  const { phones, requests, reply } = rig();
+  const adbCalls: string[] = [];
+  const adb = {
+    available: async () => true,
+    devices: async () => [{ serial: '192.168.1.20:5555', state: 'device' }] as never[],
+    screenshot: async () => ({}) as never, uiTree: async () => ({}) as never, tap: async () => undefined, swipe: async () => undefined,
+    type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
+    say: async (serial: string | undefined) => { adbCalls.push(`say ${serial}`); return { serial: serial ?? '' }; },
+    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
+  };
+  const merged = mergedPhones(adb, phones);
+  const said = merged.say(undefined, 'Hello', false);
+  await tick();
+  assert.equal(requests[0].op, 'say');
+  reply('dev_phone0000001', requests[0].id, { result: { ok: true } });
+  await said;
+  await merged.say('192.168.1.20:5555', 'Hello', false);
+  assert.deepEqual(adbCalls, ['say 192.168.1.20:5555']);
 });

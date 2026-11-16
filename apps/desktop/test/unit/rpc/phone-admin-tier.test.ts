@@ -31,7 +31,13 @@ const table = createHandlerTable();
 test('the device administration methods: settings on a secure transport, like accounts.*', () => {
   for (const method of ADMIN) {
     const rule = table.get(method)!.scope;
-    assert.deepEqual(rule, { capability: 'settings', secure: true }, method);
+    // F13: people.invite/closeInvite also have a CEO person variant – the owner's rule is its base, its HTTPS ceiling holds for a CEO too.
+    const ceoVariant = typeof rule === 'object' && 'person' in rule;
+    assert.deepEqual(ceoVariant ? rule.base : rule, { capability: 'settings', secure: true }, method);
+    if (ceoVariant) {
+      assert.equal(scopeDenial(rule, { ...PERSON, role: 'ceo', secure: false } as ClientScope), 'insecure', `${method}: a CEO never over plain LAN http`);
+      assert.equal(scopeDenial(rule, { ...PERSON, role: 'ceo', secure: true } as ClientScope), undefined, `${method}: a CEO on HTTPS`);
+    }
     assert.ok(allowedScope(rule, { kind: 'owner' }), `${method}: the owner`);
     assert.ok(allowedScope(rule, PHONE), `${method}: my phone on its tunnel`);
     assert.equal(scopeDenial(rule, LAN), 'insecure', `${method}: never over plain LAN http`);

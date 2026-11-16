@@ -6,6 +6,9 @@
 // and the person's handler for everyone else, and marks the rule `external`.
 // F-52: a person of the organisation (scope kind 'person', runtime/people) likewise reaches only methods
 // with a person variant (`addPerson`, rule `{ person: true, base }`); everything else is closed to people.
+// F13: a person variant marked `ceo` (rule `{ person: true, base, ceo: true }`) is open only to a person whose scope
+// carries the role 'ceo' (people/service.ts authenticate) – session.info lists it for exactly them –, on a secure
+// transport where the owner's own rule asks for one (people.invite: the link and code travel in it).
 // Owns: handler/registration types, the scope-rule vocabulary and the device tier checks
 // (capabilities; 'permissions' and rules marked `secure` need a secure transport).
 // Never: business logic (handlers delegate to RuntimeServices / RpcExtras), or runs a person's
@@ -27,7 +30,7 @@ export type ScopeRule =
   | 'any' // owner + every authenticated device (still filtered by the handler if needed)
   | { capability: DeviceCapability; secure?: true; external?: true } // owner + devices holding this capability (on a secure transport when marked); `external` is set by the table (addExternal)
   | { allCapabilities: readonly DeviceCapability[]; secure?: true } // owner + devices holding every listed capability
-  | { person: true; base: ScopeRule }; // F-52: also open to people (set by the table, addPerson); `base` rules everyone else
+  | { person: true; base: ScopeRule; ceo?: true }; // F-52: also open to people (set by the table, addPerson); `base` rules everyone else; F13 `ceo`: only a CEO person
 
 /** Per-call context handed to handlers. */
 export interface HandlerContext {
@@ -54,8 +57,8 @@ export class HandlerTable {
   /** C8: what an external agent's call runs, per method (its own checks, never the person's handler). */
   private readonly externals = new Map<string, Handler<MethodName>>();
   private readonly merged = new Map<string, HandlerEntry>();
-  /** F-52: what a person's call runs, per method (its own checks, never the owner's handler). */
-  private readonly persons = new Map<string, Handler<MethodName>>();
+  /** F-52: what a person's call runs, per method (its own checks, never the owner's handler); F13 `ceo`: only for a CEO person. */
+  private readonly persons = new Map<string, { handler: Handler<MethodName>; ceo?: true }>();
 
   /** Registers one method. A method may be registered only once (duplicates are a bug). */
   add<M extends MethodName>(method: M, handler: Handler<M>, scope: ScopeRule = 'owner'): void {
@@ -77,11 +80,11 @@ export class HandlerTable {
 
   /**
    * F-52: the person variant of `method` (registered before or after the method itself; a method
-   * may also exist for people only – then its base rule is 'owner').
+   * may also exist for people only – then its base rule is 'owner'). F13 `options.ceo`: open only to a CEO person.
    */
-  addPerson<M extends MethodName>(method: M, handler: Handler<M>): void {
+  addPerson<M extends MethodName>(method: M, handler: Handler<M>, options: { ceo?: true } = {}): void {
     if (this.persons.has(method)) throw new Error(`Person RPC variant registered twice: ${method}`);
-    this.persons.set(method, handler as unknown as Handler<MethodName>);
+    this.persons.set(method, { handler: handler as unknown as Handler<MethodName>, ...(options.ceo ? { ceo: true as const } : {}) });
     this.merged.delete(method);
   }
 
@@ -97,7 +100,10 @@ export class HandlerTable {
         ? { scope: { ...entry.scope, external: true }, handler: (params, ctx) => (ctx.scope.kind === 'external' ? external(params, ctx) : entry.handler(params, ctx)) }
         : entry ?? { scope: 'owner', handler: refuse };
       both = person
-        ? { scope: { person: true, base: base.scope }, handler: (params, ctx) => (ctx.scope.kind === 'person' ? person(params, ctx) : base.handler(params, ctx)) }
+        ? {
+          scope: { person: true, base: base.scope, ...(person.ceo ? { ceo: true as const } : {}) },
+          handler: (params, ctx) => (ctx.scope.kind === 'person' ? person.handler(params, ctx) : base.handler(params, ctx)),
+        }
         : base;
       this.merged.set(method, both);
     }
@@ -119,7 +125,12 @@ export function secureScope(scope: ClientScope): boolean {
  * capability), 'insecure' (capability held, but the transport is plain LAN http), or undefined.
  */
 export function scopeDenial(rule: ScopeRule, scope: ClientScope): 'scope' | 'insecure' | undefined {
-  if (typeof rule === 'object' && 'person' in rule) return scope.kind === 'person' ? undefined : scopeDenial(rule.base, scope); // F-52
+  if (typeof rule === 'object' && 'person' in rule) { // F-52; F13: a `ceo` variant only for a CEO person, under the transport ceiling of its base
+    if (scope.kind !== 'person') return scopeDenial(rule.base, scope);
+    if (!rule.ceo) return undefined;
+    if (scope.role !== 'ceo') return 'scope';
+    return needsSecure(rule.base) && scope.secure !== true ? 'insecure' : undefined;
+  }
   if (scope.kind === 'person') return 'scope'; // F-52: only person variants
   if (scope.kind === 'owner') return undefined;
   if (scope.kind === 'external') return typeof rule === 'object' && 'external' in rule && rule.external ? undefined : 'scope'; // C8: only external variants
@@ -130,6 +141,14 @@ export function scopeDenial(rule: ScopeRule, scope: ClientScope): 'scope' | 'ins
   if (!required.every((capability) => scope.capabilities.includes(capability))) return 'scope';
   if ((rule.secure || required.some((capability) => SECURE_ONLY.has(capability))) && scope.secure !== true) return 'insecure';
   return undefined;
+}
+
+/** The rule asks for a secure transport (marked `secure`, or a capability that only counts on one). */
+function needsSecure(rule: ScopeRule): boolean {
+  if (typeof rule !== 'object') return false;
+  if ('person' in rule) return needsSecure(rule.base);
+  const required = 'allCapabilities' in rule ? rule.allCapabilities : [rule.capability];
+  return rule.secure === true || required.some((capability) => SECURE_ONLY.has(capability));
 }
 
 /** True when `scope` may call a method registered with `rule`. */

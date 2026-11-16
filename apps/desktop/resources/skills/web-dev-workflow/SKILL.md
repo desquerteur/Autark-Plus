@@ -33,7 +33,9 @@ and commit the clean scaffold before changes.
 - I start it as a **background** process (e.g. `npm run dev`), read the printed URL, and open it
   in the preview pane; a foreground server would block my turn.
 - When the port is taken, I use the next free one; an unknown process on it can be someone's work.
-- I stop the server when the task is done (RAM).
+- I stop the server when the task is done (RAM). A dev server lives as long as my work on it: it gets
+  no start with the PC (scheduled task, startup folder, pm2 or a service), and one I find set up that
+  way I remove, so it runs again when someone starts it.
 
 ## 4. Build the change
 - I follow existing components, tokens and naming, in small, focused edits.

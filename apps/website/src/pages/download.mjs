@@ -17,14 +17,14 @@ export default function downloadPage(rel) {
     mac: 'macOS refuses once: <em>System Settings → Privacy &amp; Security → Open Anyway</em>.',
     linux: '<code>chmod +x</code> and run. Needs FUSE 2 and a system keyring.',
     android: 'Allow installs from your browser once, then type your PC’s Remote ID.',
-    iphone: 'Ask your manager on the PC to set it up, then add it to the Home Screen.',
+    iphone: 'Open the web app in Safari, <em>Share</em> → <em>Add to Home Screen</em>, type your PC’s Remote ID. No App Store, no Apple account.',
   };
 
   return page({
     slug: 'download',
     rel,
     title: `Download ${site.name}`,
-    description: `Download ${site.name} ${W.version} for Windows, macOS or Linux, and the Android app, free and without an account; on iPhone it is the web app your PC serves. One page per platform with the install steps, plus requirements, checksums and permanent links.`,
+    description: `Download ${site.name} ${W.version} for Windows, macOS or Linux, and the Android app, free and without an account; on iPhone it is a web app on the Home Screen, no App Store needed. One page per platform with the install steps, plus requirements, checksums and permanent links.`,
     ld: [{
       '@type': 'ItemList', name: `${site.name} downloads`, numberOfItems: platforms.length,
       itemListElement: platforms.map((p, i) => ({ '@type': 'ListItem', position: i + 1, name: `${site.name} for ${p.os}`, url: `${site.url}/download/${p.id}/` })),

@@ -57,6 +57,15 @@ test('About: one action per state, all through apply()', () => {
   for (const status of ['development', 'idle', 'checking', 'downloading', 'installing', 'current'] as const) assert.equal(aboutUpdateAction(state({ status })), null, status);
 });
 
+test('F25: an install that did not land at this start is the About hint beside the button; a landed one changes nothing', () => {
+  const failed = { text: 'The update to 0.3.8 did not install: Windows Smart App Control blocked its setup (Autark is not code-signed yet) · still on 0.3.6', failed: true as const };
+  assert.deepEqual(aboutUpdateAction(state({ status: 'available', availableVersion: '0.3.8' }), failed), { label: 'Update', primary: true, hint: failed.text });
+  assert.equal(aboutUpdateAction(state({ status: 'downloaded' }), failed)?.hint, failed.text);
+  assert.equal(aboutUpdateAction(state({ status: 'error' }), failed)?.hint, failed.text);
+  assert.equal(aboutUpdateAction(state({ status: 'available' }), { text: 'Updated to 0.3.8 · 2 tasks continued' })?.hint, 'Downloads the update and restarts');
+  assert.match(aboutUpdateAction(state({ status: 'available', automaticInstall: false }), failed)?.hint ?? '', /download page/, 'macOS keeps its own line');
+});
+
 test('installing: the app says it opens again by itself, Linux in seconds, elsewhere in about a minute', () => {
   const installing = state({ status: 'installing', availableVersion: '0.3.3', percent: 100 });
   assert.equal(installingText(installing, 'win32'), 'Autark is installing 0.3.3 and opens again by itself in about a minute.');

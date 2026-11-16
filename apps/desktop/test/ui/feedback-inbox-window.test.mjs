@@ -44,8 +44,8 @@ test('feedback privacy is available before sending; the team inbox reads text an
     const win = BrowserWindow.getAllWindows()[0]; win.setMinimumSize(320, 320); win.setContentSize(w, h);
   }, [width, height]);
   await size(1120, 780);
-  const feedback = page.getByRole('button', { name: 'Feedback', exact: true });
-  const menu = page.locator('.popover.feedback-menu');
+  const feedback = page.locator('.frame-feedback-cell').getByRole('button', { name: 'Feedback', exact: true }); // not a dialog's slot
+  const menu = page.locator('dialog.feedback-overlay[open] .feedback-dock'); // the snapshot overlay's dock (feedback 16.11.2026)
   const privacy = page.getByRole('dialog', { name: 'Feedback privacy', exact: true });
   const inbox = page.getByRole('dialog', { name: 'Feedback inbox', exact: true });
   const shot = (name) => page.screenshot({ path: path.join(shots, `${name}.png`) });
@@ -78,7 +78,7 @@ test('feedback privacy is available before sending; the team inbox reads text an
   await writeFile(delivery.receiverFile, receiver);
   await rpc.call('feedback.setup', { project: delivery.project, apiKey: delivery.apiKey, serviceAccountPath: delivery.serviceAccountFile });
   await feedback.click(); await menu.waitFor();
-  await menu.getByText('Text, selected screenshot and app/system details are sent encrypted to Teydra Lab.', { exact: false }).waitFor();
+  await menu.getByText('Text, the screenshot and recording you keep, and app/device details are sent encrypted to Teydra Lab.', { exact: false }).waitFor();
   await menu.getByRole('button', { name: 'Inbox', exact: true }).waitFor();
   await menu.getByRole('button', { name: 'Feedback privacy', exact: true }).click(); await privacy.waitFor();
   assert.equal(delivery.docs.size, 0, 'configured privacy read still sends nothing');

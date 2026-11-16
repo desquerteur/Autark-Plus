@@ -11,9 +11,12 @@
 // and finds message text via chats.search: each hit names its sender, chat and time on a quiet
 // first line and shows the text as written around its first match (search-snippet.ts) with the
 // searched words marked; a row found by its name or last message marks them there too.
-// B-078: sub-chats sit under their parent (list-order.ts nestChats, one level; threads are never rows): shown while
-// searching or after its caret opened them (remembered per window); under a closed parent an unread sub-chat or the
-// open one shows too, so nothing new hides – and stays shown until the caret is used, so opening chats moves no row.
+// B-078: sub-chats sit under their parent (list-order.ts nestChats, one level; threads are never rows); F24 (owner
+// 16.11.2026): the person's 1:1s with sub-agents sit under their top manager's 1:1 the same way (the org's agents go
+// in). A parent starts closed (owner 16.11.: sub-agents he rarely talks to must not push the next manager down) and
+// its caret opens it (remembered per window; a search shows them all); under a closed parent a sub-chat shows when it is
+// unread, open, or the person opened it in the last RECENT_MS – so the ones he talks to stay in reach – and stays shown
+// until the caret is used, so opening chats moves no row.
 // Owns: list ordering, search and rendering the sections. Never: creates chats itself
 // (NewChatDialog), draws header markup (lib/header.tsx does) or defines which chat goes where
 // (shared/text/chat-sections.ts, archive.ts).
@@ -25,7 +28,7 @@ import { Icon } from '../lib/ui.tsx';
 import type { HeaderProps } from '../lib/header.tsx';
 import { Marked } from '../lib/mark.tsx';
 import { DESTINATIONS } from '../lib/vocab.ts';
-import { activeConversationId, agentName, conversationMap, conversations, drafts } from '../lib/store.ts';
+import { activeConversationId, agentMap, agentName, conversationMap, conversations, drafts } from '../lib/store.ts';
 import { chatTitle } from '../lib/chat-face.tsx';
 import { rpc } from '../lib/rpc.ts';
 import { navigate } from '../lib/router.ts';
@@ -64,16 +67,41 @@ export function chatListHeader(): HeaderProps {
   };
 }
 
-/** B-078: caret choices per parent (true: open, false: closed); absent: open while the parent or a sub-chat is open. */
+/** B-078: caret choices per parent (true: open, false: closed); absent: closed. */
 const TREE_KEY = 'wf.chatTreeOpen';
 const treeChoice = signal<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem(TREE_KEY) ?? '{}') as Record<string, boolean>; } catch { return {}; } })());
 
-/** Sub-chats once shown under a closed parent (unread, or the open one): they stay until its caret is used, so moving
+/** Sub-chats the person opened lately (id → when), per window: they show under a closed parent for RECENT_MS. */
+const RECENT_KEY = 'wf.chatTreeRecent';
+const RECENT_MS = 3 * 24 * 60 * 60 * 1000;
+const recent: Record<string, number> = (() => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '{}') as Record<string, number>; } catch { return {}; } })();
+
+function saveRecent(): void {
+  const now = Date.now();
+  for (const [id, at] of Object.entries(recent)) if (now - at >= RECENT_MS) delete recent[id];
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)); } catch { /* storage may be blocked */ }
+}
+
+/** The open sub-chat counts as lately used (written at most once an hour per chat). */
+function noteOpened(id: string): void {
+  const now = Date.now();
+  if (now - (recent[id] ?? 0) < 60 * 60 * 1000) return;
+  recent[id] = now;
+  saveRecent();
+}
+
+const lately = (id: string): boolean => Date.now() - (recent[id] ?? 0) < RECENT_MS;
+
+/** Sub-chats once shown under a closed parent (unread, open, lately used): they stay until its caret is used, so moving
  * between chats never takes a row away under the pointer. */
 const keptChildren = new Set<string>();
 
 function setTree(id: string, open: boolean, children: readonly { id: string }[] = []): void {
-  for (const child of children) keptChildren.delete(child.id);
+  for (const child of children) {
+    keptChildren.delete(child.id);
+    if (!open) delete recent[child.id]; // closing the caret is the person's word: these fold away now
+  }
+  saveRecent();
   treeChoice.value = { ...treeChoice.peek(), [id]: open };
   try { localStorage.setItem(TREE_KEY, JSON.stringify(treeChoice.peek())); } catch { /* storage may be blocked */ }
 }
@@ -86,7 +114,8 @@ function Rows(props: { nodes: ChatNode<ConversationSummary>[]; activeId: string 
       {props.nodes.map(({ chat, children }) => {
         // only the caret opens or closes a parent: opening a chat never adds or removes rows (a click moves no neighbour)
         const open = children.length > 0 && (Boolean(mark) || treeChoice.value[chat.id] === true);
-        const shown = open ? children : children.filter((child) => child.unread > 0 || child.id === activeId || keptChildren.has(child.id));
+        if (activeId && children.some((child) => child.id === activeId)) noteOpened(activeId);
+        const shown = open ? children : children.filter((child) => child.unread > 0 || child.id === activeId || keptChildren.has(child.id) || lately(child.id));
         if (!open) for (const child of shown) keptChildren.add(child.id);
         const tree = children.length ? { open, count: children.length, onToggle: () => setTree(chat.id, !open, children) } : undefined;
         return [
@@ -113,7 +142,7 @@ function Folded(props: { label: string; storageKey: string; class: string; chats
         <Icon name={open ? 'caret-down' : 'caret-right'} size={12} /> {props.label}
         <span class="nav-count tabular">{chats.length}</span>
       </button>
-      {(open || props.reveal || chats.some((chat) => chat.id === activeId)) && <Rows nodes={nestChats(chats)} activeId={activeId} muted mark={props.mark} />}
+      {(open || props.reveal || chats.some((chat) => chat.id === activeId)) && <Rows nodes={nestChats(chats, agentMap.value)} activeId={activeId} muted mark={props.mark} />}
     </div>
   );
 }
@@ -150,7 +179,7 @@ export function ChatList() {
         </button>
       )}
       <div class="chat-rows" role="list">
-        <Rows nodes={nestChats(main)} activeId={activeId} mark={q} />
+        <Rows nodes={nestChats(main, agentMap.value)} activeId={activeId} mark={q} />
       </div>
       {hits.length > 0 && (
         <div class="search-hits">

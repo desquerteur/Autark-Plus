@@ -6,15 +6,16 @@
 // it loads) is even imported – and quits at once when the app runs or is not needed; the crash-loop cap
 // says so once. A Windows task start that goes on hands over to a detached ordinary background start
 // (`--restarted` carries the notice) and ends, so the app never runs as the task's instance. Then hands
-// over to desktop.ts; a restart after an unexpected close shows one quiet notice. The first company's start after an
-// update install wakes the other companies the install ended (companies.ts wakeCompanies).
+// over to desktop.ts; a restart after an unexpected close shows one quiet notice. The start after an update install of
+// the company that pressed Update (F25: any company) wakes the other companies the install ended (companies.ts wakeCompanies).
+// 16.11.2026: a company taken off this PC never starts again, and with the first one gone a plain start opens the next.
 // Owns: process-level lifecycle hooks. Never: business logic or long synchronous work.
 
 import os from 'node:os';
 import path from 'node:path';
 import { Menu, Notification, app, dialog, protocol } from 'electron';
 import { launchFlags } from './app-paths.ts';
-import { companiesDir, companyArgs, companyDir, companyFlag, spawnApp, wakeCompanies } from './companies.ts';
+import { companiesDir, companyArgs, companyDir, companyFlag, spawnApp, startingCompany, wakeCompanies } from './companies.ts';
 import type { Desktop } from './desktop.ts';
 import { applyIdentity } from './identity-move.ts';
 import { BACKGROUND_FLAG, NOTICES, RESTARTED_FLAG, beginLaunch, launchSource, readRunState, type LaunchNotice } from './launcher.ts';
@@ -22,8 +23,11 @@ import { PRIVILEGED_SCHEMES } from './protocols/handlers.ts';
 
 const testData = process.env.WORKFORCE_TEST_DATA ? path.resolve(process.env.WORKFORCE_TEST_DATA) : null;
 if (testData) app.setPath('userData', testData); // isolated profile; also disables the network updater
-const company = testData ? null : companyFlag(process.argv); // B-072: another company's folder, before the rename check and the lock
 const firstData = app.getPath('userData');
+// B-072: another company's folder, before the rename check and the lock. 16.11.2026: a removed first company hands a plain
+// start to the next company; undefined – a removed company's own start (its sign-in task, say) – ends at once below.
+const picked = testData ? null : startingCompany(companyFlag(process.argv), { first: firstData, dir: companiesDir(firstData) });
+const company = picked ?? null;
 if (company) app.setPath('userData', companyDir(firstData, company));
 applyIdentity(app, { testData: testData !== null }); // the product's rename: the data folder and keyring name, before the lock that lives in that folder
 const companies = testData ? null : { first: company ? firstData : app.getPath('userData'), dir: companiesDir(firstData) };
@@ -53,9 +57,10 @@ function handOff(kind: LaunchNotice | undefined): void {
   app.quit();
 }
 
-// B-072: the update install ended every company; its relaunch is the first one (read before beginLaunch writes the state)
-const updated = companies !== null && !company && readRunState(app.getPath('userData'))?.by === 'update';
-const launch = app.requestSingleInstanceLock()
+// B-072: the update install ended every company; F25: its relaunch is the company that pressed Update – any company,
+// told by its own run-state (read before beginLaunch writes the state)
+const updated = companies !== null && readRunState(app.getPath('userData'))?.by === 'update';
+const launch = picked !== undefined && app.requestSingleInstanceLock()
   ? beginLaunch({ dataDir: app.getPath('userData'), source: launchSource(process.platform, flags.launcher), now: Date.now(), bootAt: Date.now() - os.uptime() * 1000, pid: process.pid })
   : null;
 
@@ -95,7 +100,7 @@ if (!launch) {
     .then(async () => {
       const { startDesktop } = await composition;
       desktop = await startDesktop({ background: flags.background, testData, company, companies });
-      if (updated && companies) wakeCompanies(companies.dir);
+      if (updated && companies) wakeCompanies(companies, company);
       if (showWhenStarted) desktop.show();
       if (restarted) launchNotice(restarted, show);
     })

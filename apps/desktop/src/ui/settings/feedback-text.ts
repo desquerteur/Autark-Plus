@@ -3,10 +3,11 @@
 // Owns: these texts. Never: RPC or rendering.
 
 import type { RestoreStatus } from '../../shared/model/restore.ts';
-import type { FeedbackReport } from '../../shared/model/system.ts';
+import { AUDIO_DROPPED } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackKind, FeedbackReport } from '../../shared/model/system.ts';
 import { fullDate, listTime } from '../lib/format.ts';
 
-const KIND: Readonly<Record<FeedbackReport['kind'], string>> = { bug: 'Bug', idea: 'Idea', change: 'Change', praise: 'Praise' };
+const KIND: Readonly<Record<FeedbackKind, string>> = { bug: 'Bug', idea: 'Idea', change: 'Change', praise: 'Praise' };
 /** Keeps a hint line's height while its text is unknown. */
 const HOLD = ' ';
 
@@ -18,10 +19,11 @@ export function reportsHint(sending: boolean | undefined, where = 'this PC'): st
 
 /** A report's line: kind, who, how often, state, time. */
 export function reportLine(report: Pick<FeedbackReport, 'kind' | 'author' | 'status' | 'sentAt' | 'createdAt' | 'count' | 'deliveryWarning' | 'url'>, who: (id: string) => string, when: (at: number) => string = listTime, where = 'this PC'): string {
-  const state = report.status === 'sent' ? (report.url ? 'Published on GitHub' : report.deliveryWarning ? 'Sent to the team without the screenshot' : 'Sent to the team')
+  const without = report.deliveryWarning === AUDIO_DROPPED ? 'the recording' : 'the screenshot';
+  const state = report.status === 'sent' ? (report.url ? 'Published on GitHub' : report.deliveryWarning ? `Sent to the team without ${without}` : 'Sent to the team')
     : report.status === 'received' ? 'Received earlier' : report.status === 'local' || report.status === 'draft' ? `Saved on ${where}` : '';
   return [
-    KIND[report.kind], report.author === 'human' ? '' : `${who(report.author)} · Unverified`, report.count && report.count > 1 ? `Reported ${report.count} times` : '',
+    report.kind ? KIND[report.kind] : '', report.author === 'human' ? '' : `${who(report.author)} · Unverified`, report.count && report.count > 1 ? `Reported ${report.count} times` : '',
     state, when(report.sentAt ?? report.createdAt),
   ].filter(Boolean).join(' · ');
 }

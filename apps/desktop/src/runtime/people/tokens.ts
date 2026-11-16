@@ -2,7 +2,8 @@
 // one open per person, 72 hours, one use – burned when a join request is made with it) and device
 // tokens (kind 'person', one per joined phone/browser). The scope column holds {personId}; only
 // the sha256 of a ticket or token is stored, the plain value is handed out once.
-// Owns: issuing, checking, listing and revoking those rows. Never: logs or keeps plain tickets or
+// F14: a person who never joined is removed with their rows (removeAll).
+// Owns: issuing, checking, listing, revoking and removing those rows. Never: logs or keeps plain tickets or
 // tokens, issues anything for the owner, or touches the device tokens of the owner's phones.
 
 import { randomBytes } from 'node:crypto';
@@ -123,5 +124,10 @@ export class PersonTokens {
   revokeAll(personId: string): number {
     return this.db.run(`UPDATE tokens SET revoked_at = ? WHERE kind IN (?, ?) AND revoked_at IS NULL AND json_extract(scope, '$.personId') = ?`,
       [this.clock.now(), DEVICE, INVITE, personId]).changes;
+  }
+
+  /** F14: every token and invite row of a person goes (a removed person); returns how many. */
+  removeAll(personId: string): number {
+    return this.db.run(`DELETE FROM tokens WHERE kind IN (?, ?) AND json_extract(scope, '$.personId') = ?`, [DEVICE, INVITE, personId]).changes;
   }
 }

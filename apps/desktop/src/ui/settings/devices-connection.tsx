@@ -4,10 +4,16 @@
 // exists (Remove ends it); pwa.bind for LAN/Tailscale browsers stays a settings.json key the AI sets (skill phone-access).
 // The same keys of settings.json the AI changes. B-084: on my phone too – a 'settings' device on a secure transport
 // writes the 'devices' section (rpc/handlers/system.ts).
+// F29 stage 1 (16.11.2026): one row per phone app – its way to this PC now (direct or via the meeting server) and the
+// bytes of each today (RelayState.phones), so the gain of the direct way shows; inside the iPhone web app one row says
+// that it always goes via the meeting server (a page can't open a direct connection to a PC).
 // Owns: these rows. Never: lets a device in without the person's Accept, or shows a key.
 
 import { relayAddress, type RelayState } from '../../shared/model/relay.ts';
+import { time } from '../lib/format.ts';
 import { settings, updateSettings } from '../lib/store.ts';
+import { inHostedApp } from '../pwa/native.ts';
+import { IPHONE_LINK, phoneLinkHint } from './connect-text.ts';
 import { act, Group, Row, TextField, Toggle } from './controls.tsx';
 
 /** The meeting server's state in a few words (pure). */
@@ -37,6 +43,8 @@ export function ConnectionGroup(props: { relay?: RelayState; findable?: boolean 
       <Row label="Meeting server" reserve hint={relayLine(props.relay, devices?.relay ?? '')}>
         <TextField label="Meeting server" type="url" placeholder="wss://…" maxLength={300} value={devices?.relay ?? ''} disabled={!devices} onCommit={saveRelay} />
       </Row>
+      {inHostedApp() && <Row label="This iPhone" reserve hint={IPHONE_LINK} />}
+      {(props.relay?.phones ?? []).map((link) => <Row key={link.deviceId} label={link.name} reserve hint={phoneLinkHint(link, Date.now(), time)} />)}
     </Group>
   );
 }

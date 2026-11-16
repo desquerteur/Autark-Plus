@@ -2,7 +2,9 @@
 // of every row inside (so the nav search finds each setting), the methods a page needs to be useful on this connection
 // (a phone lists only the pages it may use; rows inside gate themselves) and the file behind the page (its header's one
 // way to open it: settings.json, a folder of the data folder, connectors/mcp.json – "nicht irgendwo versteckt im PC").
-// Owns: page order, searchable vocabulary, the gates and the file names. Never: renders or holds values.
+// F20 (16.11.2026): the search also matches what a page holds right now (settings-words.ts), so a secret's or an app's name
+// finds its page.
+// Owns: page order, searchable vocabulary, the gates and the file names. Never: renders or holds values, or loads a list.
 
 import type { MethodName } from '../../shared/api/methods.ts';
 import type { IconName } from '../lib/icons.tsx';
@@ -26,6 +28,7 @@ export const SECTIONS: readonly SectionInfo[] = [
     'profile', 'name', 'company', 'photo', 'appearance', 'theme', 'dark', 'light',
     'enter sends', 'send', 'tray', 'close', 'login', 'startup', 'start with windows', 'notifications', 'sound',
     'behavior', 'keep running', 'keep the screen on', 'screen', 'keep awake', 'sleep',
+    'companies', 'delete company', 'leave company', 'export company', 'import company', 'recycle bin', // 16.11.2026: CompaniesGroup.tsx
   ] },
   // Listed everywhere (B-078: it holds the former Voice page); its providers and uses show where accounts.detect is allowed.
   { id: 'models', title: 'Models', icon: 'plugs', file: SETTINGS_FILE, requires: [], keywords: [
@@ -43,6 +46,11 @@ export const SECTIONS: readonly SectionInfo[] = [
   ] },
   { id: 'secrets', title: 'Secrets', icon: 'key', file: { path: 'secrets', label: 'Open the secrets folder' }, requires: ['secrets.list'], keywords: [
     'secrets', 'password', 'passwords', 'api keys', 'tokens', 'cards', 'payment card', 'vault', 'catalog', 'logins', '2fa', 'import passwords', 'handle', '.env', 'env file', 'import keys',
+  ] },
+  // Owner 16.11.2026: the team's access to this PC and the person's lines to every agent (SecurityPage.tsx).
+  { id: 'security', title: 'Security', icon: 'shield', file: SETTINGS_FILE, requires: ['settings.update'], keywords: [
+    'security', 'access', 'full access', 'whole pc', 'careful', 'pc access', 'every agent', 'all agents', 'robot', 'captcha',
+    'not a robot', 'human.md', 'from you', 'instructions', 'prompt',
   ] },
   { id: 'apps', title: 'Apps', icon: 'squares-four', file: { path: 'connectors/mcp.json', label: 'Open mcp.json' }, requires: ['apps.list'], keywords: [
     'apps', 'connected apps', 'connections', 'integrations', 'mcp', 'mcp servers', 'notion', 'linear', 'github', 'zapier', 'mail', 'mailbox', 'email', 'reconnect', 'sign in', 'tools', 'add by address', 'token', 'test',
@@ -67,13 +75,19 @@ export function sectionById(id: string | undefined): SectionInfo {
   return SECTIONS.find((section) => section.id === (id ?? DEFAULT_SETTINGS_PAGE)) ?? SECTIONS[0];
 }
 
-/** Pages matching a search text (title or any keyword contains every word), among `sections`. */
-export function searchSections(text: string, sections: readonly SectionInfo[] = SECTIONS): SectionInfo[] {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return [...sections];
+/** F20: what a page holds right now, as one lower-case text per page (settings-words.ts: names of its secrets, apps, skills …). */
+export type PageWords = Partial<Readonly<Record<SettingsPage, string>>>;
+
+/**
+ * Pages matching a search text, among `sections`: every word is in the page's title, its keywords or (F20) what it holds
+ * (`words` – a secret's, app's, skill's, account's or device's name).
+ */
+export function searchSections(text: string, sections: readonly SectionInfo[] = SECTIONS, words: PageWords = {}): SectionInfo[] {
+  const asked = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!asked.length) return [...sections];
   return sections.filter((section) => {
-    const haystack = `${section.title} ${section.keywords.join(' ')}`.toLowerCase();
-    return words.every((word) => haystack.includes(word));
+    const haystack = `${section.title} ${section.keywords.join(' ')} ${words[section.id] ?? ''}`.toLowerCase();
+    return asked.every((word) => haystack.includes(word));
   });
 }
 

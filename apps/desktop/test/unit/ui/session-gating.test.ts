@@ -94,9 +94,9 @@ test('a phone: the org, chats and tasks on the phone; PC-local controls are not 
   assert.equal(can('accounts.loginCode'), true, 'B-091: the Claude page\'s code from the phone');
   assert.equal(blockedNote('agents.create'), undefined);
   // 12.11.2026 (mobile settings, owner "Einstellungen am Handy vollständig"): a secure owner phone edits and deletes catalog
-  // entries; the plaintext export stays on the PC.
-  for (const method of ['pwa.state', 'secrets.export'] as MethodName[]) assert.equal(can(method), false, method);
-  assert.equal(can('secrets.delete'), true, 'secrets.delete');
+  // entries; 16.11.2026 it exports them too (the file is written on the PC). Phone access itself stays on the PC.
+  assert.equal(can('pwa.state'), false, 'pwa.state');
+  for (const method of ['secrets.delete', 'secrets.export'] as MethodName[]) assert.equal(can(method), true, method);
 });
 
 test('full-access phone with the permissions tier on a secure transport: permissions, secrets (create) and spend', () => {
@@ -106,7 +106,7 @@ test('full-access phone with the permissions tier on a secure transport: permiss
     assert.equal(blockedNote(method), undefined, method);
   }
   assert.equal(can('secrets.delete'), true, 'deleting a catalog entry from the secure owner phone');
-  assert.equal(can('secrets.export'), false, 'the plaintext export stays on the PC');
+  assert.equal(can('secrets.export'), true, '16.11.2026: the export from the secure owner phone (the file stays on the PC)');
 });
 
 test('phone on plain LAN http: sensitive controls say to open the HTTPS address; the rest works', () => {

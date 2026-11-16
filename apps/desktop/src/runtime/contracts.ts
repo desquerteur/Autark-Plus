@@ -115,7 +115,8 @@ export interface ChatService {
   remove(id: string): void;
   /** Persists a message (human or agent), updates seq/preview/unread, emits events, triggers delivery. */
   /** `runId` (B-047 D4): the agent run that posts it (a <chat> block, agents/chat-out.ts). `silent`: no unread or notification – mentioned agents are still reached. */
-  send(input: SendMessageInput & { authorId: string; authorKind?: Message['authorKind']; meta?: MessageMeta; kind?: Message['kind']; taskId?: string; silent?: boolean; runId?: string }): Message;
+  /** `deliver: false` (runtime only, F07's start line): stored and shown, delivered to nobody – no wake, no notification. */
+  send(input: SendMessageInput & { authorId: string; authorKind?: Message['authorKind']; meta?: MessageMeta; kind?: Message['kind']; taskId?: string; silent?: boolean; runId?: string; deliver?: false }): Message;
   /** Quiet status line ("Mara → Opus 5.5 · high – …"). `runId`: the run it belongs to; `fromRun`: meta.fromRun of a line the runtime writes during a run. */
   status(conversationId: string, line: StatusLine, options?: { authorId?: string; taskId?: string; runId?: string; fromRun?: string }): Message;
   /** `files`: outputs the engine produced (e.g. Codex images) – stored and attached before the message is announced (MM2). */
@@ -366,6 +367,8 @@ export interface Subconscious {
   beforeTurn?(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; woke?: string; taskText?: string; vision?: boolean; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined>;
   /** Addition (01.11.2026), optional: a turn that never reached its engine gives back what beforeTurn gave it, a native turn the timeout decisions it could not take in (agents/native-timeout.ts); the next turn on the thread shows it. Never throws. */
   putBack?(agentId: string, thread: string, trace: SubconsciousTrace): void;
+  /** Addition (F26, 16.11.2026), optional: a forked part's first start – the call that condenses context items whose job is done, as beside the agent's own turns, on the part's own record (`thread`) with its brief as what wakes it; the part waits for it, bounded, and `signal` (its turn's stop) ends it. Returns how many items it condensed. Never throws. */
+  condensePart?(input: { agent: Agent; thread: string; conversationId?: string; brief: string; signal?: AbortSignal }): Promise<number>;
   /** Addition (01.11.2026), optional: the main AI's own call (tools/builtin/subconscious.ts): `ask` is any text; the answer is its tool output. Never throws. */
   ask?(input: { agent: Agent; conversationId?: string; thread?: string; taskId?: string; mode?: string; ask: string; context?: 'none' | 'recent' | 'chat'; signal?: AbortSignal }): Promise<string>;
   /** Addition (01.11.2026), optional: the person's Forget – a kept trace that mentions it goes. Never throws. */

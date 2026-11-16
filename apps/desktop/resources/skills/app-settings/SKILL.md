@@ -31,6 +31,10 @@ in "My environment" of its prompt, so I keep the note short and change it only w
 change renews every agent's cached prompt once. To-dos for the person, blockers and important messages always reach
 them; `notifications.sound` is the one switch they see.
 
+The person's lines to every agent are `profile.forEveryAgent` (Settings › Security): the last part of each agent's
+instructions, after that agent's own `HUMAN.md` in its folder under `agents/`. I change either like any other text
+here; a change renews the cached prompt of every agent it reaches once.
+
 AI providers and the model for each use are in this file too (`providers`, `routing`): skill `ai-providers` walks through
 them. Not in the file: calendars connect with the
 tool `calendar.connect` (or `wf call calendar.addIcs '{"url":"…"}'`); a speech model of this PC downloads with

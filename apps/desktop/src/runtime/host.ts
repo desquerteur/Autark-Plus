@@ -91,6 +91,8 @@ export interface Host {
   install?(installer: string): Promise<void>;
   /** B-072: opens a company on this PC (main/companies.ts): its window opens, this one goes to the tray. Missing headless. */
   openCompany?(input: { id?: string | null; create?: boolean; start?: CompanyStart }): Promise<{ ok: true; id: string | null }>;
+  /** 16.11.2026: takes a company off this PC (main/company-remove.ts): it stops and its folder goes to the recycle bin. Missing headless. */
+  removeCompany?(input: { id: string | null; name?: string }): Promise<{ ok: true }>;
   /**
    * App version and whether running packaged; `companies` (B-072): where the companies on this PC live; `start` (B-078): this
    * company's `--start=` flag; `pid` (B-080): the app's own process – an install ends it (tasks/recover-notes.ts).

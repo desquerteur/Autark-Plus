@@ -4,7 +4,7 @@
 // its files and the login's own time (Codex last_refresh, Claude Code's and Gemini CLI's token expiry, else the
 // file's mtime); the newer login wins, an older or equal one never replaces the one here, and a file without a token
 // to refresh with (an emptied login) never travels. The receiver writes the files whole (temp beside them, mode 0600,
-// file-io.ts) into the account's home here – its own <data>/accounts/<provider>/<id>, or a CLI's default home
+// file-io.ts) into the account's home here – its own <accounts>/<provider>/<id> (Paths.accounts), or a CLI's default home
 // (~/.claude, ~/.gemini) for a login this PC found there, but never over a file whose identity (accounts/login-file.ts) differs – and asks for the account check when the account is not signed in yet.
 // A login of another PC's account that this PC has itself (tables.ts: the same provider and e-mail) lands in that
 // account. A plan the person signed out of here (accounts/cli-homes.ts signedOut) takes no login from another PC
@@ -15,6 +15,10 @@
 // folder and every account change (a cheap compare) send a changed login within a second, so a second PC acts
 // like a second process on the same PC, which reads the file again before it refreshes. Claude Code on macOS keeps
 // its login in the Keychain: nothing is sent or written there.
+// 16.11.2026: a plan's home is this PC's one home of that login, shared by every company here (accounts/cli-homes.ts):
+// each company's LoginSync reads and writes the same file (whole, the newer login wins, so two writers are harmless),
+// and a refresh token is held elsewhere when any other home on this PC holds it – this company's plans' homes and every
+// home in the PC's logins folder. A sign-out mark is the home's (every company's LoginSync keeps out a linked PC's login).
 // Owns: reading, sending and writing these files. Never: logs, journals or returns their content, shows them to
 // an agent, a tool or the UI, or sends them to a PC that is no 'ceo' link.
 
@@ -26,7 +30,7 @@ import path from 'node:path';
 import type { RuntimeServices } from '../../contracts.ts';
 import type { Account } from '../../../shared/model/providers.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
-import { defaultHome, loginFiles, ownHomes, signedOut } from '../../accounts/cli-homes.ts';
+import { defaultHome, homeKey, loginFiles, ownHomes, sharedLogins, signedOut } from '../../accounts/cli-homes.ts';
 import { MAX_LOGIN_FILE, identity, loginTime, parseLogin, refreshToken, signedIn, type Json } from '../../accounts/login-file.ts';
 import { DevicesRepo } from '../repo.ts';
 import { replaceWith } from './file-io.ts';
@@ -96,16 +100,11 @@ export class LoginSync {
     this.deps = deps;
   }
 
-  private syncAllowed(account: Account): boolean { return this.s.accounts.homeSyncAllowed?.(account) ?? true; }
-  private withHome<T>(account: Account, work: () => Promise<T>): Promise<T> {
-    if (!this.syncAllowed(account)) return Promise.reject(new WorkforceError('conflict', 'Claude login sync is fenced (including after handoff).'));
-    return this.s.accounts.withHome?.(account, 'mesh', work) ?? work();
-  }
   private get platform(): NodeJS.Platform { return this.deps.platform ?? process.platform; }
 
   /** The CLI plans whose login is a file this PC knows. */
   private plans(): Account[] {
-    return this.s.accounts.list().filter((account) => account.auth === 'cli' && this.syncAllowed(account) && loginFiles(account.provider, this.platform).length > 0);
+    return this.s.accounts.list().filter((account) => account.auth === 'cli' && loginFiles(account.provider, this.platform).length > 0);
   }
 
   private homeOf(account: Account): string | undefined {
@@ -122,7 +121,7 @@ export class LoginSync {
   attach(): () => void {
     const offs = [
       this.s.bus.on('account.upserted', (account) => { this.watchHomes(); this.soon(account.id); }),
-      this.s.bus.on('account.removed', ({ id }) => { signedOut.clear(this.s.db, id); this.watchHomes(); }),
+      this.s.bus.on('account.removed', ({ id }) => { signedOut.clear(this.s.db, { id }); this.watchHomes(); }), // a home's mark stays: it is the login's
     ];
     this.watchHomes();
     return () => {
@@ -171,8 +170,7 @@ export class LoginSync {
   }
 
   /** The login of `account` as it would travel; undefined when there is none (no file, emptied, half written, kept in the Keychain). */
-  private read(account: Account): Promise<{ login: Login; digest: string } | undefined> { return this.withHome(account, () => this.readOwned(account)); }
-  private async readOwned(account: Account): Promise<{ login: Login; digest: string } | undefined> {
+  private async read(account: Account): Promise<{ login: Login; digest: string } | undefined> {
     const home = this.homeOf(account);
     const names = account.auth === 'cli' ? loginFiles(account.provider, this.platform) : [];
     if (!home || !names.length) return undefined;
@@ -195,21 +193,14 @@ export class LoginSync {
   /** The login here as it would travel; one that is here ends a sign-out mark (the person signed in here again). */
   private async local(account: Account): Promise<{ login: Login; digest: string } | undefined> {
     const read = await this.read(account).catch(() => undefined);
-    if (read) signedOut.clear(this.s.db, account.id);
+    if (read) signedOut.clear(this.s.db, account);
     return read;
   }
 
   private async post(peer: string, logins: Login[]): Promise<boolean> {
     if (!logins.length) return true;
     try {
-      const allowed = logins.filter(login => { const a = this.targetOf(login); return a && this.syncAllowed(a); });
-      const send = (index: number): Promise<unknown> => {
-        if (index === allowed.length) return this.s.devices.call(peer, 'sync.login', { logins: allowed });
-        const a = this.targetOf(allowed[index]);
-        if (!a) throw new WorkforceError('conflict', 'Login sync target changed.');
-        return this.withHome(a, () => send(index + 1));
-      };
-      if (allowed.length) await send(0);
+      await this.s.devices.call(peer, 'sync.login', { logins });
       return true;
     } catch (error) {
       this.s.log.info('logins not sent', { peer, count: logins.length, error: code(error) });
@@ -250,7 +241,7 @@ export class LoginSync {
 
   /** The plan here a login belongs to: the same account, else the same login (provider and e-mail; any, for a CLI with one sign-in per PC). */
   private targetOf(login: Login): Account | undefined {
-    const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && this.syncAllowed(account) && account.provider === login.provider);
+    const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && account.provider === login.provider);
     return plans.find((account) => account.id === login.account)
       ?? plans.find((account) => !ownHomes(account.provider) || (Boolean(login.email) && account.email === login.email));
   }
@@ -261,17 +252,12 @@ export class LoginSync {
     return run;
   }
 
-  private apply(login: Login): Promise<boolean> {
-    const target = this.targetOf(login);
-    if (!target) return Promise.resolve(false);
-    return this.withHome(target, () => this.applyOwned(login));
-  }
-  private async applyOwned(login: Login): Promise<boolean> {
+  private async apply(login: Login): Promise<boolean> {
     const target = this.targetOf(login);
     const home = target && this.homeOf(target);
     const names = target ? loginFiles(target.provider, this.platform) : [];
     if (!target || !home || login.files[0].name !== names[0]) return false; // not here, or kept in the Keychain here
-    if (signedOut.has(this.s.db, target.id)) {
+    if (signedOut.has(this.s.db, target)) {
       this.s.log.info('login of a plan signed out here not taken', { account: target.id });
       return false;
     }
@@ -300,17 +286,28 @@ export class LoginSync {
     return true;
   }
 
-  /** Another plan of the provider whose home here holds the refresh token of `file` (never the same home). */
-  private async heldElsewhere(account: Account, file: Json): Promise<Account | undefined> {
+  /**
+   * Another home of the provider here that holds the refresh token of `file` (never the same home): a plan's of this
+   * company, or any home in this PC's logins folder (another company's); its id names it in the log.
+   */
+  private async heldElsewhere(account: Account, file: Json): Promise<{ id: string } | undefined> {
     const token = refreshToken(account.provider, file);
     const home = this.homeOf(account);
     if (!token || !home) return undefined;
+    const homes = new Map<string, { id: string; home: string }>();
     for (const other of this.plans()) {
-      const there = other.id !== account.id && other.provider === account.provider ? this.homeOf(other) : undefined;
-      if (!there || path.resolve(there) === path.resolve(home)) continue;
-      const bytes = await readFile(path.join(there, loginFiles(other.provider, this.platform)[0])).catch(() => undefined);
+      const there = other.provider === account.provider ? this.homeOf(other) : undefined;
+      if (there) homes.set(homeKey(there), { id: other.id, home: there });
+    }
+    const root = this.s.paths?.accounts;
+    for (const shared of root ? sharedLogins(root, this.platform) : []) {
+      if (shared.provider === account.provider && !homes.has(homeKey(shared.home))) homes.set(homeKey(shared.home), { id: shared.id, home: shared.home });
+    }
+    homes.delete(homeKey(home));
+    for (const other of homes.values()) {
+      const bytes = await readFile(path.join(other.home, loginFiles(account.provider, this.platform)[0])).catch(() => undefined);
       const json = bytes && parseLogin(bytes);
-      if (json && refreshToken(other.provider, json) === token) return other;
+      if (json && refreshToken(account.provider, json) === token) return other;
     }
     return undefined;
   }

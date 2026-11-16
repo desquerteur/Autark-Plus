@@ -6,6 +6,9 @@
 // Where it cannot work (macCapability: read-only place, a translocated app, a disk image, or it failed for this version
 // before) the plain updater stays and with it the manual download; a failure here says so at once ('manual-only').
 // Once the new version ran stable, settleMacUpdate trashes the previous bundle and an old-named leftover.
+// F25 (review 16.11.2026): every company updates itself, so the helper starts the company that pressed Update again –
+// `open -n <app> --args --updated --company=<id>`, a new instance beside a running first company (a plain `open` would
+// only bring that one to the front); the first company starts with a plain `open` as before.
 // Owns: the capability check, the download and staging, the helper script, the settling. Never: imports electron
 // (updates-wiring.ts injects it), drains or decides when to restart (update-service.ts), or swaps while this process lives.
 
@@ -13,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { companyArg } from './install-helper.ts';
 import type { Updater } from './update-service.ts';
 
 export const STAGING_DIR = '.workforce-update'; // beside the app, so the final move is one rename on one volume
@@ -45,12 +49,14 @@ export function macCapability(input: { bundle: string | null; version: string; f
 }
 
 /**
- * The helper, run as `sh -c SWAP_SCRIPT name pid old staged new previous failed version`: positional arguments, so a
- * path needs no quoting. It keeps the staged app when the process never ends (a later try can use it). A swap that
- * fails puts the old app back, notes the version for the manual path and starts the old app.
+ * The helper, run as `sh -c SWAP_SCRIPT name pid old staged new previous failed version company`: positional arguments,
+ * so a path needs no quoting. It keeps the staged app when the process never ends (a later try can use it). A swap that
+ * fails puts the old app back, notes the version for the manual path and starts the old app. `company`: the
+ * `--company=<id>` of the company that pressed Update, empty for the first (see the header).
  */
-export const SWAP_SCRIPT = `pid=$1; old=$2; staged=$3; new=$4; previous=$5; failed=$6; version=$7
+export const SWAP_SCRIPT = `pid=$1; old=$2; staged=$3; new=$4; previous=$5; failed=$6; version=$7; company=$8
 staging=$(dirname "$staged")
+launch() { if [ -n "$company" ]; then open -n "$1" --args --updated "$company"; else open "$1"; fi; }
 tries=0
 while kill -0 "$pid" 2>/dev/null; do
   tries=$((tries + 1))
@@ -61,17 +67,17 @@ rm -rf "$previous"
 if ! mv "$old" "$previous"; then
   printf '%s\\n' "$version" > "$failed"
   rm -rf "$staging"
-  open "$old"
+  launch "$old"
   exit 1
 fi
 if mv "$staged" "$new"; then
   rm -rf "$staging"
-  open "$new"
+  launch "$new"
   exit 0
 fi
 printf '%s\\n' "$version" > "$failed"
 if mv "$previous" "$old"; then rm -rf "$staging"; fi
-open "$old"
+launch "$old"
 exit 1
 `;
 
@@ -98,6 +104,8 @@ export interface MacSelfUpdateDeps {
   spawnHelper(args: string[], onError: (error: Error) => void): void;
   quit(): void;
   log?(line: string): void;
+  /** F25: this company's start arguments (companies.ts companyArgs) – the helper starts it again with its flag. */
+  args?: readonly string[];
 }
 
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code });
@@ -164,7 +172,7 @@ export class MacSelfUpdater implements Updater {
     try {
       this.helperRunning = true;
       this.deps.spawnHelper(
-        ['-c', SWAP_SCRIPT, 'workforce-update', String(this.deps.pid), this.deps.bundle, this.staged, target, path.join(parent, PREVIOUS_BUNDLE), path.join(this.deps.cacheDir, FAILED_FILE), this.deps.version],
+        ['-c', SWAP_SCRIPT, 'workforce-update', String(this.deps.pid), this.deps.bundle, this.staged, target, path.join(parent, PREVIOUS_BUNDLE), path.join(this.deps.cacheDir, FAILED_FILE), this.deps.version, companyArg(this.deps.args)],
         error => { this.helperRunning = false; this.emit('error', error); },
       );
     } catch (error) {

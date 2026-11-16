@@ -1,5 +1,6 @@
 // Command palette (Ctrl/Cmd+K; search icon on mobile): chats (main chats and Team activity rooms, never
-// the app-owned system chats), agents, Settings and actions (new chat, new task in this chat, My day, feedback, the
+// the app-owned system chats), agents, Settings (F20: also the pages a query finds by their keywords or what they hold –
+// settings/settings-words.ts –, opened with the settings search set to it) and actions (new chat, new task in this chat, My day, feedback, the
 // feedback tour's replay "Watch how it works", "Set up team again" for the owner while a Manager exists, "Stop all
 // agent work" / "Resume agent work"). Actions this connection may not call are left out (shell/gates.ts
 // paletteActions). Matching: a label that starts with or contains the query, then a hint; a loose subsequence only
@@ -17,7 +18,9 @@ import { agents, conversations, isMobile } from '../lib/store.ts';
 import { chatTitle } from '../lib/chat-face.tsx';
 import { go, navigate } from '../lib/router.ts';
 import { can } from '../lib/session.ts';
-import { visibleSections } from '../settings/sections.ts';
+import { searchSections, visibleSections } from '../settings/sections.ts';
+import { settingsWords, wantSettingsWords } from '../settings/settings-words.ts';
+import { settingsSearch } from '../settings/SettingsNav.tsx';
 import { composerFill, newChatOpen, paletteOpen } from '../lib/shell-state.ts';
 import { activeConversationId } from '../lib/store.ts';
 import { DESTINATIONS } from '../lib/vocab.ts';
@@ -95,6 +98,20 @@ function score(entry: Entry, query: string): number {
   return index === query.length ? 1 : -1;
 }
 
+/**
+ * F20: the settings pages a query finds by their keywords or what they hold (a secret's, app's or skill's name) and not by
+ * their title – each opens with the settings search set to the query, so the page marks it.
+ */
+function settingsHits(query: string, scored: ReadonlyArray<{ entry: Entry; s: number }>): Array<{ entry: Entry; s: number }> {
+  const titled = new Set(scored.filter((item) => item.entry.group === 'Settings' && item.s >= 0).map((item) => item.entry.id));
+  return searchSections(query, visibleSections(can), settingsWords.value)
+    .filter((section) => !titled.has(`s:${section.id}`))
+    .map((section) => ({
+      s: 2,
+      entry: { id: `s:${section.id}:holds`, group: 'Settings', label: section.title, hint: 'Settings', icon: section.icon, run: () => { settingsSearch.value = query; go.settings(section.id); } },
+    }));
+}
+
 export function CommandPalette() {
   const open = paletteOpen.value;
   const [query, setQuery] = useState('');
@@ -104,8 +121,9 @@ export function CommandPalette() {
   useEffect(() => { if (open) watchWorkStop(); }, [open]); // the brake entry knows whether work is stopped
   const entries = useMemo(() => (open ? buildEntries() : []), [open, workStop.value?.stopped]);
   const q = query.trim().toLowerCase();
-  const results = entries
-    .map((entry) => ({ entry, s: score(entry, q) }))
+  useEffect(() => { if (open && q) wantSettingsWords(); }, [open, q]); // F20: what the settings pages hold
+  const scored = entries.map((entry) => ({ entry, s: score(entry, q) }));
+  const results = [...scored, ...(q ? settingsHits(query.trim(), scored) : [])]
     .filter((item) => item.s >= 0)
     .sort((a, b) => b.s - a.s)
     .slice(0, q ? 40 : 14)

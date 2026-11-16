@@ -3,7 +3,7 @@
 // not an offer: no Dismiss; it goes as soon as a model can answer.
 // B-085: the careful-access notice beside it – after the first run, while settings.profile.pcAccess is 'careful' and
 // this connection may write settings, a quiet info line "The team checks with you before changes outside its
-// folders." with [Give full access] (pc-access.ts giveFullAccess); it goes once the access is whole. Lowest priority.
+// folders." with [Give full access] (pc-access.ts setPcAccess); it goes once the access is whole. Lowest priority.
 // Owns: these notices (aiNotice and accessNotice are pure) and their registration (shell/StatusLine.tsx
 // registerShellNotices calls registerAiNotice once per app start). Never: shows the no-AI line away from Home, either
 // line before the snapshots are in or during the first run, or where this connection may not read the accounts (no
@@ -17,7 +17,7 @@ import { accounts, loaded, models, route, settings } from '../lib/store.ts';
 import { toastError } from '../lib/toasts.ts';
 import { NOTICE_PRIORITY, registerNotice, type Notice } from '../shell/notices.ts';
 import { noUsableModel } from './first-run-model.ts';
-import { giveFullAccess } from './pc-access.ts';
+import { setPcAccess } from './pc-access.ts';
 
 export const AI_NOTICE_ID = 'no-ai';
 export const AI_NOTICE_TEXT = "No AI is connected yet – your team can't start.";
@@ -79,7 +79,7 @@ export function registerAiNotice(): () => void {
       accounts: accounts.value,
     }, () => navigate({ view: 'settings', section: 'models' }))),
     registerNotice(() => accessNotice({ settings: settings.value, loaded: loaded.value, writable: can('settings.update') },
-      () => giveFullAccess().catch((error) => toastError(error, 'Could not give full access')))), // returned: the action shows busy
+      () => setPcAccess('whole').catch((error) => toastError(error, 'Could not give full access')))), // returned: the action shows busy
   ];
   return () => { for (const off of offs) off(); };
 }

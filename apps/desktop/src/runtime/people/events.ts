@@ -5,6 +5,9 @@
 // activity of those agents, their spaces) – each payload seen from the person's perspective (perspective.ts).
 // Also the rights key of a person's connection
 // (personRights): changed rights close it (rpc/server.ts).
+// F13: a CEO's device hears every company chat it reads (access.ts chatAccess) and their tasks (readsTask), and gets
+// agents (the owner's own without their SYSTEM.md, access.ts ownersOwnAgent) and people whole (perspective.ts); their
+// role is part of the rights key.
 // The owner sees everything (nothing here filters the owner's events).
 // Owns: the person's topic/event filter, payload projection and rights key. Never: method permissions.
 
@@ -16,7 +19,7 @@ import type { Person } from '../../shared/model/people.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
 import type { TaskView } from '../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../contracts.ts';
-import { chatIdsOf, maySeeSpace, mayReadTask, membership, personUnreadCounts, visibleAgents, visibleFrom } from './access.ts';
+import { chatAccess, chatIdsOf, companyChat, isCeo, maySeeSpace, ownersOwnAgent, personUnreadCounts, readsTask, visibleAgents } from './access.ts';
 import { viewAgent, viewMessage, viewPerson, viewSummary, viewTaskFor } from './perspective.ts';
 import type { SplitGroupView } from '../../shared/model/splits.ts';
 import type { SplitService } from '../contracts/splits.ts';
@@ -29,7 +32,7 @@ type ChatsAndSplits = Pick<Services, 'chats' | 'splits'>;
 export interface Replacement { event: EventName; data: unknown }
 
 const CHAT_EVENTS: ReadonlySet<string> = new Set(['message.created', 'message.updated', 'message.removed', 'notes.updated']); // notes.updated (wave 3): the chat's shared notes moved on – ids and numbers only
-const ORG_EVENTS: ReadonlySet<string> = new Set(['agent.upserted', 'agent.removed', 'agent.activity', 'space.upserted', 'person.upserted']);
+const ORG_EVENTS: ReadonlySet<string> = new Set(['agent.upserted', 'agent.removed', 'agent.activity', 'space.upserted', 'person.upserted', 'person.removed']); // F14: person.removed – ids only
 
 /**
  * The rights a person's open app was loaded with (their scopes: spaces, starting chats, tasks for agents –
@@ -37,17 +40,23 @@ const ORG_EVENTS: ReadonlySet<string> = new Set(['agent.upserted', 'agent.remove
  * rpc/server.ts closes that person's connections so the app reconnects at once and reloads all of it –
  * no waiting for the next connect. Other changes (name, title, manager) reach the app as person.upserted.
  */
-export function personRights(person: Pick<Person, 'scopes'> | undefined): string {
+export function personRights(person: Pick<Person, 'scopes' | 'role'> | undefined): string {
   if (!person) return '';
   const { spaces, startChats, assignAgents } = person.scopes;
-  return JSON.stringify([spaces === 'all' ? 'all' : [...spaces].sort(), startChats, assignAgents]);
+  return JSON.stringify([spaces === 'all' ? 'all' : [...spaces].sort(), startChats, assignAgents, person.role === 'ceo']);
 }
 
-/** May a person's device hold a subscription to `topic`? ('chat:<id>' only for a chat they belong to.) */
+/** How the person reads the chat `id` (access.ts chatAccess); undefined when they do not or it is gone. */
+function access(s: Services, personId: string, id: string) {
+  const chat = s.chats.get(id);
+  return chat ? chatAccess(s.db, personId, chat) : undefined;
+}
+
+/** May a person's device hold a subscription to `topic`? ('chat:<id>' only for a chat they read.) */
 export function personMaySubscribe(s: Services, scope: PersonScope, topic: Topic): boolean {
   if (topic === 'chats' || topic === 'tasks' || topic === 'org') return true;
   const match = /^chat:(.+)$/.exec(topic);
-  return Boolean(match && membership(s.db, scope.personId, match[1]));
+  return Boolean(match && access(s, scope.personId, match[1]));
 }
 
 const personOf = (s: Services, personId: string): Person | undefined => s.people?.repo.get(personId);
@@ -58,23 +67,19 @@ export function personMayReceive(s: Services, scope: PersonScope, topic: Topic, 
   if (topic === 'chats') {
     if (event === 'conversation.removed') return true; // ids only
     if (event !== 'conversation.upserted') return false;
-    return membership(s.db, self, (data as ConversationSummary).id) !== undefined;
+    return chatAccess(s.db, self, data as ConversationSummary) !== undefined;
   }
   if (topic.startsWith('chat:')) {
     if (!CHAT_EVENTS.has(event)) return false;
-    const conversationId = topic.slice(5);
-    const member = membership(s.db, self, conversationId);
-    if (!member) return false;
-    if (event === 'message.created' || event === 'message.updated') {
-      const chat = s.chats.get(conversationId);
-      return Boolean(chat) && (data as Message).createdAt >= visibleFrom(chat!, member.joinedAt);
-    }
+    const reads = access(s, self, topic.slice(5));
+    if (!reads) return false;
+    if (event === 'message.created' || event === 'message.updated') return (data as Message).createdAt >= reads.from;
     return true;
   }
   if (topic === 'tasks') {
     if (event === 'task.removed') return true; // ids only
     if (event !== 'task.upserted') return false;
-    return mayReadTask(s.db, self, data as TaskView);
+    return readsTask(s.db, self, data as TaskView);
   }
   if (topic === 'org') {
     if (!ORG_EVENTS.has(event)) return false;
@@ -105,16 +110,18 @@ export function personView(s: Services, scope: PersonScope, event: EventName, da
       return viewMessage(self, data as Message, (id) => s.people?.nameOf(id) ?? s.org?.get(id)?.name);
     case 'conversation.upserted': {
       const summary = data as ConversationSummary;
-      const member = membership(s.db, self, summary.id);
-      const from = member ? visibleFrom(summary, member.joinedAt) : 0;
-      return viewSummary(self, summary, { ...(member ? personUnreadCounts(s.db, self, summary.id, member.readSeq, from) : { unread: 0 }), from });
+      const reads = chatAccess(s.db, self, summary);
+      const from = reads?.from ?? 0;
+      return viewSummary(self, summary, { ...(reads?.member ? personUnreadCounts(s.db, self, summary.id, reads.member.readSeq, from) : { unread: 0 }), from });
     }
     case 'task.upserted':
       return viewTaskFor(s, self, data as TaskView); // B-050 K2: its chat as the person sees it
-    case 'agent.upserted':
-      return viewAgent(self, data as Agent);
+    case 'agent.upserted': {
+      const ceo = isCeo(s.db, self);
+      return viewAgent(self, data as Agent, ceo, ceo && (!s.org || ownersOwnAgent(s.org, self, data as Agent)));
+    }
     case 'person.upserted':
-      return viewPerson(self, data as Person);
+      return viewPerson(self, data as Person, isCeo(s.db, self));
     case 'agent.activity':
       return { active: personActivity(s, self, (data as { active?: AgentActivity[] }).active ?? []) };
     default:
@@ -131,10 +138,11 @@ export function personActivity(s: Services, self: string, active: readonly Agent
   const person = personOf(s, self);
   if (!person) return [];
   const chats = chatIdsOf(s.db, self);
+  const ceo = isCeo(s.db, self); // F13: the status lines of every company chat too
   const sees = visibleAgents(s.db, person);
   return active.filter((entry) => sees(s.org?.get(entry.agentId))).flatMap((entry) => {
     const chat = activityChat(s, entry);
-    if (chat && chats.has(chat)) return [{ ...entry }];
+    if (chat && (chats.has(chat) || (ceo && companyChat(s.db, chat)))) return [{ ...entry }];
     return entry.split ? [] : [{ agentId: entry.agentId, runId: entry.runId, note: '', startedAt: entry.startedAt }];
   });
 }

@@ -11,11 +11,14 @@
 // instance takes only the roles it is made for (`roles`: PCs here, phones in rendezvous/phone-pair.ts), and what `link`
 // returns rides in the accepted answer (a phone's device token – the answer travels sealed through the meeting server).
 // B-084: a request may name my own Remote ID or my person code (remote/code.ts); the first answer carries my chain to it.
+// F13: Accept of an employee's PC or a phone names its person – one of the people, or a new one (`newPerson`), which `link`
+// makes when the device collects the answer, so a requester that gave up leaves no person behind. My own PC (role 'ceo')
+// never becomes a person's. The first answer wins: a second one hears the request is no longer open.
 // Owns: the request lifecycle (in memory only), limits and waiters on this side.
 // Never: links without the person's answer, or keeps nonces/keys beyond the request.
 
 import { randomBytes, type KeyObject } from 'node:crypto';
-import type { JoinRole, RemoteIncoming } from '../../shared/model/remote.ts';
+import type { JoinRole, NewPerson, RemoteIncoming } from '../../shared/model/remote.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { plainLabel } from '../../shared/text/device-label.ts';
 import { b64url, fingerprintOf, fromB64url } from '../devices/keys.ts';
@@ -44,7 +47,7 @@ interface Request {
   /** This PC's identity as sent in the answer to remote1 (the transcript covers exactly that). */
   mine: PeerInfo;
   eph: KeyObject; ephA: Buffer; ephB: Buffer; na: Buffer; commit: string; t?: Buffer; key?: Buffer; code?: string;
-  stage: Stage; expiresAt: number; timer?: unknown; reason?: string; personId?: string; delivered?: boolean;
+  stage: Stage; expiresAt: number; timer?: unknown; reason?: string; personId?: string; newPerson?: NewPerson; delivered?: boolean;
   /** What `link` handed back for the accepted answer (a phone's token), repeated to a requester that asks again. */
   extras?: Record<string, unknown>;
   waiters: Set<() => void>;
@@ -60,10 +63,11 @@ export interface TargetDeps {
   self(): PeerInfo;
   signer: { sign(data: Uint8Array): Buffer };
   /**
-   * Stores the accepted device with its proven key (`info.name` already plain); `personId` for an employee. Throws to
-   * refuse. Fields it returns join the accepted answer (a phone's device token).
+   * Stores the accepted device with its proven key (`info.name` already plain); `personId` for an employee's device, or
+   * `newPerson` to make that person first (F13). Throws to refuse. Fields it returns join the accepted answer (a phone's
+   * device token).
    */
-  link(info: PeerInfo, personId: string | undefined): void | Record<string, unknown>;
+  link(info: PeerInfo, personId: string | undefined, newPerson?: NewPerson): void | Record<string, unknown>;
   /** The roles this side takes (default: the CEO's own PCs and employees' PCs). */
   roles?: readonly AskRole[];
   /** A request is shown: tell the person once (a notification). */
@@ -124,13 +128,18 @@ export class TargetRequests {
     }
   }
 
-  /** The person's answer (remote.decide); an employee's PC needs the person it belongs to. */
-  decide(id: string, accept: boolean, personId?: string): void {
+  /**
+   * The person's answer (remote.decide): an employee's PC needs the person it belongs to (`personId` or `newPerson`), a
+   * phone takes either (none: my own phone), my own PC takes no new person.
+   */
+  decide(id: string, accept: boolean, personId?: string, newPerson?: NewPerson): void {
     const request = [...this.bySession.values()].find((entry) => entry.id === id && entry.stage === 'shown');
-    if (!request) throw new WorkforceError('not_found', 'This request is no longer open.');
+    if (!request) throw new WorkforceError('not_found', 'This request is no longer open: it was answered or has ended.');
     if (!accept) return this.end(request, 'declined', 'The other PC declined.');
-    if (request.role === 'employee' && !personId) throw new WorkforceError('bad_request', 'Pick the person this PC belongs to.');
-    request.personId = request.role === 'employee' ? personId : undefined;
+    if (request.role === 'ceo' && newPerson) throw new WorkforceError('bad_request', `${request.label} asks to join as your own PC, not as a person's.`);
+    if (request.role === 'employee' && !personId && !newPerson) throw new WorkforceError('bad_request', 'Pick the person this PC belongs to.');
+    request.personId = request.role === 'ceo' ? undefined : personId;
+    request.newPerson = request.role === 'ceo' || personId ? undefined : newPerson;
     const until = Math.max(request.expiresAt, this.deps.now() + DELIVERY_GRACE_MS);
     if (until !== request.expiresAt) {
       request.expiresAt = until;
@@ -221,7 +230,7 @@ export class TargetRequests {
   private deliver(request: Request): Reply {
     if (!request.delivered) {
       try {
-        const extras = this.deps.link({ ...request.info, name: request.label }, request.personId);
+        const extras = this.deps.link({ ...request.info, name: request.label }, request.personId, request.newPerson);
         if (extras) request.extras = extras;
         request.delivered = true;
         this.deps.log.info('connect request linked', { id: request.id, role: request.role });

@@ -106,7 +106,21 @@ try {
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Elevated', '-UserSid', $UserSid)
     if ($AppExe) { $arguments += @('-AppExe', "`"$AppExe`"") }
     if ($Uninstall) { $arguments += '-Uninstall' }
-    $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+    # Process.Start, not Start-Process: Start-Process drops the Win32 error code that tells a No at the Windows prompt apart.
+    $elevate = New-Object Diagnostics.ProcessStartInfo 'powershell.exe'
+    $elevate.Arguments = $arguments -join ' '
+    $elevate.Verb = 'runas'
+    $elevate.UseShellExecute = $true
+    $elevate.WindowStyle = 'Hidden'
+    try { $process = [Diagnostics.Process]::Start($elevate) }
+    catch {
+      # The person answered the Windows prompt with No: ERROR_CANCELLED (1223) is the exit code main/broker-setup.ts reads.
+      $cause = $_.Exception
+      while ($cause -and -not ($cause -is [ComponentModel.Win32Exception])) { $cause = $cause.InnerException }
+      if ($cause -and $cause.NativeErrorCode -eq 1223) { exit 1223 }
+      throw
+    }
+    $process.WaitForExit()
     exit $process.ExitCode
   }
   $mutex = New-Object Threading.Mutex($false, 'Global\AutarkDesktopBroker.Install')

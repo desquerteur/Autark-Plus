@@ -3,11 +3,14 @@
 // on the right, like transcription apps; quiet pulsing dots until the microphone is open. Fixed in
 // the viewport under the cell (portalled to <body>), so nothing in the page moves; repainted in
 // requestAnimationFrame only while live and only when a new level arrived.
+// Feedback 16.11.2026: under a cell drawn in an open dialog or the snapshot overlay (lib/dialog.tsx DialogSlot) the
+// pill goes into that dialog's top layer (lib/top-layer.ts), so it shows above it.
 // Owns: the pill and its drawing. Never: opens the microphone or computes levels.
 
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { dictationLevels } from '../lib/dictation.ts';
+import { showInTopLayer } from '../lib/top-layer.ts';
 
 export const BARS = 12;
 const PITCH = 4; // px per bar (bar + gap)
@@ -41,8 +44,11 @@ function paint(canvas: HTMLCanvasElement, levels: readonly number[] | null): voi
 
 export function TalkPill(props: { anchor: HTMLElement | null; live: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const pill = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
   const { anchor, live } = props;
+
+  useLayoutEffect(() => showInTopLayer(pill.current), []); // inside a dialog: above it
 
   useLayoutEffect(() => {
     if (!anchor) return;
@@ -68,10 +74,10 @@ export function TalkPill(props: { anchor: HTMLElement | null; live: boolean }) {
   }, [live, place !== null]);
 
   return createPortal(
-    <div class={`feedback-talk${live ? ' live' : ' starting'}`} role="status" aria-label={live ? 'Listening' : 'Starting dictation'}
+    <div ref={pill} class={`feedback-talk${live ? ' live' : ' starting'}`} role="status" aria-label={live ? 'Listening' : 'Starting dictation'}
       style={{ left: `${place?.left ?? -9999}px`, top: `${place?.top ?? -9999}px` }}>
       <canvas ref={canvas} width={WIDTH} height={HEIGHT} aria-hidden="true" />
     </div>,
-    document.body,
+    anchor?.closest<HTMLElement>('dialog[open]') ?? document.body,
   );
 }

@@ -1,16 +1,16 @@
 // RPC handlers: people of the organisation (F-52, runtime/people). The owner manages people
-// (list, add/edit, invite, revoke, devices, audit, a person's chats as metadata; the owner's own phones
+// (list, add/edit, invite, revoke, remove one who never joined, devices, audit, a person's chats as metadata; the owner's own phones
 // may read the list to name people and – B-084 (D6), on a secure transport ('settings' + secure) – open and close a
 // person's invite for "Connect a phone": the same person-scoped invite as on the PC);
 // a person's device joins with the tokenless people.join / people.awaitJoin (rpc/tokenless.ts) and
-// then reaches only the person variants (runtime/people/rpc-*.ts, table.addPerson).
+// then reaches only the person variants (runtime/people/rpc-*.ts, table.addPerson). F13: the owner gives a person the
+// role 'ceo' with people.save; a CEO person manages the members through their own variants (people/rpc-ceo.ts).
 // Owns: param checks, scope rules and the registration of the person variants.
 // Never: business logic (people/service.ts) or any person access the variants do not check.
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
-import type { PersonChat, PersonScopes } from '../../../shared/model/people.ts';
-import type { Avatar } from '../../../shared/model/org.ts';
+import type { PersonChat } from '../../../shared/model/people.ts';
 import type { RuntimeServices } from '../../contracts.ts';
 import '../../contracts/people.ts';
 import { chatIdsOf } from '../../people/access.ts';
@@ -21,9 +21,10 @@ import { registerPersonBase } from '../../people/rpc-base.ts';
 import { registerPersonChats } from '../../people/rpc-chats.ts';
 import { registerPersonTasks } from '../../people/rpc-tasks.ts';
 import { registerPersonWork } from '../../people/rpc-work.ts'; // their files and "Make it mine"
+import { registerPersonCeo, saveInput } from '../../people/rpc-ceo.ts';
 import type { PeopleService } from '../../people/service.ts';
 import { currentCaller } from '../caller.ts';
-import { id, input, onlyKeys, optNum, optObj, optText } from '../params.ts';
+import { id, input, onlyKeys, optNum, optText } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
 
 /** B-084 (D6): device administration for my phone on a secure transport, like the PC. */
@@ -57,19 +58,11 @@ function chatsOf(services: RuntimeServices, personId: string): PersonChat[] {
 export function register(table: HandlerTable): void {
   // ---------------------------------------------------------------- the owner (admin)
   table.add('people.list', (_params, ctx) => peopleOf(ctx.services).list(), { capability: 'todo' }); // the owner's own phones name people too
-  table.add('people.save', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id', 'name', 'title', 'avatar', 'managerId', 'scopes']);
-    const managerId = o.managerId === null ? null : optText(o, 'managerId', { max: 128 });
-    return peopleOf(ctx.services).save({
-      id: optText(o, 'id', { max: 64 }), name: optText(o, 'name', { max: 80 }), title: optText(o, 'title', { max: 80, allowEmpty: true }),
-      avatar: optObj(o, 'avatar') as Avatar | undefined, ...(o.managerId !== undefined ? { managerId } : {}),
-      scopes: optObj(o, 'scopes') as PersonScopes | undefined, // cleaned by the service (people/repo.ts cleanScopes)
-    });
-  });
+  table.add('people.save', (params, ctx) => peopleOf(ctx.services).save(saveInput(params))); // F13: with the role
   table.add('people.invite', (params, ctx) => peopleOf(ctx.services).invite(id(input(params))), DEVICE_ADMIN);
   table.add('people.closeInvite', (params, ctx) => { peopleOf(ctx.services).closeInvite(id(input(params))); return { ok: true }; }, DEVICE_ADMIN);
   table.add('people.revoke', (params, ctx) => peopleOf(ctx.services).revoke(id(input(params))));
+  table.add('people.remove', (params, ctx) => { peopleOf(ctx.services).remove(id(input(params))); return { ok: true }; }); // F14: one who never joined
   table.add('people.removeDevice', (params, ctx) => {
     const o = input(params);
     return peopleOf(ctx.services).removeDevice(id(o), id(o, 'deviceId'));
@@ -101,4 +94,5 @@ export function register(table: HandlerTable): void {
   registerPersonChats(table);
   registerPersonTasks(table);
   registerPersonWork(table);
+  registerPersonCeo(table, chatsOf); // F13: what a CEO person calls beyond a member
 }

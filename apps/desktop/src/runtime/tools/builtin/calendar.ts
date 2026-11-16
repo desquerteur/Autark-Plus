@@ -34,6 +34,7 @@ import { resolveMember, roomId, rooms, whoList, type Member } from '../../calend
 import { blockOwner, busySpans, conflicts, freeGaps } from '../../calendar/rules.ts';
 import { bookTogether, freeTogether, membersBusy } from '../../calendar/team.ts';
 import { profileZone } from '../../calendar/service.ts';
+import { GOOGLE_ICS_WAY } from '../../calendar/sources/google.ts';
 import { localDate, zonedTime } from '../../calendar/when.ts';
 import { canReadTask } from '../../tasks/access.ts';
 import { quickDraft } from '../../tasks/todo-draft.ts';
@@ -306,15 +307,18 @@ const placeTask = defineTool<{ taskId: string; startAt: string; minutes?: number
  * The person's connected calendars (ICS addresses, Google), set up by the agent now that no settings page does it:
  * list them, add an ICS address (Google's "secret address in iCal format" works too), remove one, sync now, or start
  * the Google sign-in – its link goes to the person, who confirms in the browser. Never shows an address or token.
+ * Chat sweep 16.11.2026 (owner 11.11.: "Den Kalender müssen ihr irgendwie bekommen … am PC mit Google eingelockt"): the
+ * description says how a Google calendar gets here – its secret iCal address, read where that account is signed in –
+ * and 'google' without the person's own Google client answers with that way (GOOGLE_ICS_WAY) instead of a dead end.
  */
 const connectCalendar = defineTool<{ action: 'list' | 'add_ics' | 'remove' | 'sync' | 'google'; url?: string; label?: string; sourceId?: string; room?: string }>({
   name: 'calendar.connect',
-  description: "Lists, adds, syncs or removes the person's and the rooms' connected calendars.",
+  description: "Lists, adds, syncs or removes the person's and the rooms' connected calendars; once added, a calendar shows in My day and calendar.list reads it. A Google calendar connects through its secret address in iCal format (Google Calendar › Settings › the calendar › Integrate calendar), which I read where that Google account is signed in – the person's pane or their Chrome; add_ics takes it.",
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'add_ics', 'remove', 'sync', 'google'], description: 'list (also room ids), add_ics, remove, sync, or google: a sign-in link for the person.' },
-      url: { type: 'string', maxLength: 2000, description: 'An https ICS address.' },
+      action: { type: 'string', enum: ['list', 'add_ics', 'remove', 'sync', 'google'], description: "list (also room ids), add_ics, remove, sync, or google: a sign-in link for the person when this app has their own Google client (list: google.configured)." },
+      url: { type: 'string', maxLength: 2000, description: "An https ICS address – Google's secret iCal address works." },
       label: { type: 'string', maxLength: 80 }, sourceId: { type: 'string', maxLength: 100, description: 'For remove or sync; sync without it: all.' },
       room: { type: 'string', minLength: 1, maxLength: 80, description: 'The room it belongs to.' },
     },
@@ -346,7 +350,9 @@ const connectCalendar = defineTool<{ action: 'list' | 'add_ics' | 'remove' | 'sy
           await sources.remove(args.sourceId, HUMAN_ID);
           return json({ ok: true });
         case 'sync': return json({ ok: true, sources: shown(await sources.sync(args.sourceId, 'agent')) });
-        case 'google': return json({ ok: true, link: (await sources.connectGoogle()).authUrl, note: 'I send this link to the person; the calendar appears once they confirm.' });
+        case 'google':
+          if (!sources.google().configured) return failure(`${GOOGLE_ICS_WAY} add_ics takes it.`);
+          return json({ ok: true, link: (await sources.connectGoogle()).authUrl, note: 'I send this link to the person; the calendar appears once they confirm.' });
       }
     } catch (error) { return refused(error); }
   },

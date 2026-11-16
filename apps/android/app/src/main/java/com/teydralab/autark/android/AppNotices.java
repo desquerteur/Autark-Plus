@@ -3,7 +3,9 @@
 // "Messages" – only while the app is not on screen (MainActivity reports that through resumed()); while it is, the web
 // UI shows its own toast. A tap opens MainActivity with the place as the extra "route" (PhoneRoutes), and opening the
 // app clears them. Each bundled chat carries its number of messages for the launcher's icon badge; a task is one
-// outstanding notice. Asks once for the notification permission on Android 13+. Never: shows anything while the app is open, or a route that is not one of the phone UI's places.
+// outstanding notice. Asks once for the notification permission on Android 13+. Also the look every notification of the
+// app shares (branded: the Autark mark res/drawable/ic_stat_autark, which Android tints for light and dark bars, and the
+// Autark orange in the shade). Never: shows anything while the app is open, or a route that is not one of the phone UI's places.
 package com.teydralab.autark.android;
 
 import android.Manifest;
@@ -26,7 +28,15 @@ public final class AppNotices {
     private static final int ID = 4120;
     private static volatile boolean resumed;
 
+    /** The Autark orange (the mark's dot in autark_icon.png). */
+    private static final int ORANGE = 0xFFFF4F00;
+
     private AppNotices() {}
+
+    /** Every notification of the app: the Autark mark as its small icon and the Autark orange. */
+    public static Notification.Builder branded(Notification.Builder builder) {
+        return builder.setSmallIcon(R.drawable.ic_stat_autark).setColor(ORANGE);
+    }
 
     /** MainActivity: true in onResume, false in onPause. */
     public static void resumed(boolean value) { resumed = value; }
@@ -50,8 +60,8 @@ public final class AppNotices {
         NotificationChannel channel = new NotificationChannel(CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH);
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
-        Notification.Builder builder = new Notification.Builder(app, CHANNEL); // minSdk 26: channels always exist
-        builder.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title == null || title.isEmpty() ? "Autark" : title)
+        Notification.Builder builder = branded(new Notification.Builder(app, CHANNEL)); // minSdk 26: channels always exist
+        builder.setContentTitle(title == null || title.isEmpty() ? "Autark" : title)
                 .setContentText(line).setStyle(new Notification.BigTextStyle().bigText(line)).setContentIntent(tap).setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_MESSAGE).setShowWhen(true).setNumber(count(manager, tag));
         try { manager.notify(tag, ID, builder.build()); } catch (RuntimeException error) { /* notifications not allowed */ }

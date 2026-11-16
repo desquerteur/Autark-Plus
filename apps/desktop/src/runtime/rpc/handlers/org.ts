@@ -14,6 +14,9 @@
 // (runs/log.ts); 'manage' like agents.runs, since it shows every run of the agent, whichever chat or task it worked for.
 // Wave 3: agents.update `base.instructions` = the text an editor started from; instructions changed meanwhile
 // (SYSTEM.md taken over, another edit) refuse the edit as a conflict (root/text-doc.ts staleBase).
+// Feedback F10/F21 (16.11.2026): agents.activity lists the runs of the person's other PCs too (deviceId set), and
+// runs.cancel of a run this PC does not have goes to the PC that runs it (devices/sync/live.ts cancelThere).
+// F13: hireInput, updateAgent and archiveAgent take who acts – the owner here, a CEO person in people/rpc-ceo.ts.
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { MAX_SYSTEM_MD } from '../../../shared/model/agent-core.ts';
@@ -26,6 +29,8 @@ import { splitPlace } from '../../people/events.ts';
 import { staleBase } from '../../root/text-doc.ts';
 import { clearChatRetry } from '../../agents/redelivery.ts';
 import { readAgentLog } from '../../runs/log.ts';
+import { allActivity } from '../../chat/live.ts';
+import { liveSyncOf } from '../../devices/sync/live.ts';
 import '../../../shared/api/methods-log.ts'; // agents.log (module augmentation)
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
@@ -65,45 +70,11 @@ export function register(table: HandlerTable): void {
   table.add('agents.get', (params, ctx) => ctx.services.org.require(id(input(params))), CHAT);
   table.add('agents.org', (_params, ctx) => ctx.services.org.tree(), CHAT);
   table.add('agents.templates', (_params, ctx) => ctx.services.org.templates(), CHAT);
-  table.add('agents.create', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['name', 'template', 'role', 'managerId', 'spaceId', 'instructions', 'mode']);
-    return ctx.services.org.create({
-      name: optText(o, 'name', { max: 80 }),
-      template: optText(o, 'template', { max: 80 }),
-      role: optText(o, 'role', { max: 80, allowEmpty: true }),
-      managerId: optId(o, 'managerId'),
-      spaceId: optId(o, 'spaceId'),
-      instructions: optText(o, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }),
-      mode: optText(o, 'mode', { max: 60 }),
-      createdBy: HUMAN_ID,
-    });
-  }, MANAGE);
-  table.add('agents.update', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id', 'patch', 'base']);
-    const agentId = id(o);
-    const patch = input(o.patch);
-    onlyKeys(patch, AGENT_PATCH, 'patch');
-    const base = o.base === undefined ? undefined : input(o.base);
-    if (base) onlyKeys(base, ['instructions'], 'base');
-    const baseText = base ? optText(base, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }) : undefined;
-    if (baseText !== undefined && typeof patch.instructions === 'string' && staleBase(ctx.services.org.require(agentId).instructions, baseText, patch.instructions)) {
-      throw new WorkforceError('conflict', 'The instructions changed while you were editing (in SYSTEM.md or another edit). Load the new text and save again.');
-    }
-    checkPlacement(ctx, patch);
-    // Values are validated by the org service (names, avatars, policies, cycles).
-    return ctx.services.org.update(agentId, patch as Partial<Agent>, PERSON);
-  }, MANAGE);
-  table.add('agents.archive', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id', 'successorId']);
-    const successorId = optId(o, 'successorId');
-    ctx.services.org.archive(id(o), { ...PERSON, ...(successorId ? { successorId } : {}) });
-    return { ok: true };
-  }, MANAGE);
+  table.add('agents.create', (params, ctx) => ctx.services.org.create(hireInput(params, HUMAN_ID)), MANAGE);
+  table.add('agents.update', (params, ctx) => updateAgent(params, ctx, HUMAN_ID), MANAGE);
+  table.add('agents.archive', (params, ctx) => archiveAgent(params, ctx, HUMAN_ID), MANAGE);
   table.add('agents.restore', (params, ctx) => ctx.services.org.restore(id(input(params)), PERSON), MANAGE);
-  table.add('agents.activity', (_params, ctx) => ctx.services.dispatcher.activity(), CHAT);
+  table.add('agents.activity', (_params, ctx) => allActivity(ctx.services.bus, ctx.services.dispatcher.activity()), CHAT); // F10: with the runs of the person's other PCs
 
   // ---------------------------------------------------------------- runs
   table.add('agents.runs', (params, ctx) => {
@@ -130,17 +101,71 @@ export function register(table: HandlerTable): void {
   }, CHAT);
   table.add('runs.cancel', async (params, ctx) => {
     const runId = id(input(params), 'runId');
-    const run = ctx.services.runs.get(runId) ?? notFound('Run', { runId });
-    // Finished runs have nothing to stop; the call stays idempotent. Stopping by run id never
-    // hits another turn of the same agent (interrupt() without a chat stops whatever runs).
-    if (run.status === 'running' || run.status === 'queued') {
-      if (run.conversationId && !run.taskId && !run.splitId) clearChatRetry(ctx.services, run.agentId, run.conversationId);
-      const { dispatcher } = ctx.services;
-      if (dispatcher.cancelRun) await dispatcher.cancelRun(runId);
-      else await dispatcher.interrupt(run.agentId, run.conversationId);
-    }
-    return { ok: true };
+    if (await cancelRunHere(ctx.services, runId)) return { ok: true };
+    // F21/F10 (16.11.2026): a run another of the person's PCs runs (its live state is here) – that PC stops it.
+    if (await liveSyncOf(ctx.services)?.cancelThere(runId)) return { ok: true };
+    return notFound('Run', { runId });
   }, MANAGE);
+}
+
+/** agents.create's params → the hire made by `createdBy`. */
+export function hireInput(params: unknown, createdBy: string): Parameters<HandlerContext['services']['org']['create']>[0] {
+  const o = input(params);
+  onlyKeys(o, ['name', 'template', 'role', 'managerId', 'spaceId', 'instructions', 'mode']);
+  return {
+    name: optText(o, 'name', { max: 80 }),
+    template: optText(o, 'template', { max: 80 }),
+    role: optText(o, 'role', { max: 80, allowEmpty: true }),
+    managerId: optId(o, 'managerId'),
+    spaceId: optId(o, 'spaceId'),
+    instructions: optText(o, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }),
+    mode: optText(o, 'mode', { max: 60 }),
+    createdBy,
+  };
+}
+
+/** agents.update by `by`: the patch's fields, an editor's stale text, the avatar image and 'Works on' (checkPlacement). */
+export function updateAgent(params: unknown, ctx: HandlerContext, by: string): Agent {
+  const o = input(params);
+  onlyKeys(o, ['id', 'patch', 'base']);
+  const agentId = id(o);
+  const patch = input(o.patch);
+  onlyKeys(patch, AGENT_PATCH, 'patch');
+  const base = o.base === undefined ? undefined : input(o.base);
+  if (base) onlyKeys(base, ['instructions'], 'base');
+  const baseText = base ? optText(base, 'instructions', { max: MAX_SYSTEM_MD, allowEmpty: true, multiline: true }) : undefined;
+  if (baseText !== undefined && typeof patch.instructions === 'string' && staleBase(ctx.services.org.require(agentId).instructions, baseText, patch.instructions)) {
+    throw new WorkforceError('conflict', 'The instructions changed while you were editing (in SYSTEM.md or another edit). Load the new text and save again.');
+  }
+  checkPlacement(ctx, patch);
+  // Values are validated by the org service (names, avatars, policies, cycles).
+  return ctx.services.org.update(agentId, patch as Partial<Agent>, { by });
+}
+
+/** agents.archive by `by`, with an optional successor. */
+export function archiveAgent(params: unknown, ctx: HandlerContext, by: string): { ok: true } {
+  const o = input(params);
+  onlyKeys(o, ['id', 'successorId']);
+  const successorId = optId(o, 'successorId');
+  ctx.services.org.archive(id(o), { by, ...(successorId ? { successorId } : {}) });
+  return { ok: true };
+}
+
+/**
+ * Stops one of this PC's runs by its id; false when this PC has no such run. Finished runs have nothing to stop; the
+ * call stays idempotent. Stopping by run id never hits another turn of the same agent (interrupt() without a chat
+ * stops whatever runs). Also the Stop another PC forwards (devices/sync/live.ts).
+ */
+export async function cancelRunHere(services: Pick<HandlerContext['services'], 'runs' | 'dispatcher' | 'db'>, runId: string): Promise<boolean> {
+  const run = services.runs.get(runId);
+  if (!run) return false;
+  if (run.status === 'running' || run.status === 'queued') {
+    if (run.conversationId && !run.taskId && !run.splitId) clearChatRetry(services, run.agentId, run.conversationId);
+    const { dispatcher } = services;
+    if (dispatcher.cancelRun) await dispatcher.cancelRun(runId);
+    else await dispatcher.interrupt(run.agentId, run.conversationId);
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------- O6: avatar image and 'Works on'

@@ -1,20 +1,31 @@
 // B-078 (D6): phone use through the Autark Android app – no ADB, no cable. The app's own use socket attaches
 // (phoneUse.attach, rpc/handlers/phone-use.ts) and hears `phoneUse.request` for its device only; this driver sends one
-// request per step on the bus and waits for its phoneUse.reply (20 s, or the run's cancel). The serial of an app phone
-// is its device id. On the phone an AccessibilityService reads nothing until a request asks, a bubble shows while it
-// acts (a tap there cancels and pauses for 30 s) and each new app asks the person once (apps/android phoneuse/*).
+// request per step on the bus, with the run (`job`) and the agent's name (`by`), and waits for its phoneUse.reply (20 s,
+// a question APP_PHONE_ASK_TIMEOUT_MS, or the run's cancel). The serial of an app phone is its device id. On the phone
+// an AccessibilityService reads nothing until a request asks, and a bubble names the agent while it acts (feedback
+// 16.11.2026 F16, apps/android phoneuse/*): the person's touch pauses phone use until 5 s after their last touch, their
+// Pause holds until Continue, their ✕ ends it for the job; `say` puts the AI's line or question (✓ / ✕) in the bubble.
+// The phone's refusals reach the AI in its own words; an app older than 0.3.15 that does not know `say` gets OLD_APP_SAY.
+// A type step brings back what the field reads afterwards (`text`, chat sweep 16.11.: extra words in a field show at once).
 // Owns: the attached phones, the request/answer pairing and turning answers into PhoneDriver values.
 // Never: reaches a phone that is not attached, or keeps a request beyond its timeout.
 
 import { randomBytes } from 'node:crypto';
 import type { Bus } from '../bus.ts';
 import type { Device } from '../../shared/model/devices.ts';
-import type { PhoneUseAttach, PhoneUseOp, PhoneUseReply } from '../../shared/api/methods-phone.ts';
+import { PHONE_SAY_MAX, type PhoneUseAttach, type PhoneUseOp, type PhoneUseReply } from '../../shared/api/methods-phone.ts';
 import { WorkforceError, type ErrorCode } from '../../shared/errors.ts';
-import type { PhoneDriver, PhoneShot, PhoneStepOptions, PhoneTree } from './driver.ts';
+import type { PhoneDriver, PhoneSaid, PhoneShot, PhoneStepOptions, PhoneTree } from './driver.ts';
 import { renderDump, screenOf, type PhoneDevice, type PhoneNode } from './uiautomator.ts';
 
 export const APP_PHONE_TIMEOUT_MS = 20_000;
+/** A question in the bubble: the phone waits 60 s for ✓ or ✕, plus the way there and back. */
+export const APP_PHONE_ASK_TIMEOUT_MS = 75_000;
+/** The most of a field's text a type step brings back (the app cuts it to this too). */
+export const FIELD_MAX = 300;
+
+/** What I read when the phone's app does not know `say` yet. */
+export const OLD_APP_SAY = 'The Autark app on this phone is older than 0.3.15; it updates itself in the app. Until then my phone steps work without a line or question in the bubble.';
 
 /** What the phone says when phone use is not on yet (it shows the enable notification itself). */
 export const PHONE_USE_OFF = 'Phone use is off on this phone. The app showed the person a notification "Let the AI use this phone"; one tap opens Android\'s Accessibility settings (an app from outside the Play Store first needs Settings › Apps › Autark › ⋮ › Allow restricted settings). I try again once it is on.';
@@ -100,8 +111,10 @@ export class AppPhones implements PhoneDriver {
     await this.ask(this.pick(serial), 'swipe', { x1: Math.round(from.x), y1: Math.round(from.y), x2: Math.round(to.x), y2: Math.round(to.y), durationMs }, step);
   }
 
-  async type(serial: string | undefined, value: string, step?: PhoneStepOptions): Promise<void> {
-    await this.ask(this.pick(serial), 'type', { text: value }, step);
+  /** What the field reads after typing (`text`, cut on the phone) when the app tells it; an app before 0.3.15 does not. */
+  async type(serial: string | undefined, value: string, step?: PhoneStepOptions): Promise<string | undefined> {
+    const result = await this.ask(this.pick(serial), 'type', { text: value }, step) as { text?: unknown } | undefined;
+    return typeof result?.text === 'string' ? result.text.slice(0, FIELD_MAX) : undefined;
   }
 
   async key(serial: string | undefined, name: string, step?: PhoneStepOptions): Promise<string> {
@@ -112,6 +125,18 @@ export class AppPhones implements PhoneDriver {
   async open(serial: string | undefined, target: { url?: string; package?: string }, step?: PhoneStepOptions): Promise<string> {
     const result = await this.ask(this.pick(serial), 'open', { ...(target.url ? { url: target.url } : {}), ...(target.package ? { package: target.package } : {}) }, step) as { opened?: unknown } | undefined;
     return typeof result?.opened === 'string' ? result.opened : (target.url ?? target.package ?? '');
+  }
+
+  /** My line in the bubble (until the next one or the job's end); with `ask` the person's ✓ / ✕, 'none' after the phone's 60 s. */
+  async say(serial: string | undefined, value: string, ask: boolean, step?: PhoneStepOptions): Promise<PhoneSaid> {
+    const line = sayLine(value);
+    if (!line) throw new WorkforceError('bad_request', 'phone.say needs a text.');
+    const device = this.pick(serial);
+    const result = await this.ask(device, 'say', { text: line, ...(ask ? { ask: true } : {}) }, step, ask ? APP_PHONE_ASK_TIMEOUT_MS : undefined)
+      .catch((error: unknown) => { throw oldApp(error) ? new WorkforceError('unavailable', OLD_APP_SAY) : error; }) as { answer?: unknown } | undefined;
+    if (!ask) return { serial: device };
+    const answer = result?.answer === 'yes' || result?.answer === 'no' ? result.answer : 'none';
+    return { serial: device, answer };
   }
 
   // ---------------------------------------------------------------- internals
@@ -127,21 +152,23 @@ export class AppPhones implements PhoneDriver {
     throw new WorkforceError('unavailable', 'No phone is connected through the Autark app right now.');
   }
 
-  /** One step on the phone: the request on the bus, its answer (or the timeout / the run's cancel). */
-  private ask(deviceId: string, op: PhoneUseOp, args: Record<string, unknown>, step?: PhoneStepOptions): Promise<unknown> {
+  /** One step on the phone: the request on the bus, its answer (or the timeout – `limitMs`, else the step limit – / the run's cancel). */
+  private ask(deviceId: string, op: PhoneUseOp, args: Record<string, unknown>, step?: PhoneStepOptions, limitMs?: number): Promise<unknown> {
     if (step?.signal?.aborted) return Promise.reject(new WorkforceError('cancelled', 'Cancelled.'));
     const id = `pu_${randomBytes(8).toString('hex')}`;
     const timers = this.deps.timers ?? realTimers;
+    const ms = limitMs ?? this.deps.timeoutMs ?? APP_PHONE_TIMEOUT_MS;
+    const by = step?.by?.replace(/\s+/g, ' ').trim().slice(0, 60);
     return new Promise((resolve, reject) => {
       const entry: Pending = { deviceId, resolve, reject, timer: undefined };
-      entry.timer = timers.set(() => this.settle(id, entry, new WorkforceError('timeout', 'The phone did not answer within 20 s (the app may be closed by the system, or the screen locked).')), this.deps.timeoutMs ?? APP_PHONE_TIMEOUT_MS);
+      entry.timer = timers.set(() => this.settle(id, entry, new WorkforceError('timeout', `The phone did not answer within ${Math.round(ms / 1000)} s (the app may be closed by the system, or the screen locked).`)), ms);
       if (step?.signal) {
         const cancel = () => this.settle(id, entry, new WorkforceError('cancelled', 'Cancelled.'));
         step.signal.addEventListener('abort', cancel, { once: true });
         entry.off = () => step.signal?.removeEventListener('abort', cancel);
       }
       this.pending.set(id, entry);
-      this.deps.bus.emit('phoneUse.request', { deviceId, id, op, args, ...(step?.job ? { job: step.job } : {}) });
+      this.deps.bus.emit('phoneUse.request', { deviceId, id, op, args, ...(step?.job ? { job: step.job } : {}), ...(by ? { by } : {}) });
     });
   }
 
@@ -183,6 +210,17 @@ export class AppPhones implements PhoneDriver {
       model: event.model ?? current?.model, screen: event.screen ?? current?.screen, ready: event.ready ?? current?.ready ?? false, sockets: (current?.sockets ?? 0) + 1,
     });
   }
+}
+
+/** The bubble's one line: whitespace folded, at most PHONE_SAY_MAX characters (cut with an ellipsis). */
+export function sayLine(value: string): string {
+  const line = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return line.length > PHONE_SAY_MAX ? `${line.slice(0, PHONE_SAY_MAX - 1)}…` : line;
+}
+
+/** An app before 0.3.15 answers a say with bad_request "Unknown step say.". */
+function oldApp(error: unknown): boolean {
+  return error instanceof WorkforceError && error.code === 'bad_request' && /unknown step say/i.test(error.message);
 }
 
 const str = (value: unknown, max = 300) => (typeof value === 'string' && value ? value.slice(0, max) : undefined);

@@ -23,6 +23,12 @@ public final class TypedTextTest {
         check(TypedText.same("\u200bAsk Meta AI or Search", "Ask Meta AI or Search "), "same visible words");
         check(!TypedText.same("Message", "Hallo"), "different words");
         check(TypedText.plain("a\u200b\u200c\u200d\u2060\ufeffb").equals("ab"), "all zero-width kinds left out");
+        // Chat sweep 16.11.2026: a type step tells the PC what the field reads, so extra words show at once.
+        check("MessageHallo".equals(TypedText.readback("MessageHallo", false, false)), "the field's whole text goes back");
+        check(TypedText.readback("secret", true, false) == null, "a password field's text never goes back");
+        check("".equals(TypedText.readback("Message", false, true)), "a field showing its hint reads empty");
+        check("".equals(TypedText.readback(null, false, false)), "no text reads empty");
+        check(TypedText.readback("x".repeat(500), false, false).length() == TypedText.READBACK_MAX, "cut to READBACK_MAX");
         System.out.println("TypedTextTest: " + assertions + " assertions passed");
     }
 }

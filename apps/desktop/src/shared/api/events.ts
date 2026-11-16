@@ -70,6 +70,9 @@ export interface EventMap {
   'device.removed': { id: string };
   'pwa.updated': PwaState;
   'update.state': UpdateState; // forwarded from main (updater lives in main)
+  /** F03 (16.11.2026): how the desktop broker's setup at this app's start ended (main/broker-setup.ts, forwarded from main);
+   *  the computer tools say it while the secure desktop is out of reach (runtime/computer/broker.ts). */
+  'broker.setup': { state: 'installed' | 'declined' | 'failed'; code?: number; script: string };
   'feedback.upserted': FeedbackReport;
   'knowledge.upserted': KnowledgeItem;
   /** CTX5: items forgotten permanently – every version of the forgotten item's correction chain (topic: system). */
@@ -133,6 +136,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'agent.activity':
     case 'space.upserted':
     case 'person.upserted': // F-52: people of the organisation (shared/model/people.ts)
+    case 'person.removed': // F14: one who never joined left for good
       return 'org';
     case 'run.upserted':
     case 'split.upserted': // B-057: a split group of that agent (shared/model/splits.ts)
@@ -147,7 +151,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'usage.updated':
     case 'models.updated':
       return 'providers';
-    case 'calendar.sources': // B-041: connected calendars – owner only (rpc/scopes.ts lets no device hear it)
+    case 'calendar.sources': // B-041: connected calendars (an owner id only) – the owner and a secure 'settings' device (rpc/scopes.ts)
     case 'apps.changed': // Connector state carries an id only; safe Settings devices may refresh their redacted list.
       return 'system';
     default:

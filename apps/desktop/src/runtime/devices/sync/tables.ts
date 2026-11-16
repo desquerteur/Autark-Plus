@@ -29,7 +29,7 @@ import { TaskRepo, toTask } from '../../tasks/repo.ts';
 import { SpaceRepo } from '../../store/spaces.ts';
 import { ScheduleRepo } from '../../schedules/repo.ts';
 import { deleteRows, getRow, toItem } from '../../knowledge/rows.ts';
-import { ownHomes } from '../../accounts/cli-homes.ts';
+import { ownHomes, sharedHome } from '../../accounts/cli-homes.ts';
 import type { ProviderId } from '../../../shared/model/providers.ts';
 import { KvRepo } from '../../store/kv.ts';
 import { firesHere } from './home.ts';
@@ -138,7 +138,8 @@ const spaces: Table = {
 
 const people: Table = {
   name: 'people', soft: ['updated_at'],
-  drop: () => {}, // people are revoked, never deleted
+  // People are revoked; F14: one who never joined is removed – here as on my other PC (row, tokens, open code; person.removed).
+  drop: (id, { s }) => { if (s.people) s.people.forget(id); else s.db.run('DELETE FROM people WHERE id = ?', [id]); },
   emit: (id, { s }) => { const person = s.people?.get(id); if (person) s.bus.emit('person.upserted', person); },
 };
 
@@ -253,7 +254,7 @@ const schedules: Table = {
     if (owner) placeSchedules(s, owner);
   },
   drop: (id, { s }) => s.scheduler.remove(id),
-  emit: (id, { s }) => { const schedule = new ScheduleRepo(s.db).get(id); if (schedule) s.bus.emit('schedule.upserted', schedule); s.scheduler.arm(); },
+  emit: (id, { s }) => { const schedule = s.scheduler.get?.(id) ?? new ScheduleRepo(s.db).get(id); if (schedule) s.bus.emit('schedule.upserted', schedule); s.scheduler.arm(); }, // F06: as read here (its next time where another PC fires it)
 };
 
 /** A CLI plan here that is the login `row` names: same provider and e-mail – any, for a CLI with one sign-in per PC. */
@@ -272,7 +273,9 @@ const accounts: Table = {
     if (existed) { upsert(s.db, 'accounts', rest); return; }
     if (row.auth === 'cli' && sameLogin(s.db, row)) return;
     const own = row.auth === 'cli' ? ownHomes(row.provider as ProviderId) : Boolean(home);
-    upsert(s.db, 'accounts', { ...rest, home: own ? path.join(s.paths.accounts, String(row.provider), String(row.id)) : null });
+    // a plan's home here: the one home of that login on this PC (another company's, by its note's e-mail), else its own folder
+    const shared = own ? sharedHome(s.paths.accounts, row.provider as ProviderId, typeof row.email === 'string' ? row.email : undefined) : undefined;
+    upsert(s.db, 'accounts', { ...rest, home: own ? shared ?? path.join(s.paths.accounts, String(row.provider), String(row.id)) : null });
   },
   drop: (id, { s }) => { void s.accounts.remove(id).catch((error: unknown) => s.log.warn('synced account not removed', { id, error: String(error) })); },
   emit: (id, { s }) => { const account = s.accounts.get(id); if (account) s.bus.emit('account.upserted', account); },

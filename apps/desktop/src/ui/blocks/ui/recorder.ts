@@ -1,4 +1,5 @@
-// Media capture for the `record` widget: microphone, camera or screen → MediaRecorder → Blob.
+// Media capture for the `record` widget and the composer's RecordBar (chat/composer/RecordBar.tsx, F23): microphone,
+// camera or screen → MediaRecorder → Blob.
 // States: idle → preparing → ready (preview live) → recording → recorded (playback) → retake.
 // Desktop arms the Electron media permission from the user gesture first; the PWA falls back
 // to the OS recorder (<input capture>) when getUserMedia/MediaRecorder are missing or denied.
@@ -383,5 +384,5 @@ export function useRecorder(mode: RecordMode, options: { camera?: string; maxSec
     moveTo('idle');
   };
 
-  return { state, error, stream, elapsed, started, take, facing, devices: devices.choice, resumable, chooseDevice, prepare, start, stop, retake, takeFile, resume, forget, reset };
+  return { state, error, stream, elapsed, started, take, facing, devices: devices.choice, resumable, chooseDevice, prepare, start, stop, retake, takeFile, resume, forget, reset, discard };
 }

@@ -44,9 +44,9 @@ holds in both. Later calls in a chat stay where I worked last. The person can wa
 - Sign-up, sign-in, 2FA and credentials: skill `browser-accounts`. Passwords and codes travel as secret handles and
   `secret` form fields; for an account I created, `browser.save_totp` on its setup page keeps the 2FA key hidden from me
   and its handle fills the current code.
-- A page whose human check turns my browser away opens in the person's own Chrome (`browser.open` with
-  `where: 'chrome'`, their profile and logins); there I go on with `computer.ui_tree` and `computer.act`, or take the
-  service's API or CLI.
+- A page that turns my browser away opens in the person's own Chrome (`browser.open` with `where: 'chrome'`, their
+  profile and logins); there I go on with `computer.ui_tree` and `computer.act`, or take the service's API or CLI, and
+  `feedback.report` tells the makers what my browser lacked.
 
 ## Site know-how
 - What the company knows about a site can appear below my first result there ("Known for github.com …") – hints; the

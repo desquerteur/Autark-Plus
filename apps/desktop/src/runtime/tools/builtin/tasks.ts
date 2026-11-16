@@ -1,6 +1,7 @@
 // Task tools – the four commands every agent has directly (tasks.create, tasks.give, tasks.update, tasks.finish) and two
 // readers under "More tools" (tasks.list, tasks.get). One task model: work is a task, a piece is a task under another,
-// asking a person is giving them a task (a widget is how they answer). A receiver is named as a chat names a member (an
+// a person's own work for later is a task for them (a widget is how they answer); owner 07.11.2026 ("was ich zu tun hab
+// und nicht in dem Task"): a question to a person is a line in the chat, and my task waits on who. A receiver is named as a chat names a member (an
 // id, a guessed id, a name; chat-joins.ts namedMembers), or "me" / "team". Each result says the planned next look in my
 // words, so I never plan my own re-check. A task I cannot find comes back with my open tasks.
 // Owns: those six tools, the dedupe of the same open ask, the depth limit of pieces given on.
@@ -102,7 +103,7 @@ type CreateArgs = {
 
 const createTool = defineTool<CreateArgs>({
   name: 'tasks.create',
-  description: 'Gives new work to me, a colleague, a person or the team, tracked until done or dropped. Asking a person is giving them a task: a widget is how they answer, and their click comes back to me as their line. Whoever gets it hears of it at once; what I give others stands under "Given by me" until it comes back, and when it ends I hear how. A colleague I just asked in our chat already has that request; a task for it would be a second one.',
+  description: 'Gives new work to me, a colleague, a person or the team, tracked until done or dropped. A question to a person is a line in our chat; a task for them is their own work for later, a widget is how they answer it, and their click comes back to me as their line. Whoever gets it hears of it at once; what I give others stands under "Given by me" until it comes back, and when it ends I hear how. A colleague I just asked in our chat already has that request; a task for it would be a second one.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -198,7 +199,7 @@ type UpdateArgs = {
 
 const updateTool = defineTool<UpdateArgs>({
   name: 'tasks.update',
-  description: "Keeps a task's state true: its wait, plan, facts and details. The right one is woken and everyone reading it sees where it stands. A wait on someone ends with their line in the task's chat or our 1:1, a wait on a task with its end; outside, I look again at until, else a day later. Asking a person is a task for them (tasks.create), and I wait on that task.",
+  description: "Keeps a task's state true: its wait, plan, facts and details. The right one is woken and everyone reading it sees where it stands. A wait on someone ends with their line in the task's chat or our 1:1, a wait on a task with its end; outside, I look again at until, else a day later. A question to a person goes in our chat, and I wait on who.",
   inputSchema: {
     type: 'object',
     properties: {

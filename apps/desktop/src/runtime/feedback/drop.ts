@@ -22,7 +22,10 @@ export const NOT_SET_UP = 'Sending feedback is not set up in this version.';
 const RETRY = 'Feedback could not be sent right now; try again later.';
 const REFUSED = 'The feedback mailbox refused this report.';
 
-/** How long an unfetched letter waits in the mailbox before Firestore's TTL deletes it (rules v2 allow up to 31 days). */
+/**
+ * How long a letter stays in the mailbox: every team receiver deletes one older than this by Google's createTime
+ * (inbox.ts, 16.11.2026), and `exp` lets Firestore's TTL policy do it too where it is set (rules v2 allow up to 31 days).
+ */
 export const LETTER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Why a report did not reach the mailbox (WorkforceError details.reason). */

@@ -3,6 +3,10 @@
 // runtime decides who hears it: the Codex plan, this PC's speech model, a transcription service or a listening
 // model (runtime/voice/transcribe.ts). While this PC's speech model still downloads and nothing else can
 // hear, dictationNote() says "Speech model downloading NN %" (the mic shows it).
+// Compact pieces (owner 10.11.2026: "nicht so einer komplett großen, unkompakten Datei"): once the PC's ChatGPT plan
+// heard this page's last piece (voice.transcribe `by` 'plan', remembered across reloads), the next pieces go up as Ogg
+// Opus (ogg-opus.ts, about a tenth of the WAV), which the plan reads as it is. An answer from another way, a failed
+// piece or a PC that names no `by` sends WAVs again: every other way reads those as before.
 // B-082: a long take is cut at pauses while it is recorded (take-pieces.ts); each piece is uploaded at once and heard
 // right away, one after the other, with the text heard before as context – after Stop only the last piece is left.
 // finish() joins the pieces' texts (marks moved along). Nothing is lost: a piece whose hearing failed comes back in
@@ -11,12 +15,18 @@
 // pieces. An answer lost with the connection may still have been heard (and the file released), so that piece is
 // stored again in the background (same bytes, same id). keep() only stores the pieces (audio where nothing hears).
 // One take at a time: a newer start tells the older caller its take ended, a start overtaken while the
-// microphone opens throws DictationCancelled.
-// Owns: the take's microphone lifetime, its pieces and the "can this page dictate" note. Never: API keys or
-// provider calls, audio sent anywhere but the runtime's blob store (or this page's held pieces), a microphone
-// left open after finish/keep/cancel.
+// microphone opens throws DictationCancelled. F27 (16.11.2026, "ein inkonsistentes System"): when the ChatGPT plan's
+// dictation was asked first and gave no text (voice.transcribe planMissed) and another way heard the take, finish() says
+// so once per take in the status line (fallbackNote) – marked words then come from that way. F23: `heardPieces` gives the
+// latest take's pieces as each is heard (its words or why not) – the live words while recording (blocks/ui/live-words.ts,
+// a Dictation of its own on the recorder's stream, with its short `cutter`).
+// Owns: the take's microphone lifetime, its pieces and their format, the "can this page dictate" note and the take's
+// fallback notice. Never: API keys or provider calls, audio sent anywhere but the runtime's blob store (or this page's
+// held pieces), a microphone left open after finish/keep/cancel.
 
+import { signal } from '@preact/signals';
 import type { ResultOf } from '../../shared/api/methods.ts';
+import type { HeardBy } from '../../shared/api/methods-app.ts';
 import { localSpeechModel } from '../../shared/model/local-speech-models.ts';
 import { functionCandidates } from '../../shared/model/providers.ts';
 import { useValue } from '../../shared/model/models-uses.ts';
@@ -28,6 +38,7 @@ import { speechPulls, watchSpeechPulls } from '../settings/speech-models.ts';
 import { uploadRef } from './files.ts';
 import { openMicrophone } from './microphone.ts';
 import type { Microphone, SampleListener } from './microphone.ts';
+import { oggOpus } from './ogg-opus.ts';
 import { LevelHistory, meterLevel, PCM_RATE, Pcm16Encoder, rms, wavFile } from './pcm.ts';
 import { RpcError, rpc } from './rpc.ts';
 import { blockedNote } from './session.ts';
@@ -35,12 +46,16 @@ import { models, settings } from './store.ts';
 import { takeName } from './take-name.ts';
 import { PieceCutter, joinPieces, type Piece } from './take-pieces.ts';
 import { takeStore, type HeldTake } from './take-store.ts';
+import { pushToast } from './toasts.ts';
 
 /** A piece at least this long is kept when it was not heard (B-082: from 1 s on). */
 export const KEEP_TAKE_MS = 1000;
 const BLOCK_MS = 32;
 /** The text heard before a piece, as its context (voice.transcribe takes ≤ 2000 chars). */
 const BEFORE_CHARS = 2000;
+/** This page's memory that the PC's ChatGPT plan heard its last piece ('1') or not ('0'). */
+const PLAN_HEARD_KEY = 'wf.dictationPlanHeard';
+const COMPACT_REFUSED_KEY = 'wf.dictationCompactRefused';
 
 /** The running take's input levels (0..1, the waveform beside the mic button reads them). */
 export const dictationLevels = new LevelHistory(48);
@@ -85,6 +100,32 @@ export interface DictationDeps {
   hold?(blob: Blob, name: string, owner?: string): Promise<HeldTake>;
   /** Deletes a held piece (its take was discarded). */
   drop?(key: string): void;
+  /** F27: one line for the person in the status line (absent: none). */
+  notice?(note: { title: string; body: string }): void;
+  /** How a take is cut into pieces (absent: take-pieces.ts PieceCutter). */
+  cutter?(): Cutter;
+  /** A piece's PCM16 as Ogg Opus, undefined when this page cannot encode it (absent: WAV only). */
+  compact?(pcm: readonly Uint8Array[]): Promise<Blob | undefined>;
+  /** Whether the PC's ChatGPT plan heard this page's last piece, kept across reloads (absent: this page's memory only). */
+  planHeard?: { get(): boolean; set(heard: boolean): void };
+  /** Until when (ms) pieces go as WAV because the plan missed a compact one – else a plan that does not take Ogg would
+   * get every other piece and the rest would fall to this PC's slower model (absent: compact whenever the plan hears). */
+  compactRefused?: { get(): number; set(until: number): void };
+}
+
+/** How long one compact piece the plan missed keeps the page on WAV. */
+export const COMPACT_REFUSED_MS = 24 * 60 * 60 * 1000;
+
+/** What cuts a take into pieces. */
+export type Cutter = Pick<PieceCutter, 'push' | 'flush'>;
+
+/** F23: one piece of the latest take once heard, in order – its words, or why it was not heard; `ms`: its length. */
+export interface HeardPiece { ms: number; text?: string; error?: string }
+
+/** F27: what finish() says once per take when the ChatGPT plan's dictation gave no text and `by` heard the take. */
+export function fallbackNote(by: Exclude<HeardBy, 'plan'>): { title: string; body: string } {
+  const who = by === 'local' ? 'This PC\'s speech model wrote it' : by === 'service' ? 'The transcription service wrote it' : 'A listening model wrote it';
+  return { title: 'ChatGPT dictation was not reachable', body: by === 'service' ? `${who}.` : `${who}; unsure words are highlighted.` };
 }
 
 /** How a take is heard: the language hint, the chat as context, the draft its held pieces belong to. */
@@ -98,12 +139,15 @@ export interface HearOptions {
 
 type Stored = { ref: FileRef } | { held: HeldTake } | { error: unknown };
 
-interface TakePiece { blob: Blob; name: string; lengthMs: number; stored: Promise<Stored>; tried: boolean; heard?: MarkedText; error?: unknown }
+/** A piece's file as it goes up: a WAV, or Ogg Opus once the plan hears this page (see the header). */
+interface TakeFile { blob: Blob; name: string }
+
+interface TakePiece { file: Promise<TakeFile>; lengthMs: number; stored: Promise<Stored>; tried: boolean; heard?: MarkedText; error?: unknown; missedBy?: Exclude<HeardBy, 'plan'> }
 
 interface Take {
   mic: Microphone | null;
   encoder: Pcm16Encoder | null;
-  cutter: PieceCutter;
+  cutter: Cutter;
   pieces: TakePiece[];
   chain: Promise<void>;
   options: HearOptions;
@@ -121,6 +165,11 @@ export class Dictation {
   private take: Take | null = null;
   /** Bumped by every start and cancel: a start that is no longer the latest gives up. */
   private starts = 0;
+  /** F23: the latest take's pieces as they are heard (a start empties it). */
+  readonly heardPieces = signal<readonly HeardPiece[]>([]);
+  private heardTake: Take | null = null;
+  /** Whether the PC's ChatGPT plan heard this page's last piece (read once from deps.planHeard). */
+  private planHeard: boolean | undefined;
 
   constructor(deps: DictationDeps) {
     this.deps = deps;
@@ -128,6 +177,9 @@ export class Dictation {
 
   /** A take holds the microphone. */
   get active(): boolean { return this.take !== null; }
+
+  /** The running take's microphone stream once it is open (feedback records its voice beside it: ui/feedback/recording.ts). */
+  get stream(): MediaStream | undefined { return this.take?.mic?.stream; }
 
   /** Opens the microphone and records. `onEnded` fires when a newer start takes the microphone. */
   async start(onEnded?: () => void, options: HearOptions = {}): Promise<void> {
@@ -139,8 +191,10 @@ export class Dictation {
     const ticket = ++this.starts;
     const problem = this.deps.problem();
     if (problem) throw new Error(problem);
-    const take: Take = { mic: null, encoder: null, cutter: new PieceCutter(), pieces: [], chain: Promise.resolve(), options: { ...options }, cancelled: false, startedAt: this.deps.now(), onEnded };
+    const take: Take = { mic: null, encoder: null, cutter: this.deps.cutter?.() ?? new PieceCutter(), pieces: [], chain: Promise.resolve(), options: { ...options }, cancelled: false, startedAt: this.deps.now(), onEnded };
     this.take = take;
+    this.heardTake = take;
+    this.heardPieces.value = [];
     dictationLevels.clear();
     let mic: Microphone;
     try {
@@ -163,6 +217,8 @@ export class Dictation {
     for (const piece of take.pieces) this.queue(take, piece);
     await take.chain;
     const joined = joinPieces(take.pieces.flatMap((piece) => piece.heard ? [piece.heard] : []));
+    const missedBy = take.pieces.find((piece) => piece.heard && piece.missedBy)?.missedBy;
+    if (missedBy && joined.text) this.deps.notice?.(fallbackNote(missedBy)); // once per take, only with words to show
     const kept: KeptPiece[] = [];
     let failure: unknown;
     for (const piece of take.pieces) {
@@ -210,13 +266,30 @@ export class Dictation {
   }
 
   private addPiece(take: Take, piece: Piece, hear: boolean): void {
-    const base = takeName('audio/wav', new Date(take.startedAt));
-    const index = take.pieces.length + 1;
-    const name = index === 1 ? base : base.replace(/(\.\w+)$/, ` (${index})$1`);
-    const blob = new Blob([wavFile(piece.pcm).buffer as ArrayBuffer], { type: 'audio/wav' });
-    const entry: TakePiece = { blob, name, lengthMs: piece.ms, stored: this.store(blob, name, piece.ms, take.options.owner), tried: false };
+    const file = this.fileOf(piece.pcm, new Date(take.startedAt), take.pieces.length + 1);
+    const entry: TakePiece = { file, lengthMs: piece.ms, stored: file.then(({ blob, name }) => this.store(blob, name, piece.ms, take.options.owner)), tried: false };
     take.pieces.push(entry);
     if (hear) this.queue(take, entry);
+  }
+
+  /** The piece's file: Ogg Opus once the plan hears this page and the page can encode it, else a WAV (see the header). */
+  private async fileOf(pcm: readonly Uint8Array[], at: Date, index: number): Promise<TakeFile> {
+    const refused = (this.deps.compactRefused?.get() ?? 0) > Date.now();
+    const compact = this.planHears() && !refused ? await this.deps.compact?.(pcm).catch(() => undefined) : undefined;
+    const blob = compact ?? new Blob([wavFile(pcm).buffer as ArrayBuffer], { type: 'audio/wav' });
+    const base = takeName(blob.type, at);
+    return { blob, name: index === 1 ? base : base.replace(/(\.\w+)$/, ` (${index})$1`) };
+  }
+
+  private planHears(): boolean {
+    return this.planHeard ??= this.deps.planHeard?.get() ?? false;
+  }
+
+  /** Every answered piece says whether the plan heard it; a failed one counts as not. */
+  private notePlan(heard: boolean): void {
+    if (this.planHears() === heard) return;
+    this.planHeard = heard;
+    this.deps.planHeard?.set(heard);
   }
 
   /** Uploads a piece; with the link down (or the upload failing) a piece worth keeping is held in this page. */
@@ -238,18 +311,39 @@ export class Dictation {
     if (take.cancelled || piece.tried) return;
     piece.tried = true;
     const stored = await piece.stored;
-    if (!('ref' in stored)) { piece.error = 'error' in stored ? stored.error : new Error('The connection is down: the recording uploads once it is back.'); return; }
+    if (!('ref' in stored)) {
+      piece.error = 'error' in stored ? stored.error : new Error('The connection is down: the recording uploads once it is back.');
+      this.tell(take, { ms: piece.lengthMs, error: errorText(piece.error) });
+      return;
+    }
     const earlier = take.pieces.slice(0, take.pieces.indexOf(piece)).flatMap((other) => other.heard ? [other.heard] : []);
     const before = joinPieces(earlier).text.slice(-BEFORE_CHARS);
     const language = languageHint(take.options.language);
     const chatId = take.options.chatId;
     try {
-      piece.heard = markedOf(await this.deps.transcribe({ fileId: stored.ref.id, ...(language ? { language } : {}), ...(chatId ? { chatId } : {}), ...(before ? { before } : {}) }));
+      const heard = await this.deps.transcribe({ fileId: stored.ref.id, ...(language ? { language } : {}), ...(chatId ? { chatId } : {}), ...(before ? { before } : {}) });
+      piece.heard = markedOf(heard);
+      if (heard?.planMissed && heard.by && heard.by !== 'plan') {
+        piece.missedBy = heard.by;
+        if ((await piece.file).blob.type === 'audio/ogg') this.deps.compactRefused?.set(Date.now() + COMPACT_REFUSED_MS);
+      }
+      this.notePlan(heard?.by === 'plan');
+      this.tell(take, { ms: piece.lengthMs, text: piece.heard.text });
     } catch (error) {
       piece.error = error;
+      this.notePlan(false);
+      this.tell(take, { ms: piece.lengthMs, error: errorText(error) });
       // Sent again once the connection is back, before the draft that holds the piece is saved.
-      if (piece.lengthMs >= KEEP_TAKE_MS && this.deps.lost?.(error)) void this.deps.upload(piece.blob, piece.name).catch(() => undefined);
+      if (piece.lengthMs >= KEEP_TAKE_MS && this.deps.lost?.(error)) {
+        const { blob, name } = await piece.file;
+        void this.deps.upload(blob, name).catch(() => undefined);
+      }
     }
+  }
+
+  /** F23: a heard piece goes into `heardPieces` while its take is the latest one. */
+  private tell(take: Take, piece: HeardPiece): void {
+    if (this.heardTake === take) this.heardPieces.value = [...this.heardPieces.value, piece];
   }
 
   /** Detaches the take (a start or cancel meanwhile leaves it alone), releases the microphone, cuts the last piece; null without audio. */
@@ -317,4 +411,17 @@ export const dictation = new Dictation({
   offline: () => rpc.status.peek() !== 'open', // a call made now would wait in rpc's queue: hold the piece instead
   hold: (blob, name, owner) => takeStore.hold(blob, name, owner),
   drop: (key) => void takeStore.drop(key),
+  notice: (note) => pushToast({ ...note, tone: 'info' }, 8000),
+  compact: (pcm) => oggOpus(pcm, PCM_RATE),
+  planHeard: {
+    get: () => { try { return localStorage.getItem(PLAN_HEARD_KEY) === '1'; } catch { return false; } },
+    set: (heard) => { try { localStorage.setItem(PLAN_HEARD_KEY, heard ? '1' : '0'); } catch { /* storage blocked: this page's memory */ } },
+  },
+  compactRefused: (() => {
+    let until = 0; // storage blocked: this page's memory
+    return {
+      get: () => { try { return Number(localStorage.getItem(COMPACT_REFUSED_KEY)) || until; } catch { return until; } },
+      set: (at: number) => { until = at; try { localStorage.setItem(COMPACT_REFUSED_KEY, String(at)); } catch { /* memory only */ } },
+    };
+  })(),
 });

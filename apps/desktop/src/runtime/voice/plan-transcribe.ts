@@ -3,9 +3,9 @@
 // POST chatgpt.com/backend-api/transcribe with the take as the file (and a language when one is known) answers {text}.
 // Measured 10.11.2026 on the plan login of this PC (probe, d0511.wav): 42 s of speech in 1.8 s, 125 s in 4.3 s, the
 // language detected without a hint, and the call went through while Codex's weekly limit stood at 100 % (it is no
-// Codex turn). The earlier way (codex-hear.ts: the take played in real time into the plan's realtime voice over WebRTC,
-// then compared with this PC's model and rated by a helper) needs the take's whole length plus a connection, and no
-// Codex model hears audio in a turn (model/list: text and image only), so there is no faster way through the CLI.
+// Codex turn). No Codex model hears audio in a turn (model/list: text and image only), so there is no faster way
+// through the CLI, and nothing of the CLI's own context goes along: the file and the language are the whole request.
+// The take goes up as it is stored: a WAV, or once the plan heard the page's last piece, Ogg Opus (ui/lib/ogg-opus.ts).
 // The endpoint is not documented by OpenAI; every failure (no plan login, a rejected login, a limit, the network, an
 // answer without text) throws a user-safe WorkforceError and transcribe.ts goes on with this PC's model as before.
 // The login: the one place the app reads a plan token (owner-visible exception to the old "never read tokens" rule,

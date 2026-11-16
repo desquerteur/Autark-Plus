@@ -1,6 +1,7 @@
-// FindService: the one find/open path every caller shares – the agent's knowledge.find / knowledge.open tools. It asks
-// the existing stores (candidates.ts: knowledge notes, references; catalog.ts: the knowledge catalog – skills and home project
-// files – by words, and by meaning where a person chose an embedding model), merges what they found
+// FindService: the one find/open path every caller shares – the agent's knowledge.find / knowledge.open tools and the look
+// before a turn. It asks the existing stores (candidates.ts: knowledge notes, references; catalog.ts: the knowledge catalog –
+// skills and home project files – by words, and by meaning where a person chose an embedding model; secrets.ts, F19: the
+// secrets catalog's names and handles, at most three), merges what they found
 // into one ranked list and opens one candidate page by page (open.ts).
 // Ranking: score buckets of SCORE_BUCKET, then authority (skill > document > hint), then score, then id.
 // Owns: the merge and the ranking. Never: grants anything, stores query text, or opens anything by itself.
@@ -14,9 +15,10 @@ import { queryTokens } from '../subconscious/text.ts';
 import { noteCandidates, referenceCandidates, type FindCaller, type Found, type Gather } from './candidates.ts';
 import { GONE, openNote, openSkill, type OpenInput, type Opened } from './open.ts';
 import { catalogCandidates, openCatalog } from './catalog.ts';
+import { openSecret, secretCandidates } from './secrets.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 
-export const ALL_KINDS: readonly FindKind[] = ['main-skill', 'product-skill', 'note', 'reference', 'document'];
+export const ALL_KINDS: readonly FindKind[] = ['main-skill', 'product-skill', 'note', 'reference', 'document', 'secret'];
 export type { FindCaller };
 export const MAX_LIMIT = 20;
 const SCORE_BUCKET = 0.05;
@@ -65,6 +67,7 @@ export class FindService {
       quiet(() => noteCandidates(services, caller, gather)),
       quiet(() => referenceCandidates(services, caller, gather)),
       quiet(() => catalogCandidates(services, caller, gather, mode)),
+      quiet(() => secretCandidates(services, caller, gather)),
     ]);
     const merged = new Map<string, Found>();
     for (const found of lists.flat()) {
@@ -87,6 +90,7 @@ export class FindService {
     if (prefix === 'skill') opened = openSkill(services, caller, local, input, mode);
     else if (prefix === 'note' || prefix === 'ref') opened = openNote(services, caller, local, input); // references are knowledge rows
     else if (prefix === 'cat') opened = openCatalog(services, caller, local, input); // B-078: a home project entry
+    else if (prefix === 'secret') opened = openSecret(services, local, input); // F19: a secrets catalog entry (handles, never a value)
     if (!opened) throw new WorkforceError('not_found', GONE);
     return { candidate: opened.candidate, text: opened.text, page: opened.page, pages: opened.pages, ...(opened.changed ? { changed: opened.changed } : {}), follow: [] };
   }

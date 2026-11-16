@@ -125,10 +125,10 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'catalog.status',
     'accounts.useReset', 'accounts.test', // B-044 (owner)
     'accounts.try', // B-051 (owner): one tiny real turn on one account (handler: accounts/try-rpc.test.ts)
-    'accounts.transfer', // Claude handoff between this PC's companies (owner, PC-local: rpc/scope-matrix.test.ts)
     'models.uses', // what each use resolves to now (models/uses.test.ts) – the owner and the secure phone, like accounts.*
     'spend.list',
     'secrets.list', 'secrets.save', 'secrets.delete', 'secrets.capture',
+    'secrets.fromMessage', // 16.11.2026: a key or a marked piece of a message into the catalog (secrets/text-capture.test.ts)
     'secrets.groups', 'secrets.saveGroup', 'secrets.deleteGroup', // X05
     'secrets.folder', 'secrets.openFolder', // B-044 (SECRETS): the metadata files' state; open <data>/secrets (owner)
     'secrets.import', // 29.10.2026: a password export into the catalog
@@ -151,6 +151,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     ...Object.fromEntries(['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode', 'accounts.logout', 'accounts.remove',
       'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try', 'models.uses'].map((method) => [method, ACCOUNTS])), // B-084: models.uses for the phone's Settings › Models
     'secrets.capture': { capability: 'chat', secure: true },
+    'secrets.fromMessage': { capability: 'chat', secure: true },
     'pwa.pushSubscribe': 'any', 'pwa.pushConfig': 'any', 'pwa.pushUnsubscribe': 'any', 'pwa.exchange': 'any',
     'theme.get': { person: true, base: 'any' }, // also an employee's device
     // DEV2 tiers
@@ -160,6 +161,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'spend.list': PERMISSIONS, 'secrets.list': PERMISSIONS, 'secrets.save': PERMISSIONS, 'secrets.folder': PERMISSIONS,
     'secrets.groups': PERMISSIONS, 'secrets.saveGroup': PERMISSIONS, 'secrets.delete': PERMISSIONS, 'secrets.deleteGroup': PERMISSIONS,
     'secrets.import': PERMISSIONS, // 29.10.2026: creates only, like a phone's saveGroup
+    'secrets.export': PERMISSIONS, // 16.11.2026: from the owner's phone too (the file stays on the PC)
     'computer.activity': { capability: 'todo' }, 'computer.stop': { capability: 'todo' }, 'computer.resume': { capability: 'todo' },
     'feedback.create': CHAT, 'feedback.list': CHAT, 'feedback.send': CHAT, 'feedback.dismiss': CHAT, 'feedback.status': CHAT,
     'voice.transcribe': CHAT, 'voice.retranscribe': CHAT,
@@ -341,7 +343,7 @@ test('app: feedback authored by the human, onboarding, import, voice', async () 
   await rejectsCode(call('voice.transcribe', { fileId: 'c'.repeat(64), live: false }), 'bad_request');
 });
 
-test('DEV2: the permissions tier needs a secure transport; a secure owner device may edit and delete; export remains PC-only', async () => {
+test('DEV2: the permissions tier needs a secure transport; a secure owner device may edit, delete and (16.11.2026) export', async () => {
   const { call, named } = setup();
   await rejectsCode(call('secrets.list', undefined, FULL_LAN), 'forbidden');
   await rejectsCode(call('secrets.list', undefined, PHONE), 'forbidden');
@@ -351,7 +353,7 @@ test('DEV2: the permissions tier needs a secure transport; a secure owner device
   await call('secrets.save', { id: 'sec_1', label: 'Visa', kind: 'card', value: 'overwrite' }, FULL_SECURE);
   assert.equal(named('secrets.save').length, 2, 'secure owner-device update reaches the vault');
   await call('secrets.delete', { id: 'sec_1' }, FULL_SECURE);
-  await rejectsCode(call('secrets.export', {}, FULL_SECURE), 'forbidden');
+  await rejectsCode(call('secrets.export', {}, FULL_LAN), 'forbidden'); // the plaintext file never over plain LAN http
   assert.deepEqual(await call('spend.list', undefined, FULL_SECURE), []);
   await rejectsCode(call('spend.list', undefined, FULL_LAN), 'forbidden');
 });

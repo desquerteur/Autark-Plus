@@ -151,7 +151,8 @@ export class RouterImpl implements Router {
       leadNote = NO_FIT_TEXT[need.kind];
     }
     const named = !need && modelAsked(request.previous) ? resolvePin(models, request.previous!.modelId) : undefined; // D5: older id forms too
-    const asked = named ? ranked.find((entry) => entry.model.id === named.id) : undefined;
+    const runs = named ? candidates.entryFor(named) : undefined; // an older version I named runs as its family's newest
+    const asked = runs ? ranked.find((entry) => entry.model.id === runs.model.id) : undefined;
     if (asked) return decide(asked, BY_REQUEST, [fallbackReason, `${mine ?? 'requested by the agent'} · ${categoryLabel(category)}`].filter(Boolean).join(' · '), true);
     // D1: a model I named that cannot run now – my turn stays on the model it is on (its session and cache), else the strongest
     // model at least at its tier and at most its list price, else the rules below. The reason says first what I asked for and

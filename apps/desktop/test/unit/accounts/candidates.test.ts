@@ -207,12 +207,12 @@ test('the router asks per model: a used-up weekly-opus moves opus work to anothe
   assert.notEqual(moved.modelId, 'claude:claude-opus-5-5');
   assert.equal((await h.router.route({ ...video, agent: agent('ag_1', { modelPolicy: { pin: 'claude:claude-haiku-5-5' } }) })).accountId, 'acc_claude', 'other Claude models keep the plan');
 
-  // Every plan used up: the error says when the first one is back (the 5h reset, not the weekly one).
+  // Every plan used up: the error says when the first one is back (the 5h reset, not the weekly one) – F28: by account, soonest first.
   h.accounts.upsert({ ...claude, limits: limits(win('weekly', 100, now + DAY)) }, false);
   h.accounts.upsert({ ...h.accounts.get('acc_codex')!, limits: limits(win('5h', 100, now + HOUR)) }, false);
   await assert.rejects(h.router.route(video), (error: unknown) => {
     assert.ok(error instanceof WorkforceError);
-    assert.match(error.message, /limited right now/);
+    assert.match(error.message, /^acc_codex used up until \S+ · acc_claude used up until /);
     assert.equal(error.retryAfterMs, HOUR);
     return true;
   });

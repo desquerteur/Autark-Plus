@@ -26,6 +26,7 @@ import { recoveryRuns } from './splits/reconcile.ts'; // B-057
 import { reviewPromptOverrides } from './context/prompt-updates.ts';
 import { startStandards } from './org/standard.ts';
 import { runKontext1311 } from './bridge/kontext-1311.ts';
+import { loginsFolder } from './root/companies.ts';
 import { runB078Repairs } from './system/b078-repairs.ts';
 import { startSync } from './devices/sync/service.ts';
 import { wakeWhenBack } from './devices/back-wake.ts';
@@ -60,7 +61,8 @@ export interface Runtime {
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const startedAt = Date.now();
-  const paths = ensurePaths(createPaths({ data: options.dataDir, resources: options.resourcesDir, workspace: options.workspaceDir }));
+  // The plans' homes: this PC's one logins folder beside its companies, shared by all of them (16.11.2026).
+  const paths = ensurePaths(createPaths({ data: options.dataDir, resources: options.resourcesDir, workspace: options.workspaceDir, accounts: loginsFolder(options.host.app) }));
   const log = new FileLogger({ dir: paths.logs, clock: systemClock, console: options.consoleLog ?? false });
   log.info('runtime starting', { version: options.version, host: options.host.kind });
   // A restore staged by system.restore replaces the data now – before createCore opens the
@@ -97,7 +99,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // First run: the Manager. B-050 K1 (Nachtrag Runde 4): the owner's default 1:1 with every active agent – the Manager's
   // is the first chat (untitled: named after the agent), so the person can start talking right away – is made now for
   // those without one (one transaction; empty, unread nothing, wakes nobody), and for a hire as the org announces it.
-  s.org.ensureSeed();
+  // F14: a company started as my other device ('mine') gets its agents with the link – no Manager of its own (a later
+  // start without the flag still seeds an empty company).
+  if (options.host.app.start !== 'mine') s.org.ensureSeed();
   const offDirects = keepOwnerDirects(s);
   runB078Repairs(s); // data from before B-078 brought to its rules once (system/b078-repairs.ts)
   runKontext1311(s); // the one-time conversions of the 13.11.2026 context rebuild (deleted in the version after the bridge)

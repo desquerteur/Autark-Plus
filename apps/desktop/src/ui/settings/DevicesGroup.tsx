@@ -13,7 +13,8 @@
 // role; joining a company as an employee lives in the company menu's "+" (those rows are connect-rows.tsx, shared with
 // the first run's Connect card).
 // "Devices": one row per device with a right-click / long-press menu (Rename, Remove); on touch a visible Remove in the
-// row's fixed slot. Under it the connection rows (devices-connection.tsx), on the PC and my phone alike.
+// row's fixed slot; a PC's line ends with the app version it runs (F25, device-version.ts: "0.3.6 – behind <PC> 0.3.8").
+// Under it the connection rows (devices-connection.tsx), on the PC and my phone alike.
 // Owns: the groups, the phone and device rows. Never: shows keys or a link's secret as text (the 6-digit codes are meant to be typed).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -36,6 +37,7 @@ import { IOS_PHONE_USE } from '../pwa/hosted.ts';
 import { deviceHint, FORGET_HINT, groupDigits, phoneDot, phoneQrHint, pushHint } from './connect-text.ts';
 import { ConnectRow, IncomingRow, NearbyRows, PersonSelect, RemoteIdRow, useConnectState, usePeople } from './connect-rows.tsx';
 import { ConnectionGroup } from './devices-connection.tsx';
+import { versionHint } from './device-version.ts';
 
 function useDevices() {
   const list = useAsync(() => (can('devices.list') ? rpc.call('devices.list') : Promise.resolve<Device[]>([])), []);
@@ -52,14 +54,16 @@ function useDevices() {
 
 // ------------------------------------------------------------------ phones
 
-/** `code`: the 6 digits an employee types under "I was invited"; for me the QR carries only this PC's Remote ID. */
-type Qr = { qrDataUrl: string; expiresAt?: number; code?: string };
+/** `code`: the 6 digits an employee types under "I was invited"; for me the QR carries only this PC's own Remote ID (`remoteId`). */
+type Qr = { qrDataUrl: string; expiresAt?: number; code?: string; remoteId?: string };
 /** As a person's invite says it with `reachable: false`. */
 const UNREACHABLE = 'Phones can’t reach this PC yet – ask the AI to open it to the same network or to set up Tailscale (skill phone-access).';
 
 /**
  * "Connect a phone": for me the QR of this PC's pair link (phone.pairLink – only the Remote ID; the Remote ID itself
  * first in the hint, so typing works as well), for an employee their invite with its 6-digit code, renewed at expiry.
+ * F17: the pair link's ID is this PC's own (not the person code the Remote ID row shows), so the phone's request comes
+ * to the PC whose screen shows the QR; the hint's digits are that same ID.
  */
 function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
   const [person, setPerson] = useState('');
@@ -74,7 +78,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
           if (!invite.reachable) throw new Error(UNREACHABLE);
           return { qrDataUrl: invite.qrDataUrl, expiresAt: invite.codeExpiresAt, code: invite.code };
         })
-        : can('phone.pairLink') ? await rpc.call('phone.pairLink').then((link) => ({ qrDataUrl: link.qrDataUrl })) : null;
+        : can('phone.pairLink') ? await rpc.call('phone.pairLink').then((link) => ({ qrDataUrl: link.qrDataUrl, remoteId: link.remoteId })) : null;
       if (mine === seq.current) { setQr(next); setError(undefined); }
     } catch (cause) {
       if (mine === seq.current) { setQr(null); setError(errorText(cause)); }
@@ -88,7 +92,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
   }, [qr]);
   const remoteId = props.remote?.self.remoteId;
   const text = error ?? phoneQrHint(Boolean(person));
-  const digits = !error ? (person ? qr?.code ?? '' : remoteId ?? '') : '';
+  const digits = !error ? (person ? qr?.code ?? '' : qr?.remoteId ?? '') : '';
   const code = digits && <><span class="remote-slot-code" aria-label={`${person ? 'Code' : 'Remote ID'} ${digits.split('').join(' ')}`}>{person ? groupCode(digits) : groupDigits(digits)}</span> · </>;
   const hint = <span title={digits ? `${digits} · ${text}` : text}>{code}{text}</span>;
   return (
@@ -103,7 +107,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
 
 // ------------------------------------------------------------------ the device list
 
-function DeviceRow(props: { device: Device; people: Person[] }) {
+function DeviceRow(props: { device: Device; people: Person[]; devices: Device[] }) {
   const { device } = props;
   const [renaming, setRenaming] = useState(false);
   const field = useRef<HTMLInputElement>(null);
@@ -126,7 +130,7 @@ function DeviceRow(props: { device: Device; people: Person[] }) {
     : <><span class={`dot ${dot}`} aria-hidden="true" /> {device.name}</>;
   // B-084: on touch Remove is a visible button – always there on a removable row, so nothing shifts; Rename stays in the long-press menu
   return (
-    <Row class="device-row" label={label} hint={deviceHint(device, personName, listTime)} reserve
+    <Row class="device-row" label={label} hint={[deviceHint(device, personName, listTime), versionHint(device, props.devices)].filter(Boolean).join(' · ')} reserve
       menu={() => [{ items: [
         ...(can('devices.rename') ? [{ label: 'Rename', onSelect: () => setRenaming(true) }] : []),
         ...(removable ? [{ label: 'Remove', danger: true, onSelect: () => void remove() }] : []),
@@ -202,7 +206,7 @@ export function DevicesGroup() {
       <AddRows people={people} remote={remote.data} relay={relay.data} />
       {can('devices.list') && (
         <Group title="Devices" id="settings-devices" hint={devices.error ?? undefined}>
-          {list.map((device) => <DeviceRow key={device.id} device={device} people={people} />)}
+          {list.map((device) => <DeviceRow key={device.id} device={device} people={people} devices={list} />)}
         </Group>
       )}
       {/* my phone too: a secure 'settings' device writes the 'devices' section (handlers/system.ts) – remote.relay needs that transport */}

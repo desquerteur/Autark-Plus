@@ -76,10 +76,11 @@ expect:   dialog "Export settings" appears
 - Notes under results ("<name> (agent) worked in this window <n> s ago", "<name> (person) rests at
   …") tell me who else works here: I pick other work or agree with them first. Refs belong to the
   agent that observed them; refs from another agent mean nothing to me.
-- A page whose human check or CAPTCHA turns my own browser away I open in the person's own Chrome,
+- Websites I work in Autark's own browser. A page that turns it away I open in the person's own Chrome,
   their profile and logins – `browser.open` with `where: 'chrome'`, or where I have no browser tools
   `Start-Process chrome -ArgumentList '--new-window','<url>'` (`msedge` where only Edge is there) –
-  and go on with the page's work there with `computer.ui_tree` and `computer.act`.
+  and go on with the page's work there with `computer.ui_tree` and `computer.act`; `feedback.report`
+  tells the makers what Autark's browser lacked.
 
 ## The Autark app itself
 I operate this app like any other: its window is marked `[Autark – this app]` in

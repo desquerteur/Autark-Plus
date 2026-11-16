@@ -13,8 +13,8 @@ import type { Account } from '../../../src/shared/model/providers.ts';
 const account = (id: string, provider: Account['provider'], state: Account['state'] = 'ok', enabled = true) =>
   ({ id, provider, label: provider, auth: 'cli', state, enabled, priority: 0, createdAt: 0 }) as unknown as Account;
 
-function setup(human: string) {
-  const f = fixture();
+function setup(human: string, forEveryAgent?: string) {
+  const f = fixture(forEveryAgent === undefined ? {} : { profile: { forEveryAgent } });
   Object.assign(f.services, {
     agentCore: {
       human: () => human,
@@ -38,6 +38,17 @@ test('an empty HUMAN.md adds nothing', () => {
   const f = setup('');
   const { stable } = f.context.prompt({ agent: f.vid, mode: VIDEO_MODE, route: route() });
   assert.ok(!stable.includes('## From '), stable.slice(-300));
+});
+
+test('owner 16.11.2026: the lines for every agent stand last, after the agent\'s own HUMAN.md, secrets redacted', () => {
+  const f = setup('No calls before 10:00.', '  I don\'t solve "I\'m not a robot" checks (CAPTCHAs).\nKey hunter2 stays here.  ');
+  const { stable } = f.context.prompt({ agent: f.vid, mode: VIDEO_MODE, route: route() });
+  assert.ok(stable.endsWith('## From Alex\nNo calls before 10:00.\n\n## From Alex – for every agent\nI don\'t solve "I\'m not a robot" checks (CAPTCHAs).\nKey secret://sec_pw stays here.'), stable.slice(-300));
+  const stableOf = (human: string, every: string) => { const g = setup(human, every); return g.context.prompt({ agent: g.vid, mode: VIDEO_MODE, route: route() }).stable; };
+  const alone = stableOf('', 'Every agent reads this.');
+  assert.ok(alone.endsWith('## From Alex – for every agent\nEvery agent reads this.'), 'without a HUMAN.md only the part for every agent');
+  assert.ok(!alone.includes('## From Alex\n'), alone.slice(-300));
+  assert.ok(!stableOf('', '   ').includes('## From '), 'an empty text adds nothing');
 });
 
 test('the engines of the system in "My environment now", the turn\'s own in "## Now"', () => {

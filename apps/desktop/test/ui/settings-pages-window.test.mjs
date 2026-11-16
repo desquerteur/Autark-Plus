@@ -32,7 +32,7 @@ import { MODEL_USES, USE_LABELS } from '../../src/shared/model/models-uses.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
-const PAGES = ['General', 'Models', 'Calendar', 'Secrets', 'Apps', 'Skills & memory', 'Devices', 'Feedback', 'About'];
+const PAGES = ['General', 'Models', 'Calendar', 'Secrets', 'Security', 'Apps', 'Skills & memory', 'Devices', 'Feedback', 'About'];
 
 test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-settings-pages-'));

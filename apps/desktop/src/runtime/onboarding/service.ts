@@ -1,18 +1,21 @@
 // The runtime side of the first-run layer (ui/onboarding/FirstRun.tsx). The layer shows while
 // settings.onboarding.step is not 'done'; its cards make their own choices through the existing methods
 // (accounts, settings). start() ends the layer: step 'done' and completed, the Manager's first chat
-// (shared/text/manager-chat.ts; when there is none, the owner's default 1:1 with it, chat/direct.ts) and the
-// Manager's first message (brief.ts) posted there as the Manager's own line. B-090 (owner 13.11.2026: "ein gestellter
-// erster Aufbau", "der User kann sich dann auch entscheiden, dass die KI nicht direkt anfängt"): the app writes that
-// line, so no model runs and no agent wakes at Start; the person's answer is an ordinary message and the Manager's
-// first turn (one 'message' wake, the route of a person's request). reset() ("Set up team again",
-// owner): not completed, step 'ai' – the layer returns until the next start().
+// (shared/text/manager-chat.ts; when there is none, the owner's default 1:1 with it, chat/direct.ts) and its two opening
+// lines (brief.ts) in one transaction: F07 (owner 15.11.2026: "Standardprompt direkt gesendet … und dann direkt diese
+// Antwort drauf") the start line as the person's own, delivered to nobody, then the Manager's first message as the
+// Manager's own line right below it. B-090 (owner 13.11.2026: "ein gestellter erster Aufbau", "der User kann sich dann
+// auch entscheiden, dass die KI nicht direkt anfängt"): the app writes both lines, so no model runs and no agent wakes
+// at Start; the person's answer is an ordinary message and the Manager's first turn (one 'message' wake, the route of a
+// person's request), which reads all three lines. reset() ("Set up team again", owner): not completed, step 'ai' – the
+// layer returns until the next start().
 // B-085: start() first makes the Manager's PC line in its SYSTEM.md "What I have here" follow the person's choice
 // (settings.profile.pcAccess): careful swaps the whole-PC line for the careful one, whole swaps a careful line from an
 // earlier run back; both rendered from the SYSTEM.md template (resources/prompts/system-md.md, so the wording lives there
 // only); agents hired later get it at hire.
-// Owns: these state changes, posting that line and that one line swap. Never: writes as the person, writes as the
-// Manager anything but its first message, invents profile facts, changes accounts or any other part of a SYSTEM.md.
+// Owns: these state changes, posting those two lines and that one line swap. Never: writes as the person anything but
+// the start line, writes as the Manager anything but its first message, wakes anyone, invents profile facts, changes
+// accounts or any other part of a SYSTEM.md.
 
 import type { RuntimeServices } from '../contracts.ts';
 import '../../shared/model/onboarding.ts'; // the first-run methods (module augmentation)
@@ -24,7 +27,7 @@ import { renderTemplate } from '../context/templates.ts';
 import { splitAtHave, systemMdValues } from '../org/hire.ts';
 import { splitStandard } from '../org/standard.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { setupBrief } from './brief.ts';
+import { setupLines } from './brief.ts';
 
 export interface OnboardingDeps {
   services: () => RuntimeServices;
@@ -71,16 +74,26 @@ export class Onboarding {
     this.deps.services().settings.update({ onboarding: { completed: false, step: 'ai' } });
   }
 
-  /** The layer is through: onboarding done, the Manager's first chat and its first message there (once, also when asked twice); nobody wakes. */
+  /**
+   * The layer is through: onboarding done, the Manager's first chat and its two opening lines there – the start line as
+   * the person's, the Manager's first message below it (once, also when asked twice: the chat ends with that message
+   * already); nobody wakes.
+   */
   start(): { conversationId: string } {
     const s = this.deps.services();
     const manager = managerAgent(s.org.list());
     if (!manager) throw new WorkforceError('not_found', 'There is no Manager on the team.');
     this.pcLine(s, manager);
     const conversationId = managerFirstChat(s.chats.list(), manager.id)?.id ?? findOrCreateDirect(s, HUMAN_ID, manager.id, { createdBy: HUMAN_ID });
-    const line = setupBrief(s);
+    const { start, answer } = setupLines(s);
     const last = s.chats.messages(conversationId, { limit: 1 }).at(-1);
-    if (line && !(last?.authorId === manager.id && last.body === line)) s.chats.send({ conversationId, body: line, authorId: manager.id, authorKind: 'agent' });
+    if (answer && !(last?.authorId === manager.id && last.body === answer)) {
+      // one transaction: a crash between the two never leaves the start line as an unanswered request (chat/delivery-recovery.ts)
+      s.db.tx(() => {
+        if (start) s.chats.send({ conversationId, body: start, authorId: HUMAN_ID, authorKind: 'human', deliver: false });
+        s.chats.send({ conversationId, body: answer, authorId: manager.id, authorKind: 'agent' });
+      });
+    }
     s.settings.update({ onboarding: { completed: true, step: 'done' } });
     s.log.info('first run done', { managerId: manager.id, conversationId });
     return { conversationId };

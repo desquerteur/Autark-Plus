@@ -24,7 +24,9 @@
 // refuses every add). B-078 sub-chats (chat/children.ts): a deleted chat takes its threads along and puts its sub-chats
 // back on top; a deleted message's thread stays as a plain sub-chat of that chat (keepThreadOf).
 // 13.11.2026: no run is a row in the history – who works for a chat is its live bar (chat/live.ts, the summary's `live`),
-// and what a run says reaches a chat as a plain message carrying its runId.
+// and what a run says reaches a chat as a plain message carrying its runId. F07: send()'s runtime-only `deliver: false`
+// (the first run's start line, onboarding/service.ts) stores and announces a message without delivering it – no wake,
+// no notification, no chat title from it; messages.send never sets it (its params are a fixed list).
 // Owns: every write to conversations/members/messages/drafts and the chat events.
 // Never: decides who gets woken (DeliveryService does, after commit), never copies message
 // text into other tables (tasks reference messages by id) and never removes a file itself.
@@ -224,12 +226,12 @@ export class ChatServiceImpl implements ChatService {
       if (authorKind === 'human') this.convs.advanceRead(conversation.id, input.authorId, message.seq);
       else this.convs.advanceReadIfCaughtUp(conversation.id, input.authorId, message.seq);
       if (chose) this.convs.update(conversation);
-      if (!conversation.titleNamed && !conversation.settings.direct && authorKind === 'human' && message.kind === 'text' && !this.hadHumanText(conversation.id, message.seq)) {
+      if (!conversation.titleNamed && !conversation.settings.direct && authorKind === 'human' && message.kind === 'text' && input.deliver !== false && !this.hadHumanText(conversation.id, message.seq)) {
         const title = deriveTitle(message.body);
         if (title) { conversation.title = title; conversation.updatedAt = now; this.convs.update(conversation); }
       }
     });
-    publish(this.core(), message, 'message.created', { deliver: true });
+    publish(this.core(), message, 'message.created', { deliver: input.deliver !== false });
     return message;
   }
 

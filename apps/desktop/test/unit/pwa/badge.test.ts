@@ -44,7 +44,9 @@ function worker(hosted: boolean, supported = true, denied = false) {
     clients: { matchAll: async () => [], openWindow: async (url: string) => { opened.push(url); } },
     addEventListener: (type: string, fn: Handler) => { handlers.set(type, fn); },
   };
-  vm.runInNewContext(code, { self: scope, URL, Promise, console: { warn: (...args: unknown[]) => warnings.push(args) } });
+  // The hosted worker takes the browser's `caches` at load (F29, ui/hosted/ui-hashes.ts); these tests never fetch through it.
+  const caches = { open: async () => ({ match: async () => undefined, put: async () => undefined }) };
+  vm.runInNewContext(code, { self: scope, URL, Promise, caches, console: { warn: (...args: unknown[]) => warnings.push(args) } });
   const dispatch = async (type: string, event: Record<string, unknown>) => {
     const pending: Promise<unknown>[] = [];
     handlers.get(type)!({ ...event, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });

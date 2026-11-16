@@ -156,3 +156,21 @@ test('a second device joins with a new invite; removing one device drops only th
   assert.equal((await laptop.call<{ kind: string }>('session.info')).kind, 'person');
   assert.equal(r.service.require(phone.person.id).status, 'active');
 });
+
+test('F13: an employee\'s PC that linked makes its person active with one joined line; the owner and a removed person refuse', async (t) => {
+  const r = peopleRig();
+  t.after(() => r.cleanup());
+  const anna = r.service.save({ name: 'Anna Berg', title: 'Designer' });
+  assert.equal(anna.status, 'invited', 'made at Accept (remote.decide newPerson) like any new person');
+  const events: Person[] = [];
+  r.bus.on('person.upserted', (person) => events.push(person));
+  const joined = r.service.joinedWith(anna.id, { id: 'dev_annapc000001', name: 'Anna laptop' });
+  assert.equal(joined.status, 'active');
+  assert.ok(joined.joinedAt);
+  assert.deepEqual(events.map((person) => person.status), ['active'], 'Team › People hears it at once');
+  const [line] = r.service.audit(anna.id);
+  assert.deepEqual([line.action, line.details], ['joined', { deviceId: 'dev_annapc000001', device: 'Anna laptop' }]);
+  assert.throws(() => r.service.joinedWith('human', { id: 'dev_x', name: 'X' }), /no longer has access/);
+  r.service.revoke(anna.id);
+  assert.throws(() => r.service.joinedWith(anna.id, { id: 'dev_x', name: 'X' }), /no longer has access/);
+});

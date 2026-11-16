@@ -1,8 +1,12 @@
-// Model chip in the composer: the suggested model's short name ("Opus 5.5") + the suggested effort, else the model the
-// app routes the agent to now in this chat (routing.preview, lib/route-preview.ts; its last run here until the preview
-// answers), in one fixed width (nothing beside it moves when the model changes). Menu: first "Auto" (nothing suggested,
+// Model chip in the composer: the suggested model's short name ("Opus 5.5") + the suggested effort; with nothing
+// suggested "Auto" (owner F26, 16.11.2026: Auto is the visible default) and, muted after it, the model the app routes
+// the agent to now in this chat (routing.preview, lib/route-preview.ts; its last run here until the preview answers) –
+// all in one fixed width (nothing beside it moves when the model changes). A pick stays standing after sending (the
+// runtime tells a fresh pick from a standing one). Menu: first "Auto" (nothing suggested,
 // the AI decides; hint "<routed model> now", only the name while a suggestion runs), one searchable list of the chat
-// models in catalog order – only the newest of each family (owner 09.11.: "immer die aktuellen Modelle"); an older
+// models in catalog order – each row's muted hint its source (F05: "Codex", "Claude Code", a connection; the id's last
+// segment too when two rows read alike, lib/model-name.ts pickerHints), its title the full id – only the newest of
+// each family (owner 09.11.: "immer die aktuellen Modelle"); an older
 // version shows when the search names it, or while it is the chosen one, under "Older versions" – the temperature
 // row (0.0–1.0 or Auto: settings.temperatures; its title says where a temperature reaches, B-083 live 09.11.) and the effort row.
 // Everything here is a suggestion (B-083, owner 08.11.: "nur … ein kleiner Tipp"): a pick writes settings.modelHints –
@@ -20,7 +24,7 @@ import { rpc } from '../../lib/rpc.ts';
 import { can } from '../../lib/session.ts';
 import { toastError } from '../../lib/toasts.ts';
 import { isChatModel } from '../../lib/model-fit.ts';
-import { modelShortName as shortName } from '../../lib/model-name.ts';
+import { modelShortName as shortName, pickerHints } from '../../lib/model-name.ts';
 import { AUTO, useRoutePreview } from '../../lib/route-preview.ts';
 import { EFFORT_LABEL } from '../live-text.ts';
 
@@ -74,12 +78,11 @@ function lastUsed(chatId: string, agentId: string): string | undefined {
   return undefined;
 }
 
-function ModelRow(props: { model: ModelInfo; selected: boolean; onPick: () => void }) {
-  const { model } = props;
-  const hint = model.available ? undefined : 'Unavailable';
+function ModelRow(props: { model: ModelInfo; hint: string; selected: boolean; onPick: () => void }) {
+  const { model, hint } = props;
   return (
     <button type="button" class={`menu-item${model.available ? '' : ' unavailable'}`} role="menuitemradio" aria-checked={props.selected}
-      onClick={props.onPick}>
+      title={model.id} onClick={props.onPick}>
       <span class="menu-label"><span>{shortName(model.id) ?? model.name}</span></span>
       {hint && <span class="menu-hint">{hint}</span>}
       {props.selected && <Icon name="check" size={16} class="menu-check" />}
@@ -141,6 +144,8 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
   const temperature = typeof stored === 'number' ? stored : undefined;
   const chosenInfo = chosen ? models.value.find((model) => model.id === chosen) : undefined;
   const sub = effort ? EFFORT_LABEL[effort] : undefined;
+  // nothing suggested: "Auto", the routed model muted after it (with the suggested effort, if any)
+  const after = chosen ? sub : [routedName, sub].filter(Boolean).join(' · ') || undefined;
   const listed: readonly Effort[] = chosenInfo?.efforts.filter((value) => value !== 'none') ?? [];
   // a suggested effort the model lacks keeps its cell (lit, so a tap takes it back)
   const efforts = listed.length && (!effort || listed.includes(effort)) ? listed : EFFORTS;
@@ -150,7 +155,7 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
   }, 'Temperature could not be changed');
   const label = (
     <span class="chip-label">
-      {shortName(chosen ?? routed) ?? (can('routing.preview') ? '' : AUTO)}{sub && <span class="sub">{` ${sub}`}</span>}
+      {chosen ? shortName(chosen) : AUTO}{after && <span class="sub">{` ${after}`}</span>}
     </span>
   );
   if (!can('chats.update')) return <span class="chip model-chip static">{label}</span>;
@@ -158,7 +163,8 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
   // Specialists (embeddings, decision, media) are no chat models – a stored choice stays visible; older versions only by search.
   const list = models.value.filter((model) => (model.id === chosen || (isChatModel(model) && (q || !model.newer)))
     && (!q || model.name.toLowerCase().includes(q) || model.id.toLowerCase().includes(q)));
-  const rows = list.map((model) => <ModelRow key={model.id} model={model} selected={chosen === model.id} onPick={() => pick(model.id)} />);
+  const hints = pickerHints(list, (model) => shortName(model.id) ?? model.id);
+  const rows = list.map((model) => <ModelRow key={model.id} model={model} hint={hints.get(model.id) ?? ''} selected={chosen === model.id} onPick={() => pick(model.id)} />);
   // the catalog lists the newest of each family first, the older versions after them (runtime/models/order.ts)
   const older = list.findIndex((model) => model.newer);
   if (older >= 0) rows.splice(older, 0, <p key="older" class="menu-title" role="presentation">Older versions</p>);

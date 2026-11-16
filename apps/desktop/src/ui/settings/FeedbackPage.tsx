@@ -100,7 +100,7 @@ export function FeedbackPage() {
       )}
       {status.data?.receiving === true && (
         <Group title="Inbox" id="feedback-inbox">
-          <Row label="What people sent" hint="Opened on this PC with the team key; fetched when it opens" reserve>
+          <Row label="What people sent" hint={`Opened with the team key on ${pc()}; fetched when it opens`} reserve>
             <span class="account-slot"><ActionButton label="Open" onClick={() => setInbox(true)} /></span>
           </Row>
         </Group>

@@ -18,6 +18,12 @@ export interface Profile {
    * agents' SYSTEM.md, never enforced.
    */
   pcAccess?: 'whole' | 'careful';
+  /**
+   * Owner 16.11.2026 (Settings › Security): the person's lines to every agent, last in each agent's system prompt after
+   * its own HUMAN.md (≤ MAX_HUMAN_MD characters; '' = none). Starts as the "I'm not a robot" line in the PC's language
+   * (shared/model/agent-core.ts humanDefault); the person and the agents change it like every setting.
+   */
+  forEveryAgent?: string;
 }
 
 /** B-078 (D13): the public skill library (runtime/knowledge, track T3). */
@@ -153,13 +159,24 @@ export type FeedbackVisibility = 'public' | 'private';
 
 export interface FeedbackReport {
   id: string;
-  kind: FeedbackKind;
+  /** Agent reports always; a person's report only when one was chosen (16.11.2026: the menu no longer claims "bug"). */
+  kind?: FeedbackKind;
   text: string;
   author: string; // 'human' or agent id (agent reports are untrusted)
   screenshotFileId?: string;
   annotationFileId?: string;
-  /** `runId`: agent reports only – the run that filed the report. */
-  context: { view?: string; conversationId?: string; version: string; os: string; runId?: string };
+  /** 16.11.2026: the recorded takes of a dictated report (uploaded WebM or MP4 files, at most FEEDBACK_AUDIO_MAX). */
+  audioFileIds?: string[];
+  /**
+   * `runId`: agent reports only – the run that filed the report. `version`/`os`: this PC's runtime. 16.11.2026:
+   * `client` – where the person wrote it (the writing page's own facts, redacted); `company` – this company's data
+   * folder ('first', 'company-2'); `clientId` – the writing device's id for the report (feedback.create dedupe);
+   * `clientDiagnostics` – that device's own diagnostics (an Android crash report), redacted.
+   */
+  context: {
+    view?: string; conversationId?: string; version: string; os: string; runId?: string;
+    client?: string; company?: string; clientId?: string; clientDiagnostics?: string;
+  };
   /**
    * B-055: 'sent' = the sealed report is in the team's mailbox (only the team can open it). Older states stay
    * readable: queued = an older browser draft, received = an older receiver's receipt with GitHub pending.
@@ -172,7 +189,7 @@ export interface FeedbackReport {
   receiptId?: string;
   /** B-055: every report is sent 'private' (sealed for the team); 'public' only on older GitHub reports. */
   visibility?: FeedbackVisibility;
-  /** The report arrived, but without something it had (B-055: "The screenshot was too large and was not sent."). */
+  /** The report arrived, but without something it had (SCREENSHOT_DROPPED, AUDIO_DROPPED in feedback-delivery.ts). */
   deliveryWarning?: string;
   /** Agent reports: how often the same text was reported within 24 h (absent = once). */
   count?: number;
@@ -202,8 +219,10 @@ export interface SystemInfo {
   startedAt: number;
   /** Whether linked PCs can reach this PC right now (Settings › Devices shows it). */
   peer?: PeerListenerState;
-  /** RC1: what this start did after an update or a crash ("Updated to X · N tasks continued"), shown once. */
-  notice?: { id: string; text: string; at: number };
+  /** RC1: what this start did after an update or a crash ("Updated to X · N tasks continued"), shown once. F25: `failed` – an
+   *  install did not land ("The update to X did not install · …"): its line stays until Dismiss and Settings › About shows it;
+   *  `to` – the version it would have brought (main's updater does not install that one by itself again). */
+  notice?: { id: string; text: string; at: number; failed?: true; to?: string };
 }
 
 /** The dedicated peer listener: open while a pairing is in flight or a PC is linked. */

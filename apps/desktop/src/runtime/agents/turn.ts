@@ -28,6 +28,8 @@
 // before its engine leaves it for the next one) – and only the one planning read (plan.nextStepAt): a request written
 // while the turn was routed or prepared holds for the next turn.
 // B-054: the run row carries the plan's origin (what started it); session and repair-note bookkeeping use plan.thread.
+// Owner 16.11.2026 ("Wenn eine Mail reinkommt, dann sollt ihr richtig arbeiten können"): a run a mail started is a turn
+// like every other, with every tool; the mail stays data through its wake note and the app tools' untrusted marks.
 // B-057: a split's turn (request.split, on its own dispatcher lane) runs the same phases on its thread `split:<id>`
 // (agents/split-turn.ts); its run row names the split, and a split run that fails before its engine tells the split service;
 // its session renewal starts fresh with the brief (no second seed from the parent).
@@ -38,7 +40,6 @@
 // effects are unknown, keeps a session that cannot continue, or swallows a failure silently
 // (run error; a failed message where the turn streams one or fails before the engine).
 
-import { isMailTurn, executeMailTurn } from './mail-turn.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
 import { ROUTE_BY_REQUEST, type Run } from '../../shared/model/runs.ts';
@@ -143,9 +144,6 @@ export class TurnExecutor {
 
   async execute(request: TurnRequest): Promise<TurnOutcome> {
     const services = this.services();
-    // Mail isolation is held back until its route decision and push bundling are settled (owner 11.11.2026):
-    // without AUTARK_MAIL_ORIGIN_ISOLATION=on a mail-woken run goes the ordinary way, as in the installed build.
-    if (process.env.AUTARK_MAIL_ORIGIN_ISOLATION === 'on' && isMailTurn(services, request.origin)) return executeMailTurn(services, request);
     let plan = await planTurn(services, request);
     if (!plan) return { runId: request.runId, status: 'skipped' };
 

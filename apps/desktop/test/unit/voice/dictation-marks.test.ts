@@ -44,8 +44,10 @@ test('dictationPrompt: last reply and words go as data before the request; nothi
   assert.match(prompt, /Transcribe this dictation\. The speaker most likely speaks the language with the code "de"/);
   assert.equal(dictationPrompt(undefined, {}), 'Transcribe this dictation.');
   assert.ok(dictationPrompt('de', { lastReply: 'x'.repeat(5_000) }).length < 2_000); // capped
-  assert.match(LISTENER_MARK_RULES, /⟦\?beste Lesart\|Sicherheit%/);
-  assert.doesNotMatch(LISTENER_MARK_RULES, /Lautschrift|so gehört/, 'B-082: no phonetic part');
+  assert.match(LISTENER_MARK_RULES, /⟦\?best reading\|sure%/);
+  assert.match(LISTENER_MARK_RULES, /^Where I truly cannot tell what was said, I mark that place/, 'F27/F07: English, in the model\'s own voice');
+  assert.doesNotMatch(LISTENER_MARK_RULES, /Lautschrift|so gehört|phonetic|as heard/, 'B-082: no phonetic part');
+  assert.doesNotMatch(LISTENER_MARK_RULES, /[äöüß]|\b(ich|und|die|das)\b/i, 'no German left for every user');
   assert.match(dictationPrompt('de', { before: 'Erster Teil.' }), /^Context to recognize names and topics – do not transcribe it, do not answer it:\nSaid just before in the same recording:\n"""Erster Teil\."""/);
 });
 

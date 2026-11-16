@@ -7,7 +7,9 @@
 // <workspace>/skills and workspace-agent-skills/<slug>/ to <workspace>/agents/<slug>/skills (the agents' skills folders
 // there move aside first). This PC's own identity and keys
 // are carried over from the database that was live (machine-bound.ts), so a restore on another PC keeps that
-// PC's identity. The outcome lands in restore-result.json (system.restoreStatus); a failure rolls back.
+// PC's identity; where none was live (16.11.2026: an imported company's new folder, portability/company.ts) the backup's
+// own are dropped and that start makes new ones. An export's secrets.csv never goes into the data folder.
+// The outcome lands in restore-result.json (system.restoreStatus); a failure rolls back.
 // Owns: the marker, the swap and the result file. Never: runs while the database is open, or retries a failed
 // restore at every start (a failed marker is renamed to restore-failed.json).
 
@@ -17,8 +19,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { RestoreStatus } from '../../shared/model/restore.ts';
 import type { Logger } from '../contracts.ts';
-import { AGENT_SKILLS, DB_FILE, MACHINE_KEY_FILE, MANIFEST_FILE, WORKSPACE_SKILLS, checkBackup, stamp } from './backup.ts';
-import { carryOver } from './machine-bound.ts';
+import { AGENT_SKILLS, DB_FILE, EXPORT_SECRETS, MACHINE_KEY_FILE, MANIFEST_FILE, WORKSPACE_SKILLS, checkBackup, stamp } from './backup.ts';
+import { carryOver, forgetBound } from './machine-bound.ts';
 
 export const RESTORE_MARKER = 'restore-from.json';
 const RESTORE_FAILED = 'restore-failed.json';
@@ -30,8 +32,8 @@ const MARKER_FORMAT = 'workforce-restore';
  */
 const ALWAYS = [DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, 'settings.json', 'theme.css', 'agents', 'memory', 'chats'];
 /** Backup entries that are not data-folder entries (the manifest, the workspace's and its agents' skills, a v2 backup's own skills
- *  layout) or never put back (another PC's runtime.key, in a backup made before it was left out). */
-const NOT_DATA = new Set([MANIFEST_FILE, WORKSPACE_SKILLS, AGENT_SKILLS, 'skills', MACHINE_KEY_FILE]);
+ *  layout) or never put back (another PC's runtime.key, in a backup made before it was left out; an export's readable secrets). */
+const NOT_DATA = new Set([MANIFEST_FILE, WORKSPACE_SKILLS, AGENT_SKILLS, 'skills', MACHINE_KEY_FILE, EXPORT_SECRETS]);
 
 interface Marker { format: typeof MARKER_FORMAT; version: 1; path: string; stagedAt: number }
 interface Result { ok: boolean; at: number; from: string; backupAt?: number; error?: string }
@@ -156,12 +158,14 @@ export function applyPendingRestore(dataDir: string, log: Logger, options: Apply
     return fail(dataDir, log, error, now, folder);
   }
 
-  // This PC's identity and keys come from the database that was live until now (failure only costs re-entry).
-  if (moved.includes(DB_FILE)) {
+  // This PC's identity and keys come from the database that was live until now (failure only costs re-entry); with none
+  // live (a new folder) the backup's go and this start makes new ones.
+  if (existsSync(path.join(dataDir, DB_FILE))) {
     let restored: DatabaseSync | undefined;
     try {
       restored = new DatabaseSync(path.join(dataDir, DB_FILE));
-      carryOver(restored, path.join(fallback, DB_FILE));
+      if (moved.includes(DB_FILE)) carryOver(restored, path.join(fallback, DB_FILE));
+      else forgetBound(restored);
     } catch (error) {
       log.warn('restore: keys of this PC not carried over', { error: String(error) });
     } finally {

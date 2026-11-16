@@ -131,5 +131,6 @@ sw.addEventListener('message', (event) => {
   }
 });
 
-// Push, notice taps and clears (shared with the iPhone web app's worker, which always shows a notice).
-wireNotifications(sw as unknown as NotifyScope, { home: '/', icon: '/icon.png', alwaysShow: false });
+// Push, notice taps and clears (shared with the iPhone web app's worker, which always shows a notice). The badge is the
+// Autark mark, white on transparent (assets/badge.png, copied by the build), so Android's status bar shows the mark.
+wireNotifications(sw as unknown as NotifyScope, { home: '/', icon: '/icon.png', badge: '/badge.png', alwaysShow: false });

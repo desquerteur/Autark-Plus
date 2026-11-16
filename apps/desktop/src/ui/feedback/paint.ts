@@ -5,7 +5,7 @@
 // painted shot is sent ONLY as its flattened image (never the raw shot beside it), an unpainted
 // one as the original re-encoded the same way.
 // Owns: the mark model, drawing marks on a 2D context and the image choice. Never: touches the DOM,
-// decodes images or uploads (paint-image.ts, PaintEditor.tsx and FeedbackPanel.tsx do).
+// decodes images or uploads (paint-image.ts, FeedbackOverlay.tsx and FeedbackPanel.tsx do).
 
 export type PaintTool = 'pen' | 'box';
 export type Point = [number, number];

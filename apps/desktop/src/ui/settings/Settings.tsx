@@ -1,9 +1,9 @@
 // Settings main view for #/settings/<page>: the header (lib/header.tsx: the page's name, Back to the workspace as the lead and,
 // right after the title (a near cell, clear of the pane's tab strip in the row), one cell that opens the file behind the page in
 // the pane's file tab, on a right click with the system's own app) and the page content. The sidebar shows SettingsNav; its search text
-// highlights matching rows here. On the phone the frame's own top row names the page and Back goes to all settings
-// (shell/views.ts). A page this connection may not use opens the first it may (sections.ts).
-// Owns: page → component mapping and search highlighting. Never: setting values – every row is a view on settings.json,
+// marks the words in matching rows here (search-marks.ts, F20: blue, colour only). On the phone the frame's own top row names the
+// page, holds the same search and Back goes to all settings (shell/views.ts). A page this connection may not use opens the first it may (sections.ts).
+// Owns: page → component mapping and when the search marks are applied. Never: setting values – every row is a view on settings.json,
 // a file of the data folder, or an RPC; the AI edits the same.
 
 import type { ComponentType } from 'preact';
@@ -28,6 +28,8 @@ import { ModelUses } from './ModelUses.tsx';
 import { openInData, openInTab } from './open-file.ts';
 import { groupAccounts, providerGroup, type ProviderGroup } from './providers.ts';
 import { SecretsPage } from './SecretsPage.tsx';
+import { SecurityPage } from './SecurityPage.tsx';
+import { clearSearchMarks, markSearch } from './search-marks.ts';
 import { resolveVisibleSection } from './sections.ts';
 import { settingsSearch } from './SettingsNav.tsx';
 import { SkillsPage } from './SkillsPage.tsx';
@@ -77,24 +79,13 @@ const CONTENT: Readonly<Record<SettingsPage, ComponentType>> = {
   models: ModelsPage,
   calendar: CalendarPage,
   secrets: SecretsPage,
+  security: SecurityPage,
   apps: AppsPage,
   skills: SkillsPage,
   devices: DevicesGroup,
   feedback: FeedbackPage,
   about: AboutPage,
 };
-
-/** Marks rows whose text contains every search word; returns the first hit. */
-function highlight(container: HTMLElement, text: string): HTMLElement | null {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  let first: HTMLElement | null = null;
-  for (const row of container.querySelectorAll<HTMLElement>('.set-row, .set-group-head')) {
-    const hit = words.length > 0 && words.every((word) => (row.textContent ?? '').toLowerCase().includes(word));
-    row.classList.toggle('set-search-hit', hit);
-    if (hit && !first) first = row;
-  }
-  return first;
-}
 
 /** The name of the page #/settings/<section> shows on this connection (the phone's top row). */
 export function settingsSectionTitle(section: string | undefined): string {
@@ -108,13 +99,14 @@ export function Settings() {
   const body = useRef<HTMLDivElement>(null);
   const search = settingsSearch.value;
   useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [info.id]);
-  // Re-apply highlights while searching (content may render late, so observe changes briefly).
+  useEffect(() => () => clearSearchMarks(), []); // the page went: its marks go
+  // Re-apply the marks while searching (content may render late, so observe changes briefly).
   useEffect(() => {
     const el = body.current;
     if (!el) return;
     let scrolled = false;
     const apply = () => {
-      const first = highlight(el, search);
+      const first = markSearch(el, search);
       if (first && !scrolled) { scrolled = true; first.scrollIntoView({ block: 'center' }); }
     };
     apply();

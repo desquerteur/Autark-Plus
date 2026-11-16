@@ -10,10 +10,15 @@
 // Once a PC is linked – on either side – the person gets one notice (linkedNote): which PC, as what, what it receives
 // and where to remove it, so no link made from an agent's devices.connect sits unnoticed. An employee's PC accepted
 // here (a personId) also calls `admitted` (B-078 D15: the personal manager's one wake about that person).
+// F17: the requests waiting on my other PCs join the list (remote/mirror.ts, while the mesh offers peer methods); Accept on
+// one of them is decided on the PC that holds it. F13: Accept may make the person (`newPerson`) – made when the device
+// links (`createPerson`), so the person and their PC arrive in one step; an employee's PC that links makes its person
+// active (`joined`). F09: the LAN hello names this company (`company`), so a PC with several companies lists them under it.
 // Owns: wiring of these parts, the state Settings › Devices shows, `remote.updated` and the linked notice.
 // Never: links a PC without the person's answer, or answers probes while not findable.
 
-import type { NearbyPc, RemoteIncoming, RemoteOutgoing, RemoteState } from '../../shared/model/remote.ts';
+import { WorkforceError } from '../../shared/errors.ts';
+import type { NearbyPc, NewPerson, RemoteIncoming, RemoteOutgoing, RemoteState } from '../../shared/model/remote.ts';
 import type { Device } from '../../shared/model/devices.ts';
 import type { Bus } from '../bus.ts';
 import type { Clock, Logger } from '../contracts.ts';
@@ -24,6 +29,7 @@ import { codeFor, watchCode } from './code.ts';
 import { formatRemoteId, remoteIdOf } from './id.ts';
 import { findTarget, type FindDeps, type Found } from './find.ts';
 import { RemoteJoiner, type ConnectInput } from './join.ts';
+import { RequestMirror, type Decision, type MirrorMesh } from './mirror.ts';
 import { NearbyPcs } from './nearby.ts';
 import { TargetRequests, type Timers } from './requests.ts';
 
@@ -32,8 +38,20 @@ export interface RemoteDeps {
   clock: Clock;
   bus: Bus;
   log: Logger;
-  /** The linked PCs: this PC's identity, storing a proven PC (and dialing it), the device list. */
-  mesh: { selfInfo(): PeerInfo; add(info: PeerInfo, options: { side: 'joiner' | 'inviter'; personId?: string; joinedAs?: 'ceo' | 'employee' }): Device; list(): Device[] };
+  /**
+   * The linked PCs: this PC's identity, storing a proven PC (and dialing it), the device list; with peer methods
+   * (register, call – the mesh) the requests of my other PCs show here too (remote/mirror.ts).
+   */
+  mesh: { selfInfo(): PeerInfo; add(info: PeerInfo, options: { side: 'joiner' | 'inviter'; personId?: string; joinedAs?: 'ceo' | 'employee' }): Device; list(): Device[] }
+    & Partial<Pick<MirrorMesh, 'register' | 'call'>>;
+  /** F09: this company's name (companyLabel), told in the LAN hello. */
+  company?(): string;
+  /** F13: makes the person Accept named (people.save) and returns their id; throws to refuse. */
+  createPerson?(input: NewPerson): string;
+  /** Is this a person of the organisation here (a decide from another of my PCs names one). */
+  knows?(personId: string): boolean;
+  /** An employee's PC is linked for this person: the person is in now (people/service.ts joinedWith). */
+  joined?(personId: string, device: { id: string; name: string }): void;
   /** settings.devices.findable (and a peer listener that may open at all). */
   findable(): boolean;
   /** POST JSON to `<address>/peer/pair` (or the meeting server's `relay:<fp>` route) with a timeout. */
@@ -91,6 +109,8 @@ export class RemoteService {
   private readonly target: TargetRequests;
   private readonly joiner: RemoteJoiner;
   private readonly near: NearbyPcs;
+  /** F17: the requests waiting on my other PCs (absent without peer methods). */
+  private readonly mirror?: RequestMirror;
   private lastFindable?: boolean;
   private stopped = false;
   private readonly offCode: () => void;
@@ -103,10 +123,14 @@ export class RemoteService {
       now, timers, log: deps.log, signer: deps.identity,
       findable: () => this.findable(),
       self: () => deps.mesh.selfInfo(),
-      link: (info, personId) => {
+      link: (info, picked, newPerson) => {
+        const personId = this.personFor(picked, newPerson);
         this.store(info, { side: 'inviter', personId }, personId ? 'employee' : 'own');
         if (!personId) codeFor(deps.identity.fingerprint)?.sign(info.pub); // my own PC answers for my code from now on
-        if (personId) this.admitted(personId);
+        if (personId) {
+          try { deps.joined?.(personId, { id: info.id, name: info.name }); } catch (error) { deps.log.warn('person not marked joined', { personId, error: errorText(error) }); }
+          this.admitted(personId);
+        }
       },
       shown: (view) => deps.notify?.(view),
       changed: () => this.changed(),
@@ -131,6 +155,17 @@ export class RemoteService {
       outgoing: () => this.joiner.outgoing(),
       now,
     });
+    const { register, call } = deps.mesh;
+    if (register && call) {
+      this.mirror = new RequestMirror({
+        mesh: { register: register.bind(deps.mesh), call: call.bind(deps.mesh), list: () => deps.mesh.list() },
+        bus: deps.bus, now, timers, log: deps.log,
+        own: () => this.ownIncoming(),
+        decide: (decision) => this.decideHere(decision),
+        knows: (personId) => deps.knows?.(personId) ?? false,
+        changed: () => this.emitState(),
+      });
+    }
     this.offCode = watchCode(deps.identity.fingerprint, () => this.changed()); // a new code shows at once
   }
 
@@ -148,10 +183,13 @@ export class RemoteService {
     const outgoing = this.joiner.outgoing();
     return {
       self: { deviceId: self.id, name: self.name, remoteId: this.remoteId(), fingerprint: this.deps.identity.fingerprint, findable: this.findable() },
-      incoming: this.target.incoming(),
+      incoming: [...this.ownIncoming(), ...(this.mirror?.rows() ?? [])],
       ...(outgoing ? { outgoing } : {}),
     };
   }
+
+  /** The requests waiting on this PC itself (RemoteWithPhones adds the phones'). */
+  protected ownIncoming(): RemoteIncoming[] { return this.target.incoming(); }
 
   /** Starts answering LAN probes when findable, ends open requests when not; call again when settings or the listener change. */
   refresh(): void {
@@ -163,10 +201,11 @@ export class RemoteService {
     this.lastFindable = findable;
   }
 
-  /** Shutdown: no more LAN answers (refresh() stays quiet). */
+  /** Shutdown: no more LAN answers (refresh() stays quiet), no more mirrored requests. */
   stop(): void {
     this.stopped = true;
     this.offCode();
+    this.mirror?.stop();
     this.deps.responder?.answer(undefined);
   }
 
@@ -179,8 +218,29 @@ export class RemoteService {
   /** Cancels this PC's open request, or closes its last outcome. */
   cancel(): void { this.joiner.cancel(); }
 
-  /** The person's answer to a request waiting here (`personId`: the person an employee's PC belongs to). */
-  decide(id: string, accept: boolean, personId?: string): void { this.target.decide(id, accept, personId); }
+  /**
+   * The person's answer to a request (`personId`: the person an employee's PC or a phone belongs to; `newPerson`: the
+   * person to make for it, F13). One waiting here is decided at once (throws); one waiting on another of my PCs (F17) is
+   * decided there – the returned promise settles with that PC's answer.
+   */
+  decide(id: string, accept: boolean, personId?: string, newPerson?: NewPerson): void | Promise<void> {
+    const decision: Decision = { id, accept, ...(personId ? { personId } : {}), ...(newPerson ? { newPerson } : {}) };
+    if (!this.holdsHere(id) && this.mirror?.holderOf(id)) return this.mirror.decide(decision);
+    this.decideHere(decision);
+  }
+
+  /** Does this PC itself hold the request `id` (RemoteWithPhones: the phones' too). */
+  protected holdsHere(id: string): boolean { return this.target.holds(id); }
+
+  /** The answer to a request this PC holds (also what another of my PCs' decide runs here). */
+  protected decideHere(decision: Decision): void { this.target.decide(decision.id, decision.accept, decision.personId, decision.newPerson); }
+
+  /** The person a device links as: the one picked, or (F13) the one Accept named, made now. */
+  protected personFor(personId: string | undefined, newPerson: NewPerson | undefined): string | undefined {
+    if (personId || !newPerson) return personId;
+    if (!this.deps.createPerson) throw new WorkforceError('unavailable', 'People cannot be added on this PC.');
+    return this.deps.createPerson(newPerson);
+  }
 
   /** POST /peer/pair with a Remote kind (REMOTE_KINDS). */
   handle(body: Record<string, unknown>, remote: { address?: string }): Promise<Reply> {
@@ -212,15 +272,26 @@ export class RemoteService {
     try { this.deps.admitted?.(personId); } catch (error) { this.deps.log.warn('employee welcome not sent', { personId, error: errorText(error) }); }
   }
 
-  /** A LAN hello probe gets this PC's public identity, own Remote ID (older PCs check it) and chain while it accepts requests. */
+  /**
+   * A LAN hello probe gets this PC's public identity, own Remote ID (older PCs check it), chain and (F09) company name
+   * while it accepts requests.
+   */
   private hello(): Candidate | undefined {
     if (!this.findable()) return undefined;
     const self = this.deps.mesh.selfInfo();
     const fingerprint = this.deps.identity.fingerprint;
-    return { deviceId: self.id, name: self.name, fingerprint, remoteId: remoteIdOf(fingerprint), addresses: self.addresses, ...this.chain() };
+    let company = '';
+    try { company = this.deps.company?.().trim().slice(0, 80) ?? ''; } catch { /* the answer goes without it */ }
+    return { deviceId: self.id, name: self.name, fingerprint, remoteId: remoteIdOf(fingerprint), addresses: self.addresses, ...this.chain(), ...(company ? { company } : {}) };
   }
 
-  private changed(): void {
+  /** This PC's own requests changed: the state goes to the window and phones, the list to my other PCs. */
+  protected changed(): void {
+    this.emitState();
+    this.mirror?.send();
+  }
+
+  private emitState(): void {
     try { this.deps.bus.emit('remote.updated', this.state()); } catch (error) { this.deps.log.warn('remote state not sent', { error: errorText(error) }); }
   }
 }

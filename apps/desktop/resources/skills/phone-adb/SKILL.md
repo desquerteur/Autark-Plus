@@ -1,6 +1,6 @@
 ---
 name: phone-adb
-description: I read this for any task on the human's Android phone. Controlling it over ADB (wireless debugging or USB) on this PC or a linked PC - setting up adb with my shell, pairing (phone.pair), phone.ui_tree first, tap/swipe/type with verification, and disconnecting.
+description: I read this when a phone without the Autark app is reached over ADB (USB or wireless debugging) on this PC or a linked PC - setting up adb with my shell, pairing (phone.pair), phone.ui_tree first, tap/swipe/type with verification, and disconnecting. A phone paired with the Autark app I use through the app (skill phone-access), and my phone.* steps go there by themselves.
 metadata:
   modes:
     - computer
@@ -13,7 +13,8 @@ The phone is the human's personal device: I stay within the task and stop when t
 
 ## 1. Is a phone there?
 I call `phone.devices` first. It lists connected phones with their state and phones nearby that
-offer pairing or a connect port.
+offer pairing or a connect port. A phone listed with "Autark app" is the person's own, linked through the app: a step
+without `serial` goes to it, and the skill phone-access is the one for it. ADB is the way for any other phone.
 - **adb is not installed**: I install it with my shell – Windows `winget install --id Google.PlatformTools -e`
   (then adb is on the PATH of new processes), macOS `brew install android-platform-tools`, Linux the
   `android-tools-adb` / `android-tools` package. Then I call `phone.devices` again.

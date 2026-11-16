@@ -121,7 +121,7 @@ test('MCP tools/list: remote tools get the optional device argument, other tools
       assert.deepEqual(device, DEVICE_PROPERTY, tool.title);
       assert.ok(!((tool.inputSchema.required as string[] | undefined) ?? []).includes('device'), `${tool.title}: device is optional`);
     } else if (tool.title === 'agents.update') {
-      assert.equal(device?.description, 'The PC its computer, browser and phone tools use.', 'agents.update keeps its own device field');
+      assert.match(String(device?.description), /^The PC it works on: on one of the person's own PCs its turns run there too/, 'agents.update keeps its own device field');
     } else {
       assert.equal(device, undefined, `${tool.title} runs here and takes no device`);
     }

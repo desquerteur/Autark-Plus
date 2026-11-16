@@ -57,6 +57,11 @@ export interface HostOps {
   /** B-072: opens a company on this PC (main/companies.ts; create: a new folder first); this window goes to the tray. */
   'company.open': { args: { id?: string | null; create?: boolean; start?: CompanyStart }; result: { ok: true; id: string | null } };
   /**
+   * 16.11.2026: takes a company off this PC (main/company-remove.ts): marks it, stops it, moves its folder to the recycle
+   * bin; `name` (its label) names it in the notice. Main answers first; the company open here quits on the next tick.
+   */
+  'company.remove': { args: { id: string | null; name?: string }; result: { ok: true } };
+  /**
    * B-076: someone watches side tab `tab` from another PC or a phone (main/side-driver/caster.ts): `on` wakes the page,
    * starts its screencast or renews it (it ends a minute after the last renewal), off ends it now. Frames reach the
    * runtime as `side-view` messages. B-081: `view` – the watcher's picture box (whole CSS px); the page has it as its
@@ -135,6 +140,7 @@ export const HOST_OPS: readonly HostOp[] = [
   'sideBrowser', // B-055
   'media.audio', 'media.image', // B-058
   'company.open', // B-072
+  'company.remove', // 16.11.2026
   'sideCast', 'sideInput', 'sideNav', // B-076
   'voice.rtcOffer', 'voice.rtcAnswer', 'voice.rtcClose', // owner 07.11.2026: dictation heard by the Codex plan
   'app.install', // B-080

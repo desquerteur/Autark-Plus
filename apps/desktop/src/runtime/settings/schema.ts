@@ -15,6 +15,7 @@ import { MODEL_USES, OFFABLE_USES, USE_ABOUT, USE_AUTO, USE_LABELS, type ModelUs
 import { KEY_HANDLE, PROVIDER_ID, PROVIDER_PROTOCOLS, providerNotes } from '../../shared/model/provider-entries.ts';
 import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
 import { MAX_WORDS } from '../../shared/voice/vocabulary.ts';
+import { humanDefault, MAX_HUMAN_MD } from '../../shared/model/agent-core.ts';
 
 type Plain = Record<string, unknown>;
 type Literal = string | number | boolean;
@@ -103,6 +104,9 @@ export const SECTIONS: readonly SectionDef[] = [
     text('notes', 'How you want to be spoken to, kept by the AI (a language per topic, a form of address) – every agent reads it', `text up to ${NOTES_MAX} characters`, { maxLength: NOTES_MAX, default: '' }),
     // B-085: chosen on the first run's About card; absent = whole. New hires read it into their SYSTEM.md; nothing enforces it.
     { key: 'pcAccess', about: 'How far the team goes on its own on this PC: whole = anywhere, careful = freely in its own folders and checks with you before changes elsewhere (null: whole)', type: 'string', options: ['whole', 'careful'] },
+    // Owner 16.11.2026 (Settings › Security): one text for every agent, after each agent's own HUMAN.md (context/prompt-stable.ts).
+    text('forEveryAgent', 'Your lines to every agent: the last part of each agent\'s instructions, after what you wrote to that agent alone (its HUMAN.md); you and the agents change it here or in Settings › Security', `text up to ${MAX_HUMAN_MD} characters, "" = none`,
+      { maxLength: MAX_HUMAN_MD, default: (pc: PcDefaults) => humanDefault(pc.language) }),
   ] },
   { key: 'preferences', title: 'Window and app', keys: [
     choice('theme', 'Colour scheme of the window', ['system', 'light', 'dark'], 'system'),

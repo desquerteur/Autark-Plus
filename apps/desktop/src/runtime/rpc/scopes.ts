@@ -14,9 +14,9 @@
 //             browser.sessions (agent ids only) devices with 'todo' on a secure transport. tabs.changed and
 //             tabs.position (B-076: the PC's side pane, which the phone shows too) devices with 'manage'. B-084 (D6):
 //             remote.updated, relay.updated, device.upserted and device.removed (Settings › Devices) devices with
-//             'settings' on a secure transport (as remote.* / devices.* themselves). pwa.updated,
-//             calendar.sources and 'browser:<agentId>' (the live view – devices pull frames with browser.pull)
-//             stay with the owner.
+//             'settings' on a secure transport (as remote.* / devices.* themselves); 16.11.2026 calendar.sources too
+//             (Settings › Calendar on the phone: calendar.addIcs … connectGoogle are 'settings' + secure). pwa.updated
+//             and 'browser:<agentId>' (the live view – devices pull frames with browser.pull) stay with the owner.
 //   external – C8: only 'chat:<its chat>', and there message.created/updated/removed and the
 //             external.mention of itself or of one of its sub-identities (members 'ext:api:<its key>:…',
 //             bridges/external-rpc.ts) – no run's row while it streams (B-075: its live values), no media, task or list events; messages as
@@ -57,8 +57,8 @@ const PANE_EVENTS: ReadonlySet<string> = new Set(['tabs.changed', 'tabs.position
 const BUS_ONLY: ReadonlySet<string> = new Set(['task.changed', 'phoneUse.reply', 'phoneUse.attached']);
 /** B-078: accounts on the phone (accounts.* is 'settings' on a secure transport, rpc/handlers/providers.ts). */
 const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed']);
-/** B-084 (D6): Settings › Devices on the phone (remote.* / devices.* are 'settings' on a secure transport). */
-const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed', 'apps.changed']);
+/** B-084 (D6): Settings › Devices on the phone (remote.* / devices.* are 'settings' on a secure transport); 16.11.2026 its Calendar page. */
+const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed', 'apps.changed', 'calendar.sources']);
 
 /** True for a syntactically valid topic ('chats' … or 'chat:<id>' / 'runs:<agentId>' / 'browser:<agentId>'). */
 export function isTopic(value: unknown): value is Topic {

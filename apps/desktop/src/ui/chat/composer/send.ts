@@ -5,6 +5,8 @@
 // The field empties at once and the draft is fresh for the next message (level back to normal); a failed
 // send gives everything back, the text as it was typed.
 // The composer sends `silent: true` only for a silent message, never `silent: false`.
+// 16.11.2026: a key in the text is stored by the runtime before the message (runtime/secrets/text-capture.ts); the
+// message comes back with its handle, and one notice in the status line says so (message-keys.ts noteSavedKeys).
 // Owns: that one send path. Never: parses commands (slash.ts), or renders.
 
 import { newId } from '../../../shared/ids.ts';
@@ -15,6 +17,7 @@ import { clearDraft, draftFor, updateDraft } from './draft.ts';
 import { takeDraftSpeech } from './draft-speech.ts';
 import { marksFor } from './draft-marks.ts';
 import { heldKey } from '../../lib/take-store.ts';
+import { noteSavedKeys } from '../message-keys.ts';
 
 export interface DraftSend {
   conversationId: string;
@@ -44,7 +47,7 @@ export async function sendDraft(send: DraftSend): Promise<boolean> {
   const attachments = saved.attachments;
   const marks = marksFor(saved.text, saved.marks, body); // B-082: hidden beside the plain body; back with the draft on failure
   try {
-    await rpc.call('messages.send', {
+    const sent = await rpc.call('messages.send', {
       conversationId, body,
       attachments: attachments.length ? attachments : undefined,
       secrets: saved.secrets?.length ? saved.secrets : undefined,
@@ -54,6 +57,7 @@ export async function sendDraft(send: DraftSend): Promise<boolean> {
       ...(spoken.speech ? { speech: spoken.speech } : {}),
       ...(marks ? { marks } : {}),
     });
+    noteSavedKeys(body, sent?.body ?? body);
     return true;
   } catch (error) {
     toastError(error, 'Message not sent');

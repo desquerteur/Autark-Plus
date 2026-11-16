@@ -1,11 +1,13 @@
 // The chat's live bar (runtime/chat/live.ts, ConversationSummary.live): a running run or split part shows in a chat when
 // it came from that chat or posted into it during this run – nothing else; its step comes from the run journal, its
-// model from the activity; it ends with its run; every change reaches the list as conversation.upserted.
+// model from the activity; it ends with its run; every change reaches the list as conversation.upserted. F10: another
+// PC's runs merge in (deviceId) and leave with that PC's next state or its link.
 // Owns: these assertions only. Never: engines, timers or sleeps (liveGapMs 0).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AgentActivity, RunItem } from '../../../src/shared/model/runs.ts';
+import { allActivity, chatLiveOf } from '../../../src/runtime/chat/live.ts';
 import { agent, harness } from './harness.ts';
 
 function setup() {
@@ -58,4 +60,31 @@ test('split parts show as their own lines in the chat they work for', () => {
   const live = h.chats.summary(home.id).live!;
   assert.deepEqual(live.map((run) => [run.runId, run.split?.title]), [['run_tom', undefined], ['run_p1', 'Part 1'], ['run_p2', 'Part 2']], 'start order');
   assert.deepEqual(h.chats.summary(home.id).working, ['ag_tom']);
+});
+
+test('F10: another PC\'s runs merge into the bar in start order, marked with that PC; they leave with its next state or its link', () => {
+  const { h, home, other, active, tom } = setup();
+  const live = chatLiveOf(h.bus)!;
+  active([tom]);
+  const changes: number[] = [];
+  live.onChange(() => changes.push(1));
+  const lea: AgentActivity = { agentId: 'ag_lea', runId: 'run_lea', conversationId: home.id, note: '', startedAt: 50, modelName: 'GPT-6.1' };
+  live.setRemote('pc_b', [{ activity: lea, step: 'Reading a.pdf', chats: [home.id] }]);
+  assert.deepEqual(h.chats.summary(home.id).live?.map((run) => [run.runId, run.deviceId, run.step]), [['run_lea', 'pc_b', 'Reading a.pdf'], ['run_tom', undefined, undefined]]);
+  assert.deepEqual(h.chats.summary(home.id).working, ['ag_lea', 'ag_tom']);
+  assert.equal(h.chats.summary(other.id).live, undefined);
+  assert.equal(h.of('conversation.upserted').at(-1)!.id, home.id, 'the chat is announced');
+  assert.deepEqual(changes, [], 'another PC\'s state is no change of this PC\'s own work');
+  assert.deepEqual(live.snapshot().map((share) => share.activity.runId), ['run_tom'], 'only this PC\'s runs travel on');
+  assert.deepEqual(allActivity(h.bus, [tom]).map((entry) => [entry.runId, entry.deviceId]), [['run_tom', undefined], ['run_lea', 'pc_b']]);
+  active([tom, { ...lea, deviceId: 'pc_b' }]);
+  assert.deepEqual(live.snapshot().map((share) => share.activity.runId), ['run_tom'], 'an entry of another PC never counts as this PC\'s');
+  const before = h.of('conversation.upserted').length;
+  live.setRemote('pc_b', [{ activity: lea, step: 'Reading a.pdf', chats: [home.id] }]);
+  assert.equal(h.of('conversation.upserted').length, before, 'the same state announces nothing');
+  live.setRemote('pc_b', undefined);
+  assert.deepEqual(h.chats.summary(home.id).live?.map((run) => run.runId), ['run_tom'], 'gone with its link');
+  assert.deepEqual(allActivity(h.bus, [tom]).map((entry) => entry.runId), ['run_tom']);
+  h.bus.emit('run.item', call('run_tom', 'Read', { file_path: 'C:/x.md' }));
+  assert.deepEqual(changes, [1], 'a step of this PC\'s own run is a change');
 });

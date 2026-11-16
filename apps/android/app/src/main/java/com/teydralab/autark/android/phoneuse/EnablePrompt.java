@@ -14,6 +14,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import com.teydralab.autark.android.AppNotices;
 
 public final class EnablePrompt {
     private static final String CHANNEL = "phone-use";
@@ -44,7 +45,7 @@ public final class EnablePrompt {
         PendingIntent appInfo = PendingIntent.getActivity(context, 2, new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.fromParts("package", context.getPackageName(), null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, CHANNEL) : new Notification.Builder(context);
-        builder.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Let the AI use this phone").setContentText(text())
+        AppNotices.branded(builder).setContentTitle("Let the AI use this phone").setContentText(text())
                 .setStyle(new Notification.BigTextStyle().bigText(text())).setContentIntent(settings).setAutoCancel(true)
                 .addAction(new Notification.Action.Builder(null, "App info", appInfo).build());
         try { manager.notify(ID, builder.build()); } catch (SecurityException error) { /* notifications not allowed: the app shows the text when open */ }

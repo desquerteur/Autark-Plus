@@ -82,8 +82,12 @@ export type ClientScope =
   | { kind: 'agent'; agentId: string; runId: string } // MCP lease of a running agent
   /** C8: an external agent docked into one chat as member `memberId` (bridges/external-agents.ts). */
   | { kind: 'external'; memberId: string; conversationId: string; tokenId: string }
-  /** F-52: a person of the organisation (not the owner) on one of their devices; `secure` as for devices (runtime/people). */
-  | { kind: 'person'; personId: string; deviceId: string; tokenId: string; secure?: boolean };
+  /**
+   * F-52: a person of the organisation (not the owner) on one of their devices; `secure` as for devices (runtime/people).
+   * F13: `role` – the person's role (shared/model/people.ts PersonRole) when the token was checked ('ceo' opens the CEO's
+   * methods; absent = 'member').
+   */
+  | { kind: 'person'; personId: string; deviceId: string; tokenId: string; secure?: boolean; role?: 'member' | 'ceo' };
 
 /** First frame on a WebSocket connection. */
 export interface Hello {

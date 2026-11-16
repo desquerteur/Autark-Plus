@@ -1,6 +1,7 @@
-// Composer Plus menu: Files & folders, Photos & screenshots, Secret (the composer's secret mode, settings/SecretRows.tsx),
-// Task (turns the draft into a task; an empty field gets "/task " to write it), and how the draft goes out – "Send as
-// important", "Send silently" and "Schedule…" (which switches the composer into schedule mode, composer/ScheduleBar.tsx;
+// Composer Plus menu: Files & folders, Photos & videos, Take photo (a phone: the camera app), Record audio and Record
+// video (F23: composer/RecordBar.tsx above the field; a phone's video is the camera app's), Secret (the composer's
+// secret mode, settings/SecretRows.tsx), Task (turns the draft into a task; an empty field gets "/task " to write it),
+// and how the draft goes out – "Send as important", "Send silently" and "Schedule…" (which switches the composer into schedule mode, composer/ScheduleBar.tsx;
 // the Send button's right-click menu has the same three, slash.ts sendMenuItems). In schedule mode the first two read
 // "Schedule as important" / "Schedule silently" and "Schedule…" is ticked. Owner 04.11.2026: no entry is ever greyed out.
 // While a take runs the menu starts with "Discard dictation" (two deliberate clicks, nothing moves).
@@ -24,6 +25,11 @@ export interface PlusActions extends SendActions {
   secret?: () => void;
   pickFiles: () => void;
   pickImages: () => void;
+  /** F23: the composer's RecordBar (a phone's video: the camera app). */
+  recordAudio: () => void;
+  recordVideo: () => void;
+  /** Where the camera app takes the photo (a phone); the desktop's camera bar has Photo. */
+  takePhoto?: () => void;
   makeTask: () => void;
 }
 
@@ -33,7 +39,10 @@ export function PlusMenu(props: { chat: ConversationSummary; actions: PlusAction
   const { actions } = props;
   const items: MenuItem[] = [
     { label: 'Files & folders', onSelect: actions.pickFiles },
-    { label: 'Photos & screenshots', onSelect: actions.pickImages },
+    { label: 'Photos & videos', onSelect: actions.pickImages },
+    ...(actions.takePhoto ? [{ label: 'Take photo', onSelect: actions.takePhoto }] : []),
+    { label: 'Record audio', onSelect: actions.recordAudio },
+    { label: 'Record video', onSelect: actions.recordVideo },
     ...(can('secrets.capture') && actions.secret ? [{ label: 'Secret', onSelect: actions.secret }] : []),
     ...(can('tasks.create') ? [{ label: 'Task', onSelect: actions.makeTask }] : []),
   ];

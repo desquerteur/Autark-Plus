@@ -12,7 +12,7 @@ export interface Origin {
   source: string;
   /** Short human label ("New mail in office@…", "To-do area", "Routine \"Morning check\""). */
   label: string;
-  /** Staged mail capability, set by trusted runtime code, never from message text. Not yet issued by MailWaker. */
+  /** A scoped mail run's identity of before 16.11.2026; nothing issues it since a run a mail started works fully (rows read back as they are). */
   mailScope?: { appId: string; generation?: string; messageIds: string[] };
   /** Durable mail event identity, not an execution capability. Empty ids mean untrusted/legacy mail. */
   mailProvenance?: { appId: string; generation?: string; messageIds: string[] };

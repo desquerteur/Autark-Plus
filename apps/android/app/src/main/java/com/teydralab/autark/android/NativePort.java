@@ -1,21 +1,31 @@
 // Owns: the one channel between the PC's page and the app (B-084 decision 4). After every new main-frame document of
 // the app's own origin it makes a WebMessageChannel, hands the page one end as 'autark-port' (posted to that origin
 // only, so opaque-origin agent frames never get it), keeps the other and drops the previous one. Messages are JSON
-// {t, …} both ways. Page → app: 'colors' (SystemBars), 'speak'/'stopSpeech' (PhoneSpeech), 'download' (PhoneDownloads)
-// and 'haptic' are handled here; 'card', 'switch', 'add', 'forget' and 'pcs' go to the activity (Listener). App → page:
-// send(), with the latest 'companies' and 'status' sent again to every new page. Never: addJavascriptInterface, a
-// second port, or a message from another origin.
+// {t, …} both ways. Page → app: 'colors' (SystemBars), 'speak'/'stopSpeech' (PhoneSpeech), 'download' (PhoneDownloads),
+// 'haptic' and 'shot' (16.11.2026: a picture of the app's own window for a feedback report – PixelCopy, longest side
+// SHOT_SIDE, JPEG 85, answered as 'shot' {data} or {error}) are handled here; 'card', 'switch', 'add', 'forget', 'pcs'
+// and 'refused' (the PC refused the page's token) go to the activity (Listener). App → page: send(), with the latest
+// 'companies' and 'status' sent again to every new page, a crash report the person chose to send ('crash' {text},
+// CrashReport's Report) once, to the first page that has its port – then the report's file goes –, and 'feedback'
+// {down} (16.11.2026: volume up and down pressed together, MainActivity/VolumePair – the feedback cell's press). Never:
+// addJavascriptInterface, a second port, a message from another origin, or a picture of anything but the app's window.
 package com.teydralab.autark.android;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.Log;
 import android.view.HapticFeedbackConstants;
+import android.view.PixelCopy;
+import android.view.View;
+import android.view.Window;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
 import android.webkit.WebView;
+import java.io.ByteArrayOutputStream;
 import java.util.function.Supplier;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -34,9 +44,16 @@ final class NativePort {
         void forget();
         /** Show the PC picker of the current company. */
         void pickPc();
+        /** The PC refused the page's token (4401): the page goes to the next PC of the company that has not refused. */
+        void refused();
     }
 
     private static final String TAG = "AutarkPort";
+    /** The longest side of a window picture (the PC's feedback form shows it full size). */
+    static final int SHOT_SIDE = 1600;
+    /** As much of a crash report as a feedback report carries (the PC keeps clientDiagnostics to 12 000 characters). */
+    static final int CRASH_CHARS = 12_000;
+    private final Activity activity;
     private final Supplier<String> origin;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -46,8 +63,10 @@ final class NativePort {
     private WebView view;
     private JSONObject companies;
     private JSONObject status;
+    private String crash;
 
     NativePort(Activity activity, Supplier<String> origin, Listener listener) {
+        this.activity = activity;
         this.origin = origin;
         this.listener = listener;
         this.speech = new PhoneSpeech(activity, (id) -> send(message("speechDone", "id", id)));
@@ -72,6 +91,19 @@ final class NativePort {
         view = loaded;
         if (companies != null) send(companies);
         if (status != null) send(status);
+        sendCrash();
+    }
+
+    /** The last crash's report the person chose to send (main thread): it goes to the page once it has its port. */
+    void crash(String report) {
+        crash = report.length() > CRASH_CHARS ? report.substring(0, CRASH_CHARS) : report;
+        sendCrash();
+    }
+
+    private void sendCrash() {
+        if (crash == null || !send(message("crash", "text", crash))) return;
+        crash = null;
+        CrashReport.clear(activity); // handed over: the page keeps it in its report (and its outbox while the PC is away)
     }
 
     /** App → page; false while the page has no port. Any thread. */
@@ -103,6 +135,11 @@ final class NativePort {
     /** The link came back after a pause or a network change: the page refreshes its data. */
     void resume() { send(message("resume")); }
 
+    /** Volume up and down together went down (true) or were let go (false): the page presses its feedback cell. */
+    void feedback(boolean down) {
+        try { send(new JSONObject().put("t", "feedback").put("down", down)); } catch (JSONException ignored) { /* never for these values */ }
+    }
+
     PhoneDownloads downloads() { return downloads; }
 
     /** The page is gone (renderer gone, forget, onDestroy): ends the port, the voice and a half-received file. */
@@ -133,7 +170,44 @@ final class NativePort {
             case "add": listener.addCompany(); break;
             case "forget": listener.forget(); break;
             case "pcs": listener.pickPc(); break;
+            case "refused": listener.refused(); break;
+            case "shot": shot(); break;
             default: Log.w(TAG, "unknown message " + in.optString("t"));
+        }
+    }
+
+    /** A picture of the app's own window (main thread): PixelCopy, then scaled and encoded off the main thread. */
+    private void shot() {
+        Window window = activity.getWindow();
+        View decor = window == null ? null : window.peekDecorView();
+        if (decor == null || decor.getWidth() <= 0 || decor.getHeight() <= 0) { send(message("shot", "error", "The app's window is not drawn yet.")); return; }
+        Bitmap full = Bitmap.createBitmap(decor.getWidth(), decor.getHeight(), Bitmap.Config.ARGB_8888);
+        try {
+            PixelCopy.request(window, full, (result) -> {
+                if (result != PixelCopy.SUCCESS) { full.recycle(); send(message("shot", "error", "Android did not copy the window (" + result + ").")); return; }
+                Thread encode = new Thread(() -> send(encoded(full)), "autark-shot");
+                encode.setDaemon(true);
+                encode.start();
+            }, main);
+        } catch (IllegalArgumentException | IllegalStateException error) {
+            full.recycle();
+            send(message("shot", "error", "Android did not copy the window."));
+        }
+    }
+
+    /** The picture as {t:'shot', data:'data:image/jpeg;base64,…'} (longest side at most SHOT_SIDE). */
+    private static JSONObject encoded(Bitmap full) {
+        try {
+            float scale = Math.min(1f, SHOT_SIDE / (float) Math.max(full.getWidth(), full.getHeight()));
+            Bitmap sized = scale >= 1f ? full : Bitmap.createScaledBitmap(full, Math.round(full.getWidth() * scale), Math.round(full.getHeight() * scale), true);
+            ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+            sized.compress(Bitmap.CompressFormat.JPEG, 85, jpeg);
+            if (sized != full) sized.recycle();
+            return message("shot", "data", "data:image/jpeg;base64," + Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP));
+        } catch (RuntimeException | OutOfMemoryError error) {
+            return message("shot", "error", "The picture could not be made on this phone.");
+        } finally {
+            full.recycle();
         }
     }
 

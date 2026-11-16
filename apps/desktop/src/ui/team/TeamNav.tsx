@@ -2,9 +2,11 @@
 // (teamNavHeader – "Team", the in-place search and ONE fixed "Add" cell whose menu holds Agent, Person, Import an agent
 // team… and Agent from a folder… (both set up with AI) and Start setup again). A manager row (or a person with
 // reports) expands its reports right below; branches open by hand (remembered per device) and above the open agent.
-// While searching: matching people and agents as flat rows. At the very end a collapsed "Archived (n)" group
-// (ArchivedGroup.tsx; a right click on its rows offers Restore).
-// Owns: the team navigation, its expand state (per device), search and the Add menu with its dialogs.
+// While searching: matching people and agents as flat rows. At the very end – F14 – a collapsed "Invited (n)" group for the
+// owner (people who never joined: not in the tree until they do; their menu offers Remove), then the collapsed
+// "Archived (n)" group (ArchivedGroup.tsx; a right click on its rows offers Restore). Opening either only adds rows below.
+// F13: Add › Person opens the Add person page (#/team/person/new, PersonNew.tsx) – no pop-up.
+// Owns: the team navigation, its expand state (per device), search, the Invited group and the Add menu with its dialogs.
 // Never: edits the org, draws the tree's rows itself (TeamTree.tsx) or header markup (lib/header.tsx does).
 
 import { useEffect, useState } from 'preact/hooks';
@@ -12,18 +14,20 @@ import { signal } from '@preact/signals';
 import type { Agent } from '../../shared/model/org.ts';
 import type { Person } from '../../shared/model/people.ts';
 import type { MenuSection } from '../lib/ui.tsx';
+import { Icon } from '../lib/ui.tsx';
 import type { HeaderProps } from '../lib/header.tsx';
 import { openContextMenu } from '../lib/context-menu.tsx';
+import { go } from '../lib/router.ts';
 import { agents, isMobile, route } from '../lib/store.ts';
 import { can } from '../lib/session.ts';
 import { setupAgainAllowed, startSetupAgain } from '../onboarding/setup-again.ts';
 import { matchesAgent } from './model.ts';
-import { ensureSpaces, teamPeople } from './org-state.ts';
+import { ensureSpaces, invitedPeople, teamPeople } from './org-state.ts';
 import { AgentRow, PersonRow, TeamTree } from './TeamTree.tsx';
 import type { Expand } from './TeamTree.tsx';
 import { ArchivedGroup } from './ArchivedGroup.tsx';
 import { NewAgentDialog } from './NewAgentDialog.tsx';
-import { PersonDialogs, personDialog } from './person-dialogs.tsx';
+import { PersonDialogs } from './person-dialogs.tsx';
 import { folderAgentRequest, importTeamRequest, setUpWithAi } from './set-up-with-ai.ts';
 import { useSplitNav } from '../splits/SplitNav.tsx'; // B-057
 
@@ -38,7 +42,7 @@ const addingAgent = signal(false);
 function addMenu(): MenuSection[] {
   const sections: MenuSection[] = [{ items: [
     { label: 'Agent', onSelect: () => { addingAgent.value = true; } },
-    ...(can('people.save') ? [{ label: 'Person', onSelect: () => { personDialog.value = { kind: 'new' as const }; } }] : []),
+    ...(can('people.save') ? [{ label: 'Person', onSelect: () => go.addPerson() }] : []),
     { label: 'Import an agent team…', onSelect: () => { void setUpWithAi(importTeamRequest()); } },
     { label: 'Agent from a folder…', onSelect: () => { void setUpWithAi(folderAgentRequest()); } },
   ] }];
@@ -84,6 +88,23 @@ function matchesPerson(person: Person, query: string): boolean {
   return person.name.toLowerCase().includes(q) || person.title.toLowerCase().includes(q);
 }
 
+/** F14: "Invited (n)" – the owner's people who never joined, collapsed (open while one of them is the open page). */
+function InvitedGroup(props: { activeId?: string }) {
+  const list = invitedPeople.value;
+  const [open, setOpen] = useState<boolean | undefined>(undefined); // undefined: by itself (open on one of theirs)
+  if (!list.length) return null;
+  const shown = open ?? list.some((person) => person.id === props.activeId);
+  return (
+    <div class="team-space team-archived team-invited">
+      <button type="button" class="team-archived-toggle" aria-expanded={shown} onClick={() => setOpen(!shown)}>
+        <Icon name={shown ? 'caret-down' : 'caret-right'} size={12} />
+        <span>Invited ({list.length})</span>
+      </button>
+      {shown && list.map((person) => <PersonRow key={person.id} person={person} depth={0} reports={0} activeId={props.activeId} />)}
+    </div>
+  );
+}
+
 export function TeamNav() {
   const query = search.value.query;
   const [stored, setStored] = useState<string[]>(readExpanded);
@@ -127,6 +148,7 @@ export function TeamNav() {
             : <p class="empty-state team-empty">Nobody found</p>)
           : <TeamTree expand={expand} />}
         {!q && !list.length && <p class="empty-state team-empty">No agents yet</p>}
+        {!q && <InvitedGroup activeId={personId} />}
         {!q && <ArchivedGroup />}
       </div>
       <NewAgentDialog open={addingAgent.value} onClose={() => { addingAgent.value = false; }} />

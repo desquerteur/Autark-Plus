@@ -5,12 +5,16 @@
 // chat as written. The menus' level entries (sendMenuItems: the Plus menu and the Send button's right-click menu) do
 // the same as /important and /silent, and none is ever greyed out (owner 04.11.2026): with nothing to send yet they set
 // the draft's level (a second pick sets it back to normal, the tick shows it).
+// 16.11.2026: "/feedback text" saves the report and sends it like the feedback menu's Send, with one status-line toast
+// (its report number, or why it stays saved – a send that found no connection goes again by itself on the PC).
 // Owns: the command list, their effects and the level entries. Never: free-text interpretation (agents do).
 
 import type { MethodName } from '../../../shared/api/methods.ts';
 import { newId } from '../../../shared/ids.ts';
 import type { ConversationSummary, MessageLevel } from '../../../shared/model/chat.ts';
-import { rpc } from '../../lib/rpc.ts';
+import { reportNumber } from '../../../shared/model/feedback-delivery.ts';
+import type { FeedbackReport } from '../../../shared/model/system.ts';
+import { errorText, rpc, RpcError } from '../../lib/rpc.ts';
 import { can } from '../../lib/session.ts';
 import { feedbackOpen } from '../../lib/shell-state.ts';
 import { pushToast, toastError } from '../../lib/toasts.ts';
@@ -88,6 +92,30 @@ export async function createTaskFromText(conversationId: string, text: string): 
   }
 }
 
+/** Why a send left the report saved, in one line: no connection goes again by itself on the PC; else the error. */
+function notSentLine(error: unknown): string {
+  const reason = error instanceof RpcError ? error.data.details?.reason : undefined;
+  if (reason === 'offline' || reason === 'timeout' || reason === 'server') return 'Not sent yet – it goes by itself when the connection is back.';
+  return errorText(error);
+}
+
+/** "/feedback text": saved on the PC, then sent where this connection may send; one toast either way. */
+export async function feedbackFromText(text: string, conversationId: string): Promise<boolean> {
+  let report: FeedbackReport;
+  try {
+    report = await rpc.call('feedback.create', { text, view: 'chat', conversationId });
+  } catch (error) { toastError(error, 'Feedback could not be saved'); return false; }
+  if (!can('feedback.send')) { pushToast({ title: 'Feedback saved' }, 4000); return true; }
+  try {
+    const sent = await rpc.call('feedback.send', { id: report.id });
+    const number = reportNumber(sent.receiptId);
+    pushToast({ title: number ? `Feedback sent · No. ${number}` : 'Feedback sent' }, 4000);
+  } catch (error) {
+    pushToast({ title: 'Feedback saved', body: notSentLine(error) }, 6000);
+  }
+  return true;
+}
+
 export interface SlashContext {
   chat: ConversationSummary;
   openModelMenu: () => void;
@@ -119,11 +147,7 @@ export async function runSlash(command: { name: string; arg: string }, ctx: Slas
       } catch (error) { toastError(error); return false; }
     case 'feedback':
       if (!arg) { feedbackOpen.value = { view: 'chat', conversationId: chat.id }; return true; }
-      try {
-        await rpc.call('feedback.create', { kind: 'idea', text: arg, view: 'chat', conversationId: chat.id });
-        pushToast({ title: 'Feedback saved' }, 3000);
-        return true;
-      } catch (error) { toastError(error); return false; }
+      return feedbackFromText(arg, chat.id);
     default:
       return false;
   }

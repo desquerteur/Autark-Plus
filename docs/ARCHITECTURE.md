@@ -56,7 +56,8 @@ tells the AI.
   `runtime-host.ts` (fork, launch-token handshake, restart with backoff), `runtime-link.ts`/`renderer-link.ts`,
   `window.ts` (hardened window, hidden title bar), `window-recovery.ts` (a renderer crash reloads; more than two
   in a minute show "Try again"), `tray.ts` (Open, Quit, "Stop all agent work"), `work-stop.ts` (global shortcut),
-  `companies.ts` (several companies per installation, §3), `host-services.ts` (notifications with their sound, §4.2),
+  `companies.ts` (several companies per installation, §3; leaving or deleting one: `company-remove.ts`),
+  `host-services.ts` (notifications with their sound, §4.2),
   `updates/*` (electron-updater state machine; on macOS, where Squirrel.Mac refuses an ad-hoc signed app, an own
   self-update `updates/mac-self-update.ts`, only once the product is named Autark), `identity-move.ts` (B-066: at the
   first start as Autark the old data folder `Proactive Agent Workforce` moves by one atomic rename – never copied or
@@ -74,14 +75,18 @@ tells the AI.
   block catalog (`shared/blocks`), text and voice helpers. No Node, DOM or Electron imports.
 * **Who calls** (`shared/api/protocol.ts` `ClientScope`, decided by the transport, never by the client): `owner`
   (desktop window, local CLI, bearer token from `runtime.json`), `device` (a paired phone/browser of the owner),
-  `person` (a device of an employee), `peer` (a linked PC runtime), `agent` (an MCP lease of a running turn),
+  `person` (a device of an employee or a co-CEO – the scope carries the person's `role`, §8), `peer` (a linked PC
+  runtime), `agent` (an MCP lease of a running turn),
   `external` (an external agent docked into one chat). `rpc/server.ts` dispatches, `rpc/scopes.ts` filters pushed
   events, the handler table (`rpc/handlers/*`) decides which scope may call what.
 * **HTTP server** (`runtime/http/server.ts`, port 47811 or the next free one): static UI and service worker for the
   PWA, `/ws` RPC, `POST /rpc` (tokenless pairing/join exchange, or a bearer token for programs), `GET /events`
   (Server-Sent Events, `docs/EXTERNAL_PROTOCOL.md`), `/mcp` (the MCP hub, loopback only), `/files/<sha256>`,
-  `/sandbox/app` (mini-tools for the PWA). `http/peer-server.ts` is the separate peer listener (47812) other PCs
-  dial; it is open only while needed. Host allowlist, Origin check and the bind gate are in `http/security.ts`.
+  `/sandbox/app` (mini-tools for the PWA), `GET /ui-hashes.json` (the sha256 of every UI file, for the iPhone web app's
+  check, §8; `shared/model/ui-hashes.ts`). `http/peer-server.ts` is the separate peer listener (47812) other PCs
+  dial, and the Android app at `/peer/phone` (§8); it is open only while a PC or an Android phone is linked. It holds at
+  most 4 unfinished handshakes per address (503 beyond, `MAX_HANDSHAKES_PER_ADDRESS`) and waits 2 s for a refused
+  socket's close (`PEER_CLOSE_WAIT_MS`). Host allowlist, Origin check and the bind gate are in `http/security.ts`.
 
 ## 3. Data: a SQLite store plus a few files
 
@@ -98,11 +103,29 @@ new ones `company-2`, `company-3` …; the folders are the list). `main/index.ts
 before the single-instance lock, so each company is its own process with its own lock, runtime, database,
 `settings.json`, tray, window, Remote ID and "Keep agents running" launcher (task, LaunchAgent or unit named with its id);
 the workspace of every company but the first is `<data>/workspace`, and `AUTARK_DATA=<data>` points its agents' `wf`
-at its own runtime. The profile menu (`ui/shell/ProfileMenu.tsx`, desktop) lists the companies (the
-label from the profile's company or name) and "New company"; `companies.open` (host op `company.open`) starts the target
+at its own runtime. `logins` is a reserved name: `<appData>/Autark Companies/logins` is the PC's one folder of plan
+logins that all its companies share (§6). Every `CompanyEntry` carries its `folder` (`first` or the id, shared
+`folderOf`), so two companies of the same name are told apart. The profile menu (`ui/shell/ProfileMenu.tsx`, desktop)
+lists the companies (the label from the profile's company or name, the folder under a name another company shares),
+"New company" and "Import a company"; `companies.open` (host op `company.open`) starts the target
 detached or shows it if it runs, and the asking window hides to its tray while its agents keep working; a new company's
-first window runs the normal first run. Only the first company runs the updater (About says so in the others); after an
-update it starts every other company whose run-state was running. The tray's "Stop all agent work" and the global
+first window runs the normal first run. **Leave, delete, export, import** (16.11.2026; Settings › General › Companies,
+`ui/settings/CompaniesGroup.tsx`, desktop window only, facts from `companies.list {facts: true}`): `companies.remove
+{id|null}` → host op `company.remove` → `main/company-remove.ts` writes the mark `company-removed.json` first (from then
+the company is never listed, opened, woken or started; `--company=` of a removed or missing folder quits), a running
+company quits on a loopback request, and the sweep – after its runtime ended – takes its start at sign-in off and moves
+the folder to the recycle bin (never a hard delete; the first company's entries go via `<Autark Companies>/first –
+removed <time>`, and a plain start then opens the next company); the only company is refused, `~/Workforce` and
+`logins` are never touched. Leave asks once (an employee company or one with linked PCs), Delete twice with the name
+typed. `companies.export {id?, dir}` writes '<name> <time>' with a backup plus `secrets.csv`; `companies.import {path}`
+stages that backup's restore into the next free company folder (`portability/company.ts`). Every company runs the
+updater (16.11.2026, `main/desktop.ts`, `companyArgs`); one install runs at a time per PC (`updates/install-helper.ts`:
+the lock folder `%TEMP%\autark-install.lock`; a company that asks while it is held installs nothing, waits and restarts
+with `--updated --company=<id>`; on macOS the swap script restarts the company with `open -n … --args`); after an update
+it starts every other company whose run-state was running, the first included (`wakeCompanies`). A linked own PC's
+newer version (`device.upserted` caps `version`) triggers one throttled update check (`updates-wiring.ts`
+`siblingUpdates`); a version whose install did not land is not downloaded again by itself and its notice stays until
+dismissed (About shows it). The tray's "Stop all agent work" and the global
 shortcut stop every company on this PC (`work.stop` over loopback `/rpc` with each one's token from its `runtime.json`;
 a company whose shortcut registration failed retries while its agents work); the window's own stop and Resume act on
 its own company. The uninstaller removes the other companies' launcher tasks too (`assets/installer.nsh`).
@@ -113,7 +136,7 @@ its own company. The uninstaller removes the other companies' launcher tasks too
 | `settings.json` | **The only settings store**, written whole: JSON with comments (profile, preferences, notifications, voice, routing = "Models", onboarding, feedback, pwa, devices, day, calendar). Every key is present with its current value and a comment line above it naming its purpose, options or range and default; `null` means the default | `settings/schema.ts` (the one table), `read.ts`, `service.ts`, `validate.ts`, `defaults.ts` |
 | `settings.schema.json` | JSON Schema (draft-07) of the same table for editors and scripts: enums, ranges, patterns, defaults, descriptions; written by the app once per start – never edit | `settings/schema.ts` (`schemaText()`), `settings/service.ts` |
 | `theme.css` | The app's look: CSS applied live on top of the shipped styles (tokens such as `--surface`, `--text`; dark mode `:root[data-theme=dark]`). Delete it to go back | `root/theme.ts` |
-| `agents/<id>/` | `SYSTEM.md` (the agent's instructions – authoritative), `HUMAN.md` (the person's own lines, last in its prompt), `skills/<name>/SKILL.md` (its Main Skills), `agent.json`, `avatar.png/jpg` copy; `agents/README.md` says who is who | `agent-core/*` |
+| `agents/<id>/` | `SYSTEM.md` (the agent's instructions – authoritative), `HUMAN.md` (the person's own lines near the end of its prompt; only "for every agent" from `settings.json` follows, §5), `skills/<name>/SKILL.md` (its Main Skills), `agent.json`, `avatar.png/jpg` copy; `agents/README.md` says who is who | `agent-core/*` |
 | `memory/` | **The memory tree** (§5.2): one Markdown file per entry in folders by who it is for – `company/`, `branches/<space>/`, `agents/<id>/`, `references/<person>/`, `chats/<chat>/` and any topic subfolder (`_folder.md` describes a folder). The files are the truth; anyone may edit them; writing or changing one makes it findable with `knowledge.find` (by words; by meaning where a person chose an embedding model) | `knowledge/memory-*.ts`, `tools/builtin/memory.ts` |
 | `prompts/` | Own versions of the shipped prompts (`identity`, `rules`, `skills`, `compaction`, `onboarding`, `agent-default`, `subconscious`) – a file here replaces the shipped one | `context/templates.ts` |
 | `modes/` | Own modes (`<key>.md`), replacing a shipped mode of the same key | `modes/service.ts` |
@@ -123,7 +146,8 @@ its own company. The uninstaller removes the other companies' launcher tasks too
 | `side-tabs.json` | The browser tabs per space: `global` (the person's pane), `chat:<id>` (a chat's area), `agent:<id>` (an agent's own area, kept by that agent); the window follows an edit within a second (§10) | `root/side-tabs.ts`, `main/workspace-tabs.ts` |
 
 App-managed (never reported by the watcher): `workforce.db` (+ WAL), `blobs/ab/cd/<sha256>` (content-addressed
-files, `files/store.ts`), `accounts/<provider>/<id>/` (isolated CLI homes), `browser-profiles/<agentId>/`, `logs/`,
+files, `files/store.ts`), `accounts/<provider>/<id>/` (isolated CLI homes headless and in tests; the desktop app
+keeps them in the PC's shared `<Autark Companies>/logins/<provider>/<folder>`, §6), `browser-profiles/<agentId>/`, `logs/`,
 `tmp/`, `backups/`, `exports/`, `engine-cwd/` (empty folder CLI engines start in), `engine-prompts/`,
 `models/speech/` (local speech models and, on the same download rail, the local embedding model `embedding-minilm-l12-int8`, fetched on first need, §5.3), `engine-transcripts/` (rebuilt Claude Code sessions, §5.5), `runtime.json` ({port, token} while the app runs), `boot.json`,
 `run-state.json`, `next-due.json`, `window-state.json`, `bin/` (the agents' `wf` shim, below). The workspace for projects
@@ -142,7 +166,8 @@ key – purpose, options or range, pattern, default – and everything else is b
 (`schemaText()`), the defaults (`defaults.ts`), the checks (`validate.ts`) and the reader (`parseText()`/`stripJsonc()`:
 `//` and `/* */` comments outside strings and trailing commas are accepted, no dependency). Reading (`read.ts`): defaults
 ⊕ file; each section is validated on its own; an invalid section keeps its last good value and shows a quiet notice;
-`null` or a missing key means the default; `"$schema"` is skipped; unknown keys are dropped. Writing: the app writes
+`null` or a missing key means the default (in a `settings.update` too since 16.11.: `validate.ts` `deepMerge` puts a
+key's default in place of `null`); `"$schema"` is skipped; unknown keys are dropped. Writing: the app writes
 the **whole** file after every update and after every read whose text differs from the whole current text – that keeps
 the comments current, turns an old file of differences into the whole file once (every value the person set stays) and
 leaves an invalid value as written with a `// Not applied (<reason>) …` line above it. Never overwritten: the store
@@ -181,18 +206,22 @@ vector_chunks (the vectors, §5.3), context_items (the transcript's items, §5.5
 people, media (+FTS), files, bridges, split_groups and splits, calendar_events and calendar_sources, spend, kv.
 A message's `meta` carries the values every device renders (B-075): `live` while a run's row streams, `ms` and `lines`
 on its finished answer (§4.2), `call` on a call's own row and on each line said in it (§9).
-Migrations (`db/migrations/001…091`) are only ever appended, never rewritten; `085` removed the permission gate,
+Migrations (`db/migrations/001…103`) are only ever appended, never rewritten; `085` removed the permission gate,
 `086`/`087` dropped the dead tables of the refactor (`087` took `context_items` with them by mistake; `089` makes it
 again with the old schema), `088` adds the vector tables, `091` the partial index `messages_streaming` on
-`messages(conversation_id)` where `state = 'streaming'` (the live rows are read up to twice a second).
+`messages(conversation_id)` where `state = 'streaming'` (the live rows are read up to twice a second), `103` the use
+count `uses` on `secrets` and `secret_groups` (§7.4).
 Before migrating older data one pre-update copy is made (`VACUUM INTO`). Repositories live next to their service
 (`tasks/repo.ts`, `chat/*-repo.ts`, …) or in `runtime/store`.
 
 **Backup and restore** (`portability/backup.ts`, `restore.ts`): a backup is a copy of the data folder – the
 database by `VACUUM INTO`, `settings.json`, `theme.css`, the data entries (not logins, logs, tmp, the chat mirror,
 `bin/`, a company's `workspace/` or older backups), the workspace skills and the agents' own skills of the workspace
-(`<workspace>/agents/<slug>/skills` → `workspace-agent-skills/<slug>/`). Restore is staged and put back at the next start; the replaced data moves
-to `before-restore-<time>/`. Values bound to one PC's OS key stay on that PC (`machine-bound.ts`).
+(`<workspace>/agents/<slug>/skills` → `workspace-agent-skills/<slug>/`); never `runtime.json` (live port and owner
+token) or a removal mark. Restore is staged and put back at the next start; the replaced data moves
+to `before-restore-<time>/`. Values bound to one PC's OS key stay on that PC (`machine-bound.ts`); a restore into a
+folder without a live database (a company import) drops the backup's PC-bound rows – identity, VAPID key, its own
+device row, push subscriptions (`forgetBound`) – and that start makes its own. `secrets.csv` never goes into a data folder.
 
 ## 4. How work flows
 
@@ -251,7 +280,10 @@ Telegram long poll §7, the morning run's one timeout §4.7).
   woke the turn and nothing was addressed – posts the text outside blocks into the chat of that person's newest line
   (`log.info('unaddressed answer posted')`). `runs.conversation_id` is the chat of the main wake (a split part's: its
   `chat`, migration 101), and every posted message carries its `runId` – the chat's live bar reads both.
-* **Activity log** (13.11.2026): the agent's page (Team › agent, `ui/team/AgentLog.tsx`) shows the journal as one record in
+* **Activity log** (13.11.2026; since 16.11. on the agent's Work page `#/team/<id>/work`, `ui/team/AgentWork.tsx`, which
+  the profile's "Show work" opens – the profile itself has no log; above the log `WorkNow.tsx` shows the running work and
+  the really active tasks – a turn runs on it or it moved within 24 h, `team/agent-work.ts` – with older open and waiting
+  ones folded): `ui/team/AgentLog.tsx` shows the journal as one record in
   time order instead of a run list – per turn a muted system line (time, what started it, chat, model; Stop while it runs),
   its step lines (`run-steps.tsx`: tool calls opening to input/output, thoughts, the runtime's own notes as plain lines from
   `shared/text/run-notes.ts`), the agent's updates and answers as open words, a split as its "Split · 1 of 3 done" line open
@@ -267,12 +299,19 @@ Telegram long poll §7, the morning run's one timeout §4.7).
   `agents/redelivery.ts` keeps chat retries across restarts and long absences; recurring outages, timeouts and
   transient errors retry after 1, 2, 4 … 30 minutes. One due timer respects the earliest eligible account's cooling
   and known limit reset; account/model events or a reconnect bring work forward. Chat-free source events keep
-  their wakes with a doubling pause capped at 30 minutes (`agents/dispatch-runs.ts`).
+  their wakes with a doubling pause capped at 30 minutes (`agents/dispatch-runs.ts`). When nothing can run, the
+  "Paused:" line names the accounts and why (`routing/unfit.ts` `accountsReason`: "<labels> used up until <time>",
+  "paused until <time>", "signed out", "failing", "switched off"; `agents/outage-line.ts`: "Paused: <reason> – continues
+  by itself on <PC>").
 * **Restart**: interrupted turns resume; work a cut-off run belonged to hears one "interrupted – check what was
   done, then continue" note (`tasks/recover-notes.ts`). Start order in `runtime/main.ts` (B-075): the device sync
   (`startSync`) attaches its listeners first, then the reconcile ends the rows still streaming – only those of runs in
   this PC's own journal (`MessageRepo.streaming()`; runs never sync, a synced row is its home PC's to end) – and
   `endCallsLeftOpen` ends the calls left open (§9), so both changes travel like any other; then runs and wakes.
+  Right before an update stops the runtime, main calls `system.prepareRestart` – answered on main's own link only
+  (16.11.2026; anyone else hears that `system.install` is its way): `compose/restart-pause.ts` stops the dispatcher,
+  ends by itself after 2 min when no restart follows, and is closed as the first shutdown step, so a stopping runtime
+  never starts work again.
 * **Retry context** (`agents/interruption-context.ts`): a pause under 60 seconds with unchanged input adds no
   narrative. A longer pause or new messages, edits, scheduled events or task details surrounds the current input
   with timestamped **App system events**: interruption, intervening event references, retry now. Causes come from
@@ -314,7 +353,8 @@ Telegram long poll §7, the morning run's one timeout §4.7).
   chat up the list, only `meta.live`, no text; posted, it moves to a new seq at the chat's end, else – failed or stopped
   too – it is removed. `ConversationSummary.live` and `working` come from the streaming rows, so the chat header, the
   chat list (who works and what, never a half-written answer) and Home name the same on every PC; Team, tasks,
-  keep-awake and the work stop still read `agent.activity`, and `runs`/`run_items` stay this PC's journal (Team › Runs).
+  keep-awake and the work stop still read `agent.activity` (windows and phones hear it with the runs of the CEO's other
+  PCs added, each with its `deviceId` – `sync.live`, §8), and `runs`/`run_items` stay this PC's journal (Team › Runs).
   Streaming rows stay out of the full-text index until final; external agents' `messages.list` leaves them out and
   reads on past them for a full page (`bridges/external-rpc.ts` `settledPage`); a colleague's silent live row is neither
   shown nor a stop for the read cursor or steering (`context/delta.ts`, `agents/dispatch-steer.ts`). **A running split
@@ -337,9 +377,11 @@ Telegram long poll §7, the morning run's one timeout §4.7).
   default for to-dos, blockers and important messages; web push to paired devices (§8). The desktop host
   (`main/host-services.ts`) plays a sound by default (`notifications.sound`): one per 3 s across all notifications, a
   beep while the window has focus (then no OS toast), else the OS notification's own sound; none for silent ones. In the
-  window, toasts for to-dos, blockers and important messages stay (`ui/lib/toasts.ts`, ttl 0) until Open, Dismiss, the
+  window, toasts for to-dos and blockers stay (`ui/lib/toasts.ts`, ttl 0) until Open, Dismiss, the
   person reaching where Open leads (the chat, or My day for a to-do outside a chat) or the task finishing
-  (`ui/lib/store-events.ts`); done and reply toasts last 6 s. Nothing toasts for what the person already looks at.
+  (`ui/lib/store-events.ts`), and so does an install that did not land (`toastStartNotice`); an important message,
+  mention or link line goes after 20 s (`NOTICE_ONLY_MS`, 16.11.), done and reply toasts after 6 s. Nothing toasts for
+  what the person already looks at.
   **The owner's other PCs** (B-077, B-078 held push; `devices/sync/notify.ts`, `held-push.ts`): a notification that
   pushes gets an id and a tag. The PC that decides it pushes it itself – to its own subscriptions (`pwa/push.ts`) and to
   the owner's subscriptions of my other PCs, which the roster (`sync/roster.ts`) brings with their VAPID keys –, whether
@@ -417,6 +459,10 @@ through `tools.find` – the core set stays ≤ 27 tools; 1–12 parts with titl
 temperature per part, default the origin's own). Parts start when the splitting turn ends (the native fork needs the
 finished turn) on their own dispatcher lanes (`<agentId>#<splitId>`, `agents/dispatch-lanes.ts`) from the origin's
 context: a native fork (`claude --fork-session`, Codex `thread/fork`) or else a text checkpoint (`splits/fork.ts`).
+A fork part starts lean (F26, 16.11.): the origin's record is copied into the part's thread (`ledger.fork`), its
+subconscious condenses that copy once before the first start (`condensePart`, within `LOOK_MS`), and the part starts from
+it as text (`SplitFork` how `ledger`) – unless the native fork costs less: same engine, account and model, a warm cache,
+and `(P − lean) × calls < CACHED_PRICE_RATIO × lean`; a brief part gets no copy and no call.
 A part is the agent: its section opens "I am <name> – this part of me takes …" (`context/split-section.ts`); it writes in
 chats, switches its model inside its turn
 (`model.set` → `dispatcher.continueNow` on its lane; it stores no next-step request) and a part's `agents.split` adds parts
@@ -436,7 +482,10 @@ UI: split rows in the team sidebar, in the chat and on a split page (`ui/splits`
 
 `runtime/schedules`: kinds message, reminder and routine (`fire.ts`); a spec is `at`, `cron` (croner, IANA zone,
 DST-safe) or `every`, plus times, window, exceptions and catch-up (`spec.ts`). Agents use one `when` shape
-(`schedules.message/remind/routine/update/list/cancel`, `when.ts`); each result echoes the next runs.
+(`schedules.message/remind/routine/update/list/cancel`, `when.ts`); each result echoes the next runs. A schedule another
+PC fires shows its next run here too: `scheduler.ts` list/get fill a display `nextAt` (`firstFire`, never written), also
+in the synced `schedule.upserted`. The agent page lists active schedules by next run, paused ones under one closed
+"Paused (n)" fold, ended one-shots left off (one state rule for both lists, `ui/tasks/schedule-state.ts`).
 
 **The person's side – the composer's schedule mode** (`ui/chat/composer/ScheduleBar.tsx`, `schedule-form.ts`,
 `schedule-rule.ts`, `schedule-next.ts`, `schedule-mode.ts`, `schedule-clock.ts`; it replaced the "Send later" dialog and
@@ -469,13 +518,15 @@ that was in the field comes back afterwards.
   `day/handed-off.ts` ("Send to team" wakes the responsible manager), `day/assistant.ts` (the person's secretary or
   CEO assistant works for them). Settings: `settings.json` `day` and `calendar`.
 * **Connected calendars** (`calendar/sources/*`): Google two-way (system-browser consent, loopback) and read-only
-  ICS links, managed by agents with `calendar.connect` (list, add, remove, sync, Google sign-in link). Ticking off a
+  ICS links, managed by agents with `calendar.connect` (list, add, remove, sync, Google sign-in link). Without the
+  person's own Google client the `google` action starts no sign-in and names the iCal way instead – the calendar's
+  secret ICS address, read where that account is signed in, then `add_ics` (`GOOGLE_ICS_WAY`, 16.11.). Ticking off a
   to-do updates its block (`calendar/task-link.ts`).
 
 ## 5. Agents and the organisation
 
 * **Org** (`org/service.ts`): agents and the chain of command – the person is CEO; agents report to a manager agent
-  or to the person; people of the organisation can be managers too (§8). Spaces are the person's life areas
+  or to the person; people of the organisation can be managers too, and a person can be a second CEO (co-CEO, §8). Spaces are the person's life areas
   (company, personal brand, private life, custom – `org/spaces.ts`). Templates: `resources/agents/*.md` (17, front
   matter + instructions). Agents get human first names (`org/first-names.ts`); the role says what they do.
 * **Hiring** (`org/hire.ts`, tool `agents.create`, up to six at once): **any agent may hire** into any team; the new
@@ -495,8 +546,9 @@ that was in the field comes back afterwards.
   model (`agent-core/prompt.ts coreInstructions` strips every HTML comment). Only the home PC writes the comment.
   `agents.create` returns the hire's own part (from "## My role" on) and the line on how the creator starts it. Nothing
   enforces any of it; there is no monthly limit, budget field or purchase check anywhere (`Agent.budget` is gone). The
-  CAPTCHA field the owner mentioned ("ich bin kein Roboter") is not a field: the shipped texts keep handing a check that
-  turns my own browser away to the person's own Chrome (B-080), and no text has an agent solve one.
+  CAPTCHA line the owner wanted ("ich bin kein Roboter") is the default of "For every agent" (`profile.forEveryAgent`,
+  below) and stands nowhere else (16.11.2026): the shipped texts say Autark's browser first, the person's own Chrome where
+  it falls short, and `feedback.report` to tell the makers what it lacked.
 * **Editing**: any agent may update any agent, itself included (`agents.update`: role, instructions, mode, model pin,
   manager – a hand-over –, space, avatar, voice, home project, home device). B-076: `instructions` without "# How I work"
   replace the agent's own part from "## My role" on and the team's standard above stays (`withOwnPart`); a text with
@@ -505,7 +557,9 @@ that was in the field comes back afterwards.
   archived agent's role, mode, manager, space, team, reports and open tasks (`tasks/owners.ts` hands them over);
   without it the reports move up and open tasks go to the next manager. The only rule: at least one agent stays.
   So a manager can hire a successor, hand over and archive itself. Restore puts an archived agent back
-  (`org/restore.ts`).
+  (`org/restore.ts`). `agents.list {includeArchived}` leaves out archived agents that left no trace here – no run, chat
+  membership or task (`AgentRepo.listWithArchived`); a company started with `--start=mine` gets no seed Manager (its
+  agents arrive with the link).
 * **Duplicate is a skill, export is a file** (`resources/skills/agent-duplicate`, `portability/agents.ts`): there is
   no duplicate RPC (`agents.derive` is gone). The skill's steps: read the original (`agents.list`, `wf call agents.get`),
   hire the copy with `agents.create`, copy `SYSTEM.md` and `skills/` with the terminal (not `agent.json`), adapt the
@@ -519,8 +573,13 @@ that was in the field comes back afterwards.
   An edit applies at once. Between PCs the row and the file travel separately (§8). A SYSTEM.md that is still the app's
   own last write is no change: when the row came first, the row stands, the prompt uses it and a save writes over the
   file until the other PC's file lands (B-087). The **home project** (`agent-core/home.ts`) is the folder its turns start in.
-  `HUMAN.md` (`agent-core/human.ts`, owner 15.11.2026) holds the person's own lines to the agent – written only by the
-  person (agent page "From you", `agents.setHuman`, or the file); a hire gets a default line in the app's language.
+  `HUMAN.md` (`agent-core/human.ts`, owner 15.11.2026) holds the person's own lines to the agent – the person writes it
+  (agent page "From you", `agents.setHuman`, or the file), the agent may change it, no standard or update rewrites it;
+  a hire starts without one (16.11.). **For every agent** (`settings.json` `profile.forEveryAgent`, ≤ 4,000 characters,
+  default the CAPTCHA line in the PC's language, `humanDefault` in `shared/model/agent-core.ts`; Settings › Security)
+  is one text the person, any agent and linked PCs change like any setting (its own sync unit); `prompt-stable.ts`
+  renders "## From <name>" (HUMAN.md) and then "## From <name> – for every agent" last, each only with text. The bridge
+  `kontext-1311` empties once per PC a HUMAN.md that is only the old default line.
 * **Home device**: `Agent.deviceId` – the PC its computer, browser and phone tools run on by default (§8). The agent's
   turns and data stay on the PC that hosts the org.
 * **The other companies on this PC** (B-075; `tools/builtin/companies.ts`, `tools/placement.ts` `placeCompany`,
@@ -543,7 +602,8 @@ that was in the field comes back afterwards.
 ### 5.1 The prompt and the context
 
 * **Order of the system prompt** (B-076, `context/prompt-stable.ts`): "# Who I am" (facts only: name, role, company,
-  who I report to, team, time zone – no language rule), then the agent's SYSTEM.md as it stands (the main part, §5),
+  who I report to, team, time zone – no language rule; with a co-CEO the line "CEO beside <owner>: <name> (per_…) – I
+  work for each CEO alike", `identity.md` `{{ceos}}`), then the agent's SYSTEM.md as it stands (the main part, §5),
   then the rich-answer line, the mode, "My folder", "My environment" (this PC – "… the Autark system on it, whose language is set to <language>." is a
   fact, the agent writes in the language people write to it in –, workspace, web, screen, tools), skills; then the volatile
   part (now, environment now, this chat, team and models, pinned notes, tasks) and the publishing line. The heading of
@@ -563,8 +623,8 @@ that was in the field comes back afterwards.
   subconscious's asked run, §5.4). Since B-075 (owner 04.11., Nachricht 3: the AI's own will, never what it may) they
   speak as the AI itself – "# How I work", "# Who I am", "This is my SYSTEM.md" – and so do the code-side sections
   ("## My instructions", "## My folder", "## My main skills", "## My environment", "## My open tasks and promises",
-  "## My splits here" …), the tool texts and the shipped skills ("I read this when …"); `onboarding.md` stays the
-  person's own line. Every one, `rules.md` included, can be replaced by a file in `<data>/prompts`. The only rule about
+  "## My splits here" …), the tool texts and the shipped skills ("I read this when …"); `onboarding.md`'s start line
+  stays the person's own. Every one, `rules.md` included, can be replaced by a file in `<data>/prompts`. The only rule about
   irreversible steps is one self-check line: "Before something I cannot undo (deleting, paying, sending to outsiders,
   publishing under their name), I check target, amount and recipient myself (I list them), then I do it; when what I
   find reaches further than <name> likely sees (a linked PC follows a deletion), I say so in one line with what I
@@ -587,16 +647,18 @@ that was in the field comes back afterwards.
   it" and "The way there is my call: colleagues hired right away when the work needs them, everything analysed first
   when that serves better, a question to <name> about what only they know". The B-072 balance is carried by facts only:
   "Steps others see – a post, a mail to a new circle, a public push, a site, a payment – go out under <name>'s name;
-  reading, checking, drafting and preparing stay inside"; only the person gives a signature, a code sent to their phone or
-  a password nobody saved (a login is not on that list: "I picture them at it: the browser with their logins (their
-  passwords sit in the secrets catalog) …"); "what they already answered, I carry on with"; "A no is what <name> wrote or
+  reading, checking, drafting and preparing stay inside"; since 16.11. (standard texts): "What I can reach – a code in
+  their mailbox or on a linked phone, a login from the catalog, a click on the screen – I do myself; what only they can
+  give – a signature, their taste – I ask for in our chat in one line", a line in a chat says what came out, where, and
+  whether more follows, and a choice put to the person carries what they need to judge it; "what they already answered,
+  I carry on with"; "A no is what <name> wrote or
   clicked – not a tool's stop, a timeout or a colleague's caution". Out since B-076: "welcome", "Trusted like …", "what they
   need now is theirs to say", "worth showing first", "a decision that is theirs" on the ask list and the pinned note on
   working together – agreements go into the agent's SYSTEM.md under "What I have here", so they reach it every turn. "I
   write like a capable colleague in a team chat, in the language they write to me in – short and plain; the work speaks
   for itself." A step others now see that an agent took on its own is published `[[important]]` (the publishing line's
-  examples). `modes/manager.md` adds one line (work taken off the person's hands is the measure). `onboarding.md` (fallback `onboarding/brief.ts`) is the
-  start text posted as the person's own line (§11, First run) and names no recipe; the skill `org-setup-onboarding`
+  examples). `modes/manager.md` adds one line (work taken off the person's hands is the measure). `onboarding.md` (fallback `onboarding/brief.ts`) holds the
+  first chat's two lines – the person's short start line and the Manager's greeting (§11, First run) – and names no recipe; the skill `org-setup-onboarding`
   carries only tool facts (hiring, SYSTEM.md, spaces, patterns, successors). The skill `app-guide` ("How this app works") is a factual reference about the app, not a setup
   guide. Nothing names what "set everything up" means, and (G1) nothing the first request meets leans toward configuring
   the app any more: the manager mode lists none of the app's own skills, the tool is `app.status` (not `setup.status`),
@@ -635,7 +697,8 @@ that was in the field comes back afterwards.
   `agents/<id>/last-run.md` what the agent did on that turn (`context/last-run.ts`, written at the turn's end: the input –
   start and end of a long one –, every step with each result under its call, the final text; redacted before any cut;
   the newest steps stay when the file would pass 200,000 characters); both only for the main lane, not a split's parts;
-  earlier turns are in the activity log (Team › agent, `agents.log` / `runs.items`, the `agents.log` tool); a one-time upgrade (`org/standard-upgrade.ts`) replaced the false sentences in frozen `SYSTEM.md` heads ("The app
+  earlier turns are in the activity log (Team › agent › Show work, `agents.log` / `runs.items`, the `agents.log` tool);
+  asked for its system prompt, an agent hands over `last-prompt.md` as a file (skill `system-prompt`); a one-time upgrade (`org/standard-upgrade.ts`) replaced the false sentences in frozen `SYSTEM.md` heads ("The app
   enforces these limits", the "Permissions section"). Engines add their own text around ours (Claude's prefix and tool
   descriptions, Codex's skills and multi-agent notes and the person's `~/.codex/AGENTS.md`); our prose was about 15 %
   (Claude) and 25 % (Codex) of a first request, measured 03.11., the rest mostly tool schemas.
@@ -737,7 +800,7 @@ that was in the field comes back afterwards.
 * **References** (`references/references.ts`): the person's own words, reasons and corrections ("Remember why…" on
   their message, `references.remember`) are memory files of scope `reference` (folder `references/<person>/`); agents use `references.find` and
   `references.capture`. No rights matrix: every agent reads them.
-* **Find** (`find/service.ts`): one ranked path over the knowledge catalog (skills of every root, the home project's files), memory notes and references.
+* **Find** (`find/service.ts`): one ranked path over the knowledge catalog (skills of every root, the home project's files), memory notes, references and – kind `secret` since 16.11. (`find/secrets.ts`) – the secrets catalog: at most 3 entries the text names by id or by a word of their name, id or tags; opening one (`secret:<id>`) gives its catalog line, the full purpose and each field's handle, never a value, and counts as no use. The routing call's prompt names the secrets catalog as a reason to open (§5.4).
 * **Public library** (`library/hub.ts`, `library/publish.ts`, `tools/builtin/library.ts`): one server for every Autark, `services/library` (Cloudflare Worker + D1/FTS5 at library.openautark.com, no sign-in; an installation is a random id in kv `library/voter`). `library.find` / `library.open` / `library.publish` (checks first, CC0) / `library.rate`; `skills.save` with `from: <id>` writes the entry's files beside my own text and records `derived-from: library:<id>@<rev>`. It is not part of the knowledge catalog: a find there would send every query's words to a public server.
   - **The word index** (`knowledge/words.ts`) ranks them all: one in-memory SQLite FTS5 table per corpus.
   - Indexed: title, description and text, folded (ä→ae …), bm25 weights 10/4/1.
@@ -1134,6 +1197,18 @@ simpler: the separate gardener is gone, the subconscious's brains decide, and th
   accounts last, then the plan whose current weekly reading resets first, then the order of Move up/down in Settings
   (priority), then the share left; a 5h limit only pauses a plan, a used-up week until its reset.
   A plan found signed out becomes work: a sign-in task for an agent or the person's to-do (`relogin.ts`).
+  **One plan login per PC** (16.11.2026, F28): with companies the CLI homes live in `<Autark Companies>/logins/<provider>/
+  <folder>` (`Paths.accounts`, `root/companies.ts` `loginsFolder`; `<data>/accounts` headless and in tests;
+  `system/paths.ts` `homeRoots` counts both as the app's own). Each home carries an app note `.autark-login.json`
+  {email, signedOut}. A login made in one company is adopted by the others at their next detect (`accounts/adoption.ts`:
+  switched on, checked, a row on the same home – never a copy) unless that company already uses the home or the same
+  provider and e-mail, the login is signed out, or it was removed there (`dismissed.ts`, key `<provider>:<folder>`).
+  Remove drops only the row; a sign-out marks the home for every company, a working check clears the mark. Two plans of
+  one e-mail stay apart by the login's own identity (`cli-homes.ts` `whoseLogin`: Codex `account_id`, Claude Code's
+  `organizationUuid`). The bridge `bridge/logins-1611.ts` (from the AccountService constructor at every start,
+  idempotent, never throws, lock `<logins>/.move.lock`) moves each old home whole by rename into the logins folder and
+  repoints its row, joins a login another company already moved there, leaves a home that cannot move where it is, and
+  repoints a row whose home went missing (a restore, an import). The 0.3.8 handoff between companies is gone (§12).
   B-083 plan credits: an Anthropic or OpenAI API key whose organisation holds the monthly API credits a plan includes
   (Claude Max/Ultra, ChatGPT Pro/Business) carries `Account.credits` (migration 095; the account row's "Plan credits"
   toggle, `accounts.update credits`): it counts as a plan (`shared/model/charge.ts`), candidates put paying accounts
@@ -1141,7 +1216,9 @@ simpler: the separate gardener is gone, the subconscious's brains decide, and th
   (`engines/http/common.ts`) – a new billing month refills it. No balance call exists.
 * **Model catalog** (`models/catalog.ts`): every model the accounts can run, merged with the curated priors
   (`resources/model-priors.json`, `models/priors.ts`) – the one score source. Media-only providers (ElevenLabs, fal.ai)
-  come from a curated table. B-083: the list order is `models/order.ts` `catalogOrder` – family and version parsed from the
+  come from a curated table. Each model names its `source` (16.11., `catalog-merge.ts` `sourceLabel`: "Codex",
+  "Claude Code", "OpenRouter", "Ollama", else the service's or connection's name); pickers show it as the row's hint
+  with the full id as its title (`ui/lib/model-name.ts` `pickerHints`), work cards and log lines after the model. B-083: the list order is `models/order.ts` `catalogOrder` – family and version parsed from the
   provider id (dates and size markers ignored), the newest version of each family first by smarts (an unrated new version
   borrows its family's best, a gateway copy its sibling's), older versions below with `ModelInfo.newer` (the composer
   shows only the newest of each family; an older one by search or while chosen, under "Older versions"). New models
@@ -1167,7 +1244,10 @@ simpler: the separate gardener is gone, the subconscious's brains decide, and th
   runtime's helper calls the Decisions model, `routing/pins.ts`; for a helper call on `auto` the helper default on its
   qualifying plan accounts, `helper-default.ts`) → **a person's own request** (`routing/person-turn.ts`, below) → the
   previous model unless it is weak for the work → the deterministic score (prior + tier fit + plan headroom − cost) →
-  effort, then the healthy accounts of that model. B-083 (owner: a pick is "nur eine Empfehlung … ein kleiner Tipp"):
+  effort, then the healthy accounts of that model. The newest version of a family stands for the older ones
+  (`routing/pool.ts` `newestOnly`, 16.11.): an entry leaves the pool while a newer version of its family can run, and a
+  model an agent or its subconscious names runs as that newest one (`pool.entryFor`); the person's start pin and the Work
+  model keep their exact model, and the older one runs when the newer cannot. B-083 (owner: a pick is "nur eine Empfehlung … ein kleiner Tipp"):
   nothing a person picks is a hard pin – the composer writes `settings.modelHints` / `efforts` / `temperatures`, the agent
   page the agent's start model with its origin (`ModelPolicy.pinBy`); the agent's own request beats both, also for the
   effort (`routing/previous.ts` startEffort: requested → chat suggestion → fixed → previous → default). The route carries
@@ -1292,11 +1372,12 @@ via Bing; DuckDuckGo, Mojeek, Startpage and Brave answered every query with a bo
   Own MCP client over HTTP and stdio (`apps/client/*`). RPC: `apps.list`, `apps.reconnect` – nothing else.
 * **Mail** (`apps/mail/*`): IMAP/SMTP/MIME of our own; one IDLE connection per mailbox wakes the mailbox's agent on new
   mail (`apps/mail-wake.ts`); bulk mail wakes nobody (`mail/loops.ts`).
-  Staged, **not activated**: IDLE reports trusted message references when UIDVALIDITY and FETCH UID exist;
-  `Origin.mailScope` can constrain Registry calls and connector wrappers to exact-message read/reply/mark,
-  with sender-only reply ignoring Reply-To/CC (`tools/mail-scope.ts`). The current waker does not issue this scope,
-  queue persistence does not preserve it, and native engines/session context are not isolated. This is not a
-  mail-wake security boundary; activation requires durable provenance and a fresh host-read-isolated execution path.
+  A run woken by mail is a full working turn (16.11.2026): the isolated executor (`agents/mail-turn.ts`), the
+  `AUTARK_MAIL_ORIGIN_ISOLATION` branch and the scope refusal of every hub tool (`mailScopeRefusal`, sender-only reply,
+  `validMailProvenance`) are gone; `tools/mail-scope.ts` keeps only `mailMarker`/`mailPartition` (wake grouping, the
+  chat-free retry, and since 16.11. no gate on a mail run's split bookkeeping in `agents/dispatch-runs.ts`). Kept: the
+  wake note quotes the mail as untrusted data, app answers carry "[untrusted content from app …]", and sends from a
+  mail-started run carry `Auto-Submitted` (B-059).
 * Skills: `connect-apps` (the files), `telegram-setup`, `whatsapp-bridge` (with a template script on Baileys that uses
   the external protocol: `chats.connectExternal`, `messages.send`, `files.upload`, `GET /events` – never run against
   WhatsApp), `phone-access`, `import-agent-system`.
@@ -1341,6 +1422,20 @@ optimistic conflict detection, not OS compare-and-swap against external writers.
   a card – `groups.ts`), TOTP (`totp.ts`), secure capture of what the person types (`capture.ts`, `chat-capture.ts`).
   No access lists: every agent may use every handle. A text field's hint is the text itself, clipped to 60 characters
   (`groups.ts` `textHint`; B-075: a login shows its username, not its first character; `init()` brings older hints up to it).
+* **Finding an entry** (16.11.2026, `secrets/metadata.ts`): `secrets.list` and the find (kind `secret`, §5.2) use the
+  knowledge word index – name and id words weigh 10, the purpose 4, tags, route, source, kind and field names 1; cached
+  per runtime by a hash of the metadata, never a value. `rankSecrets`: an id the query names first, then most words held
+  (the B-080 route rule), then bm25, then use, then name; a site, address or path matches as a whole phrase. At most 20
+  are shown, with a count of the rest. Without a query the entries in use lead – `uses` (migration 103, counted by
+  `SecretService.use()`, never synced) and `lastUsed`.
+* **Keys typed into chat text** (16.11.2026; `shared/secrets/token-patterns.ts` – one list of key and token shapes for the
+  chat and the feedback redactor –, `secrets/text-capture.ts`): `messages.send` and `messages.edit` (`addKeysSaved`) put
+  every key of the person's text into the vault before the message is stored – a held value becomes its handle, a new one
+  is saved directly, labelled by the words before it – so no chat row, linked PC or agent holds the value; a key inside an
+  ```app fence and an agent's own `wf` send stay as written. `secrets.fromMessage {messageId, value?}` (chat + secure)
+  saves a marked piece or every key of an older message, and its author's edit then shows the handle; the agent tool
+  `secrets.save` does the same with `seq`/`chatId`. The UI masks a key still in a message (`ui/chat/message-keys.ts`:
+  "A key is hidden here", Show/Hide, "Save as secret").
 * **Import** (`import.ts`, `import-parse.ts`, `shared/model/key-values.ts`): browser and password-manager exports (CSV,
   Bitwarden JSON), `.env` files and flat JSON of names and values. From `.env`/JSON only pairs that hold a secret go in
   (`isSecretPair`: a secret-like name – key, token, secret, password, auth, session, webhook, dsn … but not an address or
@@ -1352,7 +1447,7 @@ optimistic conflict detection, not OS compare-and-swap against external writers.
   tags and route; the import keeps the names and descriptions it is given (an earlier import's "not described yet"
   counts as none), and its review task covers only the entries without a description (B-075).
 * **Export and bulk delete** (B-075; `export.ts`, `units.ts`): `secrets.export` – the agent tool `{path?, ids?, route?}`
-  and the RPC `{ids?}` (PC only) – writes the chosen entries, all when none are named, into one CSV: Chrome's columns
+  and the RPC `{ids?}` (the PC, or the owner's phone on a secure transport) – writes the chosen entries, all when none are named, into one CSV: Chrome's columns
   (`name,url,username,password,note`), then `totp,kind,description,tags,route,number,expiry,cvc,holder`; a login's or
   card's field without a column becomes its own "<name> · <field>" row, a group of free fields is skipped and counted.
   The file gets mode 0600, by default `~/Downloads/autark-secrets-<date>.csv`; a path inside the data folder gets the
@@ -1380,10 +1475,14 @@ optimistic conflict detection, not OS compare-and-swap against external writers.
 `ui/onboarding/ConnectCard.tsx`, and a link as CEO ends the first run), in this order:
 this PC's **Remote ID** (9 digits: 8 from the key fingerprint plus a check digit, `remote/id.ts`) with Copy and the
 meeting server's state in its hint ("meeting server connected", "only this network …"); incoming
-requests with their code (Accept – for an employee's PC with the person it belongs to – or Decline); "Connect a phone"
-(a QR code for me or for an employee); **PCs on this network** with Connect (`remote/nearby.ts`, the LAN hello on UDP
-47813, `devices/discovery.ts`); "Connect a PC" by Remote ID or address (IP:port of a fixed IP or local server), as CEO
-or as employee; one row per device with right-click Rename and Remove. Connection settings (`devices.findable`,
+requests with their code (Accept – for an employee's PC or phone with the person it belongs to, or a new person made in
+the same step – or Decline; my other own PCs' requests show too, below); "Connect a phone" (a QR of this PC's own Remote
+ID, `phone.pairLink` → `remoteId`, for me or for an employee); **PCs on this network** with Connect (`remote/nearby.ts`,
+the LAN hello on UDP 47813, `devices/discovery.ts`; the hello answer names its `company`, and `connect-text.ts`
+`nearbyGroups` shows one row per PC, or a PC row with one row per company; one fixed "PCs on this network" row with
+Refresh holds the place); "Connect a PC" by Remote ID or address (IP:port of a fixed IP or local server), as CEO
+or as employee; one row per device with right-click Rename and Remove (a PC behind this one ends with its version,
+`device-version.ts`); the Connection group with one row per phone (its way and bytes, below). Connection settings (`devices.findable`,
 `devices.relay`, `devices.peer`, `devices.peerPort`, `pwa.enabled`, `pwa.bind`) are `settings.json` keys the AI changes.
 
 * **Connecting PCs** (`runtime/remote`): find the PC (LAN first, then the meeting server – `remote/find.ts`; the
@@ -1394,7 +1493,13 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   address in 10 minutes – the endpoint faces the internet). The accepted PC is stored with its proven key. Agents link
   a PC with `devices.connect {target, role?}` (`devices/connect-tool.ts`; the role is how this PC joins the other PC's
   company, CEO by default); `devices.list` also shows this PC's `remoteId` and `meetingServer`
-  (connected | connecting | off).
+  (connected | connecting | off). **Requests on every own PC** (16.11.2026, `remote/mirror.ts` `RequestMirror`): the PC
+  that holds requests sends its whole list (public view, peer `remote.requests`) to each online `ceo` link on every
+  change and at link-up; the receiver shows them with `via`, expiry moved onto its own clock, and Accept or Decline there
+  runs peer `remote.decide` on the holder (first answer wins; a later one hears the request is no longer open).
+  `remote.decide {id, accept, personId? | newPerson {name, title?, managerId?, role?}}` (`readDecide`): a new person is
+  made only when the device collects the acceptance (once, `people.save`), an employee's PC that links marks its person
+  joined (`people.joinedWith`), a phone gets a person token; a `ceo` request never becomes a person's.
 * **Roles**: joining as **CEO** (default) means everything is the same as on the CEO's own PCs – they reach every
   method, and agents use tools on each other's PC. Joining as **employee** binds the PC to a person
   (`Device.personId`); that PC may only call `ping`, `device.caps`, `device.addresses` and `sync.rows` (which takes
@@ -1444,11 +1549,18 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   (a terminal on a linked PC) take an optional `device` argument; without it they run on the agent's home device, else
   on this PC. A call for another PC is forwarded over the mesh as `tools.call` and runs there like a call of that PC's
   own agent (a remote `shell.exec` has no 120 s RPC timeout; its own limits bound it); the journal names the PC.
-  `devices.list` shows the PCs, their capabilities, `homeDevice` and `employeeOf`. Agents can hire an agent with its
+  `devices.list` shows the PCs, their capabilities, `homeDevice`, `employeeOf` and – for this PC and each own online
+  PC – `load` {freeMemoryMb, runs} (`devices/load.ts`, carried by pings to `ceo` links only), so an agent can put heavy
+  work on an idle PC (`agents.update device`). Agents can hire an agent with its
   home on another PC (`agents.create device`).
 * **Shared work between linked PCs** (`runtime/devices/sync/*`, wired by `startSync` in `runtime/main.ts` before the
-  start-up reconcile, §4.1; mesh methods `sync.rows`, `sync.secret`, `sync.file`, `sync.login`; listeners attach only
-  while a PC is linked). What a link carries
+  start-up reconcile, §4.1; mesh methods `sync.rows`, `sync.secret`, `sync.file`, `sync.login`, `sync.live`; listeners
+  attach only while a PC is linked). **Live work** (16.11.2026, `sync/live.ts`, `ceo` links only): runs do not travel,
+  so each PC sends its whole live state (per run its activity, step and chats, `ChatLive.snapshot`) at link-up and on
+  every change (gathered for `GAP_MS`, one message in flight per PC, a failed one sent once more); the receiver keeps it
+  per PC (`ChatLive.setRemote`) until the link goes, so the live bar, chat header, chat list and `agent.activity`
+  (entries with `deviceId`) show the other own PCs' work; `runs.cancel` forwards a run it does not have to its PC
+  (`sync.live.cancel` → `cancelRunHere`). What a link carries
   (`home.ts`, from `devices.allow` `{personId?, joinedAs?}`): between **CEO PCs** everything both ways; to an
   **employee's PC** the chats the person is a member of, the messages they may read (`people/access.ts`, from the join or
   the whole history), their tasks, in the person's own terms (`people/perspective.ts`); back from it only the person's
@@ -1480,13 +1592,16 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   `google_accounts.json`) are read at send time and travel only inside the mesh channel between CEO links – never to an
   agent, tool, prompt, the UI or a log. The newer login wins by its own time (Codex `last_refresh`, Claude Code's and
   Gemini CLI's token expiry; else the file's mtime); the receiver writes the files whole (mode 0600) into the account's home here – its own
-  `<data>/accounts/<provider>/<id>`, or a CLI's default home (`~/.codex` …) – and never over a file of another account
-  (Codex `tokens.account_id`, Gemini CLI's id token subject). A Claude Code login file names no account: a refresh
+  home in the PC's logins folder (§6; a synced CLI row lands in the shared home of the same e-mail when that home's note
+  names it), or a CLI's default home (`~/.codex` …) – and never over a file of another account
+  (Codex `tokens.account_id`, Gemini CLI's id token subject); `heldElsewhere` checks this company's plan homes and every
+  other home in the logins folder, never the same home. A Claude Code login file names no account: a refresh
   token that another plan's home here holds, or that one list carries for two plans (kept as a hash while the runtime
   runs, also against a later lone copy), is no plan's login – neither sent nor taken (B-080, B-087) – and one login is
   checked and written at a time. A folder watch and account events send a change after
-  0.5 s. A sign-out in the app stays on that PC: its mark (kv `accounts.signed-out`) takes no login from a linked PC
-  until a new sign-in here or the account's removal. Copilot CLI and Kimi Code logins and Claude Code's on macOS
+  0.5 s. A sign-out in the app stays on that PC: its mark – the home's note `.autark-login.json`, kv
+  `accounts.signed-out` only for a default-home plan – takes no login from a linked PC into any company until a new
+  sign-in here or the account's removal. Copilot CLI and Kimi Code logins and Claude Code's on macOS
   (Keychain) do not travel. Files (`files.ts`, CEO PCs only): `theme.css`, `prompts/`,
   `modes/`, `agents/**`, `memory/**`, `connectors/mcp.json` and `mail.json` and the workspace's `skills/**` as whole
   files by sha256 (manifest, tombstones, pieces of at most 4 MiB), a change going at once through the watcher's tap
@@ -1516,19 +1631,43 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   agents arrive.
 * **Phones since B-078 (D5)**: a phone pairs by this PC's Remote ID through the meeting server, the same 4-digit code
   on both screens, Accept on the PC; access exists exactly while its accepted device row exists (no "Phone access"
-  switch). Android: the native app (`apps/android`, phone use via an AccessibilityService). **iPhone without an Apple
+  switch). Android: the native app (`apps/android`, phone use via an AccessibilityService). **Direct first** (16.11.2026,
+  stage 1): the Android app goes straight to a PC whenever one of its addresses answers – `phoneUse.attach` and
+  `phone.pcs` give each PC's peer `addresses` (http(s), at most 8), the app dials them all at once (`Route`, 1.5 s) to
+  `GET /peer/phone` on the peer listener (WebSocket, `PhoneBridge.acceptDirect` in `rendezvous/phone.ts`: the same pinned
+  handshake as the tunnel, only the key of an accepted phone row – checked again after the handshake, 4003 otherwise –,
+  then the same streams to the runtime port, keepalive 30 s) – and else through the meeting server's tunnel. Settings ›
+  Devices › Connection shows each phone's way and its bytes direct and via the server today (`rendezvous/phone-traffic.ts`,
+  `RelayState.phones`; one "phone traffic" log line per day). **iPhone without an Apple
   account**: a hosted web app (`ui/hosted/`, bundled by `scripts/hosted-bundle.mjs` into `apps/website/src/app/`,
   served from its own origin, today `https://autark-theta.vercel.app/app/`; `website/build.mjs` refuses an origin
   shared with the site, Meta Jarvis or TeleCoding). It ports Android's relay client to WebCrypto (Ed25519, X25519,
   HKDF, AES-GCM), opens a pinned-key tunnel to the PC and uses `rendezvous/phone.ts`'s stream protocol to the PC's own
   HTTP port; its service worker relays `/app/pc/*` requests to the page, `window.autarkHosted` gives `ui/lib/rpc.ts`
-  a WebSocket over the tunnel. The PC's `index.html` carries `<meta name="autark-hosted">`; without it the shell says
-  "Update Autark on your PC". `phone.pcs` lists the company's PCs for the phone, `phone.forget` revokes its own row.
+  a WebSocket over the tunnel – always the tunnel (a web app cannot open a direct connection; its Connection row says
+  so). The PC's `index.html` carries `<meta name="autark-hosted">`; without it the shell says
+  "Update Autark on your PC". **The shell runs only files the PC vouches for** (16.11.2026, F29): it fetches `/` and
+  `/ui-hashes.json` together and keeps the list in the cache `autark-pc` (`ui/hosted/ui-hashes.ts`); its service worker
+  (`ui/hosted/sw.ts`) gives the page exactly the bytes whose sha256 the list names – a copy that does not match is
+  fetched again, a fresh file that does not match or an unlisted script, style or worker gets a 403 and the screen
+  "Autark stopped a file" (after one more look at the PC's list); a PC without the list (before 0.3.9) gets "Update
+  Autark on your PC". `phone.pcs` lists the company's PCs for the phone, `phone.forget` revokes its own row.
   The PC-served web app and its `pwa.link` code below stay as the other way (Tailscale/LAN).
 * **Phone and browser access (PWA)** (`runtime/pwa`, `ui/pwa`): the runtime serves the same UI; `pwa.enabled` and
   `pwa.bind` (localhost, lan, tailscale) decide where. "Connect a phone" makes a one-time pairing link (`pwa.link`, QR
   `#pair=<secret>`) that the phone trades for a device token (`pwa.exchange`); only token hashes are stored. A paired
-  phone of the owner has full access. Beside the QR stands a 6-digit code for the same link (`pwa/pair-code.ts`, B-075:
+  phone of the owner has full access; on a secure transport (the app's tunnel or direct path, HTTPS, the tailnet) it
+  reaches every Settings page (16.11.2026: each method by its page's capability plus secure – `settings` for calendar,
+  backup and restore, provider histories and the feedback inbox; `manage` for `system.root`, `chats.export`,
+  `skills.delete`, `modes.*`, local command servers and the mailbox; `permissions` for `secrets.export`). Owner-only stay
+  `feedback.setup`, `knowledge.forget` and what opens a window on the PC's own screen (`files.open`/`openPath`,
+  `secrets.openFolder`, `modes.openFolder`, `agents.openHome`, `system.install`, `import.legacy`, `computer.preview`). A
+  sign-in whose answer returns to the PC's own 127.0.0.1 address (Google Calendar, an app's MCP OAuth, a browser plan
+  sign-in) opens in the PC's side pane – `side.open {url}` → `{ok, tab}` (`manage` + secure, host op `sideBrowser`
+  'open', `PANE_MISSING` without a pane) – and the phone shows that tab in its pane sheet (`ui/workspace/phone-tabs.ts`
+  `openInPcPane`, `showOpenedOnPc`); PC files open there too (`ui/settings/open-file.ts` `openPathHere`). `calendar.sources`
+  events reach such a phone, and `calendar` is one of the `SECURE_DEVICE_SETTINGS`. The phone shows its own OS
+  light/dark (`lib/theme.ts` `shownTheme`; the theme setting is the PC window's). Beside the QR stands a 6-digit code for the same link (`pwa/pair-code.ts`, B-075:
   an installed iPhone app keeps its storage apart from Safari's, so it types the code, `ui/pwa/AccessRequest.tsx`) –
   10 minutes, one use, kept in memory as sha256 only; the open codes face 10 wrong codes together and the 10th drops
   them all (`rate_limited`); `pwa.exchange` takes the secret or the code. The phone's address (`pwa/service.ts`
@@ -1563,10 +1702,31 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   lets a person's phone or browser ask to join; the owner allows it on a to-do; the device gets a person token.
   Person devices call the person variants (`people/rpc-*.ts`) and see the chats they are members of and their own
   to-dos (`people/access.ts`, `perspective.ts`). The owner sees everything. A new message in a chat reaches the
-  devices of every person who is a member by push (`pwa/person-push.ts`).
-* **Android control** (`runtime/phone`): `phone.*` tools over adb (USB or wireless debugging) – pair, connect,
-  disconnect, devices, screenshot, ui_tree, tap, swipe, type, key, open – on any linked PC that has the phone. Setup
-  (installing adb through the shell, pairing, `adb tcpip`) is the skill `phone-adb`. No phone RPC and no phone screen.
+  devices of every person who is a member by push (`pwa/person-push.ts`). Team › Add › Person is a page
+  (`#/team/person/new`, `ui/team/PersonNew.tsx`): name, title, reports to, role (owner only), this PC's connect QR and
+  the incoming requests, each accepted as that new person (`remote.decide newPerson`); "Copy link" makes the person and
+  an invite. Someone who never joined (`hasJoined`) sits in the Team sidebar's "Invited (n)" fold, not in the org tree
+  (`ui/team/org-state.ts` `splitInvited`); `people.remove {id}` (owner) offboards them, deletes their tokens, invites, row
+  and audit lines and emits `person.removed {id}` (topic `org`; a people `gone` item to my other PCs) – who joined keeps
+  "Remove access". **Co-CEO** (16.11.2026; `Person.role` 'member' | 'ceo' in the scopes JSON, no migration; only the
+  owner gives or takes it): a CEO gets `CEO_SCOPES`, sits at the top of the org unless a manager is named, and its
+  devices' scope carries the role (a change reconnects them). Methods registered with `{ ceo: true }` (`rpc/table.ts`,
+  under the same transport ceiling; `people/rpc-ceo.ts`: `agents.templates/create/update/archive/restore`,
+  `people.save/invite/closeInvite/revoke/remove/removeDevice/audit/chats`) act on members only – never the owner's row,
+  another CEO's or their own – and keep off the setup of the owner's personal agents (`access.ts` `ownersOwnAgent`). A
+  CEO reads every company chat – all but app-owned chats, people's own and the owner's own (alone or with one other;
+  bridged `ext:` contacts do not count; one that grew into a group only from the third member's join, `companySince`) –
+  with its tasks and files (`chatAccess`, `readsTask`, `readableTasksSql`, `mayReadFile`), and never removes the owner
+  from a chat; `mayReadMessage`/`mayReadTask` stay the member rule for the employee-PC sync. Agents read the CEOs in
+  `people.list` (`role: 'ceo'`) and their prompt (§5.1).
+* **Android control** (`runtime/phone`): `phone.*` tools – pair, connect, disconnect, devices, screenshot, ui_tree, tap,
+  swipe, type, key, open, say – on the person's paired Autark app first (`phone/app-driver.ts`, `phoneUse.request`/`reply`
+  over the app's link, 20 s a step) and over adb (USB or wireless debugging, on any linked PC that has the phone) only
+  when no app phone is attached or the serial names an ADB device (`phone/drivers.ts`; `phone.devices` marks each
+  "Autark app" or "ADB"). Each app step carries `by`, the agent's name, which the app's bubble shows; `phone.say {text ≤
+  120, ask?}` puts a status line in that bubble or asks yes/no (75 s; app 0.3.15, ADB has no bubble); `phone.type`
+  answers what the field reads afterwards (masked; a password field is not read back). Setup over adb (installing it
+  through the shell, pairing, `adb tcpip`) is the skill `phone-adb`; the app phone's facts are the skill `phone-access`.
 * **Computer use** (`runtime/computer`): a persistent Windows helper (PowerShell with UI Automation,
   `resources/computer/windows-helper.ps1`) and a Linux AT-SPI helper. Tools: screenshot, windows, ui_tree, act (by
   element ref), click, type, key, scroll, drag. One pointer lease per PC (`lease.ts`), named pointers for each agent
@@ -1584,21 +1744,27 @@ or as employee; one row per device with right-click Rename and Remove. Connectio
   focused, untitled window per display (content protection keeps it out of screenshots), opened with the first agent
   move there, hidden 5 s after the last move and closed 5 minutes later; the OS pointer itself still moves. Not on macOS
   (no driver) or Linux (the helper's app-window guard would count the overlay).
-  Desktop broker (Windows, elevated installation/reconciliation by `resources/broker/install.ps1`, protected-store contract in section 1): the service `AutarkDesktopBroker` (LocalSystem, Session 0, `resources/broker/Broker.cs`) starts a worker with its own SYSTEM token in the console session (`Worker.cs`), which serves the same helper protocol on `\\.\pipe\AutarkDesktopBroker` (ACL SYSTEM + installing user, key in `%ProgramData%\AutarkDesktopBroker\broker.key`, typed text sealed) and runs every request on the current input desktop (Winlogon/UAC included); its C# is the helper's own, cut out of `windows-helper.ps1` by `resources/broker/build.ps1`. `drivers.ts` takes it at each helper start when its pipe is listed (`computer/broker.ts`), else PowerShell; the screenshot text says when the secure desktop is shown.
+  Desktop broker (Windows, elevated installation/reconciliation by `resources/broker/install.ps1`, protected-store contract in section 1): the service `AutarkDesktopBroker` (LocalSystem, Session 0, `resources/broker/Broker.cs`) starts a worker with its own SYSTEM token in the console session (`Worker.cs`), which serves the same helper protocol on `\\.\pipe\AutarkDesktopBroker` (ACL SYSTEM + installing user, key in `%ProgramData%\AutarkDesktopBroker\broker.key`, typed text sealed) and runs every request on the current input desktop (Winlogon/UAC included); its C# is the helper's own, cut out of `windows-helper.ps1` by `resources/broker/build.ps1`. `drivers.ts` takes it at each helper start when its pipe is listed (`computer/broker.ts`), else PowerShell; the screenshot text says when the secure desktop is shown. The start-time setup (`main/broker-setup.ts`) reports installed, declined (exit 1223) or failed to the runtime as the sticky event `broker.setup`; while the broker does not serve, `computer.screenshot` on Windows names that reason and the exact install command.
 
-**Still to build** (the owner's device design, not done): phones reaching a PC through the meeting server (today:
-direct address only). NAT hole punching (today: direct only when the peer port is reachable, else the tunnel). An
-employee's phone attached to the employee's PC (owner addendum, "only if simple"). Not live-checked: the whole device
-area, the sync between two real PCs, the employee push and the HTTPS route via `tailscale serve`.
+**Still to build** (the owner's device design, not done): NAT hole punching for PCs and phones (stage 2, WebRTC; today
+a PC or the Android app goes direct only when a peer port is reachable, else through the meeting server's tunnel; the
+iPhone web app always tunnels). An employee's phone attached to the employee's PC (owner addendum, "only if simple").
+Not live-checked: the whole device area, the sync between two real PCs (live work, request mirror included), the direct
+phone path, the employee push and the HTTPS route via `tailscale serve`.
 
 ## 9. Voice, media, calls
 
 * **One dictation path** (`ui/lib/dictation.ts`, desktop and phone alike): the microphone (`microphone.ts`, 16 kHz
   through an audio worklet) → the take as a 16 kHz mono WAV → `files.upload` → `voice.transcribe` → editable text at
-  the caret. The composer's mic, the feedback cell's hold-to-talk and My day use it. While this PC's first speech
+  the caret. Once the ChatGPT plan heard the last piece (`by: 'plan'`, remembered in localStorage
+  `wf.dictationPlanHeard`), pieces go up compact as Ogg Opus at 24 kbit/s (`ui/lib/ogg-opus.ts`: WebCodecs encoder plus
+  a minimal Ogg writer; WAV again on any other answer or where the encoder is missing), about a tenth of the bytes;
+  the plan gets them unchanged as one request. The composer's mic, the feedback cell's hold-to-talk and My day use it. While this PC's first speech
   model downloads, the mic says "Speech model downloading NN %" and waits. Main has no voice code; it only arms the
   microphone for 15 s per request (`bridge.armMedia`, `main/security.ts`).
-* **Transcription** (`voice/transcribe.ts`), one fixed order: this PC's local model (sherpa-onnx: FastConformer,
+* **Transcription** (`voice/transcribe.ts`), one fixed order: a dictation goes first to the person's ChatGPT plan when
+  its login is here (B-088, `voice/plan-transcribe.ts`: one request to the Codex app's own dictation endpoint, the take
+  as stored – WAV or Ogg – and nothing else; the log lines carry its bytes and format), then this PC's local model (sherpa-onnx: FastConformer,
   Canary, Parakeet – `voice/local/*`) → the `routing.functions.stt` endpoint (learned words as prompt) → a free
   listening model (`listen-transcribe.ts`) → a "not set up yet" text. Long recordings are cut at quiet moments
   (`transcribe-endpoint.ts`). The recommended local model downloads by itself at the first start
@@ -1609,7 +1775,9 @@ area, the sync between two real PCs, the employee push and the HTTPS route via `
   output is Supertonic, voice activity Silero.
 * **B-082 – dictation over the Codex plan, hidden marks, nothing lost.** With a Codex plan the hear thread and the merge
   helper run on gpt-6-luna, low (`engines/codex/helper-thread.ts`); the plan voice meter counts session time, silence
-  included. `voice.transcribe { fileId, language?, chatId?, before?, live? }` answers plain text + `marks` (SpanMark[]);
+  included. `voice.transcribe { fileId, language?, chatId?, before?, live? }` answers plain text + `marks` (SpanMark[]),
+  plus who heard it (`by`: plan, local, service or listener) and `planMissed` when the plan was asked first and gave
+  nothing – then the take shows one info line ("ChatGPT dictation was not reachable", 16.11.);
   inline ⟦?…⟧ exists only inside the hearing and in the agent's view. A message body is plain; unsure/dictated spans
   travel as `meta.marks` (`shared/voice/marks.ts`, checked by `cleanMarks`, dropped on edit and on condensed/search
   copies); `context/render.ts agentBody` writes them in for the agent (also mid-turn, `agents/dispatch-steer.ts`),
@@ -1621,7 +1789,19 @@ area, the sync between two real PCs, the employee push and the HTTPS route via `
   retry`); `ui.state.draftFiles` brings a draft's files back. Spoken conversation: `ui/lib/turn-detect.ts`
   `createTurnDetector` (32 ms frames, level + noise floor + spectral flatness; Silero/Smart Turn plug in as
   TurnModels), 300 ms pre-roll WAV per line, `live: true` (no local model, no merge); an unheard line goes as its
-  recording and the conversation goes on.
+  recording and the conversation goes on. The correction and listener prompts (`voice/correct-dictation.ts`,
+  `shared/voice/marks.ts`) are English and first person since 16.11.
+* **Recording into a message** (16.11.2026, F23; `ui/chat/composer/RecordBar.tsx`, `record-take.ts`): Plus › Record
+  audio opens one bar of fixed cells above the field ([status] [Retake] [primary] [×], 36 px, 40 px on phones) that
+  records at once; Stop uploads the take (`uploadMedia`, chunked, ≤ 300 MB) as a chip, a failed upload keeps it with
+  Attach and Retake, and an unsent take comes back when the chat opens (IndexedDB `compose:<chatId>`); Send waits while
+  this chat's take records or uploads. On a touch device in the PWA or the app, Take photo and Record video are file
+  inputs with `capture` (the Android app opens its camera); on the desktop Record video opens a camera bar with a live
+  preview, Record and Photo. While it records, the status cell shows the words heard so far and from 8 words the pace
+  (`ui/blocks/ui/live-words.ts`: the recorder's own stream – `microphone.ts` option `stream` – feeds a second Dictation
+  whose pieces of 1.5–3.5 s go to `voice.transcribe` `live`, about 1–4 s behind). The `record` widget shows the same
+  line, and its teleprompter follows the speaker when it carries a script (`prompter.ts` `followScript`, `prompterPace`;
+  the heard word coloured through the CSS Custom Highlight API, so nothing moves).
 * **One voice mode** (`shared/voice/conversation.ts` `VoiceSessions`, page side `ui/chat/composer/voice.ts`,
   `pwa-conversation.ts`): utterance → `voice.transcribe` → `messages.send` (marked spoken) → the reply is read aloud →
   listen. Up to three chats at once over one microphone: the chat started or focused last listens; replies are read
@@ -1694,15 +1874,36 @@ area, the sync between two real PCs, the employee push and the HTTPS route via `
   and video through the function models (`generate.ts`: OpenAI-compatible, Gemini, ElevenLabs, fal.ai, images on the
   ChatGPT plan via Codex, local speech). Seeing and hearing: `media.view`, `look` (keyframes from main's analyzer
   window), `listen` (local hearing report with sound tagging – CED Mini, `sounds.ts`), `transcribe`.
-* **Feedback** (`ui/feedback`, `runtime/feedback`): the header's feedback cell – click for the form, hold to talk; a
-  window screenshot with paint-over for private parts; the report is sealed for the team's key and dropped into the
-  team's Firestore mailbox (`delivery.ts`, `seal.ts`); the team PC reads text and images through the owner-only
-  Feedback menu → Inbox (`FeedbackInbox.tsx`, `feedback.inbox*`) or `wf feedback`. Opening the inbox and Refresh
-  fetch encrypted reports once, decrypt/store locally, then delete the cloud copy. The form provides the data
-  summary and full `FeedbackPrivacy.tsx` notice before Send. Canvas export keeps the flattened JPEG within
-  600,000 image bytes; an oversized complete envelope stays local rather than dropping its screenshot. A send that is not
-  confirmed leaves the report saved on the PC, and the form's action cell then reads "Send again" (the same saved
-  report with its screenshot goes out again).
+* **Feedback** (`ui/feedback`, `runtime/feedback`): the frame's feedback cell (on the phone on every top row,
+  `ui/feedback/cell.tsx`; drawn above open dialogs at the same spot, §11). A press – a click, Ctrl/Cmd+Shift+F
+  (`shared/api/workspace-browser-keys.ts` `FeedbackKey`, read by main in the app page and in every side-browser page,
+  IPC `feedback:key`, `ui/feedback/press.ts`) or in the Android app volume up + down together – takes a fresh snapshot
+  and freezes the window in the **snapshot overlay** (16.11.2026, `FeedbackOverlay.tsx`: a modal dialog above every
+  other, the side browser's native view hidden under it, the shot at 1:1 with a transparent canvas on top – Pen, Box,
+  Undo – and a slim dock at the bottom, `FeedbackPanel.tsx`: Screenshot box, Recording and crash rows, the field with the
+  mic, Send or Save, the privacy line); holding talks. The report image is the shot flattened with its marks at Send.
+  The Android app gives the shot natively over its port (`requestNativeShot`, app 0.3.15); the iPhone web app and
+  browsers lay the dock over the live screen with "Add photo". Dictation in the form keeps its recording (`recording.ts`,
+  WebM Opus 12 kbit/s, MP4 on the iPhone; up to 4 takes, sealed with the report when they fit, else the warning
+  `AUDIO_DROPPED`); an Android crash report rides as `clientDiagnostics`; every report carries its origin line `client`
+  (`ui/feedback/client.ts`). The page writes each report into an outbox first (`ui/feedback/outbox.ts`, IndexedDB by
+  `clientId`) and flushes it on reconnect; `feedback.create` returns the stored report for a known `clientId`, and a
+  person's report needs no `kind`. The report is sealed for the team's key and dropped into the team's Firestore mailbox
+  (`delivery.ts`, `seal.ts`); the PC sends its unsent human reports again at start and 10 min after an offline, timeout
+  or server failure (`FeedbackService.resendPending`); `/feedback <text>` in a chat sends at once. A confirmed send
+  closes the form and shows "Feedback sent · No. XXXXXXXX" in the status line. **The mailbox keeps its letters**
+  (16.11.2026, `inbox.ts`): every PC and company holding the team key gets every letter – fetched at start, when the
+  inbox opens, on Refresh and by `wf feedback receive`, never on a timer – and stores it with its screenshot and
+  recordings in `<data>/feedback-inbox/`; a letter leaves the mailbox only when the team removes the report, its mark's
+  keep time passes, or it is older than `LETTER_TTL_MS` (30 days, by Google's createTime; an old letter not here yet is
+  stored first). A removed report leaves an `<id>.gone` tombstone, and letters this key cannot open stay (up to 20, a
+  copy under `unreadable/`). The team reads them in Settings › Feedback › Inbox (`FeedbackInbox.tsx`, owner-only
+  `feedback.inbox*`; `feedback.inboxAudio {id, index}` plays a recording; the meta line names PC, company folder and
+  "dictated") or with `wf feedback list [--open] | show <no> | mark <no> done|irrelevant|open`; opened letters are
+  checked by `letter.ts` `itemOf`. The form shows the data summary and full `FeedbackPrivacy.tsx` notice before Send.
+  Canvas export keeps the flattened JPEG within 600,000 image bytes; an oversized complete envelope stays local rather
+  than dropping its screenshot. A send that is not confirmed leaves the report saved on the PC, and the form's action
+  cell then reads "Send again" (the same saved report with its screenshot goes out again).
 
 ## 10. Browser, the global pane and the areas
 
@@ -1803,7 +2004,8 @@ Remote-PC", "auch am Handy"):
   last (`browser-feed` `keep`) until closed, so a switch never shows an empty field.
 * **The phone** (`ui/workspace/phone-tabs.ts`): its pane reads its PC's spaces (`tabs.get`/`tabs.set`, event
   `tabs.changed`) instead of keeping its own; the PC's websites are remote tabs there (the first real website view on the
-  phone), files show with content, and what the person does goes back to the PC. **The phone viewer** (B-081): the
+  phone), files show with content, and what the person does goes back to the PC; a sign-in that must run on the PC opens
+  in the PC's pane (`side.open`, §8) and the phone's sheet shows that tab. **The phone viewer** (B-081): the
   picture zooms as a view over its box (`ui/workspace/view-zoom.ts` `{s, x, y}`, the img translated and scaled around
   its top-left, 1–4×; clicks still map through its drawn box): the Zoom button sets 2× around the centre or 1, two
   fingers pinch (below 1.02 it settles to fit only when the last finger lifts), one finger pans the zoomed picture to
@@ -1952,20 +2154,26 @@ area). On the phone, files open with the system app.
   geometry is unknown: macOS left 80 px, otherwise right 150 px). The rail toggle and the first zone's title yield
   sideways to left controls; the main zone (`.rightmost`) reserves the right ones as `--caption-space` (controls plus
   the frame's feedback and Browser cells, `shell/WindowBar.tsx`). Compact desktop windows keep one row at phone widths.
+  While a modal dialog is open the native caption buttons dim with the backdrop (16.11.: `ui/lib/backdrop-dim.ts` watches
+  every `dialog[open]` → IPC `window:title-bar-dim` → `MainWindow.setTitleBarDim`, `title-bar.ts` `dimmedColors`; not
+  for the feedback overlay; macOS has no overlay to dim).
   Real Mac/Linux caption buttons are not yet checked on the devices.
 * **Nothing shifts on a click** (the owner's standing rule): toggles change only colour or icon inside a reserved cell;
   count badges are absolute; a busy button keeps its box (spinner over a transparent label); CSS state selectors never
   change font-weight, padding, margin, width or min-height (`test/unit/styles/stable-states.test.ts` fails on any);
   rows waiting for data render a fixed skeleton; scroll areas use `scrollbar-gutter: stable`; focus uses
   `preventScroll`. Status never takes a band: `shell/StatusLine.tsx` lays up to three small lines over the top of
-  the main zone (connection, work stop, voice, realtime, toasts – lasting ones for to-dos, blockers and important
-  messages, §4.2); in a chat they lie over the top of the messages (CSS anchor on `.message-scroller`), so under an open
+  the main zone (connection, work stop, voice, realtime, toasts – lasting ones for to-dos and blockers, §4.2); in a chat
+  they lie over the top of the messages (CSS anchor on `.message-scroller`), so under an open
   chat area and never on its tabs or page; elsewhere, or without anchor support, at the zone's top. A line never hides
   a native page. A fill never overwrites a draft.
 * **Right-click menus everywhere** (`lib/context-menu.tsx`): a row spreads `useContextMenu(() => sections)` on its root;
   a right click (or a long press on touch) opens the shared menu at the pointer; `openContextMenu(x, y, sections)` for a
   button; `<ContextMenuHost/>` is mounted once in `App.tsx`. Menus are text only. One builder per object:
-  `chat/chat-actions.ts` (chat rows and title), message menu (Reply, Copy, Edit, Delete), `team/menus.ts` (agent,
+  `chat/chat-actions.ts` (chat rows and title), message menu (Reply, Copy – the mouse selection in that message, else
+  the whole body –, "Select text" on touch, a sheet with the phone's own handles, `chat/SelectText.tsx`, "Save as
+  secret" for a selection, Edit, Delete; the rules in `chat/message-tools.ts`; final text messages also carry Copy and
+  Reply icons in their reserved meta row, and a right swipe on a message replies on the phone), `team/menus.ts` (agent,
   person), `tasks/task-menu.ts`, `tasks/todo-menu.ts`, `splits/split-menu.ts`, calendar blocks, schedules, account and
   device rows, browser tabs. Page titles of agents, people, splits and tasks open the same menu as a dropdown
   (`team/TitleMenu.tsx`); on the phone a ⋯ button and long press.
@@ -1977,21 +2185,31 @@ area). On the phone, files open with the system app.
   only "Model choice" below them; both write the `providers` and `routing` sections of `settings.json`,
   `runtime/accounts/provider-file.ts` reconciles them into accounts; protocols `openai-chat`, `openai-responses`,
   `anthropic`, `decision`; a cell names the model that runs, never "Auto" (§6); account rows have Move up/down and no plan
-  roles), **Voice**, **Calendar**, **Secrets** (the inline band, §7.4),
+  roles), **Voice**, **Calendar**, **Secrets** (the inline band, §7.4), **Security** (16.11.2026, `SecurityPage.tsx`,
+  `#/settings/security`, also for the old names `permissions` and `access`: Access – `profile.pcAccess` Full access |
+  Careful, a change goes to the Manager first as the person's line, `onboarding/pc-access.ts` `setPcAccess` – and "For
+  every agent", one text saved on blur, `profile.forEveryAgent`, §5),
   **Apps**, **Skills & memory** (skills with their route, the memory tree, click opens the file tab), **Devices** (§8),
-  **Feedback**, **About** (version and update, back up and restore, data folder). Everything else is a file the AI edits.
+  **Feedback**, **About** (version and update, back up and restore, data folder). General ends with the Companies group
+  (§3) and holds Appearance only in the PC window. Everything else is a file the AI edits. **Search** (16.11.): every
+  settings screen has the magnifier; the open page's matching words are marked through the CSS Custom Highlight API
+  (`ui/settings/search-marks.ts`, colour only, so nothing moves; Enter goes to the next hit), and the nav and Ctrl+K find
+  pages by what they hold – names of secrets, apps, skills, models and devices, never a value
+  (`ui/settings/settings-words.ts`, loaded at the first search and on their change events).
 * **Browser surfaces**: the global pane, each chat's area above its messages and each agent's area on its page, with
   Chrome-like tabs for pages and panels – §10.
 * **"Set up with AI"** (`team/set-up-with-ai.ts`): for anything without a screen of its own, a menu item opens the
   Manager's 1:1 with a prepared request in the composer; the person adds the detail and sends.
 * **Composer** (`chat/Composer.tsx`): one action row of fixed cells [+] [spacer/waveform] [Ultra] [Model] [Mic] [Send].
   Ultra is a small labelled switch beside the model chip (`UltraCell.tsx`); the model chip has a fixed width and shows
-  the short name ("Opus 5.5", `lib/model-name.ts`). With nothing chosen it names the model `routing.preview` routes the
-  agent to in this chat (`ignorePin`, `lib/route-preview.ts`; the last model the agent used here until it answers); its
+  the short name ("Opus 5.5", `lib/model-name.ts`). With nothing chosen it reads "Auto" with the model `routing.preview`
+  routes the agent to in this chat as its muted second part ("Auto Opus 5.5", 16.11.; `ignorePin`,
+  `lib/route-preview.ts`; the last model the agent used here until it answers); its
   menu's first item names that model ("Chosen per task", stored as `auto`), then one searchable list, effort. The agent
   page's Model select names its unpinned option the same way (without a chat `ignorePin` also leaves out the agent's own
-  pin). The + menu (`composer/PlusMenu.tsx`: Files & folders, Photos & screenshots, Secret – the composer's secret mode,
-  §7.4 –, Task, then the send items of `composer/slash.ts`) and the Send button's right-click (Send as important, Send
+  pin). The + menu (`composer/PlusMenu.tsx`: Files & folders, Photos & videos, Record audio, Record video – on a touch
+  device also Take photo – §9, Secret – the composer's secret mode, §7.4 –, Task, then the send items of
+  `composer/slash.ts`) and the Send button's right-click (Send as important, Send
   silently, **Schedule…**) never grey an entry out: with nothing to send a level sets the draft's level and Task fills
   "/task ". No permission chip. **Schedule
   mode** (§4.6): one settings block over the text inside the frame, the text area grows, and the bottom edge of the
@@ -2000,7 +2218,11 @@ area). On the phone, files open with the system app.
   clock button "Schedule", the right-click menu then reads Schedule as important · Schedule silently · Schedule….
 * **Chat header** (`chat/ChatHeader.tsx`): the chat's avatar and two fixed lines (name; who is working – `LiveLine.tsx`
   – or the resting line), then Call and "Chat tabs" (the chat's area, §10). Chat details: members, bridges, notes,
-  schedules, message search.
+  schedules, message search. The live bar has one line per working agent with its own Stop in a fixed slot
+  (`chat/LiveBar.tsx`; a split part's slot stays empty; a run on another own PC stops there, §8); the header has no Stop.
+  **Chat list** (`chat/ChatList.tsx`, `list-order.ts` `nestChats`): the person's 1:1s with agents nest under the 1:1 of
+  their top-most manager in the list (one level; an explicit `parentId` wins; a person ends the chain), parents open by
+  default.
 * **Live work in a chat** (B-075; `chat/WorkingMessage.tsx`, `WorkingPopover.tsx`, `RunDisclosure.tsx`,
   `team/run-items.tsx`): the header line, the chat list row, the working popover, the live block (the newest 6 steps,
   "+N earlier steps", the live line) and "Worked … · N steps" above an answer render only from the run's row and its
@@ -2009,18 +2231,27 @@ area). On the phone, files open with the system app.
   (every step, live while the run runs). The chat does not poll runs; split groups and Team views without the runs
   stream still re-read the items when the agent's live note changes (at most every 2 s, `useRunItems`).
 * **Rail** (`shell/Rail.tsx`): My day · Work · Chats · Team; from the bottom: profile (`ProfileMenu.tsx`: the
-  companies, "New company", Settings – §3), plan quotas, update. Command palette: Ctrl/Cmd+K.
-* **First run** (`ui/onboarding`, `ui/tour`): the tour (video with a play button; "Connect to my other PC" beside Skip
-  opens the connect card, §8) → the AI card (the model setup; one usable AI is needed to continue) → About you (name and
-  company only). `onboarding.start` then posts one fixed line as the person into the Manager's chat
-  (`prompts/onboarding.md`, fallback `onboarding/brief.ts`), an ordinary message wake on the strongest model. B-076
-  (owner 05.11.: the 0.3.2 start made the agent stop and ask how far it may go, then wait): the line says what just
-  happened ("I just installed Autark, entered <name> and <company> and clicked Start. You are my first AI colleague."),
-  what the person hopes for (get to know them and their work – this PC, the web, conversations with other AIs – and get
-  going on what matters most) and that the way is the agent's call ("How you go about it, whom you bring onto the team and
-  what you ask me is your call"); the browsers' passwords belong in the secrets catalog (exported, imported unread) and
-  the models (work, decisions, search by meaning) can likely be better. No "ask me first", no language order (the PC's
-  language is a fact in the prompt), nothing to store as a permission; no technical switch stands behind any of it.
+  companies, "New company", "Import a company", Settings – §3), plan quotas, update. Command palette: Ctrl/Cmd+K.
+* **Team** (`ui/team`): the Team page's second line per agent is its role and "· N reports" (`model.ts`
+  `structureLine`; the sidebar and the phone's Team tab keep the live line); people who never joined sit in the
+  sidebar's closed "Invited (n)" fold before Archived (§8); Add › Person opens the Add person page (§8).
+* **The feedback overlay's frame parts** (16.11.2026): every lib `Dialog`, once modal, draws a registered slot part
+  (`lib/dialog.tsx` `setDialogSlot`/`DialogSlot`, its own top layer via `top-layer.ts`) – the feedback cell at its fixed
+  spot, left out where the dialog's own box covers that spot; popovers stay open on a press at an element marked
+  `data-keeps-popovers`, so the snapshot shows an open menu (§9 Feedback).
+* **First run** (`ui/onboarding`, `ui/tour`): the tour (code-made, `ui/tour/timeline.ts` one tour per variant –
+  `TOURS.desktop`, `TOURS.phone`: the shipped feedback flow – press to freeze, paint, talk or type, send; "Connect to my
+  other PC" beside Skip opens the connect card, §8; the Android app shows the phone variant once before pairing, bundled by
+  `scripts/tour-page.mjs` from `ui/tour/phone-page.tsx` into the app's `assets/tour.html`) → the AI card (the model
+  setup; one usable AI is needed to continue) → About you (name and company only). `onboarding.start` then writes two
+  lines into the Manager's first chat in one transaction (`prompts/onboarding.md`, fallback `onboarding/brief.ts`
+  `setupLines`): the start line as the person's own ("Sent by Autark when I clicked Start: I've just set up my company
+  here – let's begin.", F07, owner 15.11.; stored with `ChatService.send` `deliver: false` – no delivery, notification or
+  title) and the Manager's greeting right below (a few short, optional questions – language, way of working, setting
+  up, names, structure – and what it will do once the person answers). No model runs and nobody wakes at Start (B-090);
+  the person's answer is the Manager's first turn and reads all three lines. No "ask me first", nothing to store as a
+  permission; no technical switch stands behind any of it. A new profile's language is the PC's display language (main
+  passes `app.getPreferredSystemLanguages()[0]` as `AUTARK_SYSTEM_LANGUAGE`, `settings/defaults.ts`).
 * **Rich answers** (`shared/blocks`, `ui/blocks`): agents write Markdown with ```mermaid, ```ui blocks from one catalog
   (`shared/blocks/catalog.ts`; validated forgivingly) and ```app mini-tools that run in sandboxed frames
   (`wf-sandbox://`, a small live-frame budget). Ask blocks become to-dos (§4.3). An absolute path as a link target or
@@ -2031,7 +2262,9 @@ area). On the phone, files open with the system app.
   link target keeps its backslashes as written, a network path (`\\host\…`, `//host/…`) stays text, and inside a link
   label or a button/label (an option, a card) the enclosing control keeps the click; while text is selected nothing
   opens, so selecting still copies. A task result's evidence chips open their paths the same way, with the task's
-  assignee as the author.
+  assignee as the author, and so do the Open of a file block and of a review widget on every device (16.11.; in My day
+  and a task's detail the to-do's creator is the author, `authorId`); a connection that may not read paths gets one
+  toast with the reason (`NO_PATH_READ`).
 * **Look**: `styles/tokens.css` defines every colour; the person's look is `theme.css` (§3).
 
 ## 12. Removed on purpose
@@ -2108,6 +2341,15 @@ guarded, undid or duplicated is gone, and where a settings screen went, the AI d
   chat UI's use of `agent.activity` and the chat's 2 s run refresh (the chat renders from rows; split groups and Team
   views keep the refresh, §11), the shared `'talk'` call id (every call has its own row and id, §9), the phone QR on a
   localhost address (no QR without an address a phone can reach, §8).
+* **Removed in the feedback round (16.11.2026)**: the 0.3.8 exclusive-owner handoff of plan logins between companies
+  (`accounts/home-owner.ts`, `company-transfer.ts`, `claude-quiescence.ts`, `shared/model/account-transfer.ts`, the RPC
+  `accounts.transfer`, the Supervisor's home permits and `withClaudeHome`) – one shared logins folder per PC instead
+  (§6); the isolated mail turn (`agents/mail-turn.ts`, `AUTARK_MAIL_ORIGIN_ISOLATION`, `mailScopeRefusal`, sender-only
+  reply) – a mail-woken run is a full turn (§7.2); the feedback menu popover and its "Paint over" dialog
+  (`PaintEditor.tsx`) – the snapshot overlay (§9); a seeded HUMAN.md for each hire (`seedHuman`) – "For every agent"
+  (§5); `giveFullAccess` (`setPcAccess`); the separate secrets append of `knowledge.find` (`findSecrets` – kind
+  `secret`, §5.2); the activity log on the agent's profile (its Work page, §4.1); the chat header's second Stop (the
+  live bar's per agent, §11); the "Updates install from the first company" rule (§3).
 
 **Leftovers still in the tree** (harmless, to remove when their callers go): compatibility stubs and legacy fields
 named in their file headers (e.g. `TaskView.route`, `shared/model/browser.ts` device fields); the
@@ -2117,7 +2359,9 @@ access; the person-variant RPC handlers instead of one membership check; the emp
 a deleted agent's `agent:<id>` space
 in `side-tabs.json`; some header comments that still name removed modules or only the global and chat spaces; from B-062: "Settings → Models &
 accounts" in several error texts (`routing/unfit.ts` and its test, `tools/builtin/accounts.ts`, a few header comments),
-`agents.derive` in the header of `patterns/tools.ts`, and the stale `test/ui/ui-tour.mjs`.
+`agents.derive` in the header of `patterns/tools.ts`, and the stale `test/ui/ui-tour.mjs`; from 16.11.: the field
+`Origin.mailScope` and `mailReplyAttempted` in `agents/dispatch-runs.ts`, and the feedback menu and "Paint over" still
+named in `ui/styles/index.css` and the header of `ui/settings/FeedbackPage.tsx`.
 
 ## 13. Code conventions
 
@@ -2150,35 +2394,35 @@ All paths below `code/apps/desktop/src` unless stated.
 | Composition roots | `runtime/main.ts`, `runtime/compose/*` (services, network, lifecycle, calendar, splits, people, decisions …), `main/desktop.ts`, `ui/main.tsx`, `ui/App.tsx` |
 | Service contracts | `runtime/contracts.ts`, `runtime/contracts/*` |
 | RPC | contract `shared/api/*`, server `runtime/rpc/server.ts`, scopes `rpc/scopes.ts`, handlers `rpc/handlers/*`, extras `rpc/extras.ts`; client `ui/lib/rpc.ts` |
-| HTTP, PWA, push | `runtime/http/*`, `runtime/pwa/*` (`pair-code.ts` the 6-digit code, `urls.ts`), `ui/pwa/*` |
+| HTTP, PWA, push | `runtime/http/*` (`peer.ts` incl. `/peer/phone`, `static.ts` incl. `/ui-hashes.json`), `runtime/pwa/*` (`pair-code.ts` the 6-digit code, `urls.ts`), `ui/pwa/*`, `ui/hosted/*` (`ui-hashes.ts` the file check), `shared/model/ui-hashes.ts` |
 | Data folder and files | `runtime/root/*`, `runtime/settings/*` (`schema.ts` is the one table; `read.ts`, `service.ts`), `runtime/system/paths.ts`, `runtime/agent-core/*`, `runtime/secrets/files.ts`, `runtime/apps/connectors.ts`, `runtime/chat-files/*` |
-| Companies | `main/companies.ts`, `runtime/root/companies.ts`, `shared/model/companies.ts`, `runtime/tools/builtin/companies.ts` (`companies.list`, `runCompanyTool`), `runtime/rpc/handlers/companies.ts`, UI `ui/shell/ProfileMenu.tsx`, `assets/installer.nsh` |
+| Companies | `main/companies.ts`, `main/company-remove.ts` (leave, delete), `runtime/root/companies.ts`, `shared/model/companies.ts`, `runtime/tools/builtin/companies.ts` (`companies.list`, `runCompanyTool`), `runtime/rpc/handlers/companies.ts`, `runtime/portability/company.ts` (export, import), UI `ui/shell/ProfileMenu.tsx`, `ui/settings/CompaniesGroup.tsx`, `assets/installer.nsh` |
 | Database | `runtime/db/*` (migrations), `runtime/store/*` |
-| Chats | `runtime/chat/*` (a run's row: `streaming.ts`, `live-row.ts`, `publish-message.ts`), `runtime/notes/store.ts`, UI `ui/chat/*` |
+| Chats | `runtime/chat/*` (a run's row: `streaming.ts`, `live-row.ts`, `publish-message.ts`; `live.ts` with the other PCs' live state), `runtime/notes/store.ts`, UI `ui/chat/*` (`message-tools.ts` Copy/Reply, `SelectText.tsx`, `message-keys.ts` masked keys, `LiveBar.tsx`, `list-order.ts`) |
 | Tasks, ownership | `runtime/tasks/*`, UI `ui/tasks/*` |
 | Wakes, scheduler, dispatcher, turns | `runtime/wakes/queue.ts`, `runtime/schedules/*`, `runtime/agents/*`, `runtime/runs/journal.ts` |
 | Splits | `runtime/splits/*`, `runtime/git/*`, UI `ui/splits/*` |
 | My day, calendar | `runtime/day/*`, `runtime/calendar/*`, UI `ui/day/*` |
-| Org, agents, people | `runtime/org/*`, `runtime/people/*`, `runtime/portability/*`, `runtime/patterns/*`, UI `ui/team/*` |
+| Org, agents, people | `runtime/org/*`, `runtime/people/*` (`access.ts` incl. the CEO layer, `rpc-ceo.ts` the co-CEO's methods), `runtime/portability/*`, `runtime/patterns/*`, UI `ui/team/*` (`PersonNew.tsx` Add person, `AgentWork.tsx`/`WorkNow.tsx`/`agent-work.ts` the Work page, `org-state.ts`) |
 | Prompt and context | `runtime/context/*`, `runtime/modes/*`, `resources/prompts` (incl. `agent-default.md`, `subconscious.md`), `resources/modes` |
 | Subconscious (§5.4) | `runtime/subconscious/*` (`route-turn.ts` the one call before a turn, `look.ts` its hits and context items, `flow.ts` the asked run's loop, `tools.ts` its tools, `service.ts` which call runs when, `wake.ts` the checks, `exchange.ts`, `context-tools.ts`; `verify*.ts`, `widget*.ts` the small side work), `runtime/tools/builtin/subconscious.ts`, `shared/model/subconscious.ts` |
 | Transcript by IDs (§5.5) | `runtime/context/ledger/*`, `runtime/contracts/ledger.ts`, `shared/model/context-ledger.ts`, `runtime/tools/builtin/context.ts`, `runtime/agents/rebuild*.ts`, `runtime/engines/{codex,claude}/rebuild*.ts`, `runtime/engines/claude/transcript.ts`, `runtime/engines/trace-text.ts` |
 | Vectors (§5.3) | `runtime/vectors/*`, `runtime/contracts/vectors.ts`, `runtime/models/embeddings.ts`, `runtime/tools/builtin/vector-{embed,search}.ts`, `shared/model/vectors.ts` |
 | Memory, references, find | `runtime/knowledge/*` (the tree: `memory-tree.ts`, `memory-follow.ts`, `memory-migrate.ts`; `words.ts` the word index, `tree-words.ts` the tree's), `runtime/tools/builtin/memory.ts`, `shared/model/memory.ts`, `runtime/references/*`, `runtime/find/*`, `runtime/work-presence/*` |
 | Engines | `runtime/engines/*`, `runtime/mcp/*` |
-| Accounts, models, routing, decisions, cost | `runtime/accounts/*` (`legacy.ts`), `runtime/models/*`, `runtime/routing/*` (`uses-settings.ts`, `person-turn.ts`), `runtime/decision/*`, `runtime/spend/*`, `shared/model/{models-uses,providers-connect}.ts`, `resources/model-priors.json` |
+| Accounts, models, routing, decisions, cost | `runtime/accounts/*` (`legacy.ts`; shared plan logins: `cli-homes.ts`, `adoption.ts`, `dismissed.ts`, `login-file.ts`), `runtime/bridge/logins-1611.ts` (the one-time move into the logins folder), `runtime/models/*`, `runtime/routing/*` (`uses-settings.ts`, `person-turn.ts`), `runtime/decision/*`, `runtime/spend/*`, `shared/model/{models-uses,providers-connect}.ts`, `resources/model-priors.json` |
 | Tools | `runtime/tools/*` (registry, placement incl. `placeCompany`, core sets), `runtime/tools/builtin/*` |
 | Connectors, bridges | `runtime/apps/*`, `runtime/bridges/*` |
-| Skills, secrets | `runtime/skills/*`, `resources/skills/*`, `runtime/secrets/*` (`export.ts`, `units.ts`), `shared/model/key-values.ts`, UI `ui/settings/SecretRows.tsx`, `ui/settings/secret-catalog.ts` |
-| Devices | `runtime/devices/*` (sync: `runtime/devices/sync/*` – `logins.ts`, `blobs.ts`, `file-io.ts`), `runtime/remote/*`, `runtime/phone/*`, `runtime/computer/*`, `runtime/pointers/*`, `main/screen-cursor.ts` (the AI cursor on the screen), `code/services/remote-relay`, UI `ui/settings/DevicesGroup.tsx`, `connect-rows.tsx`, `ui/onboarding/ConnectCard.tsx` |
-| Voice, calls, media | `ui/lib/dictation.ts`, `shared/voice/*`, `runtime/voice/*`, `runtime/calls/*` (`call-log.ts` a call's row, `wiring.ts` start-up and shutdown, `ring.ts` an agent's ring), `runtime/tools/builtin/call-tool.ts` (`chat.call`), `shared/model/call.ts`, `runtime/media/*`, `main/media-*.ts`, UI `ui/chat/composer/*`, `ui/chat/call/*` |
+| Skills, secrets | `runtime/skills/*`, `resources/skills/*`, `runtime/secrets/*` (`export.ts`, `units.ts`, `metadata.ts` word index and ranking, `text-capture.ts` keys in chat text), `runtime/find/secrets.ts`, `shared/secrets/token-patterns.ts`, `shared/model/key-values.ts`, UI `ui/settings/SecretRows.tsx`, `ui/settings/secret-catalog.ts` |
+| Devices | `runtime/devices/*` (sync: `runtime/devices/sync/*` – `logins.ts`, `blobs.ts`, `file-io.ts`, `live.ts`; `load.ts`; `rendezvous/phone.ts` and `phone-traffic.ts` the phones' paths), `runtime/remote/*` (`mirror.ts` requests on every own PC), `runtime/phone/*`, `runtime/computer/*`, `runtime/pointers/*`, `main/screen-cursor.ts` (the AI cursor on the screen), `code/services/remote-relay`, UI `ui/settings/DevicesGroup.tsx`, `connect-rows.tsx`, `devices-connection.tsx`, `device-version.ts`, `ui/onboarding/ConnectCard.tsx` |
+| Voice, calls, media | `ui/lib/dictation.ts`, `ui/lib/ogg-opus.ts` (compact pieces), `ui/blocks/ui/live-words.ts` and `prompter.ts` (words while recording), `ui/chat/composer/RecordBar.tsx`, `shared/voice/*`, `runtime/voice/*`, `runtime/calls/*` (`call-log.ts` a call's row, `wiring.ts` start-up and shutdown, `ring.ts` an agent's ring), `runtime/tools/builtin/call-tool.ts` (`chat.call`), `shared/model/call.ts`, `runtime/media/*`, `main/media-*.ts`, UI `ui/chat/composer/*`, `ui/chat/call/*` |
 | Browser | `main/workspace-*.ts` (one shown tab per space `workspace-shown.ts`, preview marks `workspace-marks.ts`), `main/side-driver/*` (`cursor-script.ts` the AI cursor's drawer, `pick-script.ts` the Pin picker), `runtime/browser/*`, `shared/model/{agent-cursor,page-pick}.ts`, UI `ui/workspace/*` (`pin.ts`, `view-zoom.ts`, `browser-pad.ts`), `ui/chat/ChatArea.tsx`, `ui/team/AgentBrowser.tsx` |
-| Shell, header, menus, settings | `ui/shell/*`, `ui/lib/{header,header-model,context-menu,dialog}.tsx`, `ui/settings/*`, `ui/styles/*`, `main/title-bar.ts` |
-| First run, feedback, repair | `ui/onboarding/*`, `ui/tour/*`, `runtime/onboarding/*`, `ui/feedback/*`, `runtime/feedback/*`, `runtime/repair/*`, `ui/repair/*` |
+| Shell, header, menus, settings | `ui/shell/*`, `ui/lib/{header,header-model,context-menu,dialog}.tsx`, `ui/lib/backdrop-dim.ts`, `ui/settings/*` (`SecurityPage.tsx`, `search-marks.ts`, `settings-words.ts`), `ui/styles/*`, `main/title-bar.ts` |
+| First run, feedback, repair | `ui/onboarding/*`, `ui/tour/*` (`phone-page.tsx` the phone tour, bundled by `scripts/tour-page.mjs`), `runtime/onboarding/*`, `ui/feedback/*` (`FeedbackOverlay.tsx` the snapshot overlay, `FeedbackPanel.tsx` its dock, `outbox.ts`, `press.ts`), `runtime/feedback/*`, `runtime/repair/*`, `ui/repair/*` |
 | Rich answers | `shared/blocks/*`, `ui/blocks/*`, `ui/sandbox/wf.ts`, `ui/workspace/path-links.ts` (paths in messages) |
 | Updates, launcher, tray | `main/updates/*`, `main/updates-wiring.ts`, `main/launcher*.ts`, `main/tray.ts` |
 | wf terminal client | `runtime/wf-cli/*`, the agents' shim `runtime/engines/wf-shim.ts` |
-| Feedback mailbox and team inbox | `runtime/feedback/*`, `ui/feedback/FeedbackInbox.tsx`, `resources/feedback/{receiver.json,firestore.rules,firebase.json}`; `code/services/feedback` is a retired prototype |
+| Feedback mailbox and team inbox | `runtime/feedback/*` (`inbox.ts` the fetch and tombstones, `letter.ts` checks an opened letter), `runtime/wf-cli/feedback.ts` (`wf feedback list/show/mark`), `ui/feedback/FeedbackInbox.tsx`, `resources/feedback/{receiver.json,firestore.rules,firebase.json}`; `code/services/feedback` is a retired prototype |
 | Release environment | `code/scripts/desktop-release/` (tools and preflight only), `apps/desktop/scripts/package-desktop.mjs`, `scripts/nsis-build.mjs` |
 | Native release CI | Public binary repository workflows `release-from-compiled.yml` and `verify-mac-intel.yml`; inputs are a draft tag, compiled ZIP asset and SHA-256, never private TypeScript product sources; native evidence stays in the draft until publication |
 

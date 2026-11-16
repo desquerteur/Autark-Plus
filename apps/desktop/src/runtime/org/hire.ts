@@ -1,5 +1,6 @@
 // Hiring (OrgService.create): the new agent, checked against the org before anything is saved. Any agent may hire:
-// the new agent reports to the creator unless another manager is named. A template that reports to the human (the
+// the new agent reports to the creator unless another manager is named. A human – the owner or (F13) a CEO person –
+// hires as the person does. A template that reports to the human (the
 // secretary) is a step apart from the company: hired by an agent she still works for the person (role, mode and
 // instructions come from the template only). Placed in the template's area (areaKind/forKind in
 // org/spaces.ts), a same-kind manager's first.
@@ -16,7 +17,8 @@
 
 import { WorkforceError } from '../../shared/errors.ts';
 import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
-import { HUMAN_ID, newId } from '../../shared/ids.ts';
+import { newId } from '../../shared/ids.ts';
+import { isHumanActor } from '../../shared/model/people.ts';
 import type { Agent, AgentTemplate, Space } from '../../shared/model/org.ts';
 import type { Settings } from '../../shared/model/system.ts';
 import type { OrgService } from '../contracts.ts';
@@ -100,12 +102,13 @@ export function hiredAgent(input: CreateInput, org: HireFacts): Agent {
   if (input.template && !template) throw new WorkforceError('not_found', 'This agent template does not exist.', { details: { template: input.template } });
   org.checkRoom();
   const creator = input.createdBy;
-  if (creator !== HUMAN_ID) org.requireActive(creator);
+  const human = isHumanActor(creator); // the owner or (F13) a CEO person hires as the person does; anyone else is an agent
+  if (!human) org.requireActive(creator);
 
   const toHuman = template?.reportsTo === 'human';
-  const managerId = toHuman ? undefined : input.managerId ?? (creator === HUMAN_ID ? undefined : creator);
+  const managerId = toHuman ? undefined : input.managerId ?? (human ? undefined : creator);
   const boss = managerId ? org.requireActive(managerId) : undefined;
-  const given: Pick<CreateInput, 'role' | 'instructions' | 'mode'> = toHuman && creator !== HUMAN_ID ? {} : input;
+  const given: Pick<CreateInput, 'role' | 'instructions' | 'mode'> = toHuman && !human ? {} : input;
 
   const now = org.now();
   const id = newId('ag', now);
@@ -117,7 +120,7 @@ export function hiredAgent(input: CreateInput, org: HireFacts): Agent {
   if (target?.archivedAt) throw new WorkforceError('conflict', 'This space is archived.');
   const role = cleanText(given.role ?? template?.role ?? '', 'role', 80).trim();
   const own = given.instructions === undefined ? undefined : cleanText(given.instructions, 'instructions', MAX_INSTRUCTIONS);
-  const joined = creator !== HUMAN_ID && own !== undefined ? withTemplateBody(own, template?.instructions) : undefined;
+  const joined = !human && own !== undefined ? withTemplateBody(own, template?.instructions) : undefined;
   const body = joined !== undefined && joined.length <= MAX_INSTRUCTIONS ? joined : cleanText(own ?? template?.instructions ?? '', 'instructions', MAX_INSTRUCTIONS);
   const agent: Agent = {
     id,

@@ -73,6 +73,7 @@ const targets = {
     await cp('src/ui/index.html', 'app/ui/index.html');
     await cp('src/ui/pwa/manifest.webmanifest', 'app/ui/manifest.webmanifest');
     await cp('assets/icons', 'app/ui/icons', { recursive: true });
+    await cp('assets/badge.png', 'app/ui/badge.png'); // the notices' status-bar badge (ui/pwa/sw.ts)
     await cp('assets/icon.png', 'app/ui/icon.png');
     await cp('assets/icon-maskable.png', 'app/ui/icon-maskable.png');
   },

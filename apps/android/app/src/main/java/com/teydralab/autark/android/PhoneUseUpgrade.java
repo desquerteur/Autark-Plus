@@ -67,7 +67,7 @@ public final class PhoneUseUpgrade {
         Intent open = new Intent(app, MainActivity.class).putExtra(EXTRA, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent tap = PendingIntent.getActivity(app, ID, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         String text = "Your AI wants to work on this phone. Tap and Autark adds phone use by itself.";
-        Notification notification = new Notification.Builder(app, CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+        Notification notification = AppNotices.branded(new Notification.Builder(app, CHANNEL))
                 .setContentTitle("Let the AI use this phone").setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(tap).setAutoCancel(true).build();
         try { manager.notify(ID, notification); } catch (RuntimeException error) { /* notifications not allowed */ }

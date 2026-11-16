@@ -95,10 +95,10 @@ test('device scope rules follow the capability matrix', () => {
   assert.ok(may('settings.update', device(['settings'])));
   const manage = device(['manage']);
   for (const method of ['schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.cancel', 'agents.runs', 'agents.create', 'agents.update',
-    'agents.archive', 'spaces.save', 'spaces.archive', 'skills.save']) {
+    'agents.archive', 'spaces.save', 'spaces.archive', 'skills.save', 'skills.delete' /* W2-PH: the owner's secure phone */]) {
     assert.ok(may(method, manage), `${method} for 'manage'`);
   }
-  for (const method of ['system.resources', 'skills.delete', 'chats.delete', 'files.open']) {
+  for (const method of ['system.resources', 'chats.delete', 'files.open']) {
     assert.ok(!may(method, device(['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'])), `${method} owner-only`);
   }
 });

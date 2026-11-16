@@ -6,8 +6,11 @@
 // Never: behaviour (runtime/find/*), or a permission: a candidate is a hint with its origin and
 // version, its text is data; only a skill the agent deliberately loads becomes instructions.
 
-/** What a candidate is (B-044: every candidate comes from the skill library, the source corpus, the notes or the references). */
-export type FindKind = 'main-skill' | 'product-skill' | 'file' | 'document' | 'note' | 'episode' | 'reference';
+/**
+ * What a candidate is (B-044: every candidate comes from the skill library, the source corpus, the notes or the references;
+ * F19, 16.11.2026: a secret is an entry of the secrets catalog – its name and handles, never a value).
+ */
+export type FindKind = 'main-skill' | 'product-skill' | 'file' | 'document' | 'note' | 'episode' | 'reference' | 'secret';
 
 /**
  * How much a text may steer the agent, highest first: its system prompt, then a skill it chose to
@@ -31,10 +34,11 @@ export const KIND_LABEL: Record<FindKind, string> = {
   note: 'memory note',
   episode: 'earlier work',
   reference: 'reference',
+  secret: 'secret',
 };
 
 export interface FindCandidate {
-  /** Stable: 'skill:<name>', 'src:<docId>:<seq>', 'note:<id>' or 'ref:<id>'. */
+  /** Stable: 'skill:<name>', 'src:<docId>:<seq>', 'note:<id>', 'ref:<id>' or 'secret:<id>'. */
   id: string;
   kind: FindKind;
   authority: FindAuthority;
@@ -56,6 +60,8 @@ export interface FindCandidate {
   origin: string;
   /** The candidate whose text linked here (a route inside a file). */
   via?: string;
+  /** A secret's handle, or each field's of a login or card ("username secret://…, password secret://…") – never a value. */
+  handles?: string;
 }
 
 export interface FindOpened {

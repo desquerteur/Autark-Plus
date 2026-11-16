@@ -72,7 +72,7 @@ test('an own identity.md replaces the shipped one; an unusable own file falls ba
 test('text() gives the own onboarding text cleaned (comments dropped), else the shipped one', (t) => {
   const p = setup();
   t.after(p.done);
-  assert.match(p.templates.text('onboarding'), /^\{\{#lang_de\}\}\nHallo\{\{#name\}\} \{\{name\}\}\{\{\/name\}\}, ich bin dein Manager/,"the shipped onboarding prompt (B-090: the Manager's first message, one section per language)");
+  assert.match(p.templates.text('onboarding'), /^\{\{#lang_de\}\}\n\{\{#start\}\}\nVon Autark gesendet[^\n]*\n\{\{\/start\}\}\n\{\{\^start\}\}\nHallo\{\{#name\}\} \{\{name\}\}\{\{\/name\}\}, ich bin dein Manager/,"the shipped onboarding prompt (F07: the start line, then B-090's Manager's first message, one section per language)");
   p.write('onboarding.md', '<!-- note -->\nHi {{profile.name}}!\n');
   p.changed('onboarding.md');
   assert.equal(p.templates.text('onboarding'), 'Hi {{profile.name}}!');

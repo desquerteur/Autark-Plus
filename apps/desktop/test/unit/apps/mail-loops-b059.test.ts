@@ -73,7 +73,7 @@ test('withMailRun: only a mailbox call in a run a mail started gets the auto-rep
   assert.equal(built(), undefined);
 });
 
-test('apps/tools.ts: legacy mail origin cannot send; ordinary owner and schedule calls stay unchanged', async () => {
+test('apps/tools.ts: a run a mail started sends with the auto-reply argument (owner 16.11.2026: it works fully); owner and schedule calls stay unchanged', async () => {
   const box: Connector = { id: 'box', name: 'box', transport: 'mail', enabled: true, fingerprint: 'f', mail: { address: 'me@example.com', password: 'secret://pw' } };
   const calls: Array<Record<string, unknown>> = [];
   const host: AppToolHost = { state: (id) => (id === box.id ? { connector: box, status: 'ok' } : undefined), call: async (_id, _tool, args) => { calls.push(args); return { content: [{ type: 'text', text: 'Sent.' }] }; } };
@@ -81,12 +81,11 @@ test('apps/tools.ts: legacy mail origin cannot send; ordinary owner and schedule
   const ctx = (origin?: { source: string; label: string }): ToolContext =>
     ({ agent: { id: 'ag_sec', name: 'Sec' }, runId: 'run_1', mode: 'full', services: {}, signal: new AbortController().signal, status() {}, ...(origin ? { origin } : {}) }) as unknown as ToolContext;
   const args = { to: 'maria@client.example', subject: 'Re: Offer', text: 'Here it is.' };
-  const legacy = await send.run(args, ctx({ source: 'app:box', label: 'New mail in me@example.com' }));
-  assert.equal(legacy.isError, true, 'unscoped legacy mail cannot acquire send authority');
-  assert.equal(calls.length, 0);
+  const mail = await send.run(args, ctx({ source: 'app:box', label: 'New mail in me@example.com' }));
+  assert.notEqual(mail.isError, true, 'a run a mail started sends like any other');
   await send.run(args, ctx({ source: 'schedule:s1', label: 'Morning' }));
   await send.run(args, ctx());
-  assert.deepEqual(calls, [args, args]);
+  assert.deepEqual(calls, [{ ...args, [AUTO_REPLY_ARG]: true }, args, args]);
 });
 
 async function mailbox(extra: Partial<MailTarget> = {}) {

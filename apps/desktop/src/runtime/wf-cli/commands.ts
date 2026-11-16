@@ -1,7 +1,7 @@
 // The commands of the wf terminal client (C7): call, chats, read, send (B-050 K4: --important or
 // --silent), todos, tasks, agents here; the streaming ones (watch, events, send --wait) in stream.ts;
 // export and import of chat folders (B-050 K8) in chat-files.ts; the team's feedback mailbox (B-055:
-// feedback setup | receive | status) in feedback.ts. Every command goes through the
+// feedback setup | receive | status; 16.11.2026: list | show | mark) in feedback.ts. Every command goes through the
 // runtime's normal RPC with owner scope – the same methods and checks as the desktop window;
 // nothing here skips a runtime rule.
 // B-080: `wf call` reads its params as JSON or in the shapes Windows shells deliver (parseParams).
@@ -18,7 +18,7 @@ import type { TaskStatus, TaskView } from '../../shared/model/tasks.ts';
 import { flag, integer, text, type Parsed } from './args.ts';
 import type { Rpc } from './client.ts';
 import { exportCommand } from './chat-files.ts';
-import { feedbackCommand } from './feedback.ts'; // B-055: wf feedback setup | receive | status
+import { feedbackCommand } from './feedback.ts'; // B-055: wf feedback setup | receive | status | list | show | mark
 import { CliError } from './errors.ts';
 import { chatTitle, formatAgents, formatChats, formatMessage, formatMessages, formatTasks, formatTodos, namesOf } from './format.ts';
 import { loadAgents, resolveChat } from './resolve.ts';
@@ -43,6 +43,8 @@ export interface Ctx {
   timedOut(): boolean;
   stdin(): Promise<string>;
   now(): number;
+  /** The data dir of the runtime reached (its runtime.json lies there): wf feedback show names the inbox's files in it. */
+  dataDir: string;
 }
 
 export interface Command {

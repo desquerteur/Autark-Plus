@@ -26,8 +26,9 @@
 // rolled-back transaction took back. A watcher an error stopped is armed again on the next use (RootWatcher.ensure).
 // B-044: the agent's home project (home.ts – `home` in agent.json): read, judged, set or cleared here (an edit on
 // disk too: 'agentCore.changed'); its skills are listed from the home folder (untrusted, bounded, cached).
-// Owner 15.11.2026: HUMAN.md (human.ts) – a hire gets it with the default line in the app's language, the person writes it
-// (setHuman, or on disk: 'agentCore.changed'), the prompt reads it (human); no edit of the instructions touches it.
+// Owner 15.11.2026: HUMAN.md (human.ts) – the person writes it (setHuman, or on disk: 'agentCore.changed'; the agent may
+// too), the prompt reads it (human); no edit of the instructions touches it. A hire starts without one (16.11.2026: the
+// default line stands for every agent in settings profile.forEveryAgent).
 // Owns: these rules. Never: stores instructions anywhere else, treats file text as a permission, or polls.
 
 import { mkdirSync, rmSync } from 'node:fs';
@@ -45,7 +46,7 @@ import { nudgeCore, watchCoreFolders, type CoreChange } from './watch.ts';
 import { mainSkillProblems } from './info.ts';
 import { FolderStore } from './store.ts';
 import { AgentHomes, type HomePaths } from './home.ts';
-import { readHuman, seedHuman, writeHuman } from './human.ts';
+import { readHuman, writeHuman } from './human.ts';
 
 export { REJECTED_FILE } from './store.ts';
 export const EXTERNAL_REASON = 'Changed in SYSTEM.md outside the app.';
@@ -65,8 +66,6 @@ export interface AgentCoreDeps {
   paths?: HomePaths; // B-044: the folders homes are resolved against (no paths = no home projects: fakes)
   /** B-087: where the app's own last write or take-over of each SYSTEM.md is kept across a restart (compose: kv; absent: while running). */
   own?: { get(agentId: string): string | undefined; set(agentId: string, sig: string | undefined): void };
-  /** The app's language (settings profile.language) – a hire's HUMAN.md starts with the default line in it. */
-  language?: () => string | undefined;
 }
 
 export type ReconcileOutcome = 'created' | 'updated' | 'same' | 'problem' | 'skipped' | 'unknown';
@@ -211,10 +210,7 @@ export class AgentCore {
   created(agent: Agent): void {
     if (!isCoreFolderName(agent.id)) return;
     this.hired.add(agent.id);
-    if (!this.store.writeFolder(agent)) return;
-    let language: string | undefined;
-    try { language = this.deps.language?.(); } catch { language = undefined; }
-    seedHuman(this.deps.dataDir, agent.id, language);
+    this.store.writeFolder(agent);
   }
 
   /** HUMAN.md's text for the prompt ('' without one). */

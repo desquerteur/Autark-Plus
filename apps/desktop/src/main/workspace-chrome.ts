@@ -8,12 +8,16 @@
 // passed on as before. A site's prefers-color-scheme follows the app's theme (colorScheme). B-081: the Pin button
 // ('pick': `picking` on the page entry, the picker itself is main/side-driver's – host.pick) and its pins, which go to
 // the app window as the key event 'pick' with the tab and its kept address (the keyboard stays where it is).
+// Feedback 16.11.2026 (F15): the feedback shortcut pressed inside a page goes to the app window as IPC feedbackKey (its
+// press and its release – a hold is talk); the keyboard goes back to the app with the release, where the snapshot's
+// field takes it.
 // Owns: that per-tab state, these commands, the page's shortcuts and its color scheme. Never: reads page content or runs
 // script in a page.
 
 import type { BrowserWindow, Event, Input, WebContents } from 'electron';
+import { IPC } from '../shared/api/desktop.ts';
 import { WORKSPACE_BROWSER, keptAddress, type BrowserKeyAction, type BrowserKeyEvent, type HistoryEntry, type WorkspaceBrowserCommand, type WorkspaceBrowserPage } from '../shared/api/workspace-browser.ts';
-import { pageKey, type MainKeyAction } from '../shared/api/workspace-browser-keys.ts';
+import { FeedbackKey, pageKey, type MainKeyAction } from '../shared/api/workspace-browser-keys.ts';
 import type { PickedElement } from '../shared/model/page-pick.ts';
 import { BrowserHistory } from './workspace-history.ts';
 import { SiteZoom, zoomStep } from './workspace-tab-memory.ts';
@@ -60,6 +64,7 @@ export class TabChrome {
   private readonly states = new Map<string, ChromeState>();
   private readonly host: ChromeHost;
   private readonly mac = process.platform === 'darwin';
+  private readonly feedbackKey = new FeedbackKey(); // one for every tab: the keyboard is in one page at a time
 
   constructor(host: ChromeHost, options: { historyFile?: string; zoomFile?: string } = {}) {
     this.host = host;
@@ -149,6 +154,15 @@ export class TabChrome {
   }
 
   private key(id: string, contents: WebContents, event: Event, input: Input): void {
+    const feedback = this.feedbackKey.step(input, this.mac);
+    if (feedback) {
+      event.preventDefault();
+      const window = this.host.window();
+      if (feedback === 'swallow' || !window || window.isDestroyed()) return;
+      window.webContents.send(IPC.feedbackKey, feedback);
+      if (feedback === 'up') window.webContents.focus(); // the snapshot's field is in the app
+      return;
+    }
     const key = pageKey(input, this.mac, contents.isLoading());
     if (!key) return;
     event.preventDefault();

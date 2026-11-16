@@ -5,6 +5,7 @@
 // screenshot (exec-out screencap -p, downscaled), the uiautomator tree, tap/swipe/text/keyevent with
 // bounds validation, opening URLs/apps (a step's signal ends it before the next command), and
 // wireless debugging: pair/connect/disconnect, nearby phones, phone info, USB to Wi-Fi (connect.ts).
+// phone.say has no bubble here and says so (the Autark app's driver has one).
 // The test profile WORKFORCE_ADB=none (adbOverride) finds no adb anywhere.
 // Never: runs adb through a shell on this PC, sends keys that lock or power off the phone,
 // installs or uninstalls apps, or touches developer settings.
@@ -22,7 +23,7 @@ import { parseDevices, parseDump, parseWmSize, renderDump, screenOf, type PhoneD
 import { spawnAdb, type AdbExec, type ExecResult } from './adb-exec.ts';
 import { connectPhone, disconnectPhone, discoverPhones, pairPhone, type AdbRun } from './connect.ts';
 import { inputText, keycode, sdkCandidates, shQuote } from './adb-args.ts';
-import type { PhoneDriver, PhoneShot, PhoneStepOptions, PhoneTree, PhoneWireless } from './driver.ts';
+import type { PhoneDriver, PhoneSaid, PhoneShot, PhoneStepOptions, PhoneTree, PhoneWireless } from './driver.ts';
 
 export type { AdbExec, ExecResult } from './adb-exec.ts';
 export { inputText, keycode, sdkCandidates, shQuote } from './adb-args.ts';
@@ -161,6 +162,11 @@ export class AdbPhone implements PhoneDriver, PhoneWireless {
     if (/No activities found|monkey aborted/i.test(`${text(result.stdout)} ${result.stderr}`)) throw new WorkforceError('not_found', `The app ${pkg} is not installed or has no launcher screen.`);
     if (result.code !== 0) throw new WorkforceError('unavailable', `The app ${pkg} could not be opened.`);
     return pkg;
+  }
+
+  /** ADB has no bubble on the phone: a line or question for the person goes only through the Autark app. */
+  async say(): Promise<PhoneSaid> {
+    throw new WorkforceError('unavailable', 'phone.say works only through the Autark app on the phone; over ADB the phone has no bubble. I write to the person in the chat instead.');
   }
 
   // ------------------------------------------------------------------ internals

@@ -28,6 +28,11 @@ instead of an order, thank for what someone did, and leave a trail someone else 
   for one part of a bigger piece of work; it keeps the parent's list tidy.
 - **Thread** – the replies on one message (`chat.thread {messageId}`), so a side question does not
   flood the chat.
+- **Levels** – the person's chat list follows our org, so they see at a glance which level a chat
+  belongs to: their 1:1s with us sit under their 1:1 with the top manager of our area by themselves.
+  A room for the work of my area I place under the person's 1:1 with me (`chat.set_parent`, or
+  `parent` on `chat.create`); a room where the leads of several areas meet stays on top. Who joins
+  later moves nothing – I place a room again when its purpose moves.
 
 ## Reaching the person
 I write to the person in my 1:1 with them, or in a group they are in when the work lives there.

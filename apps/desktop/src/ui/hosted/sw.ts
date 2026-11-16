@@ -7,9 +7,15 @@
 // tunnel came within 4 s, so the UI boots and shows its own "connecting" state. Without a copy and a tunnel within 10 s:
 // 503. The shell's own files are network-first in 'autark-shell'. Pushes always show a notice (sw-notify.ts, iOS); a
 // clear shows one again only on Apple's push service (B-087: elsewhere it just closes).
-// Owns: that routing and caching. Never: holds the token or the key, caches /rpc, /files, /sandbox or anything else live.
+// F29: a file on the PC's list (ui-hashes.ts) and every script, stylesheet or worker reach the page only with the bytes
+// the PC lists – a copy that differs is fetched anew, a fresh file that differs or a script the PC does not list is
+// refused with a 403 that says why, and the shell page is told ({type:'hosted.refused', file}).
+// Owns: that routing, caching and refusing. Never: holds the token or the key, caches /rpc, /files, /sandbox or anything
+// else live.
 
 import { wireNotifications, type NotifyScope } from '../pwa/sw-notify.ts';
+import { UI_HASHES_PATH } from '../../shared/model/ui-hashes.ts';
+import { CODE, PC_CACHE, UiHashCheck } from './ui-hashes.ts';
 
 export {};
 
@@ -32,8 +38,9 @@ interface HostedScope extends Omit<NotifyScope, 'clients' | 'addEventListener'> 
 const sw = self as unknown as HostedScope;
 const SCOPE = new URL(sw.registration?.scope ?? './', sw.location.href);
 const BASE = SCOPE.pathname; // '/autark/app/'
-const PC_CACHE = 'autark-pc';
 const SHELL_CACHE = 'autark-shell';
+/** F29: the PC's list of its UI files – as the shell kept it, else asked through the tunnel. */
+const hashes = new UiHashCheck(caches, SCOPE.href, () => relay(new Request(new URL(UI_HASHES_PATH.slice(1), SCOPE).href), UI_HASHES_PATH, '', QUICK_MS));
 /** The shell's own files; everything else under the scope is the PC's. */
 const SHELL = new Set(['', 'index.html', 'shell.js', 'sw.js', 'app.webmanifest', 'app-icon.png', 'app-icon-512.png']);
 /** Named by content on the PC (immutable there): chunks, icons, esbuild's hashed assets (fonts). */
@@ -122,20 +129,38 @@ async function shellFile(request: Request | string, key: string): Promise<Respon
   }
 }
 
+/** F29: what the page gets instead of a file that is not the PC's own; the shell page shows why. */
+async function refuse(file: string, clientId: string): Promise<Response> {
+  (await shellClient(clientId).catch(() => undefined))?.postMessage({ type: 'hosted.refused', file });
+  return new Response(`Autark did not run ${file}: it is not one of your PC’s own files.`, { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+}
+
 async function pcFile(request: Request, rel: string, clientId: string): Promise<Response> {
   const key = new URL(rel, SCOPE).href;
-  const path = `/${rel}${new URL(request.url).search}`;
-  const cacheable = request.method === 'GET' && !new URL(request.url).search && !request.headers.has('range');
-  if (!cacheable || (!IMMUTABLE.test(rel) && !REVALIDATE.has(rel))) return (await relay(request, path, clientId, WAIT_MS)) ?? offline();
+  const search = new URL(request.url).search;
+  const path = `/${rel}${search}`;
+  const whole = request.method === 'GET' && !request.headers.has('range');
+  const held = whole && await hashes.held(rel);
+  const checked = held || (whole && CODE.has(request.destination));
+  if (checked && !held && !(await hashes.listed(rel))) return refuse(rel, clientId);
+  /** The answer with the PC's own bytes; undefined when they differ (a copy is checked without asking the PC). */
+  const own = async (response: Response, ask = true) => (checked ? hashes.own(rel, response, ask) : response);
+  if (!whole || search || (!IMMUTABLE.test(rel) && !REVALIDATE.has(rel))) {
+    const answer = await relay(request, path, clientId, WAIT_MS);
+    return answer ? (await own(answer)) ?? refuse(rel, clientId) : offline();
+  }
   const cache = await caches.open(PC_CACHE);
-  const cached = await cache.match(key);
+  const copy = await cache.match(key);
+  const cached = copy && await own(copy, false); // a copy that is not the PC's own file counts as none
   if (cached && IMMUTABLE.test(rel)) return cached;
   const etag = cached?.headers.get('etag');
   const fresh = await relay(request, path, clientId, cached ? QUICK_MS : WAIT_MS, etag ? [['If-None-Match', etag]] : []);
   if (!fresh) return cached ?? offline();
   if (fresh.status === 304 && cached) return cached;
-  if (fresh.ok) cache.put(key, fresh.clone()).catch(() => undefined);
-  return fresh;
+  const mine = await own(fresh);
+  if (!mine) return refuse(rel, clientId);
+  if (mine.ok) cache.put(key, mine.clone()).catch(() => undefined);
+  return mine;
 }
 
 sw.addEventListener('fetch', (event) => {

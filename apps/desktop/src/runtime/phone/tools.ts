@@ -3,7 +3,9 @@
 // one: phone.pair with the 6-digit code from the phone's pairing dialog, phone.connect, phone.disconnect;
 // phone.devices also lists phones nearby. Remote-capable – the phone hangs off whichever PC it is paired with. The skills
 // phone-access (the app) and phone-adb (adb) say how each is set up. Every output of an action says to look again (no
-// blind chains).
+// blind chains); phone.type through the app shows what the field reads afterwards instead (masked like any readback).
+// Each step names the agent (`by`) for the app's bubble; phone.say (feedback 16.11.2026 F16) puts my
+// line or question (✓ / ✕) there, so the person sees what I do without opening the app and answers with one tap.
 // Owns: schemas, summaries, output formatting. Never: repeats a pairing code in a summary or an output.
 
 import type { ToolContext, ToolDef } from '../tools/types.ts';
@@ -13,6 +15,8 @@ import { imageOutput } from '../computer/tools.ts';
 import { notConnected, pairThenConnect } from './connect.ts';
 import { movingKey } from './adb-args.ts';
 import { typedText } from '../secrets/handles.ts';
+import { PHONE_SAY_MAX } from '../../shared/api/methods-phone.ts';
+import { FIELD_MAX } from './app-driver.ts';
 import type { PhoneDriver, PhoneStepOptions, PhoneWireless } from './driver.ts';
 
 type Phone = PhoneDriver & PhoneWireless;
@@ -28,7 +32,7 @@ const where = (ctx: ToolContext) => ctx.deviceId ?? 'this PC';
 const phone = (summary: string, ctx: ToolContext, reversible: boolean) => ({ summary, resource: where(ctx), reversible, external: false });
 
 export function phoneTools(adb: Phone): ToolDef[] {
-  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal, job: ctx.runId });
+  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal, job: ctx.runId, by: ctx.agent?.name });
 
   const devices = defineTool<Record<string, never>>({
     name: 'phone.devices',
@@ -40,7 +44,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
       if (!(await adb.available())) return text("No phone is connected: the Autark app on the person's phone is not connected to this PC right now, and adb is not installed here (skill phone-access for the app; skill phone-adb: winget install Google.PlatformTools).");
       const list = await adb.devices();
       const nearby = notConnected(await adb.discover().catch(() => []), list);
-      const lines = list.map((d) => `- ${d.serial} · ${d.state}${d.model ? ` · ${d.model}` : ''}`);
+      const lines = list.map((d) => `- ${d.serial} · ${d.state} · ${d.transport === 'autark-app' ? 'Autark app' : 'ADB'}${d.model ? ` · ${d.model}` : ''}`);
       const near = nearby.map((n) => `- ${n.address} · ${n.service === 'pairing' ? 'pairing dialog open (phone.pair with the code shown there)' : 'paired phone ready to connect (phone.connect)'}`);
       if (!lines.length && !near.length) return text("No phone is connected. The person's phone joins with the Autark app (skill phone-access); another one with wireless debugging (skill phone-adb, then phone.pair).");
       const body = [lines.length ? lines.join('\n') : 'No phone is connected.', near.length ? `Nearby:\n${near.join('\n')}` : ''].filter(Boolean).join('\n');
@@ -164,8 +168,11 @@ export function phoneTools(adb: Phone): ToolDef[] {
     async run(args, ctx) {
       ctx.status('typing on the phone');
       const typed = await typedText(ctx, args.text); // secret://<id> → the value, now (secrets/handles.ts)
-      await adb.type(args.serial, typed.text, step(ctx));
-      return text(`Typed ${args.text.length} characters.${typed.text === args.text ? '' : ` ${MASKED}`} ${VERIFY}`);
+      const field = await adb.type(args.serial, typed.text, step(ctx));
+      const secret = typed.text === args.text ? '' : ` ${MASKED}`;
+      // Chat sweep 16.11.2026 (words beside the typed text in a field): the field's text read back, masked like any readback.
+      if (typeof field === 'string') return text(typed.mask(`Typed ${args.text.length} characters. The field now reads: "${field.slice(0, FIELD_MAX)}".${secret}`));
+      return text(`Typed ${args.text.length} characters.${secret} ${VERIFY}`);
     },
   });
 
@@ -200,5 +207,27 @@ export function phoneTools(adb: Phone): ToolDef[] {
     },
   });
 
-  return [devices, pair, connect, disconnect, screenshot, uiTree, tap, swipe, type, key, open];
+  const say = defineTool<{ text: string; ask?: boolean; serial?: string }>({
+    name: 'phone.say',
+    description: "Puts my line in the bubble on the person's phone (the Autark app), so they see what I do there without opening the app. With ask: true it is a question with ✓ and ✕, and I get yes, no or none (no tap within 60 s); yes gives me the phone for this task. While they use the phone and my steps can wait, one question gets their decision in a tap; going straight ahead works too, since a touch of theirs pauses me only until 5 s after it.",
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', minLength: 1, maxLength: PHONE_SAY_MAX, description: 'One short line.' }, ask: { type: 'boolean' }, serial: SERIAL },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    category: 'device', remote: true, requires: 'device',
+    // A line in the bubble changes nothing on the phone; my next line or the job's end replaces it.
+    describe: (args, ctx) => phone(args.ask ? `Ask on the phone: "${short(args.text)}"` : `Show "${short(args.text)}" on the phone`, ctx, true),
+    async run(args, ctx) {
+      ctx.status(args.ask ? 'asking on the phone' : 'writing on the phone');
+      const said = await adb.say(args.serial, args.text, args.ask === true, step(ctx));
+      if (!args.ask) return text("The bubble shows my line until my next one or the end of this task's phone use.");
+      if (said.answer === 'yes') return text('The person answered ✓: the phone is mine for this task now. I look at the screen (phone.ui_tree) before my first step.');
+      if (said.answer === 'no') return text('The person answered ✕ – not now: they keep the phone for the moment. I go on with other work and ask again when my phone steps are due.');
+      return text('No answer within 60 s – the person did not tap. My phone steps run as usual; a touch of theirs pauses me until 5 s after it.');
+    },
+  });
+
+  return [devices, pair, connect, disconnect, screenshot, uiTree, tap, swipe, type, key, open, say];
 }

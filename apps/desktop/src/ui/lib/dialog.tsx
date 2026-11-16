@@ -9,21 +9,72 @@
 // form (a portal into the dialog's own footer, so a form keeps its state in one component). A hairline
 // under the title and over the footer shows only while content lies under it (overlays.css). A dialog
 // with the `anchored` class (a form whose content grows) opens at a fixed top instead of re-centring.
-// Owns: modal chrome, the actions row with its message slot and the confirm/askText queue. Never: business logic.
+// Feedback 16.11.2026 (F13 – "ich konnte nicht den Feedback-Button drücken … alles dunkel, bis auf … die Minus"): a modal
+// makes the rest of the window inert, so every open dialog draws the part a host registered (setDialogSlot – the shell's
+// feedback cell) at that part's own spot, in the dialog's top layer (DialogSlot) – never over the dialog's own box. The
+// first dialog installs the caption controls' dimming (backdrop-dim.ts).
+// Owns: modal chrome, the actions row with its message slot, the dialog slot and the confirm/askText queue. Never:
+// business logic, what the slot shows.
 
 import { createContext, type ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { signal } from '@preact/signals';
 import { addBackLayer } from './back-layers.ts';
 import { useContext, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { watchBackdropDim } from './backdrop-dim.ts';
 import { Icon } from './icons.tsx';
+import { showInTopLayer } from './top-layer.ts';
 
 /** The open dialog's footer element DialogActions renders into (undefined: no Dialog around it). */
 const FooterSlot = createContext<HTMLElement | null | undefined>(undefined);
 
+/** A part every open modal draws over itself: where it goes now (null: nowhere) and what it is. */
+export interface DialogSlotPart { place(): DOMRect | null; render(): ComponentChildren }
+const slotPart = signal<DialogSlotPart | null>(null);
+
+/** Registers the part every open dialog draws at its spot (one at a time); returns the removal. */
+export function setDialogSlot(part: DialogSlotPart): () => void {
+  slotPart.value = part;
+  return () => { if (slotPart.peek() === part) slotPart.value = null; };
+}
+
+const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+/**
+ * The registered part at its spot, shown in the top layer of the open dialog around it (render it once that dialog is
+ * modal). Where the dialog's own box reaches the spot (a phone's tall sheet, a full view) it is left out, so it never
+ * covers the dialog's controls – `anywhere`: a dialog that fills the window on purpose (the feedback overlay).
+ */
+export function DialogSlot(props: { anywhere?: boolean }) {
+  const part = slotPart.value;
+  const ref = useRef<HTMLDivElement>(null);
+  const [spot, setSpot] = useState<DOMRect | null>(null);
+  useLayoutEffect(() => {
+    const dialog = ref.current?.closest('dialog');
+    if (!part || !dialog) { setSpot(null); return; }
+    const place = () => {
+      const at = part.place();
+      setSpot(at && (props.anywhere || !overlaps(at, dialog.getBoundingClientRect())) ? at : null);
+    };
+    place();
+    addEventListener('resize', place);
+    return () => removeEventListener('resize', place);
+  }, [part]);
+  const shown = spot !== null;
+  useLayoutEffect(() => (shown ? showInTopLayer(ref.current) : undefined), [shown]);
+  return (
+    <div ref={ref} class="dialog-slot" hidden={!shown}
+      style={spot ? { left: `${spot.left}px`, top: `${spot.top}px`, width: `${spot.width}px`, height: `${spot.height}px` } : undefined}>
+      {spot && part?.render()}
+    </div>
+  );
+}
+
 export function Dialog(props: { open: boolean; onClose: () => void; title?: string; class?: string; children: ComponentChildren; width?: number }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [footer, setFooter] = useState<HTMLElement | null>(null);
+  const [modal, setModal] = useState(false); // in the top layer: the slot can follow it there
+  useLayoutEffect(watchBackdropDim, []); // the caption controls dim with the backdrop; the cleanup checks again on unmount
   // Layout effect: the native dialog follows `open` right after each render. With a passive
   // effect a quick close→reopen (Ctrl+K right after a palette command) ran the stale close after
   // the reopen and shut the dialog again.
@@ -32,6 +83,7 @@ export function Dialog(props: { open: boolean; onClose: () => void; title?: stri
     if (!dialog) return;
     if (props.open && !dialog.open) dialog.showModal();
     if (!props.open && dialog.open) dialog.close();
+    setModal(dialog.open);
   }, [props.open]);
   return (
     <dialog
@@ -59,6 +111,7 @@ export function Dialog(props: { open: boolean; onClose: () => void; title?: stri
           <div class="dialog-footer" ref={setFooter} />
         </div>
       )}
+      {props.open && modal && <DialogSlot />}
     </dialog>
   );
 }

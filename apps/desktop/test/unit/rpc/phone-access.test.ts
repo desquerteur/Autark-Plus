@@ -15,11 +15,15 @@ import { mayReceive } from '../../../src/runtime/rpc/scopes.ts';
 import { DevicesRepo, type DeviceRecord } from '../../../src/runtime/devices/repo.ts';
 import { FULL_ACCESS } from '../../../src/runtime/pwa/tokens.ts';
 import { phonePairLink, remoteIdOfPairText } from '../../../src/shared/api/methods-phone.ts';
+import { remoteIdOf } from '../../../src/runtime/remote/id.ts';
 import type { ClientScope } from '../../../src/shared/api/protocol.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { memoryDb, recordingBus } from '../devices/fakes.ts';
 
 const OWNER: ClientScope = { kind: 'owner' };
+/** This PC's key fingerprint; its own Remote ID differs from the person code remote.state shows. */
+const PC_FP = 'c'.repeat(64);
+const OWN_ID = remoteIdOf(PC_FP);
 const PHONE: ClientScope = { kind: 'device', deviceId: 'dev_phone0000001', capabilities: [...FULL_ACCESS], secure: true };
 const LAN: ClientScope = { ...PHONE, secure: false };
 
@@ -41,7 +45,8 @@ function setup(accounts: Record<string, unknown> = {}) {
       ...accounts,
     },
   } as never;
-  const extras = { remote: { state: () => ({ self: { remoteId: '482913071' } }) } } as never;
+  // remote.state's self: my person code (the root PC's ID) and this PC's own key
+  const extras = { remote: { state: () => ({ self: { remoteId: '482913071', fingerprint: PC_FP } }) } } as never;
   const aborts: AbortController[] = [];
   async function call(method: string, params: unknown, scope: ClientScope): Promise<any> {
     const entry = table.get(method);
@@ -183,12 +188,15 @@ test('phoneUse.reply carries the sender; phoneUse.request reaches only the devic
 test('phone.pairLink: the QR carries only the Remote ID; typed IDs and scanned links read the same', async () => {
   const { call } = setup();
   const link = await call('phone.pairLink', undefined, OWNER);
-  assert.equal(link.url, 'https://openautark.com/pair/#482913071');
+  // F17: this PC's own ID (from its key), not my person code – the phone's request comes to the PC showing the QR
+  assert.notEqual(OWN_ID, '482913071');
+  assert.equal(link.remoteId, OWN_ID);
+  assert.equal(link.url, `https://openautark.com/pair/#${OWN_ID}`);
   assert.match(link.qrDataUrl, /^data:image\/png;base64,/);
   assert.equal((await call('phone.pairLink', undefined, PHONE)).url, link.url, 'B-084: my phone shows the same QR for another phone');
   await rejects(call('phone.pairLink', undefined, LAN), 'forbidden');
-  assert.equal(phonePairLink('482 913 071'), link.url);
-  assert.equal(remoteIdOfPairText(link.url), '482913071');
+  assert.equal(phonePairLink(`${OWN_ID.slice(0, 3)} ${OWN_ID.slice(3, 6)} ${OWN_ID.slice(6)}`), link.url);
+  assert.equal(remoteIdOfPairText(link.url), OWN_ID);
   assert.equal(remoteIdOfPairText(' 482 913-071 '), '482913071');
   assert.equal(remoteIdOfPairText('https://metajarvis.teydralab.com/autark/pair#482913071'), '482913071', 'an older QR without the slash');
   assert.equal(remoteIdOfPairText('12345'), undefined);

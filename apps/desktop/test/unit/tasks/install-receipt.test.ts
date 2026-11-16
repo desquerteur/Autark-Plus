@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { agent, harness } from '../chat/harness.ts';
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
-import { buildVersion, dropInstall, installBuild, noteUpdate, recordStart, type InstallRecord } from '../../../src/runtime/tasks/recover-notes.ts';
+import { buildVersion, dropInstall, installBuild, noteUpdate, readStartNotice, recordStart, type InstallRecord } from '../../../src/runtime/tasks/recover-notes.ts';
 import { appInstallTools } from '../../../src/runtime/tools/builtin/app-install.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { OWNER, PHONE, TestClient, rpcFixture } from '../rpc/s1-helpers.ts';
@@ -61,7 +61,9 @@ test('a start on the new version: "Updated to", the landed note to the agent, th
   new KvRepo(h.db).set('system', 'install', { to: '0.3.5', from: '0.3.4', installer, by: { agentId: 'ag_jonas', conversationId: chat.id, runId: 'run_9' }, at: h.clock.now() - 120_000 }, 0);
   h.ownership.recover({ interruptedRuns: [] });
   assert.deepEqual(notes(h), ['Autark started again at 09:00 on 0.3.5 – the install I started at 08:58 landed.']);
-  assert.equal(recordStart(h.services, { version: '0.3.5', interrupted: 0, continued: 0 })?.text, 'Updated to 0.3.5 · 0 tasks continued');
+  const landed = recordStart(h.services, { version: '0.3.5', interrupted: 0, continued: 0 });
+  assert.equal(landed?.text, 'Updated to 0.3.5 · 0 tasks continued');
+  assert.equal(landed?.failed, undefined, 'F25: a landed install is no failure');
   assert.equal(record(h), undefined, 'answered once');
 });
 
@@ -71,7 +73,10 @@ test('a start still on the old version: "did not install", the not-landed note w
   new KvRepo(h.db).set('system', 'install', { to: '0.3.5', from: '0.3.4', by: { agentId: 'ag_jonas', conversationId: chat.id }, at: h.clock.now() - 60_000 }, 0);
   h.ownership.recover({ interruptedRuns: [] });
   assert.deepEqual(notes(h), ['Autark started again at 09:00, still on 0.3.4 – the install I started at 08:59 did not land; update-helper.log ends with: Sa 08.11.2026 09:01 the app still runs after 45 s; update left for the next try.']);
-  assert.equal(recordStart(h.services, { version: '0.3.4', interrupted: 0, continued: 2 })?.text, 'The update to 0.3.5 did not install · still on 0.3.4');
+  const notice = recordStart(h.services, { version: '0.3.4', interrupted: 0, continued: 2 });
+  assert.equal(notice?.text, 'The update to 0.3.5 did not install · still on 0.3.4');
+  assert.deepEqual([notice?.failed, notice?.to], [true, '0.3.5'], 'F25: marked failed, with the version it would have brought');
+  assert.equal(readStartNotice(h.services)?.failed, true, 'system.info reads it so');
 });
 
 test('B-084: Smart App Control refused the setup – the start notice says so, the helper\'s later "new version started" does not hide it', () => {

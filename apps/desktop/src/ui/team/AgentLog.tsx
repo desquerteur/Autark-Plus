@@ -1,12 +1,16 @@
-// Agent page › Activity log: everything the agent does, in time order, oldest at the top and the newest at the bottom –
-// no chat, a running record that writes itself. Each turn opens with a system line (time,
-// what started it, its chat, the model; Stop while it runs; the route's reason muted below), then its journaled steps as
+// An agent's Activity log (on its Work page): everything the agent does, in time order, oldest at the top and the newest
+// at the bottom – no chat, a running record that writes itself. Each turn opens with a system line (time,
+// what started it, its chat, the model and where it ran – F05: "Opus 5.5 · Claude Code"; Stop while it runs; the
+// route's reason muted below), then its journaled steps as
 // the compact step lines (run-steps.tsx: tool calls open to input and output, thoughts, plans, the runtime's own notes as
 // their line; a split is its "Split · 1 of 3 done" line, open as columns – one per running part with what it does, a
 // column less when a part is back, ../splits/SplitLanes.tsx – parallel parts are no turns of their own here), the agent's updates and answers as its words (answers open, AnswersOpen), and a closing system line
 // (how it ended, how long, its tokens and cost). A day line goes between days. "Show earlier" reads the page before
 // (agents.log `before`); the newest turns come live over `runs:<agentId>` (counted, run-items.tsx holdRunsTopic).
 // The same log reads for agents as lines through the agents.log tool (runtime/tools/builtin/agents-log.ts).
+// F11/F12 (16.11.2026): the log lives only on the agent's Work page (AgentWork.tsx, "Show work"), which reads it through
+// useAgentLog – so its Now part knows the last run – and jumps to a turn by its `data-run-id`; on a phone answers start
+// closed there.
 // Owns: the log's list, its paging and its live merge. Never: polls, renders a step itself, or shows more than the
 // runtime journaled.
 
@@ -20,7 +24,7 @@ import { Button, EmptyState, Spinner } from '../lib/ui.tsx';
 import { rpc, errorText } from '../lib/rpc.ts';
 import { conversationMap } from '../lib/store.ts';
 import { chatTitle } from '../lib/chat-naming.ts';
-import { modelShortName } from '../lib/model-name.ts';
+import { modelShortName, modelSource } from '../lib/model-name.ts';
 import { dayMonth, fullDate, time } from '../lib/format.ts';
 import { toastError } from '../lib/toasts.ts';
 import { mergeItem } from './step-view.ts';
@@ -30,7 +34,10 @@ import { AnswersOpen, StepEntry, entryKey } from './run-steps.tsx';
 import { runEntries } from './model.ts';
 import { shownEntry } from './step-view.ts';
 
-interface Log { runs: Run[]; items: Map<string, RunItem[]>; before?: number }
+export interface Log { runs: Run[]; items: Map<string, RunItem[]>; before?: number }
+
+/** The log as a view reads it: the loaded pages (null while the first loads), a read error, and paging. */
+export interface AgentLogState { log: Log | null; error: string | null; earlier: boolean; showEarlier: () => Promise<void> }
 
 const isLive = (run: Pick<Run, 'status'>) => run.status === 'running' || run.status === 'queued';
 const byStart = (a: Run, b: Run) => (a.startedAt ?? 0) - (b.startedAt ?? 0);
@@ -61,11 +68,11 @@ function Turn(props: { run: Run; items: readonly RunItem[] }) {
     setStopping(true);
     try { await rpc.call('runs.cancel', { runId: run.id }); } catch (err) { toastError(err, 'Could not stop the run'); } finally { setStopping(false); }
   };
-  const start = [triggerLabel(run), chat && chatTitle(chat), modelShortName(run.model)].filter(Boolean).join(' · ');
+  const start = [triggerLabel(run), chat && chatTitle(chat), modelShortName(run.model), modelSource(run.model)].filter(Boolean).join(' · ');
   const cost = run.costUsd ? `$${run.costUsd.toFixed(run.costUsd < 1 ? 3 : 2)}` : '';
   const end = [RUN_STATUS_LABELS[run.status], durationText(run.startedAt, run.endedAt), tokenLine(run), cost].filter(Boolean).join(' · ');
   return (
-    <li class={`log-turn status-${run.status}`}>
+    <li class={`log-turn status-${run.status}`} data-run-id={run.id}>
       <div class="log-system">
         <time class="log-time tabular" title={run.startedAt ? fullDate(run.startedAt) : undefined}>{run.startedAt ? time(run.startedAt) : ''}</time>
         <span class="log-mark" aria-hidden="true">{live ? <Spinner size={12} label={RUN_STATUS_LABELS[run.status]} /> : <span class="log-dot" />}</span>
@@ -86,8 +93,8 @@ function Turn(props: { run: Run; items: readonly RunItem[] }) {
   );
 }
 
-export function AgentLog(props: { agentId: string }) {
-  const { agentId } = props;
+/** The agent's log: its latest page, live runs and steps merged in, older pages on request. */
+export function useAgentLog(agentId: string): AgentLogState {
   const [log, setLog] = useState<Log | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [earlier, setEarlier] = useState(false);
@@ -135,11 +142,16 @@ export function AgentLog(props: { agentId: string }) {
     }
   };
 
+  return { log, error, earlier, showEarlier };
+}
+
+export function AgentLog(props: { state: AgentLogState; answersOpen: boolean }) {
+  const { log, error, earlier, showEarlier } = props.state;
   if (error) return <p class="run-error">{error}</p>;
   if (!log) return <div class="run-loading"><Spinner size={16} /></div>;
   if (!log.runs.length) return <EmptyState>Nothing yet. Everything this agent does shows up here by itself.</EmptyState>;
   return (
-    <AnswersOpen.Provider value={true}>
+    <AnswersOpen.Provider value={props.answersOpen}>
       <SplitColumns.Provider value={true}>
         {log.before !== undefined && <Button variant="ghost" class="log-earlier" busy={earlier} onClick={() => void showEarlier()}>Show earlier</Button>}
         <ol class="log-list">

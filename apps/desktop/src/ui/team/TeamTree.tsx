@@ -6,7 +6,8 @@
 // label that is never cut off (model.ts reportSpace). Each level is indented one step; every branch (row + its
 // subtree + splits) is one `.team-branch`, which draws its parent's 1 px guide beside it – the last one down to its
 // row's middle only, so a guide ends at its parent's last direct report. Every row: real
-// status ring/dot, one-line status, the tiny "AI"; right-click or long-press opens its menu (menus.ts). B-057: in
+// status ring/dot, one line under the name – in the sidebar its live status, on the Team page (F18) its role and how
+// many report to it directly (model.ts structureLine) – the tiny "AI"; right-click or long-press opens its menu (menus.ts). B-057: in
 // the sidebar an agent's splits are rows inside the same expansion, below its reports (splits/SplitNav.tsx).
 // Owns: the rows, branches and grouped body of the tree. Never: keeps expand state (the caller passes `open`),
 // edits the org or draws header markup.
@@ -17,7 +18,7 @@ import { AgentAvatar, Icon } from '../lib/ui.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { agentName } from '../lib/store.ts';
 import { go } from '../lib/router.ts';
-import { countReports, groupBySpace, reportSpace } from './model.ts';
+import { countReports, groupBySpace, reportSpace, structureLine } from './model.ts';
 import type { OrgEntry } from './model.ts';
 import { countPersonReports, statusLabel } from './people-model.ts';
 import type { PersonEntry } from './people-model.ts';
@@ -38,11 +39,11 @@ function Caret(props: { name: string; toggle: Toggle; what?: string }) {
   );
 }
 
-export function AgentRow(props: { agent: Agent; depth: number; reports: number; toggle?: Toggle; activeId?: string; what?: string; space?: string }) {
+export function AgentRow(props: { agent: Agent; depth: number; reports: number; toggle?: Toggle; activeId?: string; what?: string; space?: string; direct?: number }) {
   const { agent } = props;
   const active = agent.id === props.activeId;
   const toggle = props.toggle ?? null;
-  const line = agentLine(agent);
+  const line = props.direct === undefined ? agentLine(agent) : structureLine(agent, props.direct); // F18: the Team page shows the structure
   const menu = useContextMenu(() => agentMenu(agent));
   return (
     <div class={`team-row${active ? ' active' : ''}`} style={{ '--depth': String(props.depth) }} {...menu}>
@@ -85,8 +86,9 @@ export function PersonRow(props: { person: Person; depth: number; reports: numbe
   );
 }
 
-/** How the tree opens: `toggle` absent = read-only and fully open (no carets, no splits). */
-export interface Expand { open: (id: string) => boolean; toggle?: (id: string) => void; activeId?: string; splitId?: string; personId?: string }
+/** How the tree opens: `toggle` absent = read-only and fully open (no carets, no splits). `line: 'role'`: each agent's
+ *  second line is its role and its direct reports (the Team page), else its live status line (the sidebar). */
+export interface Expand { open: (id: string) => boolean; toggle?: (id: string) => void; activeId?: string; splitId?: string; personId?: string; line?: 'role' }
 
 /** One agent and – while open – its reports (and, in the sidebar, its splits). `space`: the space it sits in ('' = none). */
 function Branch(props: { entry: OrgEntry; depth: number; expand: Expand; space: string }) {
@@ -99,7 +101,7 @@ function Branch(props: { entry: OrgEntry; depth: number; expand: Expand; space: 
   return (
     <div class="team-branch" style={{ '--depth': String(props.depth) }}>
       <AgentRow agent={entry.agent} depth={props.depth} reports={countReports(entry)} activeId={expand.splitId && splits && open ? undefined : expand.activeId}
-        what={hasReports ? (splits ? 'reports and splits' : 'reports') : 'splits'} space={where.name}
+        what={hasReports ? (splits ? 'reports and splits' : 'reports') : 'splits'} space={where.name} direct={expand.line === 'role' ? entry.reports.length : undefined}
         toggle={toggle && (hasReports || splits) ? { expanded: open, onToggle: () => toggle(entry.agent.id) } : null} />
       {hasReports && open && (
         <div class="team-reports" role="group" aria-label={`Reports of ${entry.agent.name}`}>

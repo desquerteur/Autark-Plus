@@ -82,7 +82,7 @@ export function TaskDetail(props: { taskId: string; onClose: () => void; onOpen?
           )}
           {task.widget && ownerOf(task).kind === 'human' && !isFinished(task.status) && (
             <div class="task-detail-widget">
-              <AskBlock block={task.widget} target={askTargetOf(task)} bare />
+              <AskBlock block={task.widget} target={askTargetOf(task)} bare authorId={task.createdBy} />
             </div>
           )}
           <TaskQuestions task={task} />

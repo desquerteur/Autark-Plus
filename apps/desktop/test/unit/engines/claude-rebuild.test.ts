@@ -13,12 +13,14 @@ import { ClaudeStreamParser } from '../../../src/runtime/engines/claude/stream.t
 import { END_MARK, claudeTranscript } from '../../../src/runtime/engines/claude/transcript.ts';
 import { PROJECT_DIR_NAME, probeOutcome } from '../../../src/runtime/engines/claude/rebuild.ts';
 import { takesThinkingDisplay } from '../../../src/runtime/engines/claude/rebuilder.ts';
+import { homeRoots } from '../../../src/runtime/system/paths.ts';
 import type { EngineEvent, RebuildItem } from '../../../src/runtime/engines/types.ts';
 import { account, fakeFinder, fakeSpawn, testSupervisor, turnInput, type SpawnCall } from './fakes.ts';
 
 const DATA = path.resolve('/fake-data');
 const TRANSCRIPTS = path.join(DATA, 'engine-transcripts', 'claude');
 const ACCOUNTS = path.join(DATA, 'accounts');
+const LOGINS = path.resolve('/fake-companies/logins'); // this PC's logins folder (Paths.accounts)
 const OWN_HOME = path.join(ACCOUNTS, 'acc_claude');
 
 /** In-memory files with sizes and folder listings. */
@@ -76,7 +78,7 @@ function setup(script: CliScript = {}) {
   const engine = new ClaudeEngine({
     supervisor: testSupervisor(fake.spawn), finder: fakeFinder({ claude: '/fake-bin/claude' }), tempDir: '/fake-temp', files: fs.ops,
     env: { PATH: '/fake-bin' }, now: () => 1_800_000_000_000, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`,
-    transcriptsDir: TRANSCRIPTS, accountsRoot: ACCOUNTS,
+    transcriptsDir: TRANSCRIPTS, accountsRoots: homeRoots({ data: DATA, accounts: LOGINS }), // OWN_HOME stayed in <data>/accounts (macOS)
   });
   return { engine, fs, calls: fake.calls, turns: () => fake.calls.filter((call) => call.args.includes('--include-partial-messages')) };
 }

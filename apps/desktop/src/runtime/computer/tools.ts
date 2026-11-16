@@ -22,6 +22,8 @@
 // B-080: computer.type reads back which element holds the focus after typing and what it holds (service.ts focused),
 // masked like any typed secret – a fact, not a guard. computer.ui_tree of a Chrome or Edge window without a page document
 // names that (tree.ts frameOnly), and a covered window's picture says a browser there may not draw its page (live 09.11.).
+// F03 (16.11.2026): on Windows without the desktop broker, a screenshot says that the secure desktop (UAC, lock screen) is out
+// of reach, why (the setup at the app's start: no Yes, or failed) and how one Yes at the Windows prompt changes it (broker.ts).
 
 import type { ToolDef, ToolOutput } from '../tools/types.ts';
 import { text } from '../tools/types.ts';
@@ -33,7 +35,7 @@ import { ANCHOR_SCHEMA, dragPoints, OFFSET_SCHEMA, resolveAnchor, type Anchor, t
 import { WorkforceError } from '../../shared/errors.ts';
 import { judgeTyped, typedText } from '../secrets/handles.ts';
 import { callerOf } from './lease.ts';
-import { lockedDesktop } from './broker.ts';
+import { lockedDesktop, secureDesktopLine } from './broker.ts';
 import { MOTION_ARG, withNotes, withOthers } from './tool-notes.ts';
 import { frameOnly, TREE_DEPTH } from './tree.ts';
 import type { MotionStyle } from '../../shared/model/pointer-motion.ts';
@@ -95,6 +97,8 @@ export function computerTools(computer: ComputerService): ToolDef[] {
       // browser draws no page (live 09.11.: the person's Chrome behind their app read as blank).
       if (shot.covered) lines.push('This window is behind another one or off the screen: the picture is the window itself, and a click by coordinates lands on what is in front there – I bring it forward first with computer.act focus_window. A browser behind another window may not draw its page.');
       if (lockedDesktop()) lines.push('This is the Windows secure desktop (locked screen or UAC prompt). I reach it through the desktop broker with these same tools; on the sign-in screen "Sign-in options" leads to the password, which I type as its secret:// handle.');
+      const outOfReach = secureDesktopLine(); // F03: no broker after the setup at the app's start – why, and the one Yes that changes it
+      if (outOfReach) lines.push(outOfReach);
       if (shot.ocr?.length) {
         lines.push('Recognised text (screen coordinates x,y width×height):');
         for (const line of shot.ocr.slice(0, 300)) lines.push(`- "${line.text}" @${line.rect[0]},${line.rect[1]} ${line.rect[2]}×${line.rect[3]}`);

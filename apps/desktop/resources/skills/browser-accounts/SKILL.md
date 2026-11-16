@@ -1,6 +1,6 @@
 ---
 name: browser-accounts
-description: I read this for sign-up, sign-in, password resets and connecting services - creating and signing in to online accounts in my own browser profile, email verification, authenticator 2FA for my own accounts (browser.save_totp) or codes from the person through prepared to-dos, and credentials kept in the secret store, out of chat.
+description: I read this for sign-up, sign-in, password resets and connecting services - creating and signing in to online accounts in my own browser profile, email verification, authenticator 2FA for my own accounts (browser.save_totp), codes from a mailbox or phone I can open or else from the person, and credentials kept in the secret store, out of chat.
 metadata:
   modes:
     - browser
@@ -13,8 +13,9 @@ My browser profile is persistent: once signed in, I usually stay signed in.
 
 ## Before creating an account
 - Is there already one? I check knowledge, the secret store and the person's own browsers (below)
-  for the service; when nothing turns up, I sign in through their own Chrome or reset the password
-  through the company mailbox, with a new one from `secrets.generate` kept in the catalog.
+  for the service; when nothing turns up, I try the app's tabs, where their logins made in the app
+  hold, then their own Chrome, or reset the password through the company mailbox, with a new one
+  from `secrets.generate` kept in the catalog.
 - Whose account is it? Company (company email), brand, or the person's personal one. I use the
   email address the person designated for that purpose.
 - I read the terms briefly for anything unusual (paid after trial, real-name requirement).
@@ -85,7 +86,9 @@ logins. Their own browsers on this PC usually have them.
 ```
 
 ## When the person is needed
-- SMS or app codes on their phone, passkeys on their device, ID checks, phone number
+A code that reaches a mailbox I can open or a phone I use through Autark (skill phone-access) I read there myself, and
+a login in the catalog I fill myself. What stays with the person alone I ask for in our chat, in one form:
+- SMS or app codes on a phone I cannot use, passkeys on their device, ID checks, phone number
   verification:
 ```ui
 {"type":"form","id":"insta-code","title":"Instagram login code",
@@ -95,10 +98,10 @@ logins. Their own browsers on this PC usually have them.
   A `secret` field goes straight into the secrets catalog; I receive a handle, not the value.
   `"domain":"instagram.com"` on a secret field notes the site it came from – information
   only: every secret works everywhere, and nobody limits it to sites.
-- A human check in my browser, or a sign-in it turns away: I open the page in their own Chrome –
-  `browser.open` with `where: 'chrome'`, their profile and logins – and go on with the page's work in
-  that window with `computer.ui_tree` and `computer.act` (a password as its `secret://` handle), or
-  use the service's API/CLI.
+- A page or sign-in that turns the app's browser away: their own Chrome is the other way –
+  `browser.open` with `where: 'chrome'`, their profile and logins – where I go on with the page's work
+  with `computer.ui_tree` and `computer.act` (a password as its `secret://` handle), or I use the
+  service's API/CLI; `feedback.report` tells the makers what the app's browser lacked.
 - I sign in to my accounts in my own browser (the default). The app's tabs the person sees
   (`where: 'chat'` or `'global'`) share one sign-in: a login the person makes once in the app's
   browser holds in all of them, my side tabs included, so there I work as them without a password.

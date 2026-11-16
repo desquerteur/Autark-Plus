@@ -2,12 +2,16 @@
 // the error that says why no model fits a turn (no model, a missing capability, "never" priors, the policy band,
 // or every account limited – with the earliest moment one is back; D8 (B-080): "paused" while they only cool for a few
 // minutes after a provider error), and D1 (B-083): why a model I named cannot run now – the lead of my route's reason.
+// F28/F02 (16.11.2026): when every fitting account is out, the reason names the accounts – which is used up or paused
+// until when, which is signed out, failing or switched off ("Codex used up until 18 Nov 08:26 · Claude Code, Claude Code 2,
+// Claude Code 3 switched off"); the fixed sentence read as wrong while plans with quota left were switched off.
 // Owns: these texts and when a model's accounts are back (backAt). Never: routes, or changes state.
 
 import type { RouteRequest, RuntimeServices } from '../contracts.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { blockedUntil } from '../accounts/candidates.ts';
+import { excerpt } from '../../shared/text/chat-names.ts';
+import { blockedUntil, engineFor } from '../accounts/candidates.ts';
 import { LIMIT_COOLDOWN_MS } from '../accounts/failure.ts';
 import { profileZone, stampText } from '../context/time.ts';
 import { categoryLabel } from './categories.ts';
@@ -72,7 +76,64 @@ export function nothingFits(input: {
   // Models fit, but every account that could run them is limited, excluded or unhealthy right now:
   // the earliest moment one of them is back (cooling or a used-up window of that model).
   const back = backAt(input.s, bounded, input.now);
-  return new WorkforceError('unavailable', pausedOnly(back, input.now) ? PAUSED_MESSAGE : LIMITED_MESSAGE, back.until ? { retryAfterMs: back.until - input.now } : {});
+  const reason = accountsReason(input.s, bounded, input.now) ?? (pausedOnly(back, input.now) ? PAUSED_MESSAGE : LIMITED_MESSAGE);
+  return new WorkforceError('unavailable', reason, back.until ? { retryAfterMs: back.until - input.now } : {});
+}
+
+/** F28: names shown per group of the reason; the rest as "+N" (old keys nobody uses stay out of the way). */
+const MAX_NAMES = 3;
+/** F28: groups in the reason; accounts in further groups count as "+N more". */
+const MAX_GROUPS = 4;
+const STATE_GROUPS = ['signed out', 'failing', 'switched off'] as const;
+
+/**
+ * F28/F02: why nothing runs, from the accounts – soonest first: the enabled accounts of the fitting `models` that wait for
+ * a used-up window or a long cooling ("used up until") or a short cooling after a provider error ("paused until", D8),
+ * then every account with a chat engine that is signed out, failing its check or switched off (their models are not
+ * available, so they never reach `models`). An account free for one of the models (left out in this turn) explains
+ * nothing. Undefined when no account explains it.
+ */
+export function accountsReason(s: Pick<RuntimeServices, 'accounts' | 'settings'>, models: readonly ModelInfo[], now: number): string | undefined {
+  let accounts: Account[] = [];
+  try { accounts = s.accounts.list(); } catch { return undefined; }
+  const zone = profileZone(s);
+  const timed = new Map<string, { at: number; labels: string[] }>();
+  const states = new Map<string, string[]>(STATE_GROUPS.map((state) => [state, []]));
+  for (const account of accounts) {
+    if (!engineFor(account.provider)) continue; // media-only accounts run no turn
+    const label = excerpt(account.label?.trim() || account.provider, 32);
+    const state = !account.enabled || account.state === 'disabled' ? 'switched off' : account.state === 'needs_login' ? 'signed out' : account.state === 'error' ? 'failing' : undefined;
+    if (state) { states.get(state)!.push(label); continue; }
+    const wait = waitOf(account, models, now);
+    if (!wait) continue;
+    const key = `${wait.used ? 'used up' : 'paused'} until ${stampText(wait.at, zone, now)}`;
+    const group = timed.get(key) ?? { at: wait.at, labels: [] };
+    group.labels.push(label);
+    timed.set(key, group);
+  }
+  const groups = [
+    ...[...timed].sort((a, b) => a[1].at - b[1].at).map(([what, group]) => ({ what, labels: group.labels })),
+    ...[...states].filter(([, labels]) => labels.length).map(([what, labels]) => ({ what, labels })),
+  ];
+  if (!groups.length) return undefined;
+  const names = (labels: string[]) => `${labels.slice(0, MAX_NAMES).join(', ')}${labels.length > MAX_NAMES ? ` +${labels.length - MAX_NAMES}` : ''}`;
+  const shown = groups.slice(0, MAX_GROUPS).map((group) => `${names(group.labels)} ${group.what}`);
+  const more = groups.slice(MAX_GROUPS).reduce((sum, group) => sum + group.labels.length, 0);
+  return [...shown, ...(more ? [`+${more} more`] : [])].join(' · ');
+}
+
+/** When `account` runs one of `models` again and whether it waits for a limit (used up) or a short cooling; undefined = it is free for one now, or runs none of them. */
+function waitOf(account: Account, models: readonly ModelInfo[], now: number): { at: number; used: boolean } | undefined {
+  let wait: { at: number; used: boolean } | undefined;
+  for (const model of models) {
+    if (model.provider !== account.provider || (model.accounts.length && !model.accounts.includes(account.id))) continue;
+    const at = blockedUntil(account, now, model.model);
+    if (at === undefined) return undefined;
+    if (wait && at >= wait.at) continue;
+    const limited = blockedUntil({ ...account, coolingUntil: undefined }, now, model.model) !== undefined; // as backAt
+    wait = { at, used: !pausedOnly({ until: at, limited }, now) };
+  }
+  return wait;
 }
 
 /**

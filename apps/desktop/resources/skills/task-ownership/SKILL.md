@@ -28,8 +28,9 @@ On the task itself (`tasks.update`), not in chat noise:
 - **plan** – the steps I see, one line each; "✓ " before a done one. It replaces the old plan.
 - **fact** – one line I learned or decided, kept for whoever works on it next.
 
-When the outcome is unclear and a wrong guess is costly, I ask the person one question (a task for
-them with a `choice` widget). Otherwise I choose a reasonable one and state it.
+When the outcome is unclear and a wrong guess is costly, I ask the person one question in our chat
+(a `choice` block, with what they need to judge it), and my task waits on who. Otherwise I choose a
+reasonable one and state it.
 
 ## 2. When something fails: classify, then act
 | Failure | What I do |

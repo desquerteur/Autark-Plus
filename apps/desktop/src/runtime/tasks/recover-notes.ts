@@ -4,7 +4,7 @@
 // read by system.info).
 // B-080: an install – an agent's app.install or system.install, or the updater's own (system.prepareRestart {to}) – is
 // kept as kv 'system'/'install' {to?, from, installer?, by?, pid?, at} until the next start: the start notice then says
-// whether it landed ("Updated to X · …" or "The update to X did not install · still on Y"), the agent named in `by`
+// whether it landed ("Updated to X · …" or "The update to X did not install · still on Y" – marked `failed`, F25), the agent named in `by`
 // gets one wake note saying so (installReceipt, through the watcher's recover), and recordStart drops the record. Every
 // install ends the app, so a start under the same app process (`pid`, Host.app.pid) followed none: a postponed update
 // says nothing there, an agent hears that its install did not start. An install main gives up without a restart (the
@@ -26,7 +26,11 @@ const INSTALL_KEY = 'install';
 /** The relaunch helper's log in <data>/logs (main/updates/install-helper.ts HELPER_LOG). */
 export const HELPER_LOG = 'update-helper.log';
 
-export interface StartNotice { id: string; text: string; at: number }
+/**
+ * `failed` (F25, 16.11.2026): an install did not land – the window keeps that line until Dismiss and About shows it;
+ * `to`: the version it would have brought (main's updater does not install that one by itself again).
+ */
+export interface StartNotice { id: string; text: string; at: number; failed?: true; to?: string }
 
 /** Who started an install (app.install's turn). */
 export interface InstallBy { agentId: string; conversationId?: string; taskId?: string; runId?: string }
@@ -39,9 +43,9 @@ export function startNotice(input: { previous?: string; version: string; interru
   const notice = (text: string): StartNotice => ({ id: `start:${input.at}`, text, at: input.at });
   if (input.install && !landed(input.install, input.version)) {
     const update = `The update${input.install.to ? ` to ${input.install.to}` : ''}`;
-    return notice(input.blocked
+    return { ...notice(input.blocked
       ? `${update} did not install: Windows Smart App Control blocked its setup (Autark is not code-signed yet) · still on ${input.version}`
-      : `${update} did not install · still on ${input.version}`);
+      : `${update} did not install · still on ${input.version}`), failed: true, ...(input.install.to ? { to: input.install.to } : {}) };
   }
   if (input.install || (input.previous && input.previous !== input.version)) return notice(`Updated to ${input.version} · ${tasks}`);
   if (input.interrupted > 0) return notice(`Restarted after an interruption · ${tasks}`);

@@ -4,13 +4,18 @@
 // person), whom an agent reports to from this connection's side (managerOf: no manager is the top –
 // the caller on the owner's PC, the CEO on a person's device) and which side a chat message is drawn
 // on (messageSide: only the caller's own words are the right-hand bubble).
+// F13/F14 (owner 15.11.2026): who is in the org chart and who still sits under "Invited" (splitInvited: a person counts
+// once they joined), the person Team › Add person names for Accept (newPersonOf) and whether a browser elsewhere on the
+// network can open this PC's invite link (browserReachable). F13: the role choice – a member or a second CEO – and its
+// line (ROLE_OPTIONS, roleHint).
 // Owns: these derivations. Never: calls the runtime or renders.
 
 import { HUMAN_ID } from '../../shared/ids.ts';
 import type { Message } from '../../shared/model/chat.ts';
 import type { Agent } from '../../shared/model/org.ts';
-import { isHumanActor, OWNER_ALIAS } from '../../shared/model/people.ts';
-import type { Person } from '../../shared/model/people.ts';
+import { hasJoined, isHumanActor, OWNER_ALIAS } from '../../shared/model/people.ts';
+import type { Person, PersonRole } from '../../shared/model/people.ts';
+import type { NewPerson } from '../../shared/model/remote.ts';
 import type { OrgEntry } from './model.ts';
 
 export function statusLabel(person: Pick<Person, 'owner' | 'status'>): string {
@@ -35,6 +40,48 @@ export function managerOptions(selfId: string | undefined, people: readonly Pers
 /** "482 913". */
 export function groupCode(code: string): string {
   return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
+}
+
+/** F14: the people of the org chart (the owner and everyone who joined) and those invited who never joined yet. */
+export function splitInvited<T extends Pick<Person, 'owner' | 'joinedAt' | 'status'>>(people: readonly T[]): { members: T[]; invited: T[] } {
+  const members: T[] = [];
+  const invited: T[] = [];
+  for (const person of people) (hasJoined(person) ? members : invited).push(person);
+  return { members, invited };
+}
+
+/** F13: the person Add person's form names (undefined without a name); "" for Reports to is the top of the org. */
+export function newPersonOf(form: { name: string; title: string; managerId: string; role?: PersonRole }): NewPerson | undefined {
+  const name = form.name.trim();
+  if (!name) return undefined;
+  const title = form.title.trim();
+  return { name, ...(title ? { title } : {}), ...(form.managerId ? { managerId: form.managerId } : {}), ...(form.role === 'ceo' ? { role: 'ceo' as const } : {}) };
+}
+
+/** F13: the role choice – a member of the organisation, or a second CEO beside the owner. */
+export const ROLE_OPTIONS: Array<{ value: PersonRole; label: string }> = [{ value: 'member', label: 'Member' }, { value: 'ceo', label: 'CEO' }];
+
+/** F13: the line under the role choice (it has its place for either role, so nothing below moves). */
+export function roleHint(role: PersonRole): string {
+  return role === 'ceo'
+    ? 'Like you: every agent, person, task and company chat – not your plans, keys, secrets, Settings or 1:1s'
+    : 'Their own chats, with the agents and permissions you give them';
+}
+
+/** F13: Add person's connect code row – how their phone and their PC use it. */
+export const ADD_PERSON_CODE_HINT = 'Their phone: scan this in the Autark app · Autark on their PC: Join a company, these digits';
+
+/** F13: Add person's request slot while no request row shows there: what to do next, or what happens now. */
+export function requestSlotHint(state: { named: boolean; waiting: number; accepted?: string }): string {
+  if (state.accepted) return `Accepted · ${state.accepted} is added as their device connects, then their page opens`;
+  if (state.named) return 'Waiting for their phone or PC to ask';
+  if (!state.waiting) return 'Enter their name above; their device’s request shows here';
+  return `${state.waiting === 1 ? 'A device asks' : `${state.waiting} devices ask`} to connect · enter their name above to accept`;
+}
+
+/** F13: a browser elsewhere on the network can open this PC's link – an https or a non-loopback address (pwa.state urls). */
+export function browserReachable(urls: readonly string[]): boolean {
+  return urls.some((url) => url.startsWith('https://') || !/^http:\/\/(localhost|127\.|\[::1\])/i.test(url));
 }
 
 // ------------------------------------------------------------------ one org chart (B-041 §8)

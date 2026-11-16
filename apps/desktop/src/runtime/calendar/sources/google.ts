@@ -6,7 +6,8 @@
 // stays in memory. Reading is incremental with the sync token; a full read (window −7 … +67 days, recurring events as
 // single instances) replaces the rows when there is no token, Google answers 410 (expired) or the window moved past
 // the stored horizon. The client: settings.calendar.googleClientId or WORKFORCE_GOOGLE_CLIENT_ID, its secret from
-// the vault (settings.calendar.googleSecretId) or WORKFORCE_GOOGLE_CLIENT_SECRET.
+// the vault (settings.calendar.googleSecretId) or WORKFORCE_GOOGLE_CLIENT_SECRET. Without a client a connect is refused
+// with the way that works then (GOOGLE_ICS_WAY: the calendar's secret iCal address, added by link).
 // Owns: the Google client of the sources. Never: a token in a log, an error text or a prompt; writes from a second PC.
 
 import { SYSTEM_ID, newId } from '../../../shared/ids.ts';
@@ -25,6 +26,8 @@ export const SCOPE_READ = 'https://www.googleapis.com/auth/calendar.events.reado
 export const SCOPE_APP_CALENDAR = 'https://www.googleapis.com/auth/calendar.app.created';
 /** Asked for at connect. */
 export const GOOGLE_CALENDAR_SCOPES: readonly string[] = [SCOPE_APP_CALENDAR, SCOPE_READ];
+/** The way a Google calendar comes in without a Google client of the person's own (chat sweep 16.11.2026). */
+export const GOOGLE_ICS_WAY = "Google sign-in needs a Google client of the person's own here, so a Google calendar connects through its secret address in iCal format (Google Calendar › Settings › the calendar › Integrate calendar), added as a calendar by link (ICS).";
 /** Not asked for in this build: writing the person's own events into the main calendar (the "Workforce" calendar holds them instead). */
 export const GOOGLE_OPTIONAL_SCOPES: readonly string[] = ['https://www.googleapis.com/auth/calendar.events.owned'];
 /** Days past the read window a full read keeps (so a daily sync does not need a full read every day). */
@@ -96,7 +99,7 @@ export class GoogleCalendar {
   /** Opens the consent in the browser; the source appears (or is renewed) once the person agreed there. */
   async connect(ownerId: string, clientId?: string): Promise<{ authUrl: string }> {
     const id = clientId?.trim() || this.clientId();
-    if (!id) throw new WorkforceError('unavailable', 'Google Calendar needs a client ID first.');
+    if (!id) throw new WorkforceError('unavailable', GOOGLE_ICS_WAY);
     this.consent?.close();
     this.lastError = undefined;
     const consent = await startLoopback({ clientId: id, scopes: GOOGLE_CALENDAR_SCOPES, timers: this.d.timers, server: this.d.loopback });

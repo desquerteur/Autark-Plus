@@ -5,6 +5,9 @@
 // excluded), and pay-per-use API keys only as a spill-over (unless Settings allow them or nothing else is left) – a key
 // holding a plan's monthly API credits (B-083 Account.credits) is no pay-per-use key (score.ts isPaid): it competes like a plan,
 // and accounts.candidates (accounts/candidates.ts) lists it before the same model's paying keys, whatever their priority.
+// Last, the newest version of each model family (models/family.ts) stands for the older ones that can run now (owner
+// 14.11.2026: "Warum Fabel Fünf. Eins … 5.2"): an older version leaves the entries while a newer one of its family is in
+// them, and entryFor maps a named older version to it. A pin of the older version still runs it (unusable is unchanged).
 // Owns: these filters, their order and why a single model is unusable (for pins).
 // Never: scores or picks a model, reads the policy itself, or changes state.
 
@@ -12,6 +15,7 @@ import type { RouteRequest, RuntimeServices } from '../contracts.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import type { EffectivePolicy } from './policies.ts';
 import { NEVER, isPaid, strengthOf, tierRank, unmetNeed, withinTiers, type Tier } from './score.ts';
+import { compareVersions, familyOf } from '../models/family.ts';
 
 export interface PoolInput {
   s: RuntimeServices;
@@ -33,8 +37,10 @@ export interface Pool {
   tiered: ModelInfo[];
   suitable: ModelInfo[];
   bounded: ModelInfo[];
-  /** Runnable models with their accounts. */
+  /** Runnable models with their accounts, each family at its newest version among them. */
   entries: PoolEntry[];
+  /** The entry that runs for a model: its own, else the newest version of its family among the entries. */
+  entryFor(model: ModelInfo): PoolEntry | undefined;
   accountsFor(model: ModelInfo): Account[];
   /** Why the model cannot run at all: 'unavailable', an unmet need or 'never'; undefined = it can. */
   unusable(model: ModelInfo): string | undefined;
@@ -78,5 +84,30 @@ export function buildPool(input: PoolInput): Pool {
   if (!allowPaid && all.some((entry) => entry.accounts.some((account) => !isPaid(account)))) {
     all = all.map((entry) => ({ model: entry.model, accounts: entry.accounts.filter((account) => !isPaid(account)) })).filter((entry) => entry.accounts.length > 0);
   }
-  return { connected, capable, tiered, suitable, bounded, entries: all, accountsFor, unusable, inBand };
+  const entries = newestOnly(all);
+  const entryFor = (model: ModelInfo): PoolEntry | undefined => {
+    const own = entries.find((entry) => entry.model.id === model.id);
+    if (own) return own;
+    const named = familyOf(model.model);
+    const newer = entries.filter((entry) => {
+      const { family, version } = familyOf(entry.model.model);
+      return family === named.family && compareVersions(version, named.version) > 0;
+    });
+    return newer.find((entry) => entry.model.provider === model.provider) ?? newer[0];
+  };
+  return { connected, capable, tiered, suitable, bounded, entries, entryFor, accountsFor, unusable, inBand };
+}
+
+/** The entries without a model whose family has a newer version among them (models/family.ts reads both from the id). */
+export function newestOnly<T extends { model: ModelInfo }>(entries: readonly T[]): T[] {
+  const top = new Map<string, number[]>();
+  for (const { model } of entries) {
+    const { family, version } = familyOf(model.model);
+    const best = top.get(family);
+    if (!best || compareVersions(version, best) > 0) top.set(family, version);
+  }
+  return entries.filter(({ model }) => {
+    const { family, version } = familyOf(model.model);
+    return compareVersions(version, top.get(family)!) === 0;
+  });
 }

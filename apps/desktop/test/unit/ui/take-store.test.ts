@@ -1,7 +1,7 @@
 // B-082 decision 6 (ui/lib/take-store.ts) against a fake key/value store: a held piece is listed and plays at once,
 // survives a new page (same storage), works without storage (memory) and with storage that throws, uploads oldest
 // first once the link is back (each one leaves the store and is reported), stops at the first failed upload, and a
-// piece deleted meanwhile is neither reported nor kept. Held chips use a fileId that no file id can be.
+// piece deleted meanwhile is neither reported nor kept. Held chips use a fileId that no file id can be and the piece's own type.
 // Owns: these assertions only. Never: a real IndexedDB or upload.
 
 import { test } from 'node:test';
@@ -93,4 +93,15 @@ test('a held chip has a fileId no file id can be', () => {
   assert.equal(heldKey(chip.fileId), 'k1');
   assert.equal(heldKey('f'.repeat(64)), undefined);
   assert.doesNotMatch(chip.fileId, /^[A-Za-z0-9_.:@-]{1,128}$/, 'the runtime never keeps it in a draft');
+});
+
+test('a held compact piece keeps its own type, also on a new page', async () => {
+  const storage = fakeStorage();
+  const store = new TakeStore(storage);
+  const held = await store.hold(new Blob([new Uint8Array(40)], { type: 'audio/ogg' }), 'Dictation 2026-11-16 10-00.ogg', 'chat-1');
+  assert.equal(held.mime, 'audio/ogg');
+  assert.equal(heldAttachment(held).mime, 'audio/ogg');
+  const [later] = await new TakeStore(storage).list();
+  assert.equal(heldAttachment(later).mime, 'audio/ogg');
+  assert.equal((await store.hold(wav(), 'a.wav')).mime, 'audio/wav');
 });

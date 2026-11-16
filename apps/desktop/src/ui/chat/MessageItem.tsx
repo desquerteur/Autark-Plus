@@ -8,13 +8,17 @@
 // title names what an agent's answer was written on (B-083: the model and effort the turn ended on, and its temperature).
 // 13.11.2026: only real messages are here – who works shows in the live bar above the composer (LiveBar.tsx); a row an
 // older version left (meta.live / meta.lines, a stopped or streaming state) renders as its body.
-// Right-click (long press) opens the message's menu (MessageActions.tsx: Reply, Copy, Edit, Delete); Edit
-// swaps the body for the inline editor. A reply shows its quote line above the body (ReplyQuote). B-078: a message with
+// Right-click (long press) opens the message's menu (MessageActions.tsx: Reply, Copy, Select text on touch, Edit,
+// Delete); Edit swaps the body for the inline editor, Select text opens its sheet (SelectText.tsx). F30: the meta row
+// also holds Copy and Reply as two small icons (MessageTools) – after the time on the left, before the markers in the own
+// bubble, so the time keeps its edge. A reply shows its quote line above the body (ReplyQuote). B-078: a message with
 // a thread shows one quiet line under it ("3 replies · Mara", threads.ts) that opens or closes the thread in the side panel.
+// 16.11.2026: a key still in the text shows masked, with one quiet line under it – Show/Hide and Save as secret
+// (KeysLine, message-keys.ts).
 // Owns: message chrome. Never: renders untrusted HTML itself (MessageBody sanitizes).
 
 import { memo } from 'preact/compat';
-import { useState } from 'preact/hooks';
+import { useMemo, useState } from 'preact/hooks';
 import { messageLevel, type Message } from '../../shared/model/chat.ts';
 import { fromBridgeOwner } from '../../shared/model/bridges.ts';
 import { isExternalAgent } from '../../shared/model/external-agents.ts';
@@ -32,7 +36,8 @@ import { TaskMessage } from '../tasks/TaskMessage.tsx';
 import { openTaskDetail } from '../tasks/jump.ts';
 import { AttachmentList } from './Attachments.tsx';
 import { SecretAttachments } from './SecretAttachments.tsx';
-import { InlineEdit, messageMenu } from './MessageActions.tsx';
+import { InlineEdit, MessageTools, messageMenu } from './MessageActions.tsx';
+import { SelectText } from './SelectText.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { ReplyQuote } from './ReplyQuote.tsx';
 import { ScheduledLine } from './ScheduledLine.tsx';
@@ -42,6 +47,7 @@ import { temperatureTitle } from './live-text.ts';
 import { ModelTagMark } from './ModelTagMark.tsx';
 import { threadLine, threadsByAnchor } from './threads.ts';
 import { chatPanel, chatThread, toggleThread } from '../lib/shell-state.ts';
+import { canSaveFrom, keysIn, keysLine, maskedBody, saveAsSecret } from './message-keys.ts';
 
 function Failure(props: { message: Message }) {
   const { message } = props;
@@ -66,13 +72,14 @@ function ModelTag(props: { message: Message }) {
   return <ModelTagMark tag={messageModelTag(props.message, modelShortName)} />;
 }
 
-function Actions(props: { message: Message }) {
+function Actions(props: { message: Message; own: boolean }) {
   const { message } = props;
   const warmth = temperatureTitle(message.meta.temperature); // B-083
   const via = message.meta.model ? ` · ${message.meta.model}${message.meta.effort ? ` ${message.meta.effort}` : ''}${warmth ? ` · ${warmth}` : ''}` : '';
   const level = messageLevel(message);
   return (
     <div class="message-actions">
+      {props.own && <MessageTools message={message} />}
       {level === 'important' && <span class="important-marker" title="Important"><Icon name="exclamation-mark" size={12} /></span>}
       {level === 'silent' && !message.meta.call && <Icon name="bell-slash" size={12} class="silent-marker" title="Silent" />}
       {message.meta.ultra === true && <Icon name="lightning" size={12} class="ultra-marker" title="Ultra suggested" />}
@@ -83,6 +90,21 @@ function Actions(props: { message: Message }) {
       <time class="tabular" dateTime={new Date(message.createdAt).toISOString()} title={`${fullDate(message.createdAt)}${via}`}>{time(message.createdAt)}</time>
       {message.editedAt !== undefined && <span class="edited-marker" title={`Edited ${fullDate(message.editedAt)}`}>edited</span>}
       {message.meta.imported === true && <span class="edited-marker" title="Imported from a chat folder (another PC or an export)">imported</span>}
+      {!props.own && <MessageTools message={message} />}
+    </div>
+  );
+}
+
+/** The quiet line under a text with keys: Show/Hide (one fixed cell) and Save as secret. */
+function KeysLine(props: { message: Message; count: number; shown: boolean; onShow: (shown: boolean) => void }) {
+  const [busy, setBusy] = useState(false);
+  const save = async () => { setBusy(true); await saveAsSecret(props.message); setBusy(false); };
+  return (
+    <div class="message-keys">
+      <Icon name="key" size={12} />
+      <span>{keysLine(props.count)}</span>
+      <button type="button" class="text-button message-keys-show" onClick={() => props.onShow(!props.shown)}>{props.shown ? 'Hide' : 'Show'}</button>
+      {canSaveFrom(props.message) && <button type="button" class="text-button" disabled={busy} onClick={() => void save()}>Save as secret</button>}
     </div>
   );
 }
@@ -104,7 +126,11 @@ function ThreadLink(props: { message: Message }) {
 function MessageItemInner(props: { message: Message }) {
   const { message } = props;
   const [editing, setEditing] = useState(false);
-  const menu = useContextMenu(() => messageMenu(message, () => setEditing(true)));
+  const [selecting, setSelecting] = useState(false); // F30: the Select text sheet (touch)
+  const menu = useContextMenu((open) => messageMenu(message, open, { edit: () => setEditing(true), selectText: () => setSelecting(true) }));
+  const [shown, setShown] = useState(false); // a key in the text shows only when the person asks
+  const keys = useMemo(() => keysIn(message), [message.body, message.kind]);
+  const visible = useMemo(() => (keys.length && !shown ? { ...message, body: maskedBody(message.body, keys) } : message), [message, keys, shown]);
   if (message.kind === 'task') {
     return <div class="message task-message" data-message-id={message.id}><TaskMessage message={message} /></div>;
   }
@@ -127,13 +153,15 @@ function MessageItemInner(props: { message: Message }) {
       <div class={`message-content${editing ? ' editing' : ''}`}>
         {message.replyTo && <ReplyQuote conversationId={message.conversationId} messageId={message.replyTo} />}
         {editing ? <InlineEdit message={message} onDone={() => setEditing(false)} />
-          : message.body ? <MessageBody message={message} /> : null}
+          : message.body ? <MessageBody message={visible} /> : null}
+        {keys.length > 0 && !editing && <KeysLine message={message} count={keys.length} shown={shown} onShow={setShown} />}
         {message.attachments.length > 0 && <AttachmentList attachments={message.attachments} conversationId={message.conversationId} message={human ? message : undefined} />}
         <SecretAttachments ids={message.meta.secrets} />
       </div>
       {(message.state === 'failed' || message.state === 'stopped') && <Failure message={message} />}
-      <Actions message={message} />
+      <Actions message={message} own={human} />
       <ThreadLink message={message} />
+      {selecting && <SelectText message={message} onClose={() => setSelecting(false)} />}
     </article>
   );
 }

@@ -4,7 +4,8 @@
 // takes over the archived agent's role, mode, place (manager, space, team), its reports and (tasks/owners.ts) its open
 // tasks; an agent may archive itself; at least one agent stays – and restore (O6: back under the old manager while
 // active, else the person – org/restore.ts), the seed Manager, org tree, management rights, live status, and the
-// avatar image file ids agents use (references for blob clean-up – org/avatar-files.ts).
+// avatar image file ids agents use (references for blob clean-up – org/avatar-files.ts). F14: the list with archived
+// agents leaves out those that never ran and are in no chat and no task (store/agents.ts listWithArchived).
 // Wave 3: the agent's SYSTEM.md (agent-core/service.ts) is written before an edit that changes the
 // instructions is saved, and a hire gets its folder (setCoreFiles; absent in tests = DB only).
 // Emits 'agent.upserted', 'agent.removed', 'agent.activity' ('space.upserted' via spaces.ts).
@@ -117,8 +118,9 @@ export class Org implements OrgService {
 
   // ---------------------------------------------------------------- agents
 
+  /** `includeArchived`: with the archived agents that left a trace (F14: a seed Manager retired at link-up is no "Archived" row). */
   list(options: { includeArchived?: boolean } = {}): Agent[] {
-    return this.agents.list(options.includeArchived ?? false);
+    return options.includeArchived ? this.agents.listWithArchived() : this.agents.list();
   }
 
   get(id: string): Agent | undefined {

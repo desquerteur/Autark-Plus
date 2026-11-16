@@ -76,12 +76,13 @@ import { sql as templateEffort } from './migrations/097-template-effort.ts';
 import { sql as runUsage } from './migrations/100-run-usage.ts'; // B-089 (11.11.2026: a run's cached tokens and model calls)
 import { sql as splitChat } from './migrations/101-split-chat.ts';
 import { sql as taskNext } from './migrations/102-task-next.ts';
+import { sql as secretUses } from './migrations/103-secret-uses.ts';
 
 /**
  * Versions are applied in list order: keep the list in ascending version order and never edit a
  * shipped entry. Only the highest applied version is recorded (`meta.schema`), and a listed version
  * at or below a profile's recorded one is never applied there – so a new migration always takes a
- * number above the highest one used so far (102 now), never a number in a gap. The gaps in the
+ * number above the highest one used so far (103 now), never a number in a gap. The gaps in the
  * numbering (e.g. 51–54, 56, 57, 62–64, 66, 70) were reserved by parallel packages and never used; they
  * stay unused. 83 was reserved by a parallel package (B-057 took 84 meanwhile): a later 83 would be skipped
  * on every profile already at 84, so that step takes a number above 84 instead.
@@ -168,6 +169,7 @@ const MIGRATIONS: Migration[] = [
   { version: 100, name: 'run-usage', sql: runUsage }, // B-089: runs.cached_tokens (a part of input_tokens) and runs.model_calls
   { version: 101, name: 'split-chat', sql: splitChat }, // 13.11.2026: the chat a split part's work is for (Split.chat)
   { version: 102, name: 'task-next', sql: taskNext }, // 13.11.2026: a task's one planned look (tasks.next_at)
+  { version: 103, name: 'secret-uses', sql: secretUses }, // 16.11.2026 F19: how often a secret and a login were used (this PC's count)
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

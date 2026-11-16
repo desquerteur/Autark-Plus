@@ -1,7 +1,8 @@
 /* Team: the org tree (TeamTree.tsx – in the sidebar and read-only on the desktop Team page: agents nested under their
    manager, 20 px per level with a 1 px guide under an open parent, status ring/dot + one-line status, group headings),
-   the agent page (identity, facts, editor, model, skills, schedules, runs with tool calls; its
-   Browser view's two fixed halves: its own browser live, its area), the name dropdown in a page header and the hire dialog.
+   the agent page (identity, facts, editor, model, skills, schedules with their "Paused (n)" fold; its
+   Browser view's two fixed halves: its own browser live, its area), the activity log and its step lines (shown on the
+   agent's Work page, whose own parts are agent-work.css), the name dropdown in a page header and the hire dialog.
    Owns: classes from src/ui/team/*. Never: colors outside tokens.css. */
 
 /* ---------------------------------------------------------------- status avatar */
@@ -261,5 +262,10 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 .agent-row-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .agent-human { display: block; width: 100%; height: 104px; resize: none; line-height: 1.5; margin: 4px 0; } /* a fixed cell: typing scrolls inside */
 .agent-work-link { margin: -16px 0 24px; padding: 0; font-size: 13px; }
+/* a folded group at a section's end – "Paused (n)" under Schedules, "N older open" / "N waiting" on the Work page
+   (agent-work.css): one fixed toggle row like "Archived (n)", opening it only adds rows below */
+.agent-fold-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0 6px; color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; }
+.agent-fold-toggle:hover { color: var(--text); }
+@media (pointer: coarse) { .agent-fold-toggle { min-height: 44px; } }
 /* the phone's Add: a quiet text button at the top of the team list (the side header has the plus on a computer) */
 .team-add { display: block; padding: 8px 20px; font-size: 14px; }

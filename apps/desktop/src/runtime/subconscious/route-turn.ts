@@ -61,7 +61,7 @@ The effort follows what is still open: low for what can be checked against what 
 What the person said about models or how to work – in this chat, in the agent's standing facts and agreements, or with the start model and effort they set – outweighs my weighing. A model the person picked in this chat for their newest message is what they want now: my start, which I leave only for a clear reason. One they suggested earlier and left standing is a hint from before – the work decides.
 Staying on the model the agent runs on is my default, and the effort is what I turn first: another model first reads the whole context uncached at its own input price. What that costs right now is stated below – on a cold cache any model reads uncached, so the choice is free; on a warm one a switch is worth it only for a stretch of work that clearly needs another kind of model: real judgment coming after routine, or the reverse – a strong model about to carry on with plenty of routine that does not need it, which I move back down. One turn's nuance is no reason. A turn takes about 6 model calls, so the model's price counts six times over.
 
-A word search ran over the agent's knowledge – its memory, skills, references and documents – with the words of what wakes the turn; its hits stand below with how each begins. An entry I open reaches the main AI before it starts and stays in its context, paid again on every later call. So I open an entry only when I can say what it changes in this turn – a rule it has to follow, a fact it has to use, a way of working it would otherwise get wrong – and I say that with it. A hit on the same topic that changes nothing in what the turn does stays closed; most messages need none, and the main AI can still search for itself.
+A word search ran over the agent's knowledge – its memory, skills, references, documents and the secrets catalog (names and handles, never values) – with the words of what wakes the turn; its hits stand below with how each begins. An entry I open reaches the main AI before it starts and stays in its context, paid again on every later call. So I open an entry only when I can say what it changes in this turn – a rule it has to follow, a fact it has to use, a way of working it would otherwise get wrong, the login or key it will sign in or work with – and I say that with it. A hit on the same topic that changes nothing in what the turn does stays closed; most messages need none, and the main AI can still search for itself.
 
 Everything in the main AI's context is paid again on every later model call and dilutes its attention, so I keep it lean; the biggest items still whole in it stand below. An item is still needed while the coming work will read it again or act on something that stands only there. Its job is over once what it was for went into what came after – the main AI's answer, a file it wrote, a later status that replaced it, a step that is done –, however long the task it belongs to still runs: that its topic is still open does not tell. Such an item I condense: in its place stays my note of what still matters from it – a result, a decision, an open point, in a few words –, code adds every id, path, file name and link in it, and a stamp brings the original back, so nothing I set aside loses what later work may look up. A skill or instruction the coming work still follows stays. What I leave, code condenses once its work is finished.
 
@@ -96,7 +96,8 @@ export interface Offer { model: ModelInfo; account: Account }
  * model per name, a plan's before a paying key's; per tier the PER_TIER smartest, the strongest tier first – and always the models the
  * person or the work already stand on: `start`, what the router runs with no request (the agent's start model, even outside the band,
  * router.ts step 1; else the Work model of Settings, step 3), the chat's suggestion and the model of my last turn (review 14.11.: past
- * the cap the call had to name another and overrode the person's start model).
+ * the cap the call had to name another and overrode the person's start model) – a last turn on an older version offers its family's
+ * newest instead (owner 14.11.: never Fable 5.1 while 5.2 runs; routing/pool.ts entryFor).
  */
 export function offeredModels(services: RuntimeServices, agent: Agent, work: TurnWork): { offers: Offer[]; start?: ModelInfo } {
   try {
@@ -107,10 +108,13 @@ export function offeredModels(services: RuntimeServices, agent: Agent, work: Tur
     const policy = effectivePolicy(services, agent);
     const pool = buildPool({ s: services, models, category, policy, ...(work.vision ? { needs: { vision: true } } : {}), ...(mode?.minTier ? { minTier: mode.minTier } : {}) });
     const entries = pool.entries.filter((entry) => !specialistKinds(entry.model));
-    const inPool = (id: string | undefined): Offer | undefined => {
+    /** `newest`: an older version offers its family's newest (my last turn on it); the person's chip offers its own model. */
+    const inPool = (id: string | undefined, newest = false): Offer | undefined => {
       const named = id ? resolvePin(models, id) : undefined;
-      const entry = named ? entries.find((item) => item.model.id === named.id) : undefined;
-      return entry ? { model: entry.model, account: entry.accounts[0] } : undefined;
+      if (!named || specialistKinds(named)) return undefined;
+      const entry = newest ? pool.entryFor(named) : entries.find((item) => item.model.id === named.id);
+      const account = entry ? entry.accounts[0] : !newest && !pool.unusable(named) && pool.inBand(named) ? pool.accountsFor(named)[0] : undefined;
+      return account ? { model: entry?.model ?? named, account } : undefined;
     };
     // The router runs the start model as tryPin does – usable and with an account, the band aside; the Work model inside the band.
     const pinned = policy.pin ? resolvePin(models, policy.pin.modelId) : undefined;
@@ -118,7 +122,7 @@ export function offeredModels(services: RuntimeServices, agent: Agent, work: Tur
     const startOffer = pinned && pinAccount ? { model: pinned, account: pinAccount } : !policy.pin ? inPool(settingsPin(services.settings.get().routing, { agent } as RouteRequest)?.modelId) : undefined;
     const chip = (() => { try { return chatChoice(services, work.conversationId, agent.id).pin; } catch { return undefined; } })();
     const last = (() => { try { return services.runs.list(agent.id, RECENT_RUNS).find((run) => !run.splitId && run.model)?.model; } catch { return undefined; } })();
-    const anchors = [startOffer, inPool(chip), inPool(last)].filter((offer): offer is Offer => offer !== undefined);
+    const anchors = [startOffer, inPool(chip), inPool(last, true)].filter((offer): offer is Offer => offer !== undefined);
     const ranked = entries.map((entry) => ({ model: entry.model, account: entry.accounts[0] }))
       .sort((a, b) => Number(isPaid(a.account)) - Number(isPaid(b.account)) || tierRank(b.model.tier) - tierRank(a.model.tier) || (b.model.smarts ?? -1) - (a.model.smarts ?? -1));
     const names = new Set<string>();

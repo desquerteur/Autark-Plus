@@ -1,13 +1,15 @@
 // RPC handlers: connecting PCs (Settings › Devices) – this PC's Remote ID and requests, connecting
 // to another PC by Remote ID or address as the CEO or an employee, deciding requests waiting here
-// (an employee's PC with the person it belongs to), and the PCs on this network.
+// (an employee's PC with the person it belongs to, or – F13 – a new person; F17: also one waiting on another of my PCs,
+// decided there), and the PCs on this network.
 // The owner and – B-084 (D6) – the owner's phone on a secure transport ('settings' + secure: the app's tunnel, HTTPS or
 // the tailnet; a plain LAN browser and people never), so Settings › Devices on the phone is the PC's.
 // Whether other PCs may ask at all is settings.devices.findable (settings.json).
 // Owns: param checks and the device tier. Never: request logic, or returning keys or session secrets.
 
 import { WorkforceError } from '../../../shared/errors.ts';
-import { bad, input, onlyKeys, optBool, optOneOf, optText, text } from '../params.ts';
+import { readDecide } from '../../remote/mirror.ts';
+import { input, onlyKeys, optBool, optOneOf, text } from '../params.ts';
 import type { RemoteApi } from '../extras.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
@@ -27,15 +29,9 @@ export function register(table: HandlerTable): void {
     return remoteOf(ctx).connect({ target: text(o, 'target', { max: 200 }), role: optOneOf(o, 'role', ['ceo', 'employee'] as const) ?? 'ceo' });
   }, DEVICE_ADMIN);
   table.add('remote.cancel', (_params, ctx) => { remoteOf(ctx).cancel(); return { ok: true as const }; }, DEVICE_ADMIN);
-  table.add('remote.decide', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id', 'accept', 'personId']);
-    const id = text(o, 'id', { max: 40 });
-    if (!/^rr_[0-9a-f]{16}$/.test(id)) bad('id', 'a request id');
-    const accept = optBool(o, 'accept') ?? bad('accept', 'true or false');
-    const personId = optText(o, 'personId', { max: 80 });
-    if (personId !== undefined && !ctx.services.people?.get(personId)) bad('personId', 'a person of the organisation');
-    remoteOf(ctx).decide(id, accept, personId);
+  table.add('remote.decide', async (params, ctx) => {
+    const { id, accept, personId, newPerson } = readDecide(params, (person) => Boolean(ctx.services.people?.get(person)));
+    await remoteOf(ctx).decide(id, accept, personId, newPerson);
     return { ok: true as const };
   }, DEVICE_ADMIN);
   table.add('remote.nearby', (params, ctx) => {

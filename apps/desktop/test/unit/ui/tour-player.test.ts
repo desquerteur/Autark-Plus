@@ -1,8 +1,8 @@
 // B-055 Q5: the tour player's pure rules (src/ui/tour/player-model.ts) – the time label, the keys (Space only
-// off a button, K, ←/→ 5 s, Home/End), the scrubber's time under a point, the fit of the 960 × 600 scene and a
-// frame step that never jumps after a pause – and the tour's isolation: no file under src/ui/tour imports a
-// live component, store, router or RPC (only its own files, shared models and preact), so rebuilding the live
-// UI never breaks the tour and the tour never touches live operation.
+// off a button, K, ←/→ 5 s, Home/End), the scrubber's time under a point, the fit of the computer's 960 × 600 and the
+// phone's 360 × 760 scene and a frame step that never jumps after a pause – and the tour's isolation: no file under
+// src/ui/tour imports a live component, store, router or RPC (only its own files, shared models and preact), so
+// rebuilding the live UI never breaks the tour and the tour never touches live operation.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,13 +33,16 @@ test('the scrubber: the time under a point, clamped to the tour', () => {
 });
 
 test('the scene fits its box at every size and keeps its aspect', () => {
-  assert.equal(fitScale(960, 600), 1);
-  assert.equal(fitScale(480, 600), 0.5, 'narrow: the width decides');
-  assert.equal(fitScale(1920, 300), 0.5, 'low: the height decides');
-  assert.equal(fitScale(4000, 4000), 1.6, 'never blown up past the cap');
-  assert.equal(fitScale(0, 300), 0);
-  const phone = fitScale(388, 243);
-  assert.ok(phone > 0.39 && phone < 0.41, 'phone width');
+  assert.equal(fitScale(960, 600, 960, 600), 1);
+  assert.equal(fitScale(480, 600, 960, 600), 0.5, 'narrow: the width decides');
+  assert.equal(fitScale(1920, 300, 960, 600), 0.5, 'low: the height decides');
+  assert.equal(fitScale(4000, 4000, 960, 600), 1.6, 'never blown up past the cap');
+  assert.equal(fitScale(0, 300, 960, 600), 0);
+  assert.equal(fitScale(300, 300, 0, 600), 0, 'no scene size');
+  const computerOnPhone = fitScale(388, 243, 960, 600);
+  assert.ok(computerOnPhone > 0.39 && computerOnPhone < 0.41, 'the computer\'s tour at phone width');
+  assert.equal(fitScale(180, 600, 360, 760), 0.5, 'the phone\'s tour: the width decides');
+  assert.equal(fitScale(388, 380, 360, 760), 0.5, 'the phone\'s tour in a low box: the height decides');
 });
 
 test('a frame never jumps the tour: long gaps step at most MAX_FRAME_MS, never past the end', () => {

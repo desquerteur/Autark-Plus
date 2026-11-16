@@ -2,7 +2,8 @@
 // (no network paths), the marked tokenizers and renderers that mark them with data-path (never an href; Windows targets
 // as written; the enclosing link or control wins), and what a click opens – on the author agent's
 // home PC first, then this PC, as a folder, media or file tab in the global pane; on neither PC the tab on the PC asked
-// first (its not-found page); an offline or unlinked home PC one toast; nothing without files.readPath.
+// first (its not-found page); an offline or unlinked home PC one toast; without files.readPath nothing asked, one toast why.
+// The file block's and review's Open use it on every device (16.11.2026).
 // Owns: these assertions only. Never: a DOM, a real PC or a socket (rpc.call is stubbed).
 
 import { test } from 'node:test';
@@ -16,7 +17,8 @@ import { session } from '../../../src/ui/lib/session.ts';
 import { agents, systemInfo } from '../../../src/ui/lib/store.ts';
 import { toasts } from '../../../src/ui/lib/toasts.ts';
 import { tabsOf } from '../../../src/ui/workspace/pages.ts';
-import { openPathLink, pathIn, pathRenderer, pathTokenizer, plainInControl } from '../../../src/ui/workspace/path-links.ts';
+import { NO_PATH_READ, openPathLink, pathIn, pathRenderer, pathTokenizer, plainInControl } from '../../../src/ui/workspace/path-links.ts';
+import { readFileSync } from 'node:fs';
 
 test('pathIn: absolute Windows and posix paths; a code span needs two posix segments; globs, placeholders and network paths are text', () => {
   for (const path of ['C:\\Users\\ann\\Workforce\\a.md', 'C:/Users/ann/Workforce/openautark/README.md', 'C:/Users/ann/Workforce/', 'd:\\', 'C:\\w\\.git\\_draft\\a.md', '/home/me/report.txt', 'C:/My Docs/R&D.md']) {
@@ -174,7 +176,26 @@ test('openPathLink: an offline or unlinked home PC is one toast, no tab; without
   assert.equal(calls.length, 0, 'a network path or a relative one: nothing asked on any PC');
 
   session.value = { kind: 'device', capabilities: [], secure: false, allowedMethods: [] };
+  toasts.value = [];
   calls = stubRpc({});
   await openPathLink('C:/w/c.md', 'ag_far');
   assert.equal(calls.length, 0, 'no files.readPath here: nothing asked, nothing opened');
+  assert.deepEqual(toasts.value.map((toast) => [toast.title, toast.body]), [['Could not open c.md', NO_PATH_READ]], '16.11.: one toast says why instead of nothing');
+});
+
+// 16.11.2026 (owner on the phone: a document an agent sent did not open in the side pane): a file block's and a review's
+// Open take the chat link's way on every device, read on the asking agent's home PC first. node --test cannot import .tsx,
+// so the wiring is read from the sources.
+test('file block and review: Open goes through openPathLink on every device; the to-do\'s creator names the PC to read on', () => {
+  const read = (file: string) => readFileSync(new URL(`../../../src/ui/${file}`, import.meta.url), 'utf8');
+  const file = read('blocks/ui/FileBlock.tsx');
+  assert.match(file, /openPathLink\(path, /, 'a path opens like a chat link');
+  assert.doesNotMatch(file, /\{desktop && \(path \|\| fileId\)/, 'Open is no longer desktop-only');
+  assert.match(file, /desktop && onPc && <button[^\n]*Show in folder/, 'Show in folder stays on the desktop');
+  const review = read('blocks/ui/Review.tsx');
+  assert.match(review, /openPathLink\(src, author\)/);
+  assert.doesNotMatch(review, /platform === 'desktop'/, 'no desktop-only Open');
+  assert.match(review, /props\.authorId \?\? \(event\.currentTarget as HTMLElement\)\.closest<HTMLElement>\('\[data-author\]'\)/);
+  assert.match(read('blocks/AskBlock.tsx'), /authorId=\{props\.authorId\}/);
+  assert.match(read('tasks/HumanItem.tsx'), /authorId=\{task\.createdBy\}/, 'My day: the to-do\'s creator');
 });

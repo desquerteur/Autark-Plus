@@ -1,7 +1,9 @@
 // Owns: one RFC 6455 client connection (wss via the platform's TLS with normal certificate checks, ws for local tests):
 // the upgrade, masked frames, fragments, ping/pong and close; the time of the last frame of any kind (B-084: pings and
 // pongs too) and kill(), which ends a stuck connection at once; close() never waits for a stuck send, and a failed
-// connect leaves no socket open (B-084 review). Never: skips certificate checks or reconnects by itself.
+// connect leaves no socket open (B-084 review). F29: a caller may set the largest message and one bound for the connect
+// and the upgrade answer (DirectPipe: a PC's 8 MB channel frames, a short try per address); [IPv6] hosts dial unbracketed.
+// Never: skips certificate checks or reconnects by itself.
 package com.teydralab.autark.android.relay;
 
 import java.io.ByteArrayOutputStream;
@@ -35,6 +37,7 @@ public final class WebSocketClient {
     private final OutputStream out;
     private final DataInputStream in;
     private final Listener listener;
+    private final int maxMessage;
     /** Its own flag, not the send lock: kill() and the reader end the connection even while a send is stuck. */
     private final AtomicBoolean closed = new AtomicBoolean();
     /** One frame at a time; close() only tries it, so a send stuck on a dead link never holds up the caller of close(). */
@@ -43,11 +46,12 @@ public final class WebSocketClient {
     /** Frames read so far (only the reader thread counts). */
     private volatile long frames;
 
-    private WebSocketClient(Socket socket, InputStream in, Listener listener) throws IOException {
+    private WebSocketClient(Socket socket, InputStream in, Listener listener, int maxMessage) throws IOException {
         this.socket = socket;
         this.out = socket.getOutputStream();
         this.in = new DataInputStream(in);
         this.listener = listener;
+        this.maxMessage = maxMessage;
     }
 
     /** Connects and upgrades; the listener hears frames on a reader thread of its own. */
@@ -55,6 +59,15 @@ public final class WebSocketClient {
 
     /** The same with extra request header lines ("Cookie: …\r\n" – the phone's own socket through its local entrance). */
     public static WebSocketClient connect(String url, Listener listener, String headers) throws IOException {
+        return connect(url, listener, headers, MAX_MESSAGE, 10_000, 15_000);
+    }
+
+    /** F29: with the largest message taken and one bound for the TCP connect and the upgrade answer (ms). */
+    public static WebSocketClient connect(String url, Listener listener, int maxMessage, int timeoutMs) throws IOException {
+        return connect(url, listener, "", maxMessage, timeoutMs, timeoutMs);
+    }
+
+    private static WebSocketClient connect(String url, Listener listener, String headers, int maxMessage, int connectMs, int answerMs) throws IOException {
         if (headers.indexOf('\n') >= 0 && !headers.endsWith("\r\n")) throw new IOException("Bad header lines");
         URI uri = URI.create(url);
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
@@ -62,22 +75,24 @@ public final class WebSocketClient {
         if (!tls && !scheme.equals("ws")) throw new IOException("Not a WebSocket address");
         String host = uri.getHost();
         int port = uri.getPort() > 0 ? uri.getPort() : (tls ? 443 : 80);
+        if (host == null) throw new IOException("Not a WebSocket address");
         Socket raw = new Socket();
-        try { return upgrade(raw, uri, host, port, tls, listener, headers); }
+        try { return upgrade(raw, uri, host, port, tls, listener, headers, maxMessage, connectMs, answerMs); }
         catch (IOException | RuntimeException error) { try { raw.close(); } catch (IOException ignored) { /* closing */ } throw error; } // a failed try leaves no socket open
     }
 
-    private static WebSocketClient upgrade(Socket raw, URI uri, String host, int port, boolean tls, Listener listener, String headers) throws IOException {
-        raw.connect(new InetSocketAddress(host, port), 10_000);
+    private static WebSocketClient upgrade(Socket raw, URI uri, String host, int port, boolean tls, Listener listener, String headers, int maxMessage, int connectMs, int answerMs) throws IOException {
+        boolean v6 = host.startsWith("[") && host.endsWith("]");
+        raw.connect(new InetSocketAddress(v6 ? host.substring(1, host.length() - 1) : host, port), connectMs);
         raw.setTcpNoDelay(true);
-        raw.setSoTimeout(15_000); // the TLS handshake and the upgrade answer each get 15 s, never minutes
+        raw.setSoTimeout(answerMs); // the TLS handshake and the upgrade answer each get 15 s (a direct try less), never minutes
         Socket socket = raw;
         if (tls) {
             SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, host, port, true);
             SSLParameters parameters = ssl.getSSLParameters();
             parameters.setEndpointIdentificationAlgorithm("HTTPS"); // the server name must match its certificate
             ssl.setSSLParameters(parameters);
-            ssl.setSoTimeout(15_000); // Conscrypt's own sockets read the timeout from the TLS socket, the JDK's from the raw one
+            ssl.setSoTimeout(answerMs); // Conscrypt's own sockets read the timeout from the TLS socket, the JDK's from the raw one
             ssl.startHandshake();
             // Android's platform verifier checks the name once more (the desktop JDK's default one is a placeholder that
             // refuses everything; there the endpoint identification above is the check).
@@ -85,7 +100,7 @@ public final class WebSocketClient {
             if (android && !HttpsURLConnection.getDefaultHostnameVerifier().verify(host, ssl.getSession())) { ssl.close(); throw new IOException("Certificate does not match " + host); }
             socket = ssl;
         }
-        socket.setSoTimeout(15_000);
+        socket.setSoTimeout(answerMs);
         String key = Crypto.b64urlStd(Crypto.random(16));
         String path = (uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath()) + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
         String request = "GET " + path + " HTTP/1.1\r\nHost: " + host + (uri.getPort() > 0 ? ":" + port : "") + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -98,7 +113,7 @@ public final class WebSocketClient {
         String accept = Crypto.b64urlStd(sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
         if (!head.toLowerCase(Locale.ROOT).contains("sec-websocket-accept: " + accept.toLowerCase(Locale.ROOT))) { socket.close(); throw new IOException("Bad WebSocket accept"); }
         socket.setSoTimeout(0); // the relay pings every 30 s; RelayLink's watchdog and probe() end a silent connection
-        WebSocketClient client = new WebSocketClient(socket, input, listener);
+        WebSocketClient client = new WebSocketClient(socket, input, listener, maxMessage);
         Thread reader = new Thread(client::readLoop, "autark-relay-reader");
         reader.setDaemon(true);
         reader.start();
@@ -189,7 +204,7 @@ public final class WebSocketClient {
                 if (length == 126) length = in.readUnsignedShort();
                 else if (length == 127) length = in.readLong();
                 if ((second & 0x80) != 0) throw new IOException("masked server frame");
-                if (length > MAX_MESSAGE || length < 0) throw new IOException("frame too large");
+                if (length > maxMessage || length < 0) throw new IOException("frame too large");
                 byte[] payload = new byte[(int) length];
                 in.readFully(payload);
                 lastFrameAt = System.currentTimeMillis();
@@ -200,7 +215,7 @@ public final class WebSocketClient {
                 if (opcode == 0x1 || opcode == 0x2) { messageType = opcode; message.reset(); }
                 else if (opcode != 0x0) throw new IOException("unknown opcode");
                 message.write(payload, 0, payload.length);
-                if (message.size() > MAX_MESSAGE) throw new IOException("message too large");
+                if (message.size() > maxMessage) throw new IOException("message too large");
                 if (!fin) continue;
                 byte[] whole = message.toByteArray();
                 message.reset();
@@ -215,7 +230,15 @@ public final class WebSocketClient {
 
     private void shutdown(String reason) {
         boolean first = closed.compareAndSet(false, true);
-        try { socket.close(); } catch (IOException ignored) { /* closing */ }
+        try { socket.close(); }
+        catch (IOException ignored) { /* closing */ }
+        catch (RuntimeException mainThread) {
+            // 16.11.2026 (owner's S23, Android 16): a TLS socket's close writes its close_notify, which Android refuses on
+            // the main thread (NetworkOnMainThreadException) – a company switch crashed the app. The close runs on its own thread.
+            Thread closer = new Thread(() -> { try { socket.close(); } catch (IOException | RuntimeException ignored) { /* closing */ } }, "autark-ws-close");
+            closer.setDaemon(true);
+            closer.start();
+        }
         if (first) listener.closed(reason);
     }
 }

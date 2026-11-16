@@ -32,13 +32,14 @@ import type { EngineFile } from '../engines/types.ts';
 import { kindOf } from './probe.ts';
 import { MAIN_THREAD } from '../../shared/model/origin.ts';
 import { MediaRepo } from './repo.ts';
+import { homeRoots } from '../system/paths.ts';
 
 export const OUTPUT_LIMITS = { bytes: 4 * 1024 ** 3, files: 10, inlineBytes: 50 * 1024 * 1024, notes: 8 } as const;
 
 export interface OutputServices {
   db: Db;
   files: FileStore;
-  paths: Pick<Paths, 'workspace' | 'accounts' | 'blobs'>;
+  paths: Pick<Paths, 'workspace' | 'accounts' | 'blobs'> & Partial<Pick<Paths, 'data'>>;
 }
 
 type Refusal = 'missing' | 'outside' | 'large' | 'not_file';
@@ -90,7 +91,8 @@ export async function resolveOutput(paths: OutputServices['paths'], value: strin
   if (!inside(root, absolute) && !inside(realRoot, absolute)) return { refused: 'outside' };
   let target: string;
   try { target = await realpath(absolute); } catch { return { refused: 'missing' }; }
-  if (!inside(realRoot, target) || inside(await real(paths.accounts), target)) return { refused: 'outside' };
+  if (!inside(realRoot, target)) return { refused: 'outside' };
+  for (const homes of homeRoots(paths)) if (inside(await real(homes), target)) return { refused: 'outside' }; // never an account home
   const info = await stat(target).catch(() => undefined);
   if (!info) return { refused: 'missing' };
   if (!info.isFile()) return { refused: 'not_file' };

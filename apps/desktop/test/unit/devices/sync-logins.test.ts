@@ -235,7 +235,8 @@ test('a plan signed out here takes no login from a linked PC until one is made h
   const mine = path.join(a.own('acc_cx'), 'auth.json');
   const theirs = path.join(b.own('acc_cx'), 'auth.json');
   await put(theirs, codexLogin('r2', '2026-11-04T11:00:00Z'));
-  signedOut.mark(a.s.db, 'acc_cx', 1); // the person signed out on A (accounts.logout: the CLI removed the file)
+  await mkdir(a.own('acc_cx'), { recursive: true });
+  signedOut.mark(a.s.db, a.accounts[0], 1); // the person signed out on A (accounts.logout: the CLI removed the file; the mark is the home's)
 
   await b.logins.catchUp('dev_a');
   assert.equal(await read(mine), undefined, 'A stays signed out');
@@ -243,7 +244,7 @@ test('a plan signed out here takes no login from a linked PC until one is made h
 
   await put(mine, codexLogin('r3', '2026-11-04T12:00:00Z')); // the person signed in on A again
   await a.logins.catchUp('dev_b');
-  assert.equal(signedOut.has(a.s.db, 'acc_cx'), false, 'a login here ends the mark');
+  assert.equal(signedOut.has(a.s.db, a.accounts[0]), false, 'a login here ends the mark');
   assert.equal(await read(theirs), codexLogin('r3', '2026-11-04T12:00:00Z'), 'and goes to B');
   await put(theirs, codexLogin('r4', '2026-11-04T13:00:00Z'));
   await b.logins.catchUp('dev_a');
@@ -310,4 +311,39 @@ test('B-087: a list from an older PC that carries one login for two plans gives 
   const holders = [await read(file('acc_c2')), await read(file('acc_c3'))].filter((text) => text === cred('X', 1_793_970_000_000));
   assert.equal(holders.length, 1);
   assert.equal(b.checked.length, 1, 'and only that plan is checked');
+});
+
+test('16.11.2026: two companies on one PC share one home – both LoginSyncs write it whole, the newer login wins, a refresh there reaches the linked PC once', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b'); // company 1 on PC B
+  const b2 = await makePc(pcs, 'dev_b2'); // company 2 on PC B: its row points at the same home
+  t.after(async () => { for (const pc of [a, b, b2]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  link(a, b2);
+  const shared = b.own('acc_cx');
+  a.accounts.push(plan('acc_cx', 'codex', { home: a.own('acc_cx'), email: 'lena@example.com' }));
+  b.accounts.push(plan('acc_cx', 'codex', { home: shared, email: 'lena@example.com' }));
+  b2.accounts.push(plan('acc_c2', 'codex', { home: shared, email: 'lena@example.com' })); // its own row, the same login
+  await put(path.join(shared, 'auth.json'), codexLogin('r1', '2026-11-04T10:00:00Z'));
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r2', '2026-11-04T11:00:00Z'));
+
+  await Promise.all([a.logins.catchUp('dev_b'), a.logins.catchUp('dev_b2')]); // both companies take it at once
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r2', '2026-11-04T11:00:00Z'), 'the newer login, whole');
+  assert.deepEqual(await temps(shared), [], 'no temp file stays');
+  assert.deepEqual((await readdir(path.join(b2.root, 'data', 'accounts')).catch(() => [])), [], 'no second home for that login');
+
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r0', '2026-11-04T09:00:00Z'));
+  await Promise.all([a.logins.catchUp('dev_b'), a.logins.catchUp('dev_b2')]);
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r2', '2026-11-04T11:00:00Z'), 'an older login never replaces it');
+
+  const offs = [a.logins.attach(), b.logins.attach(), b2.logins.attach()];
+  assert.ok(b.watchers.has(shared) && b2.watchers.has(shared), 'both companies watch the one home');
+  await put(path.join(shared, 'auth.json'), codexLogin('r3', '2026-11-04T12:00:00Z')); // a turn of company 2 refreshed it
+  b.watchers.get(shared)!('rename', 'auth.json');
+  b2.watchers.get(shared)!('rename', 'auth.json');
+  await until(async () => await read(path.join(a.own('acc_cx'), 'auth.json')) === codexLogin('r3', '2026-11-04T12:00:00Z'));
+  assert.equal(await read(path.join(a.own('acc_cx'), 'auth.json')), codexLogin('r3', '2026-11-04T12:00:00Z'), 'the refresh reached the linked PC');
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r3', '2026-11-04T12:00:00Z'), 'and nothing older came back');
+  for (const off of offs) off();
 });

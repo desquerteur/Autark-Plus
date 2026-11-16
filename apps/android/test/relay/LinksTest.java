@@ -1,6 +1,7 @@
 // Owns: the phone's links to all PCs of its company on a host JVM (B-084 M1) with fake channels – every online PC gets
 // one (at most PcLinks.CAP), the page uses the newest version (the first paired among equals) and stays put on a tie,
-// moves at once when its PC drops, the picker's PC wins while it is up, a failed PC waits its backoff; PcVersion's
+// moves at once when its PC drops, the picker's PC wins while it is up, a PC that refused the page's token is passed
+// over while another has not (each refuses once, the page never circles), a failed PC waits its backoff; PcVersion's
 // ordering, its one request over stream 0 against a fake PC, and the pin comparison behind updatePcs.
 // Never: a real tunnel or handshake (ReconnectTest and a phone do that).
 package com.teydralab.autark.android.relay;
@@ -29,6 +30,7 @@ public final class LinksTest {
         newestChosen();
         failover();
         preferWins();
+        refusals();
         cap();
         retry();
         versions();
@@ -115,6 +117,36 @@ public final class LinksTest {
         links.put("notebook", back, "0.3.4");
         check(links.pick(order, "notebook") == back, "the picked PC takes the page again once it is linked");
         check(links.pick(order, "unknown") == server || links.usedPc() != null, "a preference for a PC without a channel changes nothing");
+    }
+
+    // 16.11.2026 (F15/F22): a PC that refuses the page's token (4401) gives the page to the next PC that has not refused.
+    private static void refusals() {
+        PcLinks<Fake> links = links();
+        List<String> order = Arrays.asList("notebook", "server", "office");
+        Fake notebook = new Fake("notebook"), server = new Fake("server");
+        links.put("notebook", notebook, "0.3.4");
+        links.put("server", server, "0.3.9");
+        check(links.pick(order, null) == server, "the newest PC has the page");
+        check(links.refuse("server") && !links.refuse("server"), "a refusal is news once");
+        check(links.pick(order, null) == notebook, "after the refusal the page moves to the PC that has not refused");
+        check(links.pick(order, null) == notebook, "and stays there: the newer refused PC does not take it back");
+        check(links.refuse("notebook"), "the second PC refuses too");
+        check(links.pick(order, null) == notebook, "every linked PC refused: the page stays where it is (it says 'Not paired')");
+        Fake office = new Fake("office");
+        links.put("office", office, "0.3.1");
+        check(links.pick(order, null) == office, "a PC linked later that has not refused takes the page, older version or not");
+        links.refuse("office");
+        check(links.pick(order, null) == office, "each PC refuses at most once: no circling, the page stays");
+        check(links.forgive("server") && !links.forgive("server"), "the person's pick forgives a refusal once");
+        check(links.pick(order, "server") == server, "the picked PC gets the page again");
+        check(!links.refuse(null), "no page PC: nothing to refuse");
+        PcLinks<Fake> picked = links();
+        Fake a = new Fake("a"), b = new Fake("b");
+        picked.put("a", a, "0.3.9");
+        picked.put("b", b, "0.3.9");
+        check(picked.pick(Arrays.asList("a", "b"), "a") == a, "the picker's PC first");
+        picked.refuse("a");
+        check(picked.pick(Arrays.asList("a", "b"), "a") == b, "a picked PC that refused gives the page to one that has not");
     }
 
     private static void cap() {

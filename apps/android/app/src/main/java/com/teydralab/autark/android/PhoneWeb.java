@@ -1,12 +1,13 @@
 // Owns: the app's WebView as MainActivity uses it – its settings (JavaScript and DOM storage on, no file access, content://
 // for the document picker, no mixed content, media without a second tap for a call's voice – B-084 decision 5, the
-// AutarkAndroid/<version> user agent, first-party cookies only), its navigation (PhoneNavigation), downloads of the PC's
+// AutarkAndroid/<version> (Android <release>; <maker> <model>) user agent, first-party cookies only), its navigation (PhoneNavigation), downloads of the PC's
 // /files/ links to the phone (PhoneDownloads), and wiping one company's origin when the phone forgets it (its web storage
 // and gate cookie; other companies' origins stay). Never: a JavaScript interface, debugging in release, or another origin's data.
 package com.teydralab.autark.android;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.os.Build;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebStorage;
@@ -28,7 +29,7 @@ final class PhoneWeb {
         settings.setAllowContentAccess(true); // Android document picker supplies content:// URIs.
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(false); // a call's voice plays without a second tap
-        settings.setUserAgentString(settings.getUserAgentString() + " AutarkAndroid/" + UpdateCheck.installedName(activity));
+        settings.setUserAgentString(settings.getUserAgentString() + " AutarkAndroid/" + UpdateCheck.installedName(activity) + device());
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         WebView.setWebContentsDebuggingEnabled(false);
@@ -38,6 +39,14 @@ final class PhoneWeb {
                 Toast.makeText(activity, "This file opens on the PC; Save in the app puts it on the phone.", Toast.LENGTH_LONG).show();
         });
         return web;
+    }
+
+    /** " (Android 16; samsung SM-S918B)": Chrome's reduced user agent hides the model, a feedback report names it
+     *  (ui/feedback/client.ts on the PC reads it). Brackets and semicolons in a maker's name would break the group. */
+    static String device() {
+        String model = (Build.MANUFACTURER + " " + Build.MODEL).replaceAll("[();]", " ").replaceAll("\\s+", " ").trim();
+        String release = Build.VERSION.RELEASE == null ? "" : Build.VERSION.RELEASE.replaceAll("[();\\s]", "");
+        return " (Android " + release + (model.isEmpty() ? "" : "; " + model) + ")";
     }
 
     /** Lets only this WebView through the company's local entrance (the gate cookie on its origin). */

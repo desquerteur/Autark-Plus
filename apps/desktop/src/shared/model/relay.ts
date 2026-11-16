@@ -2,6 +2,7 @@
 // PCs in different networks find each other there by Remote ID for "Connect", exchange their
 // addresses and then talk directly; a tunnel through it carries the (end-to-end encrypted) link
 // only when no direct path answers.
+// F29 (16.11.2026): the state also counts each phone's bytes direct and through the server (PhoneLink).
 // Owns: the address rule of settings.devices.relay, the state Settings › Devices shows and the
 // remote.relay method / relay.updated event (augmenting Methods / EventMap).
 // Never: carries keys, tickets or anything the server could use to read traffic.
@@ -22,6 +23,22 @@ export interface RelayState {
   peersOnline: number;
   /** Linked PCs whose current link runs through a tunnel there (the last fallback). */
   relayed: string[];
+  /** F29: my phone apps with traffic with this PC today or a channel now (absent: none). */
+  phones?: PhoneLink[];
+}
+
+/**
+ * One phone's way to this PC (F29 stage 1): the bytes its channels carried straight to this PC (`direct`) and through the
+ * meeting server (`relay`, sealed end to end) since `since` (ms: midnight, or this PC's start today), and the way its
+ * channel runs now (absent: not connected). The iPhone web app always goes through the server.
+ */
+export interface PhoneLink {
+  deviceId: string;
+  name: string;
+  via?: 'direct' | 'relay';
+  direct: number;
+  relay: number;
+  since: number;
 }
 
 const PRIVATE_HOST = /^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|\[::1\]|[a-z0-9-]+\.local)$/;

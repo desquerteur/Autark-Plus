@@ -1,7 +1,7 @@
 // The runtime's start and stop steps (runtime/compose/lifecycle.ts) exactly as main.ts runs
 // them: the restore at start gives the host more time and brings a backup's workspace skills back
-// (MM8); the stop runs every step in order, each awaited, past failures – the sign-ins (PR4), the
-// connectors and the device connections (before the peer listener) included – and the database closes last.
+// (MM8); the stop runs every step in order, each awaited, past failures – the restart pause first (16.11.2026), the
+// sign-ins (PR4), the connectors and the device connections (before the peer listener) included – and the database closes last.
 // Owns: these assertions only. Never: a whole runtime, network, real CLIs or timers.
 
 import { test } from 'node:test';
@@ -90,6 +90,7 @@ function parts(fail: ReadonlySet<string> = new Set()) {
     supervisor: { killAll: later('supervisor.killAll') },
   } as unknown as Core;
   const network = {
+    restartPause: { close: sync('restartPause.close') },
     bridges: { stop: sync('bridges.stop') },
     browser: { close: later('browser.close') },
     computer: { dispose: later('computer.dispose') },
@@ -102,7 +103,7 @@ function parts(fail: ReadonlySet<string> = new Set()) {
 }
 
 const ORDER = [
-  'dispatcher.stop', 'accountMonitor.stop', 'accounts.dispose', 'apps.stop', 'mcp.close', 'scheduler.stop', 'catalog.stop',
+  'restartPause.close', 'dispatcher.stop', 'accountMonitor.stop', 'accounts.dispose', 'apps.stop', 'mcp.close', 'scheduler.stop', 'catalog.stop',
   'bridges.stop', 'browser.close', 'computer.dispose', 'rpc.close', 'devices.stop', 'peer.close', 'http.close',
   'mesh.close', 'engines.dispose', 'supervisor.killAll', 'dataLifecycle.stop', 'rootWatcher.stop', 'db.close',
 ];
@@ -136,8 +137,8 @@ test('stop: the device connections right before the peer listener, the data fold
 test('stop: optional parts may be missing (no connectors or devices, services without stop or dispose)', async () => {
   const { core, network, calls } = parts();
   const bare = { ...core, services: { ...core.services, accounts: {}, apps: undefined } } as unknown as Core;
-  await runStopSteps(stopSteps(bare, { ...network, devices: undefined } as unknown as Network), new MemoryLogger());
-  const missing = ['accounts.dispose', 'apps.stop', 'devices.stop'];
+  await runStopSteps(stopSteps(bare, { ...network, devices: undefined, restartPause: undefined } as unknown as Network), new MemoryLogger());
+  const missing = ['accounts.dispose', 'apps.stop', 'devices.stop', 'restartPause.close'];
   assert.deepEqual(calls, ORDER.filter((name) => !missing.includes(name)));
 });
 

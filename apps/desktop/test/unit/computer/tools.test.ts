@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { deviceTools, registerDeviceHandlers } from '../../../src/runtime/devices/tools.ts';
 import { ComputerService } from '../../../src/runtime/computer/service.ts';
 import { computerTools } from '../../../src/runtime/computer/tools.ts';
+import { brokerState } from '../../../src/runtime/computer/broker.ts';
 import { frameOnly, TREE_DEPTH } from '../../../src/runtime/computer/tree.ts';
 import type { HelperClient } from '../../../src/runtime/computer/helper.ts';
 import type { HelperOp } from '../../../src/runtime/computer/protocol.ts';
@@ -30,7 +31,7 @@ test('every device tool exists with the right category, remote flag and visibili
     'computer.scroll', 'computer.drag', 'browser.open', 'browser.snapshot', 'browser.act', 'browser.screenshot', 'browser.extract',
     'browser.tabs', 'browser.batch', 'browser.find', 'browser.console', 'browser.network', 'browser.eval', 'browser.wait', // B-055 Q7 (track E)
     'phone.devices', 'phone.screenshot', 'phone.ui_tree', 'phone.tap', 'phone.swipe', 'phone.type', 'phone.key',
-    'phone.open', 'phone.pair', 'phone.connect', 'phone.disconnect', 'devices.list', 'devices.send_file',
+    'phone.open', 'phone.say', 'phone.pair', 'phone.connect', 'phone.disconnect', 'devices.list', 'devices.send_file',
     'browser.save_totp', // X05: stores a 2FA key on this PC only
     'browser.save_secret', // B-044: stores a value of this PC's page as the agent's secret (local only)
   ];
@@ -87,6 +88,18 @@ const FRAME = [
 test('B-080: a covered window\'s picture says a browser behind another window may not draw its page', async () => {
   const rig = computerRig({ screenshot: () => ({ data: Buffer.from('x').toString('base64'), mime: 'image/jpeg', width: 4, height: 2, x: 0, y: 0, srcWidth: 4, covered: true }) });
   assert.match(await rig.run('computer.screenshot', { window: 41 }), /I bring it forward first with computer\.act focus_window\. A browser behind another window may not draw its page\./);
+});
+
+test('F03: on Windows without the broker, after a setup that got no Yes, the screenshot says the secure desktop is out of reach', { skip: process.platform !== 'win32' && 'the line is about Windows' }, async () => {
+  const rig = computerRig({ screenshot: () => ({ data: Buffer.from('x').toString('base64'), mime: 'image/jpeg', width: 4, height: 2, x: 0, y: 0, srcWidth: 4 }) });
+  const saved = { via: brokerState.via, setup: brokerState.setup };
+  try {
+    brokerState.via = 'powershell';
+    brokerState.setup = undefined;
+    assert.doesNotMatch(await rig.run('computer.screenshot', {}), /secure desktop/, 'no setup ran here: nothing to say');
+    brokerState.setup = { state: 'declined', script: 'C:\\A\\install.ps1' };
+    assert.match(await rig.run('computer.screenshot', {}), /\nThe Windows secure desktop \(UAC prompts, the locked screen\) is out of my reach on this PC: .* -File "C:\\A\\install\.ps1"/);
+  } finally { Object.assign(brokerState, saved); }
 });
 
 const CHROME_FRAME = "This Chrome window's UI tree holds its frame only: Chrome puts the page document into it once the page has loaded in a window that is not covered.";

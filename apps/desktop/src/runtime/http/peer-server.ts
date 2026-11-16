@@ -1,9 +1,10 @@
 // The dedicated listener linked PCs reach this PC on: a second node:http server (port
 // settings.devices.peerPort, default 47812) that serves ONLY `GET /.well-known/workforce`,
-// `POST /peer/pair` and the `/peer` WebSocket upgrade (peer.ts); every other path answers 404.
+// `POST /peer/pair`, the `/peer` WebSocket upgrade and (F29) the phone app's `/peer/phone` (peer.ts); every other path
+// answers 404.
 // It is open while something needs it – this PC's own connect request in flight (`hold`), at
-// least one linked PC, or this PC accepting connection requests (`wanted`, settings.devices.findable)
-// – and closed otherwise. Triggers: holds, device and settings events, host resume (`refresh`);
+// least one linked PC or (F29, 16.11.2026) phone app – its direct socket `/peer/phone` –, or this PC accepting connection
+// requests (`wanted`, settings.devices.findable) – and closed otherwise. Triggers: holds, device and settings events, host resume (`refresh`);
 // never a timer. 'lan' binds 0.0.0.0 (and '::' IPv6-only while this PC has a global IPv6 address –
 // B-078: such an address is reachable from outside without the router), 'tailscale' only this PC's
 // tailnet addresses (re-read on every trigger), 'off' never opens. A PC behind a router is reached
@@ -22,7 +23,7 @@ import type { Logger, RuntimeServices } from '../contracts.ts';
 import { globalIpv6, lanAddresses, MAX_PEER_ADDRESSES, peerAddresses, type InterfacesFn } from '../pwa/urls.ts';
 import { KvRepo } from '../store/kv.ts';
 import { isBusy, listenOn } from './listen.ts';
-import { PeerRoutes, type PeerListenMode } from './peer.ts';
+import { PeerRoutes, type PeerListenMode, type PhoneAccept } from './peer.ts';
 import { PortKeeper, type PortMap } from './portmap.ts';
 import type { MeshAccept, PairingHttp } from './types.ts';
 
@@ -34,10 +35,12 @@ export const DEFAULT_PEER_PORT = 47812;
 export interface PeerServerDeps {
   pairing: PairingHttp;
   mesh: MeshAccept;
+  /** F29: the phone app's direct sockets on /peer/phone (devices/rendezvous/phone.ts). */
+  phones?: PhoneAccept;
   log: () => Logger;
   /** Mode and port (settings.devices; the headless CLI may override the mode). Read on every check. */
   config: () => { mode: PeerMode; port: number };
-  /** True while at least one PC is linked (see hasLinkedPc). */
+  /** True while at least one PC or phone app is linked (see hasLinkedPc, rendezvous/phone.ts hasRelayPhone). */
   linked: () => boolean;
   /** True while this PC accepts connection requests (other PCs must reach it). */
   wanted?: () => boolean;
@@ -114,7 +117,7 @@ export class PeerServer {
 
   constructor(deps: PeerServerDeps) {
     this.deps = deps;
-    this.routes = new PeerRoutes({ pairing: deps.pairing, mesh: deps.mesh, log: deps.log, interfaces: deps.interfaces, allowedHosts: deps.allowedHosts });
+    this.routes = new PeerRoutes({ pairing: deps.pairing, mesh: deps.mesh, phones: deps.phones, log: deps.log, interfaces: deps.interfaces, allowedHosts: deps.allowedHosts });
     // The router's outside address joins the addresses when it maps (or leaves them): the linked PCs hear it at once.
     this.keeper = deps.portmap ? new PortKeeper(deps.portmap, (url) => { this.deps.log().info('peer port mapping', { mapped: Boolean(url) }); this.announce(); }) : undefined;
   }

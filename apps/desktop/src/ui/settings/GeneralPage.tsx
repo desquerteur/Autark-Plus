@@ -1,11 +1,13 @@
 // Settings › General (B-078, D17 – owner 06.11.2026: only what is really worth it): profile (photo, name, company),
-// appearance (the theme; finer looks are <data>/theme.css), notifications (the sound – to-dos, blockers and important
+// appearance (the theme, on the PC's window only – a phone follows its own light/dark; finer looks are <data>/theme.css),
+// notifications (the sound – to-dos, blockers and important
 // messages always arrive, notify/service.ts) and behaviour (start at login and keep running when closed – desktop window
 // only –, keep the screen on while agents work, Enter sends). Language and time zone come from the PC; the AI notices the
 // language the person speaks and keeps profile.language and profile.notes itself (skill app-settings). The removed rows'
 // keys stay in settings.json for the AI. Every row is a view on settings.json. A securely paired owner phone
 // also edits profile and day, and (owner 12.11.2026) the PC's own behaviour rows – start at login, keep running when
 // closed, automatic update download – each marked as changing the PC; colleagues and plain-LAN devices do not.
+// 16.11.2026: last, the companies on this PC like accounts – export, import, leave, delete (CompaniesGroup.tsx).
 // Owns: these rows and their mapping onto Settings fields. Never: invents options without effect.
 
 import type { DaySettings } from '../../shared/model/day-settings.ts';
@@ -17,6 +19,7 @@ import { isPersonSession } from '../lib/people.ts';
 import { bridge, os } from '../lib/platform.ts';
 import { canEditOwnerSettings, canUploadOwnerPhoto, HTTPS_NOTE, PC_NOTE, session } from '../lib/session.ts';
 import { settings, systemInfo, updateSettings } from '../lib/store.ts';
+import { CompaniesGroup } from './CompaniesGroup.tsx';
 import { act, CLEAR, Group, Row, Segmented, TextField, Toggle } from './controls.tsx';
 
 const START_HINT = 'Opens the app when the PC starts and keeps agents working in the background';
@@ -69,11 +72,13 @@ export function GeneralPage() {
         <Row label="Company" hint="Used by your agents"><TextField label="Company" value={profile.company} disabled={locked} onCommit={(company) => void setProfile({ company: company.trim() })} /></Row>
       </Group>
 
-      <Group title="Appearance">
-        <Row label="Theme" hint="More of the look is theme.css in the data folder – ask your AI" reserve>
-          <Segmented label="Theme" value={prefs.theme} options={[...THEMES]} onChange={(theme) => void setPrefs({ theme })} />
-        </Row>
-      </Group>
+      {bridge && ( // feedback 16.11.2026 F15: a phone follows its own light/dark (lib/theme.ts), so the setting is the PCs'
+        <Group title="Appearance">
+          <Row label="Theme" hint="More of the look is theme.css in the data folder – ask your AI" reserve>
+            <Segmented label="Theme" value={prefs.theme} options={[...THEMES]} onChange={(theme) => void setPrefs({ theme })} />
+          </Row>
+        </Group>
+      )}
 
       <Group title="Notifications">
         <Row label="Sound" hint="To-dos for you, blockers and important messages always arrive">
@@ -104,6 +109,8 @@ export function GeneralPage() {
           <Toggle label="Enter sends" checked={prefs.enterSends} onChange={(enterSends) => void setPrefs({ enterSends })} />
         </Row>
       </Group>
+
+      <CompaniesGroup />
     </>
   );
 }

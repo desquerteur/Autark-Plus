@@ -1,6 +1,8 @@
 // Quiet in-window toasts (attention items and action errors). Max 3 at once (the oldest goes first); they expire,
-// except one pushed with ttl 0 – a to-do, a blocker or an important message that has something to open – which stays until Open or Dismiss,
-// or until the person reaches where Open leads or the to-do is finished another way (lib/store-events.ts).
+// except one pushed with ttl 0 – a to-do or a blocker that has something to open – which stays until Open or Dismiss,
+// or until the person reaches where Open leads or the to-do is finished another way (lib/store-events.ts). Feedback
+// 16.11.2026 (F10): an important message (an agent's line, a mention, a link) leaves after NOTICE_ONLY_MS – it stays
+// unread in its chat and the OS/phone push still goes. F25: a start notice saying an update did not install stays too.
 // They show as lines of the status line (shell/StatusLine.tsx). B-082: a toast may carry one `action` (its button, e.g.
 // a kept recording's "Transcribe again"); such a toast is the last one a newer toast pushes out.
 // Owns: the toast queue. Never: OS notifications (main process), their look or persistent state.
@@ -44,19 +46,25 @@ export function dismissToastsWhere(test: (toast: Toast) => boolean): void {
 }
 
 /** Kinds that ask something of the person: their toast stays until Open or Dismiss. */
-const LASTING: ReadonlySet<EventMap['notify']['kind']> = new Set(['todo', 'blocker', 'important']);
+const LASTING: ReadonlySet<EventMap['notify']['kind']> = new Set(['todo', 'blocker']);
 
 /**
- * Feedback 16.11.2026 (F09): an important notice with nothing to open – no chat, no to-do (e.g. "office-pc is now
- * linked") – asks nothing of the person, so it stays a while longer than a reply and then goes by itself.
+ * Feedback F09/F10 (16.11.2026): an important notice – an agent's message, a mention, "office-pc is now linked" – and
+ * a to-do or blocker with nothing to open stay a while longer than a reply and then go by themselves.
  */
 export const NOTICE_ONLY_MS = 20_000;
 
-/** A runtime notification as a toast: to-dos, blockers and important messages stay (one with nothing to open expires late), replies and results expire. */
+/** A runtime notification as a toast: to-dos and blockers stay (one with nothing to open expires late), important lines expire late, replies and results expire. */
 export function toastNotification(note: EventMap['notify']): void {
   const toast = { title: note.title, body: note.body, conversationId: note.conversationId, ...(note.taskId ? { taskId: note.taskId } : {}) };
   const opens = Boolean(note.conversationId || note.taskId);
-  pushToast(toast, LASTING.has(note.kind) ? (opens ? 0 : NOTICE_ONLY_MS) : undefined);
+  pushToast(toast, LASTING.has(note.kind) ? (opens ? 0 : NOTICE_ONLY_MS) : note.kind === 'important' ? NOTICE_ONLY_MS : undefined);
+}
+
+/** RC1: the start notice ("Updated to X · …") as a toast; F25: one saying an update did not install stays until Dismiss. */
+export function toastStartNotice(notice: { text: string; failed?: true }): void {
+  if (notice.failed) pushToast({ title: notice.text, tone: 'error' }, 0);
+  else pushToast({ title: notice.text });
 }
 
 /** Shows a short error toast for a failed action. */

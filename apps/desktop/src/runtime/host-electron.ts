@@ -134,6 +134,7 @@ export function createElectronHost(bridge: HostBridgeClient, app: AppInfo): Host
     // Best effort: an older main without the op keeps its normal boot timeout.
     extendBoot: async (reason) => { await bridge.call('runtime.booting', { reason }).catch(() => undefined); },
     openCompany: (input) => bridge.call('company.open', input), // B-072: main/companies.ts
+    removeCompany: (input) => bridge.call('company.remove', input), // 16.11.2026: main/company-remove.ts
     install: async (installer) => { await bridge.call('app.install', { installer }); }, // B-080: main answers, then drains and installs
     app: {
       version: app.version, packaged: app.packaged, resourcesDir: app.resourcesDir, dataDir: app.dataDir, executable: app.executable,

@@ -1,7 +1,7 @@
 // People of the organisation in the client (F-52): the list the owner manages (Team › People) or,
 // on a person's device, the directory (ids from the person's side: 'human' = them, 'owner' = the
 // CEO). Loaded on every (re)connect when this connection may read it, kept fresh by
-// `person.upserted`. Views name and draw a chat member, a message author or a task owner that is
+// `person.upserted` and (F14) `person.removed`. Views name and draw a chat member, a message author or a task owner that is
 // not an agent from here (store.agentName, avatar.tsx).
 // Owns: the people signal, its loader and name lookups. Never: changes people (the Team view calls
 // people.* itself) or polls.
@@ -40,7 +40,13 @@ export function upsertPerson(person: Person): void {
   else { const next = people.value.slice(); next[index] = person; people.value = next; }
 }
 
+/** F14: a person who never joined left for good (people.remove, here or on my other PC). */
+export function dropPerson(id: string): void {
+  if (people.value.some((entry) => entry.id === id)) people.value = people.value.filter((entry) => entry.id !== id);
+}
+
 /** Called once from store-events.ts: loads after each connect (once session.info is known) and applies changes. */
 export function wirePeople(): void {
   rpc.on('person.upserted', upsertPerson);
+  rpc.on('person.removed', ({ id }) => dropPerson(id));
 }

@@ -4,7 +4,8 @@
 // Incoming ids are mapped back (realId) before anything is checked or stored. Projections also drop
 // what a person never sees: the owner's drafts, a message's secret handles, chat settings beyond the shared ones, agents'
 // instructions and policies, other people's devices and scopes, the owner's
-// settings and this PC's data folder.
+// settings and this PC's data folder. F13: a CEO edits agents and manages members, so they see those whole (ids projected)
+// – but for the owner's own agents without their SYSTEM.md (the caller says which, people/access.ts ownersOwnAgent).
 // Owns: the id mapping and the per-type projections. Never: decides access (people/access.ts).
 
 import { HUMAN_ID } from '../../shared/ids.ts';
@@ -123,8 +124,12 @@ export function viewTaskFor(s: Parameters<typeof chatTitleFor>[0], self: string,
   return viewTask(self, task, task.conversationId ? chatTitleFor(s, task.conversationId, self) : '');
 }
 
-/** An agent as a colleague sees it: identity, place in the org and live status – no setup. */
-export function viewAgent(self: string, agent: Agent): Agent {
+/**
+ * An agent as a colleague sees it: identity, place in the org and live status – no setup; F13 a CEO (`ceo`) edits it, so
+ * with its setup – without its SYSTEM.md when it is the owner's own (`ownersOwn`, people/access.ts ownersOwnAgent).
+ */
+export function viewAgent(self: string, agent: Agent, ceo = false, ownersOwn = false): Agent {
+  if (ceo) return { ...agent, ...(ownersOwn ? { instructions: '' } : {}), managerId: viewId(self, agent.managerId), createdBy: viewId(self, agent.createdBy) };
   return {
     id: agent.id, name: agent.name, role: agent.role, avatar: agent.avatar, spaceId: agent.spaceId, managerId: viewId(self, agent.managerId),
     team: agent.team, instructions: '', mode: agent.mode, skills: [], modelPolicy: {} as Agent['modelPolicy'],
@@ -133,8 +138,9 @@ export function viewAgent(self: string, agent: Agent): Agent {
   };
 }
 
-/** The directory entry of a person: no devices, invites or other people's scopes. */
-export function viewPerson(self: string, person: Person): Person {
+/** The directory entry of a person: no devices, invites or other people's scopes; F13 a CEO (`ceo`) manages members, so all of it. */
+export function viewPerson(self: string, person: Person, ceo = false): Person {
+  if (ceo) return { ...person, id: viewId(self, person.id), managerId: viewId(self, person.managerId) };
   const { devices: _devices, inviteOpenUntil: _invite, revokedAt: _revoked, ...rest } = person;
   return { ...rest, id: viewId(self, person.id), managerId: viewId(self, person.managerId), scopes: person.id === self ? person.scopes : DEFAULT_PERSON_SCOPES };
 }

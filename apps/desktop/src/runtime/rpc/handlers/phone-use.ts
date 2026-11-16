@@ -5,14 +5,19 @@
 // phone.pcs – the same list for the iPhone web app, which claims no phone use; phone.forget – the phone app removes its
 // own row (its Forget). phone.pairLink (the owner and – B-084 (D6) – my phone on a secure transport, 'settings' + secure,
 // so another phone scans it off this one): this PC's Remote ID and the QR of its pair link for "Connect a phone"
-// (shared/api/methods-phone.ts PHONE_PAIR_LINK).
+// (shared/api/methods-phone.ts PHONE_PAIR_LINK). F17 (16.11.2026): this PC's own ID, from its key – not my person code,
+// which the meeting server answers with my first PC – so the request lands on the PC whose screen shows the QR.
+// F29 stage 1: each PC comes with its peer listener addresses, so the Android app reaches it directly when one answers.
 // Owns: param checks. Never: drives the phone or decides what it does.
 
 import '../../../shared/api/methods-phone.ts';
 import { phonePairLink, type PhonePc } from '../../../shared/api/methods-phone.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
+import { validAddress } from '../../devices/pair-proof.ts';
+import { MAX_ADDRESSES } from '../../devices/reach.ts';
 import { DevicesRepo, type DeviceRecord } from '../../devices/repo.ts';
 import { qrDataUrl } from '../../pwa/qr.ts';
+import { remoteIdOf } from '../../remote/id.ts';
 import { bad, capJson, input, onlyKeys, optBool, optObj, optText, text } from '../params.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 import type { RuntimeServices } from '../../contracts.ts';
@@ -35,13 +40,16 @@ function deviceOf(ctx: HandlerContext): string {
   return ctx.scope.deviceId;
 }
 
-/** This PC and my other PCs (no employer's or employee's PC) with the key the phone pins. */
+/** This PC and my other PCs (no employer's or employee's PC) with the key the phone pins and – F29 – their peer addresses. */
 export function myPcs(s: Pick<RuntimeServices, 'db'>): PhonePc[] {
   const own = (record: DeviceRecord) => record.kind === 'pc' && !record.revokedAt && record.status !== 'revoked' && !record.personId && record.joinedAs !== 'employee' && Boolean(record.publicKey);
   return new DevicesRepo(s.db).list({ kinds: ['pc'] }).filter(own)
     .sort((a, b) => Number(b.self) - Number(a.self))
     .slice(0, 16)
-    .map((record) => ({ deviceId: record.id, name: record.name, fingerprint: record.fingerprint, publicKey: record.publicKey! }));
+    .map((record) => {
+      const addresses = [...new Set(record.addresses.filter(validAddress))].slice(0, MAX_ADDRESSES);
+      return { deviceId: record.id, name: record.name, fingerprint: record.fingerprint, publicKey: record.publicKey!, ...(addresses.length ? { addresses } : {}) };
+    });
 }
 
 export function register(table: HandlerTable): void {
@@ -92,8 +100,9 @@ export function register(table: HandlerTable): void {
   }, 'any');
 
   table.add('phone.pairLink', async (_params, ctx) => {
-    const remoteId = ctx.extras.remote?.state().self.remoteId;
-    if (!remoteId) throw new WorkforceError('unavailable', 'Connecting devices is not available on this PC.');
+    const fingerprint = ctx.extras.remote?.state().self.fingerprint;
+    if (!fingerprint) throw new WorkforceError('unavailable', 'Connecting devices is not available on this PC.');
+    const remoteId = remoteIdOf(fingerprint);
     const url = phonePairLink(remoteId);
     return { remoteId, url, qrDataUrl: await qrDataUrl(url) };
   }, DEVICE_ADMIN);

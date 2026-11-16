@@ -1,7 +1,9 @@
 // Owns: the crash report that needs no PC (B-084 start crash): the process's handler for an uncaught exception writes the
 // trace (time, version, device, Android) to filesDir/last-crash.txt and then lets Android end the app as before; on the
 // next start MainActivity shows it first on one plain screen "Autark stopped last time" – the trace to select or copy,
-// and Continue, which deletes the file and starts the app. Never: sends the report anywhere or keeps more than the last one.
+// Report (16.11.2026: the app starts and hands the trace to the page, NativePort 'crash', which attaches it to a feedback
+// report; the file goes once the page has it) and Continue, which deletes the file and starts the app.
+// Never: sends the report anywhere without the person's Report, or keeps more than the last one.
 package com.teydralab.autark.android;
 
 import android.app.Activity;
@@ -50,8 +52,12 @@ public final class CrashReport extends Application {
         try { return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8); } catch (Exception unreadable) { file.delete(); return null; }
     }
 
-    /** The plain screen: the report to select or copy; Continue deletes it and runs `next`. */
-    static void show(Activity activity, String report, Runnable next) {
+    /** The report was handed to the page (or the person chose Continue): it goes. */
+    static void clear(Context context) { new File(context.getFilesDir(), FILE).delete(); }
+
+    /** The plain screen: the report to select or copy; Report runs `send` (the file stays until the page has it);
+     *  Continue deletes it and runs `next`. */
+    static void show(Activity activity, String report, Runnable next, Runnable send) {
         int pad = Math.round(16 * activity.getResources().getDisplayMetrics().density);
         TextView title = new TextView(activity);
         title.setText("Autark stopped last time"); title.setTextSize(20);
@@ -63,9 +69,10 @@ public final class CrashReport extends Application {
             ClipboardManager clipboard = activity.getSystemService(ClipboardManager.class);
             if (clipboard != null) { clipboard.setPrimaryClip(ClipData.newPlainText("Autark crash", report)); copy.setText("Copied"); }
         });
-        Button go = new Button(activity); go.setText("Continue"); go.setOnClickListener(view -> { new File(activity.getFilesDir(), FILE).delete(); next.run(); });
+        Button hand = new Button(activity); hand.setText("Report"); hand.setOnClickListener(view -> send.run());
+        Button go = new Button(activity); go.setText("Continue"); go.setOnClickListener(view -> { clear(activity); next.run(); });
         LinearLayout buttons = new LinearLayout(activity);
-        buttons.addView(copy); buttons.addView(go);
+        buttons.addView(copy); buttons.addView(hand); buttons.addView(go);
         LinearLayout page = new LinearLayout(activity);
         page.setOrientation(LinearLayout.VERTICAL); page.setPadding(pad, pad, pad, pad);
         page.addView(title);

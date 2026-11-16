@@ -10,6 +10,8 @@
 .remote-id { display: inline-block; min-width: 11ch; color: var(--text); font-size: 14px; line-height: 1.4; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .remote-phone-row .set-row-hint { display: -webkit-box; height: 36px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .remote-role { width: 140px; flex: none; }
+/* F09: a company under its PC on this network (settings/connect-rows.tsx NearbyRows) – the same row, set in */
+.remote-company-row > .set-row-text { padding-left: 16px; }
 .remote-qr {
   display: grid; place-items: center; box-sizing: border-box; width: 112px; height: 112px; flex: none;
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);

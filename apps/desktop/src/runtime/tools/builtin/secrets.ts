@@ -3,7 +3,8 @@
 // tool it was saved from and its handle (a login or card: one handle per field) – the same entries as the route files
 // <data>/secrets/<route>.md (secrets/files.ts), where a name, description or tags are changed by editing the file.
 // secrets.save adds an entry: a description and a value that goes straight into the vault (route chosen and id
-// generated; the agent may name either). secrets.generate creates a random password (crypto.randomInt in the vault)
+// generated; the agent may name either); with a chat message's seq (16.11.2026) the handle stands in that message instead
+// of the value (secrets/text-capture.ts showHandleIn). secrets.generate creates a random password (crypto.randomInt in the vault)
 // as a single secret, a new login (username) or into a stored login (group). secrets.import reads a password export or
 // the secrets of a .env or flat JSON file on this PC by its path into the vault (no value reaches the agent) and
 // deletes a known browser's or manager's export after a complete import (owner 04.11.2026: every entry stored whole,
@@ -15,8 +16,10 @@
 // CSV file on this PC (secrets/export.ts) – for secrets.import in another company or on another PC; secrets.delete removes
 // entries by id, route or all at once (the CEO's linked PCs follow through the device sync); "all" and a route leave the
 // app's own working credentials unless named (secrets/units.ts catalogUnits). Both return names, a path and counts only.
-// secrets.list's query matches word by word (most words first); with a route, other routes' entries holding as many of
-// the words as the route's best match come too; its note says that the engine's own shell passes a handle on as plain text.
+// secrets.list ranks by the catalog's word index (F19, secrets/metadata.ts rankSecrets: a named id, the most words held, bm25,
+// then use – the ones in use lead a listing without a query), shows at most LIST_MAX with how many fit and each entry's use
+// count; with a route, other routes' entries holding as many of the words as the route's best match come too; its note says
+// that the engine's own shell passes a handle on as plain text.
 // Owns: the agent's view of the catalog. Never: returns or logs a value.
 
 import { readFileSync, rmSync, statSync } from 'node:fs';
@@ -27,28 +30,34 @@ import { isKeyValueFormat } from '../../../shared/model/key-values.ts';
 import { registrableDomain } from '../../secrets/service.ts';
 import { newEntryId } from '../../secrets/entry-id.ts';
 import type { ToolContext, ToolDef } from '../types.ts';
-import { failure, json } from '../types.ts';
-import { clip, defineTool, internal, iso } from './util.ts';
-import { secretMetadata } from '../../secrets/metadata.ts';
+import { CHAT_ID_PROPERTY, failure, json } from '../types.ts';
+import { clip, defineTool, internal, iso, resolveChat } from './util.ts';
+import { showHandleIn } from '../../secrets/text-capture.ts';
+import { rankSecrets, SECRET_WHERE, type SecretHit } from '../../secrets/metadata.ts';
 import { ROOT_SECRETS } from '../../root/layout.ts';
 import { importSecrets, reviewBrief, reviewCount, storedCount } from '../../secrets/import.ts';
 import { GENERIC_EXPORT, MAX_IMPORT_CHARS, MAX_IMPORT_ROWS } from '../../secrets/import-parse.ts';
 import { exportSecrets } from '../../secrets/export.ts';
 import { catalogUnits } from '../../secrets/units.ts';
 
-/** Where a handle becomes its value – the list's description and its result's note. */
-const WHERE = 'A handle "secret://<id>" becomes the value in browser.act, computer.type, computer.act set_value, phone.type, shell.exec env, web.fetch headers and connector files; my engine\'s own shell passes it on as plain text.';
-export const NOTE = `Values stay hidden. ${WHERE} Every secret works everywhere, any length – any site, any command, any host, cards and CVCs included; savedFrom only says where it came from, tags are notes. A login or card has one handle per field; a 2FA field fills the current one-time code. What a command or request returns has the values it received masked, and values stay out of my notes, memory, rules, files and messages. Each route is a file <route>.md in the folder named here – I edit a name, description or tags there.`;
+/** Entries a listing shows at most; its count says how many fit (F19: the 128 entries of a live catalog were cut to ~6). */
+export const LIST_MAX = 20;
+/** A description in a listing at most (its route file holds the whole text). */
+const LIST_DESCRIPTION = 600;
+export const NOTE = `Values stay hidden. ${SECRET_WHERE} Every secret works everywhere, any length – any site, any command, any host, cards and CVCs included; savedFrom only says where it came from, tags are notes. A login or card has one handle per field; a 2FA field fills the current one-time code. What a command or request returns has the values it received masked, and values stay out of my notes, memory, rules, files and messages. Each route is a file <route>.md in the folder named here – I edit a name, description or tags there.`;
 
 const TAGS = { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 12, description: 'Usage notes.' } as const;
 const ROUTE = { type: 'string', maxLength: 40, description: `${SECRET_ROUTES.join(', ')} or my own; default chosen.` } as const;
 const NAME = { type: 'string', minLength: 1, maxLength: 120 } as const;
 const DESCRIPTION = { type: 'string', minLength: 1, maxLength: 4000, description: 'What it opens and when it is used.' } as const;
 
+/** A description as a listing shows it. */
+const listed = (text: string | undefined): string | undefined => (text && text.length > LIST_DESCRIPTION ? `${text.slice(0, LIST_DESCRIPTION)} …` : text || undefined);
+
 function single(info: SecretInfo): Record<string, unknown> {
   const out: Record<string, unknown> = {
-    id: info.id, name: info.label, description: info.description || undefined, kind: info.kind, route: info.route, tags: info.tags,
-    savedFrom: info.source, handle: `secret://${info.id}`, hint: info.hint, lastUsed: iso(info.lastUsedAt),
+    id: info.id, name: info.label, description: listed(info.description), kind: info.kind, route: info.route, tags: info.tags,
+    savedFrom: info.source, handle: `secret://${info.id}`, hint: info.hint, lastUsed: iso(info.lastUsedAt), used: info.uses,
   };
   for (const key of Object.keys(out)) if (out[key] === undefined) delete out[key];
   return out;
@@ -63,50 +72,65 @@ function fieldView(info: SecretInfo): Record<string, unknown> {
 
 function groupView(group: SecretGroup, fields: SecretInfo[]): Record<string, unknown> {
   return {
-    id: group.id, name: group.label, ...(group.description ? { description: group.description } : {}), kind: group.kind, route: group.route,
+    id: group.id, name: group.label, ...(group.description ? { description: listed(group.description) } : {}), kind: group.kind, route: group.route,
     ...(group.tags?.length ? { tags: group.tags } : {}), ...(group.source ? { savedFrom: group.source } : {}), fields: fields.map(fieldView),
+    ...(group.lastUsedAt ? { lastUsed: iso(group.lastUsedAt) } : {}), ...(group.uses ? { used: group.uses } : {}),
   };
 }
 
 const list = defineTool<{ query?: string; route?: string }>({
   name: 'secrets.list',
-  description: `Lists the secrets catalog with id, name, description, kind, route and handle. ${WHERE} Logins and cards have a handle per field; a 2FA field fills the current code.`,
+  description: `Lists the secrets catalog with id, name, description, kind, route, handle and how often each was used – the ones in use first, at most ${LIST_MAX}. ${SECRET_WHERE} Logins and cards have a handle per field; a 2FA field fills the current code.`,
   inputSchema: { type: 'object', properties: {
-    query: { type: 'string', maxLength: 100, description: 'Words of name, id, description, tags or source.' }, route: { type: 'string', maxLength: 40 },
+    query: { type: 'string', maxLength: 100, description: 'Words of name, id, description, tags or source; the best fit first.' }, route: { type: 'string', maxLength: 40 },
   }, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the secrets catalog'),
   async run(args, ctx) {
-    // B-080 (live: "windows password" in route logins gave three failed sign-ins that mention "password" – the Windows
-    // entry was a note): the text matches word by word, entries holding the most words first. With a route, an entry of
-    // another route that holds as many of the words as the route's best match comes too (the route's first on a tie).
-    const asked = [...new Set((args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean))];
+    // F19 (16.11.2026): the word index's ranking (secrets/metadata.ts rankSecrets) – a named id first, the entries holding the
+    // most words (B-080, live: "windows password" in route logins gave three failed sign-ins that mention "password" – the
+    // Windows entry was a note), bm25, then use; without a query the ones in use first. With a route, an entry of another
+    // route that holds as many of the words as the route's best match comes too (the route's first on a tie). At most LIST_MAX:
+    // the whole catalog (85k characters live) was cut to its first 6,000.
     const route = args.route?.trim().toLowerCase();
+    const query = args.query?.trim() ?? '';
+    const hits = rankSecrets(ctx.services, query);
+    const inRoute = route ? hits.filter((hit) => hit.entry.route === route) : hits;
+    const best = Math.max(0, ...inRoute.map((hit) => hit.held));
+    const others = route && query ? hits.filter((hit) => hit.entry.route !== route && (hit.exact || hit.held >= best)) : [];
+    const ranked: SecretHit[] = [...inRoute, ...others].sort((a, b) => Number(b.exact) - Number(a.exact) || b.held - a.held); // stable: the route's first on a tie
     const all = ctx.services.secrets.list();
-    const entries = [
-      ...all.filter((info) => !info.group).map((info) => ({ name: info.label, route: info.route, text: `${secretMetadata(info)} ${info.id}`, view: () => single(info) })),
-      ...ctx.services.secrets.groups().map((group) => ({
-        name: group.label, route: group.route, text: `${secretMetadata(group)} ${group.id}`, view: () => groupView(group, all.filter((info) => info.group?.id === group.id)),
-      })),
-    ].map((entry) => ({ ...entry, held: asked.filter((word) => entry.text.toLowerCase().includes(word)).length }))
-      .filter((entry) => !asked.length || entry.held > 0)
-      .sort((a, b) => b.held - a.held || a.name.localeCompare(b.name));
-    const inRoute = route ? entries.filter((entry) => entry.route === route) : entries;
-    const best = inRoute[0]?.held ?? 0;
-    const others = route && asked.length ? entries.filter((entry) => entry.route !== route && entry.held >= best) : [];
-    const secrets = [...inRoute, ...others].sort((a, b) => b.held - a.held).map((entry) => entry.view()); // stable: the route's first on a tie
+    const groups = new Map(ctx.services.secrets.groups().map((group) => [group.id, group]));
+    const singles = new Map(all.filter((info) => !info.group).map((info) => [info.id, info]));
+    const secrets = ranked.slice(0, LIST_MAX).flatMap(({ entry }) => {
+      const group = groups.get(entry.id);
+      const info = singles.get(entry.id);
+      return group ? [groupView(group, all.filter((field) => field.group?.id === group.id))] : info ? [single(info)] : [];
+    });
     const found = !others.length ? undefined : inRoute.length
       ? `Entries of other routes that hold as many of the words are here too; each shows its route.`
       : `None in route ${route}; these are in other routes.`;
+    const rest = ranked.length - secrets.length;
+    const more = rest <= 0 ? undefined : query ? `${rest} more fit; more words or a route narrow it.` : `${rest} more are in the catalog; words or a route find them.`;
     const data = ctx.services.paths?.data;
     return json({
-      ...(found ? { found } : {}),
-      note: NOTE, ...(data ? { folder: path.join(data, ROOT_SECRETS) } : {}), count: secrets.length, secrets,
+      ...(found ? { found } : {}), ...(more ? { more } : {}),
+      note: NOTE, ...(data ? { folder: path.join(data, ROOT_SECRETS) } : {}), count: ranked.length, secrets,
     });
   },
 });
 
-interface SaveArgs { name: string; description: string; value: string; kind?: 'api_key' | 'token' | 'password' | 'card' | 'note' | 'totp'; username?: string; route?: string; id?: string; tags?: string[]; source?: string }
+interface SaveArgs { name: string; description: string; value: string; kind?: 'api_key' | 'token' | 'password' | 'card' | 'note' | 'totp'; username?: string; route?: string; id?: string; tags?: string[]; source?: string; seq?: number; chatId?: string }
+
+/** With `seq`: the chat message that showed the value shows `secretId`'s handle instead – what happened, as a line. */
+function shownIn(ctx: ToolContext, args: Pick<SaveArgs, 'seq' | 'chatId'>, value: string, secretId: string): string | undefined {
+  if (args.seq === undefined) return undefined;
+  try {
+    const message = ctx.services.chats.messages(resolveChat(ctx, args.chatId), { afterSeq: args.seq - 1, limit: 1 }).find((item) => item.seq === args.seq);
+    if (!message) return `No message #${args.seq} in that chat.`;
+    return showHandleIn(ctx.services, message, value, secretId) ? `Message #${args.seq} shows the handle now.` : `Message #${args.seq} does not hold the value as a whole.`;
+  } catch (error) { return (error as Error).message; }
+}
 
 const save = defineTool<SaveArgs>({
   name: 'secrets.save',
@@ -123,6 +147,8 @@ const save = defineTool<SaveArgs>({
       id: { type: 'string', maxLength: 60, description: 'A suggested id, e.g. "github-ci-token".' },
       tags: TAGS,
       source: { type: 'string', maxLength: 200, description: 'Where it came from.' },
+      seq: { type: 'integer', minimum: 1, description: 'A chat message (#seq) that shows the value: it shows the handle there from then on.' },
+      chatId: CHAT_ID_PROPERTY,
     },
     required: ['name', 'description', 'value'], additionalProperties: false,
   },
@@ -135,7 +161,10 @@ const save = defineTool<SaveArgs>({
     if (/^secret:\/\/[A-Za-z0-9_-]+$/.test(value.trim())) return failure('Give the value itself, not a handle (that one is already stored).');
     const known = secrets.holding ? (await secrets.holding(value, ctx.agent.id))[0] : undefined;
     const stored = known ? secrets.list().find((info) => info.id === known) : undefined;
-    if (stored) return json({ ok: true, id: stored.id, handle: `secret://${stored.id}`, name: stored.group ? `${stored.field ?? 'field'} of ${stored.group.label}` : stored.label, note: 'That value is already stored; nothing new was saved. Use this handle.' });
+    if (stored) {
+      const shown = shownIn(ctx, args, value, stored.id);
+      return json({ ok: true, id: stored.id, handle: `secret://${stored.id}`, name: stored.group ? `${stored.field ?? 'field'} of ${stored.group.label}` : stored.label, note: 'That value is already stored; nothing new was saved. Use this handle.', ...(shown ? { message: shown } : {}) });
+    }
     const id = newEntryId(secrets.list(), secrets.groups(), args.name, args.id);
     if (args.username !== undefined) { // review intent #9: a server or database login as one entry with two handles
       const login = await secrets.saveGroup({
@@ -144,14 +173,17 @@ const save = defineTool<SaveArgs>({
         fields: [{ field: 'username', kind: 'text', value: args.username.trim() }, { field: 'password', kind: 'password', value }],
       }, { createdBy: ctx.agent.id });
       const handles = Object.fromEntries(login.fields.map((field) => [field.field, `secret://${field.id}`]));
-      return json({ ok: true, id: login.group.id, name: login.group.label, route: login.group.route, handles, note: 'Stored in the catalog as a login. I use each field by its handle everywhere, without typing it out or copying it.' });
+      const password = login.fields.find((field) => field.field === 'password');
+      const shown = password ? shownIn(ctx, args, value, password.id) : undefined;
+      return json({ ok: true, id: login.group.id, name: login.group.label, route: login.group.route, handles, note: 'Stored in the catalog as a login. I use each field by its handle everywhere, without typing it out or copying it.', ...(shown ? { message: shown } : {}) });
     }
     const saved = await secrets.save({
       id, label: args.name, kind: args.kind ?? 'api_key', value, description: args.description,
       createdBy: ctx.agent.id, ...(args.route ? { route: args.route } : {}), ...(args.tags ? { tags: args.tags } : {}),
       ...(args.source?.trim() ? { source: args.source.trim() } : {}),
     });
-    return json({ ok: true, id: saved.id, handle: `secret://${saved.id}`, name: saved.label, route: saved.route, note: 'Stored in the catalog. I use it by its handle everywhere, without typing it out or copying it.' });
+    const shown = shownIn(ctx, args, value, saved.id);
+    return json({ ok: true, id: saved.id, handle: `secret://${saved.id}`, name: saved.label, route: saved.route, note: 'Stored in the catalog. I use it by its handle everywhere, without typing it out or copying it.', ...(shown ? { message: shown } : {}) });
   },
 });
 

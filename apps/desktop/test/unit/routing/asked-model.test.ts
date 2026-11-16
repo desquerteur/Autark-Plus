@@ -138,19 +138,20 @@ test("D1 before D2: on a person's turn my request for a limited Opus stays on So
   assert.equal((await h.route({ conversationId: 'ch_2' })).modelId, HAIKU, 'without my request the suggestion starts the answer');
 });
 
-test('D8: a short cooling after a provider error reads "paused"; a long cooling or a used-up window "limited"', async () => {
+test('D8: a short cooling after a provider error reads "paused"; a long cooling or a used-up window "used up" (F28: by account)', async () => {
   const paused = await asked();
   for (const id of ['acc_codex', 'acc_claude']) paused.accounts.markLimited(id, T0 + 5 * MINUTE);
-  await assert.rejects(paused.route(), unavailable(PAUSED_MESSAGE, 5 * MINUTE));
+  await assert.rejects(paused.route(), unavailable('acc_codex, acc_claude paused until 09:05', 5 * MINUTE));
 
   const credit = await asked();
   for (const id of ['acc_codex', 'acc_claude']) credit.accounts.markLimited(id, T0 + 6 * 60 * MINUTE);
-  await assert.rejects(credit.route(), unavailable(LIMITED_MESSAGE, 6 * 60 * MINUTE), 'a 402 cools 6 h');
+  await assert.rejects(credit.route(), unavailable('acc_codex, acc_claude used up until 15:00', 6 * 60 * MINUTE), 'a 402 cools 6 h');
 
   const week = await asked();
   week.limitClaude();
   week.accounts.updateLimits('acc_codex', { windows: [{ name: '5h', windowMinutes: 300, usedPercent: 100, resetsAt: T0 + 10 * MINUTE }], readAt: T0 });
-  await assert.rejects(week.route(), unavailable(LIMITED_MESSAGE, 10 * MINUTE), 'a used-up window is a limit, however soon it resets');
+  await assert.rejects(week.route(), unavailable('acc_codex used up until 09:10 · acc_claude used up until 20 Oct 09:00', 10 * MINUTE), 'a used-up window is a limit, however soon it resets');
+  assert.ok(PAUSED_MESSAGE.includes('paused') && LIMITED_MESSAGE.includes('limited'), 'the fixed sentences stay for a reason no account explains (unfit-accounts.test.ts)');
 });
 
 test('backAt: every signed-in plan takes turns, so the plan back first gives the time and the word (owner 09.11.2026)', async () => {

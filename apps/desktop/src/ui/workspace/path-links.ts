@@ -3,7 +3,9 @@
 // path where it is: on the author agent's home PC first, then on this PC – a folder as a folder tab, an image, video,
 // audio file or PDF as a media tab, anything else as a file tab. No space is named, so the tab lands where the frame
 // says: the global side pane on the desktop, the open chat's area on the phone. A path on neither PC opens its tab on the
-// PC asked first (the tab's not-found page names similar paths); when that PC is offline or not linked, one toast says so.
+// PC asked first (the tab's not-found page names similar paths); when that PC is offline or not linked, one toast says so,
+// and so does a connection that may not read PC files (NO_PATH_READ). A file block's or review's Open uses it too (16.11.:
+// a file an agent sent opens on the phone as in the chat, not only on the desktop).
 // A Windows link target keeps its backslashes as written (CommonMark would read `\.` as an escape). The enclosing control
 // wins: a code span in a link's label, or a path inside a button or label (an option, a card, a checklist item), stays
 // plain text. A network path (`\\host\…`, `//host/…`) is no path here, so a click never makes this PC dial a host a
@@ -84,6 +86,8 @@ export function plainInControl(root: Element | null): void {
 }
 
 const nameOf = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+/** Why a click on a PC file opens nothing on this connection (files.readPath: the owner's devices on a secure link). */
+export const NO_PATH_READ = "Files on the PC open from the owner's PC or phone over a secure connection; this one has no access to them.";
 
 function show(read: PathRead, pc: string | undefined): void {
   if (read.state === 'folder') openFolderTab(read.path, undefined, undefined, pc);
@@ -93,7 +97,8 @@ function show(read: PathRead, pc: string | undefined): void {
 
 /** Opens `path` from a message by `authorId`: on that agent's home PC, else on this PC, else its not-found tab. */
 export async function openPathLink(path: string, authorId?: string): Promise<void> {
-  if (!pathIn(path, false) || !can('files.readPath')) return; // a network path or no path at all: nothing is asked
+  if (!pathIn(path, false)) return; // a network path or no path at all: nothing is asked
+  if (!can('files.readPath')) { toastError(NO_PATH_READ, `Could not open ${nameOf(path)}`); return; }
   const home = authorId ? knownAgentMap.peek().get(authorId)?.deviceId : undefined;
   const pcs = home && home !== systemInfo.peek()?.deviceId ? [home, undefined] : [undefined];
   let first: { read?: PathRead; error?: unknown } | undefined; // the first PC's answer when it had nothing

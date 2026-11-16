@@ -5,7 +5,12 @@
 // (0.5 s … 10 s, per PC) after the server or a PC went away, and hands the local entrance (StreamProxy) the channel the
 // page uses (PcLinks: the picked PC, else the newest version; a slow PC never holds a waiting request past its wait);
 // when that PC drops, the page moves to another channel at once and its old streams end. check() (resume, network change) resets the backoff and probes the link at once;
-// onLinked hears every move of the page to a new channel; prefer() is the picker's choice.
+// onLinked hears every move of the page to a new channel; prefer() is the picker's choice; refused() (the PC refused the
+// page's token) moves the page to a PC of the company that has not refused while this connection lives.
+// F29 stage 1 (16.11.2026): a channel goes straight to the PC whenever one of its addresses (phoneUse.attach, kept with
+// the PC) answers – Route races them and falls back to the tunnel, the same handshake either way; the direct socket
+// replaces that PC's tunnel. After a resume or a network change the page's PC, if reached through the tunnel, is tried
+// directly once and a direct channel takes its place (home Wi-Fi while mobile data stays up).
 // Never: stores anything itself (the caller keeps Paired), polls the PC, or talks to a PC it does not pin.
 package com.teydralab.autark.android.relay;
 
@@ -24,8 +29,12 @@ public final class PhoneConnection implements StreamProxy.Channels {
         public final String publicKey;
         public final String name;
         public final String deviceId;
-        public Pc(String fingerprint, String publicKey, String name, String deviceId) {
+        /** F29: the PC's peer listener addresses (http(s) base URLs, at most 8) the phone dials directly. */
+        public final List<String> addresses;
+        public Pc(String fingerprint, String publicKey, String name, String deviceId) { this(fingerprint, publicKey, name, deviceId, null); }
+        public Pc(String fingerprint, String publicKey, String name, String deviceId, List<String> addresses) {
             this.fingerprint = fingerprint; this.publicKey = publicKey; this.name = name == null ? "PC" : name; this.deviceId = deviceId == null ? "" : deviceId;
+            this.addresses = addresses == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(addresses));
         }
     }
 
@@ -45,7 +54,11 @@ public final class PhoneConnection implements StreamProxy.Channels {
         /** The PCs as JSON (app storage). */
         public String pcsJson() {
             List<Object> out = new ArrayList<>();
-            for (Pc pc : pcs) out.add(Json.map("fingerprint", pc.fingerprint, "publicKey", pc.publicKey, "name", pc.name, "deviceId", pc.deviceId));
+            for (Pc pc : pcs) {
+                Map<String, Object> row = Json.map("fingerprint", pc.fingerprint, "publicKey", pc.publicKey, "name", pc.name, "deviceId", pc.deviceId);
+                if (!pc.addresses.isEmpty()) row.put("addresses", new ArrayList<Object>(pc.addresses));
+                out.add(row);
+            }
             return Json.write(out);
         }
 
@@ -92,6 +105,8 @@ public final class PhoneConnection implements StreamProxy.Channels {
     private boolean wake;
     private volatile int attempt;
     private volatile boolean probeNow;
+    /** F29: after check(), the page's PC reached through the tunnel is tried directly once. */
+    private volatile boolean directNow;
     private volatile String preferred;
     private volatile Runnable linked;
     private static final long VERSION_MS = 4_000;
@@ -117,7 +132,16 @@ public final class PhoneConnection implements StreamProxy.Channels {
         RelayLink current = link;
         if (current != null) current.close(); // first: it ends the tunnels too and never waits for a stuck send (UI thread)
         for (PeerChannel open : links.all()) open.close();
-        if (proxy != null) proxy.close();
+        closeEntrance();
+    }
+
+    /** Frees the local entrance's port now (a loopback listener: no network write, fine on Android's main thread). */
+    public void closeEntrance() { if (proxy != null) proxy.close(); }
+
+    /** The page's PC refused the page's token (4401, the page's 'refused'): the page moves to the next PC of the company
+     *  that has not refused in this connection; when every linked PC refused, the page stays where it is ('Not paired'). */
+    public void refused() {
+        if (links.refuse(links.usedPc())) nudge();
     }
 
     /** Try now instead of after the pause. */
@@ -125,14 +149,16 @@ public final class PhoneConnection implements StreamProxy.Channels {
         synchronized (lock) { wake = true; lock.notifyAll(); }
     }
 
-    /** The app came to the front or the network changed: the backoff starts over and the link proves itself within 2 s. */
+    /** The app came to the front or the network changed: the backoff starts over, the link proves itself within 2 s, and a
+     *  page on the tunnel tries its PC directly once (F29). */
     public void check() {
         attempt = 0;
         links.retryNow();
+        directNow = true;
         probe();
     }
 
-    /** The link is probed on the connection's own thread (a stuck send never blocks the caller). */
+    /** The link and every direct channel are probed on the connection's own thread (a stuck send never blocks the caller). */
     @Override public void probe() {
         probeNow = true;
         nudge();
@@ -155,9 +181,10 @@ public final class PhoneConnection implements StreamProxy.Channels {
 
     /** The picker's choice: that PC goes first (the caller stores paired()) and the page uses it whenever its channel is up. */
     public void prefer(String fingerprintHex) {
+        boolean again = links.forgive(fingerprintHex); // the person's pick tries a PC that refused once more
         Paired before = paired;
         List<Pc> next = PhonePairing.first(before.pcs, fingerprintHex);
-        if (next == before.pcs) return;
+        if (next == before.pcs) { if (again) nudge(); return; }
         preferred = fingerprintHex;
         paired = before.withPcs(next);
         nudge();
@@ -208,7 +235,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
             try {
                 ensureLink();
                 RelayLink current = link;
-                if (probeNow) { probeNow = false; current.probe(); }
+                if (probeNow) { probeNow = false; current.probe(); for (PeerChannel open : links.all()) open.probe(); }
                 List<String> order = order();
                 for (PeerChannel gone : links.prune(order)) gone.close();
                 if (links.used() == null && links.live() > 0) settle(order, current, null); // the page's PC dropped: move now, not after this round's opens
@@ -216,12 +243,14 @@ public final class PhoneConnection implements StreamProxy.Channels {
                 for (String fp : links.toOpen(order, current::online, System.currentTimeMillis())) {
                     if (stopped) break;
                     if (links.used() == null) say("Connecting to " + nameOf(fp) + "…", false);
-                    try { openChannel(fp); }
+                    try { openChannel(fp, false); }
                     catch (IOException | RuntimeException error) { links.failed(fp, System.currentTimeMillis()); failure = error.getMessage(); }
                 }
                 settle(order, current, failure);
+                if (directNow) { directNow = false; if (tryDirect()) settle(order, current, null); }
                 pause(Math.min(15_000, links.nextRetry(System.currentTimeMillis())));
                 current.checkAlive();
+                for (PeerChannel open : links.all()) open.checkAlive();
             } catch (IOException | RuntimeException error) {
                 say(error.getMessage() == null ? "Connection failed." : error.getMessage(), false);
                 pause(backoff(attempt++));
@@ -241,7 +270,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
         if (next != null) {
             attempt = 0;
             int others = links.live() - 1;
-            say("Connected to " + nameOf(links.usedPc()) + (others > 0 ? " (+" + others + ")" : "") + ".", true);
+            say("Connected to " + nameOf(links.usedPc()) + (next.direct() ? " directly" : "") + (others > 0 ? " (+" + others + ")" : "") + ".", true);
             if (moved) {
                 proxy.retire(next);
                 Runnable listener = linked;
@@ -272,6 +301,21 @@ public final class PhoneConnection implements StreamProxy.Channels {
         return null;
     }
 
+    private List<String> addressesOf(String fp) {
+        for (Pc pc : paired.pcs) if (pc.fingerprint.equals(fp)) return pc.addresses;
+        return Collections.emptyList();
+    }
+
+    /** F29: the page's PC, reached through the tunnel, tried directly once; true when a direct channel took its place. */
+    private boolean tryDirect() {
+        String fp = links.usedPc();
+        PeerChannel used = links.used();
+        if (fp == null || used == null || used.direct() || addressesOf(fp).isEmpty()) return false;
+        try { openChannel(fp, true); } catch (IOException | RuntimeException error) { return false; } // it stays on the tunnel
+        used.close(); // its streams end, the page hears 'resume' on the direct channel
+        return true;
+    }
+
     private void ensureLink() throws IOException {
         if (link != null && link.isUp()) return;
         Map<String, byte[]> pins = new LinkedHashMap<>();
@@ -285,13 +329,15 @@ public final class PhoneConnection implements StreamProxy.Channels {
         synchronized (lock) { link = next; }
     }
 
-    private void openChannel(String fp) throws IOException {
+    /** A channel to `fp`: straight to one of its addresses when one answers, else (unless `directOnly`) through the tunnel. */
+    private void openChannel(String fp, boolean directOnly) throws IOException {
         byte[] pcPub = keyOf(fp);
         if (pcPub == null) throw new IOException("That PC is not one of yours.");
-        Tunnel tunnel = link.open(fp);
+        RelayLink relay = link;
+        Route.Opener tunnel = directOnly ? null : () -> relay.open(fp);
         PeerChannel[] holder = new PeerChannel[1];
-        AtomicReference<PcVersion> asking = new AtomicReference<>(); // read on the tunnel's reader thread
-        PeerChannel next = PeerChannel.connect(tunnel, seed, paired.deviceId, pcPub, new PeerChannel.Listener() {
+        AtomicReference<PcVersion> asking = new AtomicReference<>(); // read on the pipe's reader thread
+        PeerChannel.Listener listener = new PeerChannel.Listener() {
             @Override public void message(Map<String, Object> message) {
                 PcVersion question = asking.get();
                 if (PcVersion.mine(message)) { if (question != null) question.deliver(message); return; }
@@ -305,7 +351,9 @@ public final class PhoneConnection implements StreamProxy.Channels {
                 if (current != null) proxy.channelClosed(current);
                 nudge();
             }
-        });
+        };
+        PeerChannel next = Route.open(DirectPipe.openers(addressesOf(fp)), Route.DIRECT_MS, tunnel,
+                (pipe) -> PeerChannel.connect(pipe, seed, paired.deviceId, pcPub, listener));
         holder[0] = next;
         PcVersion question = new PcVersion(next::send);
         asking.set(question);

@@ -1,5 +1,10 @@
 // Seeding a split's native session (B-057 S4): a 'fork' part starts as its parent with the context the parent had at the
 // split, tried in this order – the first that works wins, a failure falls to the next and is recorded:
+// (0) F26 (owner 16.11.2026: "das Unterbewusstsein vom neuen Agent … komprimiert alles weg"): the part's record starts as a copy of
+//     mine up to the splitting run (ledger.fork – never my record itself); at that first start its subconscious condenses there, with
+//     its brief as what wakes it, what this piece will not read again (subconscious/service.ts condensePart; the stamp brings each
+//     original back). With items condensed the part starts from that record as text ('ledger') – unless my native fork costs less:
+//     on the same engine, account and model while my cache is warm it re-reads my session cached on each call (forkPays);
 // (a) a native engine fork – the worker's routed engine has caps.fork, the parent's splitting run ran on that engine and
 //     account, and the session my main self's splitting turn ended with (B-080: recorded when the group started –
 //     recordedParent, SplitGroup.parentSession – so a later turn of the parent that renews or moves its binding changes
@@ -9,15 +14,15 @@
 //     that account; a recorded ref the parent replaced since stays forkable (the session sweep keeps it ≥ 24 h);
 // (b) else a text fallback – the checkpoint of the parent's task (context.checkpoint: goal, done, open, constraints,
 //     artifacts – no "next step": the part is the worker's next step) and my own record as text (agents/history-text.ts, the
-//     parent thread's context ledger, marks applied – 13.11.2026: never a chat's history), within half the worker model's
+//     part's copy of it, else the parent thread's context ledger, marks applied – 13.11.2026: never a chat's history), within half the worker model's
 //     fit, returned as `inputPrefix`; nothing to carry → fresh.
 // A 'brief' part starts fresh. The turn pipeline (agents/turn-prepare.ts chooseSession) calls this for a split's first turn
 // when its thread `split:<id>` has no binding yet, binds `ref` under (agent, split thread, engine) with the current
 // promptKey and puts `inputPrefix` in front of the turn's input. The choice is noted on the worker's run
-// ({splitSeed: how, parentRef?, fellBack?} – not for a brief), recorded as the split's `fork` (services.splits.markFork)
+// ({splitSeed: how, condensed?, parentRef?, fellBack?} – not for a brief), recorded as the split's `fork` (services.splits.markFork)
 // and returned.
 // Owns: that choice, the seeding, the note, the record and the parent session's record at the group's start. Never:
-// touches the parent's native session or binding, or binds the result itself.
+// touches the parent's native session, binding or record, or binds the result itself.
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
@@ -27,11 +32,13 @@ import type { ToolSpec } from '../tools/types.ts';
 import type { Account, Effort, RouteDecision } from '../../shared/model/providers.ts';
 import type { Handoff } from '../../shared/model/knowledge.ts';
 import type { Run } from '../../shared/model/runs.ts';
-import { PAST_WINDOW, type SplitFork, type SplitGroup, type SplitParentSession, type SplitTurn } from '../../shared/model/splits.ts';
+import { PAST_WINDOW, splitThread, type SplitFork, type SplitGroup, type SplitParentSession, type SplitTurn } from '../../shared/model/splits.ts';
 import { SessionStore } from '../agents/sessions.ts';
 import { turnsOn } from '../agents/native-turns.ts';
 import { fitLimit, pastFit } from '../agents/compaction-policy.ts';
 import { historyText } from '../agents/history-text.ts';
+import { CACHE_COLD_MS, CACHED_PRICE_RATIO } from '../agents/rebuild.ts';
+import { tokensOf } from '../context/ledger/window.ts';
 import { turnCwd } from '../git/records.ts';
 import { quoteHeaders } from '../context/projection.ts';
 
@@ -65,6 +72,10 @@ export interface SeedArgs {
   /** The worker's folder (its worktree, else the parent's). */
   cwd?: string;
   runId: string;
+  /** F26: the part's first input (its brief) – what wakes its subconscious's condense call. */
+  brief?: string;
+  /** F26: the turn's stop; it ends that call too. */
+  signal?: AbortSignal;
 }
 
 export interface SeedResult {
@@ -78,6 +89,8 @@ export interface SeedResult {
   parentRef?: string;
   /** B-057 C: why the earlier ways did not seed it ("native: …"). */
   fellBack?: string[];
+  /** F26: how many items of its copy of my record the part's subconscious condensed before it started. */
+  condensed?: number;
 }
 
 type Way = (s: RuntimeServices, args: SeedArgs, cwd: string) => Promise<SeedResult | string>;
@@ -89,8 +102,10 @@ export async function seedSplitSession(s: RuntimeServices, args: SeedArgs): Prom
   }
   const fellBack: string[] = [];
   const cwd = args.cwd ?? args.split.cwd ?? turnCwd(s, args.plan.task, args.plan.agent.id);
-  let result: SeedResult | undefined;
-  for (const [name, way] of [['native', nativeFork]] as Array<[string, Way]>) {
+  const condensed = await condenseCopy(s, args); // F26 (0)
+  const lean = condensed ? textSeed(s, args, fellBack) : undefined;
+  let result: SeedResult | undefined = lean?.inputPrefix && !forkPays(s, args, lean.inputPrefix) ? { how: 'ledger', inputPrefix: lean.inputPrefix } : undefined;
+  if (!result) for (const [name, way] of [['native', nativeFork]] as Array<[string, Way]>) {
     try {
       const outcome = await way(s, args, cwd);
       if (typeof outcome !== 'string') { result = outcome; break; }
@@ -99,7 +114,8 @@ export async function seedSplitSession(s: RuntimeServices, args: SeedArgs): Prom
       fellBack.push(`${name}: ${reason(error)}`);
     }
   }
-  result ??= textSeed(s, args, fellBack);
+  result ??= lean ?? textSeed(s, args, fellBack);
+  if (condensed) result.condensed = condensed;
   if (fellBack.length) result.fellBack = fellBack;
   note(s, args.runId, result);
   mark(s, args, result);
@@ -161,10 +177,50 @@ function textSeed(s: RuntimeServices, args: SeedArgs, fellBack: string[]): SeedR
     try { checkpoint = clip(quoteHeaders(checkpointText(s.context.checkpoint({ agentId, taskId, conversationId: chat }))), CHECKPOINT_CHARS); }
     catch (error) { fellBack.push(`checkpoint: ${reason(error)}`); }
   }
-  const record = historyText(s, agentId, args.split.parentThread, Math.floor(fitLimit(windowOf(s, args)) / 2)) ?? '';
+  const budget = Math.floor(fitLimit(windowOf(s, args)) / 2);
+  // F26: the part's copy of my record (its subconscious's marks applied), else mine
+  const record = historyText(s, agentId, splitThread(args.split.splitId), budget) ?? historyText(s, agentId, args.split.parentThread, budget) ?? '';
   if (!checkpoint.trim() && !record.trim()) return { how: 'fresh' };
   const parts = [TEXT_HEAD, checkpoint && `My state:\n${checkpoint}`, record];
   return { how: 'text', inputPrefix: parts.filter(Boolean).join('\n\n') };
+}
+
+/**
+ * F26 (0): my record copied into the part's thread (ledger.fork, only while it holds none – a later seeding of the same part keeps
+ * its copy and makes no call); on that copy the part's subconscious condenses, with its brief, what this piece will not read again.
+ * How many it condensed; 0 without a copy, a brief or a model, and on any failure.
+ */
+async function condenseCopy(s: RuntimeServices, args: SeedArgs): Promise<number> {
+  const { agent } = args.plan;
+  const thread = splitThread(args.split.splitId);
+  try {
+    if (!s.ledger?.fork?.(agent.id, args.split.parentThread, thread, args.split.parentRunId)) return 0;
+    if (!args.brief?.trim() || !s.subconscious?.condensePart) return 0;
+    const conversationId = args.split.chat ?? args.split.parentConversationId;
+    return await s.subconscious.condensePart({ agent, thread, ...(conversationId ? { conversationId } : {}), brief: args.brief, ...(args.signal ? { signal: args.signal } : {}) });
+  } catch (error) {
+    s.log.warn("the part's record was not condensed; it starts as before", { splitId: args.split.splitId, error: reason(error) });
+    return 0;
+  }
+}
+
+/**
+ * F26: whether my native fork costs less than the part's condensed record. The fork re-reads my session on each model call, cached
+ * while my cache is warm on the same model (agents/rebuild.ts CACHE_COLD_MS); the record with the turn's prompt and tools is read once
+ * uncached, then cached – the fork wins while the record's saving over the calls of my splitting run stays below CACHED_PRICE_RATIO
+ * reads of it (rebuild.ts pays). No warm fork to weigh (another engine, account or model, a cold cache, past the window, no size): false.
+ */
+function forkPays(s: RuntimeServices, args: SeedArgs, record: string): boolean {
+  try {
+    const parent = args.split.parentSession;
+    const { engine, account, route } = args.route;
+    if (!engine.caps.fork || !parent?.contextTokens || parent.engine !== engine.id || parent.accountId !== account.id || pastFit(parent.contextTokens, windowOf(s, args))) return false;
+    const ran = s.runs.get(args.split.parentRunId);
+    if (!ran?.model || ran.model !== route.modelId || s.clock.now() - (ran.endedAt ?? ran.startedAt ?? 0) > CACHE_COLD_MS) return false;
+    const lean = tokensOf(record.length + args.system.stable.length + args.system.volatile.length + JSON.stringify(args.tools).length);
+    const calls = Math.max(1, ran.modelCalls || Math.round((ran.inputTokens ?? 0) / parent.contextTokens));
+    return (parent.contextTokens - lean) * calls < CACHED_PRICE_RATIO * lean;
+  } catch { return false; }
 }
 
 /** The checkpoint as text, without its "next step" (the worker's part is its next step). */
@@ -211,6 +267,6 @@ function mark(s: RuntimeServices, args: SeedArgs, result: SeedResult): void {
 
 function note(s: RuntimeServices, runId: string, result: SeedResult): void {
   try {
-    s.runs.item(runId, { kind: 'note', data: { splitSeed: result.how, ...(result.parentRef ? { parentRef: result.parentRef } : {}), ...(result.fellBack ? { fellBack: result.fellBack } : {}) }, effectStatus: 'none' });
+    s.runs.item(runId, { kind: 'note', data: { splitSeed: result.how, ...(result.condensed ? { condensed: result.condensed } : {}), ...(result.parentRef ? { parentRef: result.parentRef } : {}), ...(result.fellBack ? { fellBack: result.fellBack } : {}) }, effectStatus: 'none' });
   } catch { /* journal only */ }
 }

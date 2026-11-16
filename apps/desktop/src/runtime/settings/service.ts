@@ -7,7 +7,7 @@
 // such sections, so a writer of one key can leave a section alone that an update would replace); a key no
 // section knows is left out. After every read and change the file is written again when its text differs from the
 // whole, current one (comments never stale; an older file holding only the values that differ from the defaults
-// becomes whole once, every value kept). update() merges, validates, writes the file atomically and emits
+// becomes whole once, every value kept). update() merges (null: the default, as in the file), validates, writes the file atomically and emits
 // 'settings.updated'; one stat before makes sure an edit not handed over yet comes first. A missing file is
 // written again from the current values; a file that is no JSON object at all is copied to settings.rejected.json
 // before the app writes over it (until then nothing is written).
@@ -123,7 +123,7 @@ export class SettingsStore implements SettingsService {
       this.deps.root?.ensure();
       if (this.cache && this.changedOnDisk()) this.cache = this.load(); // an edit on disk not handed over yet comes first
     }
-    const next = deepMerge(this.get(), patch);
+    const next = deepMerge(this.get(), patch, this.defaults); // null: the key's default, as the file and a restart read it
     validateSettings(next);
     settled(next, this.pc);
     for (const section of Object.keys(patch)) delete this.rejected[section]; // the change replaces what was not applied

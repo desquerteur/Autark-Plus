@@ -17,6 +17,7 @@ import { planTurn } from '../../../src/runtime/agents/turn-prepare.ts';
 import type { Paths } from '../../../src/runtime/contracts.ts';
 import { Blobs } from '../../../src/runtime/files/store.ts';
 import { withMediaHook } from '../../../src/runtime/media/hook.ts';
+import { resolveOutput } from '../../../src/runtime/media/outputs.ts';
 import { MediaService } from '../../../src/runtime/media/service.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
 import { uiBlocksOf } from '../../../src/shared/blocks/parse.ts';
@@ -316,4 +317,19 @@ test('validate: media/file keep a 64-hex fileId only; a fileId stands in for a m
   const none = validateBlock({ type: 'file', label: 'Cut' });
   assert.deepEqual(none.ok ? undefined : none.error, '"path" missing in file');
   assert.ok(validateBlock({ type: 'file', src: 'C:/out/a.mp4' }).ok, 'path aliases still work');
+});
+
+test('an account home is never an output, also in a workspace that holds the data folder: the logins folder and <data>/accounts', async () => {
+  const temp = tempDir();
+  try {
+    const data = path.join(temp.dir, 'data');
+    const paths = { workspace: temp.dir, data, accounts: path.join(temp.dir, 'logins'), blobs: path.join(data, 'blobs') };
+    for (const file of [path.join(paths.accounts, 'claude', 'acc_a', 'x.txt'), path.join(data, 'accounts', 'claude', 'acc_mac', 'x.txt'), path.join(temp.dir, 'out', 'x.txt')]) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, 'x');
+    }
+    assert.deepEqual(await resolveOutput(paths, 'logins/claude/acc_a/x.txt'), { refused: 'outside' });
+    assert.deepEqual(await resolveOutput(paths, 'data/accounts/claude/acc_mac/x.txt'), { refused: 'outside' }, 'a home that stayed in the data folder');
+    assert.ok('path' in await resolveOutput(paths, 'out/x.txt'));
+  } finally { temp.cleanup(); }
 });

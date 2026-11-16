@@ -342,13 +342,13 @@ test('the shipped harness mode offers modes.save to the harness agent', () => {
   assert.ok(offered(modes, [builder], builder, modes.get('harness')).includes('modes.save'));
 });
 
-test('RPC modes.save and modes.delete are owner-only and delegate to the library', async () => {
+test("RPC modes.save and modes.delete are the owner's and the owner's secure managing phone's, and delegate to the library", async () => {
   const f = rig();
   try {
     const table = new HandlerTable();
     register(table);
-    assert.equal(table.get('modes.save')?.scope, 'owner');
-    assert.equal(table.get('modes.delete')?.scope, 'owner');
+    assert.deepEqual(table.get('modes.save')?.scope, { capability: 'manage', secure: true }); // 16.11.2026
+    assert.deepEqual(table.get('modes.delete')?.scope, { capability: 'manage', secure: true });
     assert.deepEqual(table.get('modes.list')?.scope, { capability: 'chat' });
     const ctx = { services: { modes: f.modes } } as unknown as HandlerContext;
     const call = (method: string, params: Record<string, unknown>) => Promise.resolve().then(() => table.get(method)!.handler(params as never, ctx));

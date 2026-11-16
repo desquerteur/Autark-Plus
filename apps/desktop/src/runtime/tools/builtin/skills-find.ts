@@ -1,8 +1,7 @@
 // knowledge.find's skill helpers (find.ts): the listing without a query – the agent's own main skills, then its mode's
-// index –, the fitting secrets catalog entries of a query (secrets/metadata.ts catalogEntries – id, name, route,
-// description, tags, never a value; the catalog is "like a skill"), and the skills of other providers in any folder on
-// the PC (skills/discover.ts, on demand, as data; keeping one is the normal skills.save).
-// Owns: the lexical score of those two, the listing order and its line. Never: treats a skill as a permission.
+// index – and the skills of other providers in any folder on the PC (skills/discover.ts, on demand, as data; keeping one is
+// the normal skills.save). The secrets catalog's entries come with the find itself since F19 (find/secrets.ts).
+// Owns: the lexical score of a folder's skills, the listing order and its line. Never: treats a skill as a permission.
 
 import path from 'node:path';
 import type { RuntimeServices } from '../../contracts.ts';
@@ -10,12 +9,9 @@ import { discoverSkills, readSkillBody, skillIndexLines } from '../../skills/dis
 import type { Agent } from '../../../shared/model/org.ts';
 import type { ModeInfo, SkillInfo } from '../../../shared/model/knowledge.ts';
 import { excerpt } from '../../../shared/text/chat-names.ts';
-import { catalogEntries, catalogLine as secretLine, secretMetadata } from '../../secrets/metadata.ts';
 
 const MAX_LIMIT = 30; // skills listed from a folder at most
 const DESCRIPTION_CHARS = 240;
-/** Catalog entries a query answers at most. */
-const SECRET_LIMIT = 5;
 
 type Place = 'main' | 'mode';
 const PLACE_TEXT: Record<Place, string> = { main: 'my main skill', mode: 'this mode' };
@@ -57,17 +53,6 @@ export function listedSkills(services: RuntimeServices, agent: Agent, mode: Mode
 
 /** One skill of the listing without a query. */
 export const listedSkillLine = (candidate: SkillCandidate): string => `- ${candidate.info.name} (${PLACE_TEXT[candidate.place]}) – ${excerpt(candidate.info.description, DESCRIPTION_CHARS)}`;
-
-/** The catalog entries that fit `query`, best first (lexical, like the skills). */
-export function findSecrets(services: RuntimeServices, query: string, limit = SECRET_LIMIT): string[] {
-  const words = queryWords(query);
-  if (!words.length) return [];
-  let entries: ReturnType<typeof catalogEntries> = [];
-  try { entries = catalogEntries(services); } catch { return []; }
-  return entries.map((entry) => ({ entry, score: lexicalScore(words, `${secretMetadata(entry)} ${entry.id.replace(/[-_]/g, ' ')}`) }))
-    .filter((hit) => hit.score > 0).sort((a, b) => b.score - a.score || a.entry.label.localeCompare(b.entry.label)).slice(0, limit)
-    .map((hit) => `- ${services.secrets.redact(secretLine(hit.entry, hit.entry.handles))}`);
-}
 
 /** A folder given by a tool: absolute, or below the workspace. */
 function foreignRoot(folder: string, workspace: string): string {

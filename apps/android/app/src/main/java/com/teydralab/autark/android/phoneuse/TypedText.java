@@ -1,10 +1,23 @@
 // Owns: whether what an input field reports as its text is only its placeholder ("Message", "\u200bAsk Meta AI or
 // Search") – some apps (WhatsApp) report an empty field's placeholder as text without isShowingHintText(), and phone
-// use's type would then write the placeholder in front of the words. Never: Android calls (UseService asks the field).
+// use's type would then write the placeholder in front of the words – and what a type step tells the PC the field
+// reads afterwards (chat sweep 16.11.2026: words beside the typed text show at once). Never: Android calls (UseService
+// asks the field), or a password's text.
 package com.teydralab.autark.android.phoneuse;
 
 final class TypedText {
     private TypedText() {}
+
+    /** The most of a field's text a type step sends back (the PC cuts to the same). */
+    static final int READBACK_MAX = 300;
+
+    /** What the field reads after typing, for the PC: null for a password field, "" while it shows its hint. */
+    static String readback(CharSequence text, boolean password, boolean showingHint) {
+        if (password) return null;
+        if (showingHint || text == null) return "";
+        String all = text.toString();
+        return all.length() > READBACK_MAX ? all.substring(0, READBACK_MAX) : all;
+    }
 
     /** True when the field's text is nothing but its known placeholder (or only invisible characters). */
     static boolean placeholder(CharSequence text, CharSequence hint) {

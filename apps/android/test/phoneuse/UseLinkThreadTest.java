@@ -60,7 +60,9 @@ public final class UseLinkThreadTest {
 
     private static void wiring(String link) {
         check(!link.contains("onChange(this::attach)")); // the main thread's change no longer writes the socket itself
-        check(link.contains("UseService.onChange(this::changed)"));
+        check(link.contains("private final Runnable onService = this::changed;") && link.contains("UseService.onChange(onService)"));
+        // 16.11.2026: the old company's link stops on its own thread, maybe after the next one started – it drops only its own listener.
+        check(link.contains("UseService.dropChange(onService)") && !link.contains("UseService.onChange(null)"));
         check(link.contains("steps.post(() -> attach(ws))"));
         check(!link.contains(" attach();") && !link.contains("{attach();")); // no direct attach() left anywhere
         check(link.contains("try { ws.sendText(Json.write(frame)); } catch (IOException | RuntimeException error) {")); // a refused write never reaches the caller

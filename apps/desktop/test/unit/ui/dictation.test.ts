@@ -5,12 +5,13 @@
 // PC's first speech model downloads with nothing else to hear, the mic says "Speech model downloading NN %".
 // B-082: a long take is cut into pieces while recording, each heard at once with the earlier text as `before`; the
 // texts are joined (marks moved), a failed piece is kept while the others' text comes back, and with the link down
-// a piece is held in the page (and dropped when the take is discarded).
+// a piece is held in the page (and dropped when the take is discarded). F27: a take another way heard after the plan
+// gave no text brings one notice. Compact pieces: Ogg Opus once the plan heard the page's last piece, WAV otherwise.
 // Owns: these assertions only. Never: a real microphone or runtime.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Dictation, DictationCancelled, TakeNotTranscribed, dictationNote } from '../../../src/ui/lib/dictation.ts';
+import { Dictation, DictationCancelled, TakeNotTranscribed, dictationNote, fallbackNote } from '../../../src/ui/lib/dictation.ts';
 import type { DictationDeps } from '../../../src/ui/lib/dictation.ts';
 import type { SampleListener } from '../../../src/ui/lib/microphone.ts';
 import { session } from '../../../src/ui/lib/session.ts';
@@ -21,12 +22,16 @@ import type { Settings } from '../../../src/shared/model/system.ts';
 
 const ID = 'a'.repeat(64);
 
-function setup(options: { text?: string; transcribeError?: unknown; openGate?: Promise<void>; heard?: (call: number) => unknown; offline?: boolean } = {}) {
+/** A page's storage of "the plan heard the last piece" (localStorage in the page) and a fake Ogg Opus encoder. */
+interface CompactPage { heard: boolean; writes: boolean[]; encodes: number; canEncode: boolean; refusedUntil?: number }
+
+function setup(options: { text?: string; transcribeError?: unknown; openGate?: Promise<void>; heard?: (call: number) => unknown; offline?: boolean; page?: CompactPage } = {}) {
   const log: string[] = [];
   const befores: Array<string | undefined> = [];
   const held: string[] = [];
   const dropped: string[] = [];
   const uploads: Array<{ blob: Blob; name: string }> = [];
+  const notices: Array<{ title: string; body: string }> = [];
   const listeners: SampleListener[] = [];
   let clock = 1000;
   let lost = false;
@@ -51,9 +56,19 @@ function setup(options: { text?: string; transcribeError?: unknown; openGate?: P
     offline: () => options.offline === true,
     hold: async (blob, name, owner) => { held.push(`${name}|${owner ?? '-'}`); return { key: `k${held.length}`, name, size: blob.size, at: clock, ...(owner ? { owner } : {}) }; },
     drop: (key) => { dropped.push(key); },
+    notice: (note) => { notices.push(note); },
+    ...(options.page ? {
+      compact: async (pcm: readonly Uint8Array[]) => {
+        const page = options.page!;
+        page.encodes += 1;
+        return page.canEncode ? new Blob([new Uint8Array([0x4f, 0x67, 0x67, 0x53]), ...pcm.slice(0, 1).map((chunk) => chunk.slice(0, 8))], { type: 'audio/ogg' }) : undefined;
+      },
+      planHeard: { get: () => options.page!.heard, set: (heard: boolean) => { options.page!.heard = heard; options.page!.writes.push(heard); } },
+      compactRefused: { get: () => options.page!.refusedUntil ?? 0, set: (until: number) => { options.page!.refusedUntil = until; } },
+    } : {}),
   };
   return {
-    dictation: new Dictation(deps), log, uploads, befores, held, dropped,
+    dictation: new Dictation(deps), log, uploads, befores, held, dropped, notices,
     speak: (seconds: number) => listeners.at(-1)!(new Float32Array(16_000 * seconds).fill(0.25), 16_000),
     /** `ms` of microphone blocks (32 ms each) at `level`. */
     say: (ms: number, level = 0.25) => { for (let at = 0; at < ms; at += 32) listeners.at(-1)!(new Float32Array(512).fill(level), 16_000); },
@@ -197,6 +212,103 @@ test('with the link down the pieces are held in the page (for the draft); a disc
   await tick();
   assert.deepEqual(discarded.dropped, ['k1']);
   assert.ok(!discarded.log.some((entry) => entry.startsWith('transcribe')));
+});
+
+test('F27: one notice per take when the plan was asked first and another way heard it; none for the plan or without a plan login', async () => {
+  const pieces = setup({ heard: (call) => ({ text: `part ${call}`, by: 'local', planMissed: true }) });
+  await pieces.dictation.start();
+  for (let piece = 0; piece < 2; piece++) { pieces.say(26_000); pieces.say(700, 0); await tick(); }
+  pieces.say(2_000);
+  const result = await pieces.dictation.finish();
+  assert.equal(result.text, 'part 1 part 2 part 3');
+  assert.deepEqual(result, { text: 'part 1 part 2 part 3' }, 'the take\'s result is unchanged');
+  assert.deepEqual(pieces.notices, [{ title: 'ChatGPT dictation was not reachable', body: 'This PC\'s speech model wrote it; unsure words are highlighted.' }], 'three pieces, one notice');
+
+  for (const heard of [{ text: 'hi', by: 'plan' }, { text: 'hi', by: 'local' }, { text: 'hi' }, { text: '', by: 'local', planMissed: true }]) {
+    const t = setup({ heard: () => heard });
+    await t.dictation.start();
+    t.speak(1);
+    await t.dictation.finish();
+    assert.deepEqual(t.notices, [], `${JSON.stringify(heard)}: the plan heard it, no plan login here, an older PC, or no words`);
+  }
+  assert.deepEqual(fallbackNote('service'), { title: 'ChatGPT dictation was not reachable', body: 'The transcription service wrote it.' }, 'a service marks nothing');
+  assert.match(fallbackNote('listener').body, /^A listening model wrote it; unsure words are highlighted\.$/);
+});
+
+const compactPage = (heard = false, canEncode = true): CompactPage => ({ heard, writes: [], encodes: 0, canEncode });
+
+test('compact pieces: WAVs until the plan heard one, then Ogg Opus; another way turns back to WAV, and the page remembers it', async () => {
+  const memory = compactPage();
+  const ways = ['plan', 'plan', 'local'];
+  const t = setup({ page: memory, heard: (call) => ({ text: `part ${call}`, by: ways[call - 1] }) });
+  await t.dictation.start();
+  for (let piece = 0; piece < 2; piece++) { t.say(26_000); t.say(700, 0); await tick(); }
+  t.say(2_000);
+  const result = await t.dictation.finish();
+  assert.equal(result.text, 'part 1 part 2 part 3');
+  assert.deepEqual(t.uploads.map((upload) => upload.blob.type), ['audio/wav', 'audio/ogg', 'audio/ogg']);
+  assert.match(t.uploads[0].name, /\d\.wav$/);
+  assert.match(t.uploads[1].name, / \(2\)\.ogg$/);
+  assert.deepEqual(memory.writes, [true, false], 'the plan heard piece 1, this PC\'s model piece 3');
+  await t.dictation.start();
+  t.speak(1);
+  await t.dictation.finish();
+  assert.equal(t.uploads.at(-1)!.blob.type, 'audio/wav', 'after another way the next piece is a WAV again');
+  assert.equal(memory.encodes, 2, 'only the compact pieces were encoded');
+});
+
+test('a page that remembers the plan starts compact; a failed piece, an older PC (no `by`) or a page without an encoder sends WAVs', async () => {
+  const memory = compactPage(true);
+  const failing = setup({ page: memory, transcribeError: new Error('The plan limit was reached.') });
+  await failing.dictation.start();
+  failing.speak(1);
+  await failing.dictation.finish().catch(() => undefined);
+  assert.equal(failing.uploads[0].blob.type, 'audio/ogg', 'remembered from an earlier page');
+  assert.deepEqual(memory.writes, [false]);
+  const older = setup({ page: memory });
+  await older.dictation.start();
+  older.speak(1);
+  await older.dictation.finish();
+  assert.equal(older.uploads[0].blob.type, 'audio/wav');
+  const plain = setup({ page: compactPage(true, false), heard: () => ({ text: 'hi', by: 'plan' }) });
+  await plain.dictation.start();
+  plain.speak(1);
+  await plain.dictation.finish();
+  assert.equal(plain.uploads[0].blob.type, 'audio/wav');
+  assert.match(plain.uploads[0].name, /\.wav$/);
+});
+
+test('a compact piece the plan missed keeps the page on WAV for a day, though the plan hears the WAVs again (no Ogg/WAV see-saw)', async () => {
+  const memory = compactPage(true);
+  const ways = [{ by: 'local', planMissed: true }, { by: 'plan' }, { by: 'plan' }];
+  const t = setup({ page: memory, heard: (call) => ({ text: `part ${call}`, ...ways[call - 1] }) });
+  for (let take = 0; take < 3; take++) {
+    await t.dictation.start();
+    t.speak(1);
+    await t.dictation.finish();
+  }
+  assert.deepEqual(t.uploads.map((upload) => upload.blob.type), ['audio/ogg', 'audio/wav', 'audio/wav'], 'the plan heard the WAVs, still no Ogg');
+  assert.ok((memory.refusedUntil ?? 0) > Date.now() + 23 * 60 * 60 * 1000, 'refused for a day');
+  memory.refusedUntil = Date.now() - 1;
+  await t.dictation.start();
+  t.speak(1);
+  await t.dictation.finish();
+  assert.equal(t.uploads.at(-1)!.blob.type, 'audio/ogg', 'after the day the plan gets compact pieces again');
+});
+
+test('a compact piece keeps its type when it is held with the link down or stored again after a lost answer', async () => {
+  const offline = setup({ page: compactPage(true), offline: true });
+  await offline.dictation.start(undefined, { owner: 'chat-1' });
+  offline.say(1_500);
+  await offline.dictation.finish().catch(() => undefined);
+  assert.match(offline.held[0], /\.ogg\|chat-1$/);
+  const lost = setup({ page: compactPage(true), transcribeError: new Error('gone') });
+  await lost.dictation.start();
+  lost.speak(1);
+  lost.advance(3000);
+  lost.loseConnection();
+  await lost.dictation.finish().catch(() => undefined);
+  assert.deepEqual(lost.uploads.map((upload) => upload.blob.type), ['audio/ogg', 'audio/ogg'], 'the same compact file again');
 });
 
 test('hear() transcribes a stored file again (Transcribe again)', async () => {

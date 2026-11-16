@@ -5,6 +5,8 @@
 // theirs (they own it, made it or gave it) and finish what they own – recorded as theirs ('reported_by_human', by their
 // id), never as the owner's answer or approval; a form asking for a password or key is never theirs to answer (secrets
 // go into the owner's vault). Ids are seen from the person's perspective.
+// F13: a CEO reads the company's work (people/access.ts readsTask) and changes, gives on and drops it like the owner;
+// they finish as done what is not another human's to-do (people answer their own).
 // Owns: these person variants. Never: the owner's handlers, or a change to work that is not theirs.
 
 import { WorkforceError } from '../../shared/errors.ts';
@@ -15,7 +17,7 @@ import { formsOf } from '../secrets/capture.ts';
 import { MAX_DECLINE_REASON, declineAnswer } from '../tasks/decline.ts';
 import { bad, capJson, id, input, notFound, onlyKeys, optBool, optId, optNum, optOneOf, optStrings, optText, text, type Obj } from '../rpc/params.ts';
 import type { HandlerContext, HandlerTable } from '../rpc/table.ts';
-import { mayReadTask, membership } from './access.ts';
+import { chatAccess, membership, readsTask } from './access.ts';
 import { realId, viewTaskFor } from './perspective.ts';
 import { caller } from './rpc-base.ts';
 import { mayChange } from './task-rules.ts';
@@ -25,13 +27,13 @@ const MAX_NOTES = 50_000;
 
 function readable(ctx: HandlerContext, person: Person, taskId: string): TaskView {
   const task = ctx.services.tasks.get(taskId);
-  if (!task || !mayReadTask(ctx.services.db, person.id, task)) notFound('Task', { taskId });
+  if (!task || !readsTask(ctx.services.db, person.id, task)) notFound('Task', { taskId });
   return task!;
 }
 
-/** Work the person changes: theirs (owned, made or given by them) – else refused. */
+/** Work the person changes: theirs (owned, made or given by them), F13 for a CEO any work they read – else refused. */
 function changeable(task: TaskView, person: Person): TaskView {
-  if (!mayChange(person.id, task)) throw new WorkforceError('forbidden', 'Only your own tasks can be changed.', { details: { taskId: task.id } });
+  if (person.role !== 'ceo' && !mayChange(person.id, task)) throw new WorkforceError('forbidden', 'Only your own tasks can be changed.', { details: { taskId: task.id } });
   return task;
 }
 
@@ -63,7 +65,7 @@ export function registerPersonTasks(table: HandlerTable): void {
   });
   table.addPerson('tasks.list', (params, ctx) => {
     const person = caller(ctx);
-    return ctx.services.tasks.list(filterOf(person, params)).filter((task) => mayReadTask(ctx.services.db, person.id, task)).map((task) => viewTaskFor(ctx.services, person.id, task));
+    return ctx.services.tasks.list(filterOf(person, params)).filter((task) => readsTask(ctx.services.db, person.id, task)).map((task) => viewTaskFor(ctx.services, person.id, task));
   });
   table.addPerson('tasks.get', (params, ctx) => {
     const person = caller(ctx);
@@ -74,7 +76,10 @@ export function registerPersonTasks(table: HandlerTable): void {
     const o = input(params);
     onlyKeys(o, ['conversationId', 'title', 'notes', 'plan', 'to', 'dueAt', 'priority', 'doneWhen', 'parentId', 'clientId']);
     const conversationId = optId(o, 'conversationId');
-    if (conversationId && !membership(ctx.services.db, person.id, conversationId)) notFound('Chat', { conversationId });
+    const chat = conversationId ? ctx.services.chats.get(conversationId) : undefined;
+    const reads = chat ? chatAccess(ctx.services.db, person.id, chat) : undefined;
+    if (conversationId && !reads) notFound('Chat', { conversationId });
+    if (chat && reads && !reads.member) ctx.services.chats.setMembers(chat.id, { add: [person.id] }, person.id); // F13: a CEO giving work in a company chat joins it, as when writing there
     const parentId = optId(o, 'parentId');
     if (parentId) readable(ctx, person, parentId);
     const priority = optNum(o, 'priority', { min: 0, max: 2 });
@@ -121,7 +126,10 @@ export function registerPersonTasks(table: HandlerTable): void {
     const task = readable(ctx, person, id(o));
     const status = optOneOf(o, 'status', ['done', 'dropped'] as const) ?? 'done';
     const owned = task.assigneeKind === 'human' && task.assigneeId === person.id;
-    if (status === 'done' ? !owned : !mayChange(person.id, task)) throw new WorkforceError('forbidden', 'Only your own to-dos and tasks can be finished here.', { details: { taskId: task.id } });
+    const ceo = person.role === 'ceo'; // F13: like the owner – done for anything but another human's to-do
+    if (status === 'done' ? !(owned || (ceo && task.assigneeKind !== 'human')) : !(ceo || mayChange(person.id, task))) {
+      throw new WorkforceError('forbidden', 'Only your own to-dos and tasks can be finished here.', { details: { taskId: task.id } });
+    }
     capJson('answer', o.answer, 256 * 1024);
     const note = optText(o, 'note', { max: 2000, multiline: true });
     const clientId = optText(o, 'clientId', { max: 100 });

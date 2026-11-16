@@ -17,7 +17,8 @@
 // toward its agent's SPLIT_LIMITS.runningPerAgent (B-080: no global limit), every lane stops with haltAll/stop() and shows in the activity rows (AgentActivity.split and its parent's chat,
 // listed after the main lanes – consumers that want the agent's own turn in a chat skip split rows); a split lane has no
 // wakes, sets no agent status of its own while the main lane runs, and the agent shows idle only when its last lane ends.
-// A split turn that planned no run or crashed tells the split service (split-turn.ts turnEndedEarly), a crashed main run too.
+// A split turn that planned no run or crashed tells the split service (split-turn.ts turnEndedEarly), a crashed main run too –
+// a run a mail started as well (16.11.2026: it works with every tool and can split).
 // B-059 (dispatch-settle.ts): #17 a crashed turn's streaming bubble fails and its task gets its after-turn handling;
 // #18 a main-lane turn still running RELEASE_MS after its abort is released – run closed, cut calls unknown, its wakes
 // settled as its abort said, the slot handed on; the late end of the hung work changes no bookkeeping here. B-057: a split
@@ -211,8 +212,8 @@ export class RunningTurns {
     } catch (error) {
       services.log.error('turn crashed', { agentId: entry.agentId, runId: entry.runId, error: String(error) });
       const open = closeRun(services, entry.runId);
-      if (!mailMarker(entry.origin)) turnEndedEarly(services, entry.runId, entry.split, 'crashed'); // B-057
-      if (!mailMarker(entry.origin)) settleCrash(services, entry, open); // B-059 #17: its bubble fails, its task gets its after-turn handling
+      turnEndedEarly(services, entry.runId, entry.split, 'crashed'); // B-057 – a mail-started run's splits too (it splits like any turn)
+      if (!mailMarker(entry.origin)) settleCrash(services, entry, open); // B-059 #17: its bubble fails, its task gets its after-turn handling (a mail's run: its retry below)
       if (!this.mailReplyAttempted(services, entry)) this.markRetry(services, entry);
     } finally {
       if (!entry.released) this.finish(services, entry); // B-059 #18: a released turn was settled already
@@ -225,12 +226,7 @@ export class RunningTurns {
     const services = this.deps.services();
     entry.released = true;
     if (this.mailReplyAttempted(services, entry)) entry.settle = 'done';
-    if (mailMarker(entry.origin)) {
-      closeRun(services, entry.runId);
-      for (const item of services.runs.items(entry.runId)) {
-        if (item.kind === 'tool_call' && item.effectStatus === 'pending') services.runs.updateItem(item.id, { effectStatus: 'unknown' });
-      }
-    } else abandonRun(services, entry);
+    abandonRun(services, entry); // a mail-started run too: its splits hear it (afterParentTurn)
     // B-057: the split service hears the person's Stop now. A shutdown's cut stays 'running' there until its hung turn's
     // late end (or the boot reconcile) puts it back – never a second turn on its session meanwhile (prepareRestart cancel).
     if (entry.split && entry.control.stopKind === 'human') turnEndedEarly(services, entry.runId, entry.split, 'stopped');

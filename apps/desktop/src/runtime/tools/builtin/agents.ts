@@ -84,7 +84,7 @@ const updateAgent = defineTool<UpdateArgs>({
       team: { type: 'string' },
       effort: { type: 'string', enum: ['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'], description: "For all its turns; auto: each turn's work sets it. One hard step or task I raise with model.set." },
       model: { type: 'string', description: "A model id for all its turns; '' = automatic." },
-      device: { type: 'string', minLength: 1, maxLength: 120, description: 'The PC its computer, browser and phone tools use.' },
+      device: { type: 'string', minLength: 1, maxLength: 120, description: "The PC it works on: on one of the person's own PCs its turns run there too; elsewhere its computer, browser and phone tools use it. An idle PC takes load off a busy one." },
       managerId: { type: 'string', description: "'' = the person; this way I hand my team over." }, spaceId: { type: 'string' },
       avatar: {
         type: 'object', properties: { color: { type: 'integer', minimum: 0, maximum: 5 }, emoji: { type: 'string', maxLength: 16 }, fileId: { type: 'string', pattern: '^[a-f0-9]{64}$' } }, additionalProperties: false,

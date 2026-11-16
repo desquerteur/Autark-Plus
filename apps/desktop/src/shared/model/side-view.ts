@@ -146,5 +146,11 @@ declare module '../api/methods.ts' {
     'side.input': { params: { device?: string; tab: string; input: BrowserInput }; result: { ok: true } };
     /** A new address, back, forward, reload or the answer to the page's dialog in that tab on its PC. */
     'side.nav': { params: SideNav; result: { ok: true } };
+    /**
+     * 16.11.2026: a page opened in a new tab of this PC's pane (global), shown there at once – the phone's pane is the
+     * PC's, so a page that has to run on the PC (a sign-in whose answer returns to the PC's own address) is done from the
+     * phone; `tab`: its id there.
+     */
+    'side.open': { params: { url: string }; result: { ok: true; tab?: string } };
   }
 }

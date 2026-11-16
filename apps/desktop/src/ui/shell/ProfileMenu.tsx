@@ -1,7 +1,9 @@
 // Profile bubble (bottom of the rail) and its menu: name/company, the companies on this PC (B-072, desktop window only:
 // one picked opens its window and this one goes to the tray, its agents keep working) and Settings. B-078: a "+" beside
 // the company name opens the add menu in the same place – New company / Connect as my other device / Join a company as
-// employee; each starts a new company whose first run opens that way (companies.open start). In the phone layout, where
+// employee; each starts a new company whose first run opens that way (companies.open start). 16.11.2026: the "+" also
+// imports an export as a new company (settings/CompaniesGroup.tsx), and two companies of the same name show their
+// folder ("first", "company-2") under the name. In the phone layout, where
 // the rail with its quota badges is hidden, the menu shows the same badges (QuotaRail). B-084 (decision 7): inside the
 // Android app (once its port is here) the menu is the phone sheet – the photo, the name and one status line
 // "<company> · <PC>" (a tap shows the app's PC picker), the companies this phone is paired with (their pictures, the
@@ -24,6 +26,7 @@ import { platform } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { toastError } from '../lib/toasts.ts';
 import { openFeedback } from '../feedback/popover-state.ts';
+import { importCompany } from '../settings/CompaniesGroup.tsx';
 import { isAndroidApp } from '../pwa/native.ts';
 import { hasNativePort } from '../pwa/native-port.ts';
 import { addCompany, phoneCompanies, phoneStatus, showPcs, statusLine, switchCompany } from '../pwa/phone-companies.ts';
@@ -54,13 +57,16 @@ const ADD_ITEMS: MenuItem[] = [
   { label: 'New company', description: 'Your own, with its own first run', onSelect: () => openCompany({ create: true, start: 'new' }) },
   { label: 'Connect as my other device', description: 'The same company as on another PC – everything mirrored', onSelect: () => openCompany({ create: true, start: 'mine' }) },
   { label: 'Join a company as employee', description: 'Someone else\'s company, as one person there', onSelect: () => openCompany({ create: true, start: 'employee' }) },
+  { label: 'Import a company', description: 'An export from Autark, as a new company here', onSelect: () => { void importCompany(); } }, // 16.11.2026
 ];
 
-/** The companies (the current one ticked); none where there is no list (a test profile, the PWA). */
+/** The companies (the current one ticked; one whose name another shares names its folder too); none where there is no list (a test profile, the PWA). */
 function companySections(list: CompanyEntry[]): MenuSection[] {
   if (!list.length) return [];
+  const shared = (label: string) => list.filter((other) => other.label === label).length > 1;
   return [{ items: list.map((company) => ({
     label: company.label,
+    ...(shared(company.label) ? { description: company.folder } : {}),
     checked: company.current,
     onSelect: () => { if (!company.current) openCompany({ id: company.id }); },
   })) }];

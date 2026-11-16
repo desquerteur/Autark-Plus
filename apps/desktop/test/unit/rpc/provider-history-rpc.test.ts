@@ -1,5 +1,6 @@
-// Provider histories (rpc/handlers/provider-history.ts): listing and purging a provider's history is owner-only;
-// a purge needs confirm: true and reaches the privacy service.
+// Provider histories (rpc/handlers/provider-history.ts): listing and purging a provider's history is the owner's – on the
+// PC and (16.11.2026) from the owner's phone with 'settings' on a secure transport; a purge needs confirm: true and reaches
+// the privacy service.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,10 +8,10 @@ import { register as history } from '../../../src/runtime/rpc/handlers/provider-
 import { HandlerTable } from '../../../src/runtime/rpc/table.ts';
 import { OWNER, PHONE, TestClient, rpcFixture } from './s1-helpers.ts';
 
-test('provider histories are owner-only', () => {
+test("provider histories are the owner's and the owner's secure settings phone's", () => {
   const table = new HandlerTable();
   history(table);
-  for (const method of ['privacy.providerHistories', 'privacy.purgeProviderHistory']) assert.equal(table.get(method)?.scope, 'owner', method);
+  for (const method of ['privacy.providerHistories', 'privacy.purgeProviderHistory']) assert.deepEqual(table.get(method)?.scope, { capability: 'settings', secure: true }, method);
 });
 
 test('a purge needs confirm and reaches the privacy service', async () => {

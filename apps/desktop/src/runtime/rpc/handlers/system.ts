@@ -2,12 +2,13 @@
 // (drafts of all chats with their files – B-082 – + the last open chat; both are chat content, so a device without 'chat'
 // – a To-do link – gets an empty state). A device with
 // 'settings' changes preferences and notifications. On a secure transport (the owner's paired phone, not a colleague's
-// session) it also changes routing, voice, devices, profile and day, and the PC's own preferences – window close,
+// session) it also changes routing, voice, devices, profile, day and calendar, and the PC's own preferences – window close,
 // login item, automatic update download (owner 12.11.2026; main applies them on change). Plain LAN keeps the PC ones.
-// system.root (B-044, owner; B-081 `device`: that linked CEO PC's, without notices): where <data> and its generated
+// system.root (B-044; 16.11.2026 for the owner and the phone's pane, PATH_RULE; B-081 `device`: that linked CEO PC's, without notices): where <data> and its generated
 // map README.md are (the map written when missing),
 // plus the settings file's quiet notice. B-080: system.install (owner) installs a build the way an update does;
-// system.prepareRestart carries the update's version (`to`), so the next start can say whether it landed.
+// system.prepareRestart carries the update's version (`to`), so the next start can say whether it landed; since 16.11.2026
+// it answers main's own link only (security.ts fromMain) – every other caller hears that system.install is its way.
 // Owns: param checks and scope rules for these methods. Never: business logic – it delegates
 // to extras.system, the settings service and the chat service.
 
@@ -25,7 +26,8 @@ import { attachedSecrets } from '../../secrets/chat-capture.ts';
 import { restartRuntime, restoreStatus } from '../../portability/service.ts';
 import { installBuild } from '../../tasks/recover-notes.ts'; // B-080
 import { bad, id, input, isIdLike, optBool, optText, text } from '../params.ts';
-import { onDevice } from './files-path.ts'; // B-081: system.root of a linked CEO PC
+import { onDevice, PATH_RULE } from './files-path.ts'; // B-081: system.root of a linked CEO PC
+import { fromMain } from './security.ts'; // 16.11.2026: system.prepareRestart answers main's own link only
 import { isTopic, maySubscribe } from '../scopes.ts';
 import { scopeHas } from '../table.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
@@ -33,16 +35,22 @@ import type { HandlerContext, HandlerTable } from '../table.ts';
 const TODO = { capability: 'todo' } as const;
 const CHAT = { capability: 'chat' } as const;
 const SETTINGS = { capability: 'settings' } as const;
+/** 16.11.2026: Settings › About's backup rows from the owner's own phone (secure transport only). */
+const SECURE_SETTINGS = { capability: 'settings', secure: true } as const;
 /** Settings sections a phone/browser with the 'settings' capability may change. */
 const DEVICE_SETTINGS: ReadonlySet<string> = new Set(['preferences', 'notifications']);
-/** B-084: the sections a 'settings' device on a secure transport (my phone app's tunnel) changes as well. */
-const SECURE_DEVICE_SETTINGS: ReadonlySet<string> = new Set(['routing', 'voice', 'devices', 'profile', 'day']);
+/** B-084: the sections a 'settings' device on a secure transport (my phone app's tunnel) changes as well; 16.11.2026
+ * 'calendar' (Settings › Calendar › Use your own Google app on the phone). */
+const SECURE_DEVICE_SETTINGS: ReadonlySet<string> = new Set(['routing', 'voice', 'devices', 'profile', 'day', 'calendar']);
 /** Preferences that change the PC itself (window close, login item, updates). Owner 12.11.2026: my own securely paired
  * phone reaches all my settings, so a secure 'settings' device changes them too (main applies them on change); a plain-LAN
  * device or a colleague does not. */
 const PC_PREFERENCES: ReadonlySet<string> = new Set(['closeToTray', 'openAtLogin', 'autoDownloadUpdates']);
 const MAX_TOPICS = 256;
 const MAX_DRAFT = 100_000;
+/** The answer to every caller of system.prepareRestart but main's own link – read by the agent whose script called it. */
+export const PREPARE_RESTART_MAIN_ONLY = "system.prepareRestart is the desktop updater's own step right before it stops the app. "
+  + 'To install a build I call system.install: it pauses the work, installs and restarts the app the way an update does, and the next start tells me whether it landed.';
 const UI_KV = { ns: 'ui', key: 'lastConversationId' };
 
 /** Remembers the chat the human used last (ui.state → reopen it after a restart). */
@@ -144,6 +152,8 @@ export function register(table: HandlerTable): void {
   table.add('system.resources', (_params, ctx) => ctx.extras.system.resources());
   table.add('system.restartReadiness', (_params, ctx) => ctx.extras.system.restartReadiness());
   table.add('system.prepareRestart', async (params, ctx) => {
+    // 16.11.2026: an agent's update script paused its own company here and the pause cut off the agent's turn with it.
+    if (!fromMain(ctx.scope)) throw new WorkforceError('forbidden', PREPARE_RESTART_MAIN_ONLY);
     const o = input(params);
     await ctx.extras.system.prepareRestart(optBool(o, 'cancel'), optText(o, 'to', { max: 64 })); // B-080: the update's version
     return { ok: true };
@@ -173,10 +183,12 @@ export function register(table: HandlerTable): void {
     return { ok: true };
   }, CHAT);
 
-  // MM7: Settings › About › Backup – the restore's state and the in-app restart (owner only: paths and the runtime of this PC).
-  table.add('system.restoreStatus', (_params, ctx) => restoreStatus(ctx.services));
-  table.add('system.restartRuntime', (_params, ctx) => restartRuntime(ctx.services));
-  // B-044: where <data> and its generated README.md map are (owner only: paths of this PC). B-081: with `device` that
+  // MM7: Settings › About › Backup – the restore's state and the in-app restart (paths and the runtime of this PC; 16.11.2026
+  // the owner's own phone on a secure transport too, like system.backup).
+  table.add('system.restoreStatus', (_params, ctx) => restoreStatus(ctx.services), SECURE_SETTINGS);
+  table.add('system.restartRuntime', (_params, ctx) => restartRuntime(ctx.services), SECURE_SETTINGS);
+  // B-044: where <data> and its generated README.md map are (paths of this PC – 16.11.2026 for whoever reads its paths:
+  // the owner and the phone's pane, PATH_RULE). B-081: with `device` that
   // linked CEO PC's (files.path 'root', devices/sync/paths.ts) – the new-tab page's Files cell of that PC.
-  table.add('system.root', (params, ctx) => onDevice(ctx, params, 'root', async () => rootInfo(ctx.services)));
+  table.add('system.root', (params, ctx) => onDevice(ctx, params, 'root', async () => rootInfo(ctx.services)), PATH_RULE);
 }

@@ -33,8 +33,7 @@ export function createAgentCore(s: RuntimeServices, org: Org, library: SkillLibr
     get: (agentId: string) => kv.get<string>(OWN_NS, agentId),
     set: (agentId: string, sig: string | undefined) => { if (sig === undefined) kv.delete(OWN_NS, agentId); else kv.set(OWN_NS, agentId, sig, s.clock.now()); },
   };
-  const core = new AgentCore({ dataDir: s.paths.data, org: () => s.org, skills: () => library, bus: s.bus, clock: s.clock, log: s.log, root: s.rootWatcher, paths: s.paths, own,
-    language: () => s.settings.get().profile?.language }); // a hire's HUMAN.md starts in the app's language
+  const core = new AgentCore({ dataDir: s.paths.data, org: () => s.org, skills: () => library, bus: s.bus, clock: s.clock, log: s.log, root: s.rootWatcher, paths: s.paths, own });
   s.agentCore = core;
   org.setCoreFiles(core);
   try {

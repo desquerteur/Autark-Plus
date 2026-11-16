@@ -1,6 +1,7 @@
-// `file` block: a deliverable. Desktop: Open / Show in folder (by path, or the stored copy by
-// fileId). Phone/PWA: the file name and Download when the runtime stored the file (fileId) –
-// never the PC's path; inside the Android app Download hands the bytes to the app (pwa/phone-download.ts).
+// `file` block: a deliverable. A path on a PC: Open on every device, the way a path in a chat opens (path-links.ts
+// openPathLink: the side pane on the desktop, the chat's area on the phone, read on the author's home PC first – 16.11.:
+// on the phone it did not open), plus Show in folder on the desktop. A stored copy only (fileId): Open on the desktop,
+// Download on the phone; inside the Android app Download hands the bytes to the app (pwa/phone-download.ts).
 // Owns: file row rendering and the download. Never: opens paths outside the host's own checks
 // (main decides) or shows an absolute path off the desktop.
 
@@ -12,6 +13,7 @@ import { toastError } from '../../lib/toasts.ts';
 import { isFileId, openPath, platform } from '../host.ts';
 import { Inline } from '../markdown.tsx';
 import { saveToPhone } from '../../pwa/phone-download.ts';
+import { openPathLink, pathIn } from '../../workspace/path-links.ts';
 import { s } from './util.ts';
 
 /** files.read sends at most this much in one frame (runtime READ_MAX_BYTES). */
@@ -44,11 +46,13 @@ export function FileBlock(props: { block: UiBlock }) {
     setBusy(true);
     try { await work(); } catch (error) { toastError(error, failure); } finally { setBusy(false); }
   };
-  const open = (reveal: boolean) => act(
-    () => (path ? openPath(path, reveal) : rpc.call('files.open', { id: fileId, reveal })),
-    "Couldn't open the file",
-  );
   const desktop = platform === 'desktop';
+  const onPc = pathIn(path, false) !== undefined; // an absolute path on a PC (a network path is none)
+  const open = (event: Event) => {
+    if (onPc) { void openPathLink(path, (event.currentTarget as HTMLElement).closest<HTMLElement>('[data-author]')?.dataset.author); return; }
+    void act(() => rpc.call('files.open', { id: fileId, reveal: false }), "Couldn't open the file");
+  };
+  const canOpen = onPc || (desktop && fileId !== '');
   return (
     <div class="b-file">
       <Icon name="file" size={20} />
@@ -56,15 +60,11 @@ export function FileBlock(props: { block: UiBlock }) {
         <div class="b-file-name" title={desktop ? path || name : name}>{name}</div>
         {props.block.note !== undefined && <Inline text={s(props.block.note)} class="b-step-sub" />}
       </div>
-      {desktop && (path || fileId) && (
+      {(canOpen || (!desktop && fileId !== '')) && (
         <div class="b-file-actions">
-          <button type="button" class="button secondary" disabled={busy} onClick={() => open(false)}>Open</button>
-          {path && <button type="button" class="button ghost" disabled={busy} onClick={() => open(true)}>Show in folder</button>}
-        </div>
-      )}
-      {!desktop && fileId && (
-        <div class="b-file-actions">
-          <button type="button" class="button secondary" disabled={busy} onClick={() => act(() => download(fileId, fileName || name), "Couldn't download the file")}>Download</button>
+          {canOpen && <button type="button" class="button secondary" disabled={busy} onClick={open}>Open</button>}
+          {desktop && onPc && <button type="button" class="button ghost" disabled={busy} onClick={() => act(() => openPath(path, true), "Couldn't open the file")}>Show in folder</button>}
+          {!desktop && fileId && <button type="button" class="button secondary" disabled={busy} onClick={() => act(() => download(fileId, fileName || name), "Couldn't download the file")}>Download</button>}
         </div>
       )}
     </div>

@@ -29,7 +29,6 @@ import { noteLearned } from './learned.ts';
 import { callRefusal, callTarget } from './builtin/tools-meta.ts';
 import { withoutSecretValues } from '../secrets/guard.ts';
 import { missed } from '../devices/back-wake.ts'; // B-080
-import { mailScopeRefusal } from './mail-scope.ts';
 import '../contracts/vectors.ts';
 
 export { resolveDevice, withDeviceArg, type DeviceTarget } from './placement.ts';
@@ -140,9 +139,6 @@ export class Registry implements ToolRegistry {
   async call(name: string, args: unknown, base: Omit<ToolContext, 'services'>, callId: string, company?: unknown): Promise<ToolOutput> {
     if (name === CALL_TOOL) return this.callThrough(args, base, callId); // B-049 F4
     const services = this.options.services();
-    const scopeRefusal = mailScopeRefusal(base.origin, name, args, company, () => services.apps?.list() ?? []);
-    if (scopeRefusal) return failure(scopeRefusal);
-    if (base.origin?.mailScope && services.apps?.mailGeneration?.(base.origin.mailScope.appId) !== base.origin.mailScope.generation) return failure('Mailbox incarnation changed.');
     const ctx: ToolContext = { ...base, services, callId: callId || undefined }; // a nested call never inherits its caller's id
     const tool = this.tools.get(name);
     if (!tool) return failure(`Unknown tool "${name}". Use one of the listed tools.`);
@@ -200,9 +196,6 @@ export class Registry implements ToolRegistry {
     const services = this.options.services();
     const target = callTarget(args);
     if ('error' in target) return failure(target.error);
-    const scopeRefusal = mailScopeRefusal(base.origin, target.name, target.args, target.company, () => services.apps?.list() ?? []);
-    if (scopeRefusal) return failure(scopeRefusal);
-    if (base.origin?.mailScope && services.apps?.mailGeneration?.(base.origin.mailScope.appId) !== base.origin.mailScope.generation) return failure('Mailbox incarnation changed.');
     const refused = callRefusal({ ...base, services, callId: callId || undefined }, target.name);
     if (refused) return failure(refused);
     const output = await this.call(target.name, target.args, base, callId, target.company);

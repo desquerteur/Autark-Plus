@@ -16,16 +16,12 @@ import { startSpotlight } from '../tour/Spotlight.tsx';
 import { previousStep, profilePatch, type PcAccess } from './first-run-model.ts';
 import { finishFirstRun, goStep } from './first-run.ts';
 import { Card, StatusLine } from './parts.tsx';
+import { ACCESS_LEVELS } from './pc-access.ts';
 
 const value = (event: Event) => (event.currentTarget as HTMLInputElement).value;
 
 /** What the person typed and chose outlives a remount (the window switching between desktop and phone shell) until Start. */
 const draft: { name?: string; company?: string; access?: PcAccess } = {};
-
-const ACCESS: ReadonlyArray<{ id: PcAccess; title: string; text: string }> = [
-  { id: 'whole', title: 'Full access', text: 'The team works anywhere on this PC.' },
-  { id: 'careful', title: 'Careful', text: 'The team works freely in its own folders and checks with you before changes elsewhere.' },
-];
 
 export function AboutCard() {
   const profile = settings.value?.profile;
@@ -73,7 +69,7 @@ export function AboutCard() {
       </div>
       <fieldset class="first-run-access">
         <legend class="field-label">Your PC</legend>
-        {ACCESS.map((row) => (
+        {ACCESS_LEVELS.map((row) => (
           <label key={row.id} class={`first-run-access-row${access === row.id ? ' chosen' : ''}`}>
             <input type="radio" name="first-run-access" value={row.id} checked={access === row.id} onChange={() => setAccess(row.id)} />
             <span class="first-run-access-text"><span class="first-run-access-title">{row.title}</span> – {row.text}</span>

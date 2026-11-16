@@ -5,8 +5,8 @@
 //   main  – the main zone's content; `header` when the route hands its header row over as data (the empty
 //           #/chats). Without it the view draws its own top row with lib/header.tsx.
 //   phone – the stack: tab root or pushed (back, no tab bar), the top row's title, the body, the nav's header
-//           data when the body is a nav (its search replaces the palette search), and `ownHeader` when the
-//           body draws its own top row with Back as its lead (a chat, an agent, a person) – one top row.
+//           data when the body is a nav or a settings page (its search replaces the palette search), and `ownHeader` when the
+//           body draws its own top row with Back as its lead (a chat, an agent, a person, Add person) – one top row.
 // A chat route on a connection that may not read chats (To-do-only phone) shows My day (shell/gates.ts).
 // The default route 'home' is a pure alias of 'day': the same My day (DayView, with today's briefing on top) in the same
 // zones with the same key, so going between them changes nothing on screen; while the first run is open its place on
@@ -33,7 +33,9 @@ import { TeamView } from '../team/TeamView.tsx';
 import { TeamNav, teamNavHeader } from '../team/TeamNav.tsx';
 import { AgentView } from '../team/AgentView.tsx';
 import { PersonView } from '../team/PersonView.tsx';
+import { PersonNew } from '../team/PersonNew.tsx'; // F13: #/team/person/new
 import { SplitView } from '../splits/SplitView.tsx'; // B-057: #/team/<agentId>/split/<splitId>
+import { AgentWork } from '../team/AgentWork.tsx'; // F11: #/team/<agentId>/work
 import { Settings, settingsSectionTitle } from '../settings/Settings.tsx';
 import { SettingsNav, settingsNavHeader } from '../settings/SettingsNav.tsx';
 import { TaskFiltersNav, taskFiltersHeader } from './TaskFiltersNav.tsx';
@@ -91,10 +93,12 @@ function sideView(current: Route): DesktopViews['side'] {
   }
 }
 
-/** The team route's page: a person, a split of an agent (B-057), an agent or the overview. */
+/** The team route's page: Add person (F13), a person, a split of an agent (B-057), an agent's Work page (F11), an agent or the overview. */
 function teamBody(current: Extract<Route, { view: 'team' }>): { key: string; body: ComponentChildren } {
+  if (current.addPerson) return { key: 'person-new', body: h(PersonNew, null) };
   if (current.personId) return { key: `person:${current.personId}`, body: h(PersonView, { key: current.personId, personId: current.personId }) };
   if (current.agentId && current.splitId) return { key: `split:${current.splitId}`, body: h(SplitView, { key: current.splitId, agentId: current.agentId, splitId: current.splitId }) };
+  if (current.agentId && current.work) return { key: `work:${current.agentId}`, body: h(AgentWork, { key: current.agentId, agentId: current.agentId }) };
   if (current.agentId) return { key: `agent:${current.agentId}`, body: h(AgentView, { key: current.agentId, agentId: current.agentId }) };
   return { key: 'team', body: h(TeamView, null) };
 }
@@ -131,10 +135,10 @@ export function tabTitle(current: Route): string {
   return DESTINATIONS[key];
 }
 
-/** Pushed screens: a chat, an agent and a person. */
+/** Pushed screens: a chat, an agent, a person and Add person. */
 export function isPushed(current: Route): boolean {
   if (current.view === 'chat') return chatRouteAllowed();
-  return current.view === 'team' && !!(current.agentId || current.personId);
+  return current.view === 'team' && !!(current.agentId || current.personId || current.addPerson);
 }
 
 /** The phone body draws its own top row (Back as its lead): every pushed screen – the frame's row has no
@@ -154,7 +158,7 @@ export function phoneView(current: Route): PhoneView {
     case 'chats': return { key: 'chats', body: h(ChatList, null), pushed, title: tabTitle(current), back: null, header: chatListHeader, ownHeader: false };
     case 'tasks': return { key: 'tasks', body: h(TasksView, null), pushed, title: tabTitle(current), back: null, header: workSearchHeader, ownHeader: false }; // Work's own search in the top row
     case 'settings': return current.section
-      ? { key: 'settings', body: h(Settings, null), pushed, title: settingsSectionTitle(current.section), back: 'settings', ownHeader: false }
+      ? { key: 'settings', body: h(Settings, null), pushed, title: settingsSectionTitle(current.section), back: 'settings', header: settingsNavHeader, ownHeader: false } // F20: the settings search, not the palette
       : { key: 'settings-list', body: h(SettingsNav, null), pushed, title: tabTitle(current), back: 'home', header: settingsNavHeader, ownHeader: false };
     case 'team': {
       const page = teamBody(current);

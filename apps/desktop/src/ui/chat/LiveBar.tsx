@@ -2,7 +2,10 @@
 // arbeitet"): one slim line per agent – or part of a split agent – working for this chat right now, "● Lena · Reading
 // invoices.pdf · 2 min" (a part: "● Lena · #2 Press DACH · …"). Where it shows is the runtime's one rule
 // (runtime/chat/live.ts, the summary's `live`): the work came from this chat or posted into it. A line is a button to
-// the agent's page with its activity log; its title says what it runs on (model · effort · temperature). The bar
+// the agent's page with its activity log; its title says what it runs on (model · effort · temperature). Feedback F21
+// (16.11.2026): at its right end, in a fixed slot, that agent's own Stop (StopRun.tsx – only this run, others keep
+// working; a split part has none, its slot stays empty). A run on another of the person's PCs shows here too
+// (runtime/devices/sync/live.ts) and its Stop reaches that PC. The bar
 // takes its height only while someone works and sits between the messages and the composer, so the person's newest
 // line stays right above it; nothing in it moves on a click. The minutes advance on one 30 s clock while it shows.
 // Owns: the bar's markup and its clock. Never: invents a step, or shows work the summary does not list.
@@ -12,8 +15,10 @@ import { signal } from '@preact/signals';
 import type { ConversationSummary, LiveRun } from '../../shared/model/chat.ts';
 import { agentName } from '../lib/store.ts';
 import { go } from '../lib/router.ts';
+import { can } from '../lib/session.ts';
 import { partLabel } from '../splits/split-text.ts';
-import { modelLine, noteText, shownOf, withTemperature } from './live-text.ts';
+import { StopRun } from './StopRun.tsx';
+import { barStopRun, modelLine, noteText, shownOf, withTemperature } from './live-text.ts';
 
 const TICK_MS = 30_000;
 const clock = signal(Date.now());
@@ -44,20 +49,25 @@ export function LiveBar(props: { chat: Pick<ConversationSummary, 'live'> }) {
   }, [working]);
   if (!working) return null;
   const now = Math.max(clock.value, ...runs.map((run) => run.startedAt));
+  const stops = can('runs.cancel');
   return (
     <div class="live-bar" role="status" aria-label="Working now">
       {runs.map((run) => {
         const name = agentName(run.agentId);
         const text = lineText(run);
         const model = withTemperature(modelLine({ modelName: run.model, effort: run.effort }), shownOf(run));
+        const stop = barStopRun(run, stops);
         return (
-          <button type="button" key={run.runId} class="live-bar-line" data-run-id={run.runId} onClick={() => go.agent(run.agentId)}
-            title={[`${name} · ${text}`, model].filter(Boolean).join('\n')}>
-            <span class="live-bar-dot" aria-hidden="true" />
-            <span class="live-bar-name">{name}</span>
-            <span class="live-bar-text">{text}</span>
-            <span class="live-bar-time tabular">{sinceText(run.startedAt, now)}</span>
-          </button>
+          <div key={run.runId} class="live-bar-row">
+            <button type="button" class="live-bar-line" data-run-id={run.runId} onClick={() => go.agent(run.agentId)}
+              title={[`${name} · ${text}`, model].filter(Boolean).join('\n')}>
+              <span class="live-bar-dot" aria-hidden="true" />
+              <span class="live-bar-name">{name}</span>
+              <span class="live-bar-text">{text}</span>
+              <span class="live-bar-time tabular">{sinceText(run.startedAt, now)}</span>
+            </button>
+            {stops && <span class="live-bar-stop">{stop && <StopRun key={stop} runId={stop} name={name} />}</span>}
+          </div>
         );
       })}
     </div>

@@ -4,7 +4,8 @@
 // second socket (apps/android phoneuse/UseLink) calls phoneUse.attach – the answer lists my PCs, so the phone tunnels to
 // the first one online when this one is off – and then hears `phoneUse.request` (only its own: the event names its
 // deviceId and reaches only that device, runtime/rpc/scopes.ts) and answers each with phoneUse.reply. The app reads
-// nothing until a request asks (AccessibilityService). phoneUse.reply and phoneUse.attached are bus-only. The iPhone web
+// nothing until a request asks (AccessibilityService); its bubble names the agent of the step (`by`) and shows the AI's
+// line or question (op 'say', feedback 16.11.2026 F16). phoneUse.reply and phoneUse.attached are bus-only. The iPhone web
 // app (ui/hosted, no phone use on iOS) asks phone.pcs for the same list without claiming phone use, and phone.forget
 // removes its own row when the person taps Forget there.
 // Handlers: runtime/rpc/handlers/phone-use.ts. Merged into Methods/EventMap by module augmentation.
@@ -30,8 +31,19 @@ export function remoteIdOfPairText(text: string): string | undefined {
   return /^\d{9}$/.test(digits) ? digits : undefined;
 }
 
-/** What an agent asks the phone to do (the PhoneDriver's steps; coordinates in screen pixels). */
-export type PhoneUseOp = 'ui_tree' | 'screenshot' | 'tap' | 'swipe' | 'type' | 'key' | 'open';
+/**
+ * What an agent asks the phone to do (the PhoneDriver's steps; coordinates in screen pixels). 'say' (app 0.3.15+):
+ * args `{text (≤ PHONE_SAY_MAX), ask?: true}` – the line stays in the bubble until the next say or the job's end and
+ * answers `{ok: true}`; with ask the bubble adds ✓ and ✕ and answers `{answer: PhoneSayAnswer}`. An older app answers
+ * bad_request "Unknown step say.".
+ */
+export type PhoneUseOp = 'ui_tree' | 'screenshot' | 'tap' | 'swipe' | 'type' | 'key' | 'open' | 'say';
+
+/** The longest line the bubble shows. */
+export const PHONE_SAY_MAX = 120;
+
+/** The person's answer to a say with ask: ✓, ✕, or none within the phone's 60 s. */
+export type PhoneSayAnswer = 'yes' | 'no' | 'none';
 
 export interface PhoneUseRequest {
   /** The phone the request is for (only that device hears it). */
@@ -41,12 +53,15 @@ export interface PhoneUseRequest {
   args: Record<string, unknown>;
   /** The PC's run this step belongs to; the phone ends exactly this job on the person's ✕ (an older phone ignores it). */
   job?: string;
+  /** The agent's name: the bubble reads "<by> is using this phone" (an older phone ignores it). */
+  by?: string;
 }
 
 export interface PhoneUseReply {
   id: string;
   result?: unknown;
-  /** 'off' (phone use is not turned on in Android's Accessibility settings), 'paused' (the person tapped the bubble), 'consent' (the person declined that app), … */
+  /** 'off' (phone use is not on, or the person has not agreed to it in the app yet), 'paused' (the person touched the
+   *  phone or tapped Pause), 'ended' (their ✕ ended phone use for this job), 'bad_request' (a step the app does not know), … */
   error?: { code: string; message: string };
 }
 
@@ -57,6 +72,11 @@ export interface PhonePc {
   fingerprint: string;
   /** base64url Ed25519 – the key the phone pins at the meeting server and checks in the handshake. */
   publicKey: string;
+  /**
+   * F29 stage 1: that PC's peer listener addresses (http(s) base URLs – the router's mapped one, LAN, tailnet, IPv6). The
+   * Android app dials `<address>/peer/phone` directly and takes the tunnel only when none answers; absent: none known.
+   */
+  addresses?: string[];
 }
 
 export interface PhoneUseAttach {

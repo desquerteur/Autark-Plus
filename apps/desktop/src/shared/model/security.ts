@@ -28,6 +28,8 @@ export interface SecretInfo {
   tags?: string[];
   createdAt: number;
   lastUsedAt?: number;
+  /** F19 (16.11.2026): how often it was used on this PC (absent: never); the device sync leaves it alone. */
+  uses?: number;
   /** X05: the group this field belongs to (a login or card); absent for a single secret. */
   group?: SecretGroupRef;
   /** X05: the field's name in its group ("username", "password", "totp", "number" …). */
@@ -58,6 +60,8 @@ export interface SecretGroup {
   tags?: string[];
   createdAt: number;
   lastUsedAt?: number;
+  /** F19: how often one of its fields was used on this PC (absent: never). */
+  uses?: number;
   /** The agent that created it (secrets.generate, browser.save_totp); absent for the person's. Information only. */
   createdBy?: string;
   /** B-075: the app itself works with it (secrets/units.ts heldByApp); set by secrets.groups. */
@@ -162,6 +166,8 @@ declare module '../api/methods.ts' {
   interface Methods {
     /** Secure chat input: creates a general secret for this chat's current agents only. */
     'secrets.capture': { params: { conversationId: string; value: string; description?: string; clientId: string }; result: SecretInfo };
+    /** 16.11.2026: the marked piece `value` of a message, else every key it holds, stored and replaced there by its handle (runtime/secrets/text-capture.ts). */
+    'secrets.fromMessage': { params: { messageId: string; value?: string }; result: { ids: string[] } };
     /** X05: the stored groups (metadata only; their fields come with secrets.list). */
     'secrets.groups': { params: void; result: SecretGroup[] };
     /** X05: creates or edits a group and its fields at once; a device may only create (no group or field ids, no remove). */

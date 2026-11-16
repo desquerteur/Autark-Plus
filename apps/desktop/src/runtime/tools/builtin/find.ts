@@ -1,8 +1,8 @@
 // The one finder and the one opener, offered in every mode (tools/registry.ts EVERY_MODE):
 //  - knowledge.find lists candidates – skills (by words, and by meaning where a person chose an embedding model), memory notes (all of the tree or
-//    the `in` folders), the person's or a colleague's references, the home project's entries (the public library is its own search, library.find) –
-//    with id, kind, score and why, never their text; fitting secrets catalog entries as handles. Without a query: my main
-//    skills and my mode's. `in` with an absolute folder on this PC lists the skills written there (any provider).
+//    the `in` folders), the person's or a colleague's references, the home project's entries (the public library is its own search, library.find)
+//    and the secrets catalog's entries (F19: kind 'secret' of the same find, with their handles, never a value) – with id, kind,
+//    score and why, never their text. Without a query: my main skills and my mode's. `in` with an absolute folder on this PC lists the skills written there (any provider).
 //  - knowledge.open opens one by its id (or a skill by its bare name: my route resolves it) page by page; `home:<name>`
 //    opens a home project skill (with `file` one file of its folder), `folder:<path>/<name>` a skill of a folder on this PC.
 // Owns: the tool wording, argument shapes and the dispatch by id. Never: ranking (runtime/find/*).
@@ -16,11 +16,11 @@ import { failure, text } from '../types.ts';
 import { clip, defineTool, internal, readChat } from './util.ts';
 import { threadKey } from '../../../shared/model/origin.ts';
 import { loadHomeSkill } from '../../agent-core/home-read.ts';
-import { findSecrets, foreignSkillBody, foreignSkillsText, listedSkills, listedSkillLine } from './skills-find.ts';
+import { foreignSkillBody, foreignSkillsText, listedSkills, listedSkillLine } from './skills-find.ts';
 import { PERSON, subjectOf } from './references.ts';
 import '../../contracts/agent-core.ts';
 
-const KINDS: FindKind[] = ['main-skill', 'product-skill', 'note', 'reference', 'document'];
+const KINDS: FindKind[] = ['main-skill', 'product-skill', 'note', 'reference', 'document', 'secret'];
 const MEMORY = /^memory(?:\/|$)/;
 
 const caller = (ctx: ToolContext) => ({ agent: ctx.agent, conversationId: readChat(ctx), thread: threadKey(ctx), mode: ctx.mode, via: 'agent' as const });
@@ -33,7 +33,7 @@ function mainSkillsText(ctx: ToolContext): string {
 
 const find = defineTool<{ query?: string; kinds?: FindKind[]; in?: string[]; person?: string; limit?: number }>({
   name: 'knowledge.find',
-  description: 'Finds skills, memory notes, references and home-project files for a job. Best fit first, each with id, kind and why, and fitting secrets as handles; without query, my main skills. I open one with knowledge.open. What other teams share publicly: library.find.',
+  description: 'Finds skills, memory notes, references, home-project files and secrets (names with their handles) for a job. Best fit first, each with id, kind and why; without query, my main skills. I open one with knowledge.open. What other teams share publicly: library.find.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -62,11 +62,9 @@ const find = defineTool<{ query?: string; kinds?: FindKind[]; in?: string[]; per
     const found = await findService(ctx.services).find(caller(ctx), {
       query, kinds: args.kinds, limit: args.limit ?? 8, signal: ctx.signal, ...(folders.length ? { folders } : {}), ...(subject ? { subject } : {}),
     });
-    const secrets = args.kinds?.length ? [] : findSecrets(ctx.services, query);
-    const secretPart = secrets.length ? ['Secrets in the catalog that fit (their handles; secrets.list shows more):', ...secrets] : [];
     const none = subject ? 'No reference of theirs fits: I do not know how they would decide here – I say so or ask them.' : 'Nothing fits. I search differently or use another tool.';
-    if (!found.length) return text([none, ...secretPart].join('\n'));
-    return text([`Candidates for "${clip(query, 80)}" (text not included):`, LEGEND, ...found.map((candidate) => candidateLine(publicCandidate(candidate))), ...secretPart].join('\n'));
+    if (!found.length) return text(none);
+    return text([`Candidates for "${clip(query, 80)}" (text not included):`, LEGEND, ...found.map((candidate) => candidateLine(publicCandidate(candidate)))].join('\n'));
   },
 });
 

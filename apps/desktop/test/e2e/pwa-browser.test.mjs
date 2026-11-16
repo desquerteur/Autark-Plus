@@ -243,7 +243,7 @@ test('PWA on a phone-sized browser: pairing, For you, chat, badge, offline snaps
   const plus = page.getByRole('menu', { name: 'Add' });
   await plus.waitFor();
   const plusItems = (await plus.locator('[role="menuitem"] .menu-label > span:first-child').allTextContents()).map((text) => text.trim());
-  for (const entry of ['Files & folders', 'Photos & screenshots', 'Task']) assert.ok(plusItems.includes(entry), `Plus offers ${entry}: ${plusItems.join(' | ')}`);
+  for (const entry of ['Files & folders', 'Photos & videos', 'Take photo', 'Record audio', 'Record video', 'Task']) assert.ok(plusItems.includes(entry), `Plus offers ${entry}: ${plusItems.join(' | ')}`);
   await page.keyboard.press('Escape');
   await plus.waitFor({ state: 'detached' });
 

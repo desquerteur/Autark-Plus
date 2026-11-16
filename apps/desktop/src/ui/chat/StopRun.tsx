@@ -1,7 +1,7 @@
 // Feedback 16.11.2026 (F20, owner; Mika's UX pass): one agent's own Stop – icon and the word, so it reads without
 // hover and on touch. While runs.cancel goes out and until the run's row goes it says "Stopping…"; a failure says
-// why in a toast and offers Stop again. Used at the end of the chat's live line (one stoppable agent working,
-// ChatHeader.tsx) and in each row of the working popover (WorkingPopover.tsx).
+// why in a toast and offers Stop again. Used at the end of each line of the chat's live bar (F21, LiveBar.tsx – a run
+// on another of the person's PCs too: runs.cancel forwards it) and in each row of the working popover (WorkingPopover.tsx).
 // Owns: that button. Never: stops another run than its own, or all agent work (shell/work-stop.ts).
 
 import { useState } from 'preact/hooks';

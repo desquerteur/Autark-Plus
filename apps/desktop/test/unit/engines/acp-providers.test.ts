@@ -81,7 +81,7 @@ function service(signedIn: { gemini: boolean; copilot: boolean }, copilotSignedO
   let registry: EngineRegistry | undefined;
   const accounts = new AccountServiceImpl({
     db, bus: new Bus((error) => { throw error; }), clock: new ManualClock(), paths: PATHS, env, finder, supervisor, version: '1.0.0',
-    engines: () => registry!, terminal: { platform: 'win32' }, rmdir: async () => { throw new Error('no home may be deleted'); },
+    engines: () => registry!, terminal: { platform: 'win32' }, // 16.11.2026: the service deletes no home at all
     mkdir: async (dir) => { folders.push(dir); },
     secrets: { save: async () => ({ id: 'none' }), read: async () => undefined, remove: () => {} },
     detectDeps: { fetch: async () => { throw new Error('offline'); }, probeTimeoutMs: 1 },
@@ -170,7 +170,7 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
   assert.equal(h.accounts.get(copilot.id)?.state, 'ok');
 
   await assert.rejects(h.accounts.logout(copilot.id), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
-  await h.accounts.remove(gemini.id); // its default home is never deleted (rmdir throws)
+  await h.accounts.remove(gemini.id); // its default home is never deleted (the service deletes no home)
   assert.equal((await h.accounts.detect(true)).clis.find((cli) => cli.provider === 'gemini-cli')?.dismissed, true, 'detection does not add it back');
   await h.accounts.dispose();
   await h.registry.dispose();

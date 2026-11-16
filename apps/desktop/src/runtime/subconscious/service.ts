@@ -6,6 +6,8 @@
 // (route-turn.ts requestHolds, which first ends a step the call set for an earlier message) – and opens the hits of the word search
 // it chooses (they come first in the turn's trace); the turn waits for it at most ROUTE_WAIT_MS. Beside it a second call on the same
 // model and system prompt condenses context items whose job is done (route-turn.ts condenseTurn, look.ts); nobody waits for that one.
+// F26 (16.11.2026): condensePart() – the same call on a forked part's own copy of the record at its first start, with its brief as
+// what wakes it; that part waits for it (at most LOOK_MS), as it starts from what the call leaves (splits/fork.ts).
 // Each call leaves one info event. Nothing runs after a turn: what the calls leave, code condenses at the rebuild once its run is
 // finished (context/ledger/window.ts leanText). ask() – the main AI's own call (the subconscious tool):
 // the loop (flow.ts), its answer is the tool output. A trace kept in kv – put back by a turn that never reached its engine,
@@ -15,7 +17,7 @@
 // widgetFor()/fillWidget() (the person's to-do widgets). The model is the engines' structured runner, one per call, its use
 // booked on the agent it works for (a widget fill on the subconscious itself) – none while no model is connected.
 // Owns: which call happens with which budget, the kept trace and failure isolation. Never: makes a turn wait longer than
-// ROUTE_WAIT_MS, judges an agent's answer, or turns memory into instructions.
+// ROUTE_WAIT_MS (a forked part's first start: LOOK_MS), judges an agent's answer, or turns memory into instructions.
 
 import { MAIN_THREAD } from '../../shared/model/origin.ts';
 import type { RuntimeServices, Subconscious } from '../contracts.ts';
@@ -49,6 +51,8 @@ export const LOOK_MS = 60_000;
 const PENDING_NS = 'subconscious_trace';
 /** A kept note or hit older than this is about something else by now: it is dropped, not shown. */
 const KEPT_MS = 24 * 60 * 60_000;
+/** F26: what the condense call of a forked part reads before its brief – the piece is all its coming work. */
+const PART_WAKE = 'The main AI split itself: this part starts now with the context so far and works on its one piece alone, so an item this piece will not read again has done its job here.';
 /** The calls that age: what a run told or found for the main AI, and what the call before a turn opened for it (put back by a turn that never ran). */
 const ABOUT_NOW: ReadonlySet<string> = new Set([NOTE_CALL, 'agent.tell', 'vector.search', 'knowledge.open']); // agent.tell: rows kept before the name changed
 
@@ -138,6 +142,37 @@ export class SubconsciousImpl implements Subconscious {
     } catch (error) {
       this.log('subconscious look failed', error);
       return [];
+    }
+  }
+
+  /**
+   * F26 (owner 16.11.2026: "das Unterbewusstsein vom neuen Agent … komprimiert alles weg, dann braucht er nur das, was er wirklich
+   * braucht"): a forked part's first start – condenseTurn on the part's own copy of its record (`thread`, splits/fork.ts), with its
+   * brief as what wakes it. The part starts from what this call leaves, so it waits for it: at most LOOK_MS, its turn's stop ends it.
+   * One info event, like the calls before a turn. Returns how many items it condensed. Never throws.
+   */
+  async condensePart(input: { agent: Agent; thread: string; conversationId?: string; brief: string; signal?: AbortSignal }): Promise<number> {
+    try {
+      const services = this.deps.services();
+      if (input.signal?.aborted || !hasContent(input.brief)) return 0;
+      const runner = this.decisionRunner(services, input.agent.id);
+      if (!runner) return 0;
+      const started = Date.now();
+      const wait = new AbortController();
+      const timer = setTimeout(() => wait.abort(), LOOK_MS);
+      (timer as { unref?: () => void }).unref?.();
+      const signal = input.signal ? AbortSignal.any([input.signal, wait.signal]) : wait.signal;
+      const call = condenseTurn(services, runner, {
+        agent: input.agent, ...(input.conversationId ? { conversationId: input.conversationId } : {}), thread: input.thread,
+        said: `${PART_WAKE}\n${input.brief}`, from: 'task', signal, deadlineMs: LOOK_MS,
+      });
+      this.track(call);
+      const condensed = await call.finally(() => clearTimeout(timer));
+      this.logRoute(input.agent.id, 'part', 'condensed', Date.now() - started, { condensed });
+      return condensed;
+    } catch (error) {
+      this.log('subconscious part condense failed', error);
+      return 0;
     }
   }
 

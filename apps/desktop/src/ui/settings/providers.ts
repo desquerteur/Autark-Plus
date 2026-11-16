@@ -85,10 +85,14 @@ export function needsSignIn(account: Pick<Account, 'provider' | 'auth' | 'state'
   return kind !== undefined && (account.state === 'needs_login' || (account.state === 'error' && kind === 'terminal' && isAcpPlan(account.provider)));
 }
 
-/** The toast text once a sign-in started. */
-export function signInHint(provider: ProviderId | undefined): string {
-  if (provider === 'copilot') return 'In the terminal window that opened, type /login and follow the steps, then come back here.';
-  return provider && SIGN_IN[provider] === 'terminal' ? 'Finish sign-in in the terminal window that opened, then come back here.' : 'Finish it in the window that opened.';
+/**
+ * The toast text once a sign-in started; `away` (16.11.2026): started from the phone – a terminal or window it opened is on
+ * the PC's own screen, and the line says so.
+ */
+export function signInHint(provider: ProviderId | undefined, away = false): string {
+  const where = away ? ' on your PC' : '';
+  if (provider === 'copilot') return `In the terminal window that opened${where}, type /login and follow the steps, then come back here.`;
+  return provider && SIGN_IN[provider] === 'terminal' ? `Finish sign-in in the terminal window that opened${where}, then come back here.` : `Finish it in the window that opened${where}.`;
 }
 
 /** The plan CLIs the PC scan looks for, in the order the model setup lists them. */

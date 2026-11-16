@@ -2,7 +2,8 @@
 <!-- Owns: launcher, the home-screen shortcuts (Chats, Work, My day: res/xml/shortcuts.xml), "Share to Autark" (SEND and
      SEND_MULTIPLE of text, images and any file: ShareIn), the pair link (App Links: https://openautark.com/pair/#<Remote ID>
      opens the app), foreground media permissions, network-change wake-ups (ACCESS_NETWORK_STATE), light haptics (VIBRATE),
-     the small foreground service while paired (KeepAlive, type remoteMessaging), the phone's text-to-speech engines
+     the small foreground service while paired (KeepAlive, type remoteMessaging), the camera app's files for a capture the
+     page asked for (CaptureFiles, not exported, a one-time grant per file), the phone's text-to-speech engines
      (PhoneSpeech), the phone-use AccessibilityService (reads
      nothing until the PC asks; phoneuse/UseService) with its one enable notification (which opens the in-app disclosure
      UseDisclosure first), the crash report that needs no PC (CrashReport: the last uncaught exception's trace, shown on
@@ -60,6 +61,8 @@
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
         <service android:name=".KeepAlive" android:exported="false" android:foregroundServiceType="remoteMessaging" />
+        <provider android:name=".CaptureFiles" android:authorities="${applicationId}.capture"
+            android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".phoneuse.UseDisclosure" android:exported="false" android:excludeFromRecents="true"
             android:launchMode="singleTop" />
         <service android:name=".phoneuse.UseService" android:exported="true"

@@ -1,6 +1,6 @@
-// The dialogs of a person (add or edit, invite a device, devices and chats), opened from the person menu
-// (menus.ts) or the Add menu by setting `personDialog`. Mounted by the team sidebar and, on the phone's
-// pushed person page, by that page – never twice on screen.
+// The dialogs of a person (edit, invite a device, devices and chats), opened from the person menu (menus.ts) by setting
+// `personDialog`. F13 (owner 15.11.2026: no pop-up for it): adding a person is a page, Team › Add person (PersonNew.tsx).
+// Mounted by the team sidebar and, on the phone's pushed person page, by that page – never twice on screen.
 // Owns: which person dialog is open. Never: decides what a dialog does (PersonDialog, PersonInvite,
 // PersonDetails do).
 
@@ -11,17 +11,16 @@ import { PersonDialog } from './PersonDialog.tsx';
 import { PersonInvite } from './PersonInvite.tsx';
 import { PersonDetails } from './PersonDetails.tsx';
 
-export const personDialog = signal<{ kind: 'new' | 'edit' | 'invite' | 'details'; id?: string } | null>(null);
+export const personDialog = signal<{ kind: 'edit' | 'invite' | 'details'; id: string } | null>(null);
 
 const close = () => { personDialog.value = null; };
 
 export function PersonDialogs() {
   const open = personDialog.value;
-  const person: Person | null = open?.id ? people.value.find((entry) => entry.id === open.id) ?? null : null;
+  const person: Person | null = open ? people.value.find((entry) => entry.id === open.id) ?? null : null;
   return (
     <>
-      <PersonDialog open={open?.kind === 'new' || (open?.kind === 'edit' && person !== null)} person={open?.kind === 'edit' ? person ?? undefined : undefined}
-        onClose={close} onCreated={(created) => { personDialog.value = { kind: 'invite', id: created.id }; }} />
+      <PersonDialog open={open?.kind === 'edit' && person !== null} person={person ?? undefined} onClose={close} />
       <PersonInvite person={open?.kind === 'invite' ? person : null} onClose={close} />
       <PersonDetails person={open?.kind === 'details' ? person : null} onClose={close} />
     </>

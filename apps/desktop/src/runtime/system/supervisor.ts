@@ -11,9 +11,6 @@
 // Never: decides *what* or *how many* to run (engines/accounts and the dispatcher do) or polls – timers are per lease and reset by activity.
 
 import { spawn as nodeSpawn } from 'node:child_process';
-import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Account } from '../../shared/model/providers.ts';
-import type { HomeOwners, HomePermit } from '../accounts/home-owner.ts';
 import * as nodeOs from 'node:os';
 import type { Readable, Writable } from 'node:stream';
 
@@ -105,17 +102,6 @@ export class Supervisor {
   private readonly envFn?: SupervisorDeps['env'];
   private readonly active = new Map<number, Lease>();
   private sequence = 0;
-  private homeOwners?: HomeOwners;
-  private readonly homeScope = new AsyncLocalStorage<{ home: string; permit: HomePermit }>();
-  setHomeOwners(owners: HomeOwners): void { this.homeOwners = owners; }
-  homeAllowed(account: Account): boolean { return this.homeOwners?.allowed(account) ?? true; }
-  homeProtected(account: Account): boolean { return this.homeOwners?.protected(account) ?? false; }
-  async withClaudeHome<T>(account: Account, kind: string, work: () => Promise<T>): Promise<T> {
-    if (!this.homeOwners || account.provider !== 'claude' || !account.home) return work();
-    const parent = this.homeScope.getStore();
-    const permit = this.homeOwners.admit(account.home, kind, account.id, parent?.home === account.home ? parent.permit.id : undefined);
-    try { return await this.homeScope.run({ home: account.home, permit }, work); } finally { permit.release(); }
-  }
 
   /** Set by killAll (shutdown): a spawnAlone still waiting starts nothing – the runtime's exit would kill it at once. */
   private stopping = false;
@@ -147,15 +133,11 @@ export class Supervisor {
   /** Starts a child process as a lease. `idleMs` kills it after that long without `touch()`. */
   spawn(input: SpawnInput): Lease {
     const env = this.envFn ? this.envFn(input.env) : input.env;
-    const home = env?.CLAUDE_CONFIG_DIR ?? (!env ? process.env.CLAUDE_CONFIG_DIR : undefined);
-    const parent = this.homeScope.getStore();
-    const permit = home ? this.homeOwners?.admit(home, parent?.home === home ? parent.permit.kind : `process:${input.owner}`, undefined, parent?.home === home ? parent.permit.id : undefined) : undefined;
     const posix = this.os.platform !== 'win32';
-    let child: ChildLike;
-    try { child = this.spawnFn(input.command, input.args, {
+    const child = this.spawnFn(input.command, input.args, {
       cwd: input.cwd, env, stdio: input.stdio ?? ['pipe', 'pipe', 'pipe'], windowsHide: true,
       detached: posix, // own process group so the whole tree can be killed
-    }); } catch (error) { permit?.release(); throw error; }
+    });
     if (child.pid) {
       try { this.os.setPriority(child.pid, nodeOs.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* best effort */ }
     }
@@ -172,12 +154,11 @@ export class Supervisor {
         lease.lastActiveAt = this.now();
         if (input.idleMs) {
           if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => { if (!permit?.fenced()) { input.onIdle?.(); void lease.release(); } }, input.idleMs);
+          idleTimer = setTimeout(() => { input.onIdle?.(); void lease.release(); }, input.idleMs);
           idleTimer.unref?.();
         }
       },
       release: async () => {
-        if (permit?.fenced()) { await exited; return; } // transfer NEVER kills an admitted process
         if (released) return exited.then(() => undefined);
         released = true;
         if (idleTimer) clearTimeout(idleTimer);
@@ -191,7 +172,7 @@ export class Supervisor {
       releaseAfter: (graceMs) => retiring ??= new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           if (child.exitCode === null) this.log?.warn('process still running after its grace: killing its tree', { owner: input.owner });
-          if (!permit?.fenced()) void lease.release();
+          void lease.release();
         }, graceMs);
         timer.unref?.();
         void exited.then(() => { clearTimeout(timer); resolve(); });
@@ -202,9 +183,8 @@ export class Supervisor {
       this.active.delete(id);
       resolveExit(code);
     };
-    child.once('close', () => permit?.release()); // real stdio/helper close, NOT JS return/grace or an exit promise
     child.once('exit', (code) => finish(code));
-    child.once('error', () => { if (!child.pid) permit?.release(); finish(null); });
+    child.once('error', () => finish(null));
     this.active.set(id, lease);
     lease.touch();
     return lease;

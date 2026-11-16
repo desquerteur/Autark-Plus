@@ -1,5 +1,5 @@
 // ContextLedger (B-048 E1): the single source of what an agent's working context in a thread is (13.11.2026: its main
-// thread spans every chat; a split's part has its own) – ids, order,
+// thread spans every chat; a split's part has its own – F26: a forked part's starts as a copy of its parent's up to the split, fork()) – ids, order,
 // token estimates, titles, marks (keep / condensed / hidden), pins, what the native session holds (applied)
 // and the way back to every original. The subconscious (subconscious/context-tools.ts) marks, the native rebuild
 // (agents/rebuild.ts) reads view(), the agent restores through context.restore (tools/builtin/context.ts).
@@ -206,6 +206,10 @@ export class ContextLedgerService implements ContextLedger {
 
   rebuilt(agentId: string, conversationId: string, upTo: number): void {
     this.store.applied(agentId, conversationId, upTo);
+  }
+
+  fork(agentId: string, from: string, to: string, runId: string): number {
+    return this.store.copy(agentId, from, to, runId);
   }
 
   capture(run: LedgerRun): void {

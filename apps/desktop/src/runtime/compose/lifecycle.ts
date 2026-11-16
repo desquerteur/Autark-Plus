@@ -4,6 +4,7 @@
 // each step runs on its own (a failing step is logged and the rest still runs). The stop closes
 // the open sign-in processes and windows (AccountServiceImpl.dispose, PR4) before the database. The subconscious's
 // routing calls in flight end right after the dispatcher (no new turns), capped, before the engines they run on stop.
+// 16.11.2026: the updater's restart pause closes before the dispatcher stops, so its timer never starts agent work again.
 // Owns: the restore call at start and the stop order. Never: business logic, timers, polling or
 // starting anything.
 
@@ -49,7 +50,7 @@ export interface StopStep {
 }
 
 /**
- * Stop order: the dispatcher first (no new turns), the subconscious's calls in flight, then realtime calls and My day, sign-ins, timers,
+ * Stop order: the restart pause, the dispatcher (no new turns), the subconscious's calls in flight, then realtime calls and My day, sign-ins, timers,
  * watchers and bridges, the client-facing servers with the device connections (meeting server, LAN
  * answers) before the peer listener, the mesh, engines and child processes, the file owners of the data
  * folder before its watcher, and the database last.
@@ -57,6 +58,7 @@ export interface StopStep {
 export function stopSteps(core: Core, network: Network): StopStep[] {
   const s = core.services;
   return [
+    { name: 'restart pause', run: () => network.restartPause?.close() }, // 16.11.2026: its timer ends; nothing starts the dispatcher again
     { name: 'dispatcher', run: () => core.dispatcher.stop() },
     { name: 'subconscious', run: () => settleSubconscious(s) }, // v1 14.11.2026: its routing calls end before the engines stop
     { name: 'calls', run: () => stopCalls(s) }, // realtime sessions close

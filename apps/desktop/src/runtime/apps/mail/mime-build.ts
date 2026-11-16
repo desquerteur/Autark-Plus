@@ -124,13 +124,7 @@ export function buildMessage(mail: OutgoingMail): { raw: Buffer; messageId: stri
 export const replySubject = (subject: string): string => /^\s*(re|aw|sv|antw)\s*:/i.test(subject) ? subject.trim() : `Re: ${subject.trim()}`;
 
 /** Who a reply goes to: Reply-To (else From); with `all`, the other To/Cc too – never the own address twice. */
-export function replyRecipients(original: ParsedMail, own: string, all: boolean, senderOnly = false): { to: MailAddress[]; cc: MailAddress[] } {
-  if (senderOnly) {
-    // The stored message, not model arguments or Reply-To, chooses the sole destination. Ambiguous/self senders
-    // yield no recipient; compose reports that explicitly before SMTP. No fallback to To/Cc of sent mail.
-    const from = original.from;
-    return { to: from.length === 1 && from[0].address.toLowerCase() !== own.toLowerCase() ? [from[0]] : [], cc: [] };
-  }
+export function replyRecipients(original: ParsedMail, own: string, all: boolean): { to: MailAddress[]; cc: MailAddress[] } {
   const me = own.toLowerCase();
   const seen = new Set<string>([me]);
   const keep = (list: MailAddress[]) => list.filter((a) => { const k = a.address.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });

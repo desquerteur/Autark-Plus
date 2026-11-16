@@ -208,11 +208,12 @@ export function markUncertainWords(text: string, words: ReadonlyArray<{ text: st
   return out + text.slice(at);
 }
 
-/** For a listening model: how it marks what it is unsure of (German, the owner's dictation language; it writes the speaker's language). */
+/** For a listening model and the dictation corrector: how it marks what it still cannot tell (in its own voice, English for
+ *  every user; it writes the words in the speaker's language). */
 export const LISTENER_MARK_RULES = [
-  'Wo ich mir wirklich unsicher bin, was gesagt wurde, markiere ich die Stelle – nur dort:',
-  '⟦?beste Lesart|Sicherheit%|Alternative Wahrscheinlichkeit%; Alternative Wahrscheinlichkeit%⟧',
-  'Die beste Lesart ist das, was am wahrscheinlichsten gesagt wurde; die Alternativen sind andere Wörter, die es auch sein könnten. Beispiel: Wir testen das mit ⟦?Codex|70%|Kotex 15%⟧ heute.',
+  'Where I truly cannot tell what was said, I mark that place, and only that place:',
+  '⟦?best reading|sure%|alternative chance%; alternative chance%⟧',
+  'The best reading is what was most likely said; the alternatives are other words it could also be. Example: We test this with ⟦?Codex|70%|Kotex 15%⟧ today.',
 ].join('\n');
 
 /** For an agent reading a person's message with marks (context/render.ts adds it once); in my own voice, one point. */

@@ -96,6 +96,8 @@ export interface AgentActivity {
   split?: { id: string; groupId: string; idx: number; of: number; parentRunId: string; title: string };
   /** Tool calls waiting for their output right now (absent: none) – the subconscious never wakes then (subconscious/wake.ts). */
   toolCalls?: number;
+  /** F10 (16.11.2026): the run is on another of the person's PCs (devices/sync/live.ts) – only in what windows and phones hear; absent: on this PC. */
+  deviceId?: string;
 }
 
 /** Addition (RT2): `Run.route.by` of a turn that the agent's own model.set request shaped (its

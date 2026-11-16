@@ -23,7 +23,7 @@ import { FakeEngine } from './fake.ts';
 import { AcpEngine, type AcpResolver } from './acp/engine.ts';
 import type { FetchFn } from './http/common.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { engineCwd } from '../system/paths.ts';
+import { engineCwd, homeRoots } from '../system/paths.ts';
 import { agentEnv } from './wf-shim.ts';
 
 export type EngineFactories = Partial<Record<EngineId, () => Engine>>;
@@ -71,7 +71,7 @@ export function claudeTranscriptsDir(data: string): string {
 
 /** Default wiring used by the composition root. */
 export function createEngineRegistry(deps: {
-  supervisor: Supervisor; finder: ExecutableFinder; paths: { temp: string; data: string }; version: string;
+  supervisor: Supervisor; finder: ExecutableFinder; paths: { temp: string; data: string; accounts?: string }; version: string;
   apiKey: (account: Account) => Promise<string | undefined>;
   onLimits?: (accountId: string, limits: AccountLimits) => void;
   fetch?: FetchFn; fake?: boolean;
@@ -87,7 +87,7 @@ export function createEngineRegistry(deps: {
     // B-048 E2: rebuilt transcripts live in the app's data folder; only the app's own homes may take the 'project' tier.
     claude: () => new ClaudeEngine({
       supervisor: deps.supervisor, finder: deps.finder, tempDir: deps.paths.temp, env: env(),
-      transcriptsDir: claudeTranscriptsDir(deps.paths.data), accountsRoot: path.join(deps.paths.data, 'accounts'),
+      transcriptsDir: claudeTranscriptsDir(deps.paths.data), accountsRoots: homeRoots(deps.paths), // the plans' homes (Paths.accounts) and <data>/accounts
     }),
     openai: () => new OpenAiEngine(http),
     anthropic: () => new AnthropicEngine(http),

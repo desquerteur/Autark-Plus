@@ -42,7 +42,7 @@ interface Box { items: Map<string, Item>; wakes: HandOver[] }
 
 /** Events that name a changed row: [event, table, removed, the field with its id or ids (default id)]. */
 const EVENTS: ReadonlyArray<readonly [EventName, string, boolean, string?]> = [
-  ['space.upserted', 'spaces', false], ['person.upserted', 'people', false], ['conversation.upserted', 'conversations', false],
+  ['space.upserted', 'spaces', false], ['person.upserted', 'people', false], ['person.removed', 'people', true], ['conversation.upserted', 'conversations', false],
   ['conversation.removed', 'conversations', true], ['agent.upserted', 'agents', false], ['task.upserted', 'tasks', false],
   ['task.removed', 'tasks', true], ['schedule.upserted', 'schedules', false], ['schedule.removed', 'schedules', true],
   ['account.upserted', 'accounts', false], ['account.removed', 'accounts', true],

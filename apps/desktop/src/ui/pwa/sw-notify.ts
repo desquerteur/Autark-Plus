@@ -8,7 +8,8 @@
 // pushed notice back quietly only when this worker's own subscription is Apple's (the PC sends Apple no clear at all);
 // B-087: the hosted app in Chrome or Edge (FCM, WNS) gets clears, and there a clear only closes, as on the PC.
 // B-081: an agent's call (`ring: true`, runtime/calls/ring.ts) stays until it is touched and vibrates like a call; the
-// clear at the ring's end closes it.
+// clear at the ring's end closes it. 16.11.2026: a notice carries the worker's `badge` (the Autark mark, white on
+// transparent – Android's status bar shows only its shape), else its icon.
 // Owns: these handlers. Never: caches, fetches, or opens the origin root unless `home` is it.
 
 import { noticeCount, syncAppBadge } from './badge.ts';
@@ -38,6 +39,8 @@ export interface NotifyOptions {
   home: string;
   /** The notice icon. */
   icon: string;
+  /** The status-bar badge (Android: a white mark on transparent, the PC's /badge.png); the icon when absent. */
+  badge?: string;
   /** Every push shows a notice (iOS): duplicates replace quietly; a clear shows its notice quietly on Apple's push service. */
   alwaysShow: boolean;
 }
@@ -94,7 +97,7 @@ export function wireNotifications(sw: NotifyScope, options: NotifyOptions): void
     const shown: NotificationOptions & { renotify?: boolean; vibrate?: number[] } = {
       body: payload.body ?? '',
       icon: options.icon,
-      badge: options.icon,
+      badge: options.badge ?? options.icon,
       tag,
       renotify: Boolean(tag) && !quiet && !duplicate,
       silent,

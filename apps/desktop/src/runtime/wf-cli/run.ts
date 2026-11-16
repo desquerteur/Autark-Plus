@@ -128,6 +128,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
     rpc = await untilAborted(connecting, controller.signal, () => timedOut);
     const ctx: Ctx = {
       rpc, out: output(io, redact, json), parsed, json, signal: controller.signal, timedOut: () => timedOut, stdin: io.stdin, now: io.now,
+      dataDir: endpoint.dataDir,
     };
     const work = command.run(ctx);
     await (command.streams ? work : untilAborted(work, controller.signal, () => timedOut, command.timeoutMessage?.(parsed)));

@@ -8,11 +8,18 @@
 // B-078: the owner's phone pairs like a PC (rendezvous/phone-pair.ts: Remote ID, the same code, Accept); phone.* tools
 // drive ADB phones and the Android app's phone use (phone/drivers.ts, phone/app-driver.ts) alike.
 // B-084: host 'online' nudges the meeting server too; a connect request's notice opens Settings › Devices (connect-signals.ts).
+// F09/F13/F17 (16.11.2026): the LAN hello names this company (companyName); Accept may make the person (people.save) and an
+// employee's PC that links marks its person joined; the mesh carries the requests of my other PCs (remote/mirror.ts).
+// F29 stage 1: the phone bridge also takes the phone app's direct socket on the peer listener (/peer/phone), which stays
+// open while a phone app is linked.
 // Settings read here (all in settings.json, changed by the AI – skill app-settings): devices.peer,
 // devices.peerPort, devices.findable, devices.relay (the meeting server), pwa.bind.
 // Owns: this wiring. Never: business logic.
 
+import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
+import { companyLabel } from '../../shared/model/companies.ts';
+import { WorkforceError } from '../../shared/errors.ts';
 import { connectNotice, nudgesMeeting } from './connect-signals.ts';
 import type { RemoteIncoming } from '../../shared/model/remote.ts';
 import type { PairingHttp } from '../http/types.ts';
@@ -37,7 +44,8 @@ import type { DeviceIdentity } from './identity.ts';
 import type { DeviceMesh } from './mesh.ts';
 import { fail } from './pair-proof.ts';
 import { Meeting, RELAY_PREFIX } from './rendezvous/service.ts';
-import { PhoneBridge } from './rendezvous/phone.ts';
+import { PhoneBridge, hasRelayPhone } from './rendezvous/phone.ts';
+import { DevicesRepo } from './repo.ts';
 import { RemoteWithPhones } from './rendezvous/phone-pair.ts';
 import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
 import { canWelcome, welcomeMember } from '../org/member-welcome.ts';
@@ -98,6 +106,14 @@ async function wellKnownAt(address: string): Promise<{ deviceId: string; name: s
   return { deviceId: value.deviceId, name: String(value.name ?? '').slice(0, 60), fingerprint: value.fingerprint };
 }
 
+/** F09: this company's name as companies.list shows it – its folder decides which company of this PC it is. */
+export function companyName(s: Pick<RuntimeServices, 'host' | 'settings'>): string {
+  const app = s.host.app;
+  const first = app?.companies?.first;
+  const id = first && app.dataDir && path.resolve(app.dataDir) !== path.resolve(first) ? path.basename(app.dataDir) : null;
+  return companyLabel(s.settings.get().profile, id);
+}
+
 /** B-078 (D15): an employee's PC accepted here – the personal manager's one wake about that person (idempotent per person). */
 function welcomeEmployee(s: RuntimeServices, personId: string): void {
   const person = s.people?.get(personId);
@@ -129,6 +145,13 @@ export function createDevices(input: DevicesInput): Devices {
     pair: (phone) => pwa.pairPhone(phone),
     linked: (note) => s.notifications.notify({ kind: 'important', ...note }),
     admitted: (personId) => welcomeEmployee(s, personId),
+    company: () => companyName(s),
+    createPerson: (person) => {
+      if (!s.people) throw new WorkforceError('unavailable', 'People cannot be added on this PC.');
+      return s.people.save(person).id;
+    },
+    knows: (personId) => Boolean(s.people?.get(personId)),
+    joined: (personId, device) => { s.people?.joinedWith(personId, device); },
     lan: () => discover({ self: identity.deviceId }),
     meeting: (remoteId, signal) => meeting?.find(remoteId, signal) ?? Promise.resolve([]),
     holdListener: () => peer?.hold().catch(() => undefined) ?? Promise.resolve(undefined),
@@ -141,16 +164,17 @@ export function createDevices(input: DevicesInput): Devices {
       return typeof kind === 'string' && REMOTE_KINDS.has(kind) ? remote.handle(body as Record<string, unknown>, from) : fail('bad_request', 'Unknown request.');
     },
   };
+  const devicesRepo = new DevicesRepo(s.db);
+  const bridge = new PhoneBridge({ identity, log: s.log, port: input.port, phone: (fingerprint) => devicesRepo.byFingerprint(fingerprint) });
   const listener = new PeerServer({
-    pairing: http, mesh, log: () => s.log, bus: s.bus, remember: rememberedPeerPort(() => s),
+    pairing: http, mesh, phones: bridge, log: () => s.log, bus: s.bus, remember: rememberedPeerPort(() => s),
     wanted: findable, // other PCs must reach this PC while it accepts requests
     config: () => ({ mode: peerMode(), port: s.settings.get().devices.peerPort }),
-    linked: () => hasLinkedPc(mesh.list()),
+    linked: () => hasLinkedPc(mesh.list()) || hasRelayPhone(devicesRepo.list({ kinds: ['phone'] })), // F29: my phone's direct socket
     // B-078: the home router maps the peer port while it listens (a test profile never touches the router)
     ...(process.env.WORKFORCE_TEST_DATA || process.env.WORKFORCE_FAKE_ENGINE === '1' ? {} : { portmap: new PortMap({ log: () => s.log }) }),
   });
   peer = listener;
-  const bridge = new PhoneBridge({ identity, log: s.log, port: input.port });
   const meet = new Meeting({
     db: s.db, bus: s.bus, log: s.log, clock: s.clock, identity, mesh,
     remote: { handle: (body, from) => remote.handle(body, from), wellKnown: () => remote.wellKnown(), kinds: REMOTE_KINDS },
@@ -175,7 +199,7 @@ export function createDevices(input: DevicesInput): Devices {
 
   return {
     pwa, push, remote, meeting: meet, peer: listener, http,
-    announceCaps: () => localCaps({ computer: input.computer, browser: input.browser, phone }).then((caps) => { mesh.updateSelf({ caps }); }),
+    announceCaps: () => localCaps({ computer: input.computer, browser: input.browser, phone, version: s.host.app?.version }).then((caps) => { mesh.updateSelf({ caps }); }), // F25: with this PC's app version
     stop: () => { offSettings(); offPower(); offPeoplePush(); offReadClear(); appPhones.stop(); bridge.closeAll(); meet.stop(); remote.stop(); responder.close(); },
   };
 }

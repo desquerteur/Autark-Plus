@@ -26,7 +26,6 @@
 // `accounts.add` hands the key straight to the account service, which stores it encrypted (an
 // environment key arrives as its variable's name only).
 
-import type { TransferCommand } from '../../accounts/company-transfer.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { GLOBAL_SPACE } from '../../../shared/api/workspace-browser.ts';
 import { DECISION_PROVIDER, ENV_KEY_PROVIDERS, type ModelPolicy, type ProviderId } from '../../../shared/model/providers.ts';
@@ -155,28 +154,6 @@ function mayRefresh(ctx: HandlerContext, params: unknown): boolean {
 
 export function register(table: HandlerTable): void {
   // ---------------------------------------------------------------- accounts
-  // Machine-local owner token only: no device/agent scope or free-form home path.
-  table.add('accounts.transfer', (params, ctx) => {
-    const o = input(params);
-    const action = oneOf(o, 'action', ['hello', 'confirm', 'prepare', 'status', 'advance', 'rollback', 'register', 'activate', 'detach'] as const);
-    let command: TransferCommand;
-    if (action === 'hello') {
-      onlyKeys(o, ['action', 'nonce']); command = { action, nonce: text(o, 'nonce', { max: 100 }) };
-    } else if (action === 'confirm') {
-      onlyKeys(o, ['action', 'nonce', 'source', 'challenge']);
-      const source = obj(o, 'source');
-      onlyKeys(source, ['protocol', 'company', 'data', 'accounts', 'pid', 'boot']);
-      if (typeof source.protocol !== 'number' || typeof source.pid !== 'number') throw new WorkforceError('bad_request', 'Runtime identity required.');
-      command = { action, nonce: text(o, 'nonce', { max: 100 }), challenge: text(o, 'challenge', { max: 100 }), source: { protocol: source.protocol, pid: source.pid, company: text(source, 'company', { max: 40 }), data: text(source, 'data', { max: 1000 }), accounts: text(source, 'accounts', { max: 1000 }), boot: text(source, 'boot', { max: 100 }) } };
-    } else if (action === 'prepare') {
-      onlyKeys(o, ['action', 'accountId', 'targetCompany', 'transferId']);
-      command = { action, accountId: text(o, 'accountId', { max: 200 }), targetCompany: text(o, 'targetCompany', { max: 40 }), transferId: text(o, 'transferId', { max: 100 }) };
-    } else if (action === 'register' || action === 'activate' || action === 'detach') {
-      onlyKeys(o, ['action', 'transferId', 'operation']); command = { action, transferId: text(o, 'transferId', { max: 100 }), operation: text(o, 'operation', { max: 100 }) };
-    } else { onlyKeys(o, ['action', 'transferId']); command = { action, transferId: text(o, 'transferId', { max: 100 }) }; }
-    if (!ctx.services.accounts.transfer) throw new WorkforceError('unavailable', 'This runtime lacks the Claude handoff contract.');
-    return ctx.services.accounts.transfer(command);
-  });
   table.add('accounts.list', (_params, ctx) => ctx.services.accounts.list(), ACCOUNTS);
   table.add('accounts.detect', (params, ctx) => ctx.services.accounts.detect(optBool(input(params), 'force') ?? false), ACCOUNTS);
   table.add('accounts.add', (params, ctx) => {

@@ -1,15 +1,19 @@
 // Owns: the team's local feedback inbox: fetch on opening or Refresh, select text and screenshot, remove a report,
 // mark one done or not relevant (feedback 16.11.2026; the runtime removes a marked report 7 days later);
-// each report's meta line starts with the same short report number its sender saw (B-085).
+// each report's meta line starts with the same short report number its sender saw (B-085). Feedback 16.11.2026: a
+// report says where it was written (its `client` line under the meta line – inbox-text.ts), shows an attached device
+// crash report open and plays its recordings (feedback.inboxAudio, as blob URLs).
 // Never: exposes keys, polls the mailbox or renders a report as HTML. The runtime permits inbox calls only to the owner.
 
 import { signal } from '@preact/signals';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { FEEDBACK_HANDLED_KEEP_MS, reportNumber, type FeedbackHandled, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackHandled, FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { errorText, rpc } from '../lib/rpc.ts';
 import { can, session } from '../lib/session.ts';
+import { dataUrlToBlob } from './bridge.ts';
+import { HANDLED_LABEL, fetchText, metaLine } from './inbox-text.ts';
 
 const selectedReport = signal<string | undefined>(undefined); // preserve selection across desktop/phone shell mounts
 
@@ -29,13 +33,6 @@ export function FeedbackInboxEntry(props: { shown: boolean; onOpen: () => void }
   }, [info, allowed, props.shown]);
   if (!allowed) return null;
   return <div class="feedback-inbox-entry">{receiving && <button type="button" class="button ghost small" onClick={props.onOpen}>Inbox</button>}</div>;
-}
-
-const HANDLED_LABEL: Record<FeedbackHandled, string> = { done: 'Done', irrelevant: 'Not relevant' };
-
-/** "Done · goes 23 Nov" – the mark and the day the runtime removes the report. */
-export function handledText(handled: NonNullable<FeedbackInboxItem['handled']>): string {
-  return `${HANDLED_LABEL[handled.as]} · goes ${new Date(handled.at + FEEDBACK_HANDLED_KEEP_MS).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 }
 
 function ReportRow(props: { item: FeedbackInboxItem; selected: boolean; select: () => void; remove: () => void; mark: (as: FeedbackHandled | null) => void; busy: boolean }) {
@@ -75,6 +72,32 @@ function ReportScreenshot(props: { item: FeedbackInboxItem }) {
   return <div class="feedback-inbox-image">{image ? <img src={image} alt="Feedback screenshot" /> : <p>{error ?? 'Loading screenshot…'}</p>}</div>;
 }
 
+/** The report's recordings, one player each (blob URLs: the app's CSP plays no data: media). */
+function ReportAudio(props: { item: FeedbackInboxItem }) {
+  const takes = props.item.audio ?? [];
+  const [urls, setUrls] = useState<string[]>([]);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    const made: string[] = [];
+    setUrls([]);
+    setError(undefined);
+    const load = (index: number) => rpc.call('feedback.inboxAudio', { id: props.item.id, index }).then((audio) => {
+      const url = URL.createObjectURL(dataUrlToBlob(`data:${audio.mime};base64,${audio.dataBase64}`));
+      if (live) made.push(url); else URL.revokeObjectURL(url);
+      return url;
+    });
+    if (takes.length) void Promise.all(takes.map((_, index) => load(index))).then((list) => { if (live) setUrls(list); }, (err) => { if (live) setError(errorText(err)); });
+    return () => { live = false; for (const url of made) URL.revokeObjectURL(url); };
+  }, [props.item.id]);
+  if (!takes.length) return null;
+  return (
+    <div class="feedback-inbox-audio" aria-label="Recordings">
+      {urls.length ? urls.map((url, index) => <audio key={url} controls preload="metadata" src={url} aria-label={`Recording ${index + 1}`} />) : <p>{error ?? 'Loading recording…'}</p>}
+    </div>
+  );
+}
+
 function InboxContent() {
   const [items, setItems] = useState<FeedbackInboxItem[]>([]);
   const selected = selectedReport.value;
@@ -101,10 +124,7 @@ function InboxContent() {
       await list(); // local reports stay readable when the cloud is unavailable
       const result = await rpc.call('feedback.inboxFetch');
       await list();
-      if (live.current) {
-        const unreadable = result.unreadable ? ` ${result.unreadable} could not be opened.` : '';
-        setMessage(`${result.total} reports.${unreadable}${result.more ? ' More are waiting; refresh again.' : ''}`);
-      }
+      if (live.current) setMessage(fetchText(result));
     } catch (err) {
       if (live.current) { setFailed(true); setMessage(errorText(err)); }
     } finally {
@@ -156,9 +176,12 @@ function InboxContent() {
         </div>
         <section class="feedback-inbox-report" aria-label="Selected feedback">
           {current ? <>
-            <p class="feedback-inbox-meta">No. {reportNumber(current.id)} · {new Date(current.createdAt).toLocaleString()} · {current.appVersion} · {current.os}{current.fromAgent ? ' · Agent report' : ''}{current.handled ? ` · ${handledText(current.handled)}` : ''}</p>
+            <p class="feedback-inbox-meta">{metaLine(current)}</p>
+            {current.client && <p class="feedback-inbox-meta feedback-inbox-client">{current.client}</p>}
             <p class="feedback-inbox-text">{current.text}</p>
+            <ReportAudio key={`audio-${current.id}`} item={current} />
             <ReportScreenshot key={current.id} item={current} />
+            {current.clientDiagnostics && <details open><summary>Crash report</summary><pre>{current.clientDiagnostics}</pre></details>}
             {current.diagnostics && <details><summary>Diagnostics</summary><pre>{current.diagnostics}</pre></details>}
           </> : <p class="feedback-inbox-empty">Select a report to read it.</p>}
         </section>

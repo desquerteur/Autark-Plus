@@ -17,12 +17,12 @@ const FILE_ID = 'e'.repeat(64);
 
 interface Call { url: string; headers: Record<string, string>; body: FormData }
 
-function setup(options: { login?: object | null; signedIn?: boolean; state?: string; enabled?: boolean; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean } = {}) {
+function setup(options: { login?: object | null; signedIn?: boolean; state?: string; enabled?: boolean; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean; take?: { mime: string; name: string; bytes: Uint8Array } } = {}) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'plan-transcribe-'));
   const writeLogin = (login: object) => writeFileSync(path.join(home, 'auth.json'), JSON.stringify(login));
   if (options.login !== null) writeLogin(options.login ?? { auth_mode: 'chatgpt', tokens: { access_token: 'tok-first', account_id: 'acct-1' } });
   const account = { id: 'acc_c', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'prolite', home, state: options.state ?? 'ok', priority: 0, enabled: options.enabled ?? true, detected: false, createdAt: 1 };
-  const wav = toneWav(1);
+  const take = options.take ?? { mime: 'audio/wav', name: 'take.wav', bytes: toneWav(1) };
   const requests: string[] = [];
   const refreshes: unknown[] = [];
   const link = {
@@ -37,7 +37,7 @@ function setup(options: { login?: object | null; signedIn?: boolean; state?: str
   const services = {
     log: quietLog,
     accounts: { candidates: (engine?: string) => (engine === 'codex' && options.signedIn !== false ? [account] : []) },
-    files: { get: () => ({ id: FILE_ID, mime: 'audio/wav', name: 'take.wav', size: wav.byteLength, createdAt: 1 }), read: async () => wav },
+    files: { get: () => ({ id: FILE_ID, mime: take.mime, name: take.name, size: take.bytes.byteLength, createdAt: 1 }), read: async () => take.bytes },
     host: { media: {} },
     engines: { get: () => ({ realtime: async () => link }) },
   } as unknown as RuntimeServices;
@@ -68,6 +68,19 @@ test('one request: the take and a language go up with the login in the headers, 
     assert.equal(file.type, 'audio/wav');
     assert.ok(file.size > 0);
     assert.deepEqual(t.requests, [], 'no refresh without a rejection');
+  } finally { t.done(); }
+});
+
+test('a compact take (Ogg Opus from the page) goes up as it is: the same bytes, its own type and name, one request', async () => {
+  const bytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, ...new Array(58).fill(7)]);
+  const t = setup({ take: { mime: 'audio/ogg', name: 'Dictation 2026-11-16 10-00 (2).ogg', bytes } });
+  try {
+    assert.deepEqual(await planTranscribe(t.services, t.ref, 'de', t.fetch), { text: 'Hallo Welt.' });
+    assert.equal(t.calls.length, 1);
+    const file = t.calls[0].body.get('file') as File;
+    assert.equal(file.type, 'audio/ogg');
+    assert.equal(file.name, 'dictation.ogg');
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes, 'not decoded, not re-encoded');
   } finally { t.done(); }
 });
 

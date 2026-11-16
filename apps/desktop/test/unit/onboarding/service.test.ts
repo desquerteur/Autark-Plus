@@ -1,7 +1,8 @@
 // First run, runtime side (runtime/onboarding/service.ts, brief.ts): start() ends the layer – step 'done'
-// and completed, the Manager's first chat (made when there is none) and B-090 the Manager's first message there (the
-// shipped resources/prompts/onboarding.md, or the fallback), which wakes nobody – the person's answer is the first
-// turn; reset() opens the layer again at 'ai'. The line's own cases: start-line.test.ts.
+// and completed, the Manager's first chat (made when there is none) and there F07's start line in the person's voice and
+// B-090's Manager's first message below it (the shipped resources/prompts/onboarding.md, or the fallback), which wake
+// nobody – the person's answer is the first turn; reset() opens the layer again at 'ai'. The lines' own cases:
+// start-line.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,8 +48,11 @@ test('start(): step done and completed, the Manager\'s first chat and its first 
   assert.deepEqual(h.settings.get().onboarding, { completed: true, step: 'done' }, 'the first run completes the onboarding itself');
 
   assert.equal(h.wakeRows().length, 0, 'B-090: no wake until the person answers');
-  assert.equal(h.chats.messages(conversationId).filter((message) => message.authorId === HUMAN_ID).length, 0, 'nothing in the person\'s name');
+  const opener = h.chats.messages(conversationId).filter((message) => message.authorId === HUMAN_ID);
+  assert.equal(opener.length, 1, 'F07: one line in the person\'s name, the start line');
+  assert.match(opener[0].body, /^Sent by Autark when I clicked Start: /);
   const [line] = managerLines(h, conversationId, manager.id);
+  assert.ok(line.seq > opener[0].seq, 'the greeting below it');
   assert.match(line.body, /^Hi Lena Hess, I'm your Manager – your right hand in Autark\./);
   assert.match(line.body, /whatever stays open I decide myself/, 'every question is optional');
   assert.match(line.body, /I build a head set up like me and working beside me; I stay your direct contact, and for parallel work I split myself \(Ultra\)/, 'B-078 structure');
@@ -61,6 +65,7 @@ test('start(): step done and completed, the Manager\'s first chat and its first 
 
   assert.deepEqual(onboarding.start(), { conversationId }, 'the same chat again');
   assert.equal(managerLines(h, conversationId, manager.id).length, 1, 'not posted twice');
+  assert.equal(h.chats.messages(conversationId).length, 2, 'the start line neither');
   assert.equal(h.wakeRows().length, 0);
 });
 

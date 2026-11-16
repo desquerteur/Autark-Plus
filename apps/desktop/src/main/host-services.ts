@@ -72,6 +72,8 @@ export interface HostServicesDeps {
   onBadge?(count: number): void; // tray tooltip
   /** B-072: opens a company on this PC (companies.ts checks the args); missing = 'unavailable' (a test profile). */
   openCompany?(args: HostOps['company.open']['args']): HostOps['company.open']['result'];
+  /** 16.11.2026: takes a company off this PC (company-remove.ts checks the args); missing = 'unavailable' (a test profile). */
+  removeCompany?(args: HostOps['company.remove']['args']): Promise<HostOps['company.remove']['result']>;
   /** B-080: installs a build from a file the way an update does (updates-wiring.ts installFile); called after the answer went out. */
   install?(installer: string): Promise<void>;
   setTimer?(fn: () => void, ms: number): unknown;
@@ -154,6 +156,9 @@ export class HostServices {
       case 'company.open': // B-072
         if (!this.deps.openCompany) throw new WorkforceError('unavailable', 'Other companies open only in the desktop app.');
         return this.deps.openCompany(args as Args<'company.open'>);
+      case 'company.remove': // 16.11.2026
+        if (!this.deps.removeCompany) throw new WorkforceError('unavailable', 'Companies are removed only in the desktop app.');
+        return this.deps.removeCompany(args as Args<'company.remove'>);
       case 'app.install': return this.install(args as Args<'app.install'>); // B-080
       // MM7: the runtime's own lifecycle is RuntimeHost's – it answers these before `handle` is asked.
       case 'runtime.restart':

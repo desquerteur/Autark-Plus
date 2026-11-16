@@ -175,3 +175,36 @@ test('where an outsider reads (an external member, a bridge) no title is read an
     assert.equal((await w.call('calendar.add', args)).error, true, `calendar.add ${JSON.stringify(args)} in a bridged chat`);
   }
 });
+
+// Chat sweep 16.11.2026 (owner 11.11.: his Google Calendar is signed in on the PC and should show in the app): the way in is
+// the calendar's secret iCal address; 'google' without a Google client of the person's own names that way.
+test('calendar.connect: google without the person\'s own Google client answers with the iCal way; a Google ICS address is added and never shown', async () => {
+  const w = setup();
+  const SECRET = 'https://calendar.google.com/calendar/ical/anna%40gmail.com/private-0123456789abcdef/basic.ics';
+  const added: unknown[] = [];
+  let signIns = 0;
+  const rows: Array<{ id: string; kind: string; label: string; status: string; visible: boolean; url: string }> = [];
+  (w.s as { calendarSources?: unknown }).calendarSources = {
+    google: () => ({ configured: false, connected: false }),
+    connectGoogle: async () => { signIns++; return { authUrl: 'https://accounts.google.com/x' }; },
+    addIcs: async (input: { url: string; label?: string }) => {
+      added.push(input);
+      const row = { id: 'cal_1', kind: 'ics', label: input.label ?? 'Calendar', status: 'ok', visible: true, url: input.url };
+      rows.push(row);
+      return row;
+    },
+    list: () => rows,
+  };
+  const google = await w.call('calendar.connect', { action: 'google' });
+  assert.equal(google.error, true);
+  assert.match(google.text, /secret address in iCal format \(Google Calendar › Settings › the calendar › Integrate calendar\).* add_ics takes it\.$/);
+  assert.equal(signIns, 0, 'no sign-in started without a client');
+  const tool = calendarTools.find((item) => item.name === 'calendar.connect')!;
+  assert.match(tool.description, /secret address in iCal format/, 'the description says how a Google calendar gets here');
+  const add = await w.call('calendar.connect', { action: 'add_ics', url: SECRET, label: 'Google' });
+  assert.equal(add.error, false, add.text);
+  assert.deepEqual(added, [{ url: SECRET, label: 'Google' }]);
+  const list = await w.call('calendar.connect', { action: 'list' });
+  assert.ok(!add.text.includes('private-0123456789abcdef') && !list.text.includes('private-0123456789abcdef'), 'the secret address stays in the source row');
+  assert.match(list.text, /"label":"Google"/);
+});

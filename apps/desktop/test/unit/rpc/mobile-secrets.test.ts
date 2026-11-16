@@ -7,7 +7,7 @@ import type { ClientScope } from '../../../src/shared/api/protocol.ts';
 import { SecretVault } from '../../../src/runtime/secrets/service.ts';
 import { OWNER, TestClient, rpcFixture } from './s1-helpers.ts';
 
-test('secure permissions device edits and removes stored secrets without receiving values; export stays PC-only', async (t) => {
+test('secure permissions device edits and removes stored secrets without receiving values; export never over plain LAN http', async (t) => {
   const f = rpcFixture({ table: createHandlerTable() }); t.after(f.cleanup);
   f.services.secrets = new SecretVault({ db: f.services.db, clock: f.services.clock, host: { encrypt: async (s: string) => Buffer.from(s), decrypt: async (b: Uint8Array) => Buffer.from(b).toString() } });
   const owner = new TestClient(f.server, OWNER);
@@ -17,7 +17,9 @@ test('secure permissions device edits and removes stored secrets without receivi
   assert.ok(!JSON.stringify(updated).includes('synthetic-replaced'));
   const group = await owner.call<{ group: { id: string }; fields: Array<{ id: string }> }>('secrets.saveGroup', { label: 'Synthetic group', kind: 'other', fields: [{ field: 'key', kind: 'token', value: 'synthetic-group' }, { field: 'second', kind: 'text', value: 'synthetic-second' }] });
   await phone.call('secrets.saveGroup', { id: group.group.id, label: 'Edited group', remove: [group.fields[0].id] });
-  assert.equal((await phone.request('secrets.export', {})).error?.code, 'forbidden');
+  // 16.11.2026: the owner's secure phone exports too (rpc/phone-settings-reach.test.ts); plain LAN http never does
+  const lan = new TestClient(f.server, { kind: 'device', deviceId: 'dev_secretlan', capabilities: ['permissions'], secure: false });
+  assert.equal((await lan.request('secrets.export', {})).error?.code, 'forbidden');
   await phone.call('secrets.deleteGroup', { id: group.group.id });
   await phone.call('secrets.delete', { id: single.id });
   assert.equal((await phone.call<unknown[]>('secrets.list')).length, 0);

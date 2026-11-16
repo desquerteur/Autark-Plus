@@ -17,8 +17,9 @@
 //     Claude Code install says why in the same line; busy shows on the pressed button only; nothing moves; the flow
 //     survives the remount across the phone layout; Continue is disabled while no model can answer (no Skip);
 //   * About you: name, company and the "Your PC" radio rows (Whole PC checked; typing moves nothing); Start saves the
-//     profile, creates nobody, completes the onboarding and opens the Manager's chat with the app's start text as the
-//     person's own line (once, before the Manager's answer); the spotlight tour then opens over that chat (Skip ends it);
+//     profile, creates nobody, completes the onboarding and opens the Manager's chat with the app's start line as the
+//     person's own line (F07, once) and the Manager's first message directly below it, no model run until the person
+//     answers – that first turn reads the start line and the answer; the spotlight tour then opens over that chat (Skip ends it);
 //   * My day after the first run while no model can answer: the status line says so with Connect → Settings › Models,
 //     which shows the same four buttons; the line goes as soon as a model can answer;
 //   * screenshots light, dark, 640×480 and phone width; no horizontal scroll; no renderer errors.
@@ -333,8 +334,9 @@ test('first run: choice → AI (model setup, plan flow) → About you → the st
   await size(1280, 820);
   await page.waitForTimeout(400);
 
-  // Start: the profile is saved, nobody is created, the Manager's chat opens with its first message (B-090: written by
-  // the app, no turn) and the Manager answers the person's reply.
+  // Start: the profile is saved, nobody is created, the Manager's chat opens with its two opening lines – F07 the start
+  // line in the person's name, then the Manager's first message directly below it (B-090: both written by the app, no
+  // turn) – and the Manager answers the person's reply; that first turn reads the start line too.
   await about.getByRole('button', { name: 'Start' }).click();
   await page.waitForFunction(() => location.hash.startsWith('#/chat/'), undefined, { timeout: 20_000 });
   const chatId = await page.evaluate(() => decodeURIComponent(location.hash.slice('#/chat/'.length)));
@@ -350,10 +352,19 @@ test('first run: choice → AI (model setup, plan flow) → About you → the st
   assert.equal((await rpc.call('agents.list')).filter((agent) => !agent.archivedAt).length, agentsBefore, 'only the Manager: nobody was created');
   await page.locator('article.message.agent').first().waitFor({ timeout: 20_000 }); // the Manager's first message
   let messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
-  assert.equal(messages.filter((message) => message.authorKind === 'human').length, 0, "nothing in the person's name");
+  const startLines = messages.filter((message) => message.authorKind === 'human');
+  assert.equal(startLines.length, 1, "one line in the person's name: the start line");
+  const [startLine] = startLines;
+  assert.match(startLine.body, /^(Sent by Autark|Von Autark gesendet|Envoyé par Autark|Enviado por Autark)\b/, 'the start line, in the PC language');
   const welcome = messages.filter((message) => message.authorId === manager.id);
   assert.equal(welcome.length, 1, "the Manager's first message, once");
   assert.match(welcome[0].body, /^(Hi|Hallo|Bonjour|Hola) Test Person, .*\n1\. \*\*/s, 'in the PC language, with the numbered questions');
+  assert.equal(welcome[0].seq, startLine.seq + 1, "the Manager's first message directly below the start line");
+  assert.deepEqual(messages.map((message) => message.id), [startLine.id, welcome[0].id], 'nothing else in the chat');
+  assert.ok(messages.every((message) => !message.runId), 'both written by the app, no model run');
+  assert.deepEqual(await page.locator('article.message').evaluateAll((list) => list.map((item) => item.dataset.messageId)), [startLine.id, welcome[0].id], 'the window shows the start line, then the greeting');
+  assert.equal(await page.locator(`article.message.human[data-message-id="${startLine.id}"]`).count(), 1, 'the start line as the person\'s own');
+  assert.deepEqual((await rpc.call('chats.get', { id: chatId })).working, [], 'nobody works until the person answers');
   await shot('first-run-08-manager-welcome-light');
   const composer = page.locator('textarea').first();
   await composer.fill('English with me and inside the team. Start right away.');
@@ -361,10 +372,14 @@ test('first run: choice → AI (model setup, plan flow) → About you → the st
   await page.waitForFunction(() => document.querySelectorAll('article.message.agent').length >= 2, undefined, { timeout: 90_000 }); // the Manager's turn
   messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
   const own = messages.filter((message) => message.authorKind === 'human');
-  assert.equal(own.length, 1, "the person's answer");
+  assert.deepEqual(own.map((message) => message.id).slice(0, 1), [startLine.id], 'the start line stays first');
+  assert.equal(own.length, 2, "the start line and the person's answer");
   const answer = messages.filter((message) => message.authorId === manager.id).at(-1);
   assert.ok(answer && answer.id !== welcome[0].id, 'the Manager answered');
-  assert.ok(own[0].createdAt <= answer.createdAt, 'the answer came after the reply');
+  assert.ok(own[1].createdAt <= answer.createdAt, 'the answer came after the reply');
+  // The demo engine echoes the turn's new input (its own greeting is not new to it): the start line, then the reply.
+  const read = answer.body.indexOf(startLine.body);
+  assert.ok(read >= 0 && answer.body.indexOf('English with me and inside the team.') > read, `the Manager's first turn read the start line and the reply (${answer.body.slice(0, 300)})`);
   await shot('first-run-08-manager-chat-light');
 
   // My day (Home) after the first run while no model can answer – the status line says so with Connect (the signals

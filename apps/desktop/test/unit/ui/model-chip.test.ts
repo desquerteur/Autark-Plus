@@ -3,7 +3,8 @@
 // the hard `models` pin), Auto clears model, effort and temperature; only the newest of each family while nothing is
 // searched (an older version by search or while chosen, under "Older versions"); the temperature row (a native slider 0–1 in tenths, saved on change, value in a fixed cell,
 // "Auto" button; saved as settings.temperatures, which chats.update takes) directly above the effort row; the effort
-// row's default cells include xhigh. The .tsx cannot be
+// row's default cells include xhigh. F26: "Auto" on the chip while nothing is suggested; F05: each row's source and full
+// id (lib/model-name.ts pickerHints). The .tsx cannot be
 // imported by node --test, so its wiring is read from the source (the window check: test/ui/model-menu-window.test.mjs).
 // Owns: these assertions only.
 
@@ -62,6 +63,30 @@ test('B-083 (live 09.11.): the temperature row\'s title says where a temperature
     assert.ok(tip.includes(fact), `tooltip: ${fact}`);
     assert.ok(TEMPERATURE_FACT.toLowerCase().includes(fact.toLowerCase()), `agent fact: ${fact}`);
   }
+});
+
+test('F26: with nothing suggested the chip says "Auto" and the routed model muted after it; a pick names itself', () => {
+  assert.match(chip, /const after = chosen \? sub : \[routedName, sub\]\.filter\(Boolean\)\.join\(' · '\) \|\| undefined;/);
+  assert.match(chip, /\{chosen \? shortName\(chosen\) : AUTO\}\{after && <span class="sub">\{` \$\{after\}`\}<\/span>\}/);
+  assert.doesNotMatch(chip, /shortName\(chosen \?\? routed\)/, 'the routed model never reads as a pick');
+});
+
+test('F05: each picker row shows where the model runs, its full id as the title; two rows alike add the id\'s end', async () => {
+  assert.match(chip, /title=\{model\.id\} onClick=\{props\.onPick\}>/);
+  assert.match(chip, /const hints = pickerHints\(list, \(model\) => shortName\(model\.id\) \?\? model\.id\);/);
+  const { pickerHints } = await import('../../../src/ui/lib/model-name.ts');
+  const hints = pickerHints([
+    { id: 'codex:gpt-6.1-terra', model: 'gpt-6.1-terra', available: true, source: 'Codex' },
+    { id: 'commandcode:gpt-6.1-terra', model: 'gpt-6.1-terra', available: false, source: 'commandcode' },
+    { id: 'openrouter:deepseek/deepseek-v4', model: 'deepseek/deepseek-v4', available: true, source: 'OpenRouter' },
+    { id: 'openrouter:deepseek/deepseek-v4-flash', model: 'deepseek/deepseek-v4-flash', available: true, source: 'OpenRouter' },
+    { id: 'old:thing', model: 'thing', available: true },
+  ], (model) => (model.model.includes('deepseek') ? 'DeepSeek V4' : model.model));
+  assert.equal(hints.get('codex:gpt-6.1-terra'), 'Codex');
+  assert.equal(hints.get('commandcode:gpt-6.1-terra'), 'commandcode · Unavailable', 'the same name from another source reads apart');
+  assert.equal(hints.get('openrouter:deepseek/deepseek-v4'), 'OpenRouter · deepseek-v4');
+  assert.equal(hints.get('openrouter:deepseek/deepseek-v4-flash'), 'OpenRouter · deepseek-v4-flash');
+  assert.equal(hints.get('old:thing'), '', 'an older runtime\'s catalog without a source: no hint');
 });
 
 test('effort cells: the model\'s own, else Low … Max with Very high (an API row lists only none, or the suggested effort is not among them); the chip names any suggested effort', () => {

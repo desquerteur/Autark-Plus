@@ -1,7 +1,7 @@
 // The team side's access to the mailbox (B-055 Q2): a Google service account (only in the owner's vault) signs a
 // JWT (RS256, node:crypto) that Google's token endpoint exchanges for an access token (scope datastore); with it
-// the team PC lists, reads and deletes mailbox documents over Firestore REST (no SDK). Admin access ignores the
-// security rules, which deny every read to everyone else.
+// the team PC lists (with each letter's createTime), reads and deletes mailbox documents over Firestore REST (no SDK).
+// Admin access ignores the security rules, which deny every read to everyone else.
 // Owns: checking the service account, the JWT, the token cache (in memory, until shortly before expiry) and the
 // three document calls. Never: logs or returns a token, the key or a remote error body; reaches another host.
 
@@ -114,14 +114,23 @@ export class Mailbox {
     return `${documentsUrl({ project: this.options.project, endpoint: this.options.firestore })}/feedback`;
   }
 
-  /** One page of letter ids (names only: `mask` leaves the sealed bytes out). Ids we would not create are returned as they are. */
-  async page(pageToken?: string): Promise<{ ids: string[]; next?: string }> {
+  /**
+   * One page of letters: each id and – 16.11.2026 – when Google stored it (`createTime`, ms; the receiver's age
+   * deletion). Names only: `mask` leaves the sealed bytes out. Ids we would not create are returned as they are.
+   */
+  async page(pageToken?: string): Promise<{ letters: Array<{ id: string; created?: number }>; next?: string }> {
     const reply = await this.call('GET', `${this.base()}?pageSize=${PAGE_SIZE}&mask.fieldPaths=v${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, 1024 * 1024);
     if (reply.status !== 200) throw unavailable();
     const answer = json(reply.body);
-    const documents = Array.isArray(answer.documents) ? answer.documents as Array<{ name?: unknown }> : [];
-    const ids = documents.map((doc) => (typeof doc.name === 'string' ? doc.name.slice(doc.name.lastIndexOf('/') + 1) : '')).filter(Boolean);
-    return { ids, ...(typeof answer.nextPageToken === 'string' && answer.nextPageToken ? { next: answer.nextPageToken } : {}) };
+    const documents = Array.isArray(answer.documents) ? answer.documents as Array<{ name?: unknown; createTime?: unknown }> : [];
+    const letters: Array<{ id: string; created?: number }> = [];
+    for (const doc of documents) {
+      const id = typeof doc.name === 'string' ? doc.name.slice(doc.name.lastIndexOf('/') + 1) : '';
+      if (!id) continue;
+      const created = typeof doc.createTime === 'string' ? Date.parse(doc.createTime) : NaN;
+      letters.push(Number.isFinite(created) ? { id, created } : { id });
+    }
+    return { letters, ...(typeof answer.nextPageToken === 'string' && answer.nextPageToken ? { next: answer.nextPageToken } : {}) };
   }
 
   /** The sealed bytes of letter `id`; undefined when it is gone or is no v1 letter. */
@@ -135,10 +144,13 @@ export class Mailbox {
     return Buffer.from(fields.sealed.bytesValue, 'base64');
   }
 
-  /** Deletes letter `id` (already gone is fine). */
+  /**
+   * Deletes letter `id` (already gone is fine) – any id a listing returned (the age deletion also takes letters no
+   * sender of ours made); one path segment, encoded, never "." or "..".
+   */
   async remove(id: string): Promise<void> {
-    if (!DOCUMENT_ID.test(id)) return;
-    const reply = await this.call('DELETE', `${this.base()}/${id}`, 0);
+    if (!id || id.length > 1500 || id.includes('/') || id === '.' || id === '..') return;
+    const reply = await this.call('DELETE', `${this.base()}/${encodeURIComponent(id)}`, 0);
     if (reply.status !== 200 && reply.status !== 204 && reply.status !== 404) throw unavailable();
   }
 }

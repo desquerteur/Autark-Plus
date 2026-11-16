@@ -51,6 +51,8 @@ export interface IpcDeps {
   openExternal(url: string): Promise<void>;
   /** The UI's layout for the native caption controls (main/title-bar.ts). */
   titleBarLayout?(layout: TitleBarLayout): void;
+  /** A modal's backdrop dims the page: the caption controls dim too (main/title-bar.ts dimmedColors). */
+  titleBarDim?(dim: boolean): void;
   /** B-044: the app window's network came back (navigator 'online'); main pushes host power 'online' to the runtime. */
   online?(): void;
   log?(line: string): void;
@@ -160,6 +162,7 @@ export function registerIpc(ipc: IpcMainLike, deps: IpcDeps): void {
 
   // window chrome: anything but 'compact' is the column layout
   on(IPC.titleBarLayout, (_event, layout) => deps.titleBarLayout?.(layout === 'compact' ? 'compact' : 'columns'));
+  on(IPC.titleBarDim, (_event, dim) => deps.titleBarDim?.(dim === true));
 
   // B-044: network back. A hidden window that shares the preload sends it too – dropped without a refusal line.
   ipc.on(IPC.online, event => {

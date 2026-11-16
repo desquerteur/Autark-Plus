@@ -184,6 +184,6 @@ test('through the runner, on the only account: the timed-out call fails alone an
   const overload = await world({ text: '', stop: 'error', error: { code: 'unavailable', message: 'OpenAI is overloaded right now.' } });
   await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }));
   assert.equal(overload.h.accounts.get('acc_codex')?.state, 'cooling', 'a real overload cools the account as before');
-  await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }), /limited right now|paused for a few minutes after a provider error/); // B-083's unfit.ts names a cooling as a pause
+  await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }), /limited right now|paused for a few minutes after a provider error|paused until/); // B-083's unfit.ts names a cooling as a pause (F28: by account)
   assert.equal(overload.calls(), 1);
 });

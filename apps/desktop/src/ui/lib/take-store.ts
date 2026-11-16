@@ -3,7 +3,8 @@
 // without IndexedDB (private window, blocked storage: then only until the page closes). flush() uploads the held
 // pieces, oldest first, once the link is back; each one uploaded leaves the store and is reported (composer/voice.ts
 // swaps its chip for the uploaded file). In a draft a held piece is an audio chip whose fileId is HELD_PREFIX + key
-// (no file id: the runtime never stores it in a draft). Every storage call is caught: storage trouble keeps nothing
+// (no file id: the runtime never stores it in a draft) and whose type is the piece's own (a WAV, or Ogg Opus for a
+// compact piece). Every storage call is caught: storage trouble keeps nothing
 // in IndexedDB, it never fails a take.
 // Owns: the held pieces and their object URLs. Never: hears, keeps a piece after it was uploaded or deleted, or holds
 // anything but dictation audio.
@@ -24,6 +25,8 @@ export interface HeldTake {
   at: number;
   /** The draft whose chip it is; absent for a field that cannot hold a chip. */
   owner?: string;
+  /** The piece's type: audio/wav, or audio/ogg for a compact one (lib/dictation.ts). */
+  mime?: string;
 }
 
 interface Stored extends HeldTake { blob: Blob }
@@ -43,7 +46,7 @@ function valid(value: unknown): value is Stored {
     && typeof Blob !== 'undefined' && entry.blob instanceof Blob && entry.blob.size > 0;
 }
 
-const view = ({ blob: _blob, ...held }: Stored): HeldTake => held;
+const view = ({ blob, ...held }: Stored): HeldTake => ({ ...held, mime: blob.type || 'audio/wav' });
 
 export class TakeStore {
   private readonly memory = new Map<string, Stored>();
@@ -134,7 +137,7 @@ export class TakeStore {
 
 /** A held piece as the draft's audio chip. */
 export function heldAttachment(held: HeldTake): Attachment {
-  return { fileId: HELD_PREFIX + held.key, name: held.name, mime: 'audio/wav', size: held.size };
+  return { fileId: HELD_PREFIX + held.key, name: held.name, mime: held.mime ?? 'audio/wav', size: held.size };
 }
 
 /** The held piece's key of a chip's fileId, or undefined for an uploaded file. */

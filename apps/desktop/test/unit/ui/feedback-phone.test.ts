@@ -1,7 +1,8 @@
-// SM6: feedback from the phone (no desktop bridge). The panel offers "Add
-// screenshot" there: a picked image (gallery or camera) is checked, scaled down and re-encoded
-// (no photo metadata) before the panel shows it for marking and uploads it; Send opens the issue
-// once in a new tab.
+// SM6: feedback from the phone (no desktop bridge). Where nothing captures the window (the iPhone
+// web app, a browser, an Android app before 0.3.15 – feedback-native.test.ts has the app's own shot)
+// the screenshot row offers "Add photo" (FeedbackRows.tsx): a picked image (gallery or camera) is
+// checked, scaled down and re-encoded (no photo metadata) before the panel shows it for painting
+// and uploads it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

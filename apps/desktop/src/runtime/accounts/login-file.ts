@@ -1,8 +1,8 @@
 // What a CLI plan's login file says, read the same way wherever a login is copied: between the CEO's PCs
 // (devices/sync/logins.ts) and from a CLI's default home into the account's own home here (takeLogin). The deciding file
 // (the first of cli-homes.ts loginFiles) holds the login: whether it can still be refreshed, the token it refreshes with,
-// its own time (Codex last_refresh, Claude Code's and Gemini CLI's token expiry, else the file's mtime) and whose it is
-// (Codex tokens.account_id, else the id token's subject).
+// its own time (Codex last_refresh, Claude Code's and Gemini CLI's token expiry, else the file's mtime), whose it is
+// (Codex tokens.account_id, else the id token's subject) and the e-mail it names (Codex: the id token's).
 // Owns: these readings and takeLogin's copy. Never: logs, returns or shows a file's content, or writes into the folder it
 // takes a login from.
 
@@ -55,8 +55,17 @@ export function identity(provider: string, file: Json): string | undefined {
   } catch { return undefined; }
 }
 
+/** The e-mail a login file names (Codex: its id token's claim); undefined where the file names none (Claude Code). */
+export function loginEmail(provider: string, file: Json): string | undefined {
+  const token = provider === 'codex' && isJson(file.tokens) ? text(file.tokens.id_token) : undefined;
+  try {
+    const claims = token ? JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as unknown : undefined;
+    return isJson(claims) ? text(claims.email) : undefined;
+  } catch { return undefined; }
+}
+
 /** The deciding login file `name` in `home` with its time (0: no login in it, e.g. emptied); undefined when there is none. */
-function loginIn(provider: ProviderId, home: string, name: string): { json: Json; at: number; bytes: Buffer } | undefined {
+export function loginIn(provider: ProviderId, home: string, name: string): { json: Json; at: number; bytes: Buffer } | undefined {
   const file = path.join(home, name);
   try {
     const info = lstatSync(file);

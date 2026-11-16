@@ -1,5 +1,6 @@
 // Wave 3: SYSTEM.md in <data>/agents/<id>/ is the one source of an agent's instructions.
-// - start: every agent (archived too) gets its folder once from its stored instructions; a second start changes nothing;
+// - start: every agent (archived too – one that left a trace, F14: the list leaves out one that never did anything) gets
+//   its folder once from its stored instructions; a second start changes nothing;
 // - an edit in the app writes SYSTEM.md first and is an agent revision; an edit without new instructions leaves it alone;
 //   a folder that cannot be written refuses the edit (nothing saved);
 // - an edit on disk becomes the person's edit with undo; the prompt uses the file's text at once;
@@ -28,6 +29,7 @@ test('start: every agent gets its folder once from its instructions; a second st
     const manager = f.org.ensureSeed()!;
     const writer = f.org.create({ name: 'Writer', role: 'Copywriter', instructions: 'Write short.\r\nNo jargon.  ', createdBy: 'human' });
     const old = f.org.create({ name: 'Old', instructions: 'Old ways.', createdBy: 'human' });
+    f.db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES ('run_1', ?, 'message', 'done')`, [old.id]); // F14: it worked once
     f.org.archive(old.id);
     const counts = f.core.start();
     assert.equal(counts.created, 3);

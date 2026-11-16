@@ -7,8 +7,15 @@
 // asked names its own role and linked PCs in companies.list, and companies.tool runs one agent tool in it for an agent of
 // another company on this PC (tools.call with company – runtime/tools/placement.ts); both runtimes reach each other over
 // loopback with the owner token of the other's runtime.json (parseRuntimeFile, the same rule in main and runtime).
-// Owns: the id rule, the label rule, the runtime.json rule and the three methods' contract. Never: behaviour
-// (runtime/root/companies.ts lists and calls, main/companies.ts opens and stops).
+// 16.11.2026 (owner: "die Firmen nur wie Konten ... austreten ... löschen ... exportieren ... importieren"): companies
+// are like accounts in one app. Each entry names its folder ("first", "company-2"), so two of the same name are told
+// apart. companies.remove takes one off this PC: it stops, its folder goes to the recycle bin and a removal mark
+// (REMOVED_FILE) keeps it out of every list and start until then; the first one may go too once another exists – a plain
+// start then opens the next one (main/company-remove.ts). companies.export writes a backup plus its secrets file into a
+// chosen folder, companies.import makes such an export a new company here (runtime/portability/company.ts).
+// Owns: the id and folder rules (the logins folder beside the companies is none), the label rule, the runtime.json
+// rule, the removal mark's name and the methods' contract. Never: behaviour
+// (runtime/root/companies.ts lists and calls, main/companies.ts opens and stops, main/company-remove.ts removes).
 
 /** A company's folder name: lower-case letters, digits and dashes ("company-2"). */
 export const COMPANY_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -16,9 +23,26 @@ export const COMPANY_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** Windows device names, which no folder may carry ("con", "nul", "com1" …). */
 const DEVICE_NAME = /^(con|prn|aux|nul|com\d|lpt\d)$/;
 
+/** The folder beside the companies that holds this PC's plan logins, shared by all of them (runtime/root/companies.ts loginsFolder): never a company. */
+export const LOGINS_FOLDER = 'logins';
+
 export function isCompanyId(value: unknown): value is string {
-  return typeof value === 'string' && COMPANY_ID.test(value) && !DEVICE_NAME.test(value);
+  return typeof value === 'string' && COMPANY_ID.test(value) && !DEVICE_NAME.test(value) && value !== LOGINS_FOLDER;
 }
+
+/** The first company's folder as lists and agents name it (its data folder is the app's own and has no company id). */
+export const FIRST_FOLDER = 'first';
+
+/** A company's folder as lists and agents name it: its id, or 'first' for the first one. */
+export const folderOf = (entry: { id: string | null }): string => entry.id ?? FIRST_FOLDER;
+
+/** The next free id: company-2, company-3, … */
+export function nextCompanyId(taken: readonly string[]): string {
+  for (let n = 2; ; n += 1) if (!taken.includes(`company-${n}`)) return `company-${n}`;
+}
+
+/** 16.11.2026: the mark in a company's folder that it is being removed from this PC ({at, name}); main/company-remove.ts. */
+export const REMOVED_FILE = 'company-removed.json';
 
 /** The person's place in a company: its owner (the CEO), or an employee of another firm whose data it holds (it joined that firm's PC as an employee). */
 export type CompanyRole = 'owner' | 'employee';
@@ -37,11 +61,15 @@ export function isCompanyStart(value: unknown): value is CompanyStart {
 export interface CompanyEntry {
   id: string | null;
   label: string;
+  /** 16.11.2026: its folder (folderOf) – tells two companies of the same name apart. */
+  folder: string;
   current: boolean;
-  /** B-075: only on the current entry – the person's role there. */
+  /** B-075: the person's role there – on the current entry, and on a running other one where its facts were asked. */
   role?: CompanyRole;
-  /** B-075: only on the current entry – its linked PCs (not removed or half-paired) and whether each is online. */
+  /** B-075: its linked PCs (not removed or half-paired) and whether each is online – where `role` is named. */
   linkedPcs?: Array<{ name: string; online: boolean }>;
+  /** 16.11.2026: only where the others' facts were asked – whether this other company runs now. */
+  running?: boolean;
   /** B-078: only on the current entry – how this start was asked for (`--start=`; its first run opens that way). */
   start?: CompanyStart;
 }
@@ -80,8 +108,27 @@ export interface CompanyToolCall {
 
 declare module '../api/methods.ts' {
   interface Methods {
-    /** B-072: the companies on this PC, the first one first; empty where there are none (a test profile, headless). B-075: the current one with its role and linked PCs. */
-    'companies.list': { params: void; result: { companies: CompanyEntry[] } };
+    /**
+     * B-072: the companies on this PC, the first one first; empty where there are none (a test profile, headless). B-075:
+     * the current one with its role and linked PCs. 16.11.2026: `facts` – each other company says whether it runs, and a
+     * running one its own role and linked PCs (asked from it over loopback).
+     */
+    'companies.list': { params: { facts?: boolean } | void; result: { companies: CompanyEntry[] } };
+    /**
+     * 16.11.2026: takes a company off this PC – id from companies.list, null = the first one. It stops, its start at
+     * sign-in goes, and its folder moves to the recycle bin (the first one's: its data, not the app's own profile; its
+     * workspace folder stays); linked PCs and phones keep their copy. The company open here goes too: the next one opens
+     * and this one quits. Refused for the only company on this PC.
+     */
+    'companies.remove': { params: { id: string | null }; result: { ok: true } };
+    /**
+     * 16.11.2026: exports a company (none = this one; another one exports itself while it runs) into a new folder inside
+     * `dir`: a backup (system.backup) plus secrets.csv with the secrets' values readable (secrets.export), so another
+     * Autark opens it with companies.import. `dir` is absolute and outside the company's data folder.
+     */
+    'companies.export': { params: { id?: string | null; dir: string }; result: { path: string; bytes: number; secrets: number } };
+    /** 16.11.2026: makes an export (or any backup folder) a new company on this PC; its window opens and its first start puts the data in. */
+    'companies.import': { params: { path: string }; result: { ok: true; id: string } };
     /**
      * B-072: switches to a company – id from companies.list, null or none = the first one – or starts a new one (create: true;
      * with an id: that folder name). Its window opens, this one goes to the tray and keeps working. B-078: `start` with

@@ -265,12 +265,14 @@ export interface LiveStep { kind: StepKind; verb: string; active: string; target
  * One agent – or one part of a split agent (`split`) – at work for a chat right now: a line of the live bar above the
  * chat's composer (runtime/chat/live.ts decides where it shows). `step`: what it does at this moment ("Reading
  * invoices.pdf"); `note`: the dispatcher's live note (also a waiting note); `model` (display name) · `effort` and the
- * turn's temperature (B-083: `temperatureSent` false – the model samples at its own setting).
+ * turn's temperature (B-083: `temperatureSent` false – the model samples at its own setting). `deviceId` (F10,
+ * 16.11.2026): the run is on another of the person's PCs (devices/sync/live.ts); absent: on this PC.
  */
 export interface LiveRun {
   runId: string; agentId: string; startedAt: number; step?: string; note?: string; model?: string; effort?: string;
   temperature?: number; temperatureSent?: boolean; taskId?: string;
   split?: { id: string; groupId: string; idx: number; of: number; parentRunId: string; title: string };
+  deviceId?: string;
 }
 
 export interface ConversationSummary {

@@ -10,6 +10,8 @@
 // of its own (13.11.2026: the mode belongs to the agent) – settings.mode is not written. B-078: settings.parentId places a chat under
 // another one (null: back on top; chat/children.ts checks it) and chats.thread finds or opens the thread on a message.
 // B-085: messages.send from an agent's own wf (owner scope with agentId) posts as that agent (sendAsAgent).
+// 16.11.2026: the person's messages.send and messages.edit store a pasted key in the secrets catalog first and carry its
+// handle (secrets/text-capture.ts addKeysSaved).
 // Never: business logic – it delegates to the chat service, dispatcher, wake queue and scheduler.
 
 import { WorkforceError } from '../../../shared/errors.ts';
@@ -33,6 +35,7 @@ import { register as registerBlocks } from './blocks.ts';
 import { rememberConversation } from './system.ts';
 import { registerExternalAgents } from '../../bridges/external-rpc.ts'; // C8
 import { attachedSecrets } from '../../secrets/chat-capture.ts';
+import { addKeysSaved } from '../../secrets/text-capture.ts';
 import { callLogOf, talkerOf } from '../../calls/wiring.ts';
 import { callDevice } from './calls.ts';
 import { todos } from '../../agents/chat-out.ts';
@@ -258,7 +261,7 @@ export function register(table: HandlerTable): void {
       beforeSeq: optNum(o, 'beforeSeq', { min: 0 }), limit: optNum(o, 'limit', { min: 1, max: 200 }) ?? 60,
     });
   }, CHAT);
-  table.add('messages.send', (params, ctx) => {
+  addKeysSaved(table, 'messages.send', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'model', 'effort', 'pin', 'clientId', 'speech', 'secrets', 'ultra', 'marks']);
     const conversationId = id(o, 'conversationId');
@@ -296,7 +299,7 @@ export function register(table: HandlerTable): void {
     rememberConversation(ctx.services, conversationId);
     return message;
   }, CHAT);
-  table.add('messages.edit', (params, ctx) => {
+  addKeysSaved(table, 'messages.edit', (params, ctx) => {
     const o = input(params);
     const messageId = id(o);
     const body = text(o, 'body', { max: MAX_BODY, multiline: true });

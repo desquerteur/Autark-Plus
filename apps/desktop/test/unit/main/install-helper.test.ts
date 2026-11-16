@@ -1,6 +1,7 @@
 // The Windows/Linux relaunch helper (src/main/updates/install-helper.ts): the cmd script and its launch values, the sh
 // script and its positional arguments, the quitAndInstall override (helper started → quit; failed → the library's own
-// call) and one real run of the sh script where a shell exists (a stand-in AppImage, no install).
+// call), one real run of the sh script where a shell exists (a stand-in AppImage, no install), and the install lock
+// (one install at a time on a PC: a second company's helper waits and starts its company, really run in a test folder).
 // Owns: these assertions only. Never: runs an installer, starts Autark or touches the real updater cache.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import os from 'node:os';
 import path from 'node:path';
 import {
-  LINUX_HELPER_SCRIPT, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, windowsHelper, type HelperLaunch, type InstallHelperDeps,
+  LINUX_HELPER_SCRIPT, LOCK_NAME, LOCK_STALE_MS, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, takeInstallLock, windowsHelper,
+  type HelperLaunch, type InstallHelperDeps,
 } from '../../../src/main/updates/install-helper.ts';
 import { INSTALL_WATCHDOG_MS } from '../../../src/main/updates/update-service.ts';
 import type { Updater } from '../../../src/main/updates/update-service.ts';
@@ -31,7 +33,8 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   assert.equal(launch.cwd, dir, 'never the install folder, which the uninstaller removes');
   assert.deepEqual(launch.env, {
     AUTARK_UPDATE_PID: '4242', AUTARK_UPDATE_INSTALLER: INSTALLER, AUTARK_UPDATE_EXE: EXE,
-    AUTARK_UPDATE_DIR: 'C:\\Users\\Jürgen Ä\\AppData\\Local\\Programs\\Autark', AUTARK_UPDATE_LOG: LOG,
+    AUTARK_UPDATE_DIR: 'C:\\Users\\Jürgen Ä\\AppData\\Local\\Programs\\Autark', AUTARK_UPDATE_LOG: LOG, AUTARK_UPDATE_ARGS: '',
+    AUTARK_UPDATE_LOCK: path.win32.join(os.tmpdir(), LOCK_NAME),
   });
   assert.equal(launch.script?.file, `${dir}\\update-helper.cmd`);
   const text = launch.script!.text;
@@ -40,12 +43,19 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   assert.equal(/^[\x00-\x7f]*$/.test(text), true, 'no path inside: the script is ASCII');
   assert.match(text, /start "" \/wait "%AUTARK_UPDATE_INSTALLER%" --updated \/S\r\n/);
   assert.doesNotMatch(text, /--force-run/, 'the helper starts the app, not NSIS through Explorer');
-  assert.match(text, /start "" \/D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated/);
+  assert.match(text, /start "" \/D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated %AUTARK_UPDATE_ARGS%\r\n/);
   assert.match(text, /"%SystemRoot%\\System32\\tasklist\.exe" \/FI "PID eq %AUTARK_UPDATE_PID%"/);
   assert.match(text, /\| "%SystemRoot%\\System32\\find\.exe" /, 'never a find from PATH (Git\'s find matches nothing)');
   assert.match(text, />>"%AUTARK_UPDATE_LOG%" echo/);
   assert.doesNotMatch(text, /timeout /, 'timeout fails without a console input; ping waits instead');
   assert.equal(WINDOWS_HELPER_SCRIPT.includes('\r'), false);
+});
+
+test('F25: the company that pressed Update starts again – only its own --company flag reaches the scripts', () => {
+  assert.equal(windowsHelper({ pid: 1, installer: INSTALLER, exe: EXE, logFile: LOG, args: ['--company=company-2'] }).env.AUTARK_UPDATE_ARGS, '--company=company-2');
+  assert.equal(windowsHelper({ pid: 1, installer: INSTALLER, exe: EXE, logFile: LOG, args: ['--company=x&calc', '--background'] }).env.AUTARK_UPDATE_ARGS, '', 'nothing that is no company flag lands in the cmd line');
+  assert.equal(linuxHelper({ pid: 1, downloaded: '/a', appImage: '/b', logFile: '/c', args: ['--company=company-3'] }).args.at(-1), '--company=company-3');
+  assert.match(LINUX_HELPER_SCRIPT, /if \[ -n "\$company" \]; then exec "\$target" --updated "\$company"; fi/);
 });
 
 test('Windows: a differential package goes along as --package-file', () => {
@@ -59,7 +69,7 @@ test('Linux: sh with positional arguments, mv -f and chmod, then exec with --upd
   const launch = linuxHelper({ pid: 77, downloaded: '/home/a b/.cache/autark-updater/pending/autark-linux-x64.AppImage', appImage: '/home/a b/Apps/autark-linux-x64.AppImage', logFile: '/home/a b/.config/Autark/logs/update-helper.log' });
   assert.equal(launch.command, '/bin/sh');
   assert.deepEqual(launch.args.slice(0, 3), ['-c', LINUX_HELPER_SCRIPT, 'autark-update']);
-  assert.deepEqual(launch.args.slice(3), ['77', '/home/a b/.cache/autark-updater/pending/autark-linux-x64.AppImage', '/home/a b/Apps/autark-linux-x64.AppImage', '/home/a b/.config/Autark/logs/update-helper.log']);
+  assert.deepEqual(launch.args.slice(3), ['77', '/home/a b/.cache/autark-updater/pending/autark-linux-x64.AppImage', '/home/a b/Apps/autark-linux-x64.AppImage', '/home/a b/.config/Autark/logs/update-helper.log', '']);
   assert.equal(launch.cwd, '/home/a b/Apps');
   assert.equal(launch.verbatim, false);
   assert.equal(launch.handoff, false);
@@ -164,8 +174,15 @@ test('Windows helper, really run through spawnHelper: waits for the process, the
   const app = spawn(path.join(system32, 'PING.EXE'), ['-n', '4', '127.0.0.1'], { stdio: 'ignore', windowsHide: true }); // "the app", about 3 s
   let appEnded = false;
   app.once('exit', () => { appEnded = true; });
-  const launch = windowsHelper({ pid: app.pid!, installer, exe: path.join(dir, 'missing', 'Autark.exe'), logFile });
-  await new Promise<void>((resolve, reject) => spawnHelper(launch, dir, { started: resolve, failed: reject, ended: () => undefined }));
+  const lock = path.join(dir, LOCK_NAME);
+  const launch = windowsHelper({ pid: app.pid!, installer, exe: path.join(dir, 'missing', 'Autark.exe'), logFile, lock });
+  process.env.AUTARK_UPDATE_AFTER = '1'; // what an app started by a waiting helper carries: it must not reach this helper
+  try {
+    await new Promise<void>((resolve, reject) => spawnHelper(launch, dir, { started: resolve, failed: reject, ended: () => undefined }));
+  } finally {
+    delete process.env.AUTARK_UPDATE_AFTER;
+  }
+  assert.equal(existsSync(lock), true, 'this company holds the install lock while its helper waits and installs');
   const read = () => (existsSync(logFile) ? readFileSync(logFile, 'utf8').trim().split(/\r?\n/) : []);
   let sawEnd = false;
   for (let i = 0; i < 120 && read().length < 4; i++) {
@@ -178,6 +195,58 @@ test('Windows helper, really run through spawnHelper: waits for the process, the
   assert.match(lines[1], /app ended; installer starts$/);
   assert.match(lines[2], /installer ended \(exit code 1\)$/);
   assert.match(lines[3], /the app file is missing after the install; nothing to start$/);
+  assert.equal(existsSync(lock), false, 'freed once the installer ended');
+});
+
+test('one install at a time: the first company takes the lock, a second does not, a stale one is taken over', () => {
+  const lock = path.join(tmp, 'lock unit', LOCK_NAME);
+  mkdirSync(path.dirname(lock));
+  assert.equal(takeInstallLock(lock), true);
+  assert.equal(takeInstallLock(lock), false, 'another company\'s helper installs');
+  assert.equal(takeInstallLock(lock, Date.now() + LOCK_STALE_MS + 1000), true, 'left by a helper that never ended');
+  assert.equal(existsSync(lock), true);
+});
+
+test('a helper that does not start frees the lock it took; another company\'s lock stays', async () => {
+  const dir = path.join(tmp, 'lock spawn');
+  mkdirSync(dir);
+  const lock = path.join(dir, LOCK_NAME);
+  const launch: HelperLaunch = { command: path.join(dir, 'no-such-helper.exe'), args: [], env: { AUTARK_UPDATE_LOCK: lock }, cwd: dir, verbatim: false, handoff: false };
+  const attempt = () => new Promise<unknown>((resolve) => {
+    try { spawnHelper(launch, dir, { started: () => resolve('started'), failed: resolve, ended: () => undefined }); } catch (error) { resolve(error); }
+  });
+  assert.notEqual(await attempt(), 'started');
+  assert.equal(existsSync(lock), false, 'free for the next try');
+  mkdirSync(lock); // another company's helper holds it
+  assert.notEqual(await attempt(), 'started');
+  assert.equal(existsSync(lock), true, 'not this helper\'s to free');
+});
+
+test('one install at a time, really run: a second company\'s helper runs no installer, waits for the lock, then starts its company', { skip: process.platform !== 'win32' && 'Windows only' }, async () => {
+  // Review 16.11.2026: NSIS runs one installer; a second one quits at once, and its helper started the app mid-install.
+  const dir = path.join(tmp, 'win after Ä');
+  mkdirSync(dir);
+  const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+  const installer = path.join(dir, 'autark-windows-x64.exe');
+  copyFileSync(path.join(system32, 'whoami.exe'), installer);
+  const logFile = path.join(dir, 'update-helper.log');
+  const lock = path.join(dir, LOCK_NAME);
+  mkdirSync(lock); // the first company's helper installs right now
+  const app = spawn(path.join(system32, 'PING.EXE'), ['-n', '2', '127.0.0.1'], { stdio: 'ignore', windowsHide: true });
+  const launch = windowsHelper({ pid: app.pid!, installer, exe: path.join(dir, 'missing', 'Autark.exe'), logFile, lock, args: ['--company=company-2'] });
+  await new Promise<void>((resolve, reject) => spawnHelper(launch, dir, { started: resolve, failed: reject, ended: () => undefined }));
+  const read = () => (existsSync(logFile) ? readFileSync(logFile, 'utf8').trim().split(/\r?\n/) : []);
+  const until = async (count: number) => { for (let i = 0; i < 120 && read().length < count; i++) await new Promise(resolve => setTimeout(resolve, 250)); };
+  await until(2);
+  assert.match(read()[1] ?? '', /app ended; another company installs this update, this one starts after it$/);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  assert.equal(read().length, 2, 'it waits while the other install holds the lock');
+  rmSync(lock, { recursive: true }); // the other install ended
+  await until(3);
+  const lines = read();
+  assert.equal(lines.length, 3, lines.join('\n'));
+  assert.match(lines[2], /nothing to start$/, 'it went on to start its own company');
+  assert.equal(lines.some(line => line.includes('installer')), false, 'no second installer');
 });
 
 const shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
@@ -200,4 +269,19 @@ test('Linux script, really run: waits for a gone process, replaces the AppImage,
   const lines = readFileSync(log, 'utf8').trim().split('\n');
   assert.equal(lines.length, 3);
   assert.match(lines[2], /replaced; new version starts$/);
+});
+
+test('F25, Linux script really run: another company starts again as itself', { skip: !shell && 'no sh on this PC' }, () => {
+  const dir = path.join(tmp, 'linux company').replace(/\\/g, '/');
+  mkdirSync(dir);
+  const target = `${dir}/autark.AppImage`;
+  const downloaded = `${dir}/pending.AppImage`;
+  const out = `${dir}/started.txt`;
+  writeFileSync(target, '#!/bin/sh\necho old\n');
+  writeFileSync(downloaded, `#!/bin/sh\necho "new $*" > "${out}"\n`);
+  const gone = spawnSync('sh', ['-c', 'echo $$']).stdout.toString().trim();
+  const launch = linuxHelper({ pid: Number(gone), downloaded, appImage: target, logFile: `${dir}/helper.log`, args: ['--company=company-2'] });
+  const run = spawnSync('sh', launch.args, { cwd: dir, timeout: 20_000 });
+  assert.equal(run.status, 0, run.stderr.toString());
+  assert.equal(readFileSync(out, 'utf8').trim(), 'new --updated --company=company-2');
 });

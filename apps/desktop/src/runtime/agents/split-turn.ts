@@ -8,6 +8,8 @@
 //            part's temperature goes on the plan like a model.set request's (engines that take one send it);
 //   session – the first turn without a binding on its thread is seeded from its parent (splits/fork.ts) and that ref is
 //            bound under (agent, split thread, engine) with this turn's prompt key; the seed's text goes before the input;
+//            F26: a 'fork' part's subconscious first condenses its copy of the parent's record with the part's notes (its
+//            brief) as what wakes it – the turn's stop ends that call;
 //            the tool offer is its agent's, like its parent's (the agent's learned tools – S8; what a part finds through
 //            tools.call is learned for its agent too, tools/registry.ts callThrough);
 //   attempt – ToolContext.split, the parent's chat for reach, its folder (its worktree, else the group's), and on a warm
@@ -18,7 +20,7 @@
 // For the agent's own (non-split) turns: the "Split results" block of its parts that came back joins the turn input, and the
 // turn's end lets the split service start the groups it created (afterParentTurn) and gather the parts it showed ('done').
 // Owns: those split rules of the pipeline. Never: runs or stops a turn, touches the parent's session, ledger or chat
-// cursor, or decides a split's lifecycle (runtime/splits/service.ts does).
+// cursor (F26: only the part's own copy of that ledger is condensed), or decides a split's lifecycle (runtime/splits/service.ts does).
 
 import type { RouteRequest, RuntimeServices } from '../contracts.ts';
 import type { SplitRunEnd } from '../contracts/splits.ts';
@@ -117,6 +119,7 @@ export async function seedSplit(services: RuntimeServices, plan: TurnPlan, reque
     seed = await seedSplitSession(services, {
       plan, split, route: { route, engine, account: native.account, model: native.model, effort: route.effort },
       tools: native.offer.native, toolNames: native.offer.names, system: native.prompt, promptKey, cwd: splitCwd(services, split), runId: request.runId,
+      brief: request.notes.map((note) => note.text).join('\n\n'), signal: request.signal, // F26: what wakes the part's condense call
     });
   } catch (error) {
     services.log.warn('seeding the split session failed; it starts fresh', { splitId: split.splitId, error: String(error) });

@@ -90,6 +90,18 @@ test('iPhone page: the web app at /app/, Add to Home Screen, Remote ID and code,
   assert.ok(!html.includes('sets the web app up') && !html.includes('Tailscale'), 'no PC-served web app any more');
 });
 
+// Chat sweep 16.11.2026 (owner 11.11.: "Kann man es nicht wie Android einfach runterladen installieren?"): the download
+// table and the FAQ say the real iPhone way – the site's web app on the Home Screen, no App Store, no Apple account.
+test('download page and FAQ: the iPhone is the web app from the site, no manager set-up, no Wi-Fi or Tailscale', async () => {
+  const html = download(rel);
+  assert.ok(html.includes('Add to Home Screen') && html.includes('No App Store, no Apple account'), 'the short iPhone line');
+  assert.ok(!/manager on the PC to set it up/.test(html) && !html.includes('web app your PC serves'));
+  const { faq } = await import('../src/data/faq.mjs');
+  const phone = faq.find((entry) => entry.q === 'Can I use it from my phone?').a;
+  assert.ok(phone.includes('web app from this site') && phone.includes('Home Screen') && phone.includes('meeting server') && phone.includes('no App Store'));
+  assert.ok(!/manager sets that up|Wi-Fi or Tailscale/.test(phone), phone);
+});
+
 test('the iPhone app: its own noindex document for the Home Screen, the manifest scoped to it, #app and the shell with SRI', async () => {
   const mod = await import('../src/pages/app.mjs');
   const html = mod.default(rel);

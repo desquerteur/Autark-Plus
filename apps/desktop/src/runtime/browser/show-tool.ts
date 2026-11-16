@@ -30,7 +30,7 @@ export function showUrl(input: string): string {
 
 const show = defineTool<{ url: string; where?: 'chat' | 'global' | 'agent'; newTab?: boolean }>({
   name: BROWSER_SHOW_TOOL,
-  description: "Shows the person a web page as a tab above this chat, with their logins. This chat's work goes there so everyone here finds it; to read or work in the page myself I use browser.open.",
+  description: "Shows the person a web page as a tab above this chat, with their logins. This chat's work goes there so everyone here finds it; what I want them to see for themselves – a site, background, a page I am building – I put in front of them this way (global: their own pane) rather than only describe it. To read or work in the page myself I use browser.open.",
   inputSchema: {
     type: 'object',
     properties: {

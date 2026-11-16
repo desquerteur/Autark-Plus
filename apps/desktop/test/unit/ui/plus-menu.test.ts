@@ -2,6 +2,7 @@
 // ausgeblendet und ausgegraut?"): no entry is greyed out. With nothing to send, "Send as important" / "Send silently" set
 // the draft's level like /important and /silent (a second pick sets it back, the tick shows it); with a draft they send
 // at that level; in schedule mode they read "Schedule …". Task is always there – an empty field gets "/task ".
+// F23 (16.11.2026): Photos & videos, Take photo (a phone's camera app), Record audio and Record video (composer/RecordBar.tsx).
 // Owns: these assertions only. Never: renders or calls a runtime.
 
 import { test } from 'node:test';
@@ -79,4 +80,39 @@ test('a ticked level reads as ticked: rows with `checked` are menuitemcheckbox, 
   assert.match(popover, /aria-checked=\{item\.checked\}/);
   assert.equal(popover.match(/button\[role\^=menuitem\]:not\(:disabled\)/g)?.length, 2, 'focus-first and the arrow keys take both roles');
   assert.doesNotMatch(popover, /button\[role=menuitem\]/);
+});
+
+test('F23: Plus offers Photos & videos, Record audio and Record video; Take photo where the camera app takes it (a phone)', () => {
+  const plus = read('chat/composer/PlusMenu.tsx');
+  const entries = [...plus.matchAll(/label: '([^']+)', onSelect: actions\.(\w+)/g)].map((match) => `${match[1]} → ${match[2]}`);
+  assert.deepEqual(entries, ['Files & folders → pickFiles', 'Photos & videos → pickImages', 'Take photo → takePhoto', 'Record audio → recordAudio',
+    'Record video → recordVideo', 'Secret → secret', 'Task → makeTask']);
+  assert.match(plus, /\.\.\.\(actions\.takePhoto \? \[\{ label: 'Take photo'/, 'Take photo only where it is given');
+  const bar = read('chat/composer/RecordBar.tsx');
+  assert.match(bar, /takePhoto: phoneCamera\(\) \? \(\) => capture\('image'\) : undefined/);
+  assert.match(bar, /if \(\(mode === 'video' && phoneCamera\(\)\) \|\| !canRecordLive\(mode\)\) capture\(mode\)/, 'a phone\'s video is the camera app\'s');
+  assert.match(bar, /el\.accept = `\$\{what\}\/\*`;/);
+  assert.match(bar, /if \(what === 'audio'\) el\.removeAttribute\('capture'\); else el\.setAttribute\('capture', 'environment'\);/,
+    'no capture for audio: the Android shell reads a capture chooser as the camera');
+  const composer = read('chat/Composer.tsx');
+  assert.match(composer, /accept="image\/\*,video\/\*"/, 'Photos & videos takes both');
+  assert.match(composer, /\{record\.bar\}\n\s+\{replyTo/, 'the bar sits in the slot above the text');
+  assert.match(composer, /\.\.\.record\.actions,/);
+  assert.match(composer, /\|\| uploading\.length > 0 \|\| record\.held\}/, 'Send waits while a take records, attaches or waits');
+  assert.match(composer, /if \(sending \|\| record\.held \|\|/);
+  assert.match(read('../main/files-pick.ts'), /images: \{ name: 'Photos & videos', extensions: \[[^\]]*'png'[^\]]*'mp4'[^\]]*\] \}/, 'the desktop dialog lists videos too');
+});
+
+test('F23: the RecordBar is one row of fixed cells; audio records at once, a fresh take attaches at once, a waiting one on Attach', () => {
+  const bar = read('chat/composer/RecordBar.tsx');
+  assert.match(bar, /if \(mode === 'audio' && rec\.state === 'ready'\) rec\.start\(\);/);
+  assert.match(bar, /if \(rec\.take && fresh\.current\) \{ fresh\.current = false; void attach\(\); \}/);
+  assert.match(bar, /if \(rec\.resumable && !fresh\.current\) rec\.resume\(\);/, 'an unsent take comes back as the take');
+  assert.match(bar, /confirm\(\{ title: 'Discard recording\?'/, '× asks while a take is at stake');
+  assert.match(bar, /useRecorder\(mode, \{ draftKey: key \}\)/);
+  assert.match(read('blocks/ui/recorder.ts'), /resume, forget, reset, discard \};/);
+  const css = read('styles/composer.css');
+  assert.match(css, /\.record-bar \{[^}]*height: 36px; box-sizing: content-box;/);
+  assert.match(css, /\.record-bar\.mode-video \{ height: 72px; \}/);
+  assert.match(css, /\.record-bar > \.record-primary \{ min-width: 96px; \}/);
 });

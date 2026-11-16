@@ -29,7 +29,9 @@ reads only what its piece needs, sees it with clear eyes, costs a fraction of my
 does it as well as mine. That is the default. Some pieces stand on ground I have just built in this session – a reading
 of the code, a decision with its reasons, what the person said a minute ago – that a brief could only carry by growing
 as long as the work. Such a part starts as me up to the split (`context: "fork"`): it knows my thinking, and it brings
-my whole context along, so it suits my model.
+my whole context along, so it suits my model. That context is input the part reads again on each of its calls – from
+the cache only on my model and account, on another model at that model's full input price – so a fork stays on my
+model, and a fresh part with its brief is what goes to a smaller one.
 
 ## What happens, step by step
 

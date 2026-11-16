@@ -1,5 +1,9 @@
 // apps.* manages the connectors in <data>/connectors through named operations only. A connected device
-// must be secure and hold Settings; it never gets the general files.writePath capability for this UI.
+// must be secure and hold Settings. 16.11.2026 (the owner's phone reaches every setting): what runs on the PC itself –
+// a local command server, removing a mailbox, the sign-in page of an app (its answer returns to this PC's own address,
+// so the phone opens it in the PC's pane, side.open) – is for whoever acts on the PC's files (onPc: the owner, or the
+// owner's phone holding 'manage' on a secure transport, files-path.ts PATH_RULE); a Settings-only device keeps the named
+// HTTP operations.
 // Owns: parameter checks and scope rules. Never: connector business logic or secret values in an answer/log.
 
 import { WorkforceError } from '../../../shared/errors.ts';
@@ -9,9 +13,12 @@ import type { ConnectedApp } from '../../../shared/model/apps.ts';
 import '../../contracts/apps.ts';
 import type { AppsService } from '../../contracts/apps.ts';
 import { bad, input, onlyKeys } from '../params.ts';
-import type { HandlerContext, HandlerTable } from '../table.ts';
+import { allowedScope, type HandlerContext, type HandlerTable } from '../table.ts';
+import { PATH_RULE } from './files-path.ts';
 
 const SETTINGS = { capability: 'settings', secure: true } as const;
+/** The owner, or the owner's phone that acts on this PC's files (its pane is the PC's): what runs on the PC is its too. */
+const onPc = (ctx: HandlerContext): boolean => allowedScope(PATH_RULE, ctx.scope);
 const SETTINGS_AND_SECRETS = { allCapabilities: ['settings', 'permissions'], secure: true } as const;
 type Transport = 'http' | 'stdio' | 'mail';
 
@@ -31,7 +38,7 @@ function appsOf(ctx: HandlerContext): AppsService {
 }
 
 function appForScope(app: ConnectedApp, ctx: HandlerContext): ConnectedApp {
-  if (ctx.scope.kind !== 'device' || !app.signInUrl) return app;
+  if (onPc(ctx) || !app.signInUrl) return app;
   const { signInUrl: _url, ...redacted } = app;
   return redacted;
 }
@@ -64,8 +71,8 @@ function requireSecretsAccess(ctx: HandlerContext, entries: Array<{ name: string
 }
 
 function rejectPhoneLocalCommands(ctx: HandlerContext, entries: Array<{ name: string; entry: Record<string, unknown> }>): void {
-  if (ctx.scope.kind === 'device' && entries.some(({ entry }) => typeof entry.command === 'string')) {
-    throw new WorkforceError('forbidden', 'Local command connectors can only be added on the PC; they execute host processes.');
+  if (!onPc(ctx) && entries.some(({ entry }) => typeof entry.command === 'string')) {
+    throw new WorkforceError('forbidden', 'Local command connectors run processes on the PC; adding one takes the PC or a phone that manages its files.');
   }
 }
 
@@ -97,11 +104,11 @@ export function register(table: HandlerTable): void {
     const o = input(params);
     onlyKeys(o, ['id', 'name', 'transport']);
     const selected = target(o);
-    // Removing a mailbox drops its DNC binding. Keep the existing desktop-owner path; devices cannot remove mail.
-    if (selected.transport === 'mail' && ctx.scope.kind === 'device') {
-      throw new WorkforceError('conflict', 'Mailbox removal is not available from a paired device.');
+    // Removing a mailbox drops its DNC binding: for whoever acts on the PC (the owner, the owner's managing phone).
+    if (selected.transport === 'mail' && !onPc(ctx)) {
+      throw new WorkforceError('conflict', 'Mailbox removal takes the PC or a phone that manages its files.');
     }
-    appsOf(ctx).mutate({ kind: 'remove', ...selected, ...(ctx.scope.kind === 'owner' && selected.transport === 'mail' ? { allowMailRemoval: true } : {}) });
+    appsOf(ctx).mutate({ kind: 'remove', ...selected, ...(selected.transport === 'mail' ? { allowMailRemoval: true } : {}) });
   }, SETTINGS);
 
   table.add('apps.setToken', (params, ctx) => {

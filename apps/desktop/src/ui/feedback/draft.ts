@@ -4,11 +4,16 @@
 // report". It survives closing the menu until it is sent; a draft without text and without marks
 // counts as empty, so the next press takes a fresh screenshot (keepsShot). Talk from the cell and
 // the mic in the field both append to the text (joinText).
+// Feedback 16.11.2026: the dictation's own recordings ("Recording", on by default – recording.ts) and an Android crash
+// report the app handed over ("Crash report attached", on by default) belong to the draft too; either one alone makes a
+// report worth sending (canSubmit). The outbox (outbox.ts) keeps the draft in this page's storage across a reload.
 // Owns: the draft state and taking its screenshot. Never: uploads, sends or draws anything.
 
 import { signal } from '@preact/signals';
+import { FEEDBACK_AUDIO_MAX, FEEDBACK_CLIENT_DIAGNOSTICS_MAX } from '../../shared/model/feedback-delivery.ts';
 import { canCaptureWindow, captureWindow } from './bridge.ts';
 import type { PaintMark, ShotDraft } from './paint.ts';
+import type { RecordedTake } from './recording.ts';
 
 /** Where the person was when the screenshot was taken (the report's context). */
 export interface DraftPlace { view?: string; conversationId?: string }
@@ -17,9 +22,52 @@ export interface FeedbackDraft extends ShotDraft {
   text: string;
   marks: readonly PaintMark[];
   where: DraftPlace;
+  /** The dictation's recordings, oldest first (at most FEEDBACK_AUDIO_MAX). */
+  audio: readonly RecordedTake[];
+  /** "Recording": the recordings go with the report. */
+  withAudio: boolean;
+  /** An Android crash report the app handed over (≤ FEEDBACK_CLIENT_DIAGNOSTICS_MAX characters). */
+  diagnostics?: string;
+  /** "Crash report attached": it goes with the report. */
+  withDiagnostics: boolean;
 }
 
-export const EMPTY_DRAFT: FeedbackDraft = { text: '', shot: null, painted: null, marks: [], withShot: true, where: {} };
+export const EMPTY_DRAFT: FeedbackDraft = { text: '', shot: null, painted: null, marks: [], withShot: true, where: {}, audio: [], withAudio: true, withDiagnostics: true };
+
+/** The report's words when only its recording speaks (the take could not be transcribed). */
+export const UNTRANSCRIBED_TEXT = '(dictation not transcribed)';
+/** The report's words when only the crash report says what happened. */
+export const CRASH_ONLY_TEXT = '(crash report)';
+
+/** Nothing in the draft that a report would carry from the person (the screenshot alone is retaken on the next press). */
+export function isEmptyDraft(draft: Pick<FeedbackDraft, 'text' | 'marks' | 'audio' | 'diagnostics'>): boolean {
+  return !draft.text.trim() && !draft.marks.length && !draft.audio.length && !draft.diagnostics;
+}
+
+/** Send is possible: words, a recording that goes along, or an attached crash report. */
+export function canSubmit(draft: Pick<FeedbackDraft, 'text' | 'audio' | 'withAudio' | 'diagnostics' | 'withDiagnostics'>): boolean {
+  return draft.text.trim() !== '' || (draft.withAudio && draft.audio.length > 0) || (draft.withDiagnostics && !!draft.diagnostics);
+}
+
+/** The report's text: the person's words, else what the attachments are. */
+export function reportText(draft: Pick<FeedbackDraft, 'text' | 'audio' | 'withAudio'>): string {
+  const words = draft.text.trim();
+  if (words) return words;
+  return draft.withAudio && draft.audio.length ? UNTRANSCRIBED_TEXT : CRASH_ONLY_TEXT;
+}
+
+/** A dictation's recording joins the draft (beyond FEEDBACK_AUDIO_MAX it is not kept). */
+export function addRecording(take: RecordedTake): void {
+  const draft = feedbackDraft.peek();
+  if (draft.audio.length >= FEEDBACK_AUDIO_MAX) return;
+  updateDraft({ audio: [...draft.audio, take] });
+}
+
+/** The Android app handed over a crash report ("Report" on its crash screen): it rides with the next report. */
+export function attachCrashReport(text: string): void {
+  const trimmed = text.trim().slice(0, FEEDBACK_CLIENT_DIAGNOSTICS_MAX);
+  if (trimmed) updateDraft({ diagnostics: trimmed, withDiagnostics: true });
+}
 
 export const feedbackDraft = signal<FeedbackDraft>(EMPTY_DRAFT);
 /** A screenshot is being taken for the draft (its thumbnail shows a placeholder meanwhile). */

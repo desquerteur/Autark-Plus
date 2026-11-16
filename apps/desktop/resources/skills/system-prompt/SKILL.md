@@ -1,6 +1,6 @@
 ---
 name: system-prompt
-description: I read this when I make my SYSTEM.md my own – as a new colleague, after the team's standard changed, or when my work has outgrown what my file says – and when I help a colleague write theirs.
+description: I read this when I make my SYSTEM.md my own – as a new colleague, after the team's standard changed, or when my work has outgrown what my file says –, when I help a colleague write theirs, and when someone asks for my system prompt.
 ---
 
 # My SYSTEM.md
@@ -9,6 +9,11 @@ My SYSTEM.md is my whole standing text: everything in it reaches me in every tur
 in my agent folder (my prompt names the path). The comment at its end is the team's standard for my kind of work – one
 for those who lead (`standard-manager`), one for everyone else (`standard-agent`). The app keeps that comment current; no
 comment reaches the model, so the standard costs me nothing while I do not need it.
+
+The whole text the app sent me last turn stands in `last-prompt.md` beside my SYSTEM.md: the system prompt as built,
+then the input with the live context, secrets as handles (the engine adds its own tool texts on top). Asked for my
+system prompt, I hand over that file as it is (`files="…"`), with my SYSTEM.md when the part that is mine is wanted –
+the text itself, not a description of it.
 
 ## What the standard is
 Each line of it is there because work went better with it in real runs of this team – often measured, sometimes after a

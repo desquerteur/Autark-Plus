@@ -15,7 +15,7 @@ import type { SpanMark } from '../../shared/voice/marks.ts';
 import type { CatalogStatus } from '../models/catalog.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
-import type { FeedbackHandled, FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackAudioType, FeedbackHandled, FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 
 export interface PwaApi {
   state(): Promise<PwaState>;
@@ -42,7 +42,10 @@ export interface MeshApi {
 }
 
 export interface FeedbackApi {
-  create(input: { kind: FeedbackKind; text: string; screenshotFileId?: string; annotationFileId?: string; view?: string; conversationId?: string; author: string }): FeedbackReport;
+  create(input: {
+    kind?: FeedbackKind; text: string; screenshotFileId?: string; annotationFileId?: string; audioFileIds?: string[]; view?: string; conversationId?: string;
+    clientId?: string; client?: string; clientDiagnostics?: string; author: string;
+  }): FeedbackReport;
   list(): FeedbackReport[];
   /**
    * B-055: seals the report for the team and drops it into the write-only mailbox after an explicit user action;
@@ -61,6 +64,8 @@ export interface FeedbackApi {
     /** Feedback 16.11.2026: done / not relevant (null clears); removed FEEDBACK_HANDLED_KEEP_MS later. */
     mark(id: string, as: FeedbackHandled | null): FeedbackInboxItem;
     screenshot(id: string): { mime: FeedbackImageType; dataBase64: string };
+    /** 16.11.2026: one recorded take (`index` into the item's `audio`). */
+    audio(id: string, index: number): { mime: FeedbackAudioType; dataBase64: string };
   };
   /** B-055: wf feedback setup (owner only; runtime/feedback/setup.ts). */
   setup?(input: { project: string; apiKey: string; serviceAccountPath: string; rotate?: boolean }): Promise<FeedbackSetupResult>;
@@ -148,7 +153,8 @@ export interface RemoteApi {
   state(): import('../../shared/model/remote.ts').RemoteState;
   connect(input: { target: string; role?: import('../../shared/model/remote.ts').JoinRole }): Promise<import('../../shared/model/remote.ts').RemoteOutgoing>;
   cancel(): void;
-  decide(id: string, accept: boolean, personId?: string): void;
+  /** F17: a request waiting on another of my PCs is decided there (the promise); one waiting here at once. */
+  decide(id: string, accept: boolean, personId?: string, newPerson?: import('../../shared/model/remote.ts').NewPerson): void | Promise<void>;
   /** PCs on this network that accept requests; `refresh` asks the network again. */
   nearby(refresh: boolean): Promise<import('../../shared/model/remote.ts').NearbyPc[]>;
 }

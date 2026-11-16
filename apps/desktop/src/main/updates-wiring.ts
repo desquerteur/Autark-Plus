@@ -8,6 +8,9 @@
 // (system.prepareRestart, B-080: with the version it installs) → runtime exits ('update').
 // B-080: installFile – a build from a file (app.install / system.install through main's host op) installs the same way:
 // the same drain, then the relaunch helper with that installer, then quit.
+// F25 (16.11.2026): every company has its updater; the helper starts the company that installed again (its `args`, on a
+// Mac too), and
+// siblingVersion / installFailed pass a linked PC's version and a not-landed install on to the service.
 // Owns: that order and the "drained" flag, binding electron to the updater wrapper. Never: talks to
 // electron-updater's download or install directly (the Updater is injected) or relaunches without the drain.
 
@@ -15,7 +18,8 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { UpdateState } from '../shared/model/system.ts';
+import type { Device } from '../shared/model/devices.ts';
+import type { SystemInfo, UpdateState } from '../shared/model/system.ts';
 import { WorkforceError } from '../shared/errors.ts';
 import { NEW_PRODUCT_NAME, OLD_PRODUCT_NAME, finishIdentityMove, updaterCacheRoot } from './identity-move.ts';
 import { applyLauncher, runCommand, type LauncherDeps } from './launcher-tasks.ts';
@@ -45,7 +49,7 @@ export interface DesktopUpdatesDeps {
     start(): void;
   };
   /** B-080 (installFile): this app's process, executable, AppImage (Linux) and logs folder, and its quit; absent: no install from a file. */
-  install?: { pid: number; exe: string; appImage?: string; logs: string; quit(): void; spawn?: typeof spawnHelper; exists?(file: string): boolean };
+  install?: { pid: number; exe: string; appImage?: string; logs: string; quit(): void; spawn?: typeof spawnHelper; exists?(file: string): boolean; args?: readonly string[] }; // F25: args – this company's start arguments
   publish(state: UpdateState): void;
   /** The system browser for the manual download (desktop.ts passes electron's shell; default: loaded on first use). Only https reaches it. */
   openExternal?(url: string): Promise<void>;
@@ -61,23 +65,24 @@ export const DRAFT_FLUSH_TIMEOUT_MS = 8000;
  * electron-updater's autoUpdater (loaded only for packaged builds). Its export is a getter that
  * Node's CJS export detection misses, so read it from the namespace or the default export.
  */
-export async function loadUpdater(log?: (line: string) => void): Promise<Updater> {
+export async function loadUpdater(log?: (line: string) => void, args: readonly string[] = []): Promise<Updater> {
   const loaded = await import('electron-updater') as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } };
   const updater = loaded.autoUpdater ?? loaded.default?.autoUpdater;
   if (!updater) throw new Error('The updater is not available.');
   if (process.platform === 'win32') allowInstallerRetry(updater);
-  if (process.platform === 'darwin') return selfUpdatingMac(updater, log);
-  if (process.platform === 'win32' || process.platform === 'linux') await relaunchingHelper(updater, log);
+  if (process.platform === 'darwin') return selfUpdatingMac(updater, log, args);
+  if (process.platform === 'win32' || process.platform === 'linux') await relaunchingHelper(updater, log, args);
   return updater;
 }
 
-/** Windows and Linux: quitAndInstall starts the relaunch helper and quits; without it the library's own way runs. */
-async function relaunchingHelper(updater: Updater, log?: (line: string) => void): Promise<void> {
+/** Windows and Linux: quitAndInstall starts the relaunch helper and quits; without it the library's own way runs. F25: `args` – this company's (it starts again). */
+async function relaunchingHelper(updater: Updater, log: ((line: string) => void) | undefined, args: readonly string[]): Promise<void> {
   const { app } = await electronMain();
   const logs = path.join(app.getPath('userData'), 'logs');
   installWithHelper(updater, {
     platform: process.platform,
     pid: process.pid,
+    args,
     exe: process.execPath,
     appImage: process.env.APPIMAGE,
     logFile: path.join(logs, HELPER_LOG),
@@ -109,7 +114,8 @@ export function feedFileUrl(updater: Updater, file: FeedFile, info: unknown): st
 
 const macCacheDir = () => path.join(os.homedir(), 'Library', 'Caches', 'workforce-self-update');
 
-async function selfUpdatingMac(updater: Updater, log?: (line: string) => void): Promise<Updater> {
+/** macOS: the zip swap of mac-self-update.ts. F25: `args` – this company's (the swap starts it again). */
+async function selfUpdatingMac(updater: Updater, log: ((line: string) => void) | undefined, args: readonly string[]): Promise<Updater> {
   const bundle = appBundleOf(process.execPath);
   if (!bundle) return updater;
   const { app, net } = await electronMain();
@@ -130,6 +136,7 @@ async function selfUpdatingMac(updater: Updater, log?: (line: string) => void): 
     },
     quit: () => app.quit(),
     log,
+    args,
   }) ?? updater;
 }
 
@@ -187,6 +194,29 @@ async function shellOpenExternal(url: string): Promise<void> {
   const shell = loaded.shell ?? loaded.default?.shell;
   if (!shell) throw new Error('The browser could not be opened.');
   await shell.openExternal(url);
+}
+
+/** What siblingUpdates reads from the runtime over main's own link. */
+export interface SiblingRpc {
+  on(event: 'device.upserted', listener: (device: Device) => void): () => void;
+  subscribe(topic: 'system'): Promise<() => void>;
+  call(method: 'system.info'): Promise<SystemInfo>;
+}
+
+/**
+ * F25 (16.11.2026): a linked own PC's version (device.upserted carries its caps; my own PCs only – no employee's PC,
+ * none this PC joined as an employee) reaches the updater, and at each runtime start this start's notice – an install
+ * that did not land names its version (SystemInfo.notice `to`). Returns what to call when the runtime is up.
+ */
+export function siblingUpdates(rpc: SiblingRpc, updates: Pick<DesktopUpdates, 'siblingVersion' | 'installFailed'>): () => void {
+  rpc.on('device.upserted', (device) => {
+    const own = device.kind === 'pc' && !device.self && !device.personId && device.joinedAs !== 'employee' && device.status === 'online';
+    if (own && typeof device.caps?.version === 'string') updates.siblingVersion(device.caps.version);
+  });
+  void rpc.subscribe('system');
+  return () => {
+    void rpc.call('system.info').then((info) => { if (info.notice?.failed && info.notice.to) updates.installFailed(info.notice.to); }, () => {});
+  };
 }
 
 /** A stand-in for electron-updater in development and test mode (UpdateService never calls it). */
@@ -252,6 +282,10 @@ export class DesktopUpdates {
   dispose(): void { this.service.dispose(); }
   setVisible(visible: boolean): void { this.service.setVisible(visible); }
   checkIfDue(): void { void this.service.checkIfDue().catch(() => {}); }
+  /** F25: a linked own PC runs `version` (a newer one asks for one check now). */
+  siblingVersion(version: string): void { this.service.siblingVersion(version); }
+  /** F25: this start's notice says the install of `version` did not land here. */
+  installFailed(version: string): void { this.service.installFailed(version); }
 
   async setAutoDownload(enabled: boolean): Promise<UpdateState> {
     await this.deps.setAutoDownload(enabled);
@@ -285,8 +319,8 @@ export class DesktopUpdates {
       if (!own || this.deps.platform === 'darwin') throw new WorkforceError('unavailable', 'This app cannot install a build from a file here.');
       if (!(own.exists ?? existsSync)(installer)) throw new WorkforceError('not_found', 'The installer file does not exist.');
       const logFile = path.join(own.logs, HELPER_LOG);
-      const launch = this.deps.platform === 'win32' ? windowsHelper({ pid: own.pid, installer, exe: own.exe, logFile })
-        : own.appImage ? linuxHelper({ pid: own.pid, downloaded: installer, appImage: own.appImage, logFile }) : undefined;
+      const launch = this.deps.platform === 'win32' ? windowsHelper({ pid: own.pid, installer, exe: own.exe, logFile, args: own.args })
+        : own.appImage ? linuxHelper({ pid: own.pid, downloaded: installer, appImage: own.appImage, logFile, args: own.args }) : undefined;
       if (!launch) throw new WorkforceError('unavailable', 'This app was not started from an AppImage, so it cannot replace itself.');
       await this.prepareInstall();
       this.deps.log?.('installing a build from a file');

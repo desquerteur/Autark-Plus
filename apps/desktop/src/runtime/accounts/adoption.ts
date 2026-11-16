@@ -3,15 +3,20 @@
 // next detect), adoption of what a scan found – logins in the default CLI homes and running local servers become
 // 'detected' accounts unless the person removed them (dismissed.ts); a Codex login runs on a copy in a home of its own
 // (cli-homes.ts found) – the checks a scan triggers, and "Add again" for a dismissed login.
+// 16.11.2026: a plan login another company on this PC made (its home in the PC's logins folder, cli-homes.ts sharedLogins)
+// becomes an account here too, switched on and checked – one login, one home, every company – unless a row here uses that
+// home or the same person's login (provider and e-mail) already, or the person removed it here.
 // Owns: the report cache and the adoption rules. Never: scans itself (detect.ts), signs in or deletes.
 
 import { foundHere, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
 import { isPlanProvider } from '../../shared/model/plan-roles.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { AccountRepo } from './repo.ts';
-import { loginKey, serverKey, type DismissedLogins } from './dismissed.ts';
+import { homeLoginKey, loginKey, serverKey, type DismissedLogins } from './dismissed.ts';
 import { envKey } from './env-keys.ts';
 import { loginUnknown } from './detect.ts';
+import { homeKey, sameEmail, type SharedLogin } from './cli-homes.ts';
+import { PROVIDER_LABELS } from './service-shape.ts';
 
 /** Providers whose logins live in a CLI home (default or <accounts>/<provider>/<id>; Gemini CLI and Copilot CLI only the default, PR8). */
 export const CLI_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli', 'copilot', 'kimi-cli']);
@@ -25,6 +30,8 @@ export interface AdoptionDeps {
   blank(provider: ProviderId, patch: Partial<Account>): Account;
   /** A found login as its account (cli-homes.ts CliHomes.found: Codex in a home of its own with a copy of the login). */
   found(account: Account): Account;
+  /** This PC's plan logins in its logins folder, whichever company made them (cli-homes.ts sharedLogins). */
+  shared(): SharedLogin[];
   /** One check in the account monitor's serial queue. */
   checkOnce(id: string): void;
   scan(): Promise<DetectionReport>;
@@ -79,6 +86,7 @@ export class Adoption {
       const adopted = this.deps.save(this.deps.found(this.deps.blank(provider, { auth: 'cli', state: 'ok', detected: true })));
       if (isPlanProvider(provider)) this.deps.checkOnce(adopted.id);
     }
+    this.adoptShared(gone);
     for (const server of report.localServers) {
       if (gone.has(serverKey(server.provider, server.baseUrl)) || existing.some((a) => a.provider === server.provider && a.baseUrl === server.baseUrl)) continue;
       this.deps.save(this.deps.blank(server.provider, { auth: 'local', baseUrl: server.baseUrl, state: 'ok', detected: true }));
@@ -89,6 +97,19 @@ export class Adoption {
       const set = envKey(account, this.deps.env()) !== undefined;
       if (!set && account.state !== 'needs_login') this.deps.save({ ...account, state: 'needs_login' });
       else if (set && account.state === 'needs_login') this.deps.checkOnce(account.id);
+    }
+  }
+
+  /** Another company's plan login on this PC as an account here (its id the home's folder name), switched on, then checked. */
+  private adoptShared(gone: ReadonlySet<string>): void {
+    for (const login of this.deps.shared()) {
+      const rows = this.deps.repo.list();
+      const mine = rows.some((a) => (a.home && homeKey(a.home) === homeKey(login.home)) || (a.provider === login.provider && sameEmail(a.email, login.email)));
+      if (mine || login.signedIn === false || gone.has(homeLoginKey(login.provider, login.home)) || rows.some((a) => a.id === login.id)) continue;
+      const same = rows.filter((a) => a.provider === login.provider).length;
+      const label = PROVIDER_LABELS[login.provider]!;
+      const adopted = this.deps.save({ ...this.deps.blank(login.provider, { auth: 'cli', state: 'unknown', home: login.home, label: same ? `${label} ${same + 1}` : label, ...(login.email ? { email: login.email } : {}) }), id: login.id });
+      this.deps.checkOnce(adopted.id);
     }
   }
 

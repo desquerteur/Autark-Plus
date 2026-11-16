@@ -27,7 +27,7 @@ export const SPLIT_LIMITS = { partsPerCall: 12, activeGroupsPerAgent: 3, running
 export interface SplitPartInput { title: string; brief: string; returns?: string; context?: SplitContext;
   model?: string; effort?: Effort; temperature?: number; after?: number[]; worktree?: boolean; chat?: string }
 
-/** How a split's session was seeded (set at its first start). */
+/** How a split's session was seeded (set at its first start). F26: 'ledger' – from its own copy of its parent's record, condensed by its subconscious (splits/fork.ts). */
 export interface SplitFork { how: 'native' | 'ledger' | 'text' | 'fresh'; engine?: EngineId; accountId?: string; parentRef?: string }
 
 /**

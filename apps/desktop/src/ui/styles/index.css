@@ -32,6 +32,7 @@
 @import "./day.css"; /* B-041: My day */
 @import "./day-overview.css"; /* the blocks under My day's list */
 @import "./team.css";
+@import "./agent-work.css"; /* F12: an agent's Work page – Now cards, active tasks, Jump to now */
 @import "./people.css"; /* F-52: people of the organisation */
 @import "./app.css";
 @import "./details.css";

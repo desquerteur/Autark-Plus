@@ -13,6 +13,8 @@ metadata:
 - Goal of the post (reach, click, reply, announcement) and the account.
 - I write in the brand voice (`writing-style`) and adapt it per platform, since each has its own
   reader.
+- A picture is a real photo or one an image model makes (`media.image`, or my engine's own image tool); what I draw
+  in code (SVG, HTML, canvas) is a layout, not a picture.
 - Media in the right format (when unsure, I check the platform's current specs):
 
 | Platform | Typical format | Notes |

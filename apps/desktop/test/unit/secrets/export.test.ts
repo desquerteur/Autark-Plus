@@ -331,7 +331,7 @@ test('secrets.delete (agent tool): by id (a group whole, a field alone), by rout
   assert.ok(!VALUES.some((value) => JSON.stringify(all).includes(value)));
 });
 
-test('rpc secrets.export: the PC only; ids or all; the path and counts', async (t) => {
+test('rpc secrets.export: the permissions tier on a secure transport (16.11.2026); ids or all; the path and counts', async (t) => {
   const table = new HandlerTable();
   for (const register of [...S1_MODULES, security]) register(table);
   const f = rpcFixture({ table });
@@ -339,7 +339,7 @@ test('rpc secrets.export: the PC only; ids or all; the path and counts', async (
   const vault = new SecretVault({ db: f.db, host, clock: f.clock });
   Object.assign(f.services, { secrets: vault, host: { ...f.services.host, ...host } });
   const ids = await filled(vault);
-  assert.equal(table.get('secrets.export')?.scope, 'owner');
+  assert.deepEqual(table.get('secrets.export')?.scope, { capability: 'permissions', secure: true });
   await withHome(async (home) => {
     const one = await f.server.call('secrets.export', { ids: [ids.key] }, OWNER) as { file: string; count: number; skipped: number };
     assert.deepEqual([path.dirname(one.file), one.count, one.skipped], [path.join(home, 'Downloads'), 1, 0]);

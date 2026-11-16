@@ -1,14 +1,15 @@
 // B-085 careful PC access, window side (src/ui/onboarding/ai-notice.ts accessNotice, pc-access.ts): after the first
 // run, while the team works carefully and this connection may write settings, one quiet info line with
 // [Give full access] below every other line; the app line the Manager then gets speaks as the person, like the start
-// text, and asks the Manager to change the PC line itself; giveFullAccess sends that line first (one clientId per try
-// until it went through) and only then writes the setting.
+// text, and asks the Manager to change the PC line itself; setPcAccess sends that line first (one clientId per try
+// until it went through) and only then writes the setting. Owner 16.11.2026 (Settings › Security): the same in both
+// directions, careful with its own line; the About card and the Security page name both levels with one sentence each.
 // Owns: these assertions only. Never: a real runtime, a socket or a window.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ACCESS_NOTICE_ID, ACCESS_NOTICE_PRIORITY, ACCESS_NOTICE_TEXT, accessNotice, type AccessNoticeInput } from '../../../src/ui/onboarding/ai-notice.ts';
-import { FULL_ACCESS_LINE, giveFullAccess } from '../../../src/ui/onboarding/pc-access.ts';
+import { ACCESS_LEVELS, CAREFUL_ACCESS_LINE, FULL_ACCESS_LINE, setPcAccess } from '../../../src/ui/onboarding/pc-access.ts';
 import { NOTICE_PRIORITY } from '../../../src/ui/shell/notices.ts';
 import type { SessionInfo } from '../../../src/shared/api/methods.ts';
 import { HUMAN_ID } from '../../../src/shared/ids.ts';
@@ -47,7 +48,7 @@ test('no line for the whole PC, during the first run, before the snapshots or wh
   assert.equal(accessNotice(input('careful', { settings: null }), () => undefined), null);
 });
 
-/** Every rpc call giveFullAccess makes, in order; `fail` makes that method throw once. */
+/** Every rpc call setPcAccess makes, in order; `fail` makes that method throw once. */
 function stubRpc(fail?: string) {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let failing = fail;
@@ -73,10 +74,10 @@ function world(chats: unknown[] = [managerChat]) {
   conversations.value = chats as never;
 }
 
-test('giveFullAccess: one line to the Manager\'s first chat as the person, with a clientId, then the setting', async () => {
+test('setPcAccess whole:one line to the Manager\'s first chat as the person, with a clientId, then the setting', async () => {
   world();
   const calls = stubRpc();
-  await giveFullAccess();
+  await setPcAccess('whole');
   assert.deepEqual(calls.map((call) => call.method), ['messages.send', 'settings.update']);
   assert.equal(calls[0].params.conversationId, 'ch_boss');
   assert.equal(calls[0].params.body, FULL_ACCESS_LINE);
@@ -85,38 +86,38 @@ test('giveFullAccess: one line to the Manager\'s first chat as the person, with 
   assert.deepEqual(calls[1].params, { profile: { pcAccess: 'whole' } });
 });
 
-test('giveFullAccess: no first chat – the default 1:1 from chats.direct', async () => {
+test('setPcAccess whole:no first chat – the default 1:1 from chats.direct', async () => {
   world([]);
   const calls = stubRpc();
-  await giveFullAccess();
+  await setPcAccess('whole');
   assert.deepEqual(calls.map((call) => call.method), ['chats.direct', 'messages.send', 'settings.update']);
   assert.deepEqual(calls[0].params, { memberId: 'ag_boss' });
   assert.equal(calls[1].params.conversationId, 'ch_direct');
 });
 
-test('giveFullAccess: a refused send leaves the setting careful; the retry and a double click carry the same clientId', async () => {
+test('setPcAccess whole:a refused send leaves the setting careful; the retry and a double click carry the same clientId', async () => {
   world();
   const calls = stubRpc('messages.send');
-  await assert.rejects(giveFullAccess(), /messages\.send refused/);
+  await assert.rejects(setPcAccess('whole'), /messages\.send refused/);
   assert.deepEqual(calls.map((call) => call.method), ['messages.send'], 'no settings write');
-  await Promise.all([giveFullAccess(), giveFullAccess()]);
+  await Promise.all([setPcAccess('whole'), setPcAccess('whole')]);
   const sends = calls.filter((call) => call.method === 'messages.send');
   assert.equal(new Set(sends.map((call) => call.params.clientId)).size, 1, 'one clientId: the chat service keeps one message');
   const next = stubRpc();
-  await giveFullAccess();
+  await setPcAccess('whole');
   assert.notEqual(next[0].params.clientId, sends[0].params.clientId, 'a new one after a try went through');
 });
 
-test('giveFullAccess: no Manager or no messages.send – only the setting', async () => {
+test('setPcAccess whole:no Manager or no messages.send – only the setting', async () => {
   world();
   agents.value = [];
   let calls = stubRpc();
-  await giveFullAccess();
+  await setPcAccess('whole');
   assert.deepEqual(calls.map((call) => call.method), ['settings.update']);
   world();
   session.value = { ...owner(['settings.update']), kind: 'device' } as unknown as SessionInfo;
   calls = stubRpc();
-  await giveFullAccess();
+  await setPcAccess('whole');
   assert.deepEqual(calls.map((call) => call.method), ['settings.update']);
 });
 
@@ -124,4 +125,20 @@ test('the line to the Manager: the app\'s automatic message in the person\'s voi
   assert.match(FULL_ACCESS_LINE, /^Automatic message from the app, not typed by me: I gave the team full access to this PC from now on\./);
   assert.match(FULL_ACCESS_LINE, /"What I have here" in your own SYSTEM\.md to the whole PC and let the team know, so each changes theirs\./, 'each agent writes its own SYSTEM.md');
   assert.equal(FULL_ACCESS_LINE.split('\n').length, 1);
+});
+
+test('owner 16.11.2026: careful the same way – its own line to the Manager, then the setting; its own clientId', async () => {
+  world();
+  const calls = stubRpc();
+  await setPcAccess('careful');
+  assert.deepEqual(calls.map((call) => call.method), ['messages.send', 'settings.update']);
+  assert.equal(calls[0].params.body, CAREFUL_ACCESS_LINE);
+  assert.deepEqual(calls[1].params, { profile: { pcAccess: 'careful' } });
+  const back = stubRpc();
+  await setPcAccess('whole');
+  assert.notEqual(back[0].params.clientId, calls[0].params.clientId, 'another direction is another message');
+  assert.match(CAREFUL_ACCESS_LINE, /^Automatic message from the app, not typed by me: from now on the team works freely in its own folders on this PC and checks with me before changes elsewhere\./);
+  assert.match(CAREFUL_ACCESS_LINE, /"What I have here" in your own SYSTEM\.md to that and let the team know, so each changes theirs\.$/);
+  assert.deepEqual(ACCESS_LEVELS.map((level) => [level.id, level.title]), [['whole', 'Full access'], ['careful', 'Careful']]);
+  for (const level of ACCESS_LEVELS) assert.match(level.text, /^The team [^.]+\.$/, 'one sentence per level');
 });

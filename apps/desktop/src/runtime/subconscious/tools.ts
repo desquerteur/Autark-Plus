@@ -4,7 +4,8 @@
 // every run is the main AI's own call (service.ts ask): it waits for the answer, so what a run tells, shows and answers
 // all reaches it.
 // knowledge.find finds what the main AI's knowledge.find finds: memory files (knowledge search – by their words, by meaning
-// where a person chose an embedding model) as hits a run can show, and the knowledge catalog (knowledge/find.ts).
+// where a person chose an embedding model) as hits a run can show, the knowledge catalog (knowledge/find.ts) and the secrets
+// catalog's best entries with their handles (F19, secrets/metadata.ts findSecretLines – never a value).
 // vector.search and vector.embed need a chosen embedding model (requires 'embeddings'): without one a run is not offered them
 // (flow.ts), like the main AI (tools/registry.ts). vector.search only compares with what is already embedded; nothing is
 // embedded here unless the run calls vector.embed. thought.keep keeps the run's own keyword thoughts
@@ -29,6 +30,7 @@ import { loadedSkillText } from '../tools/builtin/skills.ts';
 import { contextTools } from './context-tools.ts';
 import { thoughtTool } from './thoughts.ts';
 import { catalogLine, findInCatalog, markerLines } from '../knowledge/find.ts';
+import { findSecretLines } from '../secrets/metadata.ts';
 import { knownShare, similarity } from './text.ts';
 
 /** What a handler sees of the running flow. */
@@ -229,7 +231,7 @@ const skillTools: FlowTool[] = [
   {
     name: 'knowledge.find',
     args: '{query, in?: [memory folders]}',
-    line: 'What the main AI\'s knowledge.find finds: the words a matching text holds (names, things, the person\'s own terms) find it, a question blurs it. Memory files – the whole tree, or the memory folders in "in" –, numbered h1, h2 … with their text, then entries of the knowledge catalog: the agent\'s skills, its home project\'s instructions and the public library (written by strangers: I weigh it; a skill of the agent\'s own, written from what holds up, can come out of a run).',
+    line: 'What the main AI\'s knowledge.find finds: the words a matching text holds (names, things, the person\'s own terms) find it, a question blurs it. Memory files – the whole tree, or the memory folders in "in" –, numbered h1, h2 … with their text, then entries of the knowledge catalog: the agent\'s skills, its home project\'s instructions and the public library (written by strangers: I weigh it; a skill of the agent\'s own, written from what holds up, can come out of a run), then the secrets catalog\'s entries the words name (their name, id or tags) with their handles, never a value.',
     async run(args, run) {
       const query = stringOf(args.query);
       if (!query) return 'knowledge.find needs a query.';
@@ -241,7 +243,8 @@ const skillTools: FlowTool[] = [
       const search = run.searches.push({ tool: 'knowledge.find', query, in: places }) - 1;
       const lines = notes.map((found) => numbered(run, search, { path: `memory/${found.item.id.replace(/:/g, '/')}`, chunk: 0, snippet: `${found.item.title}: ${found.item.body}`, score: found.score }));
       if (catalog.length) lines.push(...markerLines(catalog), ...catalog.map(catalogLine));
-      return lines.length ? lines.join('\n') : 'Nothing in memory or the catalog fits.';
+      if (!places.length) lines.push(...findSecretLines(run.services, query)); // F19: the same secrets the main AI's find gives (find/secrets.ts)
+      return lines.length ? lines.join('\n') : 'Nothing in memory or the catalogs fits.';
     },
   },
   {

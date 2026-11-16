@@ -4,6 +4,8 @@
 // Play: bundleRelease (full, with the in-app disclosure for phone use) and bundlePlayLite (no AccessibilityService).
 // Two stores (flavors): site – the APK from the website, which downloads and installs its own update (SelfUpdate,
 // REQUEST_INSTALL_PACKAGES); play – the bundle for Google Play, which has neither and sends the person to Play.
+// Feedback 16.11.2026 (F15): build.ps1 writes the feedback video page (assets/tour.html – the PC tour's example video,
+// no copy of the PC's UI) into build/generated/tour, which the main assets include.
 // Never: bundles desktop credentials or web UI copies, or holds a key or password itself.
 plugins { id 'com.android.application' }
 def releaseKeystore = System.getenv('AUTARK_ANDROID_KEYSTORE')
@@ -19,9 +21,12 @@ android {
         // B-084 start crash fix: 0.3.7 closed at once on Android 11+ (SystemBars before setContentView); crash report.
         // B-084 phone linked to all PCs of the company (M1): a channel to every PC online, the page on the newest.
         // 10.11.: 0.3.9 phone-use main-thread fix; 0.3.10 updates and the phone-use build download by themselves (owner 10.11.).
-        versionCode = 14
-        versionName = '0.3.14'
+        // 16.11.: 0.3.15 feedback round – quiet notice with the Autark mark, phone-use bubble (ask, status, auto-continue),
+        // camera capture, window picture and crash report for feedback, company switch off the main thread.
+        versionCode = 15
+        versionName = '0.3.15'
     }
+    sourceSets { main { assets.srcDir('build/generated/tour') } } // the feedback video page (build.ps1)
     flavorDimensions = ['store']
     productFlavors {
         site { dimension = 'store' }

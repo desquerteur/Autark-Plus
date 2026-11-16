@@ -5,18 +5,44 @@
 // with another PC's id they go there over the link (devices.call → runtime/devices/side-view.ts, CEO links only), the
 // caller passed on as `via`.
 // The owner and the owner's phones on a secure transport reach them, like browser.pull.
+// 16.11.2026 (the owner's phone reaches every setting): side.open opens a page in a new tab of this PC's pane (global),
+// shown at once (host op sideBrowser 'open', main/side-driver) – a sign-in that returns to this PC's own address (Google
+// Calendar, an app's OAuth) runs there and the phone watches and touches it in its pane; 'manage' on a secure transport,
+// like the pane's tabs and files. The tab names the person as its opener (HUMAN_ID).
 // Owns: param checks and the choice of PC. Never: casts, maps input or decides who may watch on the other PC.
 
+import { HUMAN_ID } from '../../../shared/ids.ts';
+import { GLOBAL_SPACE, browserUrl } from '../../../shared/api/workspace-browser.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
+import type { SideBrowserResult } from '../../../shared/model/side-browser.ts';
 import { SIDE_PART_BYTES, type SidePull } from '../../../shared/model/side-view.ts';
 import { inputOf } from '../../browser/input-wire.ts';
 import { sideCaller, sideNavOf, sidePartOf, sidePullOf, sideTab, sideViewOf } from '../../browser/side-view.ts';
 import { OWNER_CALLER } from '../../browser/view-pull.ts';
-import { input, onlyKeys, optId, type Obj } from '../params.ts';
+import { bad, input, onlyKeys, optId, text, type Obj } from '../params.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
 /** The owner, and a device holding 'todo' on a secure transport (a phone of the owner). */
 const DEVICE = { capability: 'todo', secure: true } as const;
+/** side.open: the owner, and the owner's phone holding 'manage' on a secure transport (the pane's tabs and files are its). */
+const PANE = { capability: 'manage', secure: true } as const;
+/** side.open's answer when this PC has no pane to open it in. */
+export const PANE_MISSING = "The PC's browser pane is not available – it lives in Autark's window on the PC.";
+
+/** Opens `url` in a new tab of this PC's global pane, shown at once; its tab id. */
+async function openInPane(ctx: HandlerContext, url: string): Promise<string | undefined> {
+  const host = ctx.services.host;
+  if (!host.sideBrowser) throw new WorkforceError('unavailable', PANE_MISSING);
+  let result: SideBrowserResult;
+  try {
+    result = await host.sideBrowser({ action: 'open', url, newTab: true, show: true, space: GLOBAL_SPACE, agent: { id: HUMAN_ID, name: 'You' } });
+  } catch (error) {
+    if (error instanceof WorkforceError && error.code === 'unavailable') throw new WorkforceError('unavailable', PANE_MISSING);
+    throw error;
+  }
+  if (!result?.ok) throw new WorkforceError('unavailable', result?.error?.slice(0, 400) || PANE_MISSING);
+  return result.tab;
+}
 
 /** The caller here: the owner, or the device's own id. */
 const callerOf = (ctx: HandlerContext): string => (ctx.scope.kind === 'device' ? ctx.scope.deviceId : OWNER_CALLER);
@@ -78,4 +104,16 @@ export function register(table: HandlerTable): void {
     else await sideViewOf(ctx.services).nav(tab, nav);
     return { ok: true as const };
   }, DEVICE);
+
+  table.add('side.open', async (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['url']);
+    let url: string;
+    try { url = new URL(browserUrl(text(o, 'url', { max: 4000 }))).href; } catch (error) {
+      if (error instanceof WorkforceError) throw error;
+      bad('url', 'an http(s) address without credentials');
+    }
+    const tab = await openInPane(ctx, url);
+    return { ok: true as const, ...(tab ? { tab } : {}) };
+  }, PANE);
 }

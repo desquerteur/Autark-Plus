@@ -17,6 +17,7 @@ import { excerpt } from '../../shared/text/chat-names.ts';
 /**
  * Feedback 16.11.2026 (F24): with other PCs linked, the PC whose accounts are out – the person reads the line on another
  * PC whose own quota rail may show plenty left, so "every account is limited" read as wrong. One PC alone: no name.
+ * It closes the line ("continues by itself on <PC>"), after the reason.
  */
 export function pausedWhere(services: Partial<Pick<RuntimeServices, 'devices'>>): string | undefined {
   try {
@@ -40,15 +41,19 @@ export function outageLine(services: Pick<RuntimeServices, 'chats'> & Partial<Pi
   pausedLine(services, task.conversationId, reason, { taskId: task.id, ...(runId ? { runId } : {}) });
 }
 
+/** F28 (16.11.2026): how much of the reason the line keeps – the accounts it names (routing/unfit.ts accountsReason) fit. */
+export const REASON_CHARS = 160;
+
 /**
  * B-080 wave 3: one quiet "Paused: <reason> – continues by itself" status line in `conversationId` – by the system for a
  * task (outageLine), by `authorId` (the agent) for a chat turn; `runId` becomes meta.fromRun. Never throws (cosmetic).
+ * F28: the reason comes first – the chat row shows about 70 characters – and the PC (F24) after "continues by itself".
  */
 export function pausedLine(services: Pick<RuntimeServices, 'chats'> & Partial<Pick<RuntimeServices, 'devices'>>, conversationId: string, reason: string | undefined, of: { taskId?: string; runId?: string; authorId?: string }): void {
   try {
     const where = pausedWhere(services);
     services.chats.status(conversationId, {
-      type: 'note', text: `Paused${where ? ` on ${where}` : ''}: ${excerpt(reason ?? 'no model could be reached', 90)} – continues by itself`, details: { ...(of.taskId ? { taskId: of.taskId } : {}), outage: true },
+      type: 'note', text: `Paused: ${excerpt(reason ?? 'no model could be reached', REASON_CHARS)} – continues by itself${where ? ` on ${where}` : ''}`, details: { ...(of.taskId ? { taskId: of.taskId } : {}), outage: true },
     }, { authorId: of.authorId ?? SYSTEM_ID, ...(of.taskId ? { taskId: of.taskId } : {}), ...(of.runId ? { fromRun: of.runId } : {}) });
   } catch { /* cosmetic */ }
 }

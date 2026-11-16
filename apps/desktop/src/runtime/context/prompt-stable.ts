@@ -3,8 +3,10 @@
 // here; org/standard.ts keeps the team's standard as a comment at its end); (3) "## My environment" (environment.ts);
 // (4) "## Skills" (skills.md and my main skills); (5) "## More tools": every tool my mode offers beyond the engine's
 // direct ones, one line each (tools-meta.ts moreToolsSection); (6) "## Rich answers" (shared/blocks/prompt.ts); (7) the
-// mode; (8) last, "## From <the person>": the agent's HUMAN.md (agent-core/human.ts – owner 15.11.2026: the person's own
-// lines, "unten angehängt"; nothing but the person changes it). The mode is always the agent's own (agents/turn-prepare.ts).
+// mode; (8) last, "## From <the person>": the agent's HUMAN.md (agent-core/human.ts – owner 15.11.2026: the person's
+// lines, "unten angehängt"), then "## From <the person> – for every agent": settings profile.forEveryAgent (owner
+// 16.11.2026: set once for every agent in Settings › Security, so it has the last word); the person and the agent change
+// both, no update does. The mode is always the agent's own (agents/turn-prepare.ts).
 // Nothing here moves by itself: it changes only with the agent's or the person's own act (SYSTEM.md, settings, org,
 // mode, skills index empty ↔ not, a learned tool at a fresh session) or with this PC or app version.
 // Owns: the placeholder values and section order. Deterministic: the same agent, mode, engine, model tier and settings
@@ -42,7 +44,7 @@ export function identityValues(services: RuntimeServices, agent: Agent): Record<
   const profile = safe(() => services.settings.get().profile, undefined);
   const name = profile?.name?.trim() ?? '';
   const boss = agent.managerId ? safe(() => services.people?.get(agent.managerId!), undefined) : undefined; // F-52: a person may manage an agent
-  const manager = boss && !boss.owner ? { name: `${boss.name} (colleague, ${agent.managerId})`, role: boss.title }
+  const manager = boss && !boss.owner ? { name: `${boss.name} (${boss.role === 'ceo' ? 'CEO' : 'colleague'}, ${agent.managerId})`, role: boss.title }
     : agent.managerId ? safe(() => services.org.get(agent.managerId!), undefined) : undefined;
   const space = agent.spaceId ? safe(() => services.org.spaces().find((item) => item.id === agent.spaceId), undefined) : undefined;
   const reports = safe(() => services.org.list(), [] as Agent[])
@@ -50,6 +52,8 @@ export function identityValues(services: RuntimeServices, agent: Agent): Record<
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const reportText = reports.slice(0, MAX_REPORTS).map((item) => (item.role ? `${item.name} (${item.role})` : item.name)).join(', ')
     + (reports.length > MAX_REPORTS ? ` and ${reports.length - MAX_REPORTS} more` : '');
+  // F13: people with the role CEO beside the owner – the agents work for them too.
+  const ceos = safe(() => services.people?.list() ?? [], []).filter((person) => !person.owner && person.role === 'ceo' && person.status !== 'revoked');
   return {
     agent_name: agent.name,
     agent_role: agent.role?.trim() ?? '',
@@ -60,6 +64,7 @@ export function identityValues(services: RuntimeServices, agent: Agent): Record<
     user_given: name ? 'yes' : '',
     user_name: name || 'the person',
     user_label: name || 'CEO',
+    ceos: ceos.map((person) => `${person.name} (${person.id})`).join(', '),
     company: profile?.company?.trim() ?? '',
     language: languageName(profile?.language),
     timezone: profile?.timezone?.trim() ?? '',
@@ -117,11 +122,15 @@ export function moreToolsFor(services: RuntimeServices, input: { agent: Agent; m
   return moreToolsSection(usable, direct);
 }
 
-/** "## From <name>": the agent's HUMAN.md ('' when it has none or it is empty). */
+/**
+ * "## From <name>": the agent's HUMAN.md, then "## From <name> – for every agent": profile.forEveryAgent, the person's
+ * lines to the whole team, last. Each part only when it has text ('' when neither has).
+ */
 export function humanSection(services: RuntimeServices, agent: Agent, name: string): string {
-  const text = safe(() => services.agentCore?.human(agent.id) ?? '', '');
-  if (!text) return '';
-  return [`## From ${name}`, safe(() => services.secrets.redact(text), text)].join('\n');
+  const own = safe(() => services.agentCore?.human(agent.id) ?? '', '');
+  const every = safe(() => services.settings.get().profile?.forEveryAgent?.trim() ?? '', ''); // ≤ MAX_HUMAN_MD (settings/validate.ts)
+  const part = (heading: string, text: string) => (text ? [heading, safe(() => services.secrets.redact(text), text)].join('\n') : '');
+  return [part(`## From ${name}`, own), part(`## From ${name} – for every agent`, every)].filter(Boolean).join('\n\n');
 }
 
 export function buildStable(services: RuntimeServices, templates: PromptTemplates, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): string {

@@ -2,7 +2,7 @@
 // The key is (agent, thread) – 13.11.2026: one context per agent, so its main thread holds the lines of every chat it saw.
 // Owns: the SQL of context_items: row ↔ LedgerItem, id allocation (m<n> counting the thread's messages, t/s/r/a/f from one
 // counter per agent and thread – each the highest number used plus one, and rows are never deleted one by one, so a number is never used twice), the monotonic order, the agent's turn count in the chat (distinct runs –
-// the unit of a pin), pins, marks and the applied state of a rebuild. B-049 F9: whether a row is NESTED (a call made
+// the unit of a pin), pins, marks and the applied state of a rebuild, the copy that starts a fork's record (F26). B-049 F9: whether a row is NESTED (a call made
 // inside a code-mode script) is read with every row from its journal row – the call id there starts with "exec-"
 // (shared NESTED_CALL_PREFIX) – so rows captured before F9 count too, without a column; a pin's room counts no nested row.
 // Never: decides what to capture or mark, reads originals or deletes rows other than a removed chat's.
@@ -219,6 +219,22 @@ export class LedgerStore {
         WHERE ref = ?`,
       [at, at, `msg:${messageId}`],
     ).changes;
+  }
+
+  /**
+   * F26: a fork's record – `from`'s rows up to the last one of `runId` (all of them when that run left none) copied into `to` as they
+   * are (ids, order, marks, pins, refs to the same originals), when `to` holds no row yet; returns how many it copied.
+   */
+  copy(agentId: string, from: string, to: string, runId: string): number {
+    return this.db.tx(() => {
+      if (this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} LIMIT 1`, [agentId, to])) return 0;
+      const upTo = this.db.get<{ n: number | null }>(`SELECT MAX("order") AS n FROM context_items WHERE ${KEY} AND run_id = ?`, [agentId, from, runId])?.n;
+      const columns = 'kind, run_id, "order", created_at, tokens, title, state, condensed, pinned_until, origin_engine, origin_model, ref, applied, marked_by, mark_reason, marked_at, bytes, pruned_at';
+      return this.db.run(
+        `INSERT INTO context_items (agent_id, conversation_id, item_id, ${columns}) SELECT agent_id, ?, item_id, ${columns} FROM context_items WHERE ${KEY} AND "order" <= ?`,
+        [to, agentId, from, upTo ?? Number.MAX_SAFE_INTEGER],
+      ).changes;
+    });
   }
 
   /** A removed chat: its blob-backed unpruned rows (for their blobs), then every row goes. */

@@ -18,7 +18,6 @@ import type { AppToolHost, Connector, McpCallResult, McpToolDef } from './types.
 import { APP_TOOL_PREFIX, appLabel, appToolDescription, appToolNames, appToolSchema, cleanServerText } from './tools-schema.ts';
 import { withMailRun } from './mail/loops.ts';
 import { errorOutput, mapResult, signInLine } from './tools-result.ts';
-import { mailScopeRefusal, SCOPED_REPLY_ARG } from '../tools/mail-scope.ts';
 
 export { APP_TOOL_PREFIX, appToolName, appToolNames } from './tools-schema.ts';
 
@@ -68,9 +67,6 @@ function toolDef(connector: Connector, tool: McpToolDef, name: string, host: App
     anyMode: true,
     describe: () => ({ summary: `${label()}: ${title}`, resource: `app://${appId}`, external: !read }),
     async run(args, ctx): Promise<ToolOutput> {
-      const scopeRefusal = mailScopeRefusal(ctx.origin, name, args);
-      if (scopeRefusal) return failure(scopeRefusal);
-      if (ctx.origin?.mailScope && connector.transport !== 'mail') return failure('Mail capability requires a mail transport.');
       const app = label();
       const refused = refusal(host, appId, app);
       if (refused) return failure(refused);
@@ -78,9 +74,8 @@ function toolDef(connector: Connector, tool: McpToolDef, name: string, host: App
       let result: McpCallResult;
       try {
         const input = await filled(args ?? {}, ctx, plain) as Record<string, unknown>;
-        if (ctx.origin?.mailScope && mcpName === 'reply') input[SCOPED_REPLY_ARG] = true;
         // B-059: a mailbox's call in a run a mail started sends with Auto-Submitted (mail/loops.ts; in-process only).
-        result = await host.call(appId, mcpName, withMailRun(connector, input, ctx.origin, (id) => host.state(id)?.connector), ctx.signal, ctx.origin?.mailScope?.generation);
+        result = await host.call(appId, mcpName, withMailRun(connector, input, ctx.origin, (id) => host.state(id)?.connector), ctx.signal);
       } catch (error) {
         return masked(errorOutput(error, app, !read, ctx.signal.aborted), plain);
       }

@@ -1,8 +1,9 @@
 // Provider-side histories of native sessions: the person's "Delete histories" on a Claude Code account
 // (Settings › Models, AccountRow menu). The CLI has no per-session delete; `claude purge --all --yes` removes all
-// transcripts of a config home – only for this app's isolated homes (<data>/accounts/…, never ~/.claude or a
+// transcripts of a config home – only for this app's isolated homes (Paths.accounts/… or <data>/accounts/…, never ~/.claude or a
 // detected login), only while no turn of that account runs; the account's Claude sessions are renewed right
-// before it and the engine holds the account during the purge (ClaudeEngine.purgeHistories).
+// before it and the engine holds the account during the purge (ClaudeEngine.purgeHistories). 16.11.2026: a home is the
+// login's on this PC, shared by its companies, so the purge clears that login's histories for every company using it.
 // Owns: the purge preconditions. Never: reads or edits provider files, or runs a CLI the person did not start.
 
 import path from 'node:path';
@@ -17,11 +18,9 @@ export interface NativeHistoryDeps {
   clock: Clock;
   log?: Logger;
   accounts: () => Account[];
-  homeAllowed?: (account: Account) => boolean;
-  withHome?: <T>(account: Account, work: () => Promise<T>) => Promise<T>;
   engine: (id: EngineId) => Engine | undefined;
-  /** <data>/accounts – this app's isolated CLI homes. */
-  accountsRoot: string;
+  /** This app's isolated CLI homes lie below these (system/paths.ts homeRoots: this PC's logins folder, <data>/accounts). */
+  accountsRoots: readonly string[];
 }
 
 export interface ProviderHistoryState {
@@ -56,12 +55,7 @@ export class NativeHistory {
   }
 
   /** Deletes every Claude Code history of one isolated account home of this app (the person's explicit action). */
-  purgeClaude(accountId: string): Promise<PurgeResult> {
-    const a = this.purgeable().find(a => a.id === accountId);
-    if (!a) return Promise.reject(new WorkforceError('bad_request', "Only Claude Code accounts this app signed in itself (its own account folder on this PC) can be cleared here."));
-    return this.d.withHome?.(a, () => this.purgeOwned(accountId)) ?? this.purgeOwned(accountId);
-  }
-  private async purgeOwned(accountId: string): Promise<PurgeResult> {
+  async purgeClaude(accountId: string): Promise<PurgeResult> {
     const account = this.purgeable().find((candidate) => candidate.id === accountId);
     if (!account) throw new WorkforceError('bad_request', "Only Claude Code accounts this app signed in itself (its own account folder on this PC) can be cleared here.");
     const engine = this.d.engine('claude');
@@ -81,7 +75,7 @@ export class NativeHistory {
   private purgeable(): Account[] {
     let accounts: Account[] = [];
     try { accounts = this.d.accounts(); } catch { return []; }
-    return accounts.filter((account) => account.provider === 'claude' && (this.d.homeAllowed?.(account) ?? true) && !account.detected && !account.deviceId && account.home !== undefined && inside(account.home, this.d.accountsRoot));
+    return accounts.filter((account) => account.provider === 'claude' && !account.detected && !account.deviceId && account.home !== undefined && this.d.accountsRoots.some((root) => inside(account.home!, root)));
   }
 
   private running(accountId: string): boolean {

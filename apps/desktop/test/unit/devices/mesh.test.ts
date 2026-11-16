@@ -60,7 +60,8 @@ test('after pairing both PCs are online without any call, and nothing stays sche
   assert.equal(statusOf(b, a), 'online');
   assert.equal(a.timers.count() + b.timers.count(), 0, 'the inviter\'s fallback retry ended with the joiner\'s link');
   const seen = b.events.filter((entry) => entry.event === 'device.upserted' && (entry.data as { id: string }).id === idOf(a)).map((entry) => (entry.data as { status: string }).status);
-  assert.deepEqual(seen.slice(-2), ['connecting', 'online']);
+  // F25 (16.11.2026): the PC's caps (its app version) arrive right after and announce the row once more, still 'online'.
+  assert.deepEqual(seen.filter((status, i) => status !== seen[i - 1]).slice(-2), ['connecting', 'online']);
 });
 
 test('a dropped link: only the lower id retries, once, with backoff – then it reconnects', async () => {

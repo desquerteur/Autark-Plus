@@ -1,15 +1,18 @@
 // What the account rows and the model setup share: starting an official sign-in and following a terminal sign-in or
 // sign-out until it shows (re-checked whenever this window gets focus again, at most 30 min, then a toast), and what
 // fixes or removes an account. A Codex or Claude Code sign-in opens the browser itself; one started from the phone
-// opens the sign-in sheet instead (away-sign-in.ts).
+// opens the sign-in sheet instead (away-sign-in.ts). 16.11.2026: the page of another sign-in started from the phone is already
+// in the PC's pane (the runtime opens it there – its answer returns to the PC) and the phone's pane sheet opens on it; a
+// terminal or window it opened on the PC says so.
 // Owns: these flows and texts. Never: reads or shows tokens, or decides account state (the runtime does).
 
 import type { AwaySignIn } from '../../shared/api/methods-providers.ts';
 import { foundHere, type Account, type ProviderId } from '../../shared/model/providers.ts';
-import { openExternal } from '../lib/platform.ts';
+import { openExternal, platform } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { accounts } from '../lib/store.ts';
 import { pushToast } from '../lib/toasts.ts';
+import { showOpenedOnPc } from '../workspace/phone-tabs.ts';
 import { openAwaySignIn } from './away-sign-in.ts';
 import { act } from './controls.tsx';
 import { SIGN_IN, signInHint } from './providers.ts';
@@ -66,7 +69,7 @@ export function recheckOnFocus(id: string, goal: 'in' | 'out'): void {
 /** The toast after a sign-in started and, for a terminal sign-in, the re-check on focus; a phone's sign-in opens its sheet. */
 export function signInStarted(id: string, provider: ProviderId | undefined, result: { url?: string; signInUrl?: string } & AwaySignIn = {}): void {
   if (openAwaySignIn(id, result)) return;
-  pushToast({ title: 'Sign-in started', body: signInHint(provider) });
+  pushToast({ title: 'Sign-in started', body: signInHint(provider, platform !== 'desktop') }); // the phone: it opened on the PC
   if (inTerminal(provider)) recheckOnFocus(id, 'in');
 }
 
@@ -76,7 +79,10 @@ const OPENS_OWN_BROWSER: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex',
 /** Starts the official sign-in for an existing account; opens a returned URL the CLI does not open itself, and returns the result. */
 export async function startLogin(id: string, provider = findAccount(id)?.provider): Promise<({ started: boolean; url?: string } & AwaySignIn) | undefined> {
   const result = await act(() => rpc.call('accounts.login', { id }), 'Could not start sign-in');
-  if (result?.url && !(provider && OPENS_OWN_BROWSER.has(provider))) openExternal(result.url);
+  if (result?.url && !(provider && OPENS_OWN_BROWSER.has(provider))) {
+    // 16.11.2026: from the phone the runtime already opened the page in the PC's pane (its answer returns to the PC) – one tab, the sheet shows it
+    if (!showOpenedOnPc()) openExternal(result.url);
+  }
   if (result?.started) signInStarted(id, provider, result);
   return result;
 }

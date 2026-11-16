@@ -2,7 +2,8 @@
 // connecting PCs is wired) and the peer handlers that let a linked PC run them here: 'tools.call' (remote tool execution – the tool registry forwards a
 // call whose `device` or the agent's home device names another PC), 'files.put' (a sent file: send-file.ts)
 // and 'computer.preview' (the live screen image). A call from a linked PC runs like a call of this PC's own agent (one log line);
-// computer.* tools show in the activity pill and end at the person's Stop (computer/activity.ts).
+// computer.* tools show in the activity pill and end at the person's Stop (computer/activity.ts). localCaps: what this PC
+// offers, with the app version it runs (F25).
 // Owns: the device tool list and the executor side of a remote call. Never: executes a tool that is
 // not marked remote, forwards a received call to a third PC, or sends values of this PC's secrets back.
 
@@ -59,11 +60,14 @@ export function watched(tool: ToolDef, activity: ComputerActivity): ToolDef {
   };
 }
 
-/** What this PC can do for agents (updateSelf); a phone list of an older run is cleared (phone.devices asks adb itself). */
-export async function localCaps(deps: DeviceToolDeps): Promise<DeviceCaps> {
+/**
+ * What this PC can do for agents (updateSelf); a phone list of an older run is cleared (phone.devices asks adb itself).
+ * F25 (16.11.2026): `version` – the app version this PC runs, so my other PCs see it (Settings › Devices, their update check).
+ */
+export async function localCaps(deps: DeviceToolDeps & { version?: string }): Promise<DeviceCaps> {
   let browser = false;
   try { detectChannel(); browser = true; } catch { browser = false; }
-  return { computerUse: deps.computer.canControl(), browser, os: deps.computer.platform, adbPhones: undefined };
+  return { computerUse: deps.computer.canControl(), browser, os: deps.computer.platform, adbPhones: undefined, ...(deps.version ? { version: deps.version } : {}) };
 }
 
 interface RemoteCall { name: string; args: Record<string, unknown>; agentId: string; agentName?: string; runId: string; conversationId?: string; taskId?: string; mode: string }

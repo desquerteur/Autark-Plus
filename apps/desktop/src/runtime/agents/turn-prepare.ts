@@ -29,7 +29,8 @@
 // chat only decides which lines the input carries.
 // A native rebuild from the context ledger (agents/rebuild.ts) on an engine switch, a missing session or worthwhile marks; a turn
 // whose history starts from the projection gets the call naming what is condensed or hidden there (turnTrace).
-// B-057 (agents/split-turn.ts): a split's turn plans, routes, seeds its session and gets its parent's tool offer there; the
+// B-057 (agents/split-turn.ts): a split's turn plans, routes, seeds its session and gets its parent's tool offer there (F26: a
+// 'fork' part's first start condenses its own copy of my record before it is seeded – splits/fork.ts); the
 // agent's own turn gets its settled splits' "Split results" block in its input (RoutedTurn.splitParts).
 // Never: starts the engine, posts chat messages (only TaskService.resume's quiet line) or
 // advances cursors (turn-finish does that).

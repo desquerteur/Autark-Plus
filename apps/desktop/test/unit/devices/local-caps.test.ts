@@ -23,4 +23,11 @@ test('localCaps never asks adb and clears an older phone list', async () => {
   assert.equal(caps.computerUse, true);
   assert.equal(caps.os, 'win32');
   assert.equal(typeof caps.browser, 'boolean');
+  assert.equal(caps.version, undefined, 'no version given, none sent');
+});
+
+test('F25: the caps carry the app version this PC runs', async () => {
+  const computer = { canControl: () => false, platform: 'win32' } as unknown as ComputerService;
+  const caps = await localCaps({ computer, browser: {} as BrowserService, phone: {} as AdbPhone, version: '0.3.9' });
+  assert.equal(caps.version, '0.3.9');
 });

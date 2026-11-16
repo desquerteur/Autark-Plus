@@ -9,6 +9,11 @@
 // is not in, but the owner's PC holds them.
 // Perspective: in a person's session the ids are projected so the shared UI works unchanged –
 // 'human' means "you" (the caller) and the CEO appears as OWNER_ALIAS (runtime/people/perspective.ts).
+// F14 (owner 15.11.2026): a person counts as a member once they joined (`joinedAt`); one who never joined can be removed
+// for good (people.remove → person.removed, also on my other PCs).
+// F13 (owner 15.11.2026: "zwei CEOs … über den Managern"): a person's `role` – 'member', or 'ceo': they work like the
+// owner (top of the org, every space, agent, task and company chat; they add and remove members), never with the owner's
+// plan accounts, keys, secrets, Settings or the owner's own 1:1s (runtime/people/access.ts, rpc-ceo.ts).
 // Owns: the shapes shared by runtime and UI, the people.* methods and person.* events (augmenting
 // Methods / EventMap / SessionInfo – methods.ts is at its size limit) and the id helpers.
 // Never: carries tokens, tickets or invite codes beyond the one invite answer shown to the owner.
@@ -32,6 +37,11 @@ export interface PersonScopes {
 /** A new person works with no space's agents until the owner picks spaces (never the private space by default). */
 export const DEFAULT_PERSON_SCOPES: PersonScopes = { spaces: [], startChats: true, assignAgents: true };
 
+/** F13: a member of the organisation, or a CEO beside the owner (the owner's own row is 'ceo'). */
+export type PersonRole = 'member' | 'ceo';
+/** F13: what a CEO's scopes always are – every space, chats, tasks for agents. */
+export const CEO_SCOPES: PersonScopes = { spaces: 'all', startChats: true, assignAgents: true };
+
 /** A phone or browser of a person (the owner's view only). */
 export interface PersonDevice {
   id: string;
@@ -52,6 +62,8 @@ export interface Person {
   status: PersonStatus;
   /** The owner of this PC: the admin of the organisation. */
   owner: boolean;
+  /** F13: 'ceo' works like the owner (see the header); absent counts as 'member' (the runtime always sets it). */
+  role?: PersonRole;
   scopes: PersonScopes;
   createdAt: number;
   updatedAt: number;
@@ -107,6 +119,11 @@ export function isPersonId(value: unknown): boolean {
   return typeof value === 'string' && PERSON_ID.test(value);
 }
 
+/** F14: a person is a member of the team once they joined (a device of theirs got in); the owner always is. */
+export function hasJoined(person: Pick<Person, 'owner' | 'joinedAt' | 'status'>): boolean {
+  return person.owner || person.joinedAt !== undefined || person.status === 'active';
+}
+
 /** The owner or another person – a human actor (for attribution, never for consent). */
 export function isHumanActor(value: unknown): boolean {
   return value === 'human' || isPersonId(value);
@@ -135,19 +152,25 @@ declare module './tasks.ts' {
 declare module '../api/methods.ts' {
   interface SessionInfo {
     /** A person's session (kind 'person'): who it is and what they may do. */
-    person?: { id: string; name: string; title: string; scopes: PersonScopes };
+    person?: { id: string; name: string; title: string; scopes: PersonScopes; role?: PersonRole };
   }
   interface Methods {
-    /** Owner: every person (the owner first) with devices; a person: the directory (names, titles, managers). */
+    /** Owner (and F13 a CEO): every person (the owner first) with devices; a member: the directory (names, titles, managers). */
     'people.list': { params: void; result: Person[] };
-    /** Owner: a new person (status invited) or changes to one (name, title, avatar, manager, scopes). */
-    'people.save': { params: { id?: string; name?: string; title?: string; avatar?: Avatar; managerId?: string | null; scopes?: PersonScopes }; result: Person };
+    /**
+     * Owner: a new person (status invited) or changes to one (name, title, avatar, manager, scopes, role – F13 'ceo' puts them
+     * at the top unless a manager is named). F13: a CEO adds and edits members, never the owner, another CEO or a role.
+     */
+    'people.save': { params: { id?: string; name?: string; title?: string; avatar?: Avatar; managerId?: string | null; scopes?: PersonScopes; role?: PersonRole }; result: Person };
+    // F13: invite, closeInvite, revoke, remove, removeDevice, audit and chats – a CEO too, for members (runtime/people/rpc-ceo.ts).
     /** Owner: a new invite for a person (replaces an open one): link + QR (72 h, one use) and a 6-digit code (10 min). */
     'people.invite': { params: { id: string }; result: PersonInvite };
     /** Owner: ends a person's open invite. */
     'people.closeInvite': { params: { id: string }; result: { ok: true } };
     /** Owner: ends a person's access at once – devices cut, chats left, their open work back to the team. */
     'people.revoke': { params: { id: string }; result: Person };
+    /** Owner: a person who never joined leaves for good – reports move up, chats and open work go back, invite and code end. */
+    'people.remove': { params: { id: string }; result: { ok: true } };
     /** Owner: removes one device of a person (its token stops working at once). */
     'people.removeDevice': { params: { id: string; deviceId: string }; result: Person };
     /** Owner: a person's audit lines, newest first. */
@@ -167,5 +190,7 @@ declare module '../api/events.ts' {
   interface EventMap {
     /** A person was added, changed, joined or revoked (topic: org; people see the directory projection). */
     'person.upserted': Person;
+    /** F14: a person who never joined was removed (people.remove; topic: org, ids only). */
+    'person.removed': { id: string };
   }
 }

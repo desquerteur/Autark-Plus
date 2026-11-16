@@ -155,6 +155,9 @@ export interface ModelInfo {
   /** B-083: the id of the newest model of the same family when this one is an older version of it (catalog order,
    *  models/order.ts – such models stand below the current ones). Absent: this is its family's newest. */
   newer?: string;
+  /** F05: where it runs, as the person reads it – "Codex", "Claude Code", "OpenRouter", or a connection's own id or
+   *  known service name (models/catalog-merge.ts sourceLabel). Optional: an older runtime's catalog has none. */
+  source?: string;
 }
 
 /** Agent/chat level preference. Router stays inside these bounds. */

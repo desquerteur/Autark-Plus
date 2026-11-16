@@ -2,7 +2,7 @@
    optional title + collapsed "why", one-line receipt once answered) and every widget (`w-*`):
    choice, form, approve (a plain question), checklist (round circles, check +
    strike-through, thin progress), timer, record + teleprompter (large text, speed, camera
-   preview), upload drop zone, confirm and review. At most one primary + one secondary action.
+   preview, the live words and the heard script word), upload drop zone, confirm and review. At most one primary + one secondary action.
    Owns: these looks. Never: display blocks (blocks.css), task rows (tasks.css), colors outside
    tokens.css. */
 
@@ -137,6 +137,16 @@ video.w-record-playback { max-height: 360px; background: var(--chrome); }
 .w-record-dot.is-starting { background: var(--muted); animation: none; } /* Record clicked, the recorder not yet writing */
 @keyframes wf-rec { 50% { opacity: .35; } }
 .w-record-error { color: var(--danger); font-size: 12px; line-height: 1.5; }
+/* F23: the words heard so far under the time (blocks/ui/live-words.ts; the composer's RecordBar too), the newest at the
+   end: a line longer than its space is cut at its start (an rtl box around ltr text). Its line is there from Record on,
+   so the first words move nothing; the script's last heard word is coloured through the Custom Highlight API. */
+.w-record-head { display: grid; gap: 4px; min-width: 0; }
+.w-live-words {
+  height: 1.4em; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left;
+  color: var(--secondary); font-size: 12px; line-height: 1.4;
+}
+.w-live-words > span { direction: ltr; unicode-bidi: isolate; }
+::highlight(prompter-heard) { background-color: color-mix(in srgb, var(--update) 30%, transparent); }
 
 /* ---------------------------------------------------------------- upload */
 .w-upload { display: grid; gap: 10px; }

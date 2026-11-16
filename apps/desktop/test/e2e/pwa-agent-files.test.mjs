@@ -1,8 +1,8 @@
 // The phone view of agent files (MM2) in a real mobile-emulated browser against the headless
 // runtime (demo engine, temp profile and temp home – its workspace is the --fake default <data>/workspace):
 // the Manager answers with a media block and a file block naming workspace files; on the PWA
-// (390 px) the image shows from its stored fileId, the file row shows its name and Download –
-// never the PC's path – and Download hands over the stored bytes.
+// (390 px) the image shows from its stored fileId, the file row shows its name, Open (the PC file in the chat's area,
+// 16.11.2026) and Download – never the PC's path – and Download hands over the stored bytes.
 // Uses an installed Chrome or Edge through playwright-core and skips with a message when
 // neither exists – it never downloads a browser.
 // Owns: this flow. Never: prints the pairing secret or the device token, touches real data.
@@ -86,7 +86,7 @@ test('PWA at phone width: agent media shows by fileId, the file row offers Downl
   const text = await row.innerText();
   assert.ok(text.includes('Report'), text);
   assert.ok(!text.includes(workspace) && !text.includes('out/report.txt') && !text.includes('out\\report.txt'), `no path on the phone: ${text}`);
-  assert.equal(await row.locator('button', { hasText: 'Open' }).count(), 0, 'no desktop Open on the phone');
+  assert.equal(await row.locator('button', { hasText: 'Open' }).count(), 1, '16.11.2026: Open opens the PC file in the chat\'s area, as a path in the chat does');
   const [download] = await Promise.all([page.waitForEvent('download', { timeout: 30_000 }), row.locator('button', { hasText: 'Download' }).tap()]);
   assert.equal(download.suggestedFilename(), 'report.txt');
   const saved = await download.path();

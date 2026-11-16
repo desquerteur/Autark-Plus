@@ -4,9 +4,12 @@
 //                   home project – the ONE place it is stored, so a disk edit counts as the person's edit
 //   SYSTEM.md       the agent's instructions: the ONE text the runtime prompt and the agent editor use
 //   skills/<name>/SKILL.md  its Main Skills (agentskills.io front matter name + description, like every skill)
-//   HUMAN.md        (owner 15.11.2026) the person's own lines to this agent, last in its system prompt; only the person
-//                   writes it (the agent page or the file) – no update, standard or agent edit touches it
-// Shapes for agents.core / agents.saveMainSkill / agents.setHome and the 'agentCore.changed' event, and the limits.
+//   HUMAN.md        (owner 15.11.2026) the person's lines to this agent, near the end of its system prompt (only the
+//                   person's lines to every agent, settings profile.forEveryAgent, come after them); the person writes
+//                   it on the agent page or as a file, and the agent may change it too (owner 16.11.2026: "die dürfen
+//                   alles in unserem System") – no standard or update ever rewrites it
+// Shapes for agents.core / agents.saveMainSkill / agents.setHome and the 'agentCore.changed' event, the limits and the
+// default line of profile.forEveryAgent.
 // Owns: these shapes and constants. Never: behaviour (runtime/agent-core).
 
 import type { SkillInfo } from './knowledge.ts';
@@ -17,8 +20,18 @@ export const SYSTEM_FILE = 'SYSTEM.md';
 export const MAX_SYSTEM_MD = 60_000;
 export const CORE_MANIFEST = 'agent.json';
 export const HUMAN_FILE = 'HUMAN.md';
-/** The longest HUMAN.md the prompt and the agent page take (a longer one is cut in the prompt). */
+/** The longest HUMAN.md the prompt and the agent page take (a longer one is cut in the prompt); profile.forEveryAgent too. */
 export const MAX_HUMAN_MD = 4_000;
+
+/**
+ * Owner 15./16.11.2026: the line the person's text for every agent (settings profile.forEveryAgent) starts with, by the
+ * app's language (German, else English). Until 0.3.9 each new HUMAN.md started with it (bridge/kontext-1311.ts).
+ */
+export function humanDefault(language: string | undefined): string {
+  return language?.trim().toLowerCase().startsWith('de')
+    ? '„Ich bin kein Roboter“-Prüfungen (CAPTCHAs) löse ich nicht.'
+    : 'I don\'t solve "I\'m not a robot" checks (CAPTCHAs).';
+}
 export const MAIN_SKILLS_DIR = 'skills';
 /** Larger files are not read at all (MAX_SYSTEM_MD characters are at most four bytes each in UTF-8). */
 export const SYSTEM_MAX_BYTES = 4 * MAX_SYSTEM_MD;

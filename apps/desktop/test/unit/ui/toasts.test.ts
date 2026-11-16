@@ -1,12 +1,12 @@
 // The in-window toasts (src/ui/lib/toasts.ts): a toast expires after its time (6 s by default), one pushed with 0
-// stays until it is dismissed, at most three at once (the oldest goes first); a runtime notification for a to-do, a
-// blocker or an important message stays until Open or Dismiss (or until store-events drops it: its chat or My day
-// open, its to-do finished), a reply or a result expires.
+// stays until it is dismissed, at most three at once (the oldest goes first); a runtime notification for a to-do or a
+// blocker stays until Open or Dismiss (or until store-events drops it: its chat or My day open, its to-do finished),
+// an important message goes after 20 s, a reply or a result expires.
 // Owns: these assertions only. Never: the status line's markup (shell/StatusLine.tsx) or a real window.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { NOTICE_ONLY_MS, dismissToast, dismissToastsWhere, pushToast, toastNotification, toasts } from '../../../src/ui/lib/toasts.ts';
+import { NOTICE_ONLY_MS, dismissToast, dismissToastsWhere, pushToast, toastNotification, toastStartNotice, toasts } from '../../../src/ui/lib/toasts.ts';
 
 const titles = () => toasts.value.map((toast) => toast.title);
 
@@ -28,7 +28,7 @@ test('a toast expires after its time; one pushed with 0 stays until dismissed; a
   assert.deepEqual(titles(), ['b', 'c']);
 });
 
-test('a notification for a to-do, a blocker or an important message stays until Open or Dismiss; a reply or a result expires', (t) => {
+test('a notification for a to-do or a blocker stays until Open or Dismiss; an important message goes after 20 s; a reply or a result expires', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   toasts.value = [];
   toastNotification({ kind: 'important', title: 'Max posted on X', body: 'The launch post is live', conversationId: 'ch_1' });
@@ -36,6 +36,8 @@ test('a notification for a to-do, a blocker or an important message stays until 
   assert.deepEqual(titles(), ['Max posted on X', 'Max']);
   t.mock.timers.tick(6000);
   assert.deepEqual(toasts.value.map(({ title, body, conversationId }) => ({ title, body, conversationId })), [{ title: 'Max posted on X', body: 'The launch post is live', conversationId: 'ch_1' }], 'the reply expired');
+  t.mock.timers.tick(NOTICE_ONLY_MS - 6000);
+  assert.deepEqual(titles(), [], 'feedback F10: the important message went by itself (it stays unread in its chat)');
   toasts.value = [];
   for (const kind of ['todo', 'blocker', 'done'] as const) toastNotification({ kind, title: kind, body: '', taskId: 'task_1' });
   t.mock.timers.tick(60 * 60_000);
@@ -43,7 +45,8 @@ test('a notification for a to-do, a blocker or an important message stays until 
   assert.equal(toasts.value[0].taskId, 'task_1', 'Open goes to the to-do');
 });
 
-test('dismissToastsWhere drops only the toasts it picks (a chat opened, a to-do finished elsewhere)', () => {
+test('dismissToastsWhere drops only the toasts it picks (a chat opened, a to-do finished elsewhere)', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   toasts.value = [];
   toastNotification({ kind: 'important', title: 'In chat 1', body: '', conversationId: 'ch_1' });
   toastNotification({ kind: 'todo', title: 'To-do 1', body: '', taskId: 'task_1' });
@@ -59,13 +62,23 @@ test('dismissToastsWhere drops only the toasts it picks (a chat opened, a to-do 
   assert.deepEqual(titles(), []);
 });
 
-test('feedback F09: an important notice with nothing to open goes by itself after a while; one with a chat stays', (t) => {
+test('F25: a start notice saying an update did not install stays until Dismiss; "Updated to" goes by itself', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  toasts.value = [];
+  toastStartNotice({ text: 'The update to 0.3.8 did not install · still on 0.3.6', failed: true });
+  toastStartNotice({ text: 'Updated to 0.3.8 · 2 tasks continued' });
+  t.mock.timers.tick(60 * 60_000);
+  assert.deepEqual(toasts.value.map(({ title, tone }) => [title, tone]), [['The update to 0.3.8 did not install · still on 0.3.6', 'error']]);
+});
+
+test('feedback F09/F10: important notices go by themselves after a while, with or without a chat; a to-do with a chat stays', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   toasts.value = [];
   toastNotification({ kind: 'important', title: 'office-pc is now linked', body: 'Remove it in Settings › Devices.' });
   toastNotification({ kind: 'important', title: 'Max posted on X', body: '', conversationId: 'ch_1' });
+  toastNotification({ kind: 'todo', title: 'Confirm the login', body: '', conversationId: 'ch_1', taskId: 'task_1' });
   t.mock.timers.tick(6000);
-  assert.deepEqual(titles(), ['office-pc is now linked', 'Max posted on X'], 'longer than a reply');
+  assert.deepEqual(titles(), ['office-pc is now linked', 'Max posted on X', 'Confirm the login'], 'longer than a reply');
   t.mock.timers.tick(NOTICE_ONLY_MS - 6000);
-  assert.deepEqual(titles(), ['Max posted on X'], 'the plain notice went, the one with a chat stays');
+  assert.deepEqual(titles(), ['Confirm the login'], 'both important notices went, the to-do stays');
 });

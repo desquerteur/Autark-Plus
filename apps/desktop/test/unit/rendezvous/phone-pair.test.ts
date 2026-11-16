@@ -16,13 +16,14 @@ import { bytes, commitment, matchCode, newEphemeral, newNonce, sessionKey, signe
 import { PwaService } from '../../../src/runtime/pwa/service.ts';
 import { PeopleRepo, cleanScopes } from '../../../src/runtime/people/repo.ts';
 import { PersonTokens } from '../../../src/runtime/people/tokens.ts';
-import type { RemoteState } from '../../../src/shared/model/remote.ts';
+import type { RemoteDeps } from '../../../src/runtime/remote/service.ts';
+import type { NewPerson, RemoteState } from '../../../src/shared/model/remote.ts';
 import { HandTimers } from '../remote/rig.ts';
 import { ManualClock, fakeHost, memoryDb, recordingBus, silentLog } from '../devices/fakes.ts';
 
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-async function pcWithPhones() {
+async function pcWithPhones(deps: Partial<RemoteDeps> = {}) {
   const db = memoryDb();
   const { bus, events } = recordingBus();
   const clock = new ManualClock();
@@ -36,6 +37,7 @@ async function pcWithPhones() {
   const notes: Array<{ title: string; body: string }> = [];
   const admitted: string[] = [];
   const remote = new RemoteWithPhones({
+    ...deps,
     identity, clock, bus, log: silentLog, mesh, timers, findable: () => true,
     post: async () => { throw new Error('unused'); },
     notify: (view) => shown.push(view), linked: (note) => notes.push(note), admitted: (personId) => admitted.push(personId),
@@ -153,6 +155,28 @@ test('F1: Me (no person) keeps the phone mine; re-pairing a key for a person end
   assert.equal(pc.repo.byFingerprint(fingerprintOf(fromB64url(mine.info.pub)))?.id, issued.deviceId, 'one live row per key');
   assert.equal(pc.pwa.pairPhone({ id: 'dev_phonepair09', name: 'Mine', publicKey: b64url(Buffer.alloc(32, 4)), personId: 'human' }).person, undefined, 'the owner as person = my phone');
   assert.throws(() => pc.pwa.pairPhone({ id: 'dev_phonepair10', name: 'X', publicKey: b64url(Buffer.alloc(32, 5)), personId: 'per_gone000000001' }), (error: { code?: string }) => error.code === 'forbidden');
+});
+
+test('F13: a phone accepted for a new person makes that person once, and the phone gets only their token', async () => {
+  const made: NewPerson[] = [];
+  let db: ReturnType<typeof memoryDb> | undefined;
+  const pc = await pcWithPhones({ createPerson: (input) => { made.push(input); addAnna(db!); return ANNA; } });
+  db = pc.db;
+  const phone = await phoneAsks(pc.remote, 'Galaxy');
+  const [request] = pc.remote.state().incoming;
+  const waiting = phone.wait();
+  pc.remote.decide(request.id, true, undefined, { name: 'Anna' });
+  assert.deepEqual(made, [], 'nobody is made before the phone collects its answer');
+  const answer = await waiting;
+  assert.equal(answer.status, 'accepted');
+  assert.deepEqual(made, [{ name: 'Anna' }]);
+  const token = answer.token as string;
+  assert.equal(pc.pwa.authenticate(token), undefined, 'never my access');
+  assert.equal(new PersonTokens(pc.db, pc.clock).authenticate(token)?.personId, ANNA, 'the person token');
+  assert.equal(new PeopleRepo(pc.db).get(ANNA)?.status, 'active', 'she is in now');
+  assert.deepEqual(pc.admitted, [ANNA]);
+  await phone.wait();
+  assert.equal(made.length, 1, 'a repeated wait makes nobody again');
 });
 
 test('a declined phone gets no token; a wrong session key cannot collect the answer', async () => {

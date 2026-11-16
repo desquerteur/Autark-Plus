@@ -7,6 +7,7 @@
 // connect() rejects after the claim. Each request carries this page's lease (a random page id
 // plus a counter that moves only when the old port is gone: runtime restart or stop, or a port
 // that arrived too late and was closed); main hands out one live port per lease (ipc.ts).
+// Feedback 16.11.2026: the caption controls' dimming (setTitleBarDim) and the feedback shortcut's steps (onFeedbackKey).
 // Owns: IPC calls/listeners (incl. the window's 'online' event, B-044), envelope unwrapping and the lease. Never: holds business state,
 // logic or secrets – every action is checked again in main (sender trust + argument validation).
 
@@ -125,6 +126,8 @@ const api: WorkforceDesktopApi = {
   platform: process.platform,
   titleBarHeight: TITLE_BAR_HEIGHT,
   setTitleBarLayout: layout => { ipcRenderer.send(IPC.titleBarLayout, layout === 'compact' ? 'compact' : 'columns'); },
+  setTitleBarDim: dim => { ipcRenderer.send(IPC.titleBarDim, dim === true); },
+  onFeedbackKey: listener => listen<[unknown]>(IPC.feedbackKey, step => { if (step === 'down' || step === 'up') listener(step); }),
   connect,
   onRuntime: listener => listen<[RuntimeStatus]>(IPC.runtimeStatus, listener),
   updates: {

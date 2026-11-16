@@ -38,6 +38,7 @@ test('the root map names every entry, the app-managed ones, the workspace and ho
   assert.match(text, /boot\.json .*run-state\.json, next-due\.json and launcher\.json/);
   for (const name of ['git-no-hooks/', 'window-state.json', 'before-restore-<time>/', 'restore-result.json', 'settings.v7-backup.json']) assert.ok(text.includes(name), name);
   assert.match(text, /avatar\.png or avatar\.jpg \(a copy of its picture\)/);
+  assert.match(text, /HUMAN\.md \(the person's lines to that agent, near the end of its prompt – only the lines for every agent, settings\.json profile\.forEveryAgent, come after them; the person and the agent change it, no update does\)/); // owner 16.11.2026
   assert.match(text, /\/home\/ada\/Workforce – projects/);
   assert.match(text, /wf call <method>/);
   assert.match(text, /POST http:\/\/127\.0\.0\.1:<port>\/rpc with the header "Authorization: Bearer <token>"/);
@@ -55,6 +56,7 @@ test('the agents map: name → folder, role, reports to; archived last; cells es
   assert.match(text, /\| Wri\\\|ter \| ag_w\/ \| Writer \| Manager \|/);
   assert.match(text, /## Archived\n\n\| Name \| Folder \| Role \| Reported to \|\n\|---\|---\|---\|---\|\n\| Old \| ag_old\/ \| Gone \| Manager \|/);
   assert.match(agentsReadme([agent('ag_m', 'M')], ''), /\| M \| ag_m\/ \| – \| The person \|/);
+  assert.match(text, /Each folder holds SYSTEM\.md \(the agent's instructions\), HUMAN\.md \(the person's lines to it\) and skills\/ \(its main skills\)\./);
 });
 
 test('RootMaps writes both maps at start, only on a change, and the agents map again after team changes', async (t) => {
@@ -99,7 +101,7 @@ test('system.root: <data>, its map (written when missing) and the settings file 
   const maps = new RootMaps({ paths: { data: temp.dir, workspace: path.join(temp.dir, 'workspace') }, bus: recordingBus().bus, log, agents: () => [], personName: () => '' });
   const services = { paths: { data: temp.dir, workspace: path.join(temp.dir, 'workspace') }, rootMaps: maps, settings: { notice: () => 'In settings.json the voice section was not used.' } };
   const handler = createHandlerTable().get('system.root')!;
-  assert.equal(handler.scope, 'owner');
+  assert.deepEqual(handler.scope, { capability: 'manage', secure: true }); // 16.11.2026: the owner and the phone's pane
   const readme = path.join(temp.dir, 'README.md');
   rmSync(readme, { force: true });
   const result = await handler.handler(undefined as never, { scope: { kind: 'owner' }, services, extras: {}, topics: new Set(), signal: new AbortController().signal } as never);

@@ -11,7 +11,9 @@
 // Phone apps paired through the server (rendezvous/phone-pair.ts; B-078: also the ones the roster brings from my other
 // PCs) are pinned the same way for as long as their device row exists; their tunnels go to the phone bridge, never into
 // the PC mesh. A phone's connect request (role 'phone') takes the same route as a PC's; the old `phone` code message of
-// 0.3.x apps gets one line asking for the app update.
+// 0.3.x apps gets one line asking for the app update. F29 stage 1: the Android app's channel goes straight to the peer
+// listener whenever one of my addresses answers; the state names each phone's bytes direct and through the server today
+// (phone-traffic.ts), and a removed phone's direct channels end after the same drain as its pin.
 // B-084: it opens my person code (remote/code.ts – it holds my key and database) and sends my chain with my pins, so
 // the server finds me under the code as well.
 // Owns: the mesh hook, the request route, the relay client and its state.
@@ -65,8 +67,8 @@ export interface MeetingDeps {
   port(): number | undefined;
   timers?: Timers;
   socket?: RelayClientDeps['socket'];
-  /** Phone apps over the server: their tunnels. */
-  phones?: Pick<PhoneBridge, 'accept' | 'closeAll'>;
+  /** Phone apps over the server: their tunnels (F29: and their traffic, direct and through the server). */
+  phones?: Pick<PhoneBridge, 'accept' | 'closeAll'> & Partial<Pick<PhoneBridge, 'counts' | 'onChange' | 'prune'>>;
 }
 
 const linkedPc = (record: DeviceRecord | undefined): record is DeviceRecord =>
@@ -114,6 +116,7 @@ export class Meeting {
       bus.on('settings.updated', () => { this.syncPeers(); this.configure(); }),
       bus.on('device.upserted', () => this.syncPeers()),
       bus.on('device.removed', () => this.syncPeers()),
+      this.deps.phones?.onChange?.(() => this.changed()) ?? (() => undefined),
     );
     this.syncPeers();
     this.configure();
@@ -134,9 +137,13 @@ export class Meeting {
   state(): RelayState {
     const relay = this.relay.state();
     const ids = (fps: string[]) => fps.map((fp) => this.repo.byFingerprint(fp)).filter(linkedPc).map((record) => record.id);
+    const phones = (this.deps.phones?.counts?.() ?? []).flatMap((count) => {
+      const record = this.repo.get(count.deviceId);
+      return relayPhone(record) ? [{ ...count, name: record.name }] : [];
+    });
     return {
       status: relay.status, ...(relay.url ? { url: relay.url } : {}), ...(relay.error && relay.status !== 'connected' ? { error: relay.error } : {}),
-      peersOnline: ids(relay.online).length, relayed: ids(relay.tunnels),
+      peersOnline: ids(relay.online).length, relayed: ids(relay.tunnels), ...(phones.length ? { phones } : {}),
     };
   }
 
@@ -236,7 +243,7 @@ export class Meeting {
     for (const [fp, pub] of leaving) this.leaving.set(fp, pub);
     for (const [fp, pub] of this.leaving) if (!phones.has(fp)) peers.push({ fp, pub });
     if (leaving.length) {
-      const done = () => { for (const [fp] of leaving) this.leaving.delete(fp); this.syncPeers(); };
+      const done = () => { for (const [fp] of leaving) this.leaving.delete(fp); this.deps.phones?.prune?.(); this.syncPeers(); };
       if (this.deps.timers) this.deps.timers.set(done, PHONE_DRAIN_MS); else setTimeout(done, PHONE_DRAIN_MS).unref?.();
     }
     let port: number | undefined;

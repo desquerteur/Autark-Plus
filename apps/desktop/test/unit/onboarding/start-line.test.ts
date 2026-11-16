@@ -1,13 +1,15 @@
-// The Manager's first message (runtime/onboarding/service.ts start(), brief.ts, resources/prompts/onboarding.md, the
-// onboarding.start RPC in rpc/handlers/app.ts). B-090: Start posts one fixed line in the Manager's first chat as the
-// Manager's own, written by the app – nobody wakes, no turn runs. The person's answer is an ordinary message: one
-// 'message' wake, exactly one Manager turn, routed as a person's request. onboarding.start takes no params.
+// The first chat's opening lines (runtime/onboarding/service.ts start(), brief.ts, resources/prompts/onboarding.md, the
+// onboarding.start RPC in rpc/handlers/app.ts). F07 (owner 15.11.2026): Start posts the start line in the person's voice
+// (it says the app sent it) and B-090's fixed Manager line right below it, both written by the app – nobody wakes, no
+// turn runs, the startup sweep finds nothing to answer. The person's answer is an ordinary message: one 'message' wake,
+// exactly one Manager turn, routed as a person's request. onboarding.start takes no params.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { Onboarding } from '../../../src/runtime/onboarding/service.ts';
-import { BRIEF_MAX, setupBrief, welcomeLanguage } from '../../../src/runtime/onboarding/brief.ts';
+import { BRIEF_MAX, setupLines, welcomeLanguage } from '../../../src/runtime/onboarding/brief.ts';
+import { unansweredMessages } from '../../../src/runtime/chat/delivery-recovery.ts';
 import { groupWakes } from '../../../src/runtime/agents/dispatch-groups.ts';
 import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
 import { personAsks } from '../../../src/runtime/routing/person-turn.ts';
@@ -45,20 +47,39 @@ function withServices<H extends ReturnType<typeof harness>>(h: H) {
 
 /** The Manager's lines in a chat. */
 const managerLines = (h: ReturnType<typeof withServices>, conversationId: string) => h.chats.messages(conversationId).filter((message) => message.authorId === h.manager.id);
+/** The person's lines in a chat. */
+const personLines = (h: ReturnType<typeof withServices>, conversationId: string) => h.chats.messages(conversationId).filter((message) => message.authorId === HUMAN_ID);
+/** What every shipped start line begins with: it says the app sent it. */
+const START: Record<string, RegExp> = {
+  de: /^Von Autark gesendet, als ich auf Start geklickt habe: /,
+  fr: /^Envoyé par Autark quand j'ai cliqué sur Start : /,
+  es: /^Enviado por Autark cuando hice clic en Start: /,
+  en: /^Sent by Autark when I clicked Start: /,
+};
 
-test("start(): the fixed line as the Manager's own, in the profile's language; nothing in the person's name, nobody wakes", () => {
+test("start(): the start line as the person's, the Manager's greeting right below it, in the profile's language; nobody wakes", () => {
   const h = withServices(harness());
   const { conversationId } = h.onboarding.start();
 
   const lines = h.chats.messages(conversationId).filter((message) => message.kind === 'text');
-  assert.equal(lines.length, 1);
-  assert.equal(lines[0].authorId, h.manager.id, "the Manager's own message");
-  assert.equal(lines[0].authorKind, 'agent');
-  assert.match(lines[0].body, /^Hallo Lena Hess, ich bin dein Manager – deine rechte Hand in Autark\./);
-  for (const question of QUESTIONS.de) assert.match(lines[0].body, question);
-  assert.match(lines[0].body, /Dieser PC steht uns ganz offen\./, 'whole PC: the full setup question');
-  assert.match(lines[0].body, /Soll ich noch warten, sag es einfach/, 'the person decides when the work starts');
+  assert.equal(lines.length, 2);
+  const [opener, greeting] = lines;
+  assert.equal(opener.authorId, HUMAN_ID, "the start line is the person's");
+  assert.equal(opener.authorKind, 'human');
+  assert.match(opener.body, START.de, 'it says the app sent it at Start');
+  assert.ok(opener.body.length < 200, 'a short line: the plan is the Manager\'s');
+  assert.equal(greeting.seq, opener.seq + 1, 'the greeting directly below it');
+  assert.equal(greeting.authorId, h.manager.id, "the Manager's own message");
+  assert.equal(greeting.authorKind, 'agent');
+  assert.match(greeting.body, /^Hallo Lena Hess, ich bin dein Manager – deine rechte Hand in Autark\./);
+  for (const question of QUESTIONS.de) assert.match(greeting.body, question);
+  assert.match(greeting.body, /Dieser PC steht uns ganz offen\./, 'whole PC: the full setup question');
+  assert.match(greeting.body, /Soll ich noch warten, sag es einfach/, 'the person decides when the work starts');
+  assert.doesNotMatch(greeting.body, START.de, 'the start line is not repeated in the greeting');
   assert.equal(h.wakeRows().length, 0, 'no turn at Start');
+  assert.deepEqual(unansweredMessages(h.services), [], 'the startup sweep finds nothing to answer either');
+  const managerCursor = h.chats.members(conversationId).find((member) => member.memberId === h.manager.id)?.readSeq ?? 0;
+  assert.ok(managerCursor < opener.seq, 'the Manager has not read the start line yet: its first turn reads both lines');
   assert.deepEqual(h.settings.get().onboarding, { completed: true, step: 'done' });
 });
 
@@ -75,15 +96,33 @@ test("the person's answer is the first turn: one 'message' wake with no note, ro
   assert.equal(groupWakes(h.wakes.claim(h.manager.id)).length, 1, 'one claim, one group: one turn');
 });
 
-test('asked twice: one line; after "Set up team again" with an answer in between, a new line', () => {
+test('asked twice: the two lines once; after "Set up team again" with an answer in between, both again', () => {
   const h = withServices(harness());
   const first = h.onboarding.start();
   assert.deepEqual(h.onboarding.start(), first, 'the same chat again');
   assert.equal(managerLines(h, first.conversationId).length, 1, 'never posted twice');
+  assert.equal(personLines(h, first.conversationId).length, 1, 'the start line neither');
   h.chats.send({ conversationId: first.conversationId, body: 'Später.', authorId: HUMAN_ID, authorKind: 'human' });
+  h.wakes.done(h.wakes.claim(h.manager.id).map((wake) => wake.id)); // the answer's own wake is not this test's
   h.onboarding.reset();
   h.onboarding.start();
   assert.equal(managerLines(h, first.conversationId).length, 2, 'the person answered: the first message is the newest line again');
+  assert.deepEqual(h.chats.messages(first.conversationId).slice(-2).map((message) => message.authorId), [HUMAN_ID, h.manager.id], 'start line, then greeting');
+  assert.equal(h.wakeRows().length, 0, 'the second start wakes nobody either');
+});
+
+test('an own prompt without a start part posts the greeting alone; the shipped prompt and the fallback carry both lines', () => {
+  const h = withServices(harness());
+  const own = (text: string) => setupLines({ ...h.services, prompts: { text: () => text } } as unknown as RuntimeServices);
+  assert.deepEqual(own('Hi {{name}}, I am here.'), { start: '', answer: 'Hi Lena Hess, I am here.' }, 'no start part: no start line');
+  assert.deepEqual(own('{{#start}}Started by {{name}}.{{/start}}{{^start}}Hello.{{/start}}'), { start: 'Started by Lena Hess.', answer: 'Hello.' });
+  Object.assign(h.services, { prompts: { text: () => 'Only my own greeting.' } });
+  const { conversationId } = h.onboarding.start();
+  assert.deepEqual(h.chats.messages(conversationId).map((message) => [message.authorId, message.body]), [[h.manager.id, 'Only my own greeting.']]);
+  h.settings.update({ profile: { language: 'en' } });
+  const fallback = setupLines({ ...h.services, prompts: undefined } as unknown as RuntimeServices);
+  assert.match(fallback.start, START.en);
+  assert.match(fallback.answer, /^Hi Lena Hess, I'm your Manager/);
 });
 
 test('every shipped language has the five questions; other languages get English; careful access asks for its own area', () => {
@@ -92,7 +131,10 @@ test('every shipped language has the five questions; other languages get English
   for (const code of ['de', 'fr', 'es', 'en']) {
     for (const careful of [false, true]) {
       h.settings.update({ profile: { language: code, pcAccess: careful ? 'careful' : 'whole' } });
-      const text = setupBrief(h.services);
+      const { start, answer: text } = setupLines(h.services);
+      assert.match(start, START[code], `${code}: its own start line`);
+      assert.doesNotMatch(start, /\{\{|<!--|\u0000|\n/, `${code}: one clean line`);
+      for (const question of QUESTIONS[code]) assert.doesNotMatch(start, question, `${code}: the questions are the Manager's`);
       for (const question of QUESTIONS[code]) assert.match(text, question, `${code} ${careful}`);
       for (const other of Object.keys(QUESTIONS).filter((key) => key !== code)) assert.doesNotMatch(text, QUESTIONS[other][3], `${code}: only its own section`);
       assert.match(text, /Lena Hess/);
@@ -103,16 +145,16 @@ test('every shipped language has the five questions; other languages get English
     }
   }
   h.settings.update({ profile: { language: 'it', pcAccess: 'whole', name: '' } });
-  assert.match(setupBrief(h.services), /^Hi, I'm your Manager/, 'no name leaves no gap');
+  assert.match(setupLines(h.services).answer, /^Hi, I'm your Manager/, 'no name leaves no gap');
 });
 
 test('the fallback is the shipped English text; an own prompt replaces them and is cut when far too long', () => {
   const h = withServices(harness());
   h.settings.update({ profile: { language: 'en' } });
-  const shipped = setupBrief(h.services);
-  assert.equal(setupBrief({ ...h.services, prompts: undefined } as unknown as RuntimeServices), shipped, 'the fallback');
-  assert.equal(setupBrief({ ...h.services, prompts: { text: () => { throw new Error('locked'); } } } as unknown as RuntimeServices), shipped, 'an unreadable prompt');
-  const own = (text: string) => setupBrief({ ...h.services, prompts: { text: () => text } } as unknown as RuntimeServices);
+  const shipped = setupLines(h.services);
+  assert.deepEqual(setupLines({ ...h.services, prompts: undefined } as unknown as RuntimeServices), shipped, 'the fallback');
+  assert.deepEqual(setupLines({ ...h.services, prompts: { text: () => { throw new Error('locked'); } } } as unknown as RuntimeServices), shipped, 'an unreadable prompt');
+  const own = (text: string) => setupLines({ ...h.services, prompts: { text: () => text } } as unknown as RuntimeServices).answer;
   assert.equal(own('Hi from {{name}} of {{company}} in {{language}}'), 'Hi from Lena Hess of Hess GmbH in English');
   assert.equal(own(`${'y'.repeat(5000)} {{name}}`).length, BRIEF_MAX);
 });
@@ -154,6 +196,7 @@ test('"Set up team again" while a Manager task in that chat waits on the person:
   h.dispatcher.start();
   const { conversationId } = h.onboarding.start();
   assert.equal(conversationId, chat.id);
+  assert.equal(h.chats.get(chat.id)?.title, chat.title, 'the start line names no chat');
   await flush();
   assert.equal(h.executor.calls.length, 0, 'the first message is no turn');
   h.chats.send({ conversationId, body: 'Am Freitag.', authorId: HUMAN_ID, authorKind: 'human' });
@@ -188,8 +231,8 @@ test('onboarding.start takes no params: any key is refused and starts nothing; t
 
   const { conversationId } = await owner.call<{ conversationId: string }>('onboarding.start');
   const posted = f.chats.messages(conversationId);
-  assert.equal(posted.length, 1);
-  assert.equal(posted[0].authorId, boss.id);
+  assert.equal(posted.at(-1)?.authorId, boss.id, "the Manager's first message is the newest line");
+  assert.ok(posted.length <= 2 && posted.slice(0, -1).every((message) => message.authorId === HUMAN_ID), 'at most the start line before it');
   assert.equal(f.wakeRows().length, 0, 'nobody wakes');
   assert.deepEqual(f.services.settings.get().onboarding, { completed: true, step: 'done' });
 });

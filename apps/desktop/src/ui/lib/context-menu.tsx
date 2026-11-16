@@ -4,6 +4,9 @@
 // App.tsx. Builders run when the menu opens, so they always see current state.
 // A row inside a modal keeps the menu's anchor and popover inside that dialog's top layer.
 // B-084: a long press that opens the menu gives a light haptic tick (the Android app's, else navigator.vibrate).
+// F30 (16.11.2026): the builder learns how the menu was opened ({ touch, at: the row }) – a message's Copy takes the
+// mouse selection inside it, and touch offers "Select text"; a touch open clears the one-word selection the browser made
+// under the finger, so only this menu shows (the phone's own copy bar does not stack on it).
 // Owns: where the menu opens, the touch long-press and its tick. Never: what an item does (the caller's builder).
 
 import { signal } from '@preact/signals';
@@ -35,40 +38,55 @@ export function closeContextMenu(): void {
 
 addBackLayer({ open: () => current.peek() !== null, close: closeContextMenu }); // the phone's Back closes it first
 
-/** The light tick a native app gives when a long press opens a menu: the Android app's own (over its port), else the
- *  browser's vibrate where it has one. */
-function buzz(): void {
+/** The light tick a native app gives when a long press opens a menu (or a swipe replies): the Android app's own (over
+ *  its port), else the browser's vibrate where it has one. */
+export function buzz(): void {
   if (sendNative({ t: 'haptic' })) return;
   try { navigator.vibrate?.(8); } catch { /* no vibration here */ }
 }
 
+/** How a menu was opened: by touch (a long press), and on which row. */
+export interface MenuOpen { touch: boolean; at: HTMLElement | null }
+
+/** The selection a long press made under the finger is the browser's, not a choice: gone once this menu opens. */
+function dropTouchSelection(): void {
+  try { getSelection()?.removeAllRanges(); } catch { /* no selection here */ }
+}
+
 /** Props for an element: right-click and touch long-press open `build()`'s sections. */
-export function useContextMenu(build: () => MenuSection[]) {
+export function useContextMenu(build: (open: MenuOpen) => MenuSection[]) {
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const fired = useRef(false);
+  const touch = useRef(false); // the last press on this row was a finger (a long press's own contextmenu event comes too)
   const cancel = () => { if (press.current) clearTimeout(press.current.timer); press.current = null; };
   useEffect(() => cancel, []);
   const native = (event: Event) => Boolean((event.target as Element | null)?.closest?.(NATIVE));
   const host = (event: Event) => (event.target as Element | null)?.closest?.<HTMLElement>('dialog[open]');
+  const open = (x: number, y: number, at: HTMLElement | null, container: HTMLElement | null | undefined) => {
+    if (touch.current) dropTouchSelection();
+    openContextMenu(x, y, build({ touch: touch.current, at }), container);
+  };
   return {
     onContextMenu: (event: MouseEvent) => {
       if (native(event)) return;
       event.preventDefault();
       event.stopPropagation();
       cancel();
-      if (fired.current) return; // the long press already opened it
-      openContextMenu(event.clientX, event.clientY, build(), host(event));
+      if (fired.current) { if (touch.current) dropTouchSelection(); return; } // the long press already opened it
+      open(event.clientX, event.clientY, event.currentTarget as HTMLElement | null, host(event));
     },
     onPointerDown: (event: PointerEvent) => {
       fired.current = false;
       cancel();
-      if (event.pointerType !== 'touch' || native(event)) return;
+      touch.current = event.pointerType === 'touch';
+      if (!touch.current || native(event)) return;
       const { clientX: x, clientY: y } = event;
       const container = host(event);
+      const at = event.currentTarget as HTMLElement | null;
       press.current = { x, y, timer: setTimeout(() => {
         fired.current = true;
         press.current = null;
-        openContextMenu(x, y, build(), container);
+        open(x, y, at, container);
         if (current.peek()) buzz();
       }, LONG_PRESS_MS) };
     },

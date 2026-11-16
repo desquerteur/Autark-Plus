@@ -45,7 +45,9 @@ export interface Methods {
   /**
    * Added for the desktop updater (package B): pause new wakes, checkpoint runs, flush WAL before
    * quitAndInstall. `cancel: true` resumes when the restart did not happen after all. B-080: `to` – the version the
-   * update brings; the next start says whether it landed (tasks/recover-notes.ts).
+   * update brings; the next start says whether it landed (tasks/recover-notes.ts). 16.11.2026: main's own link only (every
+   * other caller gets 'forbidden' and the pointer to system.install); a pause no restart follows ends by itself after
+   * 2 minutes, and a shutdown closes it first (compose/restart-pause.ts).
    */
   'system.prepareRestart': { params: { cancel?: boolean; to?: string } | void; result: { ok: true } };
   /**

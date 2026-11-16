@@ -4,11 +4,13 @@
 //     × (on screen down to phone width, no Skip, no Connect), the caption line and the control bar;
 //   * Play runs it (the time grows); nothing in the player moves while it plays (expectStable); Space pauses
 //     (the time stands still – nothing runs), → steps 5 s, Home goes back to the start;
-//   * seeking on the scrubber shows each part at once: the menu under the feedback cell with the cursor's tip on
-//     the cell, the slim waveform with the menu shut, the transcript in the field, the Screenshot tooltip, the
-//     "Paint over" editor whose black stroke covers the e-mail and the phone number, "Sent – thank you.";
+//   * seeking on the scrubber shows each part of the shipped flow (re-cut 16.11.2026, F11/F15) at once: the cell's
+//     tooltip "Feedback – Ctrl+Shift+F, hold to talk", the frozen screen with the dock at its foot and the cursor's tip
+//     on the cell, the pen's black stroke on the frozen screen over the e-mail and the phone number, the dock's mic
+//     listening, the transcript in the field, then Send: the dock gone and the status line's "Feedback sent · No. …";
 //   * End shows the end card; Continue closes the dialog and the choice card is still there (step 'tour');
 //   * the command palette's "Watch how it works" (openTour) opens the same player at its poster again; Esc closes it;
+//     in the phone layout it plays the phone's tour (a phone-shaped stage, the dock as the bottom edge);
 //   * screenshots light, dark, 640×480 and phone width; no horizontal page scroll; no renderer errors.
 // Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -21,7 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { connect } from '../e2e/lib/runtime-client.mjs';
 import { expectStable } from './lib/stable.mjs';
-import { DURATION, PAINT_SPAN, SCREENSHOT_TIP, firstOn } from '../../src/ui/tour/timeline.ts';
+import { CELL_TIP, SENT_LINE, TOURS, TRANSCRIPT } from '../../src/ui/tour/timeline.ts';
+
+const TOUR = TOURS.desktop;
+const DURATION = TOUR.duration;
+const PAINT_SPAN = TOUR.paintSpan;
+const firstOn = (name) => TOUR.firstOn(name);
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
@@ -111,47 +118,47 @@ test('feedback tour: choice card → dialog poster → play → seek through eve
   // the cursor's tip is the arrow's top-left corner (its svg)
   const tip = async () => { const box = await player.locator('.tour-cursor svg').boundingBox(); return { x: box.x, y: box.y }; };
 
-  await expectStable(page, frame, () => seek(firstOn('menu') + 700));
-  const menu = player.locator('.tour-scene .tour-menu');
-  await menu.waitFor({ timeout: 2_000 });
+  // the cell names its shortcut, then one click freezes the window: the shot at 1:1 with the dock at its foot
+  await seek(firstOn('tip') + 600);
+  assert.equal((await player.locator('.tour-tooltip').textContent()).trim(), CELL_TIP);
+  await shot('tour-03-tooltip-light');
+  await expectStable(page, frame, () => seek(firstOn('frozen') + 700));
+  const frozen = player.locator('.tour-scene .tour-frozen');
+  await frozen.waitFor({ timeout: 2_000 });
   const cell = await player.locator('.tour-scene > .tour-app .tour-feedback-cell').boundingBox();
-  const menuBox = await menu.boundingBox();
-  assert.ok(menuBox.y >= cell.y + cell.height - 1, 'the menu opens under the cell');
-  assert.ok(Math.abs(menuBox.x + menuBox.width - (cell.x + cell.width)) < 3, 'right-aligned with the cell');
+  const sceneBox = await player.locator('.tour-scene').boundingBox();
+  const dockBox = await player.locator('.tour-frozen .tour-dock').boundingBox();
   const k = await scale();
+  assert.ok(Math.abs(sceneBox.y + sceneBox.height - (dockBox.y + dockBox.height) - 12 * k) < 3, 'the dock lies at the foot of the frozen screen');
+  assert.ok(Math.abs(dockBox.x + dockBox.width / 2 - (sceneBox.x + sceneBox.width / 2)) < 3, 'centred');
+  assert.ok(await player.locator('.tour-frozen .tour-feedback-cell.look-open').count() === 1, 'the cell drawn open over the frozen screen');
   const cellCenter = center(cell), at = await tip();
   assert.ok(Math.hypot(at.x - cellCenter.x, at.y - cellCenter.y) < 8 * k + 3, `the cursor's tip is on the cell (${JSON.stringify(at)} vs ${JSON.stringify(cellCenter)})`);
   const cursorBox = await player.locator('.tour-cursor svg').boundingBox();
   assert.ok(cursorBox.height / k > 45 && cursorBox.height / k < 60, 'a big cursor (≈ 52 scene units)');
-  await shot('tour-03-menu-light');
+  await shot('tour-04-frozen-light');
   await page.emulateMedia({ colorScheme: 'dark' });
-  await shot('tour-04-menu-dark');
+  await shot('tour-04-frozen-dark');
   await page.emulateMedia({ colorScheme: 'light' });
 
-  await seek(firstOn('wave') + 900);
-  assert.ok(await player.locator('.tour-wave').isVisible(), 'the slim waveform under the held cell');
-  assert.equal(await player.locator('.tour-scene .tour-menu').count(), 0, 'the menu is shut while held');
-  assert.match(await player.locator('.tour-caption').textContent(), /hold to talk|Listening/);
-  await shot('tour-05-hold-light');
-
-  await seek(firstOn('tooltip') - 1500);
-  assert.match(await player.locator('.tour-textarea').textContent(), /^The calendar stays empty after I connect Google\. And it would be great to drag tasks into tomorrow\.$/);
+  // hold the dock's mic: it listens; let go: the words come into the field
+  await seek(firstOn('listen') + 900);
+  assert.ok(await player.locator('.tour-dock .tour-mic.active').isVisible(), 'the mic listens while held');
+  assert.match(await player.locator('.tour-caption').textContent(), /Listening/);
+  await shot('tour-05-listening-light');
+  await seek(firstOn('sent') - 900);
+  assert.equal((await player.locator('.tour-field').textContent()).trim(), TRANSCRIPT);
+  assert.match(await player.locator('.tour-rec-hint').textContent(), /^0:0\d – goes with the words\.$/);
   await shot('tour-06-transcript-light');
 
-  await seek(firstOn('tooltip') + 1200);
-  assert.equal((await player.locator('.tour-tooltip').textContent()).trim(), SCREENSHOT_TIP);
-  assert.ok(await player.locator('.tour-checkbox').isVisible(), 'the Screenshot box is checked');
-  await shot('tour-07-tooltip-light');
-
   await seek((PAINT_SPAN.start + PAINT_SPAN.end) / 2);
-  const editor = player.locator('.tour-editor');
-  await editor.waitFor({ timeout: 2_000 });
+  await frozen.waitFor({ timeout: 2_000 });
   await shot('tour-08-painting-light');
   await seek(PAINT_SPAN.end + 300);
   const covered = await page.evaluate(() => {
-    const ink = document.querySelector('.tour-editor .tour-ink polyline');
+    const ink = document.querySelector('.tour-frozen .tour-ink polyline');
     const stroke = Number(ink?.getAttribute('stroke-width') ?? 0);
-    const rects = ['email', 'phone'].map((key) => document.querySelector(`.tour-editor [data-private="${key}"]`)?.getBoundingClientRect());
+    const rects = ['email', 'phone'].map((key) => document.querySelector(`.tour-frozen [data-private="${key}"]`)?.getBoundingClientRect());
     const svg = ink?.ownerSVGElement;
     const k = svg ? svg.getBoundingClientRect().width / 960 : 0;
     const points = (ink?.getAttribute('points') ?? '').trim().split(/\s+/).map((pair) => pair.split(',').map(Number));
@@ -180,8 +187,8 @@ test('feedback tour: choice card → dialog poster → play → seek through eve
   await page.emulateMedia({ colorScheme: 'light' });
 
   await seek(firstOn('sent') + 600);
-  assert.equal((await player.locator('.tour-status').textContent()).trim(), 'Sent – thank you.');
-  assert.equal(await player.locator('.tour-editor').count(), 0, 'Done closed the editor');
+  assert.equal((await player.locator('.tour-status-note').textContent()).trim(), SENT_LINE);
+  assert.equal(await player.locator('.tour-frozen').count(), 0, 'Send closed the overlay at once');
   await shot('tour-11-sent-light');
 
   // 640×480 and phone width: the scene scales into its box, the controls stay on screen, nothing scrolls sideways.
@@ -200,14 +207,14 @@ test('feedback tour: choice card → dialog poster → play → seek through eve
     });
     assert.ok(top, `the × stays inside the title row at ${label}`);
     await seek((PAINT_SPAN.start + PAINT_SPAN.end) / 2);
-    assert.ok(await player.locator('.tour-editor').isVisible(), `the scrubber seeks at ${label}`);
+    assert.ok(await player.locator('.tour-frozen .tour-dock').isVisible(), `the scrubber seeks at ${label}`);
     const stage = await player.locator('.tour-stage-box').boundingBox();
     const scene = await player.locator('.tour-scene').boundingBox();
     assert.ok(scene.width <= stage.width + 1 && scene.height <= stage.height + 1, `the scene fits its box at ${label}`);
-    assert.ok(Math.abs(scene.width / scene.height - 1.6) < 0.01, `aspect kept at ${label}`);
-    await shot(`tour-12-editor-${label}`);
+    assert.ok(Math.abs(scene.width / scene.height - 1.6) < 0.01, `aspect kept at ${label} (the opening's computer tour)`);
+    await shot(`tour-12-frozen-${label}`);
     await page.emulateMedia({ colorScheme: 'dark' });
-    await shot(`tour-12-editor-${label}-dark`);
+    await shot(`tour-12-frozen-${label}-dark`);
     await page.emulateMedia({ colorScheme: 'light' });
     await noScroll(label);
   }
@@ -249,9 +256,29 @@ test('feedback tour: choice card → dialog poster → play → seek through eve
   await page.waitForTimeout(500);
   await shot('tour-18-dialog-phone');
   await noScroll('dialog phone');
-  await size(1280, 820);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+  // In the phone layout the replay plays the phone's tour: a phone-shaped stage, the dock as the bottom edge.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  await page.locator('.palette-input').fill('Watch how');
+  await page.locator('.palette-row', { hasText: 'Watch how it works' }).first().click();
+  await page.locator('dialog.tour-dialog.phone[open] .tour-player.phone').waitFor({ timeout: 5_000 });
+  const phoneScene = await page.locator('dialog.tour-dialog .tour-scene.phone').boundingBox();
+  assert.ok(Math.abs(phoneScene.width / phoneScene.height - 360 / 760) < 0.01, 'a phone-shaped scene');
+  const phoneSeek = async (ms) => {
+    const box = await page.locator('dialog.tour-dialog .tour-scrubber').boundingBox();
+    await page.mouse.click(box.x + (box.width * ms) / TOURS.phone.duration, box.y + box.height / 2);
+    await page.waitForTimeout(120);
+  };
+  await phoneSeek((TOURS.phone.paintSpan.start + TOURS.phone.paintSpan.end) / 2);
+  const phoneDock = await page.locator('dialog.tour-dialog .tour-frozen .tour-dock').boundingBox();
+  assert.ok(Math.abs(phoneDock.width - phoneScene.width) < 2, 'the dock is the phone\'s bottom edge');
+  assert.ok(await page.locator('dialog.tour-dialog .tour-finger').count() === 1, 'a fingertip, not a cursor');
+  await shot('tour-19-phone-tour');
+  await noScroll('phone tour');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+  await size(1280, 820);
   assert.equal((await rpc.call('settings.get')).onboarding.step, 'tour', 'the replay changes no setting');
 
   t.diagnostic(`screenshots: ${shots}`);

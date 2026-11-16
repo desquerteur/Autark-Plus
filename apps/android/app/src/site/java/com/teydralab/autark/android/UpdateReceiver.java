@@ -55,7 +55,7 @@ public final class UpdateReceiver extends BroadcastReceiver {
         }
         Intent open = new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent tap = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        manager.notify(7, builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+        manager.notify(7, AppNotices.branded(builder)
                 .setContentTitle("Autark" + (version == null ? "" : " " + version) + " is installed")
                 .setContentText("Tap to open.").setContentIntent(tap).setAutoCancel(true).build());
     }

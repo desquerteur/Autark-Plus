@@ -1,4 +1,4 @@
-// Ending a person's access (people.revoke): after the tokens are cut, the person leaves every chat (their
+// Ending a person's access (people.revoke, and F14 people.remove before their row goes): after the tokens are cut, the person leaves every chat (their
 // messages stay), their open work goes back – a to-do an agent asked of them is dropped, other tasks go to the one
 // owner Autark picks now (tasks/give.ts) – and the agents and people who reported to them move up to the person's own manager.
 // Each part runs on its own; a failure is logged and the rest still runs.

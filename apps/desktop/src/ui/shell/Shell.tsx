@@ -45,6 +45,8 @@ import { RegionDialog } from '../workspace/RegionDialog.tsx'; // once for both s
 import { FeedbackMenu } from '../feedback/FeedbackMenu.tsx'; // B-055 Q4: the menu under the feedback cell, "Paint over"
 import { ColumnResize } from './ColumnResize.tsx';
 import { TourDialog } from '../tour/TourDialog.tsx'; // B-055: the feedback tour (replay)
+import { openTour } from '../tour/open.ts';
+import { firstVideoHere } from '../pwa/native.ts';
 
 function useGlobalHotkeys(): void {
   useEffect(() => {
@@ -64,6 +66,8 @@ function useCaptionLayout(compact: boolean): void {
 }
 
 function Overlays() {
+  // Feedback 16.11.2026 (F15): the iPhone web app plays the feedback video once, on its first start after pairing.
+  useEffect(() => { if (firstVideoHere()) openTour({ autoplay: true }); }, []);
   return (
     <>
       <CommandPalette />
@@ -71,7 +75,7 @@ function Overlays() {
       <FeedbackMenu />
       <ConfirmHost />
       <RememberWhyHost />
-      <TourDialog />
+      <TourDialog phone={isMobile.value} />
       <RegionDialog />
     </>
   );

@@ -132,10 +132,10 @@ test('templates: the shipped files load; a missing folder renders empty sections
   assert.deepEqual(loadTemplates(path.join(RESOURCES, 'missing-prompts')), { identity: '', skills: '' });
 });
 
-test('How I work: {{user_name}} only, about 9,000 characters, the same in every mode; the manager standard adds only "## Leading"', () => {
+test('How I work: {{user_name}} only, about 10,000 characters, the same in every mode; the manager standard adds only "## Leading"', () => {
   const keys = new Set([...ownHowIWork(STANDARD).how.matchAll(/\{\{[#^/]?([a-z_]+)\}\}/g)].map((match) => match[1]));
   assert.deepEqual([...keys], ['user_name'], 'no tool flags: it names abilities, not tools');
-  assert.ok(HOW.length <= 9200, `How I work: ${HOW.length} characters`); // 15.11.: + tidy workplace, outreach with clarity
+  assert.ok(HOW.length <= 10_800, `How I work: ${HOW.length} characters`); // 15.11.: + tidy workplace, outreach with clarity; 16.11.: + talking with the person, statements outside, quality, Autark's browser, an idle linked PC
   const manager = standard('manager');
   const leading = manager.slice(manager.indexOf('## Leading'), manager.indexOf('## My role'));
   assert.ok(leading.length > 500 && manager.replace(leading, '') === STANDARD, 'standard-manager = standard-agent + "## Leading"');

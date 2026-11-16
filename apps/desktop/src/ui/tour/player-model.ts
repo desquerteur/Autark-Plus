@@ -1,10 +1,9 @@
 // B-055 Q5: the tour player's pure rules (TourPlayer.tsx; tested in test/unit/ui/tour-player.test.ts):
 // the time label, what a key does, a step back or forward, the time under a point of the scrubber, the
-// scale that fits the fixed-size scene into its box and the next frame's time (a long gap – a hidden
-// window, a busy PC – never jumps the tour ahead).
+// scale that fits the fixed-size scene (the computer's 960 × 600 or the phone's 360 × 760) into its box and the next
+// frame's time (a long gap – a hidden window, a busy PC – never jumps the tour ahead).
 // Owns: these pure functions. Never: timers, DOM or the scene.
 
-export const SCENE_ASPECT = 960 / 600;
 /** One press of ← / → or the 5 s buttons. */
 export const STEP_MS = 5000;
 /** The longest step one animation frame advances the tour. */
@@ -46,10 +45,10 @@ export function timeAt(x: number, left: number, width: number, duration: number)
   return clampTo(((x - left) / width) * duration, duration);
 }
 
-/** The scale that fits the scene (960 × 600) into a box, never above `max`. */
-export function fitScale(width: number, height: number, max = 1.6): number {
-  if (!(width > 0) || !(height > 0)) return 0;
-  return Math.min(max, width / 960, height / 600);
+/** The scale that fits a scene of `sceneW` × `sceneH` into a box, never above `max`. */
+export function fitScale(width: number, height: number, sceneW: number, sceneH: number, max = 1.6): number {
+  if (!(width > 0) || !(height > 0) || !(sceneW > 0) || !(sceneH > 0)) return 0;
+  return Math.min(max, width / sceneW, height / sceneH);
 }
 
 /** The time of the next frame: `elapsed` ms after the last, at most MAX_FRAME_MS, never past the end. */

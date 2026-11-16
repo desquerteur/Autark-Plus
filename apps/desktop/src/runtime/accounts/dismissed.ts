@@ -1,9 +1,12 @@
 // Dismissed detected logins (PR5): removing an account that detection would adopt again – a login
-// in the default CLI home or a local model server – remembers it in kv (ns 'accounts', key
-// 'dismissed'), so detection stops adding it back and the detection row offers "Add again".
-// Keys: '<provider>:default' for a default-home login, '<provider>:<baseUrl>' for a local server.
+// in the default CLI home, a plan login in this PC's logins folder another company may still use (16.11.2026,
+// accounts/cli-homes.ts) or a local model server – remembers it in kv (ns 'accounts', key 'dismissed'), so detection
+// stops adding it back and the detection row offers "Add again" (a default-home login).
+// Keys: '<provider>:default' for a default-home login, '<provider>:<home folder>' for a home of its own,
+// '<provider>:<baseUrl>' for a local server.
 // Owns: the dismissal keys and marking them in a DetectionReport. Never: touches accounts or homes.
 
+import path from 'node:path';
 import type { Db } from '../db/database.ts';
 import { foundHere, type Account, type DetectionReport, type ProviderId } from '../../shared/model/providers.ts';
 import { KvRepo } from '../store/kv.ts';
@@ -14,11 +17,13 @@ const MAX = 100;
 
 export const loginKey = (provider: ProviderId | DetectionReport['clis'][number]['provider']): string => `${provider}:default`;
 export const serverKey = (provider: ProviderId, baseUrl: string): string => `${provider}:${baseUrl}`;
+/** A home of its own by its folder (<accounts>/<provider>/<folder>). */
+export const homeLoginKey = (provider: ProviderId, home: string): string => `${provider}:${path.basename(home)}`;
 
-/** The key detection would adopt this account by; undefined for accounts detection never adds. */
-export function dismissalKey(account: Pick<Account, 'provider' | 'auth' | 'home' | 'detected' | 'baseUrl'>): string | undefined {
-  if (account.auth === 'cli') return foundHere(account) ? loginKey(account.provider) : undefined;
-  return account.auth === 'local' && account.baseUrl ? serverKey(account.provider, account.baseUrl) : undefined;
+/** The keys detection would adopt this account by: its default-home login and its own home; none for accounts detection never adds. */
+export function dismissalKeys(account: Pick<Account, 'provider' | 'auth' | 'home' | 'detected' | 'baseUrl'>): string[] {
+  if (account.auth === 'cli') return [...(foundHere(account) ? [loginKey(account.provider)] : []), ...(account.home ? [homeLoginKey(account.provider, account.home)] : [])];
+  return account.auth === 'local' && account.baseUrl ? [serverKey(account.provider, account.baseUrl)] : [];
 }
 
 export class DismissedLogins {

@@ -1,5 +1,6 @@
 // Owns: the native pairing levels (B-084 decision 3), also used for "Add a company": 1 "Connect to your PC" (icon, where
-// the code is on the PC, the one big "Scan QR code", a small "Enter the code instead"); 2 the full-height scanner
+// the code is on the PC, "How feedback works" – the feedback video again, 16.11.2026 F15 –, the one big "Scan QR code",
+// a small "Enter the code instead"); 2 the full-height scanner
 // (ScanView) with the photo strip (RecentStrip) pinned below and a status overlay that never moves anything; 2b the
 // 9-digit code grouped 3-3-3 with "Connect" enabled at 9 digits; 3 the wait while the PC accepts (the 4-digit code
 // large, Cancel). Light/dark from uiMode. Back walks the levels. Every way to an ID (scan, picture, typing) ends in one
@@ -30,6 +31,7 @@ public final class PairScreens {
     private static Consumer<String> onRemoteId;
     private static Runnable onCancel;
     private static BiConsumer<String, String> bars;
+    private static Runnable tour;
     private static int level, from;
     private static String typed = "";
     private static ScanView scan;
@@ -52,6 +54,9 @@ public final class PairScreens {
 
     /** Optional: paints the system bar strips (CSS colours top, bottom) for each level, e.g. SystemBars::apply. */
     public static void bars(BiConsumer<String, String> paint) { bars = paint; }
+
+    /** Optional: what "How feedback works" on level 1 plays (MainActivity: the feedback video); null shows no link. */
+    public static void tour(Runnable play) { tour = play; }
 
     /** Back: one level up; true when the screens took it. */
     public static boolean back() {
@@ -122,6 +127,8 @@ public final class PairScreens {
         page.addView(look.icon(), look.centred(96));
         page.addView(look.text("Connect to your PC", 26, look.ink, true), look.spaced(24, 0));
         page.addView(look.text("On your PC: Settings › Devices › Connect a phone", 15, look.muted, false), look.spaced(8, 0));
+        Runnable play = tour;
+        if (play != null) page.addView(look.quiet("How feedback works", look.link, play), look.spaced(8, 0));
         page.addView(new View(activity), PairLook.fill());
         page.addView(slot(), PairLook.row(look.dp(44)));
         page.addView(look.primary("Scan QR code", PairScreens::scan), PairLook.row(look.dp(56)));

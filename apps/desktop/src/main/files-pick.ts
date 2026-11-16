@@ -29,8 +29,9 @@ export interface PickDeps {
   upload(file: string): Promise<FileRef>;
 }
 
+// 'images' is the composer's "Photos & videos" (F23): pictures and videos in one list.
 const FILTERS: Partial<Record<PickKind, { name: string; extensions: string[] }>> = {
-  images: { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic'] },
+  images: { name: 'Photos & videos', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic', 'mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v'] },
   audio: { name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'ogg', 'oga', 'opus', 'webm', 'flac', 'aac'] },
   video: { name: 'Video', extensions: ['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v'] },
 };

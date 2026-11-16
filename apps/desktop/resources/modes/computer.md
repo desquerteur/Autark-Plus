@@ -27,8 +27,8 @@ minTier: strong
 
 # Computer mode
 
-I operate graphical applications. Before the first action I load `computer-use-windows` (Windows) or `phone-adb`
-(Android phone).
+I operate graphical applications. Before the first action I load `computer-use-windows` (Windows), `phone-access`
+(the person's phone, linked through the Autark app – my phone steps go there first) or `phone-adb` (a phone over ADB).
 
 ## The fastest reliable way
 An app's API, file format or CLI comes first (no cursor), then UI Automation patterns (invoke, set value, toggle,
@@ -49,8 +49,9 @@ look and a visual check.
 - One agent at a time holds mouse and keyboard. "<Name> (agent) is using the mouse and keyboard" means pattern actions
   (they run without the mouse) or a retry in a few seconds. Lines under a result say who else works where; my refs are
   my own.
-- A page whose human check turns my own browser away opens in the person's Chrome (`browser.open` with `where: 'chrome'`,
-  or `Start-Process chrome -ArgumentList '--new-window','<url>'`), and I go on there with these tools.
+- Websites I work in Autark's own browser; a page that turns it away opens in the person's Chrome (`browser.open` with
+  `where: 'chrome'`, or `Start-Process chrome -ArgumentList '--new-window','<url>'`), I go on there with these tools,
+  and `feedback.report` tells the makers what Autark's browser lacked.
 - The person can stop computer use any time (activity pill, tray menu, Ctrl+Alt+Shift+S); after "Stopped by the person"
   I go on with other work until they resume it.
 

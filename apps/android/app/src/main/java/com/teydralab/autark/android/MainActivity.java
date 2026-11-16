@@ -9,8 +9,13 @@
 // app in the background – it never closes itself. Its own screen besides pairing: "can't reach" (OfflineScreen), which
 // opens the page again by itself once a PC of the company is linked.
 // Above them all, the update line (UpdateBar, UpdateCheck) when a newer Autark is there. Before everything, the last
-// start's crash report when there is one (CrashReport); a failing optional part (bar colours, the foreground service,
-// the notification question, the update line) never keeps the app from showing its screen.
+// start's crash report when there is one (CrashReport; its Report hands the trace to the page through NativePort); a
+// failing optional part (bar colours, the foreground service, the notification question, the update line) never keeps
+// the app from showing its screen. A PC that refused the page's token (the page's 'refused') hands the page to the
+// company's next PC (CompanyLink). The old company's link closes off the main thread. Feedback 16.11.2026 (F15): the
+// feedback video over the pairing screens on the first start and from their "How feedback works" (IntroTour), and on
+// the page volume up and volume down pressed together as the feedback cell's press (VolumePair → the page's
+// {t:'feedback', down}); one key alone stays the volume.
 // Never: copies the UI, needs a VPN or a reachable PC address, reads the UI's storage, or runs agents.
 package com.teydralab.autark.android;
 
@@ -20,10 +25,15 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
@@ -67,11 +77,19 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
     private ShareIn.Shared pendingShare;
     /** The Autark version of the PC that served the page on screen (null: unknown). */
     private String pageVersion;
+    /** The feedback video over the pairing screens while it shows (null: none). */
+    private IntroTour tour;
+    /** Volume up + down together on the page: the feedback cell's press; its wait runs on `keys`. */
+    private final VolumePair volume = new VolumePair();
+    private final Handler keys = new Handler(Looper.getMainLooper());
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         String crash = CrashReport.last(this); // the last start's crash comes first, before anything that could crash again
-        if (crash != null) { CrashReport.show(this, crash, () -> { start(state); resumed(); }); return; }
+        if (crash != null) {
+            CrashReport.show(this, crash, () -> { start(state); resumed(); }, () -> { start(state); resumed(); port.crash(crash); });
+            return;
+        }
         start(state);
     }
 
@@ -90,11 +108,13 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root); // first: the window's decor exists before SystemBars asks it for the insets controller
         optional(() -> { SystemBars.install(this, root, content); PairScreens.bars(SystemBars::apply); });
+        PairScreens.tour(IntroTour.carried(this) ? this::showTour : null); // "How feedback works" on the first level
         createWebView();
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::goBack);
         pendingRoute = state == null ? null : PhoneRoutes.place(state.getString("route"));
         PhoneConnection.Paired paired = companies.current();
-        if (paired != null) open(paired); else showPair(null, false); // onResume shows the update line (UpdateCheck)
+        if (paired != null) open(paired); // onResume shows the update line (UpdateCheck)
+        else { showPair(null, false); if (IntroTour.due(this, preferences)) showTour(); } // the first start: the video over the pairing
         if (state == null) arrive(getIntent()); // a recreated activity already handled its intent
     }
 
@@ -138,6 +158,7 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
     /** Starts (or reuses) the current company's link, lets only this WebView through its local entrance, opens the PC's UI. */
     private void open(PhoneConnection.Paired paired) {
         PairScreens.stop();
+        closeTour();
         String gate = CompanyLink.gate(preferences);
         if (link == null || !link.company.equals(companies.currentId())) {
             teardown();
@@ -145,7 +166,7 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
             catch (IOException error) { showPair(null, false); PairScreens.status("The app could not open its local entrance: " + error.getMessage()); return; }
             catch (IllegalArgumentException error) { showPair(null, false); PairScreens.status("This phone's stored pairing could not be read; pair it once more."); return; }
         }
-        optional(() -> KeepAlive.start(this, null));
+        optional(() -> KeepAlive.start(this));
         origin = link.origin;
         linkStatus(null, link.pcName() != null);
         PhoneWeb.admit(origin, gate);
@@ -161,6 +182,8 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
         optional(() -> AppNotices.askOnce(this, preferences));
     }
 
+    /** The old company's page and link go; the link's sockets close on a thread of their own (CompanyLink.stop: the main
+     *  thread may not write to the network – the 16.11.2026 crash on a company switch). */
     private void teardown() {
         port.dispose(); // the old company's page (a late 'card' or 'switch') never reaches the next company
         if (link != null) link.stop(this);
@@ -176,10 +199,21 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
 
     /** The pairing levels; adding: Back on the first level returns to the current company. */
     private void showPair(String remoteId, boolean adding) {
+        closeTour();
         leaveWeb();
         status = null;
         if (pairing != null) { pairing.cancel(); pairing = null; } // a new pair link replaces a running pairing
         PairScreens.show(this, content, remoteId, adding, this::pairOrCancel, adding ? () -> { PhoneConnection.Paired p = companies.current(); if (p != null) open(p); else showPair(null, false); } : null);
+    }
+
+    /** The feedback video over the pairing screens (the first start, their "How feedback works"); closing it leaves them as they were. */
+    private void showTour() {
+        if (tour == null || !tour.shown()) tour = IntroTour.show(this, content, preferences);
+    }
+
+    private void closeTour() {
+        if (tour != null) tour.close();
+        tour = null;
     }
 
     /** An ID from the levels starts the pairing (its success adds the company); null cancels the wait. */
@@ -309,11 +343,14 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
 
     @Override public void pickPc() { if (link != null) link.pick(this, EVENTS); }
 
+    @Override public void refused() { if (link != null) link.refused(); }
+
     // ------------------------------------------------------------------ Back and the lifecycle
 
     /** Back: the pairing levels walk back; a native screen returns to the app; the web UI goes back one layer; with none left the app goes to the background. */
     private void goBack() {
         if (port == null) { moveTaskToBack(true); return; } // the crash report's screen
+        if (tour != null && tour.shown()) { closeTour(); return; } // Back skips the feedback video
         if (setup && PairScreens.back()) return;
         PhoneConnection.Paired paired = companies.current();
         if (setup && paired != null && pairing == null) { open(paired); return; }
@@ -333,7 +370,7 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
         current = this;
         AppNotices.resumed(true);
         optional(() -> AppNotices.clear(this));
-        if (link != null) { link.connection.check(); optional(() -> KeepAlive.start(this, null)); }
+        if (link != null) { link.connection.check(); optional(() -> KeepAlive.start(this)); }
         if (web != null && !setup) web.onResume();
         optional(() -> SelfUpdate.resumed(this, updates::step));
         optional(() -> UpdateCheck.start(this, updates));
@@ -344,9 +381,38 @@ public final class MainActivity extends Activity implements PhoneNavigation.Host
         String place = web == null || setup ? null : PhoneRoutes.place(web.getUrl());
         if (place != null) out.putString("route", place);
     }
+    /** Volume up and down pressed together on the app's page are the feedback cell's press (VolumePair: short opens, held
+     *  talks; the page's native-port.ts {t:'feedback', down}); one key alone stays the volume, as Android's own. */
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode(), action = event.getAction();
+        if ((code != KeyEvent.KEYCODE_VOLUME_UP && code != KeyEvent.KEYCODE_VOLUME_DOWN) || (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP)) return super.dispatchKeyEvent(event);
+        if (port == null || !pageUp || setup) { volumeStep(volume.reset()); return super.dispatchKeyEvent(event); }
+        VolumePair.Step step = volume.key(code == KeyEvent.KEYCODE_VOLUME_UP ? VolumePair.UP : VolumePair.DOWN,
+                action == KeyEvent.ACTION_DOWN, event.getRepeatCount(), event.getEventTime());
+        volumeStep(step);
+        return step.consumed || super.dispatchKeyEvent(event);
+    }
+
+    private void volumeStep(VolumePair.Step step) {
+        if (step.volume != 0) {
+            AudioManager audio = getSystemService(AudioManager.class);
+            if (audio != null) audio.adjustSuggestedStreamVolume(step.volume > 0 ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI);
+        }
+        if (step.feedback != 0 && port != null) port.feedback(step.feedback > 0);
+        if (step.waitMs > 0) keys.postDelayed(() -> volumeStep(volume.expired(SystemClock.uptimeMillis())), step.waitMs);
+    }
+
+    /** The keyboard went elsewhere (a dialog, another app): a held pair is let go. */
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) volumeStep(volume.reset());
+    }
+
     @Override protected void onDestroy() {
         if (current == this) current = null;
         if (pairing != null) { pairing.cancel(); pairing = null; } // a recreated activity shows the first level again
+        keys.removeCallbacksAndMessages(null);
+        closeTour();
         PairScreens.stop();
         if (port != null) port.dispose();
         if (chrome != null) chrome.dispose();

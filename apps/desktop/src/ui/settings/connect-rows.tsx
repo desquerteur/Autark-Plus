@@ -6,18 +6,25 @@
 // failed), and a PC or my phone (B-078) asking here with its code (Accept – an employee's PC with the person it belongs
 // to, a phone with whose phone it is: Me or one of the people (F1) – / Decline); plus
 // the live-state hooks they read.
+// F09: the PCs on this network grouped by PC – a PC with several companies is one label row with a row per company under
+// it; the slot stays one fixed row while the network is asked or nobody answers (with Refresh), so the rows below never
+// jump. F17: a request waiting on another of my PCs shows here too and names it (Accept is decided there). F13: the person
+// picker offers "New person…" (a name in the same fixed cell; Accept makes the person as the device links), and
+// IncomingRow takes `newPerson` – the person already named elsewhere (Team › Add person) – instead of the picker.
 // Owns: these rows and hooks. Never: shows keys, or accepts without the person's click.
 
-import { useEffect, useState } from 'preact/hooks';
+import { Fragment } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Person } from '../../shared/model/people.ts';
 import type { RelayState } from '../../shared/model/relay.ts';
-import type { JoinRole, NearbyPc, RemoteIncoming, RemoteState } from '../../shared/model/remote.ts';
+import type { JoinRole, NearbyPc, NewPerson, RemoteIncoming, RemoteState } from '../../shared/model/remote.ts';
+import { people as everyone } from '../lib/people.ts';
 import { errorText, rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
 import { act, Row, useAsync, useBusy } from './controls.tsx';
-import { connectLine, groupDigits, incomingText, remoteIdHint, typedTarget } from './connect-text.ts';
+import { connectLine, groupDigits, incomingText, nearbyGroups, nearbyHint, remoteIdHint, typedTarget } from './connect-text.ts';
 
 /** A value kept current by an event (`on` returns its unsubscribe). */
 export function useLive<T>(readable: boolean, load: () => Promise<T>, on?: (set: (next: T) => void) => () => void) {
@@ -33,17 +40,21 @@ export function useConnectState() {
   return { remote, relay };
 }
 
-/** The people an employee's device can belong to (the owner left out). */
+/** The people an employee's device can belong to (the owner and removed people left out; live – a new person shows at once). */
 export function usePeople(): Person[] {
-  const people = useAsync(() => (can('people.list') ? rpc.call('people.list') : Promise.resolve<Person[]>([])), []);
-  return (people.data ?? []).filter((person) => person.id !== 'human');
+  return everyone.value.filter((person) => person.id !== 'human' && person.status !== 'revoked');
 }
 
-export function PersonSelect(props: { people: Person[]; value: string; onChange: (id: string) => void; label: string; me?: string }) {
+/** F13: the picker's value for "New person…" (person ids are 'per_…'). */
+export const NEW_PERSON = 'new';
+
+/** One of the people (`me`: a first option for no person); `newPerson` adds "New person…" (value NEW_PERSON). */
+export function PersonSelect(props: { people: Person[]; value: string; onChange: (id: string) => void; label: string; me?: string; newPerson?: boolean }) {
   return (
     <select class="set-input remote-role" aria-label={props.label} value={props.value} onChange={(event) => props.onChange((event.currentTarget as HTMLSelectElement).value)}>
       {props.me !== undefined && <option value="">{props.me}</option>}
       {props.people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+      {props.newPerson && <option value={NEW_PERSON}>New person…</option>}
     </select>
   );
 }
@@ -62,22 +73,48 @@ export function RemoteIdRow(props: { remote?: RemoteState; relay?: RelayState })
   );
 }
 
-/** The PCs on this network that accept requests, each with Connect (as the chosen role). */
+/**
+ * The PCs on this network that accept requests, each with Connect (as the chosen role) – F09: one group per PC, a PC with
+ * several companies as a label row with one row per company. While asking, or when nobody answers, one fixed row with
+ * Refresh holds the place.
+ */
 export function NearbyRows(props: { role: JoinRole; onError: (text: string | null) => void }) {
   const nearby = useAsync(() => (can('remote.nearby') ? rpc.call('remote.nearby', {}) : Promise.resolve<NearbyPc[]>([])), []);
   const [busy, run] = useBusy();
+  const [asking, setAsking] = useState(false);
+  const refresh = () => {
+    setAsking(true);
+    void rpc.call('remote.nearby', { refresh: true }).then(nearby.set, () => undefined).finally(() => setAsking(false));
+  };
   const connect = (pc: NearbyPc) => void run(async () => {
     props.onError(null);
     try { await rpc.call('remote.connect', { target: pc.remoteId, role: props.role }); } catch (cause) { props.onError(errorText(cause)); }
   });
+  const menu = () => [{ items: [{ label: 'Refresh list', onSelect: refresh }] }];
+  const button = (pc: NearbyPc) => (
+    <Button variant="ghost" class="small" disabled={busy || pc.state === 'waiting'} onClick={() => connect(pc)}>{pc.state === 'waiting' ? 'Waiting…' : 'Connect'}</Button>
+  );
+  const groups = nearbyGroups((nearby.data ?? []).filter((pc) => pc.state !== 'linked'));
+  const looking = nearby.loading || asking;
+  if (!groups.length) {
+    return (
+      <Row label="PCs on this network" hint={looking ? 'Looking…' : 'None accepts connection requests right now'} reserve>
+        <Button variant="ghost" class="small" busy={looking} onClick={refresh}>Refresh</Button>
+      </Row>
+    );
+  }
   return (
     <>
-      {(nearby.data ?? []).filter((pc) => pc.state !== 'linked').map((pc) => (
-        <Row key={`${pc.deviceId}:${pc.fingerprint}`} label={pc.name} hint={`On this network · Remote ID ${groupDigits(pc.remoteId)}`}
-          menu={() => [{ items: [{ label: 'Refresh list', onSelect: () => void rpc.call('remote.nearby', { refresh: true }).then(nearby.set, () => undefined) }] }]}>
-          <Button variant="ghost" class="small" disabled={busy || pc.state === 'waiting'} onClick={() => connect(pc)}>{pc.state === 'waiting' ? 'Waiting…' : 'Connect'}</Button>
-        </Row>
-      ))}
+      {groups.map((group) => group.pcs.length === 1
+        ? <Row key={group.key} label={group.name} hint={nearbyHint(group.pcs[0], false)} reserve menu={menu}>{button(group.pcs[0])}</Row>
+        : (
+          <Fragment key={group.key}>
+            <Row label={group.name} hint="On this network" reserve menu={menu} />
+            {group.pcs.map((pc) => (
+              <Row key={`${pc.deviceId}:${pc.fingerprint}`} class="remote-company-row" label={pc.company ?? pc.name} hint={nearbyHint(pc, true)} reserve menu={menu}>{button(pc)}</Row>
+            ))}
+          </Fragment>
+        ))}
     </>
   );
 }
@@ -121,32 +158,56 @@ export function ConnectRow(props: { remote?: RemoteState; role: JoinRole; error:
 }
 
 /**
- * A PC or a phone asking here: its code to compare, Accept / Decline; `onDecided` after the answer went in. An employee's
- * PC is accepted with its person; a phone (F1) with whose phone it is – Me (full access) first, or one of the people, whose
- * access it then gets; the hint (two fixed lines) says which. The select is always there for a phone, so nothing moves
- * when people load or another one is picked.
+ * A PC or a phone asking here – or (F17, `via`) on another of my PCs, which then decides it: its code to compare, Accept /
+ * Decline; `onDecided` after the answer went in. An employee's PC is accepted with its person; a phone (F1) with whose
+ * phone it is – Me (full access) first, or one of the people, whose access it then gets; F13: "New person…" turns the
+ * cell into a name field (Escape goes back), and Accept makes that person as the device links. `newPerson` (Team › Add
+ * person) names the person already: no picker, and a request as my own PC cannot be accepted there. The hint (two fixed
+ * lines) says what the device becomes; the cell is always there for a phone or an employee's PC, so nothing moves when
+ * people load or another one is picked.
  */
-export function IncomingRow(props: { request: RemoteIncoming; people: Person[]; onDecided?: (accepted: boolean) => void }) {
-  const { request } = props;
-  const [picked, setPerson] = useState(''); // '' = Me for a phone, the first person for an employee's PC
+export function IncomingRow(props: { request: RemoteIncoming; people: Person[]; newPerson?: NewPerson; onDecided?: (accepted: boolean) => void }) {
+  const { request, newPerson: given } = props;
+  const [picked, setPerson] = useState(''); // '' = Me for a phone, the first person (or a new one) for an employee's PC
+  const [name, setName] = useState('');
+  const field = useRef<HTMLInputElement>(null);
   const [busy, run] = useBusy();
   const employee = request.role === 'employee';
   const phone = request.role === 'phone';
-  const person = employee ? picked || props.people[0]?.id || '' : picked;
-  const owner = phone && person ? props.people.find((entry) => entry.id === person)?.name : undefined;
+  const person = employee ? picked || props.people[0]?.id || NEW_PERSON : picked;
+  const typing = !given && (employee || phone) && person === NEW_PERSON;
+  useEffect(() => { if (typing && picked === NEW_PERSON) field.current?.focus(); }, [typing, picked]);
+  const fresh: NewPerson | undefined = given ?? (typing && name.trim() ? { name: name.trim() } : undefined);
+  const chosen = person && person !== NEW_PERSON ? props.people.find((entry) => entry.id === person)?.name : undefined;
+  const owner = fresh?.name ?? (typing ? undefined : chosen);
+  const mine = !employee && !phone; // my own PC: never a person's
+  const blocked = mine && Boolean(given);
+  const who = mine ? {} : fresh ? { newPerson: fresh } : !typing && person ? { personId: person } : {};
+  const ready = !blocked && (mine || (given ? Boolean(given.name.trim()) : typing ? Boolean(fresh) : !employee || Boolean(person)));
   const answer = (accept: boolean) => void run(async () => {
-    const done = await act(() => rpc.call('remote.decide', { id: request.id, accept, ...(accept && (employee || (phone && owner)) ? { personId: person } : {}) }), accept ? 'Could not accept' : 'Could not decline');
+    const done = await act(() => rpc.call('remote.decide', { id: request.id, accept, ...(accept ? who : {}) }), accept ? 'Could not accept' : 'Could not decline');
     if (done) props.onDecided?.(accept);
   });
   const words = incomingText(request);
-  const hint = phone ? `${owner ? `Becomes ${owner}'s phone with ${owner}'s access` : 'Becomes your own phone with full access'} · ${words.hint}` : words.hint;
+  const becomes = phone
+    ? owner ? `Becomes ${owner}'s phone with ${owner}'s access` : typing ? 'Becomes the new person’s phone with their access' : 'Becomes your own phone with full access'
+    : employee ? owner ? `Becomes ${owner}'s PC` : 'Becomes the new person’s PC' : blocked ? `Asks to join as your own PC, not as ${given!.name}'s` : '';
+  const hint = becomes ? `${becomes} · ${words.hint}` : words.hint;
   return (
     <Row label={<><span class="dot pairing" aria-hidden="true" /> {words.label}</>}
-      hint={phone ? <span class="set-row-hint reserved two" title={hint}>{hint}</span> : hint}>
+      hint={mine && !blocked ? hint : <span class="set-row-hint reserved two" title={hint}>{hint}</span>}>
       <span class="remote-slot-code" aria-label={`Code ${request.code.split('').join(' ')}`}>{request.code}</span>
-      {employee && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This PC belongs to" />}
-      {phone && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This phone belongs to" me="Me" />}
-      <Button variant="primary" class="small" disabled={busy || (employee && !person)} onClick={() => answer(true)}>Accept</Button>
+      {typing && (
+        <input ref={field} class="set-input remote-role" aria-label="Name of the new person" placeholder="Name" maxLength={80} value={name} autoComplete="off"
+          onInput={(event) => setName((event.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && (phone || props.people.length)) { setPerson(''); setName(''); }
+            if (event.key === 'Enter' && ready && !busy) answer(true);
+          }} />
+      )}
+      {!typing && !given && employee && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This PC belongs to" newPerson />}
+      {!typing && !given && phone && <PersonSelect people={props.people} value={person} onChange={setPerson} label="This phone belongs to" me="Me" newPerson />}
+      <Button variant="primary" class="small" disabled={busy || !ready} onClick={() => answer(true)}>Accept</Button>
       <Button variant="ghost" class="small" disabled={busy} onClick={() => answer(false)}>Decline</Button>
     </Row>
   );

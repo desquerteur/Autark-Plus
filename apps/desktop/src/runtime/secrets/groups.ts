@@ -7,7 +7,8 @@
 // the store is a catalog like a skill with ZERO restrictions – no site binding for anything, card data included; the
 // site a value came from is its `source` (provenance only), the route its catalog area, the tags information only.
 // `created_by` names the agent that created a group or single secret (information only); every agent uses and
-// changes every entry. The `agents` columns are no longer read (every entry is for every agent).
+// changes every entry. The `agents` columns are no longer read (every entry is for every agent). `uses` (migration 103) is
+// read here and counted only by the vault's use(): a write of a group – the person's, an agent's, the device sync's – leaves it.
 // Owns: that SQL and those rules. Never: encrypts, decrypts, logs or returns a value (the vault
 // does the crypto; hints show at most the last 4 card digits – and a text field, which is no secret, itself: owner
 // 04.11.2026, he wants to see which email belongs to an entry).
@@ -30,12 +31,13 @@ export interface SecretRow {
   description?: string; conversation_id?: string | null;
   id: string; label: string; kind: string; cipher: Uint8Array | null; hint: string | null; agents: string;
   domains: string; created_at: number; last_used_at: number | null; group_id?: string | null; field?: string | null; created_by?: string | null;
-  source?: string | null; route?: string | null; tags?: string | null;
+  source?: string | null; route?: string | null; tags?: string | null; uses?: number | null;
 }
 
 export interface GroupRow {
   id: string; label: string; kind: SecretGroupKind; description: string | null; agents: string; domains: string;
   created_at: number; last_used_at: number | null; created_by?: string | null; source?: string | null; route?: string | null; tags?: string | null;
+  uses?: number | null;
 }
 
 const bad = (message: string): never => { throw new WorkforceError('bad_request', message); };
@@ -55,6 +57,7 @@ export function toInfo(row: SecretRow, group?: GroupRow): SecretInfo {
     createdAt: row.created_at, lastUsedAt: row.last_used_at ?? undefined,
   };
   if (tags.length) info.tags = tags;
+  if (row.uses) info.uses = Number(row.uses);
   if (row.description) info.description = row.description;
   if (row.conversation_id) info.conversationId = row.conversation_id;
   if (row.created_by) info.createdBy = row.created_by;
@@ -69,6 +72,7 @@ export function toGroup(row: GroupRow): SecretGroup {
   if (row.description) group.description = row.description;
   if (tags.length) group.tags = tags;
   if (row.last_used_at !== null) group.lastUsedAt = row.last_used_at;
+  if (row.uses) group.uses = Number(row.uses);
   if (row.created_by) group.createdBy = row.created_by;
   if (row.source) group.source = row.source;
   return group;

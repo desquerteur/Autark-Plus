@@ -3,8 +3,10 @@
 # app/build/outputs/apk/release/autark-android.apk with its record autark-android.json (version, SHA-256, signer), which
 # the release PC's publish scripts take; with -Lite also autark-android-lite.apk (no AccessibilityService) for the website.
 # APKs are the site flavor (they download and install their own update: REQUEST_INSTALL_PACKAGES, UpdateReceiver); Play
-# bundles are the play flavor (neither – Play updates them). Never: installs, publishes or restarts Autark, or
-# prints or stores the key's password.
+# bundles are the play flavor (neither – Play updates them). Every build first bundles the feedback video page
+# (16.11.2026 F15: apps/desktop/scripts/tour-page.mjs, esbuild as the desktop build) into app/build/generated/tour/tour.html,
+# which the APK carries as assets/tour.html (app/build.gradle); a release APK without it fails. Never: installs,
+# publishes or restarts Autark, or prints or stores the key's password.
 param(
     [switch]$Release,
     # With -Release: also the Play bundles (AAB) – autark-android-play.aab (full, with the in-app disclosure) and
@@ -37,6 +39,11 @@ try { New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null }
 catch { throw "Another heavy check owns $lock. Run this build after that check finishes." }
 try {
     & (Join-Path $root 'test.ps1')
+    # The feedback video before pairing (IntroTour.java): the PC tour's phone variant as one page, from apps/desktop.
+    $tourPage = Join-Path $root 'app/build/generated/tour/tour.html'
+    $tour = Invoke-Native 'node' @((Join-Path $repository 'apps/desktop/scripts/tour-page.mjs'), $tourPage)
+    $tour.output | ForEach-Object { $_ }
+    if ($tour.code -ne 0 -or -not (Test-Path -LiteralPath $tourPage -PathType Leaf)) { throw 'The feedback video page (tour.html) was not built; run npm install in apps/desktop once.' }
     $gradle = Join-Path $root 'gradlew.bat'
     if (-not (Test-Path -LiteralPath $gradle -PathType Leaf)) { throw 'Gradle wrapper is missing.' }
     $signer = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0/apksigner.bat'
@@ -74,6 +81,11 @@ try {
             $siteTree = Invoke-Native $aapt @('dump', 'xmltree', '--file', 'AndroidManifest.xml', $apkFile)
             if ($siteTree.code -ne 0) { throw "aapt2 could not read the manifest of $apkFile." }
             if (-not ($siteTree.output -match 'REQUEST_INSTALL_PACKAGES') -or -not ($siteTree.output -match 'UpdateReceiver')) { throw "$apkFile lacks its own updater (REQUEST_INSTALL_PACKAGES, UpdateReceiver)." }
+            # The feedback video before pairing travels in the APK (IntroTour shows none without it).
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [IO.Compression.ZipFile]::OpenRead($apkFile)
+            try { $hasTour = @($zip.Entries | Where-Object { $_.FullName -eq 'assets/tour.html' }).Count -gt 0 } finally { $zip.Dispose() }
+            if (-not $hasTour) { throw "$apkFile lacks assets/tour.html (the feedback video)." }
         }
         $check = Invoke-Native $signer @('verify', '--verbose', '--print-certs', $built)
         $check.output | ForEach-Object { $_ }

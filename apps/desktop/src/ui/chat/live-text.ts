@@ -8,7 +8,8 @@
 // and a live run's model line ("Opus 5.5 · High", modelLine – the short model name) is also the live block's byline.
 // B-083: the turn's temperature follows it when it has one ("Opus 5.5 · High · T 0.3", withTemperature) – "T ≈0.3" with a
 // title where the model samples at its own setting and the value is carried as the agent's stance.
-// Owns: the texts. Never: markup, widths or a name or model the rows do not give.
+// F20/F21: which run a popover row's or a live bar line's Stop ends (stoppableRun, barStopRun).
+// Owns: the texts and those Stop rules. Never: markup, widths or a name or model the rows do not give.
 
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import type { Effort } from '../../shared/model/providers.ts';
@@ -173,9 +174,9 @@ export function stoppableRun(row: Pick<WorkingRow, 'runId' | 'groupId'>, mayCanc
   return mayCancel && !row.groupId && row.runId ? row.runId : undefined;
 }
 
-/** F20 (Mika): the run the live line's own Stop ends – only while exactly one agent works here and it can be stopped. */
-export function lineStopRun(rows: ReadonlyArray<Pick<WorkingRow, 'runId' | 'groupId'>>, mayCancel: boolean): string | undefined {
-  return rows.length === 1 ? stoppableRun(rows[0], mayCancel) : undefined;
+/** F21: the run a live bar line's Stop ends (LiveBar.tsx) – that agent's own run; a split part has none. */
+export function barStopRun(run: { runId: string; split?: { groupId: string } }, mayCancel: boolean): string | undefined {
+  return stoppableRun({ runId: run.runId, groupId: run.split?.groupId }, mayCancel);
 }
 
 /** B-057: a running split group of this chat as the popover lists it (splits/split-model.ts liveGroupsOf). */

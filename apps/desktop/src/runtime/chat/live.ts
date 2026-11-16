@@ -8,10 +8,14 @@
 // model · effort), the run journal (run.item: the step it is on – itemStep, thoughtStep) and posted messages
 // (message.created). A chat whose entries changed gets its summary announced again (`announce`: conversation.upserted
 // with ConversationSummary.live) – the first change after a quiet moment at once, further ones together after GAP_MS –
-// so windows, phones and runtime readers all read the same list. A run on another linked PC is not here (runs do not
-// travel between PCs; OFFEN).
-// Owns: that rule, each running run's current step and the chats it posted into, and the announcements. Never: writes a
-// message or a run, keeps anything after its run ended, or copies a tool's input or output (only the step label).
+// so windows, phones and runtime readers all read the same list. Feedback F10 (16.11.2026): what the person's other PCs
+// run comes in as their whole live state (devices/sync/live.ts, sync.live: `snapshot()` there, `setRemote` here – each
+// entry marked with its PC's `deviceId`) and is merged into the same list; it leaves with the next state of that PC or
+// when its link goes. `onChange` tells the sync when this PC's own work changed. One ChatLive per runtime, found by its
+// bus (chatLiveOf), so the RPC side adds the other PCs' runs to what windows and phones hear (allActivity).
+// Owns: that rule, each running run's current step and the chats it posted into, the other PCs' last live state, and
+// the announcements. Never: writes a message or a run, keeps anything after its run ended, or copies a tool's input or
+// output (only the step label).
 
 import type { Bus } from '../bus.ts';
 import type { LiveRun, LiveStep } from '../../shared/model/chat.ts';
@@ -60,8 +64,11 @@ export function stepOf(item: RunItem): string | undefined {
 
 interface Work { activity: AgentActivity; step?: string; posted: Set<string> }
 
+/** One running run as it travels to the person's other PCs (sync.live): its activity, its step and the chats it shows in. */
+export interface LiveShare { activity: AgentActivity; step?: string; chats: string[] }
+
 /** The entry a running run is in a chat's live bar. */
-function entryOf(work: Work): LiveRun {
+function entryOf(work: Pick<Work, 'activity' | 'step'>): LiveRun {
   const a = work.activity;
   return {
     runId: a.runId, agentId: a.agentId, startedAt: a.startedAt,
@@ -77,18 +84,39 @@ function chatsOf(work: Work): string[] {
   return [...new Set([...(work.activity.conversationId ? [work.activity.conversationId] : []), ...work.posted])];
 }
 
+/** One runtime's ChatLive, by its bus (the RPC side reaches it through ctx.services.bus). */
+const lives = new WeakMap<object, ChatLive>();
+
+export function chatLiveOf(bus: object): ChatLive | undefined {
+  return lives.get(bus);
+}
+
+/** What windows and phones hear as agent.activity: this PC's running runs, then those of the person's other PCs. */
+export function allActivity(bus: object, local: readonly AgentActivity[]): AgentActivity[] {
+  const remote = lives.get(bus)?.remoteActivity() ?? [];
+  if (!remote.length) return [...local];
+  const here = new Set(local.map((entry) => entry.runId));
+  return [...local, ...remote.filter((entry) => !here.has(entry.runId))];
+}
+
 export class ChatLive {
   private readonly runs = new Map<string, Work>();
+  /** The person's other PCs: deviceId → that PC's running runs as it last sent them. */
+  private readonly remote = new Map<string, LiveShare[]>();
+  private readonly listeners = new Set<() => void>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly last = new Map<string, number>();
   private readonly offs: Array<() => void>;
+  private readonly bus: Bus;
   private readonly announce: (chatId: string) => void;
   private readonly gapMs: number;
 
   /** `announce`: the chat's entries changed (the chat service sends its summary). */
   constructor(bus: Bus, announce: (chatId: string) => void, gapMs = GAP_MS) {
+    this.bus = bus;
     this.announce = announce;
     this.gapMs = gapMs;
+    lives.set(bus, this);
     this.offs = [
       bus.on('agent.activity', ({ active }) => this.activity(active)),
       bus.on('run.item', (item) => {
@@ -97,45 +125,89 @@ export class ChatLive {
         if (!work || !step || step === work.step) return;
         work.step = step;
         this.changed(chatsOf(work));
+        this.moved();
       }),
       bus.on('message.created', (message) => {
         const work = message.runId ? this.runs.get(message.runId) : undefined;
         if (!work || work.posted.has(message.conversationId)) return;
         work.posted.add(message.conversationId);
         this.changed([message.conversationId]);
+        this.moved();
       }),
     ];
   }
 
-  /** The chat's live bar: every running run or part that shows there, in start order. */
+  /** The chat's live bar: every running run or part that shows there – this PC's and the other PCs' –, in start order. */
   of(chatId: string): LiveRun[] {
-    return [...this.runs.values()].filter((work) => chatsOf(work).includes(chatId))
-      .sort((a, b) => a.activity.startedAt - b.activity.startedAt).map(entryOf);
+    const here = [...this.runs.values()].filter((work) => chatsOf(work).includes(chatId)).map(entryOf);
+    const there = [...this.remote].flatMap(([deviceId, shares]) => remoteIn(shares, chatId)
+      .filter((share) => !this.runs.has(share.activity.runId)).map((share) => ({ ...entryOf(share), deviceId })));
+    return [...here, ...there].sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  /** This PC's running runs as they travel to the person's other PCs. */
+  snapshot(): LiveShare[] {
+    return [...this.runs.values()].map((work) => ({ activity: work.activity, ...(work.step ? { step: work.step } : {}), chats: chatsOf(work) }));
+  }
+
+  /** `listener` hears every change of this PC's own running work (not the other PCs'); returns its off switch. */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** Another PC's whole live state (undefined: none, its link went); the chats whose entries changed are announced. */
+  setRemote(deviceId: string, shares: readonly LiveShare[] | undefined): void {
+    const before = this.remote.get(deviceId) ?? [];
+    const after = shares ?? [];
+    if (after.length) this.remote.set(deviceId, [...after]);
+    else this.remote.delete(deviceId);
+    const chats = new Set([...before, ...after].flatMap((share) => share.chats));
+    const sig = (list: readonly LiveShare[], chat: string) => JSON.stringify(remoteIn(list, chat).map(entryOf));
+    this.changed([...chats].filter((chat) => sig(before, chat) !== sig(after, chat)));
+  }
+
+  /** The other PCs' running runs, each with its PC's `deviceId`. */
+  remoteActivity(): AgentActivity[] {
+    return [...this.remote].flatMap(([deviceId, shares]) => shares.map((share) => ({ ...share.activity, deviceId })));
   }
 
   dispose(): void {
     for (const off of this.offs) off();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    this.listeners.clear();
+    if (lives.get(this.bus) === this) lives.delete(this.bus);
+  }
+
+  private moved(): void {
+    for (const listener of [...this.listeners]) {
+      try { listener(); } catch { /* a listener's failure stays its own */ }
+    }
   }
 
   /** A new snapshot of what runs: runs that ended go, new ones come, changed ones are announced in their chats. */
   private activity(active: readonly AgentActivity[]): void {
     const chats = new Set<string>();
     const now = new Set(active.map((entry) => entry.runId));
+    let moved = false;
     for (const [runId, work] of this.runs) {
       if (now.has(runId)) continue;
       this.runs.delete(runId);
+      moved = true;
       for (const chat of chatsOf(work)) chats.add(chat);
     }
     for (const entry of active) {
+      if (entry.deviceId) continue; // another PC's run never counts as this PC's
       const work = this.runs.get(entry.runId);
       if (work && JSON.stringify(entryOf(work)) === JSON.stringify(entryOf({ ...work, activity: entry })) && work.activity.conversationId === entry.conversationId) continue;
       const next: Work = { activity: entry, posted: work?.posted ?? new Set(), ...(work?.step ? { step: work.step } : {}) };
       for (const chat of [...(work ? chatsOf(work) : []), ...chatsOf(next)]) chats.add(chat);
       this.runs.set(entry.runId, next);
+      moved = true;
     }
     this.changed([...chats]);
+    if (moved) this.moved();
   }
 
   private changed(chats: readonly string[]): void {
@@ -154,4 +226,9 @@ export class ChatLive {
     if (this.last.size > 500) this.last.delete(this.last.keys().next().value!);
     this.announce(chat);
   }
+}
+
+/** The shares of another PC that show in `chatId`, in start order. */
+function remoteIn(shares: readonly LiveShare[], chatId: string): LiveShare[] {
+  return shares.filter((share) => share.chats.includes(chatId)).sort((a, b) => a.activity.startedAt - b.activity.startedAt);
 }

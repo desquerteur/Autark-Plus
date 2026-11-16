@@ -1,7 +1,8 @@
 // B-055: opening the feedback tour from anywhere (the command palette's "Watch how it works"; B-085: the
 // first run's choice card opens it too). The player (ui/tour/TourPlayer.tsx) is mounted by the shell while
 // `tourOpen` is true. B-090 (owner 13.11.2026: "wenn man eine neue Company auswählt, dass man dann das Video sieht"):
-// "Set up a new company" opens it already playing (`tourAutoplay`; the click is the user gesture).
+// "Set up a new company" opens it already playing (`tourAutoplay`; the click is the user gesture). Feedback 16.11.2026
+// (F15): the iPhone web app's first start after pairing opens it playing too (shell/Shell.tsx, pwa/native.ts).
 // Owns: the open/close signal. Never: the player or its timeline.
 
 import { signal } from '@preact/signals';

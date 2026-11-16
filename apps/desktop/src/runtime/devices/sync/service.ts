@@ -14,7 +14,9 @@
 // 'online' during a run (a link swap cut its calls) ends it before its next step and runs it again at once – and a run
 // whose link is gone ends before its next step (no step or page dials for it); a cut run leaves the cursor, so the
 // next run still owes the rest. Removing a PC drops its cursor, so a new link begins with everything again. A link
-// that comes up or goes re-places the schedules' due times (one PC fires each).
+// that comes up or goes re-places the schedules' due times (one PC fires each). F10 (16.11.2026): sync.live and
+// sync.live.cancel (live.ts, 'ceo' links only) – the live work goes to a CEO PC the moment its link is up, outside the
+// link-up's steps, and what that PC ran leaves when its link goes.
 // Owns: this wiring and the link-up order. Never: decides what a link carries (home.ts) or logs content.
 
 import type { RuntimeServices } from '../../contracts.ts';
@@ -33,6 +35,9 @@ import { RosterSync, type RosterMesh } from './roster.ts';
 import { placeSchedules } from './tables.ts';
 import { EVERY_LINK, type LinkKind } from '../mesh.ts';
 import { announcePane, TabSync } from './tabs.ts';
+import { CANCEL_METHOD, LIVE_METHOD, LiveSync, bindLiveSync } from './live.ts';
+import { chatLiveOf } from '../../chat/live.ts';
+import { cancelRunHere } from '../../rpc/handlers/org.ts';
 
 export interface SyncInput {
   s: RuntimeServices;
@@ -125,6 +130,13 @@ export function startSync(input: SyncInput): Sync {
   mesh.register('sync.tabs', (params, from) => tabs.receive(params, from));
   mesh.register('files.path', (params, from) => paths.serve(params, from));
   mesh.register('tabs.position', (params, from) => tabPositions(s).receive(params, from));
+  const chatLive = chatLiveOf(s.bus);
+  const live = chatLive ? new LiveSync(s, chatLive, (runId) => cancelRunHere(s, runId)) : undefined;
+  if (live) {
+    mesh.register(LIVE_METHOD, async (params, from) => live.receive(params, from), ['ceo']);
+    mesh.register(CANCEL_METHOD, (params, from) => live.cancel(params, from), ['ceo']);
+    bindLiveSync(s, live);
+  }
   const unwatch = s.rootWatcher?.register(ROOT_SIDE_TABS, () => { announcePane(s); tabs.changed(); });
 
   let detach: (() => void) | undefined;
@@ -132,7 +144,7 @@ export function startSync(input: SyncInput): Sync {
   const refresh = () => {
     const linked = links(s.db).length > 0;
     if (linked && !detach) {
-      const offs = [rows.attach(), secrets.attach(), files.attach(input.tap), logins.attach(), tabs.attach(), ...(roster ? [roster.attach()] : [])];
+      const offs = [rows.attach(), secrets.attach(), files.attach(input.tap), logins.attach(), tabs.attach(), ...(roster ? [roster.attach()] : []), ...(live ? [live.attach()] : [])];
       detach = () => { for (const off of offs) off(); };
     } else if (!linked && detach) {
       detach();
@@ -147,14 +159,17 @@ export function startSync(input: SyncInput): Sync {
     refresh();
     if (device.status !== 'online') {
       online.delete(device.id);
+      live?.linkDown(device.id);
       if (device.status === 'revoked') { stamps.dropCursor(device.id); place(); }
       return;
     }
     if (online.has(device.id)) return;
     online.add(device.id);
     place();
+    live?.linkUp(device.id);
     run(device.id);
   });
+  const offRemoved = s.bus.on('device.removed', ({ id }) => live?.linkDown(id));
   refresh();
-  return { stop: () => { off(); online.clear(); unwatch?.(); detach?.(); detach = undefined; } }; // a link-up still running ends at its next step
+  return { stop: () => { off(); offRemoved(); online.clear(); unwatch?.(); detach?.(); detach = undefined; bindLiveSync(s, undefined); } }; // a link-up still running ends at its next step
 }

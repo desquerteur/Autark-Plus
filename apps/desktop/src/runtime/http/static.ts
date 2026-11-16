@@ -2,17 +2,22 @@
 // types, cache headers, ETags, the app CSP for HTML and an SPA fallback to index.html for
 // navigation paths (no file extension). B-082: /turn/<name> – the conversation's turn detector files by fixed name
 // (onnxruntime-web's wasm and loader, Silero VAD, Smart Turn; turnFile), never a path from the client.
-// Owns: URL → file mapping with traversal protection and the cache/CSP policy of UI files.
+// F29 (16.11.2026): UI_HASHES_PATH lists the SHA-256 of every file below `root` – the iPhone web app fetches it over its
+// pinned channel and runs only files with those bytes (shared/model/ui-hashes.ts); each hash is kept until the file's
+// size or mtime changes, so an update of the UI folder is listed at once.
+// Owns: URL → file mapping with traversal protection, the cache/CSP policy of UI files and their hash list.
 // Never: serves files outside `root`, dotfiles, or anything authenticated (files.ts does that).
 
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { TURN_ROUTE, turnFile } from '../../shared/model/local-speech-models.ts';
+import { UI_HASHES_PATH, type UiHashes } from '../../shared/model/ui-hashes.ts';
 import { modelDir } from '../voice/local/store.ts';
-import { BASE_HEADERS, sendError } from './body.ts';
+import { BASE_HEADERS, sendError, sendJson } from './body.ts';
 
 /** CSP of the UI shell served over HTTP (the PWA). */
 export const APP_CSP = [
@@ -107,6 +112,8 @@ const RESERVED = /^\/(?:api|rpc|ws|mcp|files|peer|sandbox|\.well-known|chunks|ic
 export class StaticFiles {
   private readonly root: string;
   private readonly dataDir?: () => string;
+  /** F29: each UI file's SHA-256 by its size and mtime. */
+  private readonly hashed = new Map<string, { stamp: string; hash: string }>();
 
   /** `dataDir`: where the downloaded models are (the turn files); without it /turn/ serves the ort files only. */
   constructor(root: string, dataDir?: () => string) {
@@ -118,6 +125,10 @@ export class StaticFiles {
   async serve(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendError(res, 405, 'bad_request', 'Method not allowed.', { Allow: 'GET, HEAD' });
+      return;
+    }
+    if (pathname === UI_HASHES_PATH) {
+      try { sendJson(res, 200, { files: await this.uiHashes() } satisfies UiHashes); } catch { sendError(res, 503, 'unavailable', 'The UI folder is changing; ask again.'); }
       return;
     }
     if (pathname.startsWith(TURN_ROUTE)) {
@@ -137,6 +148,29 @@ export class StaticFiles {
       if (await this.send(req, res, path.join(this.root, 'index.html'))) return;
     }
     sendError(res, 404, 'not_found', 'Not found.');
+  }
+
+  /** F29: path below `root` → SHA-256 hex of every file there (dotfiles left out, as serve() never serves them). */
+  private async uiHashes(): Promise<Record<string, string>> {
+    const files: Record<string, string> = {};
+    const walk = async (dir: string, prefix: string): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        const rel = `${prefix}${entry.name}`;
+        if (entry.isDirectory()) await walk(full, `${rel}/`);
+        else if (entry.isFile()) {
+          const info = await stat(full);
+          const stamp = `${info.size}-${info.mtimeMs}`;
+          const known = this.hashed.get(rel);
+          const hash = known?.stamp === stamp ? known.hash : createHash('sha256').update(await readFile(full)).digest('hex');
+          this.hashed.set(rel, { stamp, hash });
+          files[rel] = hash;
+        }
+      }
+    };
+    await walk(this.root, '');
+    return files;
   }
 
   /** The file behind one fixed turn name: ort next to the app's package.json (unpacked from the asar), a model in its folder. */
