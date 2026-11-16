@@ -135,7 +135,7 @@ automatically after a secret scan.
 
 ## Who is behind it
 
-OpenAutark is published and developed by Teydra Lab (Meral Anna Hees), Salzburg, Austria. Developer: Stanislaus Hees.
+OpenAutark is created and owned by Stanislaus Hees. It is published under Teydra Lab, the sole proprietorship of Meral Anna Hees (Salzburg, Austria), which is the legal publisher and media owner.
 Legal notice: [openautark.com/impressum](https://openautark.com/impressum/).
 
 ## Contributing and security
