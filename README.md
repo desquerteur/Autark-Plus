@@ -133,6 +133,11 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 with nothing internal in it. Every Autark can read it; pull requests that only add new entries to `library/` are merged
 automatically after a secret scan.
 
+## Who is behind it
+
+OpenAutark is published and developed by Teydra Lab (Meral Anna Hees), Salzburg, Austria. Developer: Stanislaus Hees.
+Legal notice: [openautark.com/impressum](https://openautark.com/impressum/).
+
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send changes, and [SECURITY.md](SECURITY.md) for how
