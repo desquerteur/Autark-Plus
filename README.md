@@ -222,6 +222,8 @@ Legal notice: [openautark.com/impressum](https://openautark.com/impressum/).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send changes, and [SECURITY.md](SECURITY.md) for how
 to report a vulnerability privately.
 
+[Join the Teydra Lab Discord](https://discord.gg/2MXxH8c3ee) – talk AI agents, get help with OpenAutark.
+
 ## License
 
 The source code is licensed under the [Apache License 2.0](LICENSE). The documentation texts are licensed under
