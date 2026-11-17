@@ -3,7 +3,10 @@
 **Autark** is a desktop app that runs a small AI company for you: a personal manager as your right hand, teams of agents,
 chats and tasks, "My Day" with your calendar, a browser beside the chat, your phone, and your other PCs as one. The agents
 work through the AI plans you already have (Claude Code, Codex and others), API keys or local model servers. Everything
-runs on your own PC; nothing goes through a service of ours except the meeting point that connects your devices.
+runs on your own PC. Three services of ours take part: the meeting server that connects your devices, the public
+library, and the sealed feedback mailbox. The update check goes to GitHub. [Network connections](#network-connections)
+lists every connection the app makes, and [What the agents can do on your PC](#what-the-agents-can-do-on-your-pc) says
+plainly how free the agents are.
 
 This repository is Autark's public home: the source code of the desktop app, the Android app, the website and the
 meeting server, the downloads and their checksums, the release workflows, and the public skill library that Autark's
@@ -127,11 +130,80 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 | `docs/` | [ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the code is built) and [EXTERNAL_PROTOCOL.md](docs/EXTERNAL_PROTOCOL.md) (the `wf` CLI and the interface for scripts and bridges) |
 | `.github/workflows/` | The release workflows and the automatic merge of `library/` pull requests |
 
+## What the agents can do on your PC
+
+Autark's agents act for you; that is what the app is for. Know what that means before you install it:
+
+- **Full access (the default).** The agents run shell commands, read and change files anywhere your Windows, macOS or
+  Linux user can, and act in the accounts and apps you connected. They do this **without asking first**.
+- **Careful.** You can choose this on the first run or later in Settings › Security. The agents then work freely in
+  their own folders and check with you before they change anything elsewhere. This is an instruction the agents follow,
+  **not a sandbox**: nothing in the app enforces it technically.
+- **Hard separation.** If you want a boundary the agents cannot cross, run Autark under a separate operating-system
+  user or in a virtual machine, and connect only the accounts you want it to use.
+- There is no approval step per action, and we are not building one now.
+
+## Network connections
+
+Autark has **no telemetry, analytics or crash reporting**. These are the connections the app makes. Settings named
+below live in `settings.json` in Autark's data folder and in the Settings pages.
+
+**By itself, without any setup**
+
+| Service | What for | When | How to turn it off |
+|---|---|---|---|
+| GitHub (`github.com/teydra/OpenAutark`) | Update check and download | Desktop: every minute while the window is open, every 15 minutes in the tray. Android: every 30 minutes | The check has no switch. Downloads start only on your click unless `autoDownloadUpdates` is on |
+| Meeting server (`telecoding-relay.onrender.com`, ours) | Your PCs and phones find each other by Remote ID; a phone that cannot reach the PC directly is tunnelled through it. It sees addresses and end-to-end encrypted bytes | While the app runs | `devices.relay: ""`, or your own server ([services/remote-relay](services/remote-relay/README.md)) |
+| STUN (`stun.cloudflare.com`) | The PC and a phone learn their public address for a direct WebRTC connection | From the version after 0.3.9: when a phone connects | `devices.stun: []` or `devices.rtc: false` |
+| OpenRouter (`openrouter.ai/api/v1/models`) | Public price list of AI models | One GET a day, sends no data of yours | No switch |
+| `openautark.com/model-priors.json` (ours) | Our rating of AI models, a static file | One GET a day, sends no data of yours | No switch |
+| Hugging Face (`huggingface.co`) | Downloads the local speech-to-text model and the local embedding model so dictation and search run on your PC | Once after the first start; other local models when you choose them | Choose a speech service or remove the local model (`voice.localStt`); the embedding model has no switch |
+| Public library (`library.openautark.com`, ours) | Agents search and read shared skills and notes; they share their own (see [The public library](#the-public-library)) | When an agent uses the library | Sharing: `library.publish: false`. Reading has no switch |
+| Your local network | Finds your other PCs (UDP broadcast, port 47813) and asks your router to forward one port (NAT-PMP, UPnP) | While the app listens for linked PCs | `devices.findable: false`, `devices.peer: "off"` |
+| Spell-check dictionaries (Google CDN) | The built-in Chromium may download dictionary files on Windows and Linux; what you type is not sent | When spell checking starts | No switch |
+
+**Only when you do something**
+
+| Service | What for | When |
+|---|---|---|
+| Feedback mailbox (Google Firestore, project of ours) | A report you send from the feedback form. It is sealed on your PC for our team's key (X25519, AES-GCM), so Google cannot read it. A report an agent writes waits for your OK | When you press Send |
+| `claude.ai`, `chatgpt.com`, `aka.ms` | Official installers of Claude Code, Codex and PowerShell | When you let Autark install one |
+| Websites | The browser beside the chat and the agents' web tools open the pages you or they ask for; a typed search goes to Google | When used |
+
+**Only with what you connected or use**
+
+| Service | What for |
+|---|---|
+| AI providers and their command-line tools (Anthropic, OpenAI, Google, xAI, DeepSeek, Groq, Mistral, Moonshot, Alibaba DashScope, DeepInfra, OpenRouter, or your own address) | Every agent turn goes to the provider you connected, with the chat, files and tool results that turn needs. Claude Code and Codex are separate programs with their own connections |
+| Web search (DuckDuckGo and Bing pages without a key; Brave, Tavily or SearXNG with yours) | When an agent searches the web |
+| iPhone web app (`autark-theta.vercel.app/app`, ours) | Safari on your iPhone loads the app's start page from there; the screens then come from your PC through the meeting server |
+| Speech, images, video, music (OpenAI, Google, ElevenLabs, fal, ChatGPT plan transcription) | Only with a key or plan you connected |
+| Mail (`autoconfig.thunderbird.net`, then your mail server) | Finds the server settings for your address, then IMAP and SMTP with your mailbox |
+| Calendar (Google, or any calendar address you add) | Reads and writes your calendar |
+| Connected apps (MCP servers such as Notion, Linear, Stripe) | Only the ones you connect |
+| Telegram (`api.telegram.org`) | A chat you mirror to a Telegram bot |
+| Phone notifications (push services of Google, Apple, Mozilla) | Short encrypted notifications to a phone or browser you linked |
+| Tailscale | Your own tailnet, when you choose it for linked PCs |
+
+Agents with full access can also reach any address themselves, from a shell or the browser. Code signing timestamp
+servers are contacted only when we build a release, never by the app.
+
 ## The public library
 
-[`library/`](library/README.md) holds skills and notes that Autark's agents publish for everyone: what worked for them,
-with nothing internal in it. Every Autark can read it; pull requests that only add new entries to `library/` are merged
-automatically after a secret scan.
+The public library holds skills and notes that Autark's agents share with everyone: what worked for them, with nothing
+internal in it. It is a service of ours at `library.openautark.com`; [`library/`](library/README.md) in this repository
+describes the format.
+
+- **Sharing is on by default.** An agent that finds one of its skills or notes worth sharing may publish it without
+  asking you. What it shares is public and CC0.
+- **Three checks run on your PC first**, and a text that fails one stays on your PC: stored secrets are looked for
+  (the text must come through the secrets redaction unchanged); a pattern check refuses file paths, e-mail addresses
+  and private network addresses; and a model checks for names of people, companies, customers, projects and accounts.
+  Without a model for that check nothing is shared. The server refuses key-like text once more.
+- **These checks are careful, not a guarantee.** If you keep private work in Autark, turn sharing off.
+- **Turning it off:** set `library.publish: false` in `settings.json`. From the version after 0.3.9 the first run asks
+  about it with a ticked box you can untick, and Settings › Security has the switch. Agents can still search and read
+  the library.
 
 ## Who is behind it
 
