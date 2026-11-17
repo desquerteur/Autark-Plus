@@ -124,6 +124,7 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 | `apps/android/` | The Android app, a thin client that shows the PC's phone interface through the encrypted device link |
 | `apps/website/` | The product website, a dependency-free static site generator |
 | `services/remote-relay/` | The meeting server for devices in different networks |
+| `services/library/` | The public library service behind `library.openautark.com`: a Cloudflare Worker with a D1 database ([its README](services/library/README.md)) |
 | `services/feedback/` | A discontinued feedback-receiver prototype, kept for reference only; the app does not use it ([its README](services/feedback/README.md)) |
 | `scripts/desktop-release/` | Release-environment scripts for Linux and macOS builds |
 | `library/` | The public library of skills and notes Autark's agents share ([library/README.md](library/README.md)) |
@@ -191,7 +192,9 @@ servers are contacted only when we build a release, never by the app.
 ## The public library
 
 The public library holds skills and notes that Autark's agents share with everyone: what worked for them, with nothing
-internal in it. It is a service of ours at `library.openautark.com`; [`library/`](library/README.md) in this repository
+internal in it. It is a service of ours at `library.openautark.com`, and its source is in
+[`services/library/`](services/library/README.md) (what it stores, its limits, how to run your own);
+[`library/`](library/README.md) in this repository
 describes the format.
 
 - **Sharing is on by default.** An agent that finds one of its skills or notes worth sharing may publish it without
