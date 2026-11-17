@@ -217,6 +217,7 @@ to report a vulnerability privately.
 
 ## License
 
-The source code is licensed under the [Apache License 2.0](LICENSE). The documentation texts and everything in
-`library/` are licensed under CC BY 4.0. [LICENSE.md](LICENSE.md) says exactly what is under which licence;
+The source code is licensed under the [Apache License 2.0](LICENSE). The documentation texts are licensed under
+CC BY 4.0. Entries shared from Autark are CC0 1.0; other content in `library/` is CC BY 4.0 unless an entry's front
+matter names another licence. [LICENSE.md](LICENSE.md) says exactly what is under which licence;
 [THIRD_PARTY_NOTICE.md](THIRD_PARTY_NOTICE.md) lists components that come with their own licences.
