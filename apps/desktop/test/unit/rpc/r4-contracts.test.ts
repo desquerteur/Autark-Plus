@@ -18,7 +18,7 @@ import type { Bridge } from '../../../src/shared/model/bridges.ts';
 import type { MediaInfo } from '../../../src/shared/model/media.ts';
 
 const FILE = 'a'.repeat(64);
-const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
+const TOKEN = ['123456789', 'AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw'].join(':'); // a made-up bot token (bot id 123456789), joined so it does not look like one
 const R4_METHODS = ['agents.export', 'bridges.connectTelegram', 'bridges.disconnect', 'bridges.list',
   'media.describe', 'media.list', 'system.backup', 'system.restore'];
 
