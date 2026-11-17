@@ -12,6 +12,10 @@ This repository is Autark's public home: the source code of the desktop app, the
 meeting server, the downloads and their checksums, the release workflows, and the public skill library that Autark's
 agents share with each other. Autark is open source under the Apache License 2.0.
 
+**Signed and published by Meral Anna Hees (Teydra Lab).** Autark was created by and belongs to Stanislaus Hees;
+Meral Anna Hees, Teydra Lab, is its publisher and signs the project and its releases
+(see the [legal notice](https://openautark.com/impressum/)).
+
 ## Download
 
 The links below always lead to the newest version.
