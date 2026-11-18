@@ -89,6 +89,7 @@ jobs:
             export XDG_CURRENT_DESKTOP=GNOME
             export GNOME_KEYRING_CONTROL=$(mktemp -d)
             rm -rf "$HOME/.local/share/keyrings" # 16.11.2026: a runner image shipped a login.keyring the daemon cannot read, so it prompted and the check timed out
+            mkdir -p "$HOME/.local/share/keyrings" && printf login > "$HOME/.local/share/keyrings/default" # 18.11.2026: without a default the store prompted to create one
             task_ci_keyring_password=$(openssl rand -hex 32)
             printf "%s" "$task_ci_keyring_password" | gnome-keyring-daemon --daemonize --unlock --components=secrets --control-directory="$GNOME_KEYRING_CONTROL"
             unset task_ci_keyring_password
