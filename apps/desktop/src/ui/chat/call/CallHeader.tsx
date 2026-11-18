@@ -11,13 +11,15 @@
 // B-085: while this device talks in the chat the cell is a slot holding the same End button plus the floating call
 // card (CallCard.tsx), which it lays into the chat column of its own chat view – so the card lives exactly as long as
 // the call shows here, and its Hang up is the cell's End.
+// Owner 18.11.2026: a call asked for by the floating to-do button (lib/router.ts callRequest) starts once the cell shows.
 // Owns: the cell's states and what a tap starts. Never: the voice loop (voice.ts) or realtime audio (realtime-call.ts).
 
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { TAKEN_OVER } from '../../../shared/model/call.ts';
 import type { ConversationSummary } from '../../../shared/model/chat.ts';
 import type { HeaderCell } from '../../lib/header.tsx';
 import { cellClass } from '../../lib/header-model.ts';
+import { callRequest } from '../../lib/router.ts';
 import { voiceSessions } from '../../lib/shell-state.ts';
 import { settings } from '../../lib/store.ts';
 import { toastError } from '../../lib/toasts.ts';
@@ -86,6 +88,15 @@ function CallLeave(props: { chat: ConversationSummary }) {
 /** The header's call cell: Talk → End in the same box (busy while it starts); Answer / Take over while this chat's call rings or runs elsewhere. */
 export function useCallCell(chat: ConversationSummary): HeaderCell {
   const [busy, setBusy] = useState(false);
+  // Owner 18.11.2026: the floating to-do button's Call opens this chat with its call asked for (lib/router.ts callRequest)
+  const asked = callRequest.value === chat.id;
+  useEffect(() => {
+    if (!asked) return;
+    callRequest.value = null;
+    if (!callable(chat) || talking(chat.id)) return;
+    setBusy(true);
+    void startCall(chat.id).catch((error: unknown) => toastError(error)).finally(() => setBusy(false));
+  }, [asked, chat.id]);
   if (!callable(chat)) return { id: CALL_CELL, placeholder: true };
   if (talking(chat.id)) return { id: CALL_CELL, slot: <CallLeave chat={chat} /> };
   const live = liveCalls.value.find((call) => call.conversationId === chat.id && (call.state === 'running' || (call.until ?? 0) > Date.now()));

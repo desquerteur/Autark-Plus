@@ -5,8 +5,9 @@
 // One compact line per model (texts: model-facts.ts), at most MAX_MODELS lines and about MAX_CHARS characters.
 // Decisions and embeddings are uses of their own (B-072): what answers them now (context/setup-facts.ts usesLine) and
 // only the connected models made for them – a chat model with no prior for them is no embedding model.
-// B-083: the footer names my start model (and who set it) as what I start on and change with model.set when my work
-// needs another; a start model of mine that cannot run now says so, with the stand-in rule (router.ts D3). A limited line
+// B-083: the footer names my start model (and who set it); 17.11.2026 (the model settles): as the model I run on from my
+// next context, and model.set as the way to name another, which then stays my start model (or runs at once with now:
+// true); a start model of mine that cannot run now says so, with the stand-in rule (router.ts D3). A limited line
 // says until when (unfit.ts backAt). B-083 (live 09.11.): a line names whether the model takes a temperature
 // (model-facts.ts temperatureTag).
 // Owns: this selection and its text. Never: changes state, routes a turn, or lists a chat model outside the policy band
@@ -95,13 +96,13 @@ export function modelList(input: ModelListInput): string {
   const title = `Models I can use for ${categoryLabel(category)}${explicit ? '' : " (my mode's kind of work; category picks another)"}, best first as routing ranks them (model preference ${MODEL_CHOICE_LABELS[costMode]}${bounds}):`;
   const footer: string[] = [];
   if (hidden) footer.push(`${hidden} more cannot run right now (includeUnavailable: true lists ${hidden === 1 ? 'it' : 'them'} with the reason).`);
-  // B-083: my start model is where I begin, and model.set picks another.
+  // My start model is where a fresh context of mine runs, and model.set names another from the next one on.
   const name = pinned?.name ?? pin?.modelId;
   const held = pinned ? ranked.find((entry) => entry.model.id === pinned.id) : undefined; // hidden entries included
   if (pin && held && (held.state === 'limited' || held.state === 'none')) { // a key-only start model still runs (router.ts tryPin)
     footer.push(`My start model is ${name}${setBy(input.agent)}; it cannot run now (${held.text ?? STATE_TEXT[held.state]}) – until then my turns start on a model from the strongest tier that runs at most at its price.`);
-  } else if (pin) footer.push(`My start model is ${name}${setBy(input.agent)}; I start on it and change it when my work needs another.`);
-  if (shown.length) footer.push('I ask for one with model.set (its id, or a need such as "stronger" or "cheaper"; for: "task" keeps it for my whole task).');
+  } else if (pin) footer.push(`My start model is ${name}${setBy(input.agent)}; I run on it from my next context.`);
+  if (shown.length) footer.push('I ask for one with model.set (its id, or a need such as "stronger" or "cheaper"): it runs from my next context, or at once with now: true, and stays my start model until I, my lead or the person names another.');
 
   if (!shown.length) return [title, `No model I can use fits ${categoryLabel(category)} right now.`, ...footer].join('\n');
   const moreLine = (count: number) => `… ${count} more not shown${explicit ? '' : ' (category narrows it)'}.`;

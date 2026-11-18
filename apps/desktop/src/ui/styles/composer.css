@@ -130,6 +130,8 @@ dialog textarea.input { resize: vertical; min-height: 72px; line-height: 1.5; }
 .secret-band.chat { margin: 0 0 10px; padding: 0 0 10px; }
 .secret-band.chat .secret-band-body { height: 74px; }
 .secret-band.chat .secret-band-line { height: 18px; -webkit-line-clamp: 1; line-clamp: 1; }
+/* a phone: one stacked row whole (name, value) and the next one's name in sight */
+@media (max-width: 719px) { .secret-band.chat .secret-band-body { height: 156px; } }
 
 /* B-082 marks: unsure places of dictated text, painted by a mirror behind the transparent field (MarkLayer.tsx – the
    same box, font, padding, line height, wrapping and scrolling as .composer-input, its letters invisible), and the

@@ -315,3 +315,27 @@ test('the caller aborts a hanging tell immediately without continuing the sessio
   assert.equal(turns, 1);
   assert.equal(h.pending.size, 0);
 });
+
+test('package C: a continuation keeps the latest reported cost (a running total), never the sum, and counts the model calls of every segment', async () => {
+  const h = setup();
+  h.options.review = async () => ({ action: 'abort', reason: 'No progress' });
+  let turns = 0;
+  const engine = { run: (input: EngineTurnInput) => {
+    turns++;
+    if (turns === 2) {
+      // Claude Code resumed: its total goes on from 10.50 (0.30 of its own); its call count starts anew in the new process
+      input.onEvent({ type: 'usage', inputTokens: 50, outputTokens: 5, costUsd: 10.8, modelCalls: 1 });
+      return Promise.resolve({ text: 'Recovered', stop: 'done', session: input.session, usage: { inputTokens: 50, outputTokens: 5, costUsd: 10.8 } });
+    }
+    input.onEvent({ type: 'usage', inputTokens: 100, outputTokens: 10, costUsd: 10.5, modelCalls: 2 });
+    input.onEvent(start);
+    return new Promise<EngineTurnResult>((resolve) => input.signal.addEventListener('abort', () => resolve({ text: '', stop: 'interrupted', session: { ref: 'session1', generation: 2 }, usage: { inputTokens: 100, outputTokens: 10, costUsd: 10.5 } }), { once: true }));
+  } } as unknown as Engine;
+  const running = runWithNativeTimeouts(engine, h.input, h.ctx, h.options);
+  h.tick(1000); await flush();
+  const result = await running;
+  assert.equal(turns, 2);
+  assert.equal(result.usage?.costUsd, 10.8, 'the session total after the continuation, not 10.50 + 10.80');
+  const calls = h.events.filter((event) => event.type === 'usage').map((event) => (event as { modelCalls?: number }).modelCalls);
+  assert.deepEqual(calls, [2, 3], 'the second process counts on from the first');
+});

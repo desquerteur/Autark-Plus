@@ -7,6 +7,9 @@
 // F30 (16.11.2026): the builder learns how the menu was opened ({ touch, at: the row }) – a message's Copy takes the
 // mouse selection inside it, and touch offers "Select text"; a touch open clears the one-word selection the browser made
 // under the finger, so only this menu shows (the phone's own copy bar does not stack on it).
+// 17.11.2026 (the owner twice, "soll einfach so sein, wie es normalerweise ist"): a row of text (a message) takes `{ touchByButton: true }` – a finger's
+// long press then opens nothing of ours and the phone's own selection (handles, its copy bar) works as everywhere; the menu is the row's own button
+// (message tools "More"). The mouse's right click still opens it.
 // Owns: where the menu opens, the touch long-press and its tick. Never: what an item does (the caller's builder).
 
 import { signal } from '@preact/signals';
@@ -54,7 +57,7 @@ function dropTouchSelection(): void {
 }
 
 /** Props for an element: right-click and touch long-press open `build()`'s sections. */
-export function useContextMenu(build: (open: MenuOpen) => MenuSection[]) {
+export function useContextMenu(build: (open: MenuOpen) => MenuSection[], options: { touchByButton?: boolean } = {}) {
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const fired = useRef(false);
   const touch = useRef(false); // the last press on this row was a finger (a long press's own contextmenu event comes too)
@@ -69,6 +72,7 @@ export function useContextMenu(build: (open: MenuOpen) => MenuSection[]) {
   return {
     onContextMenu: (event: MouseEvent) => {
       if (native(event)) return;
+      if (options.touchByButton && touch.current) return; // a finger's long press selects text natively: nothing of ours, and the event is not stopped
       event.preventDefault();
       event.stopPropagation();
       cancel();
@@ -79,7 +83,7 @@ export function useContextMenu(build: (open: MenuOpen) => MenuSection[]) {
       fired.current = false;
       cancel();
       touch.current = event.pointerType === 'touch';
-      if (!touch.current || native(event)) return;
+      if (!touch.current || native(event) || options.touchByButton) return;
       const { clientX: x, clientY: y } = event;
       const container = host(event);
       const at = event.currentTarget as HTMLElement | null;

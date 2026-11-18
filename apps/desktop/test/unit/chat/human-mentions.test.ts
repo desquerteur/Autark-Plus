@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID } from '../../../src/shared/ids.ts';
+import { findMentions } from '../../../src/shared/text/chat-names.ts';
 import { humanAliases, mentionCandidates } from '../../../src/runtime/chat/mentions.ts';
 import { chatTitleFor } from '../../../src/runtime/chat/titles.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
@@ -28,7 +29,7 @@ test('humanAliases / mentionCandidates: profile name first, fixed aliases, only 
   assert.deepEqual(mentionCandidates([{ memberId: 'ag_tom' }, { memberId: 'ag_mara' }], 'ag_mara', names, profile('Gerd')), [{ id: 'ag_tom', name: 'Tom' }], 'agent-only room');
 });
 
-test('a quiet agent message that mentions the person by profile name is loud, mentions them and notifies them', () => {
+test('a quiet agent message that mentions the person by profile name is loud, mentions them and notifies them as a reply', () => {
   const h = harness();
   Object.assign(h.services, { settings: profile('Gerd') });
   const tom = h.org.add(agent('ag_tom', 'Tom'));
@@ -36,7 +37,7 @@ test('a quiet agent message that mentions the person by profile name is loud, me
   const done = h.chats.postAgentMessage(chat.id, tom.id, 'run_1', { body: '@Gerd the upload needs your login code', state: 'final', silent: true });
   assert.deepEqual(done.mentions, [HUMAN_ID]);
   assert.equal(done.silent, false);
-  assert.equal(h.notified.at(-1)?.kind, 'important');
+  assert.equal(h.notified.at(-1)?.kind, 'reply', 'KI-Runde 17.11.2026: the @mention by an agent addresses the person and does not ring them');
   assert.equal(h.chats.summary(chat.id).unread, 1);
 });
 
@@ -66,3 +67,13 @@ test('an agent named like the person loses the tie; a longer agent name still wi
   assert.deepEqual(chatTitleFor(h.services, chat.id, HUMAN_ID).split(', ').sort(), ['Gerd', 'Gerd Miller', 'Tom'], 'titles still use member names (B-050 K2: per viewer)');
 });
 
+
+test('an @ inside an e-mail address names nobody; an @ after a space, a bracket or at the start does', () => {
+  const candidates = [...['Gerd', 'CEO', 'Human', 'You'].map((name) => ({ id: HUMAN_ID, name })), { id: 'ag_ben', name: 'Ben' }];
+  for (const body of ['Report sent to info@karl-weber.de.', 'Mailed office@ceo.com', 'Replied to anna@ben.org', 'x.y_z+1@Ben.de']) {
+    assert.deepEqual(findMentions(body, candidates), [], body);
+  }
+  assert.deepEqual(findMentions('@Ben, fertig', candidates), ['ag_ben']);
+  assert.deepEqual(findMentions('Quiet note for @Ben', candidates), ['ag_ben']);
+  assert.deepEqual(findMentions('(@Gerd) gerd@example.com', candidates), [HUMAN_ID]);
+});

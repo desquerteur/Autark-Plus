@@ -2,7 +2,8 @@
 // (a result while a background task runs ends nothing and the input stays open; the result after its notification ends
 // the turn with both texts; an ambient or awaited task is none, task_updated moves one in or out, an error result ends the
 // turn at once); setModel writes the set_model control request into the running CLI (another effort is
-// false; the CLI's error answer puts the turn back on the model before); a fresh session is announced at system/init.
+// false) and the turn is on the new model once a request runs on it (FIXES-3 C1 – a refused or never-used switch leaves it
+// where it was); a fresh session is announced at system/init.
 // Owns: these assertions only. Never: a real Claude Code binary.
 
 import { test } from 'node:test';
@@ -55,8 +56,11 @@ test('claude: a foreground task_started (not backgrounded) holds nothing', async
   assert.equal(t.events.some((event: any) => event.type === 'background'), false);
 });
 
-test('claude: setModel writes set_model into the running CLI and says so; another effort or an ended turn is false; an error answer puts it back', async () => {
-  const h = claudeSetup({ exit: false, turn: () => [assistant('Working')] });
+const request = (model: string) => ({ type: 'stream_event', event: { type: 'message_start', message: { id: `msg_${model}`, model, usage: { input_tokens: 10 } } } });
+const models = (events: any[]) => events.filter((event: any) => event.type === 'model');
+
+test('claude: setModel writes set_model into the running CLI; the turn is on the new model once a request runs on it (FIXES-3 C1); another effort or an ended turn is false', async () => {
+  const h = claudeSetup({ exit: false, turn: () => [request('claude-opus-5-5'), assistant('Working')] });
   const t = input();
   const running = h.engine.run(t.input);
   await until(() => t.events.some((event: any) => event.type === 'text'));
@@ -64,16 +68,60 @@ test('claude: setModel writes set_model into the running CLI and says so; anothe
   assert.equal(await h.engine.setModel('run_1', 'claude-sonnet-5', 'high'), false, 'the CLI sets no effort inside a turn');
   assert.equal(await h.engine.setModel('run_1', 'claude-sonnet-5', 'medium'), true);
   await until(() => call.child.lines.some((line: any) => line?.request?.subtype === 'set_model'));
-  const request = call.child.lines.find((line: any) => line?.request?.subtype === 'set_model') as any;
-  assert.equal(request.type, 'control_request');
-  assert.equal(request.request.model, 'claude-sonnet-5');
-  assert.deepEqual(t.events.filter((event: any) => event.type === 'model'), [{ type: 'model', model: 'claude-sonnet-5', effort: 'medium' }]);
-  call.child.send({ type: 'control_response', response: { subtype: 'error', request_id: request.request_id, error: 'unknown model' } });
-  await until(() => t.events.filter((event: any) => event.type === 'model').length === 2);
-  assert.deepEqual(t.events.filter((event: any) => event.type === 'model')[1], { type: 'model', model: 'claude-opus-5-5', effort: 'medium' }, 'back on the model before');
+  const asked = call.child.lines.find((line: any) => line?.request?.subtype === 'set_model') as any;
+  assert.equal(asked.type, 'control_request');
+  assert.equal(asked.request.model, 'claude-sonnet-5');
+  call.child.send({ type: 'control_response', response: { subtype: 'success', request_id: asked.request_id } });
+  call.child.send(request('claude-opus-5-5')); // the request already on its way (real run 18.11.: the CLI switched 1.7 s later)
+  await until(() => false, 20);
+  assert.deepEqual(models(t.events), [], 'no request ran on it yet');
+  call.child.send(request('claude-sonnet-5'));
+  await until(() => models(t.events).length === 1);
+  assert.deepEqual(models(t.events), [{ type: 'model', model: 'claude-sonnet-5', effort: 'medium' }]);
   call.child.send(result(sessionOf(call.args), 'Working'));
   await running;
   assert.equal(await h.engine.setModel('run_1', 'claude-sonnet-5', 'medium'), false, 'no turn runs');
+  call.child.exit(0);
+});
+
+test('claude: a turn whose requests all ran before the switch (or the CLI refused it) stays on its model (FIXES-3 C1)', async () => {
+  for (const answer of ['success', 'error']) {
+    const h = claudeSetup({ exit: false, turn: () => [request('claude-opus-5-5'), assistant('Working')] });
+    const t = input();
+    const running = h.engine.run(t.input);
+    await until(() => t.events.some((event: any) => event.type === 'text'));
+    const call = h.cli.of('turn')[0];
+    assert.equal(await h.engine.setModel('run_1', 'claude-sonnet-5', 'medium'), true);
+    await until(() => call.child.lines.some((line: any) => line?.request?.subtype === 'set_model'));
+    const asked = call.child.lines.find((line: any) => line?.request?.subtype === 'set_model') as any;
+    call.child.send({ type: 'control_response', response: { subtype: answer, request_id: asked.request_id, ...(answer === 'error' ? { error: 'unknown model' } : {}) } });
+    if (answer === 'error') call.child.send(request('claude-sonnet-5')); // refused: nothing is waited for any more
+    call.child.send(result(sessionOf(call.args), 'Working'));
+    const done = await running;
+    assert.equal(done.stop, 'done');
+    assert.deepEqual(models(t.events), [], `${answer}: the turn ran on Claude Opus only`);
+    call.child.exit(0);
+  }
+});
+
+test('claude: a switch to the 1M variant of the model a turn is on waits for a request after the ask (FIXES-3 C1, review R3)', async () => {
+  const h = claudeSetup({ exit: false, turn: () => [request('claude-opus-5-5'), assistant('Working')] });
+  const t = input();
+  const running = h.engine.run(t.input);
+  await until(() => t.events.some((event: any) => event.type === 'text'));
+  const call = h.cli.of('turn')[0];
+  assert.equal(await h.engine.setModel('run_1', 'claude-opus-5-5-1m', 'medium'), true);
+  await until(() => call.child.lines.some((line: any) => line?.request?.subtype === 'set_model'));
+  const asked = call.child.lines.find((line: any) => line?.request?.subtype === 'set_model') as any;
+  call.child.send({ type: 'control_response', response: { subtype: 'success', request_id: asked.request_id } });
+  call.child.send(assistant('Still the request before'));
+  await until(() => false, 20);
+  assert.deepEqual(models(t.events), [], 'the request before the ask names the same API model – it ran on the old window');
+  call.child.send(request('claude-opus-5-5'));
+  await until(() => models(t.events).length === 1);
+  assert.deepEqual(models(t.events), [{ type: 'model', model: 'claude-opus-5-5-1m', effort: 'medium' }]);
+  call.child.send(result(sessionOf(call.args), 'Working'));
+  await running;
   call.child.exit(0);
 });
 

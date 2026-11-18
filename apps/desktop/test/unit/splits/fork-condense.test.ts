@@ -26,7 +26,7 @@ const BRIEF = 'I have just split myself: what came before is me up to my agents.
 
 /**
  * Tom's record: four finished turns with one long tool output each (t1–t4; run_4 splits), then a fifth turn after the split (t5).
- * The subconscious answers `condense`; the engine forks natively when asked.
+ * The subconscious answers its items as done; the engine forks natively when asked.
  */
 function setup(condense: Array<{ id: string; note: string }>) {
   const t = ledgerSetup();
@@ -41,7 +41,7 @@ function setup(condense: Array<{ id: string; note: string }>) {
   const prompts: string[] = [];
   const runner: StructuredRunner = async (call) => {
     prompts.push(call.prompt);
-    const structured = { condense };
+    const structured = { items: condense.map((entry) => ({ ...entry, done: true })) }; // 17.11.2026: one yes or no per shown item
     return { text: JSON.stringify(structured), structured, by: 'fake' };
   };
   Object.assign(t.services, { catalog: { get: () => undefined, list: () => [] } });
@@ -66,7 +66,7 @@ function setup(condense: Array<{ id: string; note: string }>) {
 test('a fork part: my record up to the split is copied, its subconscious condenses there with the brief, it starts from that record; mine stays whole', async () => {
   const { t, prompts, forks, seed, state, seedNote } = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
   try {
-    const result = await seed(150_000);
+    const result = await seed(250_000); // re-read on each call it costs more than 40 writes of the condensed record
     assert.equal(prompts.length, 1, 'one condense call');
     assert.match(prompts[0], /this part starts now with the context so far and works on its one piece alone/);
     assert.match(prompts[0], /Write the release notes from build 4 only\./, 'the brief wakes it');
@@ -103,6 +103,35 @@ test('my warm fork on the same model costs less than the condensed record: the p
   } finally { t.cleanup(); }
 });
 
+test('the fork weighs the record\'s saving against what writing it costs in reads, from the price table: about 40 on Claude Code, 10 on Codex', async () => {
+  // a 100,000-token parent: re-read on each call it costs about 13 times the condensed record
+  const unpriced = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
+  try {
+    assert.equal((await unpriced.seed(100_000)).how, 'native', 'no price known: a write counts as 40 reads (Claude Code, measured), so my warm fork is cheaper');
+  } finally { unpriced.t.cleanup(); }
+  const priced = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
+  try {
+    Object.assign(priced.t.services, { catalog: { get: () => ({ id: MODEL, model: 'gpt-6.1-sol', price: { inputPerM: 2 } }), list: () => [] } });
+    assert.equal((await priced.seed(100_000)).how, 'ledger', 'input $2 and its cached tenth: a write is 10 reads, and the record pays');
+  } finally { priced.t.cleanup(); }
+});
+
+test('the record is weighed in the engine\'s own tokens, as my session\'s count is: on Codex 3.4 characters make one (r2-3 #8)', async () => {
+  const first = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
+  let record = 0;
+  try {
+    record = Math.ceil(((await first.seed(250_000)).inputPrefix ?? '').length / 2); // in the ledger's unit, two characters per token
+  } finally { first.t.cleanup(); }
+  assert.ok(record > 0);
+  // one call of the splitting run, a write worth 10 reads (input $2, cached a tenth): the fork pays while my session is below 11
+  // records – counted in Codex tokens, of which the record holds 1.7 times fewer than of the ledger's
+  const between = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
+  try {
+    Object.assign(between.t.services, { catalog: { get: () => ({ id: MODEL, model: 'gpt-6.1-sol', price: { inputPerM: 2 } }), list: () => [] } });
+    assert.equal((await between.seed(8 * record)).how, 'ledger', '8 ledger-unit records are 13.6 in Codex tokens: the record pays');
+  } finally { between.t.cleanup(); }
+});
+
 test('the same fork on a cold cache: the condensed record (my fork would read everything uncached anyway)', async () => {
   const { t, forks, seed } = setup([{ id: 't2', note: 'build 2 finished in 402 seconds' }]);
   try {
@@ -110,6 +139,22 @@ test('the same fork on a cold cache: the condensed record (my fork would read ev
     const result = await seed(6_000);
     assert.equal(result.how, 'ledger');
     assert.deepEqual(forks, []);
+  } finally { t.cleanup(); }
+});
+
+test('a splitting turn that still runs (agents.split with wait): the fork is weighed on the model its recorded session names (FIXES-3 B1)', async () => {
+  const { t, forks, engine, splitOf } = setup([{ id: 't1', note: 'build 1 finished in 401 seconds' }]);
+  try {
+    t.journal.start({ id: 'run_wait', agentId: t.tom.id, trigger: 'message' }); // its row names no model until it ends
+    const split = splitOf(6_000);
+    const result = await seedSplitSession(t.services, {
+      plan: { agent: t.tom, thread: PART } as unknown as TurnPlan, split: { ...split, parentRunId: 'run_wait', parentSession: { ...split.parentSession!, model: MODEL } },
+      route: { route: { modelId: MODEL } as RouteDecision, engine, account: { id: 'acc_1' } as Account, model: 'gpt-6.1-sol', effort: 'medium' },
+      tools: [], toolNames: [], system: { stable: '', volatile: '' }, promptKey: 'pk', cwd: 'C:/work/repo', runId: 'run_part', brief: BRIEF,
+    });
+    assert.equal(result.condensed, 1);
+    assert.equal(result.how, 'native', 'my warm fork costs less, as for a turn that ended');
+    assert.deepEqual(forks, ['thr_parent']);
   } finally { t.cleanup(); }
 });
 
@@ -154,7 +199,7 @@ test('the pipeline hands the part\'s notes and its turn\'s stop to the call; a s
     const stop = new AbortController();
     const request = { runId: 'run_part', agentId: t.tom.id, reason: 'split', split, signal: stop.signal, notes: [{ text: BRIEF, at: 0 }, { text: 'Part #2 found: build 4 is green.', at: 0 }] } as unknown as TurnRequest;
     const route = { modelId: MODEL, engine: 'codex', accountId: 'acc_1', effort: 'medium' } as RouteDecision;
-    const native = { account: { id: 'acc_1' } as Account, model: 'gpt-6.1-sol', offer: { native: [], names: [] }, prompt: { stable: '', volatile: '' } };
+    const native = { account: { id: 'acc_1' } as Account, model: 'gpt-6.1-sol', offer: { native: [], hub: [], names: [] }, prompt: { stable: '', volatile: '' } };
     stop.abort();
     const cut = await seedSplit(t.services, plan, request, engine, route, 'pk', native);
     assert.deepEqual(seen, [{ brief: `${BRIEF}\n\nPart #2 found: build 4 is green.`, thread: PART, aborted: true }]);

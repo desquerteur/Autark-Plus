@@ -25,7 +25,7 @@ test('defaults cover the full Settings shape with the confirmed values', () => {
   assert.equal(s.onboarding.step, 'tour'); // B-055 Q5: a new install starts with the feedback tour
   assert.equal(s.routing.work, 'auto');
   assert.equal(s.profile.timezone, 'Europe/Berlin');
-  assert.equal(s.profile.language, 'de');
+  assert.equal(s.profile.language, 'en'); // owner 18.11.2026: English on every PC
   assert.deepEqual(s.notifications.pushFor, ['todo', 'blocker', 'important']);
   assert.equal(s.preferences.sidebarWidth, 288);
   assert.equal(s.preferences.closeToTray, true);

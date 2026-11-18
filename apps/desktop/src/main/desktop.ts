@@ -13,10 +13,12 @@
 // the recycle bin once it has ended (company-remove.ts, 16.11.2026).
 // B-080: the host op app.install reaches the updater wiring (installFile), and a start with a window sets up the desktop
 // broker where it is missing (broker-setup.ts). B-081: the side tabs' Pin picker and the AI cursor over the screen (screen-cursor.ts).
+// 18.11.2026: the floating to-do button (float-bar*.ts; the first company only).
 // Owns: constructing and connecting the main-side modules. Never: business logic (runtime),
 // UI decisions (renderer), long work on the main thread.
 
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -37,6 +39,7 @@ import { applyLauncher, launcherDeps } from './launcher-tasks.ts';
 import { setupBroker } from './broker-setup.ts'; // B-080
 import { armDueStart } from './launcher-windows.ts';
 import { RunStateMarks } from './launcher.ts';
+import { guardMainErrors } from './crash-guard.ts'; // 17.11.2026: an uncaught error is a main.log line, never Electron's dialog
 import { openMainLog } from './main-log.ts';
 import { ProtocolHandlers, registerProtocolHandlers } from './protocols/handlers.ts';
 import { RendererLink } from './renderer-link.ts';
@@ -62,6 +65,7 @@ import { personalDownloads } from './workspace-downloads.ts';
 import { WorkStopControl, type WorkStopRpc } from './work-stop.ts';
 import { ScreenCursor, electronCursorOverlays } from './screen-cursor.ts'; // B-081
 import { loadWindowState, saveWindowState } from './window-state.ts';
+import { startFloatBar } from './float-bar-window.ts'; // owner 18.11.2026: the floating to-do button
 
 export interface DesktopOptions {
   background: boolean; // started at sign-in or by the launcher: tray + runtime, no window
@@ -88,6 +92,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
 
   const paths = appPaths({ appPath: app.getAppPath(), userData: app.getPath('userData') });
   const log = openMainLog(paths.logs, !app.isPackaged);
+  guardMainErrors(process, line => log.line(line));
   const runMarks = new RunStateMarks(paths.data, line => log.line(line)); // B-044: every deliberate quit is marked (launcher.ts)
   log.line(`starting ${app.getVersion()}${app.isPackaged ? '' : ' (development)'}${testMode ? ' (test data)' : ''}`);
 
@@ -106,14 +111,14 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     onLoaded: () => {
       renderer.send(IPC.runtimeStatus, link.status);
       if (updates) renderer.send(IPC.updateState, updates.state());
-      retitle(); // the page's <title> replaced the window's
+      retitle(); startFloat(); // the page's <title> replaced the window's; 18.11.: the float bar after the main page (it is the first window)
     },
   });
 
   // ---------------------------------------------------------------- capture
   let appWindow: MainWindow | null = null;
   // MM4 video keyframes run in a hidden window – never the person's window.
-  const hidden = hiddenWindows({ blobsDir: paths.blobs });
+  const hidden = hiddenWindows({ blobsDir: paths.blobs, previewDir: paths.previews, previewScript: () => readFileSync(paths.previewPage, 'utf8') });
   const capture = new Capture({
     screen,
     getSources: sourceOptions => desktopCapturer.getSources(sourceOptions),
@@ -201,7 +206,10 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     createNotification: notification => (Notification.isSupported() ? new Notification({ ...notification, ...(platform === 'darwin' ? {} : { icon: paths.icon }) }) : null),
     setBadgeCount: count => app.setBadgeCount(count),
     capture,
-    media: hidden.mediaAnalyzer,
+    media: {
+      analyze: (request) => hidden.mediaAnalyzer.analyze(request), audio: (request) => hidden.mediaAnalyzer.audio(request),
+      image: (request) => hidden.mediaAnalyzer.image(request), preview: (request) => hidden.mediaPreview.preview(request), // 17.11.2026
+    },
     voiceRtc: hidden.voiceRtc, // owner 07.11.2026: dictation heard by the Codex plan over WebRTC
     sideBrowser: call => sideDriver.call(call), // B-055 F1: checks every field itself
     sideView: { cast: args => caster.cast(args), input: args => caster.input(args), nav: args => caster.nav(args) }, // B-076
@@ -411,6 +419,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     runMarks.quit(desktopUpdates.draining ? 'update' : 'person'); // tray Quit, menu, window close and the update install alike
     workStop.dispose();
     screenCursor.dispose(); // B-081
+    floatBar?.close();
     hidden.dispose();
     workspaceBrowser?.dispose();
     log.line('quitting');
@@ -426,6 +435,8 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
 
   nativeUpdater.on('before-quit-for-update', () => desktopUpdates.markUpdateQuit());
 
+  let floatBar: ReturnType<typeof startFloatBar> | null = null; // one per PC: the first company's (not in a test profile: its global shortcut, one window); after the main page (background: at once)
+  function startFloat(): void { if (!company && !testMode && !floatBar) floatBar = startFloatBar({ BrowserWindow, session, screen, globalShortcut, nativeImage }, { rpc: link.rpc, capture, file: path.join(paths.data, 'float-bar.json'), log: line => log.line(line), open: request => { mainWindow.show(); renderer.sendWhenLoaded(IPC.navigate, request); } }); } if (options.background) startFloat();
   // ---------------------------------------------------------------- go
   runtimeHost.start();
   tray.create();

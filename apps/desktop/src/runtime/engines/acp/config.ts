@@ -67,7 +67,7 @@ export function parseConfig(result: unknown, previous: SessionConfig = { models:
 
 /** EngineModels for an account from what its agent offered (one 'default' model when it offered none).
  *  B-058 G7: `audio` (initialize promptCapabilities.audio) lists every model with audioIn, so the listener
- *  may route a recording to the agent (engine-runner hearsAudio; turn.ts sends it as ACP audio blocks). */
+ *  may route a recording to the agent (decision/listener.ts hearsAudio; turn.ts sends it as ACP audio blocks). */
 export function listing(config: SessionConfig | undefined, label: string, vision: boolean, audio = false): EngineModel[] {
   const efforts = [...new Set((config?.efforts ?? []).map((e) => e.effort))];
   const defaultEffort = config?.efforts.find((e) => e.value === config.effort)?.effort;

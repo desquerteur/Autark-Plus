@@ -81,14 +81,15 @@ test('asking the person is a task for them: a widget without to goes to the pers
   assert.deepEqual([again.taskId, again.already], [todo.id, true]);
 });
 
-test('a wait on the person: their line in the task\'s chat opens it; a pause holds until they resume', async () => {
+test('a wait on the person: their line in the task\'s chat wakes its owner with it and leaves it waiting; a pause holds until they resume', async () => {
   const h = setup();
   const task = h.tasks.create({ conversationId: h.chat.id, title: 'Handy-Test', assigneeKind: 'agent', assigneeId: 'ag_ida', createdBy: HUMAN_ID });
   const out = await h.run('tasks.update', { status: 'waiting', on: 'who', who: 'human', why: '7:30 oder nachmittags?' }, h.ctx('ag_ida', task.id));
   assert.equal(out.status, 'waiting');
   assert.match(out.next, /^when .* answers \(I look again /);
   h.chats.send({ conversationId: h.chat.id, body: 'Nachmittags, 15 Uhr.', authorId: HUMAN_ID });
-  assert.equal(h.tasks.get(task.id)!.status, 'open');
+  assert.equal(h.tasks.get(task.id)!.status, 'waiting', 'KI-Runde 17.11.2026: its owner moves it');
+  assert.ok(h.wakesOf('ag_ida').some((row) => row.task_id === task.id), 'its owner is woken with the task');
   h.tasks.pause(task.id, HUMAN_ID);
   const paused = h.tasks.get(task.id)!;
   assert.deepEqual([paused.status, paused.waitingOn?.why, paused.nextAt], ['waiting', PAUSED_REASON, undefined]);

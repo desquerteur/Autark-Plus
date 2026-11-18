@@ -1,19 +1,22 @@
 // tools.find / tools.call: the two meta tools beside every core set (tools/core-sets.ts), and the prompt's list of the
 // tools they reach (moreToolsSection: one line per tool – name and the description's first sentence).
-// tools.find answers which tools fit a job, best first, out of what the agent may use in this mode (the registry's
-// specsFor). Its first answer carries what a call needs: the best hit's whole description and argument schema, and
-// the schema of every other hit that is small (else its compact arguments). A full tool name answers that tool's
-// description and schema. Ranking: the name's parts, a short keyword index per tool family, the description's words.
+// tools.find answers which tools fit a job, best first, out of every tool that can work here (the registry's specsFor –
+// every mode reaches every tool; a tool that cannot work here, phone.* without a linked phone or adb on this PC, answers
+// why: cannotWork).
+// Its first answer carries what a call needs: the best hit's whole description and argument schema, and the schema of
+// every other hit that is small (else its compact arguments). A full tool name answers that tool's description and schema. Ranking: the name's parts, a short keyword index per tool family, the description's words.
+// The prompt's list opens with one line on how a name from it is called on the calling engine (howToCall: the engine's
+// own name for a tool, and the call tool as that engine names it – live 17.11.2026: Sonnet parts called web__fetch and failed).
 // tools.call runs one of those tools: the registry unwraps it (registry.ts callThrough) and runs the target under its
 // own name and this call's id, so validation, journal and result are a direct call's; a target that succeeded joins
-// the agent's direct offer at its next fresh session (tools/learned.ts).
+// the agent's direct offer when its session next starts anew (tools/learned.ts).
 // tools.call's `company` runs the target in another company on this PC (placement.ts placeCompany); companies.list
 // (builtin/companies.ts), which names those companies, is registered with these two.
 // A mail query while no mailbox is connected adds one line on where mail tools come from.
 // Owns: their wording and argument shapes, the keyword index, the compact argument line, the one-line purpose (a
 // tool's first sentence), the prompt's tool list, the name normalisation (wire names, the hub's mcp__workforce__
-// prefix), what a tools.call may run (callRefusal) and calledTool for counting.
-// Never: runs a tool itself, offers a tool the mode does not allow, or nests tools.call.
+// prefix), what a tools.call may run (callRefusal, cannotWork) and calledTool for counting.
+// Never: runs a tool itself, offers a tool that cannot work here, or nests tools.call.
 
 import type { ModeInfo } from '../../../shared/model/knowledge.ts';
 import type { ToolContext, ToolDef, ToolSpec } from '../types.ts';
@@ -32,6 +35,8 @@ const SMALL_SCHEMA = 400;
 /** A line in the prompt's tool list names what the tool does in at most this many characters. */
 const BRIEF_CHARS = 100;
 const HUB_PREFIX = 'mcp__workforce__';
+/** The engine that names our tools under HUB_PREFIX (engines/claude/engine.ts id). */
+const CLAUDE_ENGINE = 'claude';
 
 /** A short keyword index: a family prefix ('schedules.') or a full name → words people use for that work. */
 const KEYWORDS: Readonly<Record<string, string>> = {
@@ -49,7 +54,10 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'media.': 'image picture photo video audio sound music speech voice transcribe generate draw clip',
   'browser.': 'browser website page site click form login sign-in tab download',
   'computer.': 'screen desktop window mouse keyboard click app gui',
-  'phone.': 'phone android mobile adb smartphone',
+  'phone.': 'phone android mobile adb smartphone', // 17.11.2026: phone questions found mail tools
+  // A code or a notification is read off the screen, so these words rank the two reading tools, not the ADB setup ones.
+  'phone.key': 'notification notifications sms code authenticator 2fa otp quick settings back home recents',
+  'phone.ui_tree': 'screen notification sms code authenticator 2fa otp text read elements',
   'secrets.': 'password secret credential token key vault login 2fa',
   'secrets.import': 'import export csv env dotenv file bitwarden', // 04.11.2026: a password export or a .env by its path
   'secrets.export': 'export download file passwords logins backup', // B-075
@@ -105,6 +113,22 @@ export function calledTool(name: string, args: unknown): { name: string; args: u
   return 'error' in target ? { name, args } : target;
 }
 
+/** The one family that needs something linked before it can work here (tools/registry.ts allowed). */
+export const PHONE_FAMILY = 'phone.';
+
+/** Why a registered tool is not offered here, with the reason the registry judged by (`tool`: the registered definition). */
+export function cannotWork(name: string, tool?: Pick<ToolDef, 'modes' | 'requires'>): string {
+  if (name.startsWith(PHONE_FAMILY)) {
+    return `${name} needs a linked phone or adb on this PC, and neither is here: the person links theirs with the Autark app (skill phone-access); adb is set up by an agent in computer mode (skill phone-adb).`;
+  }
+  if (tool?.modes?.length) return `${name} works in mode ${tool.modes.join(' or ')}.`;
+  if (tool?.requires === 'embeddings') return `${name} needs an embedding model, and none that can serve is chosen in Settings.`;
+  return `${name} cannot work here right now.`;
+}
+
+/** A tool of this name is registered (a registry without the lookup counts as none). */
+const registered = (ctx: ToolContext, name: string): boolean => { try { return Boolean(ctx.services.tools.get(name)); } catch { return false; } };
+
 function modeOf(ctx: ToolContext): ModeInfo | undefined {
   try { return ctx.services.modes.get(ctx.mode); } catch { return undefined; }
 }
@@ -121,7 +145,7 @@ function engineOf(ctx: ToolContext): { ownTools: boolean; via: 'mcp' | 'native' 
   }
 }
 
-/** What the agent may use in this mode on its engine, without the meta tools; undefined when the mode is unknown. */
+/** What the agent can use here on its engine, without the meta tools; undefined when the mode is unknown. */
 function usableSpecs(ctx: ToolContext, mode: ModeInfo | undefined): ToolSpec[] | undefined {
   if (!mode) return undefined;
   try { return ctx.services.tools.specsFor(ctx.agent, mode, engineOf(ctx)).filter((spec) => !META_TOOLS.includes(spec.name)); } catch { return undefined; }
@@ -133,9 +157,8 @@ export function callRefusal(ctx: ToolContext, name: string): string | undefined 
   if (name === FIND_TOOL) return undefined;
   const usable = usableSpecs(ctx, modeOf(ctx));
   if (!usable || usable.some((spec) => spec.name === name)) return undefined;
-  return ctx.services.tools.get(name)
-    ? `Tool "${name}" is not available to me in mode "${ctx.mode}". tools.find lists what I can use here.`
-    : `Unknown tool "${name}". tools.find lists what I can use here.`;
+  const tool = ctx.services.tools.get(name);
+  return tool ? cannotWork(name, tool) : `Unknown tool "${name}". tools.find lists what I can use here.`;
 }
 
 function typeOf(prop: Record<string, unknown>): string {
@@ -194,6 +217,14 @@ export const mailHint = (query: string, usable: readonly ToolSpec[]): string => 
   ? 'My mail tools (app.<name>.send, reply, search, read) come from a mailbox in <data>/connectors/mail.json – address plus password as secret://<id>, skill connect-apps; it connects within a second, and its Sent folder then holds every mail I send.'
   : '';
 
+/** A query about a phone (17.11.2026: an agent asked the person for an SMS code while no phone was linked). */
+const PHONE_WORDS = /\b(phones?|android|smartphone|adb|sms|otp|2fa|authenticator)\b/i;
+
+/** The phone line – only for a phone query and only while no phone tool can work here: why, and the two ways to link one. */
+export const phoneHint = (query: string, usable: readonly ToolSpec[]): string => (PHONE_WORDS.test(query) && !usable.some((spec) => spec.name.startsWith(PHONE_FAMILY))
+  ? cannotWork(`${PHONE_FAMILY}*`)
+  : '');
+
 function families(specs: readonly ToolSpec[]): string {
   const counts = new Map<string, number>();
   for (const spec of specs) { const family = spec.name.split('.')[0]; counts.set(family, (counts.get(family) ?? 0) + 1); }
@@ -208,7 +239,21 @@ export function brief(description: string): string {
   return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), BRIEF_CHARS / 2)).replace(/[\s,;:–-]+$/, '')}…`;
 }
 
-export const MORE_TOOLS_HEADER = '## More tools (tools.call runs one; tools.find shows its full arguments)';
+export const MORE_TOOLS_HEADER = '## More tools (tools.find shows a tool\'s full arguments)';
+
+/**
+ * The list's first line: how a name from it is called on this engine (live 17.11.2026: 24 calls used the dotted name
+ * itself – `web__fetch`, `tools__find` – because no engine is given our dotted names). Every engine gets our names with
+ * each dot as two underscores; Claude Code sees them under `mcp__workforce__` as well (engines/claude/transcript.ts
+ * hubWireName). `engine`: the calling engine's id.
+ */
+export function howToCall(engine?: string): string {
+  const hub = engine === CLAUDE_ENGINE;
+  const own = hub
+    ? `${HUB_PREFIX} plus the name with each dot as two underscores (web.fetch is ${HUB_PREFIX}web__fetch)`
+    : 'the name with each dot as two underscores (web.fetch is web__fetch)';
+  return `A name below is written with dots here; my engine's own name for a tool is ${own}. Any name below I run through ${hub ? HUB_PREFIX : ''}tools__call {"name": "<the name as written here>", "args": {…}}.`;
+}
 
 /** A connected app's tool (app.<id>.<tool>): it comes and goes with the app, so the volatile apps line names it. */
 const appTool = (name: string): boolean => name.startsWith(APP_TOOL_PREFIX) && name.split('.').length > 2;
@@ -218,7 +263,7 @@ const appTool = (name: string): boolean => name.startsWith(APP_TOOL_PREFIX) && n
  * name and its description's first sentence (brief), so the agent knows what exists without a search. '' where tools.call is
  * not offered or nothing is left. Sorted, so the same tools give the same text.
  */
-export function moreToolsSection(usable: readonly ToolSpec[], direct: ReadonlySet<string>): string {
+export function moreToolsSection(usable: readonly ToolSpec[], direct: ReadonlySet<string>, engine?: string): string {
   if (!direct.has(CALL_TOOL)) return '';
   const more = usable.filter((spec) => !direct.has(spec.name) && !META_TOOLS.includes(spec.name) && !appTool(spec.name))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -228,7 +273,7 @@ export function moreToolsSection(usable: readonly ToolSpec[], direct: ReadonlySe
     const family = spec.name.split('.')[0];
     byFamily.set(family, [...(byFamily.get(family) ?? []), `${spec.name} – ${brief(spec.description)}`]);
   }
-  return [MORE_TOOLS_HEADER, ...[...byFamily.values()].map((tools) => tools.join(' · '))].join('\n');
+  return [MORE_TOOLS_HEADER, howToCall(engine), ...[...byFamily.values()].map((tools) => tools.join(' · '))].join('\n');
 }
 
 const find = defineTool<{ query: string; limit?: number }>({
@@ -245,7 +290,10 @@ const find = defineTool<{ query: string; limit?: number }>({
     const mode = modeOf(ctx);
     const usable = usableSpecs(ctx, mode);
     if (!mode || !usable) return failure('My tools cannot be listed right now.');
-    const exact = usable.find((spec) => spec.name === normalizeName(args.query));
+    const named = normalizeName(args.query);
+    const meta = META_TOOLS.includes(named) ? ctx.services.tools.get(named) : undefined; // always mine, and out of `usable`
+    const exact = meta ?? usable.find((spec) => spec.name === named);
+    if (!exact && registered(ctx, named)) return text(cannotWork(named, ctx.services.tools.get(named)));
     const direct = () => directNames(ctx, mode);
     if (exact) {
       return text([`${exact.name} – ${exact.description}`, `Arguments: ${JSON.stringify(exact.inputSchema)}`,
@@ -253,7 +301,8 @@ const find = defineTool<{ query: string; limit?: number }>({
     }
     const found = rankTools(usable, args.query, args.limit ?? DEFAULT_LIMIT);
     const mail = mailHint(args.query, usable);
-    if (!found.length) return text([`Nothing fits "${clip(args.query, 80)}". I can use these here: ${families(usable)}. Ask with other words or a tool name.`, mail].filter(Boolean).join('\n'));
+    const phone = phoneHint(args.query, usable);
+    if (!found.length) return text([`Nothing fits "${clip(args.query, 80)}". I can use these here: ${families(usable)}. Ask with other words or a tool name.`, mail, phone].filter(Boolean).join('\n'));
     const listed = direct();
     const lines = found.map((spec, index) => {
       const head = `- ${spec.name}${listed.has(spec.name) ? ' (in my list)' : ''}:`;
@@ -261,7 +310,7 @@ const find = defineTool<{ query: string; limit?: number }>({
       if (index === 0) return `${head} ${spec.description}\n  Arguments: ${schema}`;
       return `${head} ${purpose(spec.description)} Arguments: ${schema.length <= SMALL_SCHEMA ? schema : `${compactArgs(spec.inputSchema)} (* = required; its name as query gives the schema)`}`;
     });
-    return text([`Tools for "${clip(args.query, 80)}", best first – tools.call {"name": …, "args": {…}} runs one:`, ...lines, mail].filter(Boolean).join('\n'));
+    return text([`Tools for "${clip(args.query, 80)}", best first – tools.call {"name": …, "args": {…}} runs one:`, ...lines, mail, phone].filter(Boolean).join('\n'));
   },
 });
 

@@ -3,10 +3,12 @@
 // the anchor is posted there (an anchor made during a run in that chat carries meta.fromRun); without one it is
 // chat-free – its space from input.spaceId (runtime callers only), else the parent's, else the creating agent's; its
 // origin from the input, else from the creating run, else 'todo-list' (the person) or 'system'. A piece without a chat
-// takes its parent's when its creator is a member there. An agent receiver out of a 1:1 it is not in gets it in the
-// creator's own 1:1 with it; a colleague gets it where people/task-rules.ts says. The owner is resolved before (team
+// takes its parent's when its creator is a member there. An agent receiver out of a 1:1 or a chat a person is in that it
+// is not in gets it in the creator's own 1:1 with it (chat/direct.ts workRoomFor; nobody is seated there by a task); a colleague gets it where people/task-rules.ts says. The owner is resolved before (team
 // goes through tasks/give.ts pickOwner – TaskService.createTo). The anchor is sent after the insert; when that send
-// throws, the row is deleted again and the error re-thrown. Its owner hears of it at once (lifecycle.created).
+// throws, the row is deleted again and the error re-thrown. Its owner hears of it at once (lifecycle.created). The card of a
+// task an agent owns is silent (KI-Runde 17.11.2026): it stands in the chat for whoever looks, counts no unread, moves no
+// row and notifies nobody; a task for a person, and the card of work a person hands an agent themselves, stays loud.
 // Owns: building and inserting a new task. Never: gives a task to an unknown or archived agent, leaves it without an
 // owner, or takes an origin from an agent's or a person's text (runtime code sets it).
 
@@ -98,7 +100,7 @@ export function createTask(t: TaskServiceImpl, input: CreateTaskInput & { create
     const owner = s.org.get(input.assigneeId);
     if (!owner || owner.archivedAt !== undefined) throw new WorkforceError('not_found', 'Agent not found.');
   }
-  // An agent out of a 1:1 it is not in gets the work in the creator's own 1:1 with it; a colleague where task-rules.ts says.
+  // An agent out of a 1:1 or a person's chat it is not in gets the work in the creator's own 1:1 with it; a colleague where task-rules.ts says.
   const given = chatFor(t, input, parent);
   const receiver = assigneeKind === 'agent' ? { kind: 'agent' as const, id: input.assigneeId! } : { kind: 'human' as const, ...(input.assigneeId && input.assigneeId !== HUMAN_ID ? { id: input.assigneeId } : {}) };
   const placed = checkMayGive(s, input.createdBy, receiver, { conversationId: given, widget: input.widget });
@@ -149,7 +151,8 @@ function anchorTask(t: TaskServiceImpl, task: Task, input: CreateTaskInput & { c
     const fromRun = runOf(t, options, input.createdBy, conversationId);
     const meta = { ...(options.anchorWith?.meta ?? {}), ...(fromRun ? { fromRun } : {}) };
     const message = s.chats.send({
-      conversationId, body: options.anchorWith?.body ?? task.title, kind: 'task', taskId: task.id,
+      // an agent's bookkeeping card is silent; the person's own hand-over of work is their act and stays loud
+      conversationId, body: options.anchorWith?.body ?? task.title, kind: 'task', taskId: task.id, silent: task.assigneeKind === 'agent' && !isHumanActor(author),
       authorId: author, authorKind: isHumanActor(author) ? 'human' : author === SYSTEM_ID ? 'system' : 'agent',
       ...(options.anchorWith?.attachments?.length ? { attachments: options.anchorWith.attachments } : {}),
       ...(Object.keys(meta).length ? { meta } : {}),

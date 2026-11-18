@@ -1,32 +1,35 @@
 // The turn executor: one agent turn from wake to integrated result.
 //   plan (agent, mode, task, the subconscious's trace, previous model) → route (without images when no model can
-//   read them) → session/prompt/input (a session whose prompt key – stable prompt + offered
-//   tools – no longer matches, e.g. after a mode switch, is renewed first; SES2) →
+//   read them) → session/prompt/input (S2: a changed prompt key keeps the session on its start record; it starts anew
+//   only at a switch, no session, a fold, past the fit or a cold cache – rebuild.ts) →
 //   run journal + streaming message → engine attempt → session renewal once when the native
 //   session cannot continue (context full, thread gone; another folder, details.folder: quietly)
 //   → the account learns what the attempt says about it (always, also after tool calls) →
 //   failover on limit/unavailable (renewal only when no tool ran; failover also after tool calls whose effects are all known – PR3: the
 //   continuation gets them as "What I already did then" (in the cut-off note); finish then judges and books every attempt:
 //   tools, plan, tokens and cost – mergeAttempts; B-083: again after each account that fails, every failed account of the
-//   turn left out, until routing has no other or tools with unknown effects ran) → finish (message, blocks, cursor, ownership …)
+//   turn left out, until routing has no other or tools with unknown effects ran; a context fold's turn has neither renewal nor
+//   failover – it folds the session it resumes or nothing, agents/context-fold.ts) → finish (message, blocks, cursor, ownership …)
 //   → the engine-reported context window is kept with the session. A turn that cannot start
 //   (routing or preparation failed) ends as a failed run; for a task, no model or account to run
 //   on is the ownership outcome 'unavailable' and a limit 'limit' (no stall), anything else
 //   'failed' – an outage of a task leaves one quiet line per outage, no failed bubble (T06); an
 //   outage of a chat turn without a task is noted for one automatic re-delivery (B-044, redelivery.ts) – B-080 wave 3: one
 //   the platform re-delivers by itself leaves one quiet Paused line too (on its first attempt there), no red bubble.
-// Owns: the phase order, run start, switch/renewal status lines (a switch someone asked for says why – route-line.ts decides,
-// switch-line.ts words it, RT5; judged against the chat's last turn), the renewal retry, failover and recording
+// Owns: the phase order, run start, switch/renewal status lines (a turn on another model than my last one says why, as does an
+// effort someone asked for – route-line.ts decides, switch-line.ts words it, RT5), the renewal retry, failover and recording
 // the account consequence of every failed attempt (the rules – limit → cooling, a signed-out plan →
 // needs_login plus one notification, CLI missing → error, else a short cooling – live in
 // accounts/failure.ts, shared with helper calls).
 // B-047 D4: the run's status lines carry meta.fromRun. 13.11.2026: a run has no row in the history – it shows in the
 // chat's live bar from the dispatcher's activity (chat/live.ts); a turn that fails before its engine posts its failed
 // bubble (a task's outage only its quiet line, T06).
-// B-048 E4.5: bindTurn reports what the turn runs on after every (re)build (the activity's model fields). A model.set request for
-// the next step is used up only once the turn is built and bound – just before its engine runs (a turn that fails
-// before its engine leaves it for the next one) – and only the one planning read (plan.nextStepAt): a request written
-// while the turn was routed or prepared holds for the next turn.
+// B-048 E4.5: bindTurn reports what the turn runs on after every (re)build (the activity's model fields). My next turn's step
+// (an effort, a temperature – mine or my subconscious's) is used up only once the turn is built and bound – just before its
+// engine runs (a turn that fails before its engine leaves it for the next one) – and only the one planning read
+// (plan.nextStepAt): one written while the turn was routed or prepared holds for the next turn. 17.11.2026: the model I asked
+// for is used up the same way by the turn that could apply it (plan.nextModelAt: at a boundary, or at once with now); off a
+// boundary it stays stored and waits.
 // B-054: the run row carries the plan's origin (what started it); session and repair-note bookkeeping use plan.thread.
 // Owner 16.11.2026 ("Wenn eine Mail reinkommt, dann sollt ihr richtig arbeiten können"): a run a mail started is a turn
 // like every other, with every tool; the mail stays data through its wake note and the app tools' untrusted marks.
@@ -42,13 +45,14 @@
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
-import { ROUTE_BY_REQUEST, type Run } from '../../shared/model/runs.ts';
+import type { Run } from '../../shared/model/runs.ts';
 import { toErrorData, type WorkforceErrorData } from '../../shared/errors.ts';
 import type { StatusLine } from '../../shared/model/chat.ts';
-import { buildTurn, planTurn, renewSession, routeRequest, visionUnavailable, withoutImages } from './turn-prepare.ts';
+import { buildTurn, planTurn, routeRequest, visionUnavailable, withoutImages } from './turn-prepare.ts';
+import { renewSession } from './session-choice.ts';
 import { canFailover, liveRoute, runAttempt, sendsTemperature } from './turn-attempt.ts';
 import { effectsKnown } from '../context/recent-actions.ts';
-import { errorOutcome, finishTurn, takeRepairNotes } from './turn-finish.ts';
+import { errorOutcome, finishTurn, saveRepairNotes, takeRepairNotes } from './turn-finish.ts';
 import { ChatOutbox } from './chat-out.ts';
 import { SessionStore } from './sessions.ts';
 import { accountFailure, recordAccountFailure } from '../accounts/failure.ts';
@@ -57,7 +61,7 @@ import { outageLine, pausedLine } from './outage-line.ts';
 import { noteChatOutage } from './redelivery.ts';
 import { failoverText } from './switch-line.ts';
 import { postRunLine, routeLine, type SwitchFrom } from './route-line.ts';
-import { takeNextRoute } from './next-route.ts';
+import { takeNextModel, takeNextRoute } from './next-route.ts';
 import { splitTurnFailed } from './split-turn.ts'; // B-057
 import { addCache } from '../engines/shared.ts';
 import type { AttemptResult, RoutedTurn, TurnOutcome, TurnPlan, TurnRequest } from './turn-types.ts';
@@ -67,7 +71,7 @@ function isMember(services: RuntimeServices, conversationId: string, agentId: st
   return services.chats.members(conversationId).some((item) => item.memberId === agentId && !item.leftAt);
 }
 
-/** Runs looked at for the chat's last turn (the return rule's window). */
+/** Runs looked at for my last done turn. */
 const SWITCH_WINDOW = 50;
 
 /** The engine says its native session cannot continue (context window full, thread gone). */
@@ -76,21 +80,20 @@ export function sessionEnded(attempt: AttemptResult): boolean {
 }
 
 /**
- * The switch line's base: plan.previous – unless a model.set request (RT2, the target, not the base)
- * shapes this turn or shaped the chat's last one: then what that last done turn ran on (none: no line).
- * B-083: with the temperature the chat's last done turn ran with; `at`: when that turn began (a start model set since is new to this chat).
+ * The switch line's base: what my last done turn ran on, in whichever chat (one context – the line stands once, in the chat
+ * of the turn that switched); none: a first turn, no line. B-083: with the temperature that turn ran with; `at`: when it
+ * began (a start model set since is new).
  */
-export function switchedFrom(services: Pick<RuntimeServices, 'runs' | 'log'>, plan: Pick<TurnPlan, 'agent' | 'conversationId' | 'previous'>): SwitchFrom | undefined {
-  const previous = plan.previous;
+export function switchedFrom(services: Pick<RuntimeServices, 'runs' | 'log'>, plan: Pick<TurnPlan, 'agent'>): SwitchFrom | undefined {
   let last: Run | undefined;
-  try { last = services.runs.list(plan.agent.id, SWITCH_WINDOW).find((run) => !run.splitId && run.conversationId === plan.conversationId && run.model && run.status === 'done'); } catch (error) { // B-057: never a split's run
+  try { last = services.runs.list(plan.agent.id, SWITCH_WINDOW).find((run) => !run.splitId && run.model && run.status === 'done'); } catch (error) { // B-057: never a split's run
     services.log.warn('reading the last turn failed', { agentId: plan.agent.id, error: String(error) });
   }
-  const requested = last?.route?.by === ROUTE_BY_REQUEST; // the return after a request
-  const warmth = last?.route?.temperature !== undefined ? { temperature: last.route.temperature } : {};
-  const at = last?.startedAt !== undefined ? { at: last.startedAt } : {};
-  if (!previous?.explicit && !requested) return previous ? { modelId: previous.modelId, effort: previous.effort, ...warmth, ...at } : undefined;
-  return last?.model ? { modelId: last.model, effort: last.effort ?? 'medium', ...warmth, ...at } : undefined;
+  if (!last?.model) return undefined;
+  return {
+    modelId: last.model, effort: last.effort ?? 'medium',
+    ...(last.route?.temperature !== undefined ? { temperature: last.route.temperature } : {}), ...(last.startedAt !== undefined ? { at: last.startedAt } : {}),
+  };
 }
 
 /** B-083: the route a turn runs on, with its temperature – the agent's own request (plan) over the person's suggestion (router). */
@@ -153,13 +156,13 @@ export class TurnExecutor {
       trigger: request.reason, deviceId: plan.agent.deviceId, ...(plan.origin ? { origin: plan.origin } : {}),
       ...(plan.split ? { splitId: plan.split.splitId } : {}), // B-057: the run of a split (runs.split_id)
     });
-    const repairNotes = takeRepairNotes(services, plan.agent.id, plan.thread);
+    const repairNotes = plan.fold ? [] : takeRepairNotes(services, plan.agent.id, plan.thread); // a fold's turn reads one note; the others wait for my next turn
 
     let turn: RoutedTurn;
     try {
       let route: RouteDecision;
       try {
-        route = await services.router.route(routeRequest(plan));
+        route = plan.fold?.route ?? await services.router.route(routeRequest(plan)); // a fold resumes its session where it is (agents/context-fold.ts)
       } catch (error) {
         // Images are a preference, not a requirement: without a model that can read them the
         // turn runs on the text and the agent is told. Failing instead would block the chat –
@@ -171,11 +174,14 @@ export class TurnExecutor {
       }
       turn = await buildTurn(services, plan, request, turnRoute(plan, route), repairNotes);
     } catch (error) {
+      // No engine ran, so nothing read these notes (the standard's among them): they wait for my next turn.
+      saveRepairNotes(services, plan.agent.id, plan.thread, repairNotes);
       return this.failBeforeEngine(services, plan, request, toErrorData(error));
     }
     bindTurn(request, turn);
     this.announceSwitch(services, plan, request.runId, turn);
-    if (!plan.split && plan.nextStepAt !== undefined) takeNextRoute(services.db, plan.agent.id, plan.nextStepAt); // B-080: the request this turn read is used up now
+    if (!plan.split && plan.nextStepAt !== undefined) takeNextRoute(services.db, plan.agent.id, plan.nextStepAt); // B-080: the step this turn read is used up now
+    if (!plan.split && plan.nextModelAt !== undefined) takeNextModel(services.db, plan.agent.id, plan.nextModelAt); // the model I asked for had its boundary (or ran at once)
 
     // 13.11.2026: what the run writes into chats – its <chat> blocks, posted as they arrive (agents/chat-out.ts)
     const out = new ChatOutbox(services, { agentId: plan.agent.id, runId: request.runId, ...(plan.callId && plan.conversationId ? { skip: plan.conversationId } : {}) });
@@ -183,7 +189,8 @@ export class TurnExecutor {
 
     // Renew once (compaction + fresh session with the full projection) in the same run – only when
     // nothing external happened yet (else it is forgotten below); another folder: no chat line.
-    if (sessionEnded(attempt) && attempt.toolCalls === 0 && !request.signal.aborted) {
+    // A fold turn is never renewed or routed elsewhere: it exists to fold the session it resumes (agents/context-fold.ts).
+    if (sessionEnded(attempt) && attempt.toolCalls === 0 && !request.signal.aborted && !plan.fold) {
       const folder = attempt.result.error?.details?.folder === true;
       const retry = { ...request, interruption: { at: services.clock.now(), reason: attempt.result.error?.message ?? 'The previous session ended.' } };
       try { request.onStatus?.('starting a fresh session'); } catch { /* cosmetic */ }
@@ -203,7 +210,7 @@ export class TurnExecutor {
     // B-083: every account that failed in this turn stays out of the next route; it ends when routing has no other account
     // (the route throws or names a failed one) or when tools with unknown effects ran (canFailover).
     const failedAccounts: string[] = [];
-    while (canFailover(attempt, request.signal, attempt.toolCalls > 0 && effectsKnown(services, request.runId, attempt.toolCalls))) {
+    while (!plan.fold && canFailover(attempt, request.signal, attempt.toolCalls > 0 && effectsKnown(services, request.runId, attempt.toolCalls))) {
       const afterTools = attempt.toolCalls;
       const failed = turn;
       const first = attempt;
@@ -230,6 +237,8 @@ export class TurnExecutor {
     if (attempt.result.stop === 'done') out.segment(attempt.result.text || attempt.streamed, true); // the final text's blocks, its last open one closed
     await out.done();
     const outcome = finishTurn(services, plan, turn, request, attempt, out);
+    // A turn that ended with nothing of mine in it did not read these notes either: they wait for my next turn.
+    if (attempt.result.stop !== 'done' && !attempt.toolCalls && !attempt.streamed.trim()) saveRepairNotes(services, plan.agent.id, plan.thread, repairNotes);
     this.rememberWindow(services, plan, turn, attempt);
     return outcome;
   }

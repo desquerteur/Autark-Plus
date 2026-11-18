@@ -4,7 +4,7 @@
 // its script; files.write runs on this PC. A path is relative to the workspace or absolute anywhere on the PC – the data
 // folder included. files.read, files.list and shell.exec are remote tools: with `device` (or an agent homed on another
 // PC) that PC runs them (registry.ts, devices/tools.ts runRemoteTool), by the same path rule as this PC's own agents
-// (readPath). shell.exec is offered in every mode (registry.ts EVERY_MODE) and takes `env`, whose values may hold
+// (readPath). shell.exec is offered in every mode (registry.ts: every tool in every mode; core-sets.ts BASE_CORE) and takes `env`, whose values may hold
 // secret://<id> handles resolved at spawn (command.ts, secrets/handles.ts). A command without cwd runs in a split part's
 // folder (ToolContext.split.cwd), else in the workspace (commandCwd). On Windows it runs in PowerShell itself
 // (defaultShell: the engines' PowerShell 7 where found, else Windows PowerShell 5.1; the command as one -Command

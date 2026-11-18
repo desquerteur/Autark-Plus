@@ -26,7 +26,8 @@
 // D15: the agent's own call line its live voice said (liveVoiceLine: a realtime session's or the talker's)
 // reads `(my live voice said: "…")` – capped, so the agent knows what its voice told the person.
 // B-082: a person's body is plain; its hidden marks (meta.marks) are written in for the agent, with MARKS_LEGEND once.
-// Owns: the line label (lineLabel), author naming (the human = the profile name), per-message caps, mini-app elision,
+// Owns: the line label (lineLabel), author naming (the human = the profile name), per-message caps (a person's new line
+// in the turn's own lines comes whole up to WHOLE_CHARS, past it its head and tail), mini-app elision,
 // reply lines and neutralizing body lines that imitate chat lines ("[ch_x · Alex · 11:05 #3] …" inside
 // a colleague's or contact's text would otherwise read as a message of the CEO) or a full
 // projection's section headers (projection.ts: only delta.ts writes them). Used by delta(),
@@ -58,6 +59,7 @@ import { uiBlocksOf } from '../../shared/blocks/parse.ts';
 import { chatTitleFor } from '../chat/titles.ts';
 import '../contracts/people.ts';
 import { hasMarks, markedForAgent, MARKS_LEGEND } from '../../shared/voice/marks.ts';
+import { headAndTail, WHOLE_CHARS } from '../tools/outputs.ts';
 
 
 export const BODY_CAP = 6000;
@@ -172,10 +174,16 @@ export function stateNote(message: Pick<Message, 'state'>): string {
   return message.state === 'failed' ? '(this message failed)' : message.state === 'stopped' ? '(stopped before it was finished)' : '';
 }
 
-/** Message body for an agent: hidden marks written in, mini-app HTML elided, long text capped. */
-export function bodyText(message: Message): string {
+/** Message body for an agent: hidden marks written in, mini-app HTML elided, long text capped at BODY_CAP – `cap`
+ *  WHOLE_CHARS (a person's new line this turn answers): past it its head and tail; Infinity (chat.read of one line,
+ *  which tools/outputs.ts bounds): uncut. */
+export function bodyText(message: Message, cap = BODY_CAP): string {
   let body = elideApps(agentBody(message)).trim();
-  if (body.length > BODY_CAP) body = `${body.slice(0, BODY_CAP)}… [truncated; chat.read shows message #${message.seq} in full]`;
+  if (body.length > cap) {
+    body = cap === WHOLE_CHARS
+      ? headAndTail(body, (left) => `… [${left} chars of #${message.seq} left out here; chat.read {seq: ${message.seq}} stores all of it as a file and names that file] …`)
+      : `${body.slice(0, cap)}… [truncated; chat.read shows message #${message.seq} in full]`;
+  }
   return neutralize(body);
 }
 
@@ -346,8 +354,8 @@ export function suggestionTag(ctx: RenderContext, message: Pick<Message, 'conver
   return when === 'now' ? `picked ${text} for this message` : when === 'after' ? `picked ${text} after this message` : `earlier suggested ${text}`;
 }
 
-/** One message's content without the author header ('' when there is nothing to show). */
-function content(ctx: RenderContext, message: Message, byId: ReadonlyMap<string, Message>): string {
+/** One message's content without the author header ('' when there is nothing to show); `cap`: its body's (bodyText). */
+function content(ctx: RenderContext, message: Message, byId: ReadonlyMap<string, Message>, cap = BODY_CAP): string {
   const reply = replyLine(ctx, message, byId);
   const parts: string[] = reply ? [reply] : [];
   const prefix = messageLevel(message) === 'important' ? '(important) ' : '';
@@ -356,7 +364,7 @@ function content(ctx: RenderContext, message: Message, byId: ReadonlyMap<string,
   } else if (message.authorId === ctx.agentId && liveVoiceLine(message)) {
     parts.push(`(my live voice said: "${neutralize(excerpt(message.body, VOICE_CAP)).replace(/"/g, "'")}")`);
   } else {
-    const body = bodyText(message);
+    const body = bodyText(message, cap);
     const task = message.taskId && message.kind !== 'answer' ? ` [task ${message.taskId}]` : ''; // an answer's to-do is no task of the agent's
     if (body) parts.push(prefix + body + task + ultraNote(message), ...speechNotes(ctx, message)); // B-057: Ultra suggested on it
     else if (ultraNote(message)) parts.push(ultraNote(message).trim()); // B-057: a files-, selection- or secret-only message keeps its suggestion
@@ -397,9 +405,11 @@ export function lineLabel(ctx: RenderContext, message: Pick<Message, 'conversati
 /**
  * Renders messages in seq order, each under its own label (lineLabel). Status lines are "· text" after a label without the
  * author (with it for agents' own status notes). `suggestions`: the turn's new lines – a person's names their model
- * suggestion for me (suggestionTag).
+ * suggestion for me (suggestionTag) and arrives whole, past BODY_CAP, up to WHOLE_CHARS (KI-Runde 17.11.2026: the ask in
+ * the last paragraph of a 21,000-character dictation never reached the agent). `whole`: every body uncut (chat.read of
+ * one line; its output is bounded in tools/outputs.ts).
  */
-export function renderMessages(ctx: RenderContext, messages: Message[], options: { texts?: AttachmentTexts; images: boolean; maxImages?: number; suggestions?: boolean }): RenderedLines {
+export function renderMessages(ctx: RenderContext, messages: Message[], options: { texts?: AttachmentTexts; images: boolean; maxImages?: number; suggestions?: boolean; whole?: boolean }): RenderedLines {
   const { byId, latest } = lineIndex(messages);
   const lines: string[] = [];
   const images: RenderedLines['images'] = [];
@@ -419,7 +429,8 @@ export function renderMessages(ctx: RenderContext, messages: Message[], options:
     if (files.pending) pendingSeq = Math.min(pendingSeq ?? message.seq, message.seq);
     const marked = !legend && message.authorKind === 'human' && hasMarks(agentBody(message));
     if (marked) legend = true;
-    const text = [content(ctx, message, byId), ...(marked ? [MARKS_LEGEND] : []), ...files.lines,
+    const cap = options.whole === true ? Infinity : options.suggestions === true && message.authorKind === 'human' ? WHOLE_CHARS : BODY_CAP; // the person's new line arrives whole
+    const text = [content(ctx, message, byId, cap), ...(marked ? [MARKS_LEGEND] : []), ...files.lines,
       ...secretLines(ctx.services, ctx.agentId, message.meta.secrets)].filter(Boolean).join('\n');
     if (!text) continue;
     lines.push(`${lineLabel(ctx, message, true, options.suggestions ? suggestionTag(ctx, message) : '')} ${text}`);

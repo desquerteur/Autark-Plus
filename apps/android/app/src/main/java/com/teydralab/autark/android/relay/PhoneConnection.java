@@ -11,6 +11,11 @@
 // the PC) answers – Route races them and falls back to the tunnel, the same handshake either way; the direct socket
 // replaces that PC's tunnel. After a resume or a network change the page's PC, if reached through the tunnel, is tried
 // directly once and a direct channel takes its place (home Wi-Fi while mobile data stays up).
+// F25 stage 2 (16.11.2026): when the page's PC is reached through the tunnel, the phone also tries the WebRTC way to it
+// (RtcWay over that channel, A; RtcPlan says when – once per channel and after each check(), no timer loop). Once the
+// PC says ready on the data channel, that channel (B) is the page's: new streams go there, the ones on A end and the
+// page hears 'resume'. A stays open and idle; when B ends, the page is back on A at once. Without an Engine (no
+// WebRTC on this phone) nothing of this runs.
 // Never: stores anything itself (the caller keeps Paired), polls the PC, or talks to a PC it does not pin.
 package com.teydralab.autark.android.relay;
 
@@ -110,11 +115,20 @@ public final class PhoneConnection implements StreamProxy.Channels {
     private volatile String preferred;
     private volatile Runnable linked;
     private static final long VERSION_MS = 4_000;
+    /** F25: the WebRTC way to the page's PC, or null when this phone has no libwebrtc. */
+    private final PageRtc rtc;
 
-    public PhoneConnection(Paired paired, Status status) {
+    public PhoneConnection(Paired paired, Status status) { this(paired, status, null); }
+
+    public PhoneConnection(Paired paired, Status status, RtcEngine engine) {
         this.paired = paired;
         this.seed = Crypto.fromB64url(paired.seed);
         this.status = status;
+        this.rtc = engine == null ? null : new PageRtc(engine, seed, paired.deviceId, new PageRtc.Host() {
+            @Override public void deliver(PeerChannel b, Map<String, Object> message) { proxy.deliver(b, message); }
+            @Override public void channelClosed(PeerChannel b) { proxy.channelClosed(b); }
+            @Override public void nudge() { PhoneConnection.this.nudge(); }
+        });
     }
 
     /** Opens the local entrance (127.0.0.1:`port`, else any free port) and starts connecting; returns its origin. */
@@ -132,6 +146,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
         RelayLink current = link;
         if (current != null) current.close(); // first: it ends the tunnels too and never waits for a stuck send (UI thread)
         for (PeerChannel open : links.all()) open.close();
+        if (rtc != null) rtc.stop();
         closeEntrance();
     }
 
@@ -155,6 +170,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
         attempt = 0;
         links.retryNow();
         directNow = true;
+        if (rtc != null) rtc.check(); // F25: the WebRTC way gets one more try (now, or when the one standing ends)
         probe();
     }
 
@@ -219,16 +235,19 @@ public final class PhoneConnection implements StreamProxy.Channels {
             PeerChannel used;
             while (!stopped && (used = links.used()) == null) {
                 long left = deadline - System.currentTimeMillis();
-                if (left <= 0) return links.pick(order(), preferred); // a round still opening a slow PC: a linked one serves now (null: none)
+                if (left <= 0) return viaWay(links.pick(order(), preferred)); // a round still opening a slow PC: a linked one serves now (null: none)
                 wake = true;
                 lock.notifyAll();
                 try { lock.wait(Math.min(left, 1_000)); } catch (InterruptedException error) { Thread.currentThread().interrupt(); return null; }
             }
-            return links.used();
+            return viaWay(links.used());
         }
     }
 
-    @Override public PeerChannel used() { return links.used(); }
+    @Override public PeerChannel used() { return viaWay(links.used()); }
+
+    /** F25: the channel the page's streams take for PC channel `a` – its WebRTC channel B while that carries, else `a`. */
+    private PeerChannel viaWay(PeerChannel a) { return rtc == null ? a : rtc.via(a); }
 
     private void run() {
         while (!stopped) {
@@ -248,7 +267,9 @@ public final class PhoneConnection implements StreamProxy.Channels {
                 }
                 settle(order, current, failure);
                 if (directNow) { directNow = false; if (tryDirect()) settle(order, current, null); }
-                pause(Math.min(15_000, links.nextRetry(System.currentTimeMillis())));
+                long now = System.currentTimeMillis();
+                if (rtc != null && !stopped) { String fp = links.usedPc(); rtc.step(links.used(), fp == null ? null : keyOf(fp)); }
+                pause(Math.min(15_000, Math.min(links.nextRetry(now), rtc == null ? Long.MAX_VALUE : rtc.nextAgain(now))));
                 current.checkAlive();
                 for (PeerChannel open : links.all()) open.checkAlive();
             } catch (IOException | RuntimeException error) {
@@ -264,7 +285,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
     /** The page's PC after this round: a move ends the streams left on other channels and tells the listener. */
     private void settle(List<String> order, RelayLink current, String failure) {
         PeerChannel next;
-        synchronized (lock) { next = links.pick(order, preferred); lock.notifyAll(); }
+        synchronized (lock) { next = viaWay(links.pick(order, preferred)); lock.notifyAll(); }
         boolean moved = next != null && next != shown;
         shown = next;
         if (next != null) {
@@ -342,6 +363,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
                 PcVersion question = asking.get();
                 if (PcVersion.mine(message)) { if (question != null) question.deliver(message); return; }
                 PeerChannel current = holder[0];
+                if (RtcSignal.mine(message)) { if (rtc != null) rtc.signal(current, message); return; } // F25: the PC's side of a try
                 if (current != null) proxy.deliver(current, message);
             }
             @Override public void closed() {
@@ -349,6 +371,7 @@ public final class PhoneConnection implements StreamProxy.Channels {
                 if (question != null) question.deliver(Json.map("t", "e")); // the version wait ends with the channel
                 PeerChannel current = holder[0];
                 if (current != null) proxy.channelClosed(current);
+                if (rtc != null) rtc.closed(current); // F25: a way on this channel ends with it
                 nudge();
             }
         };

@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { NO_LISTENER } from '../../../src/runtime/decision/engine-runner.ts';
+import { NO_LISTENER } from '../../../src/runtime/decision/listener.ts';
 import { AUDIO_INPUT_BYTES } from '../../../src/runtime/engines/http/base.ts';
 import { builtinTools } from '../../../src/runtime/tools/builtin/index.ts';
 import { listenUsd } from '../../../src/runtime/tools/builtin/media-listen.ts';

@@ -70,6 +70,18 @@ export function attachCrashReport(text: string): void {
 }
 
 export const feedbackDraft = signal<FeedbackDraft>(EMPTY_DRAFT);
+/**
+ * The draft as it was sent, while its send is on its way (feedback 17.11.2026, Mika: during "Sending…" the form showed
+ * the fresh draft – "Recording" ticked again – as if it sent what the person had unticked). The outbox holds the report
+ * and the draft is fresh at once (a second press never sends it twice); the form and the overlay show this one,
+ * disabled, until the outcome.
+ */
+export const sentDraft = signal<FeedbackDraft | null>(null);
+
+/** What the form and the overlay show: the draft on its way while it goes, else the draft. */
+export function shownDraft(): FeedbackDraft {
+  return sentDraft.value ?? feedbackDraft.value;
+}
 /** A screenshot is being taken for the draft (its thumbnail shows a placeholder meanwhile). */
 export const shotTaking = signal(false);
 

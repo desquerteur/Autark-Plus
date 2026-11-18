@@ -1,6 +1,7 @@
 // Owner 14.11.2026 ("Warum Fabel Fünf. Eins ist richtig schlecht / 5.2"): the newest version of a model family stands for the
-// older ones that can run now (routing/pool.ts newestOnly, entryFor). The router and the subconscious see only the newest; a
-// model I name in an older version runs as the newest; a start model the person pinned to the older version still runs it.
+// older ones that can run now (routing/pool.ts newestOnly, entryFor). The router sees only the newest; a model I name in an older
+// version runs as the newest; a start model the person pinned to the older version still runs it. 17.11.2026 (the model settles):
+// my live session stays on the older version it is on, and where my context starts anew its family's newest replaces it.
 // Owns: these assertions only. Never: real engines, accounts or network.
 
 import { test } from 'node:test';
@@ -10,7 +11,6 @@ import { Priors } from '../../../src/runtime/models/priors.ts';
 import { selectCandidates } from '../../../src/runtime/accounts/candidates.ts';
 import { buildPool, newestOnly } from '../../../src/runtime/routing/pool.ts';
 import { effectivePolicy } from '../../../src/runtime/routing/policies.ts';
-import { offeredModels } from '../../../src/runtime/subconscious/route-turn.ts';
 import type { Effort, EngineId, ModelInfo } from '../../../src/shared/model/providers.ts';
 
 const F51 = 'claude:claude-fable-5-1';
@@ -60,13 +60,16 @@ test('newestOnly compares versions inside a family only, dates and providers asi
   assert.deepEqual(kept.map((entry) => entry.model.id), ['gw:anthropic/claude-fable-5.2', 'claude:claude-sonnet-4-5-20250929', 'codex:gpt-6.1-sol', 'codex:gpt-6-luna']);
 });
 
-test('subconscious: my last turn on Fable 5.1 offers 5.2 in its place, never 5.1', async () => {
+test('17.11.2026: my session on Fable 5.1 stays there off a boundary; where my context starts anew 5.2 replaces it and the reason says so', async () => {
   const w = await world();
-  Object.assign(w.services, { runs: { list: () => [{ model: F51, status: 'done' }] } });
-  const { offers } = offeredModels(w.services, agent('ag_1'), { text: 'Schreib den Text für die Startseite.' });
-  const offered = offers.map((offer) => offer.model.id);
-  assert.ok(offered.includes(F52), offered.join(', '));
-  assert.ok(!offered.includes(F51), offered.join(', '));
+  const lead = agent('ag_1', { template: 'manager' }); // leading runs on the frontier tier, so the family's newest fits
+  const route = (boundary: boolean) => w.router.route({ agent: lead, mode: mode('writing'), previous: { modelId: F51, effort: 'high' }, boundary });
+  const live = await route(false);
+  assert.deepEqual([live.modelId, live.by], [F51, 'previous'], live.reason);
+  assert.match(live.reason, /^continues on my model/);
+  const fresh = await route(true);
+  assert.equal(fresh.modelId, F52, fresh.reason);
+  assert.match(fresh.reason, /^claude-fable-5-2 replaces Claude Fable 5\.1/);
 });
 
 test('router: the agent naming Fable 5.1 runs on 5.2; the start model the person pinned to 5.1 still runs 5.1', async () => {

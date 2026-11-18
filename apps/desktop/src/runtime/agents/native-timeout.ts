@@ -7,6 +7,8 @@
 // turn was open – Claude names every call of a message at once and runs them one after another; all 5 Read aborts waited
 // behind a shell): a call's clock starts when it runs – a call named while another top-level call is open starts unarmed,
 // and when a top-level native call ends, every other open native call not reviewed yet starts its clock then.
+// Package C (17.11.2026): a continued turn reports the latest cost (Claude Code's session running total, never a sum of
+// them) and its usage events count the model calls of every segment.
 // Owns: deadlines, decision delivery and native continuation. Never: guesses a command's result.
 
 import type { CacheTokens, Engine, EngineEvent, EngineTurnInput, EngineTurnResult } from '../engines/types.ts';
@@ -69,6 +71,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
   let cache: CacheTokens = {};
   let hadUsage = false;
   let hadCost = false;
+  let callsBefore = 0; // the model calls of the segments before this one (each engine process counts from one)
   let next = input;
   let compacted = false;
   let traceAsText: string | undefined;
@@ -81,6 +84,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
     const deliveries: Promise<void>[] = [];
     let interrupted = false;
     let ended = false;
+    let segmentCalls = 0;
     const clear = (call: Call) => {
       if (call.handle !== undefined) timers.clear(call.handle);
       call.handle = undefined;
@@ -156,6 +160,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
           if (call.native && !call.parent) for (const other of calls.values()) if (other.native && !other.reviews && !other.review && !other.children.size) { clear(other); other.started = now(); arm(other, other.seconds); }
         }
       }
+      if (value.type === 'usage' && value.modelCalls !== undefined) { segmentCalls = value.modelCalls; value = { ...value, modelCalls: callsBefore + value.modelCalls }; }
       input.onEvent(value);
     };
     let result: EngineTurnResult;
@@ -165,6 +170,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
       for (const call of calls.values()) clear(call);
     }
     await Promise.all(deliveries);
+    callsBefore += segmentCalls;
     compacted ||= result.compacted === true;
     traceAsText ??= result.traceAsText;
     files.push(...result.files ?? []);
@@ -173,7 +179,8 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
       totals.inputTokens += result.usage.inputTokens;
       totals.outputTokens += result.usage.outputTokens;
       cache = addCache(cache, result.usage);
-      if (result.usage.costUsd !== undefined) { hadCost = true; totals.costUsd += result.usage.costUsd; }
+      // the latest reported cost: the only engine that continues with one (Claude Code) reports the session's running total
+      if (result.usage.costUsd !== undefined) { hadCost = true; totals.costUsd = result.usage.costUsd; }
     }
     for (const call of calls.values()) {
       if (call.notes.length) undelivered.push(note(call, NO_OUTPUT));

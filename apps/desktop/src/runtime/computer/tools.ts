@@ -24,6 +24,8 @@
 // names that (tree.ts frameOnly), and a covered window's picture says a browser there may not draw its page (live 09.11.).
 // F03 (16.11.2026): on Windows without the desktop broker, a screenshot says that the secure desktop (UAC, lock screen) is out
 // of reach, why (the setup at the app's start: no Yes, or failed) and how one Yes at the Windows prompt changes it (broker.ts).
+// KI-Runde 17.11.2026: computer.wait and computer.batch (flow-tools.ts) beside these; a ui_tree search finds up to maxNodes
+// matches (at most the helper's 100, default 20) and, when it stops early, says how to get the rest.
 
 import type { ToolDef, ToolOutput } from '../tools/types.ts';
 import { text } from '../tools/types.ts';
@@ -38,6 +40,7 @@ import { callerOf } from './lease.ts';
 import { lockedDesktop, secureDesktopLine } from './broker.ts';
 import { MOTION_ARG, withNotes, withOthers } from './tool-notes.ts';
 import { frameOnly, TREE_DEPTH } from './tree.ts';
+import { batchTool, waitTool } from './flow-tools.ts';
 import type { MotionStyle } from '../../shared/model/pointer-motion.ts';
 
 export { idWords, onThisPc, RefLabels, WindowApps } from './seen.ts';
@@ -46,6 +49,8 @@ const COORDS = { type: 'string', enum: ['screen', 'screenshot'], description: 's
 const WINDOW = { type: 'integer', description: 'From computer.windows.' };
 const BUTTON = { type: 'string', enum: ['left', 'right', 'middle'] };
 const INT = { type: 'integer' };
+/** The most matches one ui_tree search finds (service.ts find clamps to it). */
+const SEARCH_MAX = 100;
 
 export function imageOutput(shot: Pick<Screenshot, 'data' | 'mime'>, caption: string, structured?: unknown): ToolOutput {
   return {
@@ -131,9 +136,9 @@ export function computerTools(computer: ComputerService): ToolDef[] {
       properties: {
         window: { ...WINDOW, description: 'Default the one in front.' },
         depth: { type: 'integer', minimum: 1, maximum: 40 },
-        maxNodes: { type: 'integer', minimum: 20, maximum: 2000 },
+        maxNodes: { type: 'integer', minimum: 20, maximum: 2000, description: 'Elements to read; a search finds up to 100 (default 20).' },
         name: { type: 'string', maxLength: 200, description: 'Search: name contains.' },
-        automationId: { type: 'string', maxLength: 200, description: 'Search.' },
+        automationId: { type: 'string', maxLength: 200, description: 'Search: the exact automation id.' },
         role: { type: 'string', maxLength: 40, description: 'Search: control type, e.g. button.' },
       },
       additionalProperties: false,
@@ -143,9 +148,11 @@ export function computerTools(computer: ComputerService): ToolDef[] {
     async run(args, ctx) {
       ctx.status('reading the window');
       if (args.name || args.automationId || args.role) {
-        const found = await computer.find({ window: args.window, name: args.name, automationId: args.automationId, role: args.role, signal: ctx.signal, caller: callerOf(ctx) });
+        const found = await computer.find({ window: args.window, name: args.name, automationId: args.automationId, role: args.role, max: args.maxNodes, signal: ctx.signal, caller: callerOf(ctx) });
         refLabels.learn(found.text, args.window ?? apps.front);
-        return text(found.count ? `${found.count} match${found.count === 1 ? '' : 'es'}${found.truncated ? ' (search stopped early)' : ''}:\n${found.text}` : 'No matching element. Read the whole tree or check the window.');
+        // The maxNodes clause only while a higher one would find more: at SEARCH_MAX there is nothing left to raise.
+        const stopped = found.truncated ? ` (search stopped at ${found.count} – ${found.count < SEARCH_MAX ? `maxNodes up to ${SEARCH_MAX} finds more, a narrower name or role fewer` : 'a narrower name or role finds fewer'})` : '';
+        return text(found.count ? `${found.count} match${found.count === 1 ? '' : 'es'}${stopped}:\n${found.text}` : 'No matching element. Read the whole tree or check the window.');
       }
       const tree = await computer.uiTree({ window: args.window, depth: args.depth, maxNodes: args.maxNodes, signal: ctx.signal, caller: callerOf(ctx) });
       refLabels.learn(tree.text, tree.window.hwnd);
@@ -283,7 +290,9 @@ export function computerTools(computer: ComputerService): ToolDef[] {
     },
   });
 
-  return withOthers([screenshot, windows, uiTree, act, click, type, key, scroll, drag], (caller) => computer.othersLine?.(caller) ?? '');
+  const wait = waitTool(computer, refLabels, apps);
+  const batch = batchTool([act, click, type, key, scroll, drag, wait]);
+  return withOthers([screenshot, windows, uiTree, act, click, type, key, scroll, drag, wait, batch], (caller) => computer.othersLine?.(caller) ?? '');
 }
 
 function round(value: number): number {

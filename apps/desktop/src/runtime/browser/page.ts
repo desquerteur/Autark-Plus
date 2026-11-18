@@ -56,6 +56,8 @@ export interface PageLike {
   on(event: 'download', listener: (download: DownloadLike) => void): unknown;
   /** browser.eval, browser.wait, password fields: an expression evaluated in the page, awaited when it is a promise. */
   evaluate?(expression: string): Promise<unknown>;
+  /** BEFUND §6: the page's frames (the main one first), for the hidden fields of a payment iframe. */
+  frames?(): Array<{ url(): string; evaluate(expression: string): Promise<unknown> }>;
   waitForURL?(url: (url: URL) => boolean, options?: { timeout?: number; waitUntil?: 'commit' }): Promise<void>;
   viewportSize?(): { width: number; height: number } | null;
 }
@@ -321,7 +323,44 @@ export async function passwordValues(page: PageLike): Promise<string[]> {
 export function maskPasswords(text: string, values: readonly string[]): string {
   if (!values.length) return text;
   const sorted = [...values].sort((a, b) => b.length - a.length);
-  return text.split('\n').map((line) => (/^\s*-\s+textbox\b/.test(line) ? sorted.reduce((out, value) => out.split(value).join(PASSWORD_MASK), line) : line)).join('\n');
+  return text.split('\n').map((line) => (/^\s*-\s+(textbox|combobox|spinbutton|searchbox)\b/.test(line) ? sorted.reduce((out, value) => out.split(value).join(PASSWORD_MASK), line) : line)).join('\n');
+}
+
+/**
+ * 17.11.2026 (BEFUND-RUNTIME-JAN §6): the snapshot is an ARIA snapshot over all frames, so a card number typed into a
+ * Stripe iframe showed in clear text (2 journal entries with a valid card number, 16./17.11.) – only password fields of
+ * the main document were masked. Hidden now, in every frame: password fields, fields whose autocomplete names a card,
+ * a one-time code or a password, fields named like a card number, CVC or expiry, and every field of a payment
+ * provider's frame (Stripe, Adyen, Braintree, PayPal, Mollie, Checkout.com).
+ */
+const PAYMENT_FRAME = /(^|\.)(stripe\.com|stripe\.network|adyen\.com|adyenpayments\.com|braintreegateway\.com|braintree-api\.com|paypal\.com|paypalobjects\.com|mollie\.com|checkout\.com)$|^checkoutshopper-/i;
+const hiddenExpression = (all: boolean) => `Array.from(document.querySelectorAll('input, textarea, select'), (field) => {
+  const type = String(field.type || '').toLowerCase();
+  if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'file', 'image', 'reset'].includes(type)) return '';
+  const auto = String(field.getAttribute('autocomplete') || '').toLowerCase();
+  const named = (String(field.name || '') + ' ' + String(field.id || '') + ' ' + String(field.getAttribute('data-elements-stable-field-name') || '')).toLowerCase();
+  const hide = ${all ? 'true' : 'false'} || type === 'password' || /(^|\\s)(cc-|one-time-code|current-password|new-password)/.test(auto)
+    || /(card.?number|cardnumber|cc.?num|cvc|cvv|csc|security.?code|exp.?date|expiry|expiration)/.test(named);
+  return hide ? String(field.value || '') : '';
+}).filter(Boolean).slice(0, 20)`;
+
+/** The values of the page's hidden fields in all its frames (see above; at most 40, read within 1.5 s; [] when the page cannot say). Never logged. */
+export async function hiddenValues(page: PageLike): Promise<string[]> {
+  const frames = page.frames?.() ?? [];
+  const reads = frames.length
+    ? frames.map((frame) => frame.evaluate(hiddenExpression(PAYMENT_FRAME.test(hostOf(frame.url())))).catch(() => []))
+    : page.evaluate ? [page.evaluate(hiddenExpression(false)).catch(() => [])] : [];
+  if (!reads.length) return [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<unknown[]>((resolve) => { timer = setTimeout(() => resolve([]), 1500); timer.unref?.(); });
+  try {
+    const found = await Promise.race([Promise.all(reads), late]);
+    const values = found.flatMap((list) => (Array.isArray(list) ? list : [])).filter((value): value is string => typeof value === 'string' && value.trim().length >= 3 && value.length <= 500); // a 1–2 character value would mask every field line it is in
+    // a grouped card number shows grouped or not, depending on the field
+    return [...new Set(values.flatMap((value) => (/^[\d  -]{12,23}$/.test(value) && /\D/.test(value) ? [value, value.replace(/\D/g, '')] : [value])))].slice(0, 40);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Host of a page URL ('' for about:blank or invalid). */

@@ -2,8 +2,8 @@
 // for every engine (MCP hub and function tools, wire name ui__help); a call through the real
 // registry and permission service runs without an approval in Standard and returns blockHelp's
 // text (the mini-app guide, a block's props and example, the topic list for an unknown topic);
-// invalid topics are refused by the schema; the stable prompt names ui__help exactly when the
-// agent's mode offers the tool (blockOptions).
+// invalid topics are refused by the schema; the stable prompt names ui__help while the registry
+// holds it (blockOptions) – after the KI-Runde 17.11.2026 a mode's tool patterns no longer hide it.
 // Owns: these assertions only. Never: real engines, network or timers.
 
 import { test } from 'node:test';
@@ -81,15 +81,16 @@ test('invalid ui.help arguments are refused before running', async () => {
   }
 });
 
-test('the stable prompt names ui__help only when the mode offers it', () => {
+test('the stable prompt names ui__help while the registry has it – a mode\'s patterns no longer hide it', () => {
   const { registry, tom } = rig();
   const services = { catalog: { get: () => ({ tier: 'frontier' }) }, tools: registry } as unknown as RuntimeServices;
   const general = blockOptions(services, { agent: tom, mode: modes.get('general'), route: route() });
-  assert.deepEqual(general, { tier: 'full', app: true, helpTool: 'ui__help' });
-  // A specialist mode whose tool patterns leave ui.* out does not offer it, so the prompt keeps quiet.
+  assert.deepEqual(general, { tier: 'full', helpTool: 'ui__help' }); // S2: mini-apps follow from 'full' (blockLine), no tier of their own
+  // T (KI-Runde 17.11.2026): every tool is reachable in every mode – the mode sets the core set, so a mode whose patterns
+  // leave ui.* out still reaches ui.help, and the prompt names it.
   const masked: ModeInfo = { ...modes.get('general'), key: 'narrow', tools: ['tasks.*', 'chat.*'] };
-  assert.deepEqual(blockOptions(services, { agent: tom, mode: masked, route: route() }), { tier: 'full', app: true });
-  // Without a registry (or one that throws) there is no help line either.
+  assert.deepEqual(blockOptions(services, { agent: tom, mode: masked, route: route() }), { tier: 'full', helpTool: 'ui__help' });
+  // Without a registry (or one that throws) there is no help line: the prompt never names a tool that is not there.
   assert.equal(blockOptions({ catalog: services.catalog, tools: { get: () => undefined } } as unknown as RuntimeServices, { agent: tom, mode: masked, route: route() }).helpTool, undefined);
 
   const f = fixture();
@@ -100,5 +101,5 @@ test('the stable prompt names ui__help only when the mode offers it', () => {
   const prompt = (mode: ModeInfo) => f.context.prompt({ agent: f.vid, conversationId: chat.id, mode, route: route() }).stable;
   assert.ok(prompt(VIDEO_MODE).includes('ui__help "blocks" lists every type with its fields'), 'B-049 F5: the one rich-answer line names the help tool');
   assert.equal(prompt(VIDEO_MODE), prompt(VIDEO_MODE), 'deterministic');
-  assert.ok(!prompt({ ...VIDEO_MODE, tools: ['tasks.*', 'files.*'] }).includes('ui__help'));
+  assert.ok(prompt({ ...VIDEO_MODE, tools: ['tasks.*', 'files.*'] }).includes('ui__help'), 'reachable in every mode, so named in every mode');
 });

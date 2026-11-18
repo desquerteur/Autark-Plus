@@ -59,7 +59,7 @@ function bigButton(p, rel) {
   if (!p.file) return `<a class="btn btn--ink btn--lg" href="${appUrl}/" data-app-link>${icon('phone')}<span>Open the iPhone app</span></a><a class="btn btn--ghost btn--lg" href="#steps">${icon('arrowDown')}<span>How to add it</span></a>`;
   const v = rel[p.id];
   const meta = v ? `<span class="btn__meta"${p.id === 'windows' ? ' data-rel="windows-meta"' : ''}>v${esc(v.version)} · ${v.sizeMb} MB</span>` : '';
-  return `<a class="btn btn--ink btn--lg plat-hero__btn" href="${release.asset(p.file)}" data-dl="${p.id}" rel="nofollow">${icon(p.icon)}<span>Download for ${p.short || p.os}</span>${meta}</a>${p.alt ? `<a class="btn btn--ghost btn--lg" href="${release.asset(p.alt.file)}" rel="nofollow">${p.alt.label}</a>` : ''}`;
+  return `<a class="btn btn--ink btn--lg plat-hero__btn" href="${release.latestUrl}" data-dl="${p.id}" rel="noopener">${icon(p.icon)}<span>Download for ${p.short || p.os}</span>${meta}</a>${p.alt ? `<a class="btn btn--ghost btn--lg" href="${release.latestUrl}" rel="noopener">${p.alt.label}</a>` : ''}`;
 }
 
 function fileFacts(p, rel) {
@@ -70,7 +70,9 @@ function fileFacts(p, rel) {
     <div><dt>Released</dt><dd>${esc(v.date || '–')}</dd></div>
     <div><dt>Size</dt><dd>${v.sizeMb ? `about ${v.sizeMb} MB` : '–'}</dd></div>
     <div><dt>File</dt><dd><code>${esc(p.file)}</code></dd></div>
-  </dl>`;
+    ${rel.sums?.[p.file] ? `<div><dt>SHA-256</dt><dd><code class="plat-hash">${esc(rel.sums[p.file])}</code></dd></div>` : ''}
+  </dl>
+  <p class="small muted" style="margin:14px 0 0">The download button opens the release page on GitHub: take <code>${esc(p.file)}</code> from its Assets list${rel.sums?.[p.file] ? ' and compare it with the SHA-256 above' : ''}.</p>`;
 }
 
 function platformPage(p, rel) {
@@ -85,7 +87,7 @@ function platformPage(p, rel) {
     '@type': 'HowTo', name: p.file ? `How to install ${site.name} on ${p.os}` : `How to use ${site.name} on an iPhone`, totalTime: 'PT5M',
     step: stepTexts(steps).map((text, i) => ({ '@type': 'HowToStep', position: i + 1, text })),
   }];
-  if (p.file) ld.push({ '@type': 'SoftwareApplication', '@id': `${site.url}/${slug}/#app`, name: `${site.name} for ${p.os}`, operatingSystem: p.os, applicationCategory: 'BusinessApplication', downloadUrl: release.asset(p.file), ...(v ? { softwareVersion: v.version, fileSize: `${v.sizeMb} MB` } : {}), isAccessibleForFree: true, offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' }, isPartOf: { '@id': `${site.url}/#software` } });
+  if (p.file) ld.push({ '@type': 'SoftwareApplication', '@id': `${site.url}/${slug}/#app`, name: `${site.name} for ${p.os}`, operatingSystem: p.os, applicationCategory: 'BusinessApplication', downloadUrl: `${site.url}/${slug}/`, ...(v ? { softwareVersion: v.version, fileSize: `${v.sizeMb} MB` } : {}), isAccessibleForFree: true, offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' }, isPartOf: { '@id': `${site.url}/#software` } });
 
   return page({
     slug, rel, title: f.title, description, ld, trail: [['Download', 'download']],

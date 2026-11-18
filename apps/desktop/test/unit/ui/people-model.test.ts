@@ -86,6 +86,20 @@ test('F13/F14 wiring: Add › Person is a page (a pushed screen on the phone), a
   assert.match(read('lib/people.ts'), /rpc\.on\('person\.removed', \(\{ id \}\) => dropPerson\(id\)\)/);
 });
 
+test('17.11.2026 (F13 Pop-up, Mika draft 3+4): the invite is a card on the person page, no modal; without an address it says why and offers Devices', () => {
+  const read = (file: string) => readFileSync(new URL(`../../../src/ui/${file}`, import.meta.url), 'utf8');
+  const invite = read('team/PersonInvite.tsx');
+  assert.doesNotMatch(invite, /<Dialog/, 'no modal dialog');
+  assert.match(invite, /<section ref=\{card\} class="person-invite person-invite-card"/);
+  assert.match(invite, /if \(event\.key === 'Escape'\) \{ event\.stopPropagation\(\); props\.onClose\(\); \}/);
+  assert.match(invite, /go\.settings\('devices'\)/, 'Open Devices');
+  assert.match(invite, /hasJoined\(person\) \? 'Withdraw invite' : 'Withdraw and remove'/);
+  assert.match(invite, /Right now this link only opens on this PC, because other devices can't reach it yet\./);
+  assert.doesNotMatch(read('team/person-dialogs.tsx'), /<PersonInvite/, 'not mounted as a dialog');
+  assert.match(read('team/PersonView.tsx'), /\{person && inviteOpen\(personId\) && <PersonInvite person=\{person\} /);
+  assert.match(read('team/menus.ts'), /onSelect: \(\) => inviteDevice\(person\) \}/);
+});
+
 test('a task owner can be a person; For you holds only your own to-dos', () => {
   assert.deepEqual(ownerOf({ assigneeKind: 'human', assigneeId: 'per_a' }), { kind: 'person', id: 'per_a' });
   assert.deepEqual(ownerOf({ assigneeKind: 'human' }), { kind: 'human' });

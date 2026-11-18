@@ -347,3 +347,22 @@ test('16.11.2026: two companies on one PC share one home – both LoginSyncs wri
   assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r3', '2026-11-04T12:00:00Z'), 'and nothing older came back');
   for (const off of offs) off();
 });
+
+test('a login kept "Only on this PC" (17.11.2026, Account.thisPcOnly) is not sent – not at a link-up, not on a change of its file – until it is shared', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b');
+  t.after(async () => { for (const pc of [a, b]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  const kept = plan('acc_cx', 'codex', { home: a.own('acc_cx'), email: 'lena@example.com', thisPcOnly: true });
+  a.accounts.push(kept);
+  b.accounts.push(plan('acc_cx', 'codex', { home: b.own('acc_cx'), email: 'lena@example.com', state: 'needs_login' }));
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r1', '2026-11-04T10:00:00Z'));
+  await a.logins.catchUp('dev_b');
+  assert.equal(await read(path.join(b.own('acc_cx'), 'auth.json')), undefined, 'kept on this PC: the login does not go');
+  assert.deepEqual(a.calls, [], 'no call at all');
+
+  delete kept.thisPcOnly; // "On all PCs of this company"
+  assert.equal(await a.logins.catchUp('dev_b'), true);
+  assert.equal(await read(path.join(b.own('acc_cx'), 'auth.json')), codexLogin('r1', '2026-11-04T10:00:00Z'), 'shared: it goes');
+});

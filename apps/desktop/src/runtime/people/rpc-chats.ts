@@ -12,6 +12,7 @@
 // F13: a CEO lists and reads every company chat from its start (people/access.ts chatAccess), changes its members like
 // the owner – the owner himself stays in it –, and writing in one they are not in makes them a member first – never
 // the owner's own 1:1s.
+// 18.11.2026: they search the chats they read (chats.search) and stop the agents' replies there (messages.stop).
 // Owns: these person variants. Never: the owner's handlers, drafts, chat settings or files a person may not read.
 
 import { WorkforceError } from '../../shared/errors.ts';
@@ -20,7 +21,8 @@ import type { ConversationSummary, Message, SendMessageInput } from '../../share
 import { isPersonId, type Person } from '../../shared/model/people.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { findDirect, findOrCreateDirect } from '../chat/direct.ts';
-import { attachmentsOf, levelOf } from '../rpc/handlers/chats.ts';
+import { attachmentsOf, levelOf, runningIn } from '../rpc/handlers/chats.ts';
+import { chatTitleFor } from '../chat/titles.ts';
 import { bad, id, ids, input, num, onlyKeys, optBool, optId, optIds, optMemberIds, optNum, optText, text } from '../rpc/params.ts';
 import type { HandlerContext, HandlerTable } from '../rpc/table.ts';
 import { activePerson } from './repo.ts';
@@ -139,6 +141,38 @@ export function registerPersonChats(table: HandlerTable): void {
     const o = input(params);
     const { chat, member } = ownChat(ctx.services, person, id(o));
     if (member) ctx.services.chats.markRead(chat.id, person.id, num(o, 'seq', { min: 0 })); // F13: a CEO reading a company chat they are not in keeps no cursor there
+    return { ok: true };
+  });
+  // 18.11.2026: a person searches the chats they read and stops the agents' replies in them, as the owner does.
+  table.addPerson('chats.search', (params, ctx) => {
+    const person = caller(ctx);
+    const o = input(params);
+    const query = text(o, 'text', { max: 200 });
+    const conversationId = optId(o, 'conversationId');
+    if (conversationId) ownChat(ctx.services, person, conversationId);
+    const limit = optNum(o, 'limit', { min: 1, max: 100 }) ?? 30;
+    const readable = new Map<string, { title: string; from: number } | null>();
+    const reads = (chatId: string) => {
+      if (!readable.has(chatId)) {
+        const chat = ctx.services.chats.get(chatId);
+        const access = chat ? chatAccess(ctx.services.db, person.id, chat) : undefined;
+        readable.set(chatId, access ? { title: chatTitleFor(ctx.services, chatId, person.id), from: access.from } : null);
+      }
+      return readable.get(chatId);
+    };
+    return ctx.services.chats.search(query, { conversationId, limit: limit * 4 })
+      .filter(({ message }) => { const chat = reads(message.conversationId); return !!chat && message.createdAt >= chat.from; })
+      .slice(0, limit)
+      .map(({ message, snippet }) => ({ message: viewMessage(person.id, message, names(ctx)), conversationTitle: reads(message.conversationId)!.title, snippet }));
+  });
+  table.addPerson('messages.stop', async (params, ctx) => {
+    const person = caller(ctx);
+    const o = input(params);
+    onlyKeys(o, ['conversationId', 'agentId']);
+    const { chat } = ownChat(ctx.services, person, id(o, 'conversationId'));
+    const only = optId(o, 'agentId');
+    await Promise.all(runningIn(ctx.services, chat.id, only).map((agentId) => ctx.services.dispatcher.interrupt(agentId, chat.id)));
+    try { ctx.services.splits?.stop({ conversationId: chat.id, ...(only ? { agentId: only } : {}) }, person.id); } catch { /* the splits log their own failures */ }
     return { ok: true };
   });
   table.addPerson('messages.list', (params, ctx) => {

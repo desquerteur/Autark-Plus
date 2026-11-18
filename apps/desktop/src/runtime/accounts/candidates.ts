@@ -1,7 +1,8 @@
 // Pure account selection rules for one engine (and model).
 // Owns: engine → provider mapping; the health filter – state, cooling and used-up limit windows
 // (a window at 100 % with a future reset counts as cooling until then; model windows such as
-// weekly-opus only for matching models); ordering (B-083: accounts that pay per use – models/pricing.ts chargeOf 'paid' –
+// weekly-opus only for matching models; a plan whose owner switched on its extra usage – Account.extraUsage – is not
+// held by a used-up window, only by cooling, and ranks behind every plan with quota left, like a paying key); ordering (B-083: accounts that pay per use – models/pricing.ts chargeOf 'paid' –
 // behind plans, keys holding a plan's monthly API credits and free ones, whatever their priority; then the plan whose
 // current weekly reading resets first – `weeklyReset` –, then priority, then the smallest remaining share of the windows
 // that apply). Every signed-in plan of a provider takes turns (owner 09.11.2026: "Die müssen einspringen können …
@@ -52,9 +53,22 @@ export function applicableWindows(account: Account, now: number, model?: string)
   return (account.limits?.windows ?? []).filter((window) => (window.resetsAt === undefined || window.resetsAt > now) && windowApplies(window.name, model));
 }
 
+/**
+ * 17.11.2026 (Konrad task_bgykyzcx): the person allowed this plan's extra usage (Claude "usage credits", ChatGPT "credits", billed
+ * by the provider): a used-up window does not hold it, the provider goes on serving the turn. A turn the provider refuses
+ * anyway (extra usage not switched on there, its cap reached) comes back as a limit and cools the account as always.
+ */
+const goesOnPastLimit = (account: Account) => account.extraUsage === true && planQuota(account);
+
+/** The account's turn on `model` runs on extra usage now: a plan allowed to, with a used-up window that applies. */
+export function inOverage(account: Account, now: number, model?: string): boolean {
+  return goesOnPastLimit(account) && applicableWindows(account, now, model).some((window) => usedUp(window, now));
+}
+
 /** When the account can run `model` again (cooling or a used-up window); undefined = now. */
 export function blockedUntil(account: Account, now: number, model?: string): number | undefined {
   let until = isCooling(account, now) ? account.coolingUntil : undefined;
+  if (goesOnPastLimit(account)) return until;
   for (const window of applicableWindows(account, now, model)) {
     if (usedUp(window, now)) until = Math.max(until ?? 0, window.resetsAt!);
   }
@@ -114,7 +128,8 @@ export function selectCandidates(accounts: Account[], engine: EngineId, now: num
     out.push(...accounts.filter((a) => a.provider === provider && a.enabled && isHealthy(a, now, model)));
   }
   return out.sort((a, b) => {
-    const paid = Number(chargeOf(a) === 'paid') - Number(chargeOf(b) === 'paid'); // B-083: credits and plans before paying keys
+    // B-083: credits and plans before paying keys; 17.11.2026: a plan running on its extra usage counts as paying (behind every plan with quota left)
+    const paid = Number(chargeOf(a) === 'paid' || inOverage(a, now, model)) - Number(chargeOf(b) === 'paid' || inOverage(b, now, model));
     if (paid) return paid;
     const ra = weeklyReset(a, now); // the plan whose week resets first goes first
     const rb = weeklyReset(b, now);

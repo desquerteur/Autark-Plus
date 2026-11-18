@@ -38,7 +38,11 @@ declare module '../api/methods.ts' {
     'accounts.list': { params: void; result: Account[] };
     'accounts.detect': { params: { force?: boolean } | void; result: DetectionReport };
     'accounts.add': { params: { provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; envVar?: string; detected?: boolean }; result: Account & { signInUrl?: string } & AwaySignIn }; // apiKey: typed, or a handle secret://<id> of the catalog (the account then only names that entry); PR5: envVar = key variable name, detected = "Add again"; B-051: signInUrl = the page the CLI's sign-in printed (when it did within a few seconds)
-    'accounts.update': { params: { id: string; label?: string; priority?: number; enabled?: boolean; credits?: boolean }; result: Account }; // B-083 credits: the key holds a plan's monthly API credits (used like a plan)
+    'accounts.update': { params: { id: string; label?: string; priority?: number; enabled?: boolean; credits?: boolean; extraUsage?: boolean; thisPcOnly?: boolean }; result: Account }; // B-083 credits: the key holds a plan's monthly API credits (used like a plan)
+    /** 17.11.2026: "Use" – the offered plan login (DetectionReport.found) becomes an account here, switched on and checked; only the person (a window, the phone, a `wf` by hand), never an agent. */
+    'accounts.useFound': { params: { key: string; thisPcOnly?: boolean }; result: Account }; // `thisPcOnly` (default true): the account stays on this PC; false: it goes to all PCs of the company
+    /** "Not here" – the offered login is dismissed in this company (it stays on the PC; "Add again" brings it back). Only the person. */
+    'accounts.declineFound': { params: { key: string }; result: { ok: true } };
     'accounts.login': { params: { id: string }; result: { started: boolean; url?: string } & AwaySignIn };
     /** B-091: the code the Claude sign-in page showed the person on their phone, handed to the running away sign-in; ok = the account works now. */
     'accounts.loginCode': { params: { id: string; code: string }; result: { ok: boolean } };

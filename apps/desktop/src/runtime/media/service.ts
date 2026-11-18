@@ -10,6 +10,7 @@
 // (dictation.ts RETRY_MS) until the blob exists; a person's recording becomes the message's text (dictation.ts).
 // B-080 F4: bytes a pull brings later are probed when they land (arrived, devices/sync/blobs.ts onArrival), and at
 // start every row still waiting for its probe whose bytes are here is probed once – no timer of its own.
+// 17.11.2026 (task_d4pdwppg): a heavy video gets a light preview copy in the background (media/preview.ts) once its probe knows its size.
 // Owns: the hook → row step, message → chat links and the probe queue. Never: changes FileStore
 // behaviour or blob bytes, throws out of onFileStored (it runs inside every upload), or blocks an
 // upload on a probe.
@@ -30,6 +31,7 @@ import { countPdfPages, type PdfPageCounter } from './pdf-pages.ts';
 import { kindOf, needsProbe, probeFile } from './probe.ts';
 import { MediaRepo } from './repo.ts';
 import { blobHere, Dictation, RETRY_MS } from './dictation.ts';
+import { PreviewMaker } from './preview.ts';
 
 const FILE_ID = /^[a-f0-9]{64}$/;
 
@@ -63,6 +65,8 @@ export class MediaService implements MediaApi {
   private scanAtStart = true;
   /** B-078: a person's recording becomes the message's text (media/dictation.ts). */
   readonly dictation: Dictation;
+  /** 17.11.2026: the light preview copy of heavy videos (media/preview.ts). */
+  private readonly previews: PreviewMaker;
 
   constructor(deps: MediaServiceDeps) {
     this.deps = deps;
@@ -70,6 +74,7 @@ export class MediaService implements MediaApi {
     // Secrets are bound later by the composition root; read them through the getter.
     this.library = new MediaLibrary({ db: s.db, bus: s.bus, clock: s.clock, get secrets() { return deps.services().secrets; } });
     this.repo = new MediaRepo(s.db);
+    this.previews = new PreviewMaker({ services: deps.services, emit: (info) => this.library.emit(info) });
     s.bus.on('message.created', (message) => this.linkMessage(message));
     s.bus.on('message.updated', (message) => this.linkMessage(message));
     this.dictation = new Dictation({ services: deps.services, ...(deps.later ? { later: deps.later } : {}) });
@@ -81,6 +86,7 @@ export class MediaService implements MediaApi {
     try {
       const info = this.repo.get(fileId);
       if (info && needsProbe(info)) this.enqueue(fileId);
+      else if (info?.kind === 'video') this.previews.consider(fileId);
     } catch (error) {
       this.safeLog('media arrival not probed', { id: fileId, error: String(error) });
     }
@@ -93,6 +99,7 @@ export class MediaService implements MediaApi {
    */
   onFileStored(file: FileRef, ctx?: { conversationId?: string }): void {
     try {
+      if (this.previews.owns(file.id)) return; // a video's own preview copy is no medium of its own
       this.record(file, ctx?.conversationId);
     } catch (error) {
       this.safeLog('media row not recorded', { id: file.id, error: String(error) });
@@ -128,6 +135,7 @@ export class MediaService implements MediaApi {
   /** Resolves once every queued probe has finished (tests, orderly shutdown). */
   async idle(): Promise<void> {
     while (this.running) await this.running;
+    await this.previews.idle();
   }
 
   // ------------------------------------------------------------------ internals
@@ -143,6 +151,7 @@ export class MediaService implements MediaApi {
     if (!info) return;
     if (created || linked) this.library.emit(info);
     if (needsProbe(info)) this.enqueue(file.id);
+    else if (info.kind === 'video') this.previews.consider(file.id);
   }
 
   /** Attachments and block files of a message belong to its chat unless an earlier chat claimed them. */
@@ -177,7 +186,7 @@ export class MediaService implements MediaApi {
   /** One probe at a time; `running` is cleared in the same tick the queue is seen empty. */
   private async drain(): Promise<void> {
     await new Promise<void>((resolve) => setImmediate(resolve)); // let the upload finish first
-    if (this.scanAtStart) { this.scanAtStart = false; this.queueStored(); }
+    if (this.scanAtStart) { this.scanAtStart = false; this.queueStored(); this.previews.queueStored(); }
     for (;;) {
       const next = this.queue.values().next();
       if (next.done) { this.running = undefined; return; }
@@ -201,6 +210,7 @@ export class MediaService implements MediaApi {
     if (!this.repo.setFacts(fileId, facts, s.clock.now())) return;
     const next = this.repo.get(fileId);
     if (next) this.library.emit(next);
+    if (next?.kind === 'video') this.previews.consider(fileId); // its size and length are known now
   }
 
   /** B-080 F4: once at start – each row still waiting for its probe whose bytes are here (no pull for the others). */

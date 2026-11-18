@@ -21,7 +21,9 @@ import { useSignal } from '@preact/signals';
 import { GLOBAL_SPACE } from '../../shared/api/workspace-browser.ts';
 import { isMobile, loadError, loaded, preferences, route, updatePreferences } from '../lib/store.ts';
 import { rpc } from '../lib/rpc.ts';
-import { bridge } from '../lib/platform.ts';
+import { bridge, os, platform } from '../lib/platform.ts';
+import { pushToast, toasts } from '../lib/toasts.ts';
+import { chatZoom, nextZoom, restoreChatZoom, setChatZoom, zoomKey } from '../chat/text-zoom.ts';
 import { hotkey } from '../lib/hotkeys.ts';
 import { toggleSettings } from '../lib/router.ts';
 import { ConfirmHost } from '../lib/dialog.tsx';
@@ -57,6 +59,24 @@ function useGlobalHotkeys(): void {
       hotkey('mod+n', () => { if (canStartChat()) newChatOpen.value = {}; }), // never a dialog whose Create is refused
     ];
     return () => off.forEach((fn) => fn());
+  }, []);
+  // 17.11.2026 (Theo, portrait videos): Ctrl +/−/0 sizes the chat's text on the desktop (chat/text-zoom.ts) – after
+  // workspace/pane-shortcuts.ts, which keeps the key for a website tab the keyboard is in.
+  useEffect(() => {
+    if (platform !== 'desktop') return undefined;
+    restoreChatZoom();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const dir = zoomKey({ key: event.key, mod: os === 'mac' ? event.metaKey : event.ctrlKey, alt: event.altKey });
+      if (dir === undefined) return;
+      event.preventDefault();
+      setChatZoom(nextZoom(chatZoom.peek(), dir), (percent) => {
+        toasts.value = toasts.peek().filter((toast) => !toast.title.startsWith('Chat text ')); // one size line, not a pile
+        pushToast({ title: `Chat text ${percent} %`, body: percent === 100 ? undefined : `${os === 'mac' ? '⌘' : 'Ctrl'}+0 resets` }, 1500);
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 }
 

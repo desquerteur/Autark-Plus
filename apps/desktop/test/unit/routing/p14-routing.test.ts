@@ -1,9 +1,9 @@
 // RT10 – the routing E2E's expectations (test/e2e/runtime-routing.test.mjs), checked without a
 // runtime: the fake engine lists the WORKFORCE_FAKE_MODELS ids bare, the catalog merges them with
 // the SHIPPED priors (resources/model-priors.json) on the demo 'compatible' account, and the real
-// router with the real return rule (agents/next-route.ts) picks: coding → GPT-6.1 Sol; a Remotion
-// animation after it → Claude Opus 5.5 high (weak prior, with the switch line's text); an effort
-// request holds for one step; a stuck cheap-chat task on Claude Haiku → a stronger model at high.
+// router with the model the agent is on (agents/next-route.ts) picks: coding → GPT-6.1 Sol; a Remotion
+// animation after it → still GPT-6.1 Sol at high, in the live session (the E2E) and where the context starts anew (it fits
+// the kind's tier; a weak prior moves nothing); an effort request holds for one step.
 // A change of the shipped priors that would break the E2E fails here first.
 // Owns: these assertions only. Never: network, processes or real accounts.
 
@@ -14,7 +14,6 @@ import { fileURLToPath } from 'node:url';
 import { FakeEngine, fakeModels } from '../../../src/runtime/engines/fake.ts';
 import { Priors } from '../../../src/runtime/models/priors.ts';
 import { returnChoice } from '../../../src/runtime/agents/next-route.ts';
-import { firstReason, switchText } from '../../../src/runtime/agents/switch-line.ts';
 import { account, agent, mode, setup, T0 } from '../models/harness.ts';
 import type { RouteRequest } from '../../../src/runtime/contracts.ts';
 import type { Run } from '../../../src/shared/model/runs.ts';
@@ -80,17 +79,18 @@ test('the catalog merges the bare listing with the shipped priors (names, tiers,
   assert.deepEqual([h.catalog.get(HAIKU)!.name, h.catalog.get(HAIKU)!.tier], ['Claude Haiku 5.5', 'small']);
 });
 
-test('coding → GPT-6.1 Sol; a Remotion animation after it → Claude Opus 5.5 high, and the switch line says why', async () => {
+test('coding → GPT-6.1 Sol; a Remotion animation after it → still Sol at high, in the live session and at a boundary: Sol fits the kind\'s tier, its weak prior for video moves nothing', async () => {
   const h = await demo();
   const coding = await h.route({ text: CODING });
   assert.deepEqual([coding.modelId, coding.effort, coding.category, coding.by], [SOL, 'medium', 'coding', 'rules']);
 
   const previous = returnChoice([run({ model: SOL, effort: coding.effort, route: { reason: coding.reason, by: coding.by, category: coding.category } })], undefined);
-  const remotion = await h.route({ text: REMOTION, previous });
-  assert.deepEqual([remotion.modelId, remotion.effort, remotion.category, remotion.by], [OPUS, 'high', 'video-animation', 'rules']);
-  assert.match(remotion.reason, /^GPT-6\.1 Sol is weak at video animation · /);
-  assert.equal(switchText('Vera', { modelName: 'Claude Opus 5.5', effort: remotion.effort }, firstReason(remotion.reason, remotion.category)),
-    'Vera → Claude Opus 5.5 · high – GPT-6.1 Sol is weak at video animation'); // B-083: the line names the agent
+  // 17.11.2026: minutes later in the same session (the E2E) the model stays – another one would write the whole context again.
+  const live = await h.route({ text: REMOTION, previous, boundary: false });
+  assert.deepEqual([live.modelId, live.effort, live.category, live.by, live.reason], [SOL, 'high', 'video-animation', 'previous', 'continues on my model · video animation']);
+  const remotion = await h.route({ text: REMOTION, previous, boundary: true });
+  // review 17.11.2026: the old "weak for this turn's work" test flipped agents between models by one keyword
+  assert.deepEqual([remotion.modelId, remotion.effort, remotion.category, remotion.by, remotion.reason], [SOL, 'high', 'video-animation', 'previous', 'continues on my model · video animation']);
 });
 
 test('model.set {effort: max} holds for the next turn only; then the previous effort returns', async () => {
@@ -104,6 +104,6 @@ test('model.set {effort: max} holds for the next turn only; then the previous ef
 
   const after = [run({ model: OPUS, effort: 'max', route: { reason: lifted.reason, by: lifted.by, category: lifted.category } }), ...runs];
   const back = await h.route({ text: 'Polish the Remotion animation.', previous: returnChoice(after, undefined) });
-  assert.deepEqual([back.modelId, back.effort, back.by], [OPUS, 'high', 'previous'], 'the run the request shaped is skipped');
+  assert.deepEqual([back.modelId, back.effort, back.by], [OPUS, 'high', 'previous'], 'my settled effort: the one of my last run nobody asked for');
 });
 

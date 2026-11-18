@@ -89,6 +89,15 @@ export interface Account {
   /** B-083: an API key whose organisation holds the API credits a plan includes (Claude Max/Ultra, ChatGPT Pro/Business):
    *  prepaid and lost at the end of each billing month, so routing uses it like a plan while they last (charge.ts). */
   credits?: boolean;
+  /** 17.11.2026: a plan (Claude Code, Codex) whose owner allows the provider's extra usage once its window is used up (Claude
+   *  "usage credits", ChatGPT "credits" – switched on at the provider, billed by it): routing keeps the account instead of
+   *  waiting for the reset, behind every plan that has quota left (runtime/accounts/candidates.ts inOverage). Off until the
+   *  person switches it on; an account whose provider has not enabled it fails its turn and waits as before. */
+  extraUsage?: boolean;
+  /** 17.11.2026: a plan login that stays on this PC – its row and its login files do not travel to the company's other PCs (device sync,
+   *  runtime/devices/sync/tables.ts). What "Use" on a found login starts with ("Only on this PC"); the person's switch in the account row
+   *  changes it either way. Absent: shared with the company's PCs, as every account was before. */
+  thisPcOnly?: boolean;
   createdAt: number;
   checkedAt?: number;
 }
@@ -199,11 +208,27 @@ export interface UsageSummary {
 }
 
 /** Result of scanning the PC for engines, logins and local model servers. */
+/**
+ * 17.11.2026: a plan login on this PC that is not an account here – offered, never used or shared before the person says
+ * "Use" (accounts.useFound) or "Not here" (accounts.declineFound). `where`: the login in the CLI's default home on this PC,
+ * or one another company on this PC made (its home in the PC's logins folder). `email`: the login's note, only for a login
+ * of another company – a default-home login's e-mail is not read (no token reading). `declined`: the person said "Not here"
+ * for a login of another company (a default-home one is dismissed in `clis` with "Add again").
+ */
+export interface FoundLogin {
+  key: string; // opaque: what accounts.useFound and accounts.declineFound take
+  provider: ProviderId;
+  where: 'this-pc' | 'other-company';
+  email?: string;
+  declined?: true;
+}
+
 export interface DetectionReport {
   // `dismissed` (PR5): the person removed this login or server – detection no longer adds it ("Add again").
   clis: Array<{ provider: 'codex' | 'claude' | 'gemini-cli' | 'copilot' | 'kimi-cli'; path?: string; version?: string; loggedIn?: boolean; method?: string; dismissed?: boolean }>;
   localServers: Array<{ provider: 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm'; baseUrl: string; models: string[]; dismissed?: boolean }>;
   envKeys: string[]; // names of provider env vars that are set (never values; ENV_KEY_PROVIDERS)
+  found?: FoundLogin[]; // 17.11.2026: plan logins offered, not adopted (FoundLogin); absent in an old report
   tailscale?: { running: boolean; dnsName?: string };
   checkedAt: number;
 }

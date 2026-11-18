@@ -6,6 +6,8 @@
 // blind chains); phone.type through the app shows what the field reads afterwards instead (masked like any readback).
 // Each step names the agent (`by`) for the app's bubble; phone.say (feedback 16.11.2026 F16) puts my
 // line or question (✓ / ✕) there, so the person sees what I do without opening the app and answers with one tap.
+// KI-Runde 17.11.2026: each description opens with what the prompt's one-line list must carry – phone.say the ask,
+// phone.key the app phone's keys with notifications (what just arrived, an SMS code), phone.ui_tree that it reads the screen.
 // Owns: schemas, summaries, output formatting. Never: repeats a pairing code in a summary or an output.
 
 import type { ToolContext, ToolDef } from '../tools/types.ts';
@@ -117,7 +119,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const uiTree = defineTool<{ serial?: string }>({
     name: 'phone.ui_tree',
-    description: 'Lists the elements on the phone screen with the point to tap each.',
+    description: 'Reads the phone screen: every element with its text and the point to tap it.',
     inputSchema: { type: 'object', properties: { serial: SERIAL }, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('Read the phone screen', ctx, true),
@@ -178,8 +180,8 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const key = defineTool<{ key: string; serial?: string }>({
     name: 'phone.key',
-    description: 'Presses a phone key such as back, home, recents or enter.',
-    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40, description: 'back, home, recents, enter, delete, tab, escape, arrows, page_up/page_down or wakeup.' }, serial: SERIAL }, required: ['key'], additionalProperties: false },
+    description: 'Presses a phone key such as back, home or notifications, which shows what just arrived. On the phone with the Autark app the keys are back, home, recents, notifications (the shade with fresh messages and codes, which phone.ui_tree then reads), quick_settings and enter.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40, description: 'Autark app: back, home, recents, notifications, quick_settings, enter. Over ADB: back, home, recents, enter, delete, tab, escape, arrows, page_up/page_down or wakeup.' }, serial: SERIAL }, required: ['key'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Press ${short(args.key)} on the phone`, ctx, movingKey(args.key)),
     async run(args, ctx) {
@@ -209,7 +211,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const say = defineTool<{ text: string; ask?: boolean; serial?: string }>({
     name: 'phone.say',
-    description: "Puts my line in the bubble on the person's phone (the Autark app), so they see what I do there without opening the app. With ask: true it is a question with ✓ and ✕, and I get yes, no or none (no tap within 60 s); yes gives me the phone for this task. While they use the phone and my steps can wait, one question gets their decision in a tap; going straight ahead works too, since a touch of theirs pauses me only until 5 s after it.",
+    description: "Asks the person for a moment of their phone with ✓ and ✕, or shows my line on it. With ask: true my question appears on the phone with the Autark app and I get yes, no or none (no tap within 60 s); ✓ gives me the phone for this task. Without ask the line shows what I do there. While they use the phone and my steps can wait, one question gets their decision in a tap; going straight ahead works too, since a touch of theirs pauses me only until 5 s after it.",
     inputSchema: {
       type: 'object',
       properties: { text: { type: 'string', minLength: 1, maxLength: PHONE_SAY_MAX, description: 'One short line.' }, ask: { type: 'boolean' }, serial: SERIAL },
@@ -224,7 +226,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
       const said = await adb.say(args.serial, args.text, args.ask === true, step(ctx));
       if (!args.ask) return text("The bubble shows my line until my next one or the end of this task's phone use.");
       if (said.answer === 'yes') return text('The person answered ✓: the phone is mine for this task now. I look at the screen (phone.ui_tree) before my first step.');
-      if (said.answer === 'no') return text('The person answered ✕ – not now: they keep the phone for the moment. I go on with other work and ask again when my phone steps are due.');
+      if (said.answer === 'no') return text('The person answered ✕ – not now: they keep the phone for the moment. What I needed from it I ask them for in our chat, and I go on with other work.');
       return text('No answer within 60 s – the person did not tap. My phone steps run as usual; a touch of theirs pauses me until 5 s after it.');
     },
   });

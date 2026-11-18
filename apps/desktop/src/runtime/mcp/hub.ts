@@ -2,7 +2,8 @@
 // through acp/mcp-proxy.ts). Each run gets a lease: a random 32-byte token mapped to the run's tool context (agent,
 // run, chat, task, mode, device), reached as `POST /mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`.
 // JSON response mode only (no SSE): initialize (version echo + Mcp-Session-Id), ping, tools/list (the agent's direct
-// offer under MCP-safe wire names), tools/call (→ ToolRegistry.call with the lease context), notifications → 202,
+// offer under MCP-safe wire names – the tool names the run's lease was given, S2: a resumed session's own; without them the
+// agent's current offer), tools/call (→ ToolRegistry.call with the lease context), notifications → 202,
 // batches. Releasing a lease aborts its in-flight calls; the token is rejected afterwards (401). Nothing depends on
 // initialize (the stateless 2026-07-28 core works too).
 // A call's id is the model's own tool-call id where the client sends it (Claude Code: params._meta
@@ -51,6 +52,7 @@ interface LeaseState {
   controller: AbortController;
   inflight: Map<string, AbortController>; // JSON-RPC request id → call (notifications/cancelled)
   specs?: ToolSpec[]; // offered tools, computed once per lease (mode is fixed for a run)
+  tools?: readonly string[]; // the names the turn offers (S2: a resumed session's own)
 }
 
 type Reply = { response?: RpcResponse; sessionId?: string; invalid?: boolean } | undefined;
@@ -67,9 +69,9 @@ export class Mcp implements McpHub {
     this.deps = deps;
   }
 
-  lease(ctx: LeaseContext): { url: string; token: string; release(): void } {
+  lease(ctx: LeaseContext, tools?: readonly string[]): { url: string; token: string; release(): void } {
     const token = randomBytes(32).toString('base64url');
-    const state: LeaseState = { ctx: { ...ctx }, controller: new AbortController(), inflight: new Map() };
+    const state: LeaseState = { ctx: { ...ctx }, controller: new AbortController(), inflight: new Map(), ...(tools ? { tools } : {}) };
     this.leases.set(token, state);
     return {
       url: `${this.base()}/mcp/${token}`,
@@ -206,6 +208,13 @@ export class Mcp implements McpHub {
   private specs(lease: LeaseState): ToolSpec[] {
     if (lease.specs) return lease.specs;
     const services = this.deps.services();
+    if (lease.tools) {
+      lease.specs = lease.tools.flatMap((name) => {
+        const tool = services.tools.get(name);
+        return tool ? [{ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }] : [];
+      });
+      return lease.specs;
+    }
     let mode: ModeInfo;
     try { mode = services.modes.get(lease.ctx.mode); } catch { mode = services.modes.get('general'); }
     // The core set + the agent's learned tools + tools.find/tools.call (as the turn's key) – a part's are its agent's,

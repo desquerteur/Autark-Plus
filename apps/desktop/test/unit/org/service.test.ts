@@ -199,6 +199,23 @@ test('setStatus emits agent.upserted and agent.activity (default and injected so
   assert.throws(() => org.setStatus(manager.id, 'dancing' as never), code('bad_request'));
 });
 
+test('phone traffic 18.11.: a new step note is agent.activity only – the whole agent (its SYSTEM.md) goes out when the status changes', () => {
+  const { org, of } = setup();
+  const manager = org.ensureSeed()!;
+  const upserts = () => of('agent.upserted').filter((agent) => (agent as { id: string }).id === manager.id).length;
+  const activities = () => of('agent.activity').length;
+  const start = upserts();
+  org.setStatus(manager.id, 'working', 'reading the brief');
+  assert.equal(upserts(), start + 1, 'idle → working announces the agent');
+  const [u, a] = [upserts(), activities()];
+  for (const step of ['running npm test', 'editing app.ts', 'thinking about the fix']) org.setStatus(manager.id, 'working', step);
+  assert.equal(upserts(), u, 'step notes of a running turn never resend the agent');
+  assert.equal(activities(), a + 3, 'each step note reaches the live rows');
+  assert.equal(org.get(manager.id)?.statusNote, 'thinking about the fix', 'the stored note is current');
+  org.setStatus(manager.id, 'idle');
+  assert.equal(upserts(), u + 1, 'working → idle announces the agent again');
+});
+
 test('spaces: create, update, archive', () => {
   const { org } = setup();
   const company = org.saveSpace({ name: 'Teydra', kind: 'company', color: '#112233' });

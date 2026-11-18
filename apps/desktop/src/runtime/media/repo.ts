@@ -23,7 +23,7 @@ export interface MediaRow {
   file_id: string; conversation_id: string | null; kind: string; mime: string; name: string;
   width: number | null; height: number | null; duration_ms: number | null; pages: number | null;
   description: string | null; tags: string | null; described_by: string | null; described_at: number | null;
-  created_at: number; updated_at: number; size: number | null;
+  created_at: number; updated_at: number; size: number | null; preview_file_id: string | null;
 }
 
 /** Who reads: the owner (everything but the people's own chats, F-52) or one agent (see the visibility rule above). */
@@ -37,7 +37,7 @@ export interface NewMedia {
 export interface MeasuredFacts { kind?: MediaKind; width?: number; height?: number; durationMs?: number; pages?: number }
 
 const SELECT = `SELECT m.file_id, m.conversation_id, m.kind, m.mime, m.name, m.width, m.height, m.duration_ms, m.pages,
-  m.description, m.tags, m.described_by, m.described_at, m.created_at, m.updated_at, f.size
+  m.description, m.tags, m.described_by, m.described_at, m.created_at, m.updated_at, f.size, m.preview_file_id
   FROM media m JOIN files f ON f.id = m.file_id`;
 
 const AGENT_SCOPE = `(m.conversation_id IN (
@@ -63,6 +63,7 @@ export function toInfo(row: MediaRow): MediaInfo {
     height: optNumber(row.height),
     durationMs: optNumber(row.duration_ms),
     pages: optNumber(row.pages),
+    previewFileId: opt<string>(row.preview_file_id),
     description: opt<string>(row.description),
     tags: tags.length ? tags : undefined,
     describedBy: opt<string>(row.described_by),
@@ -128,6 +129,36 @@ export class MediaRepo {
     ).changes > 0;
   }
 
+  /** 17.11.2026: the stored light copy of a video; true when the row changed. */
+  setPreview(fileId: string, previewFileId: string, now: number): boolean {
+    return this.db.run("UPDATE media SET preview_file_id = ?, preview_state = NULL, updated_at = ? WHERE file_id = ? AND preview_file_id IS NOT ?", [previewFileId, now, fileId, previewFileId]).changes > 0;
+  }
+
+  /** 17.11.2026: why a video has no copy ('small', 'light', 'long', 'failed'); no event – nothing a reader sees changes. */
+  setPreviewState(fileId: string, state: string): void {
+    this.db.run('UPDATE media SET preview_state = ? WHERE file_id = ? AND preview_file_id IS NULL', [state, fileId]);
+  }
+
+  /** 17.11.2026: why a video has no copy (see setPreviewState), if it was decided. */
+  previewState(fileId: string): string | undefined {
+    return this.db.get<{ s: string | null }>('SELECT preview_state AS s FROM media WHERE file_id = ?', [fileId])?.s ?? undefined;
+  }
+
+  /** 17.11.2026: the copy a video has (a blob id), if any. */
+  previewOf(fileId: string): string | undefined {
+    return this.db.get<{ p: string | null }>('SELECT preview_file_id AS p FROM media WHERE file_id = ?', [fileId])?.p ?? undefined;
+  }
+
+  /** 17.11.2026: the video a stored blob is the copy of (access to the copy follows the original), if it is one. */
+  originalOf(previewFileId: string): string | undefined {
+    return this.db.get<{ f: string }>('SELECT file_id AS f FROM media WHERE preview_file_id = ? LIMIT 1', [previewFileId])?.f;
+  }
+
+  /** 17.11.2026: videos nobody has decided about yet (no copy, no state), oldest first, at most `limit`. */
+  undecidedVideos(limit: number): string[] {
+    return this.db.all<{ file_id: string }>("SELECT file_id FROM media WHERE kind = 'video' AND preview_file_id IS NULL AND preview_state IS NULL ORDER BY created_at LIMIT ?", [limit]).map((row) => row.file_id);
+  }
+
   /** Replaces description + tags; `by` undefined clears the author (nothing written any more). */
   describe(fileId: string, value: { description?: string; tags: string[]; by?: string }, now: number): void {
     this.db.tx(() => {
@@ -143,6 +174,10 @@ export class MediaRepo {
     const scope = audienceSql(audience); // F-52
     where.push(scope.sql); params.push(...scope.params);
     if (filter.conversationId) { where.push('m.conversation_id = ?'); params.push(filter.conversationId); }
+    if (filter.fileIds) {
+      if (!filter.fileIds.length) return [];
+      where.push(`m.file_id IN (${filter.fileIds.map(() => '?').join(',')})`); params.push(...filter.fileIds);
+    }
     if (filter.kind) { where.push('m.kind = ?'); params.push(filter.kind); }
     const text = filter.text?.trim();
     if (!text) return this.rows(where, params, 'm.created_at DESC, m.file_id', limit);

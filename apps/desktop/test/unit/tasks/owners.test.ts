@@ -41,8 +41,12 @@ test('B-078 D7: the owner assigning a task of his 1:1 to another agent moves it 
   assert.equal(isMember(h, direct, 'ag_bob'), false, 'the 1:1 stays two');
   const group = h.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
   const other = h.tasks.create({ conversationId: group.id, title: 'Music', createdBy: 'human' });
-  assert.equal(routeOwner(h.tasks, h.tasks.get(other.id)!, 'ag_bob', 'human'), group.id, 'any other chat: the agent joins it');
-  assert.ok(isMember(h, group.id, 'ag_bob'));
+  assert.equal(routeOwner(h.tasks, h.tasks.get(other.id)!, 'ag_bob', 'human'), findDirect(h.services, 'human', 'ag_bob'), 'KI-Runde 17.11.2026: a group the person is in keeps its members too');
+  assert.equal(isMember(h, group.id, 'ag_bob'), false);
+  const agentsOnly = h.chats.create({ agentIds: ['ag_ava'], humans: false, createdBy: 'ag_ava' });
+  const inRoom = h.tasks.create({ conversationId: agentsOnly.id, title: 'Mails', createdBy: 'ag_ava', assigneeId: 'ag_ava' });
+  assert.equal(routeOwner(h.tasks, h.tasks.get(inRoom.id)!, 'ag_bob', 'ag_ava'), agentsOnly.id, 'a room of agents only: the agent joins it');
+  assert.ok(isMember(h, agentsOnly.id, 'ag_bob'));
 });
 
 test('without a manager chain: a manager of the space, else a company-wide manager takes over', () => {

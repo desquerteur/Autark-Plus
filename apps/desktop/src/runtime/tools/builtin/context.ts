@@ -22,7 +22,6 @@ const restore = defineTool<{ ids: string[]; keep?: boolean }>({
     required: ['ids'], additionalProperties: false,
   },
   category: 'read',
-  anyMode: true,
   describe: (args) => internal(`Restore ${args.ids.slice(0, 5).join(', ')}${args.keep ? ' (keep)' : ''}`),
   async run(args, ctx) {
     return text(restoreItems(ctx.services, ctx.agent.id, threadKey(ctx), { ids: args.ids, ...(args.keep !== undefined ? { keep: args.keep } : {}) }));

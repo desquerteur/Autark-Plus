@@ -35,8 +35,8 @@ export interface SplitLane { agentId: string; splitId: string; runId: string }
 export interface SplitProgress { id: string; goal: string; thread: string; conversationId?: string; status: 'pending' | 'running'; parts: number; done: number; running: number; waiting: number; ended: number }
 
 export interface SplitService {
-  /** Validates and stores a group with its parts (status pending); they start when the calling turn ends – B-083: a part's call adds parts to its own group, which start at once. Throws WorkforceError (clear English message). */
-  create(ctx: SplitCreateContext, input: { goal: string; parts: SplitPartInput[] }): SplitGroupView;
+  /** Validates and stores a group with its parts (status pending); they start when the calling turn ends – B-083: a part's call adds parts to its own group, which start at once; `wait` (decision 10 of 17.11.2026): they start at once and the calling turn waits for them (waitFor). Throws WorkforceError (clear English message). */
+  create(ctx: SplitCreateContext, input: { goal: string; parts: SplitPartInput[]; wait?: boolean }): SplitGroupView;
   /** Turn-finish of every NON-split turn: pending groups of that run start ('done'/'failed') or are stopped ('stopped' by the person). */
   afterParentTurn(runId: string, status: 'done' | 'failed' | 'stopped'): void;
   /** Turn-finish of a split turn. */
@@ -49,8 +49,11 @@ export interface SplitService {
   pendingResults(agentId: string, thread: string): { splitIds: string[]; text: string } | undefined;
   /** The origin's turn that got that block ended 'done': those parts are gathered. */
   markGathered(runId: string, splitIds: string[]): void;
-  /** agents.split_results: the full results text of one of the agent's groups (B-080: from any thread), one part, or its newest group (this thread's first). */
-  results(agentId: string, q: { groupId?: string; idx?: number; thread?: string }): string;
+  /**
+   * agents.split_results: the full results text of one of the agent's groups (B-080: from any thread), one part, or its newest
+   * group (this thread's first). `runId`: the reading turn – the ended parts shown are gathered when it ends 'done' (FIXES-3 A3).
+   */
+  results(agentId: string, q: { groupId?: string; idx?: number; thread?: string; runId?: string }): string;
   /**
    * Stops splits (running: aborted; waiting: stopped); returns how many. `by`: who stopped them. `taskId`: exactly the
    * groups split by a turn on that task (the person ended it or took it back – tasks/owners.ts, tasks/capture.ts).

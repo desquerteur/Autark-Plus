@@ -20,6 +20,13 @@ What it does:
 - **Connect by Remote ID.** A PC that accepts connection requests can be found by its 9-digit
   Remote ID (never by name). The request messages are sealed end to end; the person on the target
   PC still compares the 4-digit code and accepts. Rate-limited per key and per client address.
+- **The tunnel has a daily budget.** Tunnel bytes count per device key, per client source and in total
+  per UTC day (`RELAY_TUNNEL_BYTES_PER_DAY`, default 256 MiB; `RELAY_TUNNEL_BYTES_PER_DAY_TOTAL`, default
+  10 GiB). Past a budget the sender's tunnels close with code `quota`; until the next UTC day a new tunnel
+  opens only as a signalling tunnel (64 KiB, one per minute per device key and per source; `opened` says
+  `held: "quota"`), enough for the devices to agree on a direct WebRTC path, never to carry their data.
+  `RELAY_TUNNELS=off` is the emergency stop: only signalling tunnels (`held: "off"`); meeting, presence,
+  Connect and direct links go on. `GET /healthz` shows `tunnelBytesToday` and `tunnelsOn`.
 - **Remove is immediate.** When a PC removes another, it unpins it here: presence ends and open
   tunnels between them close.
 

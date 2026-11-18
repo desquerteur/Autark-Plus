@@ -73,11 +73,11 @@ export const release = {
   // Shown before the live check answers, and to crawlers. Refreshed by the
   // build from the GitHub API when the network is available.
   fallback: {
-    windows: { version: '0.3.7', date: '2026-11-15', sizeMb: 133 },
-    mac: { version: '0.3.7', date: '2026-11-15', sizeMb: 272 },
-    linux: { version: '0.3.7', date: '2026-11-15', sizeMb: 158 },
+    windows: { version: '0.3.9', date: '2026-11-16', sizeMb: 133 },
+    mac: { version: '0.3.9', date: '2026-11-16', sizeMb: 272 },
+    linux: { version: '0.3.9', date: '2026-11-16', sizeMb: 158 },
     // The phone app is a small shell that shows the PC's own interface; its version runs on its own.
-    android: { version: '0.3.8', date: '2026-11-08', sizeMb: 4 },
+    android: { version: '0.3.15', date: '2026-11-08', sizeMb: 4 },
   },
 };
 
@@ -119,10 +119,11 @@ export const maker = {
   pressUrl: 'https://stanislaushees.com/presse/',
   award: 'Startup category winner, Beyond Optimization Crowd in Motion Challenge, 16th Austrian Innovation Forum (2026)',
   awardUrl: 'https://stanislaushees.com/notizen/austrian-innovation-forum-2026/',
-  imprintUrl: 'https://teydralab.com/impressum',
+  imprintUrl: 'https://openautark.com/impressum/', // this site's own imprint (pages/impressum.mjs), 16.11.2026
   privacyUrl: 'https://teydralab.com/privacy-policy',
   contactUrl: 'https://teydralab.com/kontakt',
   feedbackUrl: `https://github.com/${repo}/issues`,
+  discordUrl: 'https://discord.gg/2MXxH8c3ee', // permanent invitation to the Teydra Lab Discord (17.11.2026)
   social: [
     { name: 'X', url: 'https://x.com/teydralab' },
     { name: 'LinkedIn', url: 'https://www.linkedin.com/company/teydralab-chatbot/' },

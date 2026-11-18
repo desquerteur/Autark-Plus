@@ -166,7 +166,7 @@ export function titleForBlock(block: UiBlock): string {
     .find(value => typeof value === 'string' && value.trim()) as string | undefined;
   if (text) return excerpt(text, 120);
   switch (block.type) {
-    case 'record': return block.mode === 'video' ? 'Record a video' : block.mode === 'screen' ? 'Record the screen' : 'Record audio';
+    case 'record': return block.video || block.fileId ? 'Record a voice-over' : block.mode === 'video' ? 'Record a video' : block.mode === 'screen' ? 'Record the screen' : 'Record audio';
     case 'upload': return 'Upload files';
     case 'checklist': return listTitle(block.items, (item) => (typeof item === 'string' ? item : (item as { text?: unknown })?.text)) ?? 'Checklist';
     case 'review': return 'Review';

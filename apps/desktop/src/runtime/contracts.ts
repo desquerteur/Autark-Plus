@@ -164,9 +164,11 @@ export interface TaskService {
   /** Fields; status 'waiting' with waitingOn sets a wait, 'open' ends it (a person's 'open' reopens finished work); plan, fact. */
   update(id: string, patch: TaskPatch, by: string, rev?: number): TaskView;
   /** Gives the task to `to` (as createTo); the receiver hears at once, the giver hears how it ends. */
-  give(id: string, to: string, by: string, input?: { note?: string; model?: string; effort?: Effort; from?: string; fact?: string }): Promise<TaskView>;
+  give(id: string, to: string, by: string, input?: { note?: string; effort?: Effort; fact?: string; givenIn?: string }): Promise<TaskView>;
   /** Ends it: done with what came out, or dropped with why; the one verification step runs on a done one with doneWhen. */
   finish(id: string, input: FinishInput, by: string): TaskView;
+  /** Takes back the latest logged change of a task (or `changeId`) within 24 hours: the fields it changed come back (tasks/changes.ts). */
+  undo(id: string, by: string, changeId?: string): TaskView;
   remove(id: string, by: string): void;
   /** A person's open to-dos and those waiting for a ring (the calm "For you" list); `personId`: a colleague's instead of the owner's. */
   todos(limit?: number, personId?: string): TaskView[];
@@ -333,11 +335,13 @@ export interface PromptParts {
   volatile: string; // pinned memory, open tasks/promises, time
   /** B-049 F6: `volatile` by section name ('now' …; joined it is `volatile`) – agents/volatile-delta.ts. */
   sections?: Array<{ name: string; text: string; failed?: true }>;
+  /** S2: `stable` by section name ('identity' …; joined by a blank line it is `stable`) – agents/volatile-delta.ts stableDelta. */
+  stableSections?: Array<{ name: string; text: string }>;
 }
 
 export interface ContextService {
-  /** Builds the system prompt sections for a turn. */
-  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision }): PromptParts;
+  /** Builds the system prompt sections for a turn; `direct` (S2): the tools a resumed session holds, so "More tools" lists the rest. */
+  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision; direct?: readonly string[] }): PromptParts;
   /** New chat lines the agent has not seen yet, rendered for the engine (context/delta.ts: within their reach). */
   delta(input: { agent: Agent; conversationId: string; sinceSeq: number }): { text: string; images: Array<{ path: string; mime: string }>; lastSeq: number };
   /** Portable checkpoint for handoffs/model switches. */
@@ -363,8 +367,8 @@ export interface Subconscious {
   /** Addition (F05), optional so simple fakes stay valid: the props `text` gives that `block` lacks – the
    * text's own first, then the cheap model; the type stays. */
   fillWidget?(block: UiBlock, text: string): Promise<UiBlock>;
-  /** Addition (01.11.2026), optional: what the main AI's history gets before this turn's model call – the trace kept for the thread; undefined = nothing. `said`: what people wrote for this turn; `woke` (v1, 14.11.2026): what other agents wrote for it; `taskText`: the turn's task as it reads it, its title and newest note (else its notes) – with content (`said` when a person wrote, else `woke` with content, else `taskText`), one call sets the turn's model and effort – not while a request of the agent's own or of its task (`taskId`) holds the turn –, opens the hits of the word search it chooses (first in the trace) and condenses context items whose job is done, and the turn waits for it, bounded (subconscious/service.ts, route-turn.ts, look.ts); `vision`: the turn shows an image (the call offers only models that see). `signal`: the turn's stop, which ends that call too. Never throws. */
-  beforeTurn?(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; woke?: string; taskText?: string; vision?: boolean; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined>;
+  /** Addition (01.11.2026), optional: what the main AI's history gets before this turn's model call – the trace kept for the thread; undefined = nothing. `said`: what people wrote for this turn; `woke` (v1, 14.11.2026): what other agents wrote for it; `taskText`: the turn's task as it reads it, its title and newest note (else its notes) – with content (`said` when a person wrote, else `woke` with content, else `taskText`), one call sets the turn's model and effort – not while a request of the agent's own or of its task (`taskId`) holds the turn –, opens the hits of the word search it chooses (first in the trace) and condenses context items whose job is done, and the turn waits for it, bounded (subconscious/service.ts, route-turn.ts, look.ts); `vision`: the turn shows an image (the call offers only models that see); `callId` (FIXES-3 D2): this turn answers a line of that running call (a task's turn too) – it does not wait for the call. `signal`: the turn's stop, which ends that call too. Never throws. */
+  beforeTurn?(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; woke?: string; taskText?: string; vision?: boolean; callId?: string; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined>;
   /** Addition (01.11.2026), optional: a turn that never reached its engine gives back what beforeTurn gave it, a native turn the timeout decisions it could not take in (agents/native-timeout.ts); the next turn on the thread shows it. Never throws. */
   putBack?(agentId: string, thread: string, trace: SubconsciousTrace): void;
   /** Addition (F26, 16.11.2026), optional: a forked part's first start – the call that condenses context items whose job is done, as beside the agent's own turns, on the part's own record (`thread`) with its brief as what wakes it; the part waits for it, bounded, and `signal` (its turn's stop) ends it. Returns how many items it condensed. Never throws. */

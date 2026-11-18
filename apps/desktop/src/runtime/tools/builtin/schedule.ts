@@ -11,7 +11,6 @@
 // chat line comes from the scheduler (schedules/fire.ts announceCreated), once. B-054: only a scheduled message
 // is posted in a chat; a routine is handed over in the run's chat or chatId when the agent is in it (util.ts chatIfAny),
 // else its tasks are chat-free; reminders stay chat-free.
-// Every schedules.* tool is anyMode – through tools.call in every mode, the direct offers unchanged.
 // Owns: schedules.message, schedules.remind, schedules.routine, schedules.update, schedules.list,
 // schedules.cancel. Never: changes or cancels schedules of others it does not manage (or the
 // person's); never creates hidden recurring work (every schedule is listed and cancellable by the person).
@@ -254,5 +253,4 @@ const cancelSchedule = defineTool<{ scheduleId: string }>({
   },
 });
 
-/** Reachable in every mode through tools.call; a mode's direct offer is unchanged. */
-export const scheduleTools: ToolDef[] = [scheduleMessage, remindMe, createRoutine, updateSchedule, listSchedules, cancelSchedule].map((tool) => ({ ...tool, anyMode: true as const }));
+export const scheduleTools: ToolDef[] = [scheduleMessage, remindMe, createRoutine, updateSchedule, listSchedules, cancelSchedule];

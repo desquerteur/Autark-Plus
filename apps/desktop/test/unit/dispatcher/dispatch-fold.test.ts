@@ -2,7 +2,8 @@
 // engine refused while its turn could not take it yet is tried again until it lands (dispatch-fold.ts); folds of one chat
 // run one after another; a person's line in a group chat reaches every member's running turn wherever it works
 // (dispatcher.hear: the group frame, no waiting line, no pick of that chat); an important line from another chat is
-// folded into the running turn instead of cutting it.
+// folded into the running turn instead of cutting it; a call voice's hand-over reaches the agent's running turn wherever
+// it runs, and the call's chat runs next.
 // Owns: these assertions only. Never: real engines or network.
 
 import { test } from 'node:test';
@@ -120,4 +121,25 @@ test('an important line for a turn not bound to its engine yet is not cut for: i
   assert.match(texts[0], /\(important\) Call me now$/);
   tom.finish();
   await flush();
+});
+
+test('a call voice hands something on (KI-Runde 17.11.2026, decision 8.1): it reaches the agent\'s running turn in another chat, and the call\'s chat runs next', async () => {
+  const { h, a, b } = team();
+  h.chats.send({ conversationId: b.id, body: 'publish the release notes', authorId: 'human' });
+  await flush();
+  const running = h.executor.last();
+  const texts = steerable(running);
+  (running.request.control.engine as unknown as { id: string }).id = 'claude';
+  h.chats.send({ conversationId: a.id, body: 'Stopp den Deploy.', authorId: 'human', silent: true, meta: { call: { id: 'call_1', participant: 'device:pc', name: 'PC' } } }); // the call line, stored quiet
+  await flush();
+  assert.equal(texts.length, 0, 'the quiet call line itself is not folded in: the voice decides');
+  assert.equal(await h.dispatcher.relay(running.request.agentId, a.id, '[Live call: my live voice passes this on now] Stop the deploy.', 'now'), true, 'steered, though the turn runs in another chat');
+  assert.deepEqual(texts, ['[Live call: my live voice passes this on now] Stop the deploy.']);
+  assert.equal(running.request.signal.aborted, false, 'nothing is cut');
+  running.finish();
+  await flush();
+  assert.equal(h.executor.last().request.conversationId, a.id, 'the call\'s chat runs next');
+  h.executor.last().finish();
+  await flush();
+  assert.equal(await h.dispatcher.relay('ag_tom', a.id, 'later', 'next'), false, 'an idle agent: not steered (the voice wakes it)');
 });

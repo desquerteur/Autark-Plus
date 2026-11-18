@@ -3,11 +3,16 @@
 // tool_use/tool_result, rate_limit_event, result incl. modelUsage context windows) to
 // EngineEvents and a final turn summary (usage over every result of the turn – a steered line may get
 // its own; inputTokens counts cache reads and writes, which also stand on their own), and how a failed turn ended (limit, signed out).
+// Package C (17.11.2026): the cost a result reports (total_cost_usd) is the session's running total, restored on every --resume –
+// the turn keeps the latest one and agents/turn-attempt.ts takes the difference to the session's kept total; every main-thread
+// message_start is one model call of the turn (state.modelCalls, carried on each 'usage' event); FIXES-3 C1: it also names the
+// model that request runs on (state.requestModel – engine.ts switches a turn's model only once a request runs on it).
 // D5: thinking blocks are reasoning with an id per block (content_block_start/stop of streamed
 // thinking; a full message's thinking block when no deltas came – empty or redacted thinking shows nothing).
 // B-048: a thinking block's signature (signature_delta or the full block's) rides on its reasoning_end; a
 // tool_result's full content (bounded 64k) on tool_end.output; system/init's claude_code_version is kept.
-// B-049 F6: a system/compact_boundary (the CLI compacted the session) is kept as state.compacted.
+// B-049 F6: a system/compact_boundary (the CLI compacted the session) is kept as state.compacted; KI-Runde 17.11.2026: it is
+// also a 'compacted' event with the CLI's own figures (compact_metadata: tokens before and after, how long it took).
 // B-080: the CLI's own background work is kept as state.background (system/task_started with is_backgrounded adds its
 // task id – not an ambient one, a watcher the CLI counts as no activity, nor an awaited one, whose report goes into the
 // call that waits for it; system/task_updated with patch.is_backgrounded moves a task in or out; system/task_notification
@@ -35,6 +40,10 @@ export interface ClaudeTurnState {
   subtype?: string;
   /** inputTokens: all input, cache reads and writes included (the turn's totals count on it); the cache parts beside it, when reported. */
   usage?: { inputTokens: number; outputTokens: number; costUsd?: number } & CacheTokens;
+  /** Package C: main-thread model calls of the turn (one per message_start). */
+  modelCalls: number;
+  /** FIXES-3 C1: the model the latest main-thread request ran on (its message_start's `message.model`). */
+  requestModel?: string;
   contextTokens?: number;
   /** Context window per model id from `result.modelUsage`. */
   contextWindows: Record<string, number>;
@@ -54,17 +63,10 @@ export interface ClaudeTurnState {
 }
 
 export function newClaudeState(): ClaudeTurnState {
-  return { text: '', answer: [], contextWindows: {}, done: false, isError: false, rejected: false, background: new Set() };
+  return { text: '', answer: [], modelCalls: 0, contextWindows: {}, done: false, isError: false, rejected: false, background: new Set() };
 }
 
 const HUB_PREFIX = `mcp__${HUB_SERVER}__`;
-
-/** The turn's cost after another result: the CLI's running total, or the sum when the reported total went down. */
-function laterCost(before: number | undefined, now: number | undefined): number | undefined {
-  if (now === undefined) return before;
-  if (before === undefined) return now;
-  return now >= before ? now : Math.round((before + now) * 1e9) / 1e9;
-}
 
 /** The text of an error result: `result` when it is a string, else the `errors` strings (at most 500 chars). */
 function errorTextOf(message: Record<string, unknown>): string | undefined {
@@ -72,6 +74,15 @@ function errorTextOf(message: Record<string, unknown>): string | undefined {
     : Array.isArray(message.errors) ? message.errors.filter((entry): entry is string => typeof entry === 'string') : [];
   const text = parts.join('\n').slice(0, 500);
   return text || undefined;
+}
+
+/** A compact_boundary's own figures (compact_metadata, in the stream's or the transcript's spelling): what it reports, nothing else. */
+function compactionOf(message: Record<string, unknown>): { before?: number; after?: number; ms?: number } {
+  const meta = isRecord(message.compact_metadata) ? message.compact_metadata : isRecord(message.compactMetadata) ? message.compactMetadata : {};
+  const before = num(meta.pre_tokens) ?? num(meta.preTokens);
+  const after = num(meta.post_tokens) ?? num(meta.postTokens);
+  const ms = num(meta.duration_ms) ?? num(meta.durationMs);
+  return { ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), ...(ms !== undefined ? { ms } : {}) };
 }
 
 /** Our dotted tool name for a hub wire name ("tasks__create" → "tasks.create", see toWireName). */
@@ -128,7 +139,10 @@ export class ClaudeStreamParser {
       case 'system':
         if (message.subtype === 'init' && str(message.session_id)) s.sessionId = message.session_id as string;
         if (message.subtype === 'init' && str(message.claude_code_version)) s.version = message.claude_code_version as string;
-        if (message.subtype === 'compact_boundary' && !sub) s.compacted = true; // B-049 F6: the session's history was compacted
+        if (message.subtype === 'compact_boundary' && !sub) { // B-049 F6: the session's history was compacted
+          s.compacted = true;
+          this.emit({ type: 'compacted', ...compactionOf(message) });
+        }
         if (str(message.task_id)) this.task(message, message.task_id as string); // B-080
         break;
       case 'stream_event': {
@@ -158,6 +172,8 @@ export class ClaudeStreamParser {
           this.signatures.delete(index);
         } else if (event.type === 'message_start' && isRecord(event.message)) {
           this.messageId = str(event.message.id) ?? '';
+          s.modelCalls++; // package C: one main-thread model call
+          if (str(event.message.model)) s.requestModel = event.message.model as string; // FIXES-3 C1
           this.thinking.clear();
           this.signatures.clear();
           const u = isRecord(event.message.usage) ? event.message.usage : undefined;
@@ -247,14 +263,14 @@ export class ClaudeStreamParser {
           costUsd: num(message.total_cost_usd),
           ...addCache(cache, {}),
         };
-        // A steered line answered as its own result (engine.ts, 17:09): each result's usage covers its
-        // own query, so tokens add up; total_cost_usd is the CLI process's running total, so the last
-        // one counts – unless it went down (then it was per result and they add up). Not verified live.
+        // A steered line answered as its own result (engine.ts, 17:09): each result's usage covers its own query, so tokens add
+        // up; total_cost_usd is the session's running total (Claude Code docs; 1,191 of 1,194 cost-states measured), so the
+        // latest one counts.
         const before = s.usage;
         s.usage = before
-          ? { inputTokens: before.inputTokens + step.inputTokens, outputTokens: before.outputTokens + step.outputTokens, costUsd: laterCost(before.costUsd, step.costUsd), ...addCache(before, step) }
+          ? { inputTokens: before.inputTokens + step.inputTokens, outputTokens: before.outputTokens + step.outputTokens, costUsd: step.costUsd ?? before.costUsd, ...addCache(before, step) }
           : step;
-        this.emit({ type: 'usage', inputTokens: s.usage.inputTokens, outputTokens: s.usage.outputTokens, ...addCache(s.usage, {}), contextTokens: s.contextTokens, costUsd: s.usage.costUsd });
+        this.emit({ type: 'usage', inputTokens: s.usage.inputTokens, outputTokens: s.usage.outputTokens, ...addCache(s.usage, {}), contextTokens: s.contextTokens, costUsd: s.usage.costUsd, modelCalls: s.modelCalls });
         break;
       }
     }

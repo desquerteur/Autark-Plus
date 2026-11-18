@@ -67,7 +67,7 @@ import type { AcpLaunch } from '../engines/acp/process.ts';
 import { engineCwd } from '../system/paths.ts';
 import { newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { creditsPossible } from '../../shared/model/charge.ts';
+import { creditsPossible, extraUsageOf } from '../../shared/model/charge.ts';
 
 export type { SecretPort } from './connect.ts';
 export type { AccountServiceDeps, AddAccountInput } from './service-shape.ts';
@@ -165,6 +165,12 @@ export class AccountServiceImpl implements AccountServiceContract {
     return this.adoption.detect(force);
   }
 
+  /** 17.11.2026: "Use" for a plan login on offer (DetectionReport.found) – only now it is an account here, used and shared to this company's PCs. */
+  useFound(key: string, options: { thisPcOnly?: boolean } = {}): Promise<Account> { return this.adoption.useFound(key, options.thisPcOnly ?? true); }
+
+  /** "Not here": the offered plan login stays on the PC and unused in this company. */
+  declineFound(key: string): Promise<void> { return this.adoption.declineFound(key); }
+
   /** The last detection's report without a new scan (RT7: readers that follow every rescan), dismissed entries marked; undefined before the first. */
   lastDetection(): DetectionReport | undefined { return this.adoption.cached(); }
 
@@ -201,7 +207,7 @@ export class AccountServiceImpl implements AccountServiceContract {
   }
 
   /** `credits` (B-083): the account holds a plan's monthly API credits – charged and routed like a plan (shared/model/charge.ts). */
-  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'enabled' | 'credits'>>): Account {
+  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'enabled' | 'credits' | 'extraUsage' | 'thisPcOnly'>>): Account {
     const account = this.require(id);
     const next: Account = { ...account };
     if (typeof patch.label === 'string' && patch.label.trim()) {
@@ -214,6 +220,17 @@ export class AccountServiceImpl implements AccountServiceContract {
       if (!creditsPossible(account)) throw new WorkforceError('bad_request', 'Plan credits come with an Anthropic or OpenAI key.');
       next.credits = true;
     } else if (patch.credits === false) delete next.credits;
+    // 17.11.2026: a plan may go on past its limit on the provider's extra usage (billed by the provider) – the person's switch, off by default
+    if (patch.extraUsage === true) {
+      const can = extraUsageOf(account);
+      if (!can.ok) throw new WorkforceError('bad_request', can.why);
+      next.extraUsage = true;
+    } else if (patch.extraUsage === false) delete next.extraUsage;
+    // 17.11.2026: a plan login stays on this PC, or goes to all PCs of the company (the other PCs drop it when it comes back here only)
+    if (typeof patch.thisPcOnly === 'boolean') {
+      if (account.auth !== 'cli') throw new WorkforceError('bad_request', 'Only a plan login can stay on this PC.');
+      if (patch.thisPcOnly) next.thisPcOnly = true; else delete next.thisPcOnly;
+    }
     if (typeof patch.enabled === 'boolean') { next.enabled = patch.enabled; if (!patch.enabled) next.state = 'disabled'; else if (next.state === 'disabled') next.state = 'unknown'; }
     const saved = this.save(next);
     // switched back on: checked again at once ('unknown' until the check answers – Settings says "Checking…")

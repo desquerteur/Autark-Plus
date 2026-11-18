@@ -7,6 +7,7 @@
 
 import { build } from 'esbuild';
 import { cp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { swPrecacheDefines } from './sw-precache.mjs';
@@ -19,8 +20,17 @@ const args = process.argv.slice(2);
 const dev = args.includes('--dev');
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-// Feedback (B-055): nothing is compiled in – the runtime reads the team's receiver from resources/feedback/receiver.json
-// (written by `wf feedback setup`, shipped with resources/**). The old WORKFORCE_FEEDBACK_ORIGIN endpoint is gone.
+// Feedback (B-055): the runtime reads the team's receiver from resources/feedback/receiver.json (written by
+// `wf feedback setup`, shipped with resources/**). 18.11.2026: the page gets its public part compiled in
+// (__FEEDBACK_RECEIVER__: public key, project, web API key – public by design), so a phone sends straight to the
+// mailbox (ui/feedback/direct.ts); null when the file is missing or incomplete.
+function feedbackReceiver() {
+  try {
+    const value = JSON.parse(readFileSync(path.join(root, 'resources/feedback/receiver.json'), 'utf8'));
+    return typeof value.publicKey === 'string' && typeof value.project === 'string' && typeof value.apiKey === 'string'
+      ? { publicKey: value.publicKey, project: value.project, apiKey: value.apiKey } : null;
+  } catch { return null; }
+}
 
 const common = {
   bundle: true,
@@ -28,7 +38,7 @@ const common = {
   minify: !dev,
   legalComments: 'linked',
   logLevel: 'warning',
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: { __APP_VERSION__: JSON.stringify(pkg.version), __FEEDBACK_RECEIVER__: JSON.stringify(feedbackReceiver()) },
 };
 
 // Node bundles keep heavyweight or file-based deps external (installed as production deps).
@@ -77,6 +87,8 @@ const targets = {
     await cp('assets/icon.png', 'app/ui/icon.png');
     await cp('assets/icon-maskable.png', 'app/ui/icon-maskable.png');
   },
+  // 17.11.2026: the page of main's hidden video preview window (main/media-preview.ts reads it as wf-file://media-preview/page.js), with mediabunny inside.
+  mediapreview: () => build({ ...common, entryPoints: ['src/ui/preview/page.ts'], outfile: 'app/media-preview-page.js', platform: 'browser', format: 'iife', target: 'chrome140' }),
   // The iPhone web app's shell and service worker (src/ui/hosted) as generated files of the website (apps/website/src/app),
   // with a source hash in their first line (scripts/hosted-bundle.mjs; test/unit/hosted/bundle-fresh.test.ts).
   hosted: async () => { await writeHosted(root, { minify: !dev }); },

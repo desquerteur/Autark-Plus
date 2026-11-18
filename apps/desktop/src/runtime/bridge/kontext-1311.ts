@@ -216,7 +216,7 @@ function ownTeamHow(s: Pick<RuntimeServices, 'paths'>, values: Readonly<Record<s
 }
 
 /** The wake of an agent whose SYSTEM.md got today's "# How I work" on top. */
-export const WHOLE_NOTE = 'My SYSTEM.md is my whole standing text now: the team\'s "# How I work" stands in it on top of my role and what I have here, and the team\'s standard is the comment at its end (no comment reaches the model). From here all of it is mine: I read it once, take out what does not fit my work and sharpen what does – where I am sure – and keep my agreements under "What I have here" (skill system-prompt). One line in my 1:1 with my manager or the person says what I changed.';
+export const WHOLE_NOTE = 'My SYSTEM.md is my whole standing text now: the team\'s "# How I work" stands in it on top of my role and what I have here, and the team\'s standard is the comment at its end (no comment reaches the model). From here all of it is mine: I read it once, take out what does not fit my work and sharpen what does – where I am sure – and keep my agreements under "What I have here" (skill system-prompt).';
 
 /** The SYSTEM.md part, once per PC: every agent at home here in the new form; one that got "# How I work" is woken once. */
 function systemMdPart(s: RuntimeServices): number {
@@ -225,7 +225,7 @@ function systemMdPart(s: RuntimeServices): number {
   kv.delete(PROMPT_DEFAULTS, 'compaction');
   s.prompts?.invalidate();
   const values = systemMdValues(s.settings.get());
-  const standard = (mode: string) => renderTemplate(s.prompts?.text(standardName(standardKind(mode))) ?? '', values);
+  const standard = (mode: string) => renderTemplate(s.prompts?.text(standardName(standardKind(mode === 'manager'))) ?? '', values);
   const have = splitAtHave(standard('general')).tail;
   const facts = { templates: s.org.templates(), previous: loadPreviousBodies(path.join(s.paths.resources, 'agents')), have };
   const team = ownTeamHow(s, values);

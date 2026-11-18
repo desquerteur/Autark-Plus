@@ -4,7 +4,8 @@
 // changes and MCP calls as tool_end.output, bounded 64k), usage incl. the reported context window and the cached input, limits, interrupt),
 // generated images as EngineTurnResult.files (base64 result, or the saved path when Codex sent no bytes) and the
 // turn/start input (with the volatile context block and the turn's own sandbox, approval policy and approval reviewer
-// from isolation.ts); B-049 F6: whether Codex compacted the thread in this turn (EngineTurnResult.compacted). B-049 F9:
+// from isolation.ts); B-049 F6: whether Codex compacted the thread in this turn (EngineTurnResult.compacted) – KI-Runde
+// 17.11.2026: each compaction is also a 'compacted' event (the context before it, how long it took). B-049 F9:
 // this turn's raw Responses items give its code-mode exec/wait calls as native tool events, and a call made inside a
 // script ("exec-" id) is marked nested on its tool_start (code-mode.ts). B-058: recordings as `localAudio` for a model
 // that hears audio (G7, reads.ts); a nested call's images steered into the running turn (G10, nestedImageSteer).
@@ -112,6 +113,27 @@ const INPUT_ITEMS: ReadonlySet<string> = new Set(['userMessage', 'hookPrompt']);
 const modelSign = (note: RpcNotification): boolean => note.method === 'thread/tokenUsage/updated'
   || (note.method.startsWith('item/') && !(isRecord(note.params.item) && INPUT_ITEMS.has(str(note.params.item.type) ?? '')));
 
+/**
+ * The thread's running token total (tokenUsage.total.totalTokens) as last counted, per app-server process and thread. Codex
+ * sends the thread's usage again unchanged when a turn is interrupted: measured 18.11.2026 on two cut turns (a model.set
+ * with now, a fold cut by the person's line), each run stored the turn before's last request (27,718 in + 14 out = the
+ * context before it; 141,459 + 49 = 141,508) as its own. A usage update whose total did not move is that repeat – no request.
+ * A process that has not counted the thread yet (the app started anew) knows the repeat by its size: a turn's first update
+ * whose request holds exactly the session's count before the turn – a real request of the turn holds its new input too.
+ */
+const countedTotals = new WeakMap<CodexServer, Map<string, number>>();
+
+/** Whether a usage update reports a new request of the turn (see countedTotals); `before`: the session's count before a turn's first update. */
+function newRequest(server: CodexServer, threadId: string, usage: Record<string, unknown>, before: number | undefined): boolean {
+  const total = isRecord(usage.total) ? num(usage.total.totalTokens) : undefined;
+  let threads = countedTotals.get(server);
+  if (!threads) countedTotals.set(server, (threads = new Map()));
+  const counted = threads.get(threadId);
+  if (total !== undefined) threads.set(threadId, total);
+  if (total !== undefined && counted !== undefined) return counted !== total;
+  return before === undefined || !isRecord(usage.last) || num(usage.last.totalTokens) !== before;
+}
+
 /** A completed imageGeneration item as an engine file (undefined when it carries no image). */
 export function generatedImage(item: Record<string, unknown>, n: number): EngineFile | undefined {
   if (item.status === 'failed' || isRecord(item.failure)) return undefined;
@@ -161,8 +183,17 @@ export async function runCodexTurn(args: {
   let contextTokens: number | undefined;
   let contextWindow: number | undefined;
   let requests = 0;
+  let usageSeen = false; // the turn's first usage update is weighed against the session's count before it (newRequest)
   let lastError: { message: string; info: unknown } | undefined;
   let compacted = false; // B-049 F6: Codex compacted the thread's history in this turn (contextCompaction / thread/compacted)
+  let compacting: { at: number; before?: number } | undefined; // KI-Runde 17.11.2026: a compaction that began – when, and the context then
+  // The compaction as an event, once per compaction: the context before it and how long it took, as far as this turn saw them.
+  const tellCompacted = () => {
+    if (compacted && !compacting) return; // its deprecated second form
+    compacted = true;
+    emit({ type: 'compacted', ...(compacting?.before !== undefined ? { before: compacting.before } : contextTokens !== undefined ? { before: contextTokens } : {}), ...(compacting ? { ms: Math.max(0, args.now() - compacting.at) } : {}) });
+    compacting = undefined;
+  };
   let turnId: string | undefined;
   let ended = false; // this Codex cannot run tools: the turn was stopped
   let quiet: ReturnType<typeof setTimeout> | undefined; // a helper turn's cut, until the model's first sign
@@ -203,7 +234,10 @@ export async function runCodexTurn(args: {
         const item = isRecord(p.item) ? p.item : undefined;
         if (!item) break;
         const type = str(item.type) ?? '';
-        if (type === 'contextCompaction') compacted = true;
+        if (type === 'contextCompaction') {
+          if (note.method === 'item/started') compacting = { at: args.now(), ...(contextTokens !== undefined ? { before: contextTokens } : {}) };
+          else tellCompacted();
+        }
         if (type === 'agentMessage') {
           const id = str(item.id) ?? '';
           if (item.phase === 'commentary') commentary.add(id);
@@ -237,6 +271,9 @@ export async function runCodexTurn(args: {
       }
       case 'thread/tokenUsage/updated': {
         const tu = isRecord(p.tokenUsage) ? p.tokenUsage : {};
+        const first = !usageSeen;
+        usageSeen = true;
+        if (!newRequest(server, threadId, tu, first ? input.session?.contextTokens : undefined)) break; // the thread's usage sent again (an interrupt): no request of this turn
         const last = isRecord(tu.last) ? tu.last : {};
         const inTok = num(last.inputTokens) ?? 0, outTok = num(last.outputTokens) ?? 0;
         const cached = num(last.cachedInputTokens); // a part of inputTokens, which stays the total
@@ -250,7 +287,7 @@ export async function runCodexTurn(args: {
         break;
       }
       case 'thread/compacted': // deprecated form of the contextCompaction item (app-server schema v2)
-        compacted = true;
+        tellCompacted();
         break;
       case 'rawResponseItem/completed': // B-049 F9: only this turn's (an injection's items carry an 'auto-compact-<n>' turn id)
         if (p.turnId === turnId && isRecord(p.item)) {
@@ -334,7 +371,10 @@ export async function runCodexTurn(args: {
     const { status, error } = await completed;
     code.flush(); // B-049 F9: a script call still open ends with what it printed
     // B-080: the completed answers (as Codex keeps them in its thread); the streamed deltas only when none completed
-    const answers = [...texts.entries()].filter(([id]) => !commentary.has(id));
+    // A helper turn has no tools, so a model that wrote its whole answer as a commentary message (18.11.2026, a call's voice:
+    // the line went unanswered and nothing was passed on) answered with it.
+    const final = [...texts.entries()].filter(([id]) => !commentary.has(id));
+    const answers = args.helper && !final.some(([, part]) => part.trim()) ? [...texts.entries()] : final;
     const kept = answers.some(([id]) => done.has(id)) ? answers.filter(([id]) => done.has(id)) : answers;
     const text = kept.map(([, part]) => part).filter(Boolean).join('\n\n');
     const result: EngineTurnResult = { text, stop: 'done', usage, contextTokens, contextWindow, session };

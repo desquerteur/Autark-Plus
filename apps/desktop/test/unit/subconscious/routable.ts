@@ -1,6 +1,5 @@
-// Test helper (Unterbewusstsein v1, re-review 14.11.2026): the routing call names only the models the router's own pool runs for the turn
-// (subconscious/route-turn.ts offeredModels → routing/pool.ts buildPool). This gives fake services one Codex plan account for their
-// connected models (the fixtures' model() lists 'acc_1') and the routing settings the pool reads; `models` replaces the catalog's list.
+// Test helper: fake services that route – one Codex plan account for their connected models (the fixtures' model() lists 'acc_1')
+// and the routing settings the router's pool reads (routing/pool.ts buildPool); `models` replaces the catalog's list.
 // Owns: that setup only. Never: real accounts or engines.
 
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';

@@ -4,7 +4,7 @@
    Owns: .ask-strip*. Never: colors outside tokens.css. */
 .ask-strip { /* the composer's axis and width (chat.css .message-column, .composer-area) */
   --col-inset: clamp(16px, 5cqi, 24px);
-  display: flex; flex: none; align-items: center; gap: 8px; box-sizing: border-box; width: min(var(--message-max), 100cqi - 2 * var(--col-inset));
+  display: flex; flex: none; align-items: center; gap: 8px; box-sizing: border-box; width: min(var(--message-max), calc((100cqi - 2 * var(--col-inset)) / var(--chat-zoom, 1)));
   height: 44px; margin: 0 auto 6px; padding: 0 8px 0 10px; overflow: hidden;
   border: 1.5px solid var(--warn); border-radius: var(--r-lg); background: color-mix(in srgb, var(--warn) 6%, var(--surface));
 }

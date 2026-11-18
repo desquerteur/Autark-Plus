@@ -68,6 +68,8 @@ import { WorkPresence } from '../work-presence/service.ts'; // B-055 G (Q11)
 import '../work-presence/contract.ts'; // RuntimeServices.workPresence
 import { SubconsciousImpl } from '../subconscious/service.ts';
 import { ContextLedgerService } from '../context/ledger/service.ts';
+import { startSecurityLog } from '../settings/security-log.ts';
+import { KvRepo } from '../store/kv.ts';
 import { SessionSweep, transcriptFiles } from '../agents/session-sweep.ts';
 import { Registry } from '../tools/registry.ts';
 import { registerBuiltinTools } from '../tools/builtin/index.ts';
@@ -235,6 +237,7 @@ export async function createCore(options: CoreOptions): Promise<Core> {
     supervisor, finder, paths, version: options.version, fake: options.fakeEngine,
     apiKey: (account) => accounts.apiKey(account.id),
     acp: accounts.acpLaunch, // PR8: an ACP plan runs the launch its detection confirmed (unavailable until then)
+    warn: (message, data) => log.warn(message, data),
     onLimits: (accountId, limits) => { try { accounts.updateLimits(accountId, limits); } catch (error) { log.warn('limits update failed', { error: String(error) }); } },
   });
   s.engines = engines;
@@ -264,6 +267,7 @@ export async function createCore(options: CoreOptions): Promise<Core> {
   s.workPresence.start();
   s.ledger = new ContextLedgerService({ services }); // the context ledger: captures turns from the run journal, marks by item id (context/ledger)
   s.ledger.start?.();
+  startSecurityLog({ bus, settings, kv: new KvRepo(db), now: () => clock.now() }); // Settings › Security's change log (settings/security-log.ts)
   s.subconscious = new SubconsciousImpl({ services });
   s.evidence = createEvidenceChecker(); // B-047 D11: deterministic evidence checks of task results (subconscious/verify.ts)
   s.vectors = createVectors(s); // vector.embed / vector.search (runtime/vectors/create.ts)

@@ -12,9 +12,13 @@
 // and sessions sat at the window's ceiling because the fit trims only the excess above 80 %): the lean history. At a native
 // rebuild (sent uncached anyway) the tool work of finished runs keeps its call and arguments in place with the restore stamp and
 // leaves its output (leanMarks: condensed by 'window'); their reasoning is hidden. Chat lines and the agent's own words stay.
-// The same choice over the ledger's rows (leanRows, rowsResend) sizes a rebuild for savings before any original is read.
-// Owns: which items the fit hides, which items the lean history and the chat lines' reach set aside and the platform's token unit
-// (tokensOf, B-080 wave 3). Never: deletes anything, marks the agent's own words, the newest turn, the kept runs or a pinned item.
+// KI-Runde 17.11.2026: the lean history rides on a rebuild that happens anyway (agents/rebuild.ts) – nothing here weighs a
+// rebuild for savings any more. The fold (foldHides): once the agent wrote its hand-over, everything of its own work before
+// it leaves the view – restorable like any mark – while the chat lines (the agent's own posted words among them), the
+// tasks.finish calls since the hand-over before it and what it brought back stay.
+// Owns: which items the fit hides, which items the lean history and the chat lines' reach set aside, which items a fold hides,
+// and the platform's token unit (tokensOf). Never: deletes anything; the fit and the lean history never mark the agent's own
+// words, the newest turn, the kept runs or a pinned item.
 
 import { CHARS_PER_TOKEN, compactStamp, type LedgerItem, type LedgerKind, type LedgerState, type LedgerViewItem } from '../../../shared/model/context-ledger.ts';
 
@@ -90,7 +94,7 @@ export function leanStart(text: string): string {
   return at < 0 ? text : text.slice(0, at);
 }
 
-/** B-080 wave 3: a character count in the platform's one token unit (shared/model/context-ledger.ts CHARS_PER_TOKEN, measured there). */
+/** A character count in the platform's one token unit (shared/model/context-ledger.ts CHARS_PER_TOKEN, measured there). */
 export { CHARS_PER_TOKEN };
 export const tokensOf = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
 
@@ -126,18 +130,22 @@ export function fitHides(entries: readonly LedgerViewItem[], excess: number, kee
 /** B-089: one lean mark and the tokens it takes off the rebuilt history; `reason`: the mark's own (else LEAN_REASON); `text`: a condensed one's (leanText, else LEAN_TEXT). */
 export interface LeanMark { itemId: string; state: 'condensed' | 'hidden'; saves: number; reason?: string; text?: string }
 
-/** The chat lines my context carries: those of the last CHAT_DAYS before the newest line, at most CHAT_TOKENS of them. */
+/**
+ * The chat lines my context carries: those of the last CHAT_DAYS before the newest line, at most CHAT_TOKENS of them
+ * (17.11.2026: 24,000 at two characters per token – the same 48,000 characters the 16,000 held at three).
+ */
 export const CHAT_DAYS = 2;
-export const CHAT_TOKENS = 16_000;
+export const CHAT_TOKENS = 24_000;
 export const CHAT_REASON = 'an older chat line – chat.read finds it by date';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The chat lines past that reach, as hidden marks: newest first, a line is hidden once it is older than CHAT_DAYS before the
- * newest line or the newer lines already fill CHAT_TOKENS. Never the newest line, a pinned or nested one. Pure.
+ * newest line or the newer lines already fill CHAT_TOKENS. Never the newest line, a pinned or nested one. `rows` are the
+ * thread's lines – the others' and the agent's own posted words alike (ledger.lines). Pure.
  */
 export function oldChatLines(rows: readonly LedgerItem[], pinned: ReadonlySet<string>): LeanMark[] {
-  const lines = rows.filter((row) => row.kind === 'message' && row.state !== 'hidden' && !row.nested).sort((a, b) => a.order - b.order);
+  const lines = rows.filter((row) => row.state !== 'hidden' && !row.nested).sort((a, b) => a.order - b.order);
   const newest = lines.at(-1)?.createdAt ?? 0;
   const out: LeanMark[] = [];
   let used = 0;
@@ -160,7 +168,7 @@ export function leanCost(entry: Pick<LedgerViewItem, 'itemId' | 'text' | 'call' 
   return entryTokens({ text: '', call: { name: '', args: entry.call?.args ?? {}, callId: '', output: `${text}\n${stamp}` } });
 }
 
-/** B-089: what leanMarks and leanRows both choose from – an item, what it costs now and what its condensed form would cost. */
+/** B-089: what the lean history chooses from – an item, what it costs now and what its condensed form would cost. */
 interface LeanCandidate { itemId: string; kind: LedgerKind; runId?: string; state: LedgerState; nested?: boolean; tokens: number; cost: number; text?: string }
 type LeanKeep = { runs: ReadonlySet<string>; pinned: ReadonlySet<string> };
 
@@ -192,44 +200,16 @@ export function leanMarks(entries: readonly LedgerViewItem[], keep: LeanKeep): L
   }), keep);
 }
 
-/**
- * B-089: a row's size without reading its original (the ledger's capture estimate), capped at what a rebuild shows of it at most
- * (`capChars`; view.ts: 24,000 characters of a tool output of ours and of a text, 64,000 of an engine's own output).
- */
-export function rowTokens(row: Pick<LedgerItem, 'tokens' | 'nested'>, capChars: number): number {
-  return row.nested ? 0 : Math.min(Math.max(0, row.tokens), tokensOf(capChars));
-}
-/** B-089: the smaller cap estimates a saving, the larger a re-send – the check errs towards keeping the warm cache. */
-const ROW_SAVES_CHARS = 24_000;
-const ROW_RESEND_CHARS = 64_000;
-/** B-089: a condensed row's text (`chars` long) plus its stamp, without its arguments (the rows hold none; ledger/service.ts STAMP_TOKENS). */
-const rowCondensed = (row: Pick<LedgerItem, 'itemId'>, chars: number) => tokensOf(chars + 1 + compactStamp(row.itemId, 0).length + 6);
-/**
- * The rows' estimate of a lean row, a lower bound of the view's exact figure (leanCost) with no original read: LEAN_TEXT, ' It began: ', the
- * start as leanText sizes it (startOf the row's size), ' …' and the stamp at its fewest digits. The row's size also counts the call's
- * arguments, which leanCost counts in full, so what they add to the start stays below what they add there (at or below leanCost on all 249
- * real tool outputs, fix A 14.11.). Only an output of mostly white space renders a shorter start (and one of a few characters none – its
- * condensed form costs more than it does). The values a leanText adds are unknown without the original. So the rows err towards a rebuild
- * here, and the view's exact figures (leanMarks, rebuild.ts) weigh it again before
- * anything is written – a refusal is remembered (review 14.11.: the rows' saving runs ~29 % above the exact one on real cases; sizing them at
- * the most a leanText can hold refused rebuilds that pay).
- */
-const rowLean = (row: Pick<LedgerItem, 'itemId' | 'tokens' | 'nested'>) =>
-  tokensOf(LEAN_TEXT.length + 13 + startOf(rowTokens(row, ROW_SAVES_CHARS) * CHARS_PER_TOKEN) + 1 + compactStamp(row.itemId, 0).length);
+/** The reason a fold's hide carries (the ledger's mark reason). */
+export const FOLD_REASON = 'my work before my hand-over';
 
-/** B-089: leanMarks over the ledger's rows – the same choice with no original read (the cheap check before a rebuild for savings). */
-export function leanRows(rows: readonly LedgerItem[], keep: LeanKeep): LeanMark[] {
-  return leanPick(rows.map((row) => ({ ...row, tokens: rowTokens(row, ROW_SAVES_CHARS), cost: rowLean(row) })), keep);
-}
-
-/** B-089: the rebuilt history's size from the rows once `lean` applies: kept rows as they are, condensed ones short, hidden and nested none. */
-export function rowsResend(rows: readonly LedgerItem[], lean: readonly LeanMark[]): number {
-  const marked = new Map(lean.map((mark) => [mark.itemId, mark.state]));
-  let sum = 0;
-  for (const row of rows) {
-    const state = marked.get(row.itemId) ?? row.state;
-    if (state === 'hidden' || row.nested) continue;
-    sum += state === 'condensed' ? (marked.has(row.itemId) ? rowLean(row) : rowCondensed(row, row.condensed?.length ?? 0)) : rowTokens(row, ROW_RESEND_CHARS);
-  }
-  return sum;
+/**
+ * The fold's choice: every item before order `before` (where the hand-over starts) that is still in view and is the agent's own
+ * work – tool calls and outputs (a script's inner calls with it), skills, files, reasoning, its own words, an earlier hand-over.
+ * Never a chat line (its reach rule decides), an item in `stays` (the tasks.finish calls: their arguments are the task's
+ * summary) or one the agent brought back and that is still pinned. Pure: nothing is written.
+ */
+export function foldHides(rows: readonly LedgerItem[], before: number, stays: ReadonlySet<string>): string[] {
+  return rows.filter((row) => row.order < before && row.state !== 'hidden' && row.kind !== 'message' && !stays.has(row.itemId)
+    && (row.kind === 'checkpoint' || row.pinnedUntil === undefined)).map((row) => row.itemId);
 }

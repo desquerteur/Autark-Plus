@@ -64,7 +64,7 @@ test('loginUnknown: only an installed Codex or Claude Code without a login answe
   assert.equal(loginUnknown({ clis: [{ provider: 'claude' }, { provider: 'gemini-cli', path: '/bin/gemini' }, { provider: 'copilot', path: '/bin/copilot' }, { provider: 'kimi-cli', path: '/bin/kimi' }] }), false);
 });
 
-test('adoption: a report with an unknown login is scanned again on the next non-forced detect (no timer), a complete one is served from the cache', async () => {
+test('adoption: a report with an unknown login is scanned again on the next non-forced detect (no timer), a complete one is served from the cache; the login it finds is offered', async () => {
   const reports = [
     { clis: [{ provider: 'claude' as const, path: '/bin/claude' }], localServers: [], envKeys: [], checkedAt: 1 },
     { clis: [{ provider: 'claude' as const, path: '/bin/claude', version: '2.1.303', loggedIn: true, method: 'claude.ai' }], localServers: [], envKeys: [], checkedAt: 2 },
@@ -78,9 +78,11 @@ test('adoption: a report with an unknown login is scanned again on the next non-
   });
   assert.equal((await adoption.detect(false)).checkedAt, 1);
   assert.equal(saved.length, 0, 'an unknown login is not adopted');
+  assert.deepEqual(adoption.cached()?.found, [], 'and not offered');
   assert.equal((await adoption.detect(false)).checkedAt, 2, 'the incomplete report is not served again: a new scan');
   assert.equal(scans, 2);
-  assert.equal(saved.length, 1, 'the login the second scan found is adopted');
+  assert.equal(saved.length, 0, 'the login the second scan found is not adopted behind the person\'s back');
+  assert.deepEqual(adoption.cached()?.found, [{ key: 'claude:default', provider: 'claude', where: 'this-pc' }], 'it is offered');
   assert.equal((await adoption.detect(false)).checkedAt, 2, 'a complete report comes from the cache');
   assert.equal(scans, 2, 'no further scan');
   assert.equal(adoption.cached()?.checkedAt, 2);

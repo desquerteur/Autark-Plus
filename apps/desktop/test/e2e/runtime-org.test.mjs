@@ -112,7 +112,7 @@ test('hiring and delegation: the secretary at once, delegated work comes back to
   assert.equal(dev.managerId, manager.id);
   assert.equal((await client.call('spaces.list')).find((space) => space.id === dev.spaceId)?.kind, 'company', 'the company area');
   // A fresh chat for the brief (the first chat holds the hire directive, which a renewed session
-  // would run again) and a work chat the developer joins (it never sees the brief's directive).
+  // would run again) and a work chat named for the job (the person is in it, so the work lands in the Manager's 1:1 with the developer).
   const brief = await client.call('chats.create', { title: 'Website', agentIds: [manager.id] });
   const work = await client.call('chats.create', { title: 'Landing page', agentIds: [manager.id] });
   await client.call('events.subscribe', { topics: [`chat:${brief.id}`, `chat:${work.id}`, `runs:${dev.id}`, `runs:${manager.id}`] });
@@ -138,13 +138,17 @@ test('hiring and delegation: the secretary at once, delegated work comes back to
 
   const done = await doneTask;
   assert.equal(done.id, delegated.taskId);
-  assert.deepEqual([done.assigneeId, done.createdBy, done.conversationId, done.parentId], [dev.id, manager.id, work.id, undefined]);
+  // KI-Runde 17.11. §5.6: work handed from a chat the person is in to an agent who is not in it lands in the giver's 1:1 with the receiver.
+  const room = await client.call('chats.get', { id: done.conversationId });
+  assert.equal(room.settings.direct, true, 'the work lands in a 1:1');
+  assert.deepEqual(room.members.filter((member) => !member.leftAt).map((member) => member.memberId).sort(), [manager.id, dev.id].sort(), 'the Manager\'s 1:1 with the developer');
+  assert.deepEqual([done.assigneeId, done.createdBy, done.parentId], [dev.id, manager.id, undefined]);
   assert.equal(done.result?.summary, 'Landing page built');
   assert.equal(done.result?.verification, 'claimed_by_agent');
   const runs = client.events.filter((frame) => frame.event === 'run.upserted' && frame.data.agentId === dev.id).map((frame) => frame.data);
   assert.equal(done.ledger?.givenIn, brief.id, 'it knows the chat it was given from');
   assert.ok(runs.some((run) => run.trigger === 'task' && run.taskId === done.id), 'the developer worked on it in its task turn');
-  assert.ok((await client.call('chats.get', { id: work.id })).members.some((member) => member.memberId === dev.id && !member.leftAt), 'the developer joined the work chat');
+  assert.ok(!(await client.call('chats.get', { id: work.id })).members.some((member) => member.memberId === dev.id && !member.leftAt), 'the person\'s work chat keeps its members');
 
   const woken = await childRun;
   assert.equal(woken.conversationId, brief.id, 'the Manager hears back in the chat it gave the work from');

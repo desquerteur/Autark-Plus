@@ -99,7 +99,7 @@ test('mini-app to-dos hand a generated WAV and a fake-microphone take back to th
   await wavItem.waitFor({ state: 'detached', timeout: 20_000 });
   const wavReceipt = await receiptOf(wavTodo);
   assert.deepEqual(wavReceipt?.attachments.map((attachment) => [attachment.name, attachment.mime]), [['take.wav', 'audio/wav']]);
-  assert.equal(wavReceipt.body, 'Done in mini-app');
+  assert.equal(wavReceipt.body, 'Done in mini-app\ntake: take.wav'); // answer-text.ts appText: the data the app handed back, the file by name
 
   await go(`#/chat/${chat.id}`);
   const receiptView = page.locator(`[data-message-id="${wavReceipt.id}"]`);

@@ -14,6 +14,8 @@ import { STABLE_MS, type BootJournal } from './journal.ts';
 export interface GuardedBootDeps<R, P> {
   journal: BootJournal;
   version: string;
+  /** Linux desktop only: check OS storage before the database or boot journal is opened. */
+  keyringAvailable?(): Promise<boolean>;
   /** Builds the full runtime (createRuntime). */
   start(): Promise<R>;
   /** Builds the repair runtime for `problem`. */
@@ -30,6 +32,11 @@ function defaultLater(fn: () => void, ms: number): void {
 }
 
 export async function guardedBoot<R, P>(deps: GuardedBootDeps<R, P>): Promise<BootOutcome<R, P>> {
+  if (deps.keyringAvailable && !await deps.keyringAvailable()) {
+    // Environmental, not a crash. Do not pin it in the journal; the next app launch checks anew.
+    const problem: StartProblem = { code: 'keyring_unavailable', version: deps.version, at: Date.now() };
+    return { kind: 'repair', repair: deps.repair(problem), problem };
+  }
   const begun = deps.journal.begin(deps.version);
   if (begun.problem) return { kind: 'repair', repair: deps.repair(begun.problem), problem: begun.problem };
   let runtime: R;

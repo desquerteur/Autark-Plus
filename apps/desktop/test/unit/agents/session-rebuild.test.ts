@@ -2,20 +2,22 @@
 // with two recording engines (caps.rebuild) and a fake context ledger: an engine switch rebuilds from the ledger and
 // binds the new session (only new lines as input, the old binding superseded, ledger.rebuilt, run note); a failed
 // rebuild or probe falls back to today's path with a run note; the probe is kept per CLI version; a rebuilt session
-// that ends on its first turn falls back at once and blocks further rebuilds of that chat; marks that take something off
-// rebuild at the next turn, with the call naming what is marked; the view mapping (lines the delta carries stay out).
+// that ends on its first turn falls back at once and blocks further rebuilds of that chat; marks land with the next rebuild
+// that happens anyway, with the call naming what is marked; the view mapping (lines the delta carries stay out).
 // B-080 (the part the session holds, the fit) and B-080 wave 3 (one token unit, the fallback memory) are in session-rebuild-b080.test.ts;
 // the harness both use is rebuild-harness.ts.
-// B-089 (11.11.2026, live 10.11.: warm rebuilds re-sent whole sessions uncached): a marks rebuild on the same engine runs when it pays –
-// the cases about marks, the revert path and the shrink guard let the session rest past CACHE_COLD_MS, where any saving pays
-// (the warm rule and the lean history are in rebuild-lean.test.ts).
+// KI-Runde 17.11.2026: a session starts anew only where it does anyway (an engine switch, no session, a fold, past the fit, a cold
+// cache) – marks ride on that rebuild and are no reason for one; the cases about marks and the revert path let the session rest
+// past CACHE_COLD_MS; past the fit the engine's own count calibrates the room, and a record nothing brings under the limit
+// renews the session with the record as text (the lean history is in rebuild-lean.test.ts, the fold in context-fold.test.ts).
 
 import { PROJECTION } from '../../../src/runtime/context/projection.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { account } from '../models/harness.ts';
 import { SUPERSEDED_NS, type SupersededSession } from '../../../src/runtime/agents/sessions.ts';
-import { CACHE_COLD_MS, PROBE_NS, PROBE_REV, probeFor, rebuildItems, withMarks } from '../../../src/runtime/agents/rebuild.ts';
+import { PROBE_NS, PROBE_REV, probeFor, rebuildItems, withMarks } from '../../../src/runtime/agents/rebuild.ts';
+import { CACHE_COLD_MS } from '../../../src/runtime/agents/compaction-policy.ts';
 import { marksCall } from '../../../src/runtime/context/ledger/marks.ts';
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
 import type { EngineRebuildInput, RebuildProbe } from '../../../src/runtime/engines/types.ts';
@@ -44,7 +46,7 @@ test('switch: the turn on the other engine rebuilds its session from the ledger,
   assert.equal(h.codex.state.probes, 1, 'the probe ran once for this version');
 
   const input = h.codex.calls[0];
-  assert.deepEqual(input.session, { ref: 'codex-r1', generation: 1 });
+  assert.deepEqual(input.session, { ref: 'codex-r1', generation: 1, contextTokens: 585 }); // the rebuilt binding's own count goes with it
   assert.match(textOf(input), /Use CSV please/);
   assert.doesNotMatch(textOf(input), /Earlier messages:|Build the export/, 'no catch-up block: the history is native now');
   assert.equal(h.binding('codex')?.ref, 'codex-r1');
@@ -111,15 +113,18 @@ test('a rebuild the engine refuses is not tried again every turn (each try start
   h.claude.engine.rebuild = async (input) => { tries++; return rebuild(input); };
   h.claude.state.fail = 'refused';
   h.ledgerState.need = { since: 1, reason: '1 hidden', saves: 50_000 };
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1); // rested past the cache: the session would start anew
   h.send('One');
   await h.turn('claude');
   assert.equal(tries, 1);
-  assert.deepEqual(h.notes('run_2').find((note) => note.rebuild), { rebuild: 'fallback', why: 'marks', reason: 'refused' });
+  assert.deepEqual(h.notes('run_2').find((note) => note.rebuild), { rebuild: 'fallback', why: 'cold', reason: 'refused' });
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
   h.send('Two');
   await h.turn('claude');
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
   h.send('Three');
   await h.turn('claude');
-  assert.equal(tries, 1, 'the same marks do not start one more session each turn');
+  assert.equal(tries, 1, 'the refusal does not start one more session each turn');
 });
 
 test('first-turn error: a rebuilt session that ends on its first turn falls back at once to my record as text and blocks rebuilds of that thread', async () => {
@@ -161,38 +166,40 @@ test('backstop: an ended (overflowing) session is rebuilt from my record in its 
   assert.ok(h.notes('run_2').some((note) => note.rebuild === 'native' && note.why === 'no_session'));
 });
 
-test('marks: any mark the session lacks that takes something off rebuilds it at the next turn; the rebuilt history ends with the call naming what is marked', async () => {
+test('marks ride on a rebuild that happens anyway: a warm session is never rebuilt for them, whatever they save; a cold one starts anew with them and the call naming what is marked', async () => {
   const h = setup();
   h.send('Hello');
   await h.turn('codex');
   h.ledgerState.view = view([['a1', 'assistant', 'assistant', 'Long answer'], ['t2', 'tool', 'tool', 'short {"compacted":"t2"}', { name: 'shell', args: { command: 'npm i' }, callId: 'c1', output: 'short' }]]);
   h.ledgerState.marked = [{ agentId: 'a', conversationId: 'c', itemId: 't2', kind: 'tool', order: 2, createdAt: 0, tokens: 9000, title: 'npm install log', state: 'condensed', origin: {} }];
-  h.ledgerState.need = { since: 2, reason: '1 restored', saves: -400 };
+  // KI-Runde 17.11.2026: 110 warm rebuilds for savings took 11 % off and each paid a full cache write – a saving alone is no reason.
+  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 500_000 };
   h.send('Next');
   await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 0, 'a restore alone takes nothing off: the call that brought it back stands for it');
+  assert.equal(h.codex.rebuilds.length, 0, 'warm: the marks wait, however much they would take off');
   assert.equal(h.codex.calls[1].session?.ref, 'codex-s1');
-  // q-r3: a restore whose result was condensed about balances (the item back in place, the result short) – still nothing to rebuild for.
-  h.ledgerState.need = { since: 2, reason: '1 restored, 1 condensed', saves: 300, marked: false };
-  h.send('Again');
-  await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 0, 'no mark of the subconscious among the changes');
+  assert.equal(h.notes('run_2').find((note) => note.rebuild), undefined, 'and no note about a rebuild that does not pay: nothing is weighed');
 
-  // q-r1b2 (03.11.2026): marks came almost every turn, a gate of max(12k, 25 %) let them in only every third; medium items never.
-  // B-089: a session past a provider cache's life is sent uncached either way – there any saving rebuilds it.
-  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 400 };
-  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1); // the cache is gone: the next call reads everything uncached either way
   h.send('More');
   await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 1, 'no minimum saving');
+  assert.equal(h.codex.rebuilds.length, 1, 'cold: the session starts anew with the marks');
   const items = h.codex.rebuilds[0].items;
   const said = 'My context, kept small: condensed t2 – get any back with tools.call {"name":"context.restore","args":{"ids":[…]}}.';
   assert.deepEqual(items.at(-1), { itemId: 'marks2', kind: 't', role: 'tool', text: said, call: { name: 'subconscious', args: {}, callId: 'call_context_marks_2', output: said } });
+  assert.equal(h.codex.calls[2].session?.ref, 'codex-r1');
+  assert.equal(h.notes('run_3').find((note) => note.rebuild)?.why, 'cold');
+
+  // A cold session that already holds the record as the ledger has it: starting it anew would change nothing.
+  h.ledgerState.need = undefined;
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
+  h.send('Later');
+  await h.turn('codex');
+  assert.equal(h.codex.rebuilds.length, 1, 'nothing to land: it resumes');
   assert.equal(h.codex.calls[3].session?.ref, 'codex-r1');
-  assert.equal(h.notes('run_4').find((note) => note.rebuild)?.why, 'marks');
 });
 
-test('marks come before the backstop: past the fit of the window any marks rebuild the session; B-080 without marks too (the part it holds fits)', async () => {
+test('past the fit of the window the session starts anew under the limit, with or without marks – the renewal is only the backstop', async () => {
   const h = setup();
   h.send('Hello');
   await h.turn('codex');
@@ -204,7 +211,9 @@ test('marks come before the backstop: past the fit of the window any marks rebui
   await h.turn('codex');
   assert.equal(h.codex.rebuilds.length, 1);
   assert.equal(h.codex.calls[1].session?.ref, 'codex-r1', 'the rebuilt session goes on');
-  assert.equal(h.notes('run_2').find((note) => note.rebuild)?.why, 'marks');
+  const fitted = h.notes('run_2').find((note) => note.rebuild)!;
+  assert.equal(fitted.why, 'fit');
+  assert.equal(fitted.live, 170_000, 'the note names the engine\'s own count that was past the fit');
 
   h.store.save({ ...h.binding('codex')!, contextTokens: 170_000 }); // B-080: past 80 % of the assumed 200k window (the catalog names none)
   h.ledgerState.need = undefined;
@@ -338,33 +347,44 @@ test('B-049 F6: a rebuild that keeps the session ref (a Codex revert) forgets wh
   assert.ok(next.system.volatile.includes('## My chats') && next.system.volatile.includes('## Now'), next.system.volatile);
 });
 
-test('B-049 F9 guard: a marks rebuild that would not shrink the live context is skipped with a note; a bigger live context rebuilds; a switch always does', async () => {
+test('past the fit the engine\'s own count calibrates the fit: a record the estimate alone lets through is brought under the limit; a switch rebuilds whatever the size', async () => {
   const h = setup();
-  h.codex.state.reply = () => ({ contextTokens: 14_000 }); // what the engine reports as the session's real context
   h.send('Hello');
   await h.turn('codex');
-  assert.equal(h.binding('codex')?.contextTokens, 14_000);
-  h.ledgerState.view = view([['a1', 'assistant', 'assistant', 'x'.repeat(60_000)], ['t2', 'tool', 'tool', 'short {"compacted":"t2"}', { name: 'shell', args: { command: 'npm i' }, callId: 'c1', output: 'short' }]]);
-  h.ledgerState.marked = [{ agentId: 'a', conversationId: 'c', itemId: 't2', kind: 'tool', order: 2, createdAt: 0, tokens: 9000, title: 'npm install log', state: 'condensed', origin: {} }];
-  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 20_000 }; // the ledger's savings alone say "worth it"
-  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1); // B-089: rested past the cache, so only the shrink guard decides
+  // A 200k window: the fit is 160,000 of Codex's own tokens, which hold 3.4 characters each (the ledger counts two). The engine
+  // counts 176,000 in the session; the ledger estimates the record at 229,506 of its tokens plus the turn's prompt – 135,000 of
+  // Codex's, so by the estimate alone it fits, and a rebuild that hid nothing would come back just as big (15.–17.11.2026: 63
+  // such rebuilds wrote 48M tokens and 43 of them were still past the fit).
+  h.store.save({ ...h.binding('codex')!, contextTokens: 176_000 });
+  const big = (id: string) => [id, 'tool', 'tool', 'x'.repeat(153_000), { name: 'shell', args: {}, callId: id, output: 'x'.repeat(153_000) }] as const;
+  h.ledgerState.view = view([[...big('t1')], [...big('t2')], [...big('t3')], ['a4', 'assistant', 'assistant', 'Done.']]);
   h.send('Next');
   await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 0, 'the rebuilt history (20k + prompt) is not smaller than the 14k the session really holds');
-  const skipped = h.notes('run_2').find((note) => note.rebuild)!;
-  assert.equal(skipped.rebuild, 'skipped');
-  assert.equal(skipped.why, 'not smaller than the live context');
-  assert.equal(skipped.live, 14_000);
-  // B-080 wave 3: 60,000 characters are 20,000 tokens in the engines' unit (window.ts tokensOf), not 15,000
-  assert.ok(Number(skipped.rebuilt) > 20_500, `${skipped.rebuilt}: the history (~20.06k) plus the turn's prompt and tool definitions`);
-  assert.equal(h.codex.calls[1].session?.ref, 'codex-s1', 'the session goes on as it is');
+  assert.equal(h.codex.rebuilds.length, 1);
+  const notes = h.notes('run_2');
+  const fit = notes.find((note) => note.fit)!.fit as { hidden: number; before: number; after: number; room: number };
+  assert.equal(fit.hidden, 1, 'the oldest tool work goes: what the engine counts above the limit is taken off');
+  assert.equal(fit.before, 229_506);
+  assert.ok(fit.room < fit.before && fit.room >= 160_000 * 1.7 / 1.25 - 25_000, `${fit.room}: the room – the fit in the ledger's tokens – shrinks by the engine's count over the estimate, at most 1.25 times`);
+  assert.deepEqual(h.codex.rebuilds[0].items.filter((item) => item.itemId !== 'marks1').map((item) => item.itemId), ['t2', 't3', 'a4']);
+  const rebuilt = notes.find((note) => note.rebuild === 'native')!;
+  assert.equal(rebuilt.why, 'fit');
+  assert.equal(rebuilt.live, 176_000);
+  assert.ok(Number(rebuilt.tokens) <= fit.room, 'the new session starts under the calibrated limit');
 
-  h.store.save({ ...h.binding('codex')!, contextTokens: 60_000 });
-  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
-  h.send('More');
-  await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 1, 'clearly smaller than 60k: rebuilt');
-  assert.equal(h.notes('run_3').find((note) => note.rebuild)?.why, 'marks');
+  // A record that nothing brings under the limit: no rebuild that would come back past the fit – the session is renewed with my record as text.
+  const r = setup();
+  r.send('Hello');
+  await r.turn('codex');
+  r.store.save({ ...r.binding('codex')!, contextTokens: 176_000 });
+  r.ledgerState.view = view([['a1', 'assistant', 'assistant', 'y'.repeat(578_000)]]); // my own words alone, 170,000 of Codex's tokens: nothing the fit may hide
+  r.send('Next');
+  await r.turn('codex');
+  assert.equal(r.codex.rebuilds.length, 0);
+  assert.deepEqual(r.notes('run_2').find((note) => note.rebuild), { rebuild: 'fallback', why: 'fit', reason: 'too_large' });
+  assert.ok(r.notes('run_2').some((note) => note.sessionRenewed === 'context'), 'renewed once');
+  assert.equal(r.codex.calls[1].session, undefined);
+  assert.match(textOf(r.codex.calls[1]), new RegExp(`^${PROJECTION.history}`), 'with my record as text');
 
   const s = setup();
   s.codex.state.reply = () => ({ contextTokens: 1_000 });
@@ -376,7 +396,7 @@ test('B-049 F9 guard: a marks rebuild that would not shrink the live context is 
   assert.equal(s.claude.rebuilds.length, 1, 'an engine switch rebuilds whatever the size');
   s.send('Back');
   await s.turn('codex');
-  assert.equal(s.codex.rebuilds.length, 1, 'a switch back onto a small live Codex session rebuilds too (no guard on a switch)');
+  assert.equal(s.codex.rebuilds.length, 1, 'a switch back onto a small live Codex session rebuilds too');
 });
 
 test('B-049 F9: a probe kept before PROBE_REV runs once more; the kept one of this revision holds', async () => {

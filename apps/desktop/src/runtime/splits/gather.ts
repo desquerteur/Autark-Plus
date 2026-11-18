@@ -7,14 +7,22 @@
 // did, digest.ts); when that turn ends 'done' those parts are gathered (markGathered – Split.gatheredAt; a settled group
 // whose parts all reached it is 'gathered' and its native sessions are released – release.ts; a fan-in wake not yet
 // claimed is withdrawn once nothing of its group waits to reach the origin).
-// A group the person stopped wakes nobody. agents.split_results reads the full texts (results).
-// Owns: settle, the origin's wakes, pendingResults, markGathered and results. Never: starts or stops a split.
+// A group the person stopped wakes nobody. agents.split_results reads the full texts (results); FIXES-3 A3 (18.11.2026,
+// measured: one extra quiet turn for results the agent had already read): the ended parts it showed are gathered when the
+// reading turn ends 'done', like an input block's.
+// Decision 10 (17.11.2026): while the turn that split waits for a part (wait.ts) that part's end wakes nobody – the call
+// that split it brings the same block back inside the turn (waitedResults), and those parts are gathered when that turn
+// ends 'done' like the next turn's block. When the call's answer reaches nobody (it was cut, or its turn failed) the
+// ended parts it held wake their origin once (wakeUnread).
+// Owns: settle, the origin's wakes, pendingResults, markGathered, results and the waiting call's block. Never: starts or
+// stops a split.
 
 import { WorkforceError } from '../../shared/errors.ts';
-import type { Split, SplitGroup } from '../../shared/model/splits.ts';
+import { SPLIT_TERMINAL, type Split, type SplitGroup } from '../../shared/model/splits.ts';
 import { isTerminal, type SplitCore } from './core.ts';
 import { fullResults, resultsBlock } from './results.ts';
 import { partDigest } from './digest.ts';
+import type { WaitNote } from './wait.ts';
 
 export const coalesceKey = (groupId: string): string => `splits:${groupId}`;
 const NOTE_GOAL = 120;
@@ -47,6 +55,7 @@ export function returned(core: SplitCore, splitId: string): void {
   const split = core.repo.getSplit(splitId);
   const group = split ? core.repo.getGroup(split.groupId) : undefined;
   if (!split || !group || !isTerminal(split.status) || group.status !== 'running') return;
+  if (core.waits.waiting(splitId)) return; // decision 10: the turn that split it waits for it – its call returns it
   try { wakeOrigin(core, group, returnNote(group, split)); } catch (error) {
     core.deps.log.warn('a part\'s return did not wake its origin; its group\'s end will', { splitId, error: String(error) });
   }
@@ -60,12 +69,24 @@ export function settle(core: SplitCore, groupId: string): boolean {
   if (!splits.every((split) => isTerminal(split.status))) return false;
   core.deps.db.tx(() => {
     core.repo.updateGroup(groupId, { status: 'settled', endedAt: core.now() });
-    if (splits.some((split) => split.gatheredAt === undefined)) wakeOrigin(core, group, wakeNote(group, splits.map((split) => split.status)));
+    // Decision 10: parts a turn of the origin waits for reach it in that call's result, so they wake nobody.
+    if (splits.some((split) => split.gatheredAt === undefined && !core.waits.waiting(split.id))) wakeOrigin(core, group, wakeNote(group, splits.map((split) => split.status)));
   });
   return true;
 }
 
 const waiting = (split: Split) => isTerminal(split.status) && split.gatheredAt === undefined;
+
+/**
+ * Decision 10: the ended parts of `group` that reached nobody – their wake was skipped while a call waited for them, and
+ * that call's answer was not read – wake the origin once, with the notes they sent it meanwhile (a stopped group wakes nobody).
+ */
+export function wakeUnread(core: SplitCore, group: SplitGroup, notes: readonly WaitNote[] = []): void {
+  if (group.status !== 'running' && group.status !== 'settled') return;
+  const unread = core.repo.listSplits({ groupId: group.id }).filter((split) => waiting(split) && !core.waits.waiting(split.id));
+  if (!unread.length) return;
+  wakeOrigin(core, group, [wakeNote(group, unread.map((split) => split.status)), ...notesText(notes)].join('\n'));
+}
 
 /**
  * The origin's "Split results" block for its next turn on `thread`: every part there that ended and has not reached it
@@ -81,6 +102,36 @@ export function pendingResults(core: SplitCore, agentId: string, thread: string)
   }).filter((entry) => entry.shown.length);
   if (!entries.length) return undefined;
   return { splitIds: entries.flatMap((entry) => entry.shown.map((split) => split.id)), text: resultsBlock(core.deps.runs, entries, undefined, (split) => digestOf(core, split)) };
+}
+
+/** Decision 10: how many characters of my parts' notes while I waited ride in that call's result. */
+const NOTES_CHARS = 6_000;
+export const TOLD_WAITING = 'What my parts told me while I waited:';
+export const STILL_WORKING = 'My parts that still work come back to me on their own as soon as they end.';
+
+/** The notes of a wait as lines, newest last, within NOTES_CHARS; [] when none came. */
+function notesText(notes: readonly WaitNote[]): string[] {
+  if (!notes.length) return [];
+  const lines: string[] = [];
+  let size = 0;
+  for (const note of [...notes].reverse()) {
+    const line = `- ${note.text.trim()}`;
+    if (size + line.length + 1 > NOTES_CHARS) { lines.push(`- … ${notes.length - lines.length} earlier notes`); break; }
+    lines.push(line);
+    size += line.length + 1;
+  }
+  return [TOLD_WAITING, ...lines.reverse()];
+}
+
+/**
+ * Decision 10: the result of the call that split with `wait` – the "Split results" block the origin's next turn would
+ * have got for the parts it waited for (`shown`, of the group's `splits`), the notes they sent while it waited, and,
+ * while a part of that group still works, that it comes back on its own.
+ */
+export function waitedResults(core: SplitCore, group: SplitGroup, splits: readonly Split[], shown: readonly Split[], notes: readonly WaitNote[]): string {
+  const block = resultsBlock(core.deps.runs, [{ group, splits, shown }], undefined, (split) => digestOf(core, split));
+  const working = splits.some((split) => !SPLIT_TERMINAL.includes(split.status)); // also a part one of them added (join)
+  return [block, ...notesText(notes), ...(working ? [STILL_WORKING] : [])].join('\n');
 }
 
 /** What a part did, as its subconscious kept it (digest.ts); '' when nothing can be read. */
@@ -126,9 +177,10 @@ export function markGathered(core: SplitCore, runId: string, splitIds: readonly 
 /**
  * agents.split_results: a group's (or its part's) full results – B-080: any group of mine, from whichever thread I split it
  * in (chat.read shows me those chats anyway); without groupId this thread's newest group, else my newest. Another agent's
- * group stays its own. The fan-in (pendingResults, the wake) stays on the group's own thread.
+ * group stays its own. The fan-in (pendingResults, the wake) stays on the group's own thread. `ended`: the parts shown that
+ * ended and had not reached me yet (FIXES-3 A3: read is read – gathered when the reading turn ends 'done').
  */
-export function results(core: SplitCore, agentId: string, q: { groupId?: string; idx?: number; thread?: string }): string {
+export function results(core: SplitCore, agentId: string, q: { groupId?: string; idx?: number; thread?: string }): { text: string; ended: string[] } {
   let group: SplitGroup | undefined;
   if (q.groupId) {
     group = core.repo.getGroup(q.groupId);
@@ -138,8 +190,9 @@ export function results(core: SplitCore, agentId: string, q: { groupId?: string;
     group = (q.thread !== undefined ? core.repo.listGroups({ agentId, thread: q.thread, limit: 1 })[0] : undefined)
       ?? core.repo.listGroups({ agentId, limit: 1 })[0];
   }
-  if (!group) return 'I have no split results yet.';
+  if (!group) return { text: 'I have no split results yet.', ended: [] };
   const splits = core.repo.listSplits({ groupId: group.id }).sort((a, b) => a.idx - b.idx);
   if (q.idx !== undefined && !splits.some((split) => split.idx === q.idx)) throw new WorkforceError('not_found', `Split group ${group.id} has no part #${q.idx}.`);
-  return fullResults(core.deps.runs, group, splits, q.idx);
+  const shown = splits.filter((split) => (q.idx === undefined || split.idx === q.idx) && waiting(split));
+  return { text: fullResults(core.deps.runs, group, splits, q.idx), ended: group.status === 'running' || group.status === 'settled' ? shown.map((split) => split.id) : [] };
 }

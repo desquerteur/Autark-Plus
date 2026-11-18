@@ -14,6 +14,7 @@
 // one on the PC; a phone that reads no PC's pane keeps its app tabs and chosen tab on the device, over a restart. A
 // finished download ends with a toast. Ctrl+F opens the find field (findOpen) of a shown website tab. On the desktop a
 // website – this PC's or another PC's – closes through main ('close'), never by a layout, so it stays closed (B-081); a phone's close goes to its PC in its layout (tabs.set), as before.
+// 18.11.2026: a person's device keeps its own tabs and gets the websites shared in its chats' areas (phone-tabs.ts).
 // Owns: the spaces, the tab lists, the shown tabs and these commands. Never: page content or agent browser sessions.
 
 import { effect, signal, type Signal } from '@preact/signals';
@@ -280,6 +281,13 @@ export async function openWebsite(url: string, options: { select?: boolean; spac
   return id;
 }
 
+/** A copy of the page at `url` as a new tab of `space`, shown (Share in chat): this PC's browser, or on the phone its PC's. */
+export async function openCopy(url: string, space: string): Promise<void> {
+  if (hasPersonalBrowser()) { await openWebsite(url, { space }); return; }
+  if (!phone) throw new Error('The browser is part of the desktop app.');
+  openOnPc(phone, space, newTabId(), url);
+}
+
 /** Runs a command of the person's browser on its tab (back, reload, reveal …); a failure is a toast. */
 export async function command(action: WorkspaceBrowserCommand): Promise<void> {
   const native = bridge?.workspaceBrowser;
@@ -352,6 +360,9 @@ export function acceptLayout(layout: SideSpaces): void {
   sentLayout = JSON.stringify(layoutOf(next));
   spaces.value = next;
 }
+
+/** This device's spaces as side-tabs.json would hold them (a person's device keeps its own, phone-tabs.ts withShared). */
+export const ownLayout = (): SideSpaces => layoutOf(spaces.peek());
 
 function forgetDeviceTabs(): void {
   try {

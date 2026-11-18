@@ -4,15 +4,20 @@
 // folder is here (line references and Git Bash paths understood); a check that confidently fails rejects the result whatever the predicate would say;
 // the checks that ran are facts in the predicate's context; without a done-condition the result stays unverified.
 // B-080: a link is checked by one GET, its body cancelled unread (live 05./07.11.2026: a page answered HEAD with 404 and
-// GET with 200); a failed check is a fact (`fact: true`), a model's "no" is none; the predicate reads the whole summary.
+// GET with 200); a failed check is a fact (`fact: true`), a model's "no" is none; the call reads the whole summary.
+// 17.11.2026: the verifier is one call that answers whether the result shows what the condition asks for and names in a few
+// words what it does not show; a "no" without a named gap leaves the result as claimed – no "Verifier disagrees".
 // Owns: these assertions only. Never: the real network or file system (scripted fetch and stat).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { fakeDecisions, fixture } from '../context/fixture.ts';
+import { fixture } from '../context/fixture.ts';
+import { SubconsciousImpl } from '../../../src/runtime/subconscious/service.ts';
+import { uncheckedNote } from '../../../src/runtime/tasks/verification.ts';
+import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
 import { createEvidenceChecker, targetsOf, type CheckFetch, type CheckStat } from '../../../src/runtime/subconscious/verify-evidence.ts';
-import { resultContext } from '../../../src/runtime/subconscious/verify.ts';
+import { VERIFY_SYSTEM, resultContext, verifyResult } from '../../../src/runtime/subconscious/verify.ts';
 import type { Evidence, Task, TaskResult } from '../../../src/shared/model/tasks.ts';
 
 const ROOT = path.resolve('/ws');
@@ -120,44 +125,75 @@ test('no false "missing": private repo 404s, line references, Git Bash paths and
   }
 });
 
-test('verify: failing evidence rejects before any predicate; held evidence is a fact in the predicate context', async () => {
+/** The decision model of a verification, answering every call with `answer`; it keeps the calls it got. */
+function verifier(answer: Record<string, unknown>) {
+  const calls: Array<Parameters<StructuredRunner>[0]> = [];
+  const runner: StructuredRunner = async (call) => { calls.push(call); return { text: JSON.stringify(answer), structured: answer, by: 'codex:gpt-6-luna' }; };
+  return { runner, calls };
+}
+
+test('verify: failing evidence rejects before any call; held evidence is a fact in the call\'s context', async () => {
   const { fetch } = scriptedFetch();
-  const yes = fakeDecisions(() => ({ value: true, confidence: 0.9 }));
-  const f = fixture({ decisions: yes.service });
+  const yes = verifier({ met: true, missing: '' });
+  const f = fixture();
   Object.assign(f.services, { evidence: createEvidenceChecker({ fetch, stat }), paths: { ...f.services.paths, workspace: ROOT } });
+  const subconscious = new SubconsciousImpl({ services: () => f.services, runner: yes.runner });
   const task = doneTask({ doneWhen: 'The intro is rendered and online' });
 
-  const rejected = await f.subconscious.verify(task, result([{ kind: 'file', label: 'Intro', ref: path.resolve('/abs/missing.pdf') }, { kind: 'link', label: 'Video', ref: 'https://gone.example/x' }]));
+  const rejected = await subconscious.verify(task, result([{ kind: 'file', label: 'Intro', ref: path.resolve('/abs/missing.pdf') }, { kind: 'link', label: 'Video', ref: 'https://gone.example/x' }]));
   assert.equal(rejected.ok, false);
   assert.equal(rejected.checked, true);
   assert.equal((rejected as typeof rejected & { fact?: boolean }).fact, true, 'a failed runtime check is a fact');
   assert.match(rejected.reason, /^The evidence does not hold: file missing: .*; link does not exist \(HTTP 404\): https:\/\/gone\.example\/x\.$/);
-  assert.equal(yes.calls.length, 0, 'no predicate after a failed deterministic check');
+  assert.equal(yes.calls.length, 0, 'no call after a failed deterministic check');
 
-  const passed = await f.subconscious.verify(task, result([{ kind: 'file', label: 'Intro', ref: 'out/intro.mp4' }, { kind: 'link', label: 'Video', ref: 'https://live.example/' }]));
-  assert.deepEqual([passed.ok, passed.checked], [true, true]);
-  assert.match(yes.calls[0].context!, /Checked by the runtime \(facts\):\n- file exists \(2\.3 MB\): out\/intro\.mp4\n- link answers \(HTTP 200\): https:\/\/live\.example\//);
+  const passed = await subconscious.verify(task, result([{ kind: 'file', label: 'Intro', ref: 'out/intro.mp4' }, { kind: 'link', label: 'Video', ref: 'https://live.example/' }]));
+  assert.deepEqual(passed, { ok: true, reason: 'done-condition met (checked by codex:gpt-6-luna)', checked: true });
+  assert.match(yes.calls[0].prompt, /Checked by the runtime \(facts\):\n- file exists \(2\.3 MB\): out\/intro\.mp4\n- link answers \(HTTP 200\): https:\/\/live\.example\//);
+  assert.deepEqual([yes.calls[0].purpose, yes.calls[0].system], ['verify', VERIFY_SYSTEM]);
+  const fields = (yes.calls[0].schema as { properties: Record<string, { description: string }>; required: string[] });
+  assert.deepEqual(fields.required, ['met', 'missing']);
+  for (const field of Object.values(fields.properties)) assert.match(field.description, /\?/, 'one question per field');
 });
 
-test('verify: without a done-condition the result stays unverified even when its evidence held; without a checker nothing changes', async () => {
+test('verify: without a done-condition the result stays unverified even when its evidence held; without a checker nothing changes; without a decision model it is accepted as claimed', async () => {
   const { fetch } = scriptedFetch();
-  const f = fixture({ decisions: fakeDecisions(() => ({ value: true, confidence: 0.9 })).service });
+  const f = fixture();
   Object.assign(f.services, { evidence: createEvidenceChecker({ fetch, stat }), paths: { ...f.services.paths, workspace: ROOT } });
-  assert.deepEqual(await f.subconscious.verify(doneTask(), result([{ kind: 'file', label: 'Intro', ref: 'out/intro.mp4' }])), { ok: true, reason: 'no done-condition', checked: false });
-  const empty = await f.subconscious.verify(doneTask(), result([{ kind: 'file', label: 'Notes', ref: path.join(ROOT, 'empty.txt') }]));
+  const subconscious = new SubconsciousImpl({ services: () => f.services, runner: verifier({ met: true, missing: '' }).runner });
+  assert.deepEqual(await subconscious.verify(doneTask(), result([{ kind: 'file', label: 'Intro', ref: 'out/intro.mp4' }])), { ok: true, reason: 'no done-condition', checked: false });
+  const empty = await subconscious.verify(doneTask(), result([{ kind: 'file', label: 'Notes', ref: path.join(ROOT, 'empty.txt') }]));
   assert.deepEqual([empty.ok, empty.checked], [false, true], 'an empty file is no result, done-condition or not');
   const plain = fixture();
-  assert.deepEqual(await plain.subconscious.verify(doneTask(), result([{ kind: 'link', label: 'Gone', ref: 'https://gone.example/x' }])), { ok: true, reason: 'no done-condition', checked: false });
+  const bare = new SubconsciousImpl({ services: () => plain.services, runner: verifier({ met: true, missing: '' }).runner });
+  assert.deepEqual(await bare.verify(doneTask(), result([{ kind: 'link', label: 'Gone', ref: 'https://gone.example/x' }])), { ok: true, reason: 'no done-condition', checked: false });
+  assert.deepEqual(await verifyResult(plain.services, doneTask({ doneWhen: 'The intro is online' }), result([])), { ok: true, reason: 'no verifier available; result accepted as claimed', checked: false });
 });
 
-test('B-080: a model\'s "no" names what the result does not show and is no fact; the predicate reads the whole summary', async () => {
-  const no = fakeDecisions(() => ({ value: false, confidence: 0.9 }));
-  const f = fixture({ decisions: no.service });
+test('a model\'s "no" names the gap – what the result does not show, in its own few words – and is no fact; the call reads the whole summary', async () => {
+  const no = verifier({ met: false, missing: '  which form goes out\n on Monday ' });
+  const f = fixture();
+  const subconscious = new SubconsciousImpl({ services: () => f.services, runner: no.runner });
   const task = doneTask({ doneWhen: 'Hurdle checked and the minimal next step named' });
   const summary = `${'Checked the hurdle against the form and the guide. '.repeat(40)}The minimal next step: send the form on Monday.`;
   assert.ok(summary.length > 2000, String(summary.length));
-  const doubted = await f.subconscious.verify(task, { summary, evidence: [], verification: 'claimed_by_agent' });
-  assert.deepEqual(doubted, { ok: false, reason: 'The result does not show: Hurdle checked and the minimal next step named', checked: true });
-  assert.ok(no.calls[0].context!.includes('The minimal next step: send the form on Monday.'), 'the summary\'s end reaches the predicate');
+  const doubted = await subconscious.verify(task, { summary, evidence: [], verification: 'claimed_by_agent' });
+  // On the code before 17.11.2026 the note repeated the done-condition: "The result does not show: Hurdle checked and the minimal next step named".
+  assert.deepEqual(doubted, { ok: false, reason: 'The result does not show: which form goes out on Monday', checked: true });
+  assert.ok(no.calls[0].prompt.includes('The minimal next step: send the form on Monday.'), 'the summary\'s end reaches the call');
   assert.ok(resultContext(task, { summary, evidence: [], verification: 'claimed_by_agent' }).endsWith(`Result: ${summary}\nEvidence: none`));
+});
+
+test('17.11.2026: a "no" without a named gap says nothing anyone could act on – the result stands as claimed and no "Verifier disagrees" is written', async () => {
+  const f = fixture();
+  const task = doneTask({ doneWhen: 'Review exact hash-bound final source; return pass/blockers only' });
+  const claimed = { summary: 'PASS read-only: 17 hashes match the manifest.', evidence: [], verification: 'claimed_by_agent' as const };
+  // On the code before 17.11.2026 every confident "no" became "Verifier disagrees: The result does not show: <the done-condition>" – 75 of 186 results.
+  for (const answer of [{ met: false, missing: '' }, { met: false, missing: '   ' }, { met: false }, {}]) {
+    const verdict = await new SubconsciousImpl({ services: () => f.services, runner: verifier(answer).runner }).verify(task, claimed);
+    assert.deepEqual(verdict, { ok: true, reason: 'verifier unsure; result accepted as claimed', checked: false }, JSON.stringify(answer));
+    assert.equal(uncheckedNote(verdict.reason), 'Not independently checked: the verifier was unsure');
+  }
+  const failing: StructuredRunner = async () => { throw new Error('model down'); };
+  assert.deepEqual(await new SubconsciousImpl({ services: () => f.services, runner: failing }).verify(task, claimed), { ok: true, reason: 'verifier failed; result accepted as claimed', checked: false });
 });

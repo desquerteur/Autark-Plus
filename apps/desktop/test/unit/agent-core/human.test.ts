@@ -55,16 +55,14 @@ test('an edit of the instructions and a new standard leave HUMAN.md as the perso
     f.core.setHuman(wes.id, 'Mine, not the app\'s.');
     f.org.update(wes.id, { instructions: 'Write tighter.' }, { by: wes.id, reason: 'agents.update' });
     let standard = 'Standard one.';
-    const woken: unknown[] = [];
     const s = {
-      db: f.db, org: f.org, log: f.log, agentCore: f.core,
-      wakes: { wake: (input: unknown) => { woken.push(input); } },
+      db: f.db, org: f.org, log: f.log, agentCore: f.core, clock: { now: () => 1 },
       settings: { get: () => ({ profile: { name: 'Ada' }, permissions: {} }) },
       prompts: { text: () => standard },
     } as unknown as Parameters<typeof syncStandard>[0];
     assert.equal(syncStandard(s, f.org.require(wes.id)), 'quiet');
     standard = 'Standard two.';
-    assert.equal(syncStandard(s, f.org.require(wes.id)), 'woken');
+    assert.equal(syncStandard(s, f.org.require(wes.id)), 'noted');
     assert.match(f.org.require(wes.id).instructions, /Standard two\./);
     assert.equal(readFileSync(humanFile(f.data, wes.id), 'utf8'), 'Mine, not the app\'s.\n');
   } finally { f.cleanup(); }

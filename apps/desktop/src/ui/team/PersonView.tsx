@@ -9,6 +9,7 @@
 // ownsTopRow), the feedback cell ends it (feedback/cell.tsx) and this page mounts the person dialogs the sidebar
 // mounts on a computer. The caller's own page
 // ('human') names them as the profile button does.
+// 17.11.2026: "Invite a device" / "Invite again" shows its invite card at the top of this page (no modal).
 // Renders before the people list is loaded (a spinner) and says so when the person is unknown.
 // Owns: the person page. Never: changes people itself (the dialogs do) or shows messages of a person's chats.
 
@@ -25,7 +26,8 @@ import { managerOf, statusLabel, topPersonId } from './people-model.ts';
 import { ensureSpaces } from './org-state.ts';
 import { AiTag } from './parts.tsx';
 import { personMenu } from './menus.ts';
-import { PersonDialogs } from './person-dialogs.tsx';
+import { closeInvite, inviteOpen, PersonDialogs } from './person-dialogs.tsx';
+import { PersonInvite } from './PersonInvite.tsx';
 import { PersonCalendar } from './PersonCalendar.tsx';
 import { TitleMenu } from './TitleMenu.tsx';
 import { phoneFeedbackCells } from '../feedback/cell.tsx';
@@ -79,6 +81,7 @@ export interface PersonViewProps {
 export function PersonView(props: PersonViewProps) {
   const { personId } = props;
   useEffect(() => { ensureSpaces(); }, []);
+  useEffect(() => () => closeInvite(personId), [personId]); // the invite card goes with its page
   const admin = can('people.save');
   const person = people.value.find((entry) => entry.id === personId);
   const menu = useContextMenu(() => (person ? personMenu(person) : []));
@@ -101,6 +104,7 @@ export function PersonView(props: PersonViewProps) {
       <Header zone="main" class="person-header" lead={lead} title={person ? <TitleMenu name={name} sections={() => personMenu(person)} /> : name} cells={phoneFeedbackCells()} />
       <div class="agent-scroll">
         <div class="agent-column" {...menu}>
+          {person && inviteOpen(personId) && <PersonInvite person={person} onClose={() => closeInvite()} />}
           <section class="agent-profile" aria-label="Identity">
             <div class="agent-identity">
               <AgentAvatar agentId={personId} size={64} />

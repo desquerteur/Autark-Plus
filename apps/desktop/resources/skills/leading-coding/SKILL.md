@@ -25,7 +25,8 @@ layer and reports done after a green test. My brief is where that changes.
   same code right now.
 - **How it proves it:** the check that shows the outcome – a test of the behaviour, a real run, the installed app – and
   which states it reports apart: source, tested, built, installed, released.
-- **Model:** code runs on a strong model with high or xhigh effort; the person's own preference stands above mine.
+- **Model, where the context starts:** a new colleague or a fresh part runs on what the piece's hardest step needs
+  (skill briefing); a colleague keeps its model. The person's own preference stands above mine.
 
 ## How I prompt it
 - I give the why and the person's own words; an agent that knows why makes the small decisions I did not foresee.
@@ -33,9 +34,11 @@ layer and reports done after a green test. My brief is where that changes.
   in the brief instead of asking for a plan.
 - Big work goes into pieces that move on alone – parts or colleagues, fresh from a brief, each in its own worktree with
   its own done-condition.
-- I ask for a short report: what changed and why, what was deleted, what was checked and how, what is still open.
+- The task's result is the report: what changed and why, what was deleted, what was checked and how, what is still
+  open.
 
 ## When it comes back
-I run or read the proof myself, not the summary. I read the diff for simplicity: what could go, what got a second name,
+Proof belongs to the one who built it: I read what their check shows, and run it again where a mistake would cost more
+than the run. I read the diff for simplicity: what could go, what got a second name,
 what copies the old where something new was asked. What I would sharpen I say concretely; what my brief lacked, my next
 brief carries.

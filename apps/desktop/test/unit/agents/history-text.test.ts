@@ -20,7 +20,7 @@ test('my record as text: lines, my words and my calls with their output; condens
     const text = historyText(t.services, t.tom.id, 'main', 50_000)!;
     assert.ok(text.startsWith(`${HISTORY_HEAD}\n\n`), text);
     assert.match(text, /Please build the export\./);
-    assert.match(text, /\[ran shell\.exec: npm run export\]\n\[output of shell\.exec\]\nexport written to out\/export\.csv/);
+    assert.match(text, /\[record of an earlier call, not replayable here – shell\.exec: npm run export\]\n\[its output\]\nexport written to out\/export\.csv/);
     assert.doesNotMatch(text, /secret plan/, 'a hidden item leaves no trace');
     const third = t.turn(t.say('One more long step.').seq);
     t.ourCall(third, 'shell.exec', { command: 'cat big.log' }, 'log line\n'.repeat(300), 'c9');

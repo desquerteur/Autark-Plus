@@ -2,7 +2,10 @@
 // right-aligned bubble without a name. Another human's words (a colleague) sit on the left like an agent's,
 // with name and round avatar (→ their page). Task messages render through TaskMessage; quiet status lines
 // through StatusGroup (collapsible bursts; B-080: a task's line – "Done: …", "Mara took: …" – opens that task's
-// detail in Work, same text and time). Failed/stopped messages show their short error and Retry.
+// detail in Work, same text and time; KI-Runde 17.11.2026: an agent's quiet line is a row there too – "<name>: <first
+// sentence>", a click shows the whole line under it, the row stays; a burst has one shape for one line and many, and its next
+// line comes below, so nothing above an opened line moves – message-rows.ts burstView). Failed/stopped messages show
+// their short error and Retry.
 // The meta row every message reserves holds the markers (important, silent, Ultra, scheduled, voice, from a
 // messenger), the model tag (model-tag-view.ts), the time and "edited"/"imported" – nothing moves on hover. The time's
 // title names what an agent's answer was written on (B-083: the model and effort the turn ended on, and its temperature).
@@ -39,9 +42,12 @@ import { SecretAttachments } from './SecretAttachments.tsx';
 import { InlineEdit, MessageTools, messageMenu } from './MessageActions.tsx';
 import { SelectText } from './SelectText.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
+import type { MenuOpen } from '../lib/context-menu.tsx';
+import type { MenuSection } from '../lib/popover.tsx';
 import { ReplyQuote } from './ReplyQuote.tsx';
 import { ScheduledLine } from './ScheduledLine.tsx';
 import { statusText } from './status-text.ts';
+import { burstView, isQuietLine, quietLineText } from './message-rows.ts';
 import { messageModelTag } from './model-tag-view.ts';
 import { temperatureTitle } from './live-text.ts';
 import { ModelTagMark } from './ModelTagMark.tsx';
@@ -72,14 +78,14 @@ function ModelTag(props: { message: Message }) {
   return <ModelTagMark tag={messageModelTag(props.message, modelShortName)} />;
 }
 
-function Actions(props: { message: Message; own: boolean }) {
+function Actions(props: { message: Message; own: boolean; menu: (open: MenuOpen) => MenuSection[] }) {
   const { message } = props;
   const warmth = temperatureTitle(message.meta.temperature); // B-083
   const via = message.meta.model ? ` · ${message.meta.model}${message.meta.effort ? ` ${message.meta.effort}` : ''}${warmth ? ` · ${warmth}` : ''}` : '';
   const level = messageLevel(message);
   return (
     <div class="message-actions">
-      {props.own && <MessageTools message={message} />}
+      {props.own && <MessageTools message={message} menu={props.menu} />}
       {level === 'important' && <span class="important-marker" title="Important"><Icon name="exclamation-mark" size={12} /></span>}
       {level === 'silent' && !message.meta.call && <Icon name="bell-slash" size={12} class="silent-marker" title="Silent" />}
       {message.meta.ultra === true && <Icon name="lightning" size={12} class="ultra-marker" title="Ultra suggested" />}
@@ -90,7 +96,7 @@ function Actions(props: { message: Message; own: boolean }) {
       <time class="tabular" dateTime={new Date(message.createdAt).toISOString()} title={`${fullDate(message.createdAt)}${via}`}>{time(message.createdAt)}</time>
       {message.editedAt !== undefined && <span class="edited-marker" title={`Edited ${fullDate(message.editedAt)}`}>edited</span>}
       {message.meta.imported === true && <span class="edited-marker" title="Imported from a chat folder (another PC or an export)">imported</span>}
-      {!props.own && <MessageTools message={message} />}
+      {!props.own && <MessageTools message={message} menu={props.menu} />}
     </div>
   );
 }
@@ -127,7 +133,8 @@ function MessageItemInner(props: { message: Message }) {
   const { message } = props;
   const [editing, setEditing] = useState(false);
   const [selecting, setSelecting] = useState(false); // F30: the Select text sheet (touch)
-  const menu = useContextMenu((open) => messageMenu(message, open, { edit: () => setEditing(true), selectText: () => setSelecting(true) }));
+  const build = (open: MenuOpen) => messageMenu(message, open, { edit: () => setEditing(true), selectText: () => setSelecting(true) });
+  const menu = useContextMenu(build, { touchByButton: true }); // 17.11.2026: a finger's long press selects text natively; the menu is the "More" button
   const [shown, setShown] = useState(false); // a key in the text shows only when the person asks
   const keys = useMemo(() => keysIn(message), [message.body, message.kind]);
   const visible = useMemo(() => (keys.length && !shown ? { ...message, body: maskedBody(message.body, keys) } : message), [message, keys, shown]);
@@ -159,7 +166,7 @@ function MessageItemInner(props: { message: Message }) {
         <SecretAttachments ids={message.meta.secrets} />
       </div>
       {(message.state === 'failed' || message.state === 'stopped') && <Failure message={message} />}
-      <Actions message={message} own={human} />
+      <Actions message={message} own={human} menu={build} />
       <ThreadLink message={message} />
       {selecting && <SelectText message={message} onClose={() => setSelecting(false)} />}
     </article>
@@ -177,37 +184,56 @@ export function statusTaskId(message: Message): string | undefined {
 }
 
 /** One status line: a task's line is a button that opens the task (same text and time, nothing moves), any other a quiet row. */
-function StatusLineRow(props: { message: Message; text: string; nested?: boolean }) {
+function StatusLineRow(props: { message: Message; text: string }) {
   const { message } = props;
   const taskId = statusTaskId(message);
-  const kind = `status-line${props.nested ? ' nested' : ''}`;
+  const kind = 'status-line nested'; // a row of its burst (StatusGroup)
   const parts = <><span>{props.text}</span><time class="tabular">{time(message.createdAt)}</time></>;
   if (!taskId) return <div class={kind} data-message-id={message.id}>{parts}</div>;
   return <button type="button" class={`${kind} open`} data-message-id={message.id} title="Open the task" onClick={() => openTaskDetail(taskId)}>{parts}</button>;
 }
 
-/** Quiet status lines; a burst shows the newest line and expands to all. C6: notices for agents are left out – the message shows the change. */
+/** An agent's quiet line in a burst: its first sentence; a click shows the whole line under it (the row stays where it
+ *  is). Whether it is open is its burst's (StatusGroup), so a line arriving in the burst leaves it open. */
+function QuietLineRow(props: { message: Message; open: boolean; onToggle: () => void }) {
+  const { message, open } = props;
+  return (
+    <div class="quiet-line" data-message-id={message.id}>
+      <button type="button" class="status-line open nested" aria-expanded={open} title={open ? 'Hide the line' : 'Show the whole line'}
+        onClick={props.onToggle}>
+        <span>{quietLineText(message, agentName(message.authorId))}</span><time class="tabular">{time(message.createdAt)}</time>
+      </button>
+      {open && <MessageItem message={message} />}
+    </div>
+  );
+}
+
+/** Quiet status lines and agents' quiet lines in one shape for one line and for many (message-rows.ts burstView): earlier
+ *  lines fold into one row in their place, a new line comes below. C6: notices for agents are left out – the message shows the change. */
 export function StatusGroup(props: { messages: Message[] }) {
   const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set()); // the quiet lines the person opened
   const list = props.messages.filter((message) => !isAgentNotice(message));
   if (!list.length) return null;
   const last = list[list.length - 1];
-  const text = (message: Message) => statusText(message); // a cut-off call in the run line's words (status-text.ts)
-  if (list.length === 1) {
-    if (last.meta.status?.type === 'schedule_created') return <ScheduledLine message={last} />; // B-044: "Scheduled · <when>" → Chat details › Scheduled
-    return <StatusLineRow message={last} text={text(last)} />;
-  }
+  const byId = new Map(list.map((message) => [message.id, message]));
+  const toggleLine = (id: string) => setOpened((now) => { const next = new Set(now); if (!next.delete(id)) next.add(id); return next; });
+  const row = (message: Message) => {
+    if (message.meta.status?.type === 'schedule_created') return <ScheduledLine key={message.id} message={message} />; // B-044: "Scheduled · <when>" → Chat details › Scheduled
+    if (isQuietLine(message)) return <QuietLineRow key={message.id} message={message} open={opened.has(message.id)} onToggle={() => toggleLine(message.id)} />;
+    return <StatusLineRow key={message.id} message={message} text={statusText(message)} />; // a cut-off call in the run line's words (status-text.ts)
+  };
+  const fold = (key: string, expanded: boolean, label: string) => (
+    <button key={key} type="button" class="status-line toggle" aria-expanded={expanded} onClick={() => setOpen(!expanded)}>
+      <Icon name={expanded ? 'caret-down' : 'caret-right'} size={11} />
+      <span>{label}</span>
+    </button>
+  );
+  const updates = (count: number) => `${count} earlier ${count === 1 ? 'update' : 'updates'}`;
   return (
     <div class="status-group" data-message-id={last.id}>
-      <button type="button" class="status-line toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon name={open ? 'caret-down' : 'caret-right'} size={11} />
-        <span>{open ? `${list.length} updates` : text(last)}</span>
-        {!open && <span class="status-count tabular">+{list.length - 1}</span>}
-        <time class="tabular">{time(last.createdAt)}</time>
-      </button>
-      {open && list.map((message) => (
-        <StatusLineRow key={message.id} message={message} text={text(message)} nested />
-      ))}
+      {burstView(list, open, opened).map((item) => (item.kind === 'line' ? row(byId.get(item.id)!)
+        : item.kind === 'earlier' ? fold('earlier', false, updates(item.count)) : fold('hide', true, `Hide ${updates(item.count)}`)))}
     </div>
   );
 }

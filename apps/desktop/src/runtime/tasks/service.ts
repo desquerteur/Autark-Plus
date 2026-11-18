@@ -28,8 +28,9 @@ import { isHumanActor, isPersonId } from '../../shared/model/people.ts';
 import { DAY_PATCH_FIELDS, type DayPatchField } from './patch-fields.ts';
 import { applyDepends, checkDepends } from './depends.ts';
 import { answerByReply } from './reply-answer.ts';
-import { askedRoute, giveTask, nameOf, pickOwner, receiverOf, type GiveInput } from './give.ts';
+import { giveTask, nameOf, pickOwner, receiverOf, type GiveInput } from './give.ts';
 import { nextLook } from './next.ts';
+import { applyUndo, recordChange, undoable } from './changes.ts';
 import type { Effort } from '../../shared/model/providers.ts';
 import { setTaskRoute } from '../agents/next-route.ts';
 import '../contracts/people.ts';
@@ -158,6 +159,7 @@ export class TaskServiceImpl implements TaskService {
       if (after) applyDepends(this.repo, draft, after, now);
       if (moved) draft.ledger = { ...draft.ledger, movedAt: now, stalls: 0 };
       if (moved || after || patch.dueAt !== undefined || Object.hasOwn(patch, 'dueAt') || patch.status !== undefined) draft.nextAt = nextLook(draft, now, this.openPieces(draft));
+      recordChange(draft, current, by, 'update', now); // the change log (tasks/changes.ts): the person's "Undo"
     }, rev);
     if (patch.widget) armTimer(this.s, task);
     const view = this.emit(task);
@@ -166,9 +168,9 @@ export class TaskServiceImpl implements TaskService {
   }
 
   /** Gives task `id` to `to` ("me", "team", an agent, the person or a colleague by id); "team" picks one owner now. */
-  async give(id: string, to: string, by: string, input: { note?: string; model?: string; effort?: Effort; from?: string; fact?: string; givenIn?: string } = {}): Promise<TaskView> {
+  async give(id: string, to: string, by: string, input: { note?: string; effort?: Effort; fact?: string; givenIn?: string } = {}): Promise<TaskView> {
     const task = this.require(id);
-    const route = this.s.catalog ? askedRoute(this.s as Pick<RuntimeServices, 'catalog'>, input) : undefined;
+    const route = input.effort ? { effort: input.effort } : undefined;
     let receiver = receiverOf(to, by);
     if (receiver.kind === 'team') receiver = await pickOwner(this, task, by);
     const give: GiveInput = { ...(input.note ? { note: input.note } : {}), ...(route ? { route } : {}), ...(input.fact ? { fact: input.fact } : {}), ...(input.givenIn ? { givenIn: input.givenIn } : {}) };
@@ -193,9 +195,27 @@ export class TaskServiceImpl implements TaskService {
       draft.completedAt = now;
       delete draft.waitingOn;
       delete draft.nextAt;
+      recordChange(draft, before, by, 'finish', now);
     });
     const view = this.emit(task);
     this.life.finished(task, by);
+    return view;
+  }
+
+  /**
+   * Takes back a logged change (the latest not undone one, or `changeId`) within its 24 hours while the task still holds what it wrote: the fields come back,
+   * the owner is told as for any change of status and reads a fact why. `not_found` when there is nothing to undo, `conflict` when a later change came after it.
+   */
+  undo(id: string, by: string, changeId?: string): TaskView {
+    const current = this.require(id);
+    const now = this.s.clock.now();
+    const entry = undoable(current, now, changeId);
+    if (!entry) throw new WorkforceError('not_found', 'There is nothing to undo here (a change can be undone for 24 hours).', { details: { taskId: id } });
+    const task = this.mutate(id, (draft) => applyUndo(draft, entry, by, this.nameOf(by), now, this.openPieces(draft)));
+    const view = this.emit(task);
+    if (isFinished(current.status) && !isFinished(task.status)) this.life.changed(current, task, by); // the owner hears that it is open again
+    else if (!isFinished(current.status) && isFinished(task.status)) this.life.finished(task, by);
+    else this.life.changed(current, task, by);
     return view;
   }
 

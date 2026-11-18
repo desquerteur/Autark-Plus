@@ -1,7 +1,8 @@
 // B-080 – one engine attempt (agents/turn-attempt.ts): a failed engine-native call's journaled result carries its
 // summary and output as `preview`; a fresh native session the engine announces is bound at once with the turn's start
 // cursor, so a turn that dies afterwards still leaves it bound; an in-turn model switch moves the turn's route, the run's
-// books and the activity row (B-083: with the turn's temperature) and posts the quiet switch line with the agent's name;
+// books and the activity row (B-083: with the turn's temperature), ends my now-request and names the model of my first
+// requests in the route's reason (FIXES-3 C1) and posts the quiet switch line with the agent's name;
 // the plan's temperature reaches the engine, else (B-083) the person's suggestion on the route; a stall note names how long
 // the engine was silent (quietMs), not only how long the attempt ran.
 // Owns: these assertions only. Never: real engines.
@@ -11,6 +12,7 @@ import assert from 'node:assert/strict';
 import { runAttempt } from '../../../src/runtime/agents/turn-attempt.ts';
 import { STALL_IDLE_MS } from '../../../src/runtime/agents/stall-watch.ts';
 import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
+import { pendingRoute, setNextRoute } from '../../../src/runtime/agents/next-route.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import type { TurnPlan, TurnRoute } from '../../../src/runtime/agents/turn-types.ts';
 import type { EngineTurnInput } from '../../../src/runtime/engines/types.ts';
@@ -84,8 +86,14 @@ test('an in-turn model switch moves the route, the books and the activity row; t
     return { text: 'Done.', stop: 'done' };
   };
   const turn = h.routed();
+  setNextRoute(h.services.db, h.tom.id, { modelId: 'claude:claude-sonnet-5', now: true, temperature: 0.7, at: 1 }); // my model.set now
   await runAttempt(h.services, planOf(h, { temperature: 0.3 }), turn, h.request({ onRoute: (route) => routes.push(route) }), undefined);
   assert.equal(seen?.temperature, 0.3);
+  // FIXES-3 C1: the engine ran a request on it – the request is used up (its temperature stays for my next turn), and the
+  // route's reason names the model my first requests ran on
+  assert.equal(pendingRoute(h.services.db, h.tom.id, undefined, () => false)?.modelId, undefined);
+  assert.equal(pendingRoute(h.services.db, h.tom.id, undefined, () => false)?.temperature, 0.7);
+  assert.equal(turn.route.reason, `${h.route.reason} · first requests on Claude Opus 5.5`);
   assert.equal(turn.route.modelId, 'claude:claude-sonnet-5');
   assert.equal(turn.route.effort, 'high');
   assert.equal(turn.model, 'claude-sonnet-5');

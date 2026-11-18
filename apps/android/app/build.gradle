@@ -6,6 +6,10 @@
 // REQUEST_INSTALL_PACKAGES); play – the bundle for Google Play, which has neither and sends the person to Play.
 // Feedback 16.11.2026 (F15): build.ps1 writes the feedback video page (assets/tour.html – the PC tour's example video,
 // no copy of the PC's UI) into build/generated/tour, which the main assets include.
+// F25 stage 2 (16.11.2026): the WebRTC way to the PC (relay/WebRtc) runs on Threema's libwebrtc build, pinned exactly; the
+// APK carries its native library for arm64-v8a and armeabi-v7a only (phones; on an x86 emulator the app stays on its
+// tunnel), compressed (useLegacyPackaging: ~7.8 MB more download instead of 14.5 MB; Android unpacks it at install – its
+// arm64 ELF segments are 16 KB-aligned, as Play asks).
 // Never: bundles desktop credentials or web UI copies, or holds a key or password itself.
 plugins { id 'com.android.application' }
 def releaseKeystore = System.getenv('AUTARK_ANDROID_KEYSTORE')
@@ -25,6 +29,7 @@ android {
         // camera capture, window picture and crash report for feedback, company switch off the main thread.
         versionCode = 15
         versionName = '0.3.15'
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' } // F25: libwebrtc for phones only (x86 would add ~20 MB)
     }
     sourceSets { main { assets.srcDir('build/generated/tour') } } // the feedback video page (build.ps1)
     flavorDimensions = ['store']
@@ -59,10 +64,16 @@ android {
             if (releaseKeystore) signingConfig = signingConfigs.release
         }
     }
-    packaging { resources { excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF'] } }
+    packaging {
+        resources { excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF'] }
+        jniLibs { useLegacyPackaging = true } // F25: libwebrtc compressed in the APK (decision 16.11.2026: download size first)
+    }
 }
 dependencies {
     // Ed25519 and X25519 for Android 8+ (the platform has them only from Android 13); the same version Gradle already caches.
     implementation 'org.bouncycastle:bcprov-jdk18on:1.79'
     implementation 'com.google.zxing:core:3.5.3' // QR decoding for the in-app pairing scanner (pair/QrDecode), pure Java
+    // F25: WebRTC (Google's libwebrtc M149, BSD-3; Threema's build Apache-2.0/MIT) for the direct way to the PC – a data
+    // channel only, no audio or video. Exactly this version (THIRD_PARTY_NOTICE.md, assets/licenses/webrtc.txt).
+    implementation('ch.threema:webrtc-android') { version { strictly '149.0.0' } }
 }

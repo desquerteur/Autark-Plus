@@ -1,8 +1,9 @@
 // One plan login per PC (16.11.2026, accounts/cli-homes.ts + adoption.ts + service.ts): two companies on one PC share its
-// logins folder. A login one company made is adopted by the other at its next detect – switched on, checked, its row
+// logins folder. A login one company made is OFFERED to the other at its next detect (17.11.2026: no account, no check, nothing
+// synced until the person says "Use"); then it is a plan there – switched on, checked, its row
 // pointing at that same home (no copy) – unless that company has the home or the person's login already, or the login is
-// signed out; removing it in one company drops only that row (the home and the other company's row stay, and it is not
-// adopted back there); signing out in one company signs the login out for both: the other takes no linked PC's login into
+// signed out; removing it in one company drops only that row (the home and the other company's row stay, and it is only
+// offered as declined there); signing out in one company signs the login out for both: the other takes no linked PC's login into
 // it and does not report the sign-out as unexpected. A Codex login found in the default home joins another company's home
 // of that e-mail only for the same workspace. Fake homes in a temp folder, the account harness's scripted CLIs.
 // Owns: these assertions only. Never: a real CLI, account or login.
@@ -42,7 +43,7 @@ function pc(t: { after(fn: () => void): void }) {
   return { root, logins, first: company(), second: company(), home };
 }
 
-test('a login made in one company is adopted by the other at its next detect: switched on, checked, the same home', async (t) => {
+test('a login made in one company is offered to the other at its next detect, and after "Use" it is a plan there: switched on, checked, the same home', async (t) => {
   const { logins, first, second, home } = pc(t);
   const dir = home('acc_lena', credentials('r1'), 'lena@example.com');
   first.repo.save(row('acc_lena', { provider: 'claude', auth: 'cli', home: dir, email: 'lena@example.com' }));
@@ -50,7 +51,12 @@ test('a login made in one company is adopted by the other at its next detect: sw
   home('acc_max', credentials('r2'), 'max@example.com'); // the second company has Max's login in a home of before
   second.repo.save(row('acc_old', { provider: 'claude', auth: 'cli', home: path.join(logins, '..', 'company-2', 'accounts', 'claude', 'acc_old'), email: 'max@example.com' }));
 
-  await second.service.detect();
+  const report = await second.service.detect();
+  await second.settle();
+  assert.equal(second.service.get('acc_lena'), undefined, 'offered, not adopted: no row, so nothing uses it and no linked PC gets it');
+  assert.deepEqual(report.found?.map((login) => [login.key, login.provider, login.where, login.email, login.declined]), [['claude:acc_lena', 'claude', 'other-company', 'lena@example.com', undefined]], 'a signed-out login and one the company has already are not offered');
+  assert.equal(second.checks.length, 0, 'no check before the person said "Use"');
+  await second.service.useFound('claude:acc_lena');
   await second.settle();
   const adopted = second.service.get('acc_lena');
   assert.ok(adopted, 'Lena\'s login is a plan of the second company too');
@@ -64,7 +70,9 @@ test('a login made in one company is adopted by the other at its next detect: sw
   assert.equal(second.service.list().length, 2, 'detecting again doubles nothing');
   await first.service.detect();
   await first.settle();
-  assert.deepEqual(first.service.list().map((account) => account.id).sort(), ['acc_lena', 'acc_max'], 'the first company keeps its row and adopts Max\'s login');
+  assert.deepEqual(first.service.list().map((account) => account.id), ['acc_lena'], 'the first company keeps its row; Max\'s login is only offered');
+  await first.service.useFound('claude:acc_max');
+  assert.deepEqual(first.service.list().map((account) => account.id).sort(), ['acc_lena', 'acc_max'], 'and is its plan after "Use"');
 });
 
 test('a Codex login found in the default home runs in another company\'s home of that e-mail only when it is the same workspace', (t) => {
@@ -106,6 +114,7 @@ test('removing it in one company drops only that row: the home and the other com
   const dir = home('acc_lena', credentials('r1'), 'lena@example.com');
   first.repo.save(row('acc_lena', { provider: 'claude', auth: 'cli', home: dir, email: 'lena@example.com' }));
   await second.service.detect();
+  await second.service.useFound('claude:acc_lena');
   await second.settle();
   assert.ok(second.service.get('acc_lena'));
 
@@ -113,9 +122,10 @@ test('removing it in one company drops only that row: the home and the other com
   assert.equal(second.service.get('acc_lena'), undefined);
   assert.deepEqual(readdirSync(path.join(logins, 'claude')), ['acc_lena'], 'the login\'s home stays');
   assert.equal(first.service.get('acc_lena')?.home, dir, 'the first company keeps using it');
-  await second.service.detect(true);
+  const report = await second.service.detect(true);
   await second.settle();
   assert.equal(second.service.get('acc_lena'), undefined, 'removed here: the next detect does not adopt it again');
+  assert.deepEqual(report.found?.map((login) => [login.key, login.declined]), [['claude:acc_lena', true]], 'it stays on offer as declined: "Use" can bring it back');
 });
 
 test('signing out in one company signs the one login out for both: no linked PC\'s login comes back, no unexpected sign-out is reported', async (t) => {
@@ -123,6 +133,7 @@ test('signing out in one company signs the one login out for both: no linked PC\
   const dir = home('acc_lena', credentials('r1'), 'lena@example.com');
   first.repo.save(row('acc_lena', { provider: 'claude', auth: 'cli', home: dir, email: 'lena@example.com' }));
   await second.service.detect();
+  await second.service.useFound('claude:acc_lena');
   await second.settle();
   const theirs = second.service.get('acc_lena')!;
   assert.equal(theirs.state, 'ok');

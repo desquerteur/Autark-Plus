@@ -245,7 +245,7 @@ test('B-050 K3: a message that @mentions only people wakes no agent; one that al
   assert.deepEqual(woken(), ['ag_tom'], 'an unaddressed line still reaches the one agent');
 });
 
-test('the person is notified for agent replies; @mentions and important as important; never for own or system lines; a group names its chat', () => {
+test('the person is notified for agent replies; important as important, the @mention of them by an agent as a reply; never for own or system lines; a group names its chat', () => {
   const t = team();
   t.say('Hello @Tom');
   t.chats.status(t.chat.id, { type: 'note', text: 'Renamed' });
@@ -255,7 +255,7 @@ test('the person is notified for agent replies; @mentions and important as impor
   t.chats.send({ conversationId: t.chat.id, authorId: 'ag_lin', body: 'Server is down', priority: 'important' });
   // B-050 K2: in a room of more than two the title is "Author · chat" (the chat as the owner sees it – here derived from the first line).
   assert.deepEqual(t.notified.map((note) => [note.kind, note.title, note.conversationId]), [
-    ['reply', 'Tom · Hello @Tom', t.chat.id], ['important', 'Mara · Hello @Tom', t.chat.id], ['important', 'Lin · Hello @Tom', t.chat.id],
+    ['reply', 'Tom · Hello @Tom', t.chat.id], ['reply', 'Mara · Hello @Tom', t.chat.id], ['important', 'Lin · Hello @Tom', t.chat.id],
   ]);
 });
 
@@ -298,10 +298,11 @@ test('with the real notifications: the chat level decides pushes and toasts of m
   reply('@Gerd mentions mention');
   level('off');
   reply('@Gerd off mention');
-  assert.deepEqual(pushed, ['@Gerd default mention', 'plain all', '@Gerd mentions mention']);
+  // KI-Runde 17.11.2026: an agent's @mention rings only where the chat is set to "Mentions and tasks"
+  assert.deepEqual(pushed, ['plain all', '@Gerd mentions mention']);
   const toasts = t.of('notify').map((note) => [note.body, note.toast]);
   assert.deepEqual(toasts, [
-    ['plain default', false], ['@Gerd default mention', true], ['plain all', true],
+    ['plain default', false], ['@Gerd default mention', false], ['plain all', true],
     ['plain mentions', false], ['@Gerd mentions mention', true], ['@Gerd off mention', false],
   ]);
 });

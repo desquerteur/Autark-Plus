@@ -21,3 +21,9 @@
 .person-details .details-heading:first-child { margin-top: 0; }
 .person-history { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 4px 0; min-width: 0; flex-wrap: wrap; }
 .person-history .details-member-text { font-size: 13px; color: var(--secondary); }
+/* 17.11.2026: the invite as a card at the top of the person's page (PersonInvite.tsx), not a modal */
+.person-invite-card { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.person-invite-card:focus { outline: none; } /* focused only so Tab and Escape start inside it */
+.person-invite-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; }
+.person-invite-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.person-invite-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }

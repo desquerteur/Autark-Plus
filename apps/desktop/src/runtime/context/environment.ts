@@ -1,13 +1,16 @@
 // "## My environment": true facts about where the agent runs and what it can reach, built from the real tool offer of
 // the agent's own mode. Two parts:
+// KI-Runde 17.11.2026: every tool is in reach from every mode through tools.call, so no line here sends screen or web
+// work to another mode or another agent; a line names what this turn's offer really holds.
 // - stable (environmentSection): this PC (OS, name, the app's language), how the shells on Windows handle text
 //   (windowsShellLine), profile.notes, the workspace, the person's own files, the data folder and memory (constant paths), how
 //   the agent searches the web (its engine's own search first), its screen tools and the one line on instruction files.
 //   The same agent, mode, engine and PC give the same text – nothing here moves by itself.
 // - live (environmentNow, prompt-volatile.ts): free disk space below 2 GB, the engines connected in the Autark system
 //   (owner 15.11.2026: "Codex CLI und Claude Code, wenn beide verknüpft sind" – the one this turn runs in stands in
-//   "## Now", engineName), the companies on this PC and the linked PCs, accounts that need a sign-in (labels only) and the
-//   connected apps – only what moves on its own. Never a memory list.
+//   "## Now", engineName), the companies on this PC and the linked PCs, the linked phones with their phone use (KI-Runde
+//   17.11.2026: a linked phone stood nowhere in the prompt, so agents asked the person for codes it shows), accounts that
+//   need a sign-in (labels only) and the connected apps – only what moves on its own. Never a memory list.
 // Owner 15.11.2026: the agent lives in the Autark system ("im Autark-System drin … und nicht einfach nur in der App"), so
 // these lines say so; texts for people keep "app".
 // The lines speak as the agent, in the first person.
@@ -27,6 +30,7 @@ import { whereHint } from '../browser/place.ts'; // B-080: the person's own Chro
 import { cleanLabel, linkedPcs } from './setup-facts.ts';
 import { CALL_TOOL, FIND_TOOL } from '../tools/core-sets.ts';
 import { listCompanies } from '../root/companies.ts'; // B-075
+import { linkedPhones, type LinkedPhone } from '../phone/linked.ts';
 import '../contracts/apps.ts'; // B-052: RuntimeServices.apps (the connected-apps line)
 import { pwshDir } from '../engines/wf-shim.ts'; // B-080 wave 3: the engines' PowerShell 7
 import { PROVIDER_LABELS } from '../accounts/service-shape.ts';
@@ -87,8 +91,8 @@ function webLine(offered: ReadonlySet<string>, engine?: string, own = false): st
   if (search) return `Web: ${search} (my engine's own search) finds current pages${fetch ? ', web.fetch reads one' : ''}.`;
   if (own && offered.has('web.search')) return `Web: my engine's own search, or web.search through tools.call, finds pages${fetch ? ', web.fetch reads one' : ''}.`;
   if (offered.has('web.search')) return `Web: web.search finds pages (title, link, snippet)${fetch ? ', web.fetch reads one' : ''}.`;
-  if (fetch) return 'Web: no search tool in this mode – web.fetch reads a page whose address I know; searching I give a colleague in research mode (tasks.create to them).';
-  return 'Web: no web tools in this mode – web work I give a colleague in research mode (tasks.create to them).';
+  if (fetch) return 'Web: web.fetch reads a page whose address I know.';
+  return '';
 }
 
 function screenLine(offered: ReadonlySet<string>): string {
@@ -97,9 +101,9 @@ function screenLine(offered: ReadonlySet<string>): string {
   // B-080: where: 'chrome' is the person's own Chrome (browser/tools.ts browser.open), computer.* works in its window.
   if (browser && computer) return 'Screen: browser.* browses websites (the person can watch and take over; where: \'chrome\' is the person\'s own Chrome with their logins), computer.* operates this PC\'s screen, mouse and keyboard.';
   // B-072 (live 03.11.2026: a browser-only agent asked the person to sign in while their own Chrome had the session).
-  if (browser) return 'Screen: browser.* browses websites in my own profile (the person can watch and take over); the person\'s own browsers on this screen keep their logins and autofill – a colleague in computer mode reaches them (tasks.create to them).';
+  if (browser) return 'Screen: browser.* browses websites in my own profile (the person can watch and take over); the person\'s own browsers on this screen keep their logins and autofill.';
   if (computer) return 'Screen: computer.* operates this PC\'s screen, mouse and keyboard.';
-  return 'Screen: the browser and computer tools live in the modes of those names – I switch my own mode (agents.update), or a colleague there does the screen work (tasks.create to them).';
+  return '';
 }
 
 /** The workspace line ('' without a workspace). */
@@ -232,6 +236,33 @@ export function companiesLine(services: RuntimeServices, offered: ReadonlySet<st
   return `${parts.join(' · ')}.`;
 }
 
+/** An app phone's phone use in a few words. */
+const PHONE_USE: Readonly<Record<NonNullable<LinkedPhone['use']>, string>> = {
+  on: 'phone use on', off: 'phone use off – the app shows the person how to turn it on', away: 'not connected right now',
+};
+
+/** Phones named in the phones line (beyond: "+N more"). */
+const MAX_PHONES = 3;
+
+/**
+ * "Linked phones: samsung SM-S918B (the person's, Autark app, phone use on) – phone.* works on a phone whose phone use is
+ * on (an ADB phone always); phone.say with ask: true asks the person for a moment of theirs." – '' without a linked phone
+ * or where phone.* is not offered. A phone attached to another PC of mine names that PC: phone.* reaches it with `device`.
+ */
+export function phonesLine(services: RuntimeServices, offered: ReadonlySet<string>): string {
+  const phones = offered.has('phone.ui_tree') ? safe(() => linkedPhones(services), []) : [];
+  if (!phones.length) return '';
+  const names = phones.slice(0, MAX_PHONES).map((phone) => {
+    const where = phone.pc ? `, on ${cleanLabel(phone.pc)}` : '';
+    if (phone.via === 'adb') return `${cleanLabel(phone.name)} (over ADB${where || ' on this PC'})`;
+    return `${cleanLabel(phone.name)} (the person's, Autark app${where || `, ${PHONE_USE[phone.use ?? 'away']}`})`;
+  });
+  const more = phones.length > MAX_PHONES ? ` +${phones.length - MAX_PHONES} more` : '';
+  const ask = phones.some((phone) => phone.via === 'app') ? '; phone.say with ask: true asks the person for a moment of theirs' : '';
+  const elsewhere = phones.some((phone) => phone.pc) ? '; one on another PC with device: that PC' : '';
+  return `Linked phones: ${names.join(', ')}${more} – phone.* works on a phone whose phone use is on (an ADB phone always)${elsewhere}${ask}.`;
+}
+
 /** The name an engine goes by for the person: its account's provider ("Claude Code", "Codex", "OpenAI API"), else the engine's. */
 export function engineName(services: RuntimeServices, route: Pick<RouteDecision, 'engine' | 'accountId'>): string {
   const account = safe(() => services.accounts.list(), []).find((entry) => entry.id === route.accountId);
@@ -301,7 +332,7 @@ export function diskLine(services: RuntimeServices, read: (dir: string) => numbe
 }
 
 /**
- * The live part (prompt-volatile.ts): the free disk space when low (B-080), the companies and linked PCs, accounts
+ * The live part (prompt-volatile.ts): the free disk space when low (B-080), the companies and linked PCs, the linked phones, accounts
  * needing sign-in and connected apps. `mode`: the agent's own mode (its tool offer); `disk`: the free-space probe (tests
  * pass their own).
  */
@@ -311,6 +342,7 @@ export function environmentNow(services: RuntimeServices, input: { agent: Agent;
     diskLine(services, disk), // B-080: the agent can make room while it keeps working
     enginesLine(services), // owner 15.11.2026: which engines the system has (the turn's own: "## Now")
     companiesLine(services, offered), // B-075
+    phonesLine(services, offered), // KI-Runde 17.11.2026
     signInLine(services, offered),
     appsLine(services, input.agent, offered), // B-052 M6
   ].filter(Boolean);

@@ -5,7 +5,7 @@
 // Numeric options (e.g. seconds to wait) travel as labels and return as numbers.
 // Owns: the decide definition, the options rule (distinct also ignoring case, as the hub matches a
 // pick), the source rules – judged before anything runs, also without a decision model: an
-// existing tool of category 'read' offered in the mode and valid arguments; then run through registry.call, so the
+// existing tool of category 'read' that can work here (else the registry's reason, cannotWork) and valid arguments; then run through registry.call, so the
 // mode's offer applies as for a direct call –, the decision context (the agent's
 // context, then the source's output; the hub caps it at 12k), the stop (a stopped turn ends the
 // decision: DecisionRequest.signal), the reply and the run note { decision: { question, outcome,
@@ -25,6 +25,7 @@ import { outcomeOf } from '../../decision/service.ts';
 import { MAX_OPTIONS, NONE_OPTION } from '../../decision/types.ts';
 import { MCP_SERVER_NAME } from '../../mcp/names.ts';
 import { clip, defineTool, internal } from './util.ts';
+import { cannotWork } from './tools-meta.ts';
 
 export const DECIDE_TOOL = 'decide';
 /** The agent's own context; the rest of the hub's 12k characters is left for the source's output. */
@@ -104,7 +105,7 @@ function checkSource(ctx: ToolContext, source: Source): Checked | { error: strin
   const tool = ctx.services.tools.get(name);
   if (!tool) return { error: `Unknown source tool "${clip(source.tool, 100)}". Name a read tool I can use, e.g. files.list.` };
   if (tool.category !== 'read') return { error: `${name} cannot be a source: a source only reads (its category is ${tool.category}). I call it myself if I need it.` };
-  if (!offered(ctx, name)) return { error: `Tool "${name}" is not available in mode "${ctx.mode}", so it cannot be a source.` };
+  if (!offered(ctx, name)) return { error: `${cannotWork(name, tool)} So it cannot be a source.` };
   const args = source.args ?? {};
   const errors = validate(args, tool.inputSchema);
   if (errors.length) return { error: `Invalid arguments for the source ${name}:\n${errors.join('\n')}` };

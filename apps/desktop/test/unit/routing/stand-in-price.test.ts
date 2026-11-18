@@ -63,7 +63,7 @@ test('Sol pinned and at its limit: Sonnet stands in, not Opus – also after an 
   const first = await h.route();
   assert.equal(first.modelId, SONNET, first.reason);
   assert.equal(first.by, 'fallback');
-  assert.match(first.reason, /^pinned model unavailable · research/);
+  assert.match(first.reason, /^pinned model unavailable · executing runs on the strong tier's first choice · research/);
   assert.equal(first.effort, 'medium');
 
   const afterOpus = await h.route({ previous: { modelId: OPUS, effort: 'max', category: 'research' } });
@@ -76,7 +76,7 @@ test("a person's line on top of the failover: Sonnet at effort high", async () =
   const person = await h.route();
   assert.equal(person.modelId, SONNET, person.reason);
   assert.equal(person.effort, 'high');
-  assert.match(person.reason, /^pinned model unavailable · .*a person's request/);
+  assert.match(person.reason, /^pinned model unavailable · .*a person's line/);
 });
 
 test('nothing that cheap connected: the whole pool runs (Opus), the work goes on', async () => {

@@ -103,9 +103,12 @@ test('acp providers: the ACP flag comes from the CLI\'s --help; the sign-in is t
   assert.equal(signInMethod(ACP_PROVIDERS.copilot, GEMINI_METHODS), undefined, 'Copilot CLI signs in in its own window');
 });
 
-test('acp providers: a Gemini CLI signed in on this PC is adopted; every CLI starts in the engine folder without provider keys', async () => {
+test('acp providers: a Gemini CLI signed in on this PC is adopted after "Use"; every CLI starts in the engine folder without provider keys', async () => {
   const h = service({ gemini: true, copilot: false });
   const report = await h.accounts.detect();
+  await h.settle();
+  assert.deepEqual([h.accounts.list().length, report.found?.map((login) => login.key)], [0, ['gemini-cli:default']], '17.11.2026: only offered until the person says Use');
+  await h.accounts.useFound('gemini-cli:default');
   await h.settle();
   assert.deepEqual(report.clis.filter((cli) => cli.provider === 'gemini-cli' || cli.provider === 'copilot'), [
     { provider: 'gemini-cli', path: '/bin/gemini', version: '0.9.0', loggedIn: true },
@@ -233,7 +236,8 @@ test('acp providers: routing reaches a Gemini CLI plan; its turn runs through th
   const argon = h.catalog.get('gemini-cli:gemini-4-argon');
   assert.deepEqual([argon?.engine, argon?.tier, argon?.accounts, argon?.available], ['acp', 'frontier', ['acc_gemini'], true], 'listed by the agent, Gemini priors applied');
   try {
-    const decision = await h.router.route({ agent: agent('ag_1'), mode: mode('research'), text: 'Compare the three vendor reports.' });
+    // a lead runs on the frontier tier's first choice (17.11.2026: the model settles by kind); an executor would take Flash
+    const decision = await h.router.route({ agent: agent('ag_1', { template: 'head' }), mode: mode('research'), text: 'Compare the three vendor reports.' });
     assert.deepEqual([decision.engine, decision.accountId, decision.modelId], ['acp', 'acc_gemini', 'gemini-cli:gemini-4-argon']);
     const { input } = turnInput({ account: gemini, model: h.catalog.get(decision.modelId)!.model, effort: decision.effort, cwd: WORKSPACE });
     const result = await engine.run(input);

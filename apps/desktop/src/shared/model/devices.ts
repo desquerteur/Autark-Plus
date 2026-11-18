@@ -13,7 +13,8 @@ export interface DeviceCaps {
   browser?: boolean;
   shell?: boolean;
   screens?: number;
-  adbPhones?: string[]; // phones reachable via ADB from this PC
+  adbPhones?: string[]; // phones attached to that PC over ADB (serials), as it last saw them
+  appPhones?: string[]; // phones whose Autark app is attached to that PC (device ids): phone.* reaches them through it
   os?: string;
   /** F25 (16.11.2026): the Autark version that PC runs (Settings › Devices; a newer one on my own PC checks for the update here). Older PCs send none. */
   version?: string;

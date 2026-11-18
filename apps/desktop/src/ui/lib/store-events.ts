@@ -9,6 +9,7 @@
 
 import { effect } from '@preact/signals';
 import type { TaskView } from '../../shared/model/tasks.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { rpc } from './rpc.ts';
 import {
   accounts, activeConversationId, activity, agents, archivedAgents, conversations, loadAll, messages, models, putMessage,
@@ -34,10 +35,14 @@ function rememberNotice(id: string): void {
   try { localStorage.setItem(NOTICE_KEY, id); } catch { /* storage blocked: shown again after a reload */ }
 }
 
-/** The person is where a toast's Open leads (shell/StatusLine.tsx): its chat, or My day for a to-do outside a chat. */
+/** The person is where a toast's Open leads (shell/StatusLine.tsx) or sees what it is about: its chat, or My day (also
+ *  as Home) for a to-do outside a chat and – 17.11.2026, a second line over My day said the list's rows again – for any
+ *  to-do its list shows. */
 function atToastTarget(item: { conversationId?: string; taskId?: string }): boolean {
   const at = route.peek();
-  return at.view === 'chat' ? item.conversationId === at.id : at.view === 'day' && !item.conversationId && item.taskId !== undefined;
+  if (at.view === 'chat') return item.conversationId === at.id;
+  const myDay = at.view === 'day' || at.view === 'home';
+  return myDay && item.taskId !== undefined && (!item.conversationId || todos.peek().some((task) => task.id === item.taskId));
 }
 
 /**
@@ -48,6 +53,14 @@ function atToastTarget(item: { conversationId?: string; taskId?: string }): bool
  */
 function isOpenTodo(task: TaskView): boolean {
   return onForYouList(task);
+}
+
+/** A phone hears an agent whose only news is its status without the instructions it already holds (runtime/rpc/scopes.ts
+ *  deviceAgent, 18.11.2026): they stay as known. */
+export function withInstructions(event: Agent | Omit<Agent, 'instructions'>): Agent {
+  if ('instructions' in event && typeof event.instructions === 'string') return event as Agent;
+  const known = agents.peek().find((agent) => agent.id === event.id) ?? archivedAgents.peek().find((agent) => agent.id === event.id);
+  return { ...event, instructions: known?.instructions ?? '' };
 }
 
 /** setTimeout's longest reliable delay is ~24.8 days; the clock re-arms after a day at most. */
@@ -102,7 +115,11 @@ export function wireEvents(): void {
   wireDay(); // B-041: calendar.upserted/removed, day.briefing, handed-off work, the day clock
 
   // org
-  rpc.on('agent.upserted', (agent) => { upsertById(agents, agent); if (agent.archivedAt !== undefined) upsertById(archivedAgents, agent); else removeById(archivedAgents, agent.id); });
+  rpc.on('agent.upserted', (event) => {
+    const agent = withInstructions(event);
+    upsertById(agents, agent);
+    if (agent.archivedAt !== undefined) upsertById(archivedAgents, agent); else removeById(archivedAgents, agent.id);
+  });
   rpc.on('agent.removed', ({ id }) => { removeById(agents, id); removeById(archivedAgents, id); });
   rpc.on('agent.activity', ({ active }) => { activity.value = active; });
   wirePeople(); // F-52: person.upserted
@@ -147,7 +164,7 @@ export function wireEvents(): void {
   });
 
   // A toast goes once the person is where its Open leads, also when the window comes back to that view.
-  effect(() => { void route.value; dismissToastsWhere(atToastTarget); });
+  effect(() => { void route.value; void todos.value; dismissToastsWhere(atToastTarget); }); // a to-do reaching the list after its toast too
   window.addEventListener('focus', () => dismissToastsWhere(atToastTarget));
 
   wireTodoClock();

@@ -15,16 +15,20 @@ metadata:
 
 # Human-minimal handoff
 
-The human's "My day" list works when it is calm and short. Every item I add costs their
-attention: I add what only they can do, and prepare everything else.
+The human's "My day" list works when it is calm and short. Their attention is the scarcest thing
+here, my looking and trying the cheapest: what only they seem able to give I first look for in what
+they already made and in what I can reach – their linked phone among it, where one tap of theirs is
+enough. An item goes on their list after my own way was tried, and says what I tried; one the work has
+overtaken I take back myself.
 
 ## What usually needs the human
 - **Physical**: be on camera, speak a voice-over, plug in a device, sign on paper, pick up
-  a parcel, empty the dishwasher. I organize it: a task for them with a time on their day
+  a parcel. Their face and voice I first take from what they already recorded; what is still theirs I
+  organize: a task for them with a time on their day
   (`tasks.create` to the person with `dueAt` – when they do it – and `estimateMin` puts it into their
   calendar), or a helper or service who does it.
-- **Identity**: a signature, KYC/ID checks, a passkey or code only their phone or device has (a code
-  that reaches a mailbox I can open or a phone I use through Autark I read there myself).
+- **Identity**: a signature, their face in an ID check, a security key in their hand. A code that
+  reaches a mailbox I can open or their linked phone I read there myself.
 - **Legal / binding**: signatures, contracts.
 
 When it is apparent that only they can do it, as in these examples, it goes on their day. Research,
@@ -61,20 +65,14 @@ Teleprompter recording (a `record` block with `script` becomes a teleprompter):
  "bullets":["Smile at the start","Pause after the question","Look at the lens, not the screen"]}
 ```
 
-Voice-over only:
-```ui
-{"type":"record","id":"vo-part2","mode":"audio","maxSeconds":60,
- "script":"Part two: the three settings that matter most...","instructions":"Quiet room, phone 20 cm away."}
-```
-
 Something done outside, then confirmed:
 ```ui
-{"type":"confirm","id":"bank-2fa","important":true,"title":"Approve the bank login",
- "instructions":"Open your banking app and approve the login request from 'Autark browser'.",
- "confirmLabel":"Approved","why":"The bank only accepts approval on your phone."}
+{"type":"confirm","id":"lease-signed","important":true,"title":"Sign the lease",
+ "instructions":"Sign page 4 of the printed lease on your desk and put it in the envelope beside it. I post it and file the copy.",
+ "confirmLabel":"Signed","why":"The landlord accepts only your handwritten signature."}
 ```
 
-A step in my own browser only a person can do (a code or passkey only their device has): a
+A step in my own browser only a person can do (a security key or passkey only their device holds): a
 `confirm` with the page's `url`. When I work in the browser or social mode, or have a browser
 open, the to-do gets "Open browser": the person does it in my browser
 (taken over) and hands it back – also from their phone, where it opens only at the to-do's
@@ -82,8 +80,8 @@ open, the to-do gets "Open browser": the person does it in my browser
 page first (open it, fill what I can):
 ```ui
 {"type":"confirm","id":"shop-login","important":true,"title":"Confirm the shop sign-in for me",
- "instructions":"Click Open browser, enter the code the shop sent to your phone, then Hand back. I place the order.",
- "url":"https://shop.example.com/login","confirmLabel":"Signed in","why":"The shop sends its code only to your phone."}
+ "instructions":"Click Open browser, touch your security key when the page asks, then Hand back. I place the order.",
+ "url":"https://shop.example.com/login","confirmLabel":"Signed in","why":"The shop signs in only with your security key."}
 ```
 While the person has my browser, `browser.*` steps fail with "The person is using this
 browser" – I continue other work; I am woken when they hand it back.
@@ -127,8 +125,7 @@ instead of theirs, a different source). When there is no way, I say what is bloc
 line. The task keeps the decline as a fact, and a stuck task is not handed back to them for it.
 
 ## Pitfalls
-- Asking the human to do something I could do in the browser or on the computer – a sign-in
-  their own browser already has included.
+- Asking the human to do something I could do in the browser, on the computer or on their linked
+  phone – a sign-in their own browser already has, a code that arrives there included.
 - Vague items ("please check"); mine say exactly what, where, how long.
 - Several items for one thing; I combine or split by the human's effort, not my plan.
-- Waiting idle; I continue with the parts that do not depend on the answer.

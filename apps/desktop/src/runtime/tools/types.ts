@@ -51,8 +51,16 @@ export const WHEN_PROPERTY: JsonSchema = Object.freeze({
   type: 'string',
   description: 'An ISO time ("2026-11-16T07:00", this PC\'s zone without one), a date ("2026-11-16", 00:00 here), a duration ("PT2H") or "+3h" / "in 2d"; "" clears it.',
 });
-/** What a piece of work needs from its first turn on (tasks.create, tasks.give). */
-export const MODEL_PROPERTY: JsonSchema = Object.freeze({ type: 'string', minLength: 1, maxLength: 200, description: 'A model from models.list, or "cheap" / "strong" – cheaper or stronger than mine.' });
+/**
+ * The model of work whose context starts here (agents.create – a new colleague). 17.11.2026 (measured: described as "cheaper
+ * or stronger than mine", the field was used three times in 56 hand-overs, each time "strong" by a giver on the strongest
+ * model): described by what the work asks for, not relative to the one who gives it.
+ */
+export const MODEL_PROPERTY: JsonSchema = Object.freeze({
+  type: 'string', minLength: 1, maxLength: 200,
+  description: 'An id from models.list: the smallest model that does the hardest step of this work as well as the strongest would.',
+});
+/** The effort of work from its first turn on (tasks.create, tasks.give, agents.create). */
 export const EFFORT_PROPERTY: JsonSchema = Object.freeze({ type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] });
 
 export interface ToolContext {
@@ -119,8 +127,6 @@ export interface ToolDef<A = Record<string, unknown>> extends ToolSpec {
   requires?: ToolRequirement;
   /** Can run on a linked PC (forwarded by DeviceService); the registry adds the `device` argument. */
   remote?: boolean;
-  /** Offered in every mode regardless of the mode's tool patterns (a connector's tools, runtime/apps/tools.ts; spend.note; devices.send_file). */
-  anyMode?: true;
   /** The journal's one-line summary; without it the journal shows the tool's name. */
   describe?(args: A, ctx: ToolContext): ActionDescription;
   run(args: A, ctx: ToolContext): Promise<ToolOutput>;

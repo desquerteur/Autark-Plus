@@ -1,6 +1,7 @@
 // An agent's call (src/runtime/calls/ring.ts with call-log.ts and the real chat service): the row is born ringing and
 // rings this PC's window once; nobody picking up ends it missed after RING_MS (written by its PC) and wakes the agent
-// once; a decline – here or arriving by sync – wakes only on the PC that holds the row; a device that takes the ring
+// once and goes out once as a 'notify' event of kind 'call'; wherever the ring ends, the same notify goes out once more
+// with its time up (the app phone's notice); a decline – here or arriving by sync – wakes only on the PC that holds the row; a device that takes the ring
 // answers it (no wake, the opening line as the agent's live voice, a line of the call); the live list (ringing and
 // running calls) and current() (chat.call) drop a running call whose PC is offline; an employee's seat PC neither rings nor lists; at start the
 // calls that did not end are read again without an alert.
@@ -69,6 +70,7 @@ test('ring: the row is born ringing as the caller\'s, rings this window once and
   assert.equal(rung.until, h.clock.now() + RING_MS);
   assert.deepEqual(rung.online, { pcs: 1, phones: 0 }, 'this PC; the other PC is not reachable, no phone subscribed');
   assert.deepEqual(h.alerts, [{ title: 'Ava calls', body: 'Logo decision', tag: `call:${rung.callId}` }]);
+  assert.deepEqual(h.of('notify'), [{ kind: 'call', title: 'Ava calls', body: 'Logo decision', conversationId: h.chat.id, toast: false, call: { id: rung.callId, until: rung.until } }], 'the ring as a notify of its own kind (the call notice of the Android app)');
   assert.deepEqual(h.timers.pending.map((timer) => timer.ms), [RING_MS]);
   const [live] = h.rings.live();
   assert.deepEqual(live, { callId: rung.callId, rowId: row.id, conversationId: h.chat.id, state: 'ringing', agentName: 'Ava', why: 'Logo decision', until: rung.until });
@@ -76,6 +78,7 @@ test('ring: the row is born ringing as the caller\'s, rings this window once and
   assert.deepEqual(h.rings.current(h.chat.id), { callId: rung.callId, state: 'ringing' });
   h.bus.emit('message.updated', row); // the same row again (a sync echo): no second alert
   assert.equal(h.alerts.length, 1);
+  assert.equal(h.of('notify').length, 1);
 });
 
 test('a call adds one notice beside unread chat messages and its end clears only the call', { timeout: 5000 }, async () => {
@@ -188,6 +191,28 @@ test('the live list and current(): a running call held by an offline PC drops ou
   h.bus.emit('device.upserted', { id: 'dev_server' } as never);
   assert.deepEqual(h.lives().at(-1)?.map((live) => [live.callId, live.state, live.device, live.holder, live.last?.name]), [['call_srv', 'running', 'Server PC', 'dev_server/device:pc', 'Ava']]);
   assert.deepEqual(h.rings.current(h.chat.id), { callId: 'call_srv', state: 'running' });
+});
+
+// KI-Runde 17.11.2026, fix after the review: the app phone kept ringing for the rest of the ring when the call was
+// answered or declined somewhere else, because only the web-push notices were cleared.
+test('the ring\'s end goes out as the same notify with its time up – for this PC\'s ring and for another PC\'s', async () => {
+  const h = setup();
+  const { callId } = await h.rings.ring({ conversationId: h.chat.id, agentId: 'ag_ava', why: 'Logo' });
+  const ends = () => h.of('notify').filter((event) => event.call !== undefined && event.call.until <= h.clock.now());
+  assert.equal(ends().length, 0, 'the ring itself rings on');
+  h.clock.advance(3000);
+  h.rings.decline(callId, { key: 'pc', name: 'Office PC' });
+  assert.deepEqual(ends(), [{ kind: 'call', title: 'Ava calls', body: 'Logo', conversationId: h.chat.id, toast: false, call: { id: callId, until: 0 } }], 'until 0: past on every clock, so a phone whose clock is behind the PC\'s stops too (review r2-1 finding 5)');
+  h.bus.emit('message.updated', h.row(callId));
+  assert.equal(ends().length, 1, 'once per ring');
+
+  // A ring the other PC wrote and answered: this PC holds no row, and its phone still has to stop ringing.
+  const far: CallRecord = { id: 'call_far', participant: 'agent:ag_ben', name: 'Ben', pc: 'dev_server', startedAt: h.clock.now(), lines: [], ring: { by: 'ag_ben', why: 'Deploy', until: h.clock.now() + RING_MS } };
+  const sent = h.chats.send({ conversationId: h.chat.id, body: 'Ben calls: Deploy', kind: 'status', silent: true, authorId: SYSTEM_ID, authorKind: 'system', mentions: [], meta: { status: { type: 'note', text: 'Ben calls: Deploy' }, call: far } });
+  assert.equal(ends().length, 1);
+  writeCallRow(h.services, sent.id, (record) => ({ ...record, participant: 'device:pc', name: 'Pixel', pc: 'dev_server', ring: { ...record.ring!, answeredAt: h.clock.now() } }));
+  assert.deepEqual(ends().map((event) => [event.call?.id, event.toast]), [[callId, false], ['call_far', false]]);
+  assert.equal(h.wakeRows().length, 1, 'the other PC\'s ring wakes nobody here');
 });
 
 test('an employee\'s seat PC neither rings nor lists the owner\'s calls; at start the rows that did not end are read again without an alert', async () => {

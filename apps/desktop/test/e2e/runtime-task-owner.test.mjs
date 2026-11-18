@@ -42,8 +42,15 @@ test('retries follow the owner; the human cancel stops the work', { timeout: 240
     const at = Date.now();
     assert.equal(reassigned.assigneeId, rhea.id);
     assert.equal(reassigned.assignedBy, 'human', 'it records who gave it');
-    const line = await client.waitFor('message.created', (message) => message.meta?.status?.type === 'handoff' && message.meta.status.details?.taskId === task.id, 90_000);
-    assert.equal(line.meta.status.details.to, rhea.id, 'its chat notes the new owner');
+    // KI-Runde 17.11. §5.6: work handed out of a chat the person is in to an agent who is not in it moves into the
+    // giver's 1:1 with the receiver – here the person's own 1:1 with Rhea; the Hosting chat keeps its members.
+    const room = await client.call('chats.get', { id: reassigned.conversationId });
+    assert.equal(room.settings.direct, true, 'the work moved into a 1:1');
+    assert.ok(room.members.some((member) => member.memberId === rhea.id && !member.leftAt), 'Rhea\'s 1:1 with the person');
+    assert.ok(!(await client.call('chats.get', { id: chat.id })).members.some((member) => member.memberId === rhea.id && !member.leftAt), 'Rhea is not seated in Hosting');
+    const line = (await client.call('messages.list', { conversationId: room.id, limit: 100 }))
+      .find((message) => message.meta?.status?.type === 'handoff' && message.meta.status.details?.taskId === task.id);
+    assert.equal(line?.meta.status.details.to, rhea.id, 'its chat notes the new owner');
     await client.waitFor('run.upserted', (run) => run.agentId === rhea.id && run.taskId === task.id, 90_000);
     await sleep(QUIET_MS);
     assert.equal(turnsOn(task.id, manager.id, at + GRACE_MS), 0, 'no duplicate work by the previous owner');

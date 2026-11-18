@@ -2,10 +2,11 @@
 // a routine, the successor of an archived agent and the watcher's owner pick for a row without one:
 //  - receiverOf: who a word names – "me", "team", an agent (id or name), the person (human, their name) or a colleague;
 //  - pickOwner ("team"): Autark picks one owner now – one cheap decision among the active agents and the colleagues the
-//    giver may give to, each with role and open work; unsure, no model or fewer than two → the responsible manager; no
-//    agent at all → the giver keeps it (an agent) or it lands on the person's own list;
+//    giver may give to (a colleague: only agents they work with), each with role and open work; unsure, no model or
+//    fewer than two → the responsible manager; no agent at all → the giver keeps it (an agent or a colleague) or it
+//    lands on the person's own list;
 //  - giveTask: the colleague rules (people/task-rules.ts) and the chat it lives in, the owner, "given by", its last move,
-//    the giver's note as "From <name>: …", the model and effort the work needs, a quiet line in its chat, the receiver
+//    the giver's note as "From <name>: …", the effort the work needs, a quiet line in its chat, the receiver
 //    told at once (tell) and its next look (tasks/next.ts);
 //  - tell: an agent hears by a wake on the task, the person by a notification, a colleague by a push.
 // Owns: those. Never: gives finished work, gives to an archived or unknown agent, or leaves a task without an owner.
@@ -24,7 +25,8 @@ import { nextLook } from './next.ts';
 import { moveTaskChat, responsibleManager, routeOwner, stopRuns } from './owners.ts';
 import { checkMayGive } from '../people/task-rules.ts';
 import { SURE_CONFIDENCE } from '../decision/service.ts';
-import { catalogModel, modelWord, setTaskRoute, type NextRoute } from '../agents/next-route.ts';
+import { setTaskRoute, type NextRoute } from '../agents/next-route.ts';
+import { recordChange } from './changes.ts';
 import '../contracts/people.ts';
 
 /** Who receives work: an agent, the owner (no id) or a colleague (per_…), or "team" before the pick. */
@@ -62,10 +64,16 @@ function loads(s: Pick<RuntimeServices, 'db'>): Map<string, number> {
 }
 
 /** Who "team" may land on: active agents (a team's only, with `team`) and the colleagues the giver may give to – never the giver. */
+/** A colleague gives only to agents they work with (people/task-rules.ts); everyone else to any agent. */
+function mayGiveTo(t: TaskServiceImpl, by: string, agentId: string): boolean {
+  if (!isPersonId(by)) return true;
+  try { checkMayGive(t.s, by, { kind: 'agent', id: agentId }, undefined); return true; } catch { return false; }
+}
+
 function candidates(t: TaskServiceImpl, by: string, team?: string): Array<{ id: string; label: string }> {
   const s = t.s;
   const fold = (text: string) => text.trim().toLowerCase();
-  const agents = (s.org?.list() ?? []).filter((agent) => agent.archivedAt === undefined && agent.id !== by && (!team || fold(agent.team ?? '') === fold(team)));
+  const agents = (s.org?.list() ?? []).filter((agent) => agent.archivedAt === undefined && agent.id !== by && (!team || fold(agent.team ?? '') === fold(team)) && mayGiveTo(t, by, agent.id));
   const people = team ? [] : (s.people?.list?.() ?? []).filter((person) => person.id !== by && !person.owner && person.status !== 'revoked' && (() => {
     try { checkMayGive(s, by, { kind: 'human', id: person.id }, undefined); return true; } catch { return false; }
   })());
@@ -83,7 +91,12 @@ function candidates(t: TaskServiceImpl, by: string, team?: string): Array<{ id: 
 export async function pickOwner(t: TaskServiceImpl, task: Pick<Task, 'title' | 'notes' | 'spaceId'>, by: string, team?: string): Promise<Receiver> {
   const s = t.s;
   const fallback = (): Receiver => {
-    const manager = s.org ? responsibleManager(s.org, task.spaceId) : undefined;
+    const found = s.org ? responsibleManager(s.org, task.spaceId) : undefined;
+    const manager = found && mayGiveTo(t, by, found.id) ? found : undefined;
+    if (isPersonId(by) && !manager) { // a colleague: an agent they work with, else they keep it
+      const agent = options.find((option) => !isPersonId(option.id));
+      return agent ? { kind: 'agent', id: agent.id } : { kind: 'human', id: by };
+    }
     if (manager && manager.id !== by) return { kind: 'agent', id: manager.id };
     if (!isHumanActor(by) && by !== SYSTEM_ID && s.org?.get(by)) return { kind: 'agent', id: by };
     return manager ? { kind: 'agent', id: manager.id } : { kind: 'human' };
@@ -108,20 +121,9 @@ export async function pickOwner(t: TaskServiceImpl, task: Pick<Task, 'title' | '
   }
 }
 
-/** The route a giver asks for the work (model checked against the catalog; cheap / strong relative to the giver's model). */
-export function askedRoute(s: Pick<RuntimeServices, 'catalog'>, input: { model?: string; effort?: Effort; from?: string }): Omit<NextRoute, 'at' | 'reason'> | undefined {
-  if (!input.model && !input.effort) return undefined;
-  if (!input.model) return { effort: input.effort };
-  const need = modelWord(input.model);
-  if (need) return { need, ...(input.from ? { from: input.from } : {}), ...(input.effort ? { effort: input.effort } : {}) };
-  const info = catalogModel(s.catalog, input.model);
-  if (typeof info === 'string') throw new WorkforceError('bad_request', `${info} Nothing was given.`);
-  return { modelId: info.id, ...(input.effort ? { effort: input.effort } : {}) };
-}
-
 export interface GiveInput {
   note?: string;
-  /** What the work needs from here on (askedRoute's result), for an agent receiver. */
+  /** The effort the work needs from here on, for an agent receiver. */
   route?: Omit<NextRoute, 'at' | 'reason'>;
   /** A fact for its ledger ("Taken over from Ida (archived)."). */
   fact?: string;
@@ -159,6 +161,7 @@ export function giveTask(t: TaskServiceImpl, id: string, to: Receiver, by: strin
     const givenIn = input.givenIn && input.givenIn !== draft.conversationId ? input.givenIn : undefined;
     draft.ledger = { ...ledger, movedAt: now, stalls: 0, ...(givenIn ? { givenIn } : {}), ...(input.fact ? { facts: [...(draft.ledger.facts ?? []), input.fact].slice(-20) } : {}) };
     draft.nextAt = nextLook(draft, now, t.openPieces(draft));
+    recordChange(draft, before, by, 'give', now);
   });
   const previous = before.assigneeKind === 'agent' ? before.assigneeId : undefined;
   if (previous && previous !== task.assigneeId) {
@@ -174,21 +177,25 @@ export function giveTask(t: TaskServiceImpl, id: string, to: Receiver, by: strin
   return view;
 }
 
-/** The receiver of new or given work hears of it at once ("<giver> gave me …", "I took on …"); work I give myself in its own turn needs no word. */
+/**
+ * The receiver of new or given work hears of it at once ("<giver> gave me …"). Work I give myself is no news to me: a bare
+ * wake starts it, so a wait I set in the turn that made it stands (FIXES-3b F2.3; agents/turn-prepare.ts B-047), and in its
+ * own turn it needs no wake at all.
+ */
 export function tellGiven(t: TaskServiceImpl, task: Task, by: string): void {
   const owner = task.assigneeKind === 'agent' ? task.assigneeId : task.assigneeId ?? HUMAN_ID;
   if (!owner || task.assigneeKind === 'team') return;
   const title = excerpt(task.title, 120);
   if (task.assigneeKind === 'agent') {
     if (owner === by && t.isRunning(task.id, owner)) return; // its own turn on it plans its next look
-    tell(t.s, owner, { reason: 'task', taskId: task.id, conversationId: task.conversationId, note: owner === by ? `I took on "${title}".` : `${nameOf(t.s, by)} gave me "${title}".` });
+    tell(t.s, owner, { reason: 'task', taskId: task.id, conversationId: task.conversationId, ...(owner === by ? {} : { note: `${nameOf(t.s, by)} gave me "${title}".` }) });
     return;
   }
   if (owner === by) return; // the person's own to-do
   tell(t.s, owner, { kind: 'todo', title: `${nameOf(t.s, by)}: ${excerpt(task.title, 80)}`, body: excerpt(task.notes, 160), taskId: task.id, conversationId: task.conversationId });
 }
 
-type Tell = { reason: WakeReason; note: string; taskId?: string; conversationId?: string; key?: string } | NotificationInput;
+type Tell = { reason: WakeReason; note?: string; taskId?: string; conversationId?: string; key?: string } | NotificationInput;
 
 /**
  * Tells `who`: an agent by a wake (under the task's one key, task:<id>, unless another is given), the person by a

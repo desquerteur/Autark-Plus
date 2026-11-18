@@ -8,9 +8,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
-import { RunningTurns, setModelInTurn, type RunEntry } from '../../../src/runtime/agents/dispatch-runs.ts';
+import { RunningTurns } from '../../../src/runtime/agents/dispatch-runs.ts';
 import { groupWakes } from '../../../src/runtime/agents/dispatch-groups.ts';
-import { setNextRoute, takeNextRoute } from '../../../src/runtime/agents/next-route.ts';
+import { setNextRoute, takeNextRoute, tookInTurn } from '../../../src/runtime/agents/next-route.ts';
 import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate } from '../../../src/runtime/db/migrate.ts';
 import { shownTemperature, temperatureText, type AgentActivity, type Run } from '../../../src/shared/model/runs.ts';
@@ -116,24 +116,15 @@ test('the activity row carries the temperature and whether it is sent; a change 
   assert.equal(emits.length, 2, 'the same again is quiet');
 });
 
-test('model.set now switched inside the turn: the temperature it carried stays for my next turn, the rest ends', async () => {
+test('model.set now: once a request of the turn ran on the new model (FIXES-3 C1, next-route.ts tookInTurn) the temperature it carried stays for my next turn, the rest ends', () => {
   const db = new Db(':memory:');
   migrate(db);
-  const sonnet: ModelInfo = { ...model('claude:claude-sonnet-5', 'strong', 'Claude Sonnet 5'), provider: 'claude', engine: 'claude', accounts: ['acc_a'] };
-  const services = {
-    db, clock: { now: () => 5 }, catalog: { get: (id: string) => (id === sonnet.id ? sonnet : undefined) }, runs: { item() {} },
-    log: { info() {}, warn() {}, error() {}, debug() {} },
-  } as unknown as RuntimeServices;
-  const entry = {
-    runId: 'run_1', agentId: 'ag_tom', conversationId: 'cv_a', control: { engine: { id: 'claude', setModel: async () => true } },
-    route: { model: sonnet.id, modelName: 'Claude Sonnet 5', effort: 'high', engine: 'claude', accountId: 'acc_a' },
-  } as unknown as RunEntry;
   setNextRoute(db, 'ag_tom', { temperature: 0.7, reason: 'loose drafts', at: 1 }); // model.set {temperature: 0.7, now: true}
-  assert.equal(await setModelInTurn(services, entry, { modelId: sonnet.id }), true);
+  tookInTurn(db, 'ag_tom', 5);
   assert.deepEqual(takeNextRoute(db, 'ag_tom'), { temperature: 0.7, reason: 'loose drafts', at: 5 });
-  setNextRoute(db, 'ag_tom', { modelId: sonnet.id, effort: 'high', at: 2 });
-  assert.equal(await setModelInTurn(services, entry, { modelId: sonnet.id, effort: 'high' }), true);
-  assert.equal(takeNextRoute(db, 'ag_tom'), undefined, 'model and effort were this turn\'s');
+  setNextRoute(db, 'ag_tom', { modelId: 'claude:claude-sonnet-5', effort: 'high', at: 2 });
+  tookInTurn(db, 'ag_tom', 6);
+  assert.equal(takeNextRoute(db, 'ag_tom'), undefined, "model and effort were this turn's");
 });
 
 test('a temperature in its shown form', () => {

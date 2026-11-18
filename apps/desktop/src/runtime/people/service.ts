@@ -122,7 +122,7 @@ export class PeopleService {
     if (!name && id !== HUMAN_ID) throw new WorkforceError('bad_request', 'Enter a name.', { details: { field: 'name' } });
     const next: Person = current ? { ...current } : {
       id, name: name ?? '', title: '', avatar: defaultAvatar(id, name ?? ''), status: 'invited', owner: false, role: 'member',
-      scopes: cleanScopes({}), createdAt: now, updatedAt: now,
+      scopes: { ...cleanScopes({}), spaces: 'all' }, createdAt: now, updatedAt: now,
     };
     if (id !== HUMAN_ID && name) {
       if (current?.avatar.kind === 'initials' && input.avatar === undefined && name !== current.name) next.avatar = defaultAvatar(id, name);

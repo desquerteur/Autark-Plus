@@ -66,7 +66,7 @@ test('D1: Opus asked for while its plan is at its week – my turn stays on Sol,
   h.limitClaude();
   const stays = await h.route({ previous: { ...ASKED_OPUS, from: SOL } });
   assert.deepEqual([stays.modelId, stays.by, stays.effort], [SOL, 'request', 'high'], stays.reason);
-  assert.match(stays.reason, /^asked for Claude Opus 5\.5 – no account of it can run now \(limited until .+\) · continues on the previous model/);
+  assert.match(stays.reason, /^asked for Claude Opus 5\.5 – no account of it can run now \(limited until .+\) · continues on my model/);
 
   // Not on a model yet: the strongest model at least at its tier and at most its price – Sol, never Haiku or Luna.
   const like = await h.route({ previous: ASKED_OPUS });
@@ -95,12 +95,12 @@ test('D1: why it cannot run – failed in this turn, outside my policy, not conn
   const h = await asked();
   const failed = await h.route({ previous: { ...ASKED_OPUS, from: SOL }, exclude: ['acc_claude'] });
   assert.equal(failed.modelId, SOL);
-  assert.match(failed.reason, /^asked for Claude Opus 5\.5 – it just failed in this turn · continues on the previous model/);
+  assert.match(failed.reason, /^asked for Claude Opus 5\.5 – it just failed in this turn · continues on my model/);
   const capped = await h.route({ agent: agent('ag_1', { modelPolicy: { ceilingTier: 'strong' } }), previous: { ...ASKED_OPUS, from: SOL } });
   assert.match(capped.reason, /^asked for Claude Opus 5\.5 – outside the model policy · /);
   assert.notEqual(h.catalog.get(capped.modelId)!.tier, 'frontier');
   const gone = await h.route({ previous: { ...ASKED_OPUS, modelId: 'claude:claude-fable-5-1', from: SOL } });
-  assert.match(gone.reason, /^asked for claude:claude-fable-5-1 – no account of it is connected · continues on the previous model/);
+  assert.match(gone.reason, /^asked for claude:claude-fable-5-1 – no account of it is connected · continues on my model/);
 });
 
 test("D1 for a split's part: on its parent's model, else a frontier stand-in at most at Opus's price", async () => {
@@ -134,7 +134,7 @@ test("D1 before D2: on a person's turn my request for a limited Opus stays on So
   h.addChat('ch_2', ['ag_1'], { modelHints: { ag_1: HAIKU } }, PERSON_LINE);
   const mine = await h.route({ conversationId: 'ch_2', previous: { ...ASKED_OPUS, from: SOL } });
   assert.equal(mine.modelId, SOL, mine.reason);
-  assert.match(mine.reason, /^asked for Claude Opus 5\.5 – no account of it can run now \(limited until .+\) · continues on the previous model/);
+  assert.match(mine.reason, /^asked for Claude Opus 5\.5 – no account of it can run now \(limited until .+\) · continues on my model/);
   assert.equal((await h.route({ conversationId: 'ch_2' })).modelId, HAIKU, 'without my request the suggestion starts the answer');
 });
 
@@ -187,5 +187,5 @@ test('askedMiss: "paused until" for a short cooling; no time when none is known'
   login.accounts.markUnavailable('acc_claude', 'needs_login'); // the catalog still lists Opus
   assert.equal(login.catalog.get(OPUS)?.available, true);
   const unknown = await login.route({ previous: { ...ASKED_OPUS, from: SOL } });
-  assert.match(unknown.reason, /^asked for Claude Opus 5\.5 – no account of it can run now · continues on the previous model/);
+  assert.match(unknown.reason, /^asked for Claude Opus 5\.5 – no account of it can run now · continues on my model/);
 });

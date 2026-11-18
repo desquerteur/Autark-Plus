@@ -4,11 +4,16 @@
 // jittered finger path, Gestures), type (ACTION_SET_TEXT on the focused field, Enter between lines; answers what the
 // field reads afterwards, TypedText.readback), key (back, home,
 // recents, notifications, quick_settings, enter), open (an app or a link) and say (16.11.2026: the AI's short line in the
-// bubble, or with ask its question with ✓ and ✕ – {answer: yes|no|none}, none after ASK_MS; a ✓ makes the job active).
+// bubble, or with ask its question with ✓ and ✕ – {answer: yes|no|none}, none after ASK_MS; a ✓ makes the job active;
+// KI-Runde 17.11.2026: the question also vibrates once and, with the screen off or the app not in front, is a
+// notification whose ✓ / ✕ answer it the same way – AskNotice, answerAsk).
 // Each step shows the bubble (UseBubble, naming the request's agent `by`); the AI's screenshot leaves it out and its own
 // gestures pass through it. Who has the phone is UseState (owner 10.11.2026 16:18, 15.11.2026): the person's touch pauses
 // until 5 s after their last touch, their Pause until Continue, their ✕ ends the job for good. Turning "Use this phone"
 // on once (UseDisclosure) covers every app – no question per app (owner 10.11.2026). The PC asks through UseLink.
+// While the service is on it also carries the person's own to-do button over every app (TodoButton, shown while this
+// phone is paired); both the AI's screenshot and the to-do button's take the screen without the bubble and the button
+// (capture, one at a time).
 // Never: acts while paused or ended, or reads a password's text.
 package com.teydralab.autark.android.phoneuse;
 
@@ -35,6 +40,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import com.teydralab.autark.android.relay.Json;
 
 public final class UseService extends AccessibilityService {
@@ -54,6 +60,10 @@ public final class UseService extends AccessibilityService {
     private final UseState state = new UseState();
     private final TypeTarget target = new TypeTarget();
     private UseBubble bubble;
+    /** The running question's answer (phone.say ask), for a tap on its notification; null while none runs. */
+    private volatile Consumer<String> asking;
+    private TodoButton todo;
+    private final Object shooting = new Object();
 
     /** The service while it is on (Accessibility settings), else null. */
     public static UseService current() { return current; }
@@ -85,6 +95,8 @@ public final class UseService extends AccessibilityService {
             @Override public void touched() { if (state.touched(System.currentTimeMillis())) show(); }
         });
         current = this;
+        todo = new TodoButton(this);
+        todo.start();
         // Turned on by hand in Android's settings without the in-app disclosure: show it now (on "Not now" it switches itself off).
         if (!UseConsent.agreed(this)) {
             try { startActivity(new Intent(this, UseDisclosure.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
@@ -97,6 +109,7 @@ public final class UseService extends AccessibilityService {
     @Override public boolean onUnbind(Intent intent) {
         current = null;
         if (bubble != null) bubble.close();
+        if (todo != null) { todo.close(); todo = null; }
         Runnable listener = changed;
         if (listener != null) listener.run();
         return super.onUnbind(intent);
@@ -155,11 +168,20 @@ public final class UseService extends AccessibilityService {
         if (!ask) { bubble.said(line); show(); return Json.map("ok", true); }
         AtomicReference<String> answer = new AtomicReference<>();
         CountDownLatch done = new CountDownLatch(1);
-        bubble.ask(line, (value) -> { if (answer.compareAndSet(null, value)) done.countDown(); });
+        Consumer<String> reply = (value) -> { if (answer.compareAndSet(null, value)) done.countDown(); };
+        asking = reply;
+        bubble.ask(line, reply);
+        AskNotice.show(this, line);
         try { await(done, ASK_MS); }
-        finally { answer.compareAndSet(null, "none"); bubble.askDone("yes".equals(answer.get())); }
+        finally { asking = null; AskNotice.cancel(this); answer.compareAndSet(null, "none"); bubble.askDone("yes".equals(answer.get())); }
         if ("yes".equals(answer.get())) { state.agreed(job, System.currentTimeMillis()); show(); }
         return Json.map("answer", answer.get());
+    }
+
+    /** The person's ✓ ("yes") or ✕ ("no") on the question's notification (AskNotice), as if tapped in the bubble. */
+    void answerAsk(String value) {
+        Consumer<String> reply = asking;
+        if (reply != null) reply.accept(value);
     }
 
     /** The person took the phone (or ended) while this step ran: it stops part-way. */
@@ -180,24 +202,8 @@ public final class UseService extends AccessibilityService {
     private Map<String, Object> screenshot(String job) throws UseError {
         if (Build.VERSION.SDK_INT < 30) throw new UseError("unavailable", "Screenshots need Android 11 or newer; phone.ui_tree reads the screen.");
         look(job, root());
-        AtomicReference<Bitmap> shot = new AtomicReference<>();
-        CountDownLatch done = new CountDownLatch(1);
-        bubble.hideForShot(); // the AI sees the screen as the person's apps draw it, without the bubble
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
-                @Override public void onSuccess(ScreenshotResult result) {
-                    Bitmap hardware = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
-                    if (hardware != null) shot.set(hardware.copy(Bitmap.Config.ARGB_8888, false));
-                    result.getHardwareBuffer().close();
-                    done.countDown();
-                }
-                @Override public void onFailure(int code) { done.countDown(); }
-            });
-            await(done, 5_000);
-        } finally {
-            bubble.showAfterShot();
-        }
-        Bitmap full = shot.get();
+        Bitmap full;
+        try { full = capture(); } catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new UseError("conflict", "The step was interrupted on the phone."); }
         if (full == null) throw new UseError("unavailable", "Android did not hand over a screenshot right now (at most one per second).");
         int width = Math.min(SHOT_WIDTH, full.getWidth());
         int height = Math.round(full.getHeight() * (width / (float) full.getWidth()));
@@ -206,6 +212,36 @@ public final class UseService extends AccessibilityService {
         scaled.compress(Bitmap.CompressFormat.JPEG, 70, jpeg);
         return Json.map("data", Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP), "mime", "image/jpeg", "width", width, "height", height,
                 "screen", Json.map("width", full.getWidth(), "height", full.getHeight()));
+    }
+
+    /** The screen as the person's apps draw it – without the bubble and the to-do button (Android 11+; a thread of the
+     *  caller's, never the main one). One at a time: Android hands out at most one screenshot per second. Null when
+     *  Android handed none over. */
+    Bitmap capture() throws InterruptedException {
+        if (Build.VERSION.SDK_INT < 30) return null;
+        synchronized (shooting) {
+            AtomicReference<Bitmap> shot = new AtomicReference<>();
+            CountDownLatch done = new CountDownLatch(1);
+            TodoButton button = todo;
+            bubble.hideForShot();
+            if (button != null) button.hideForShot();
+            try {
+                takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+                    @Override public void onSuccess(ScreenshotResult result) {
+                        Bitmap hardware = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
+                        if (hardware != null) shot.set(hardware.copy(Bitmap.Config.ARGB_8888, false));
+                        result.getHardwareBuffer().close();
+                        done.countDown();
+                    }
+                    @Override public void onFailure(int code) { done.countDown(); }
+                });
+                done.await(5_000, TimeUnit.MILLISECONDS);
+            } finally {
+                bubble.showAfterShot();
+                if (button != null) button.showAfterShot();
+            }
+            return shot.get();
+        }
     }
 
     private void tap(String job, float x, float y) throws UseError {

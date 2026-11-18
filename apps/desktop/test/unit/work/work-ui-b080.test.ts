@@ -22,7 +22,7 @@ test('a task status line in a chat is a button that opens the task; other status
   assert.match(item, /const id = status\.details\?\.taskId;\s*return typeof id === 'string' && id \? id : message\.taskId;/, 'details.taskId, else the message\'s own');
   assert.match(item, /<button type="button" class=\{`\$\{kind\} open`\}[^>]*onClick=\{\(\) => openTaskDetail\(taskId\)\}>\{parts\}<\/button>/);
   assert.match(item, /if \(!taskId\) return <div class=\{kind\}[^>]*>\{parts\}<\/div>;/, 'the same text and time either way');
-  assert.equal((item.match(/<StatusLineRow /g) ?? []).length, 2, 'a single line and a burst\'s nested lines');
+  assert.equal((item.match(/<StatusLineRow /g) ?? []).length, 1, 'one shape: a burst of one line and of many render their lines alike');
 });
 
 test('a step\'s text opens the step\'s detail, its circle stays the toggle; a step\'s detail names its task', () => {

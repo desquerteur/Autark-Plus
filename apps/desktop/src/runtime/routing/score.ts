@@ -21,7 +21,7 @@ export type Tier = ModelInfo['tier'];
 
 /** Strength at or below this means "never for this category" (priors use −1 for that). */
 export const NEVER = -0.95;
-/** Return rule: the previous model is kept unless its strength for the category is below this. */
+/** Where my context starts anew, the model I am on stays unless its strength for the turn's work is below this (router.ts Auto). */
 export const WEAK = -0.3;
 
 const TIER_FIT: Record<CostMode, Record<Tier, number>> = {

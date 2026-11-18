@@ -19,7 +19,6 @@ const subconscious = defineTool<{ ask: string; context?: 'none' | 'recent' | 'ch
     required: ['ask'], additionalProperties: false,
   },
   category: 'think',
-  anyMode: true,
   describe: (args) => internal(`Ask the subconscious: ${clip(args.ask, 80)}`),
   async run(args, ctx) {
     const ask = ctx.services.subconscious.ask;

@@ -1,5 +1,7 @@
 // Running split groups (B-057 S3/S7/S11/S12/S13/S16): a group starts when its parent's turn ends (startGroup – B-080: it
-// records the session that turn ended with, fork.ts recordedParent) – parts without `after` are queued, the others wait;
+// records the session that turn ended with, fork.ts recordedParent; decision 10 of 17.11.2026: a group whose call waits
+// for its parts starts at that call – FIXES-3 B1: on Claude Code it records the session that turn runs on as it stood
+// before it, the dispatcher's activity naming its engine and model) – parts without `after` are queued, the others wait;
 // ready parts start on their own dispatcher lanes at once (pump → dispatcher.startSplit; no global limit, at most
 // SPLIT_LIMITS.runningPerAgent per agent – B-080: a part beyond that waits with QUEUED_TEXT as its reason, one write, cleared
 // when it starts; 'busy' or 'refused' leaves them queued until a lane frees – the dispatcher's onLaneFree calls pump
@@ -77,7 +79,9 @@ export class SplitRunner {
     // B-080: what its 'fork' parts fork – the session the splitting turn ended with, whatever the parent's next turn does to it.
     let run;
     try { run = this.core.deps.runs.get(group.parentRunId); } catch { run = undefined; }
-    const parentSession = recordedParent(this.core.deps.db, run, group);
+    let live;
+    try { live = this.dispatcher()?.activity().find((item) => item.runId === group.parentRunId); } catch { live = undefined; }
+    const parentSession = recordedParent(this.core.deps.db, run, group, live); // FIXES-3 B1: `live` – what a splitting turn that still runs is on
     this.core.repo.updateGroup(groupId, { status: 'running', startedAt: this.core.now(), ...(parentSession ? { parentSession } : {}) });
     this.advance(groupId);
   }
@@ -288,6 +292,7 @@ export class SplitRunner {
 
   private after(groupId: string): void {
     this.advance(groupId);
+    this.core.waits.look(); // decision 10: a turn waiting for these parts inside its own turn goes on when they ended
     this.core.emit([groupId]);
     this.pump();
   }
@@ -326,6 +331,7 @@ export class SplitRunner {
       } else if (this.advance(group.id)) changed.add(group.id);
     }
     if (count) this.core.deps.log.info('splits stopped', { count, by: by === HUMAN_ID ? 'person' : by });
+    this.core.waits.look(); // decision 10: a stopped part ends the wait of the turn that split it
     this.core.emit(changed);
     this.pump();
     return count;

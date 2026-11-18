@@ -1,11 +1,10 @@
-// B-083 track R – the subconscious routes the coming turn (v1 14.11.2026: service.ts lookFirst → route-turn.ts, one call;
+// B-083 track R – the subconscious sets the coming turn's effort (v1 14.11.2026: service.ts lookFirst → route-turn.ts, one call;
 // agents/next-route.ts `by: 'subconscious'`, agents/turn-prepare.ts reading the request after the look, routing/router.ts
-// "my subconscious: <why>"): planTurn of the same turn runs on what the call set; a turn the call routed again continues from that run
-// (review 14.11.: a next step is relative to the model I am on), a turn it did not route – a call that set nothing, a wake without
-// anyone's words and without a task – goes back to where the router chose last (findings 14.11.), a delegated task's request alone
-// holds its turns on the task's own model (re-review 14.11.); a model it named that cannot
-// run leaves no "my subconscious" on the route; an effort alone keeps the model; a request read that fails after the look puts the
-// trace back; the call reads one line about how the turn runs (route-turn.ts turnFacts, with its temperature and the start effort).
+// "my subconscious: <why>"). 17.11.2026 – the model settles: planTurn of the same turn runs at the effort the call set, on the model
+// I am on – a model in the call's answer changes nothing; a turn it set nothing for – a wake without anyone's words and without a
+// task – runs at my settled effort, never at the one set for another message; a task's effort from its giver holds its turns, costs
+// no call and names whose it is; a person's line keeps the effort at high or above; a request read that fails after the look puts
+// the trace back; the call reads one line about how the turn runs (route-turn.ts turnFacts).
 // Owns: these assertions only. Never: real engines, accounts, timers or network.
 
 import { test } from 'node:test';
@@ -45,7 +44,7 @@ const PRIORS = Priors.parse({
   ],
 });
 
-/** What the routing call answers (route-turn.ts schema); an empty model and effort set nothing. */
+/** What the call before a turn answers (route-turn.ts schema); an empty effort sets nothing, a model is no part of it. */
 type RoutePick = { model?: string; effort?: string; why: string };
 
 /** A decision model answering one routing call after another; after its script it sets nothing. */
@@ -54,7 +53,7 @@ function brain(picks: RoutePick[]) {
   const runner: StructuredRunner = async (call) => {
     prompts.push(call.prompt);
     const next = picks.shift() ?? { why: 'nothing to change' };
-    const structured = { hardest: 'x', misread: false, decide: false, model: next.model ?? '', effort: next.effort ?? '', why: next.why };
+    const structured = { hardest: 'x', misread: false, decide: false, ...(next.model ? { model: next.model } : {}), effort: next.effort ?? '', why: next.why };
     return { text: JSON.stringify(structured), structured, by: 'fake' };
   };
   return { runner, prompts };
@@ -66,8 +65,8 @@ async function world(picks: RoutePick[]) {
   h.org.add(agent(AGENT, 'Ada', { mode: 'coding' }));
   const chat = h.chats.create({ agentIds: [AGENT], createdBy: 'human' });
   const defaults = defaultSettings({ locale: 'en-US', timezone: 'UTC' });
-  // No Claude Code work plan default here; economy: the person's line gets no strongest-model rule, so the return rule shows.
-  const settings = { ...defaults, routing: { ...defaults.routing, work: 'gemini-cli', costMode: 'economy' as const } };
+  // No Claude Code work plan default here.
+  const settings = { ...defaults, routing: { ...defaults.routing, work: 'gemini-cli' } };
   const engines = new Map<EngineId, FakeEngine>([['codex', new FakeEngine('codex')], ['claude', new FakeEngine('claude')]]);
   engines.get('codex')!.lists.set('codex', [{ model: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ALL }]);
   engines.get('claude')!.lists.set('claude', [{ model: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ALL }]);
@@ -107,37 +106,35 @@ async function world(picks: RoutePick[]) {
     const route = await router.route({ ...routeRequest(plan), ...(exclude ? { exclude } : {}) });
     if (plan.nextStepAt !== undefined) takeNextRoute(h.db, AGENT, plan.nextStepAt);
     const temperature = plan.temperature !== undefined ? { temperature: plan.temperature } : {}; // as turn-finish.ts records it
-    finish({ engine: route.engine, model: route.modelId, effort: route.effort, accountId: route.accountId, route: { reason: route.reason, by: route.by, category: route.category, ...temperature } });
+    finish({ engine: route.engine, model: route.modelId, effort: route.effort, accountId: route.accountId, route: { reason: route.reason, by: route.by, category: route.category, ...(route.effortBy ? { effortBy: route.effortBy } : {}), ...temperature } });
     return { route, ...(plan.temperature !== undefined ? { temperature: plan.temperature } : {}) };
   };
   return { ...h, chat, decision, finish, turn };
 }
 
-test('the routing call sets the coming turn: planTurn of that turn runs on it, the reason names my subconscious; a routed turn after continues from it, one the call did not route goes back', async () => {
-  const w = await world([{ model: 'Claude Opus 5.5', effort: 'high', why: 'a contract the customer signs' }, { effort: 'medium', why: 'going on with the checked clauses' }]);
+test('the call sets the coming turn\'s effort: planTurn of that turn runs at it on the model I am on, the reason names my subconscious; a model in its answer changes nothing', async () => {
+  // On the code before 17.11.2026 this answer moved the turn to Opus – on a live cache – and the turn after went back to Sol.
+  const w = await world([{ model: 'Claude Opus 5.5', effort: 'xhigh', why: 'a contract the customer signs' }, { effort: 'medium', why: 'going on with the checked clauses' }]);
   w.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
   w.chats.send({ conversationId: w.chat.id, authorId: 'human', body: 'Bitte prüf den Vertrag für Müller, er unterschreibt morgen.' });
 
   const set = await w.turn();
-  assert.deepEqual([set.route.modelId, set.route.effort, set.route.by, set.temperature], [OPUS, 'high', 'request', undefined]);
-  assert.match(set.route.reason, /^my subconscious: a contract the customer signs · coding/);
-  assert.ok(w.decision.prompts[0].includes("The main AI's coming turn: runs on GPT-6.1 Sol · effort low; start model chosen per task."), w.decision.prompts[0]);
+  assert.deepEqual([set.route.modelId, set.route.effort, set.route.by, set.temperature], [SOL, 'xhigh', 'request', undefined]);
+  assert.equal(set.route.reason, 'continues on my model · coding · my subconscious: a contract the customer signs');
+  assert.ok(w.decision.prompts[0].includes("The main AI's coming turn: its last turn ran on GPT-6.1 Sol at effort low; a new message of the person runs at effort high at least."), w.decision.prompts[0]);
   assert.equal(w.decision.prompts.length, 1, 'one call, no steps');
 
-  const on = await w.turn(); // the same message is still unread: the call runs again and sets an effort only
-  assert.deepEqual([on.route.modelId, on.route.effort, on.route.by], [OPUS, 'medium', 'request'], 'a routed turn continues from the run my subconscious shaped: the model I am on');
-  assert.ok(w.decision.prompts.at(-1)!.includes('runs on Claude Opus 5.5 · effort high'), 'the next call reads what ran');
-  assert.ok(w.decision.prompts.at(-1)!.includes("the main AI's last turn ran 1 min ago on Claude Opus 5.5 · high"), 'and what a switch costs now');
-
-  const after = await w.turn(); // the call runs again and sets nothing
-  assert.deepEqual([after.route.modelId, after.route.effort, after.route.by], [SOL, 'low', 'previous'], 'a turn the call did not route: back to where the router chose last');
+  const on = await w.turn(); // the same message is still unread: the call runs again; the person's line keeps its medium at high
+  assert.deepEqual([on.route.modelId, on.route.effort, on.route.by], [SOL, 'high', 'request']);
+  assert.equal(on.route.reason, "continues on my model · coding · my subconscious: going on with the checked clauses · a person's line · effort at least high");
+  assert.ok(w.decision.prompts.at(-1)!.includes('its last turn ran on GPT-6.1 Sol at effort xhigh'), 'the next call reads what ran');
 });
 
-test('a wake without anyone\'s words and without a task: no call, and it never inherits the model the call set for another message', async () => {
-  const w = await world([{ model: 'Claude Opus 5.5', effort: 'high', why: 'a contract the customer signs' }]);
+test('a wake without anyone\'s words and without a task: no call, and it runs at my settled effort – never at the one the call set for another message', async () => {
+  const w = await world([{ effort: 'xhigh', why: 'a contract the customer signs' }]);
   w.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
   w.chats.send({ conversationId: w.chat.id, authorId: 'human', body: 'Bitte prüf den Vertrag für Müller, er unterschreibt morgen.' });
-  assert.equal((await w.turn()).route.modelId, OPUS);
+  assert.equal((await w.turn()).route.effort, 'xhigh');
   const quiet = w.chats.create({ agentIds: [AGENT], createdBy: 'human' }); // a timer's wake: no line in its chat, no task
   const timer = await w.turn(undefined, { conversationId: quiet.id, reason: 'schedule', notes: [{ text: 'Täglicher Blick auf die Mails.', at: w.clock.now() }] });
   assert.equal(w.decision.prompts.length, 1, 'no call');
@@ -145,45 +142,34 @@ test('a wake without anyone\'s words and without a task: no call, and it never i
   assert.doesNotMatch(timer.route.reason, /my subconscious/);
 });
 
-test('a task wake without chat lines routes on its task: its title and the wake\'s newest note', async () => {
-  const w = await world([{ model: 'Claude Opus 5.5', effort: 'high', why: 'books that have to add up' }]);
+test('a task wake without chat lines is weighed on its task: its title and the wake\'s newest note', async () => {
+  const w = await world([{ effort: 'high', why: 'books that have to add up' }]);
   w.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
   const task = w.tasks.create({ title: 'Monatsabschluss Oktober', notes: 'Belege liegen in belege/10.', assigneeKind: 'agent', assigneeId: AGENT, createdBy: 'human' });
   const routed = await w.turn(undefined, { conversationId: undefined, taskId: task.id, reason: 'review', notes: [{ text: 'Konrad hat die Buchungen geprüft, zwei fehlen noch.', at: w.clock.now() }] });
   assert.ok(w.decision.prompts[0].includes('The task that wakes the main AI:\nMonatsabschluss Oktober\nKonrad hat die Buchungen geprüft, zwei fehlen noch.'), w.decision.prompts[0]);
-  assert.deepEqual([routed.route.modelId, routed.route.effort, routed.route.by], [OPUS, 'high', 'request']);
+  assert.deepEqual([routed.route.modelId, routed.route.effort, routed.route.by], [SOL, 'high', 'request']);
 });
 
-test('re-review 14.11.: a delegated task\'s effort-only request holds its turns on the task\'s own model – never on one the call set for other work', async () => {
-  const w = await world([{ model: 'Claude Opus 5.5', effort: 'low', why: 'a receipt to take note of' }]);
+test('a task\'s effort from its giver holds its turns – the call is not asked, the reason names whose effort it is; off the task the call sets the effort again', async () => {
+  const w = await world([{ effort: 'medium', why: 'a receipt to take note of' }]);
   w.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
   const task = w.tasks.create({ title: 'Quartalsbericht schreiben', notes: 'Zahlen aus reports/q3.md.', assigneeKind: 'agent', assigneeId: AGENT, createdBy: 'human' });
   setTaskRoute(w.db, AGENT, task.id, { effort: 'high', reason: 'given by Lead', at: w.clock.now() });
   const wake = () => w.turn(undefined, { conversationId: undefined, taskId: task.id, reason: 'task', notes: [{ text: 'Konrad hat die Zahlen geprüft.', at: w.clock.now() }] });
   const first = await wake();
-  assert.deepEqual([first.route.modelId, first.route.effort], [SOL, 'high'], 'no run of the task yet: where the router chose last, at the task\'s effort');
-  w.chats.send({ conversationId: w.chat.id, authorId: 'human', body: 'Danke, die Rechnung ist angekommen und abgelegt.' });
-  assert.equal((await w.turn()).route.modelId, OPUS, 'the call routes the receipt');
+  assert.deepEqual([first.route.modelId, first.route.effort, first.route.by], [SOL, 'high', 'request']);
+  // On the code before 17.11.2026 such a route read "effort requested by the agent".
+  assert.match(first.route.reason, /effort from my task \(given by Lead\)$/);
+  assert.equal(w.decision.prompts.length, 0, 'the task\'s effort holds its turns: no call');
+  w.org.add(agent('ag_bo', 'Bo'));
+  const quiet = w.chats.create({ agentIds: [AGENT, 'ag_bo'], createdBy: 'human' });
+  w.chats.send({ conversationId: quiet.id, authorId: 'ag_bo', body: 'Die Rechnung ist angekommen und liegt in belege/10 – zur Kenntnis.' });
+  const receipt = await w.turn(undefined, { conversationId: quiet.id });
+  assert.deepEqual([receipt.route.modelId, receipt.route.effort], [SOL, 'medium'], 'the call weighs the colleague\'s receipt');
   const next = await wake();
-  assert.equal(w.decision.prompts.length, 1, 'the task request holds its turns: no call');
-  assert.deepEqual([next.route.modelId, next.route.effort], [SOL, 'high'], "the task's own newest run, not the receipt's model");
-});
-
-test('a model my subconscious named that cannot run here: the turn stays on its model and says what was asked (B-083 D1); with its effort the note stays', async () => {
-  const w = await world([{ model: 'Claude Opus 5.5', why: 'a contract the customer signs' }]);
-  w.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
-  w.chats.send({ conversationId: w.chat.id, authorId: 'human', body: 'Bitte prüf den Vertrag für Müller.' });
-  const failover = await w.turn([OPUS]);
-  assert.deepEqual([failover.route.modelId, failover.route.by], [SOL, 'previous']);
-  assert.match(failover.route.reason, /^asked for Claude Opus 5\.5 – /, 'the reason leads with what was asked and why it cannot run');
-  assert.doesNotMatch(failover.route.reason, /my subconscious/);
-
-  const hard = await world([{ model: 'Claude Opus 5.5', effort: 'high', why: 'a contract the customer signs' }]);
-  hard.finish({ engine: 'codex', model: SOL, effort: 'low', route: { reason: 'seed', by: 'rules', category: 'coding' } });
-  hard.chats.send({ conversationId: hard.chat.id, authorId: 'human', body: 'Bitte prüf den Vertrag für Müller.' });
-  const kept = await hard.turn([OPUS]);
-  assert.deepEqual([kept.route.modelId, kept.route.effort, kept.route.by], [SOL, 'high', 'request']);
-  assert.match(kept.route.reason, /my subconscious: a contract the customer signs$/, 'the effort it set runs');
+  assert.equal(w.decision.prompts.length, 1);
+  assert.deepEqual([next.route.modelId, next.route.effort], [SOL, 'high'], 'the task\'s effort again');
 });
 
 test('an effort alone: the model stays, the reason names my subconscious', async () => {
@@ -208,7 +194,7 @@ test('a request read that fails after the look gives the trace it took back to t
   assert.deepEqual(back, [[h.tom.id, 'main', trace]]);
 });
 
-test('the line about the coming turn: my last model (any chat), the start model and who set it, the person\'s suggestion', () => {
+test('the line about the coming turn: my last model and effort (any chat) and the effort the person suggested – a model they suggested is not the call\'s', () => {
   const h = harness();
   h.org.add(agent(AGENT, 'Ada'));
   const chat = h.chats.create({ agentIds: [AGENT], createdBy: 'human' });
@@ -221,22 +207,21 @@ test('the line about the coming turn: my last model (any chat), the start model 
   const models = new Map<string, ModelInfo>([[SOL, model(SOL, 'frontier', 'GPT-6.1 Sol')], [OPUS, model(OPUS, 'frontier', 'Claude Opus 5.5')]]);
   Object.assign(h.services, {
     runs: { list: () => runs }, catalog: { get: (id: string) => models.get(id), list: () => [...models.values()] },
-    settings: { get: () => ({ profile: { name: 'Stanislaus', timezone: 'Europe/Berlin' } }) },
+    settings: { get: () => ({ profile: { name: 'Alex', timezone: 'Europe/Berlin' } }) },
   });
-  const ada = agent(AGENT, 'Ada', { modelPolicy: { pin: OPUS, pinBy: { name: 'Stanislaus', at: Date.UTC(2026, 10, 8, 12) } } });
+  const ada = agent(AGENT, 'Ada', { modelPolicy: { pin: OPUS, pinBy: { name: 'Alex', at: Date.UTC(2026, 10, 8, 12) } } });
   assert.equal(turnFacts(h.services, ada, chat.id),
-    "The main AI's coming turn: runs on GPT-6.1 Sol · effort low · temperature 0.4; start model Claude Opus 5.5 (set by Stanislaus, 2026-11-08); Stanislaus picked Claude Opus 5.5 · effort high · temperature 0.3 in this chat after their newest message – what they want now, left only for a clear reason; it runs when I set it.");
+    "The main AI's coming turn: its last turn ran on GPT-6.1 Sol at effort low; a new message of the person runs at effort high at least; Alex picked effort high in this chat after their newest message – what they want now.");
   // F22 (16.11.2026): picked before their line – for it; their next line without a new pick – a value that stayed
   h.clock.advance(60_000);
   h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Schreib den Vertrag' });
-  assert.match(turnFacts(h.services, ada, chat.id), /; Stanislaus picked Claude Opus 5\.5 · effort high · temperature 0\.3 in this chat for their newest message – what they want now, left only for a clear reason; it runs when I set it\.$/);
+  assert.match(turnFacts(h.services, ada, chat.id), /; Alex picked effort high in this chat for their newest message – what they want now\.$/);
   h.clock.advance(60_000);
   h.chats.send({ conversationId: chat.id, authorId: 'human', body: 'Und noch die Rechnung' });
-  assert.match(turnFacts(h.services, ada, chat.id), /; Stanislaus suggested Claude Opus 5\.5 · effort high · temperature 0\.3 in this chat earlier and left it standing – a hint from before, the work decides; it runs when I set it\.$/);
-  const self = agent(AGENT, 'Ada', { modelPolicy: { pin: SOL, pinBy: { name: 'Ada', at: Date.UTC(2026, 10, 7, 9), self: true } } });
-  assert.match(turnFacts(h.services, self, chat.id), /start model GPT-6\.1 Sol \(set by itself, 2026-11-07\); /);
-  const fixed = agent(AGENT, 'Ada', { modelPolicy: { pin: OPUS, effort: 'high', pinBy: { name: 'Stanislaus', at: Date.UTC(2026, 10, 8, 12) } } });
-  assert.match(turnFacts(h.services, fixed, chat.id), /; start model Claude Opus 5\.5 · effort high \(set by Stanislaus, 2026-11-08\); /, 'the start model with its fixed effort');
+  assert.match(turnFacts(h.services, ada, chat.id), /; Alex suggested effort high in this chat earlier and left it standing – a hint from before, the work decides\.$/);
   const fresh = h.chats.create({ agentIds: [AGENT], createdBy: 'human' });
-  assert.match(turnFacts(h.services, agent(AGENT, 'Ada'), fresh.id), /^The main AI's coming turn: runs on GPT-6\.1 Sol · effort low · temperature 0\.4; start model chosen per task\.$/, 'one context: a fresh chat continues on my last turn');
+  assert.equal(turnFacts(h.services, agent(AGENT, 'Ada'), fresh.id), "The main AI's coming turn: its last turn ran on GPT-6.1 Sol at effort low; a new message of the person runs at effort high at least.", 'one context: a fresh chat continues on my last turn');
+  // review 17.11.2026: the router raises a person's line to high (routing/router.ts) – the call reads it; a colleague's or a task's wake is not raised
+  assert.equal(turnFacts(h.services, agent(AGENT, 'Ada'), fresh.id, 'colleague'), "The main AI's coming turn: its last turn ran on GPT-6.1 Sol at effort low.");
+  assert.equal(turnFacts(h.services, agent(AGENT, 'Ada'), fresh.id, 'task'), "The main AI's coming turn: its last turn ran on GPT-6.1 Sol at effort low.");
 });

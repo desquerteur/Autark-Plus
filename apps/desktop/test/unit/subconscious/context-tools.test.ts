@@ -13,6 +13,7 @@ import { marksCall, marksOf } from '../../../src/runtime/context/ledger/marks.ts
 import { mid, ledgerSetup } from '../context/ledger-fixture.ts';
 import { rebuildItems } from '../../../src/runtime/agents/rebuild-items.ts';
 import { tokensOf } from '../../../src/runtime/context/ledger/window.ts';
+import { KIND_PREFIX } from '../../../src/shared/model/context-ledger.ts';
 
 const tool = (name: string) => contextTools.find((entry) => entry.name === name)!;
 
@@ -263,4 +264,10 @@ test('13.11.2026: context.hide {before, keep} hides everything older but what I 
     assert.match(view.call?.output ?? view.text, /build 1 finished in 401 seconds\n\{"compacted":"t1"/, 'marked condensed with its stamp for the main AI');
     assert.match(String(await tool('context.condense').run({ texts: { t3: 'build 3 took 999 seconds' } }, run)), /names values the original lacks: 999/);
   } finally { t.cleanup(); }
+});
+
+test('context.list explains every id letter an item can carry, c for the hand-over a fold turn wrote among them', () => {
+  const line = tool('context.list').line;
+  for (const [kind, letter] of Object.entries(KIND_PREFIX)) assert.match(line, new RegExp(`(\\(|, )${letter} [a-z]`), `${kind} (${letter})`);
+  assert.match(line, /c the hand-over it wrote to itself/);
 });

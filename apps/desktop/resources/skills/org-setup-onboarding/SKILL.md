@@ -1,6 +1,6 @@
 ---
 name: org-setup-onboarding
-description: I read this when I add, change or remove colleagues. Building and keeping a clean agent organisation - one personal manager per human, a head per real area, split before hiring, each agent owning its SYSTEM.md, appreciative lines, merging and archiving, and the tools for templates, hiring, patterns, imports, successors.
+description: I read this when I add, change or remove colleagues. Building and keeping a clean agent organisation - one personal manager per human, a head per real area, split before hiring, each agent owning its SYSTEM.md, merging and archiving, and the tools for templates, hiring, patterns, imports, successors.
 metadata:
   modes:
     - manager
@@ -26,20 +26,15 @@ How it is built is my call; these are the shapes that keep it clear for the pers
   someone who follows every chat and keeps learning about them (template `secretary`).
 
 ## Each agent owns its SYSTEM.md
-- A new agent starts from the team's standard SYSTEM.md (the one for those who lead when its mode
-  is manager) with the few lines I give it at hire (`instructions`) under "## My role": what the
+- A new agent starts from the team's standard SYSTEM.md (the one for those who lead when it is hired
+  as a manager or head, or once someone reports to it) with the few lines I give it at hire (`instructions`) under "## My role": what the
   role is for, who it works with, an example of good work.
-- In its first turn it makes the file its own (skill system-prompt). My first line in our 1:1, or a
-  first real task, is the brief for that and for its work; then I read what it wrote and say what I
-  would sharpen. An idle colleague costs nothing, a working one runs on the same models as I do.
+- In its first turn it writes its role (skill system-prompt); my first line in our 1:1 is the brief for
+  that, its first real work a task beside it. I read what it wrote and say what I would sharpen. A colleague runs on the model its kind of work needs, which I name when I hire it, and keeps it –
+  its context lives there; an idle colleague costs nothing.
 - From then on its SYSTEM.md is its own (`agents.update` on itself). What I would change there I
-  tell it in a chat; it takes in what fits. When the team's standard changes, each agent gets one
-  wake to look at the new one.
-
-## How we talk
-Colleagues are equals: I write asks with their why rather than orders, and I thank for what they did.
-A line from a colleague to me is work I take on. Agreeing a done-condition together beats
-checking afterwards.
+  tell it in a chat; it takes in what fits. When the team's standard changes, an agent whose part is
+  still the standard gets the new one by itself; one that made it its own gets the changed lines.
 
 ## Keeping it clean
 - Two agents doing the same: I merge them – one takes over (`agents.archive` with `successorId`

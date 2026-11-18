@@ -1,10 +1,12 @@
 // The context ledger's rows (B-048 E1, table context_items – migration 77).
 // The key is (agent, thread) – 13.11.2026: one context per agent, so its main thread holds the lines of every chat it saw.
-// Owns: the SQL of context_items: row ↔ LedgerItem, id allocation (m<n> counting the thread's messages, t/s/r/a/f from one
+// Owns: the SQL of context_items: row ↔ LedgerItem, id allocation (m<n> counting the thread's messages, t/s/r/a/f/c from one
 // counter per agent and thread – each the highest number used plus one, and rows are never deleted one by one, so a number is never used twice), the monotonic order, the agent's turn count in the chat (distinct runs –
 // the unit of a pin), pins, marks and the applied state of a rebuild, the copy that starts a fork's record (F26). B-049 F9: whether a row is NESTED (a call made
 // inside a code-mode script) is read with every row from its journal row – the call id there starts with "exec-"
-// (shared NESTED_CALL_PREFIX) – so rows captured before F9 count too, without a column; a pin's room counts no nested row.
+// (shared NESTED_CALL_PREFIX) – so rows captured before F9 count too, without a column; a pin's room counts no nested row
+// and no checkpoint (a hand-over is pinned by the fold, not out of the room the agent keeps things in). KI-Runde 17.11.2026:
+// the rows of one tool by its journal name (callItems – the fold leaves tasks.finish calls) and a pin set directly (pin).
 // Never: decides what to capture or mark, reads originals or deletes rows other than a removed chat's.
 
 import type { Db } from '../../db/database.ts';
@@ -96,16 +98,16 @@ export class LedgerStore {
     return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
   }
 
-  /** The run's own words are in the ledger (its text or a tool call) – its chat message is not recorded again. */
+  /** The run's own words are in the ledger (its text, its hand-over or a tool call) – its chat message is not recorded again. */
   hasOwnWords(agentId: string, conversationId: string, runId: string): boolean {
-    return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? AND kind IN ('assistant', 'tool') LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
+    return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? AND kind IN ('assistant', 'tool', 'checkpoint') LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
   }
 
   /** Inserts a new row with the next order and id; returns it. Call inside a transaction. */
   insert(input: NewRow): LedgerRow {
     const { agent_id: agentId, conversation_id: conversationId } = input;
     const order = Number(this.db.get<{ n: number | null }>(`SELECT MAX("order") AS n FROM context_items WHERE ${KEY}`, [agentId, conversationId])?.n ?? 0) + 1;
-    const message = input.kind === 'message'; // messages count apart (m1, m2 …); t/s/r/a/f share one counter
+    const message = input.kind === 'message'; // messages count apart (m1, m2 …); t/s/r/a/f/c share one counter
     const last = this.db.get<{ n: number | null }>(`SELECT MAX(CAST(substr(item_id, 2) AS INTEGER)) AS n FROM context_items WHERE ${KEY} AND kind ${message ? '=' : '<>'} 'message'`, [agentId, conversationId])?.n;
     const itemId = `${KIND_PREFIX[input.kind]}${Number(last ?? 0) + 1}`;
     this.db.run(
@@ -135,7 +137,34 @@ export class LedgerStore {
 
   /** B-050 K5: the tokens of the items pinned at least until `atLeast` (KEEP_PIN: the items kept for good) – B-049 F9: nested rows cost none. */
   pinnedTokens(agentId: string, conversationId: string, atLeast: number): number {
-    return Number(this.db.get<{ n: number | null }>(`SELECT SUM(tokens) AS n FROM context_items WHERE ${KEY} AND pinned_until >= ? AND NOT ${NESTED}`, [agentId, conversationId, atLeast])?.n ?? 0);
+    return Number(this.db.get<{ n: number | null }>(`SELECT SUM(tokens) AS n FROM context_items WHERE ${KEY} AND pinned_until >= ? AND kind <> 'checkpoint' AND NOT ${NESTED}`, [agentId, conversationId, atLeast])?.n ?? 0);
+  }
+
+  /** Pins a row until the turn count `until` (the fold pins its hand-over for good). */
+  pin(row: Pick<LedgerRow, 'agent_id' | 'conversation_id' | 'item_id'>, until: number): void {
+    this.db.run(`UPDATE context_items SET pinned_until = ? WHERE ${KEY} AND item_id = ?`, [until, row.agent_id, row.conversation_id, row.item_id]);
+  }
+
+  /**
+   * The ids of the rows that are the agent's own words posted in a chat: their journal note names the message it became, or
+   * reached one (agents/publishing.ts), or – a commentary segment's 'Update' note – the messages its blocks became (agents/chat-out.ts).
+   */
+  postedItems(agentId: string, conversationId: string): Set<string> {
+    return new Set(this.db.all<{ item_id: string }>(
+      `SELECT item_id FROM context_items WHERE ${KEY} AND kind = 'assistant' AND ref LIKE 'item:%'
+         AND EXISTS (SELECT 1 FROM run_items ri WHERE ri.id = substr(context_items.ref, 6)
+           AND (json_extract(ri.data, '$.messageId') IS NOT NULL OR json_extract(ri.data, '$.visibility') = 'notify' OR json_extract(ri.data, '$.messageIds') IS NOT NULL))`,
+      [agentId, conversationId],
+    ).map((row) => row.item_id));
+  }
+
+  /** The ids of the tool rows whose call is `name`, read from their journal row (a call through tools.call is journaled under its target's name). */
+  callItems(agentId: string, conversationId: string, name: string): Set<string> {
+    return new Set(this.db.all<{ item_id: string }>(
+      `SELECT item_id FROM context_items WHERE ${KEY} AND kind = 'tool' AND ref LIKE 'item:%'
+         AND EXISTS (SELECT 1 FROM run_items ri WHERE ri.id = substr(context_items.ref, 6) AND ri.name = ?)`,
+      [agentId, conversationId, name],
+    ).map((row) => row.item_id));
   }
 
   /** The newest `limit` rows of the subconscious's calls (their journal call id starts with TRACE_CALL_PREFIX), hidden ones left out. */

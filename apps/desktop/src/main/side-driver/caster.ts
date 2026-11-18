@@ -251,7 +251,7 @@ export class SideCaster {
     const cast = this.casts.get(id);
     if (!cast || (only && cast !== only)) return;
     this.casts.delete(id);
-    this.unfit(cast);
+    try { this.unfit(cast); } catch { /* the page is gone: nothing to give back */ }
     cast.ended = true;
     for (const off of cast.offs) off();
     if (cast.tab.localPress === cast.local) cast.tab.localPress = undefined;
@@ -261,10 +261,11 @@ export class SideCaster {
     cast.pending = undefined;
     void cast.tab.cdp.send('Page.stopScreencast').catch(() => undefined);
     void cast.tab.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
-    if (!again) this.deps.release?.(id);
+    if (!again) { try { this.deps.release?.(id); } catch { /* the page is gone with its window */ } }
   }
 
   private frame(cast: Cast, event: ScreencastFrame): void {
+    if (this.gone(cast)) return;
     if (typeof event?.sessionId === 'number') void cast.tab.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
     if (cast.ended || typeof event?.data !== 'string' || !frameFits(event.data, event.metadata ?? {})) return; // B-081: no squeezed in-between frame
     const wait = cast.lastAt + CAST_FRAME_GAP_MS - this.now();
@@ -280,13 +281,27 @@ export class SideCaster {
   }
 
   private pass(cast: Cast, event: ScreencastFrame): void {
+    if (this.gone(cast)) return; // 17.11.2026: a frame waited for its slot while its window closed – nobody to send it to
     cast.lastAt = this.now();
     const m = event.metadata ?? {};
-    const zoom = finite(cast.tab.contents.getZoomFactor?.(), 1);
+    let zoom: number;
+    try { zoom = finite(cast.tab.contents.getZoomFactor?.(), 1); } catch { this.stop(cast.id, cast); return; } // closed between the check and the read
     this.tell(cast.id, cast, {
       data: event.data as string,
       meta: { deviceWidth: finite(m.deviceWidth), deviceHeight: finite(m.deviceHeight), offsetTop: finite(m.offsetTop), pageScaleFactor: finite(m.pageScaleFactor, 1), zoom: zoom > 0 ? zoom : 1 },
     });
+  }
+
+  /**
+   * The tab's page is gone (its window or tab was closed): the cast ends with it. Electron throws "Object has been
+   * destroyed" on every read of a destroyed page, and a timer that threw it showed the app's default error dialog in front
+   * of the shared screen (feedback 17.11.2026), so nothing here reads a page without asking first.
+   */
+  private gone(cast: Cast): boolean {
+    let destroyed: boolean;
+    try { destroyed = cast.tab.contents.isDestroyed(); } catch { destroyed = true; }
+    if (destroyed) this.stop(cast.id, cast);
+    return destroyed;
   }
 
   private now(): number { return this.deps.now?.() ?? Date.now(); }

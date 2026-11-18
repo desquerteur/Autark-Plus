@@ -3,6 +3,7 @@
 // analyzer's routes (media-analyzer-routes.ts). The session refuses every permission and device
 // and cancels every request that is not for the analyzer's origin; the window has no preload, no
 // node, no devtools, no popups, never navigates by itself and plays no sound.
+// 17.11.2026: the video preview window (media-preview.ts) is the same window with a session and origin of its own (`config`).
 // Owns: the window and session options. Never: imports electron values (hidden-windows.ts injects
 // BrowserWindow and session.fromPartition), touches the default session or the app window.
 
@@ -18,17 +19,20 @@ export interface ElectronAnalyzerDeps {
   fromPartition(partition: string, options: { cache: boolean }): Session;
 }
 
+/** The session's name and the one origin it reaches. */
+export interface PrivateSessionConfig { partition: string; origin: string }
+
 /** `MediaAnalyzerDeps.open` for Electron; the private session is set up on the first window. */
-export function electronAnalyzerWindows(deps: ElectronAnalyzerDeps): (serve: Serve) => AnalyzerWindow {
+export function electronAnalyzerWindows(deps: ElectronAnalyzerDeps, config: PrivateSessionConfig = { partition: ANALYZER_PARTITION, origin: ANALYZER_ORIGIN }): (serve: Serve) => AnalyzerWindow {
   let serving: Serve = async () => new Response(null, { status: 410 });
   let prepared: Session | null = null;
   const privateSession = (): Session => {
     if (prepared) return prepared;
-    const session = deps.fromPartition(ANALYZER_PARTITION, { cache: false });
+    const session = deps.fromPartition(config.partition, { cache: false });
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.setPermissionCheckHandler(() => false);
     session.setDevicePermissionHandler(() => false);
-    session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(`${ANALYZER_ORIGIN}/`) }));
+    session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(`${config.origin}/`) }));
     session.protocol.handle('wf-file', (request) => serving(request));
     prepared = session;
     return session;

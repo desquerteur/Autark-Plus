@@ -7,6 +7,7 @@
 // Pause holds until Continue, their ✕ ends it for the job; `say` puts the AI's line or question (✓ / ✕) in the bubble.
 // The phone's refusals reach the AI in its own words; an app older than 0.3.15 that does not know `say` gets OLD_APP_SAY.
 // A type step brings back what the field reads afterwards (`text`, chat sweep 16.11.: extra words in a field show at once).
+// useOf tells the rest of the runtime (RuntimeServices.phones) whether an app phone is attached and its phone use on.
 // Owns: the attached phones, the request/answer pairing and turning answers into PhoneDriver values.
 // Never: reaches a phone that is not attached, or keeps a request beyond its timeout.
 
@@ -74,6 +75,12 @@ export class AppPhones implements PhoneDriver {
   serials(): string[] { return [...this.attached.keys()]; }
 
   async available(): Promise<boolean> { return this.attached.size > 0; }
+
+  /** Phone use on an app phone now (RuntimeServices.phones, contracts/phones.ts): on, off, or undefined while it is not attached. */
+  useOf(deviceId: string): 'on' | 'off' | undefined {
+    const entry = this.attached.get(deviceId);
+    return entry ? (entry.ready ? 'on' : 'off') : undefined;
+  }
 
   async devices(): Promise<PhoneDevice[]> {
     const names = new Map(this.deps.devices().map((device) => [device.id, device.name]));

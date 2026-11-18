@@ -17,6 +17,7 @@ import { reportNumber } from '../../shared/model/feedback-delivery.ts';
 import { bridge } from '../lib/platform.ts';
 import { errorText, RpcError, rpc } from '../lib/rpc.ts';
 import { session } from '../lib/session.ts';
+import { builtInReceiver } from './direct.ts';
 import { pushToast } from '../lib/toasts.ts';
 
 const SENDING_KEY = 'wf.feedbackSending';
@@ -34,7 +35,9 @@ function remembered(): boolean | undefined {
 }
 
 /** Can this build send feedback? The last known answer until the runtime answers; a failed read shows false (Save). */
-export const feedbackSending = signal<boolean | undefined>(remembered());
+/** 18.11.2026: a phone or browser with the team's receiver built in sends itself (direct.ts) – no question to the PC. */
+const sendsItself = !bridge && builtInReceiver() !== null;
+export const feedbackSending = signal<boolean | undefined>(sendsItself ? true : remembered());
 let asking: Promise<void> | undefined;
 let answered = false;
 
@@ -42,7 +45,7 @@ let answered = false;
 export function useFeedbackSending(): boolean | undefined {
   const info = session.value;
   useEffect(() => {
-    if (answered) return;
+    if (answered || sendsItself) return;
     asking ??= rpc.call('feedback.status')
       .then((status) => {
         answered = true;
@@ -97,10 +100,10 @@ export function notSentLine(error: unknown): string {
   return errorText(error);
 }
 
-/** Where a report waits that could not reach the PC yet: this page (outbox.ts) sends it once the PC answers. */
+/** Where a report waits that could not go yet: this page (outbox.ts) sends it once there is a connection again. */
 export function heldText(where: 'window' | 'phone' | 'browser'): string {
   if (where === 'window') return 'Saved in this window – it goes out as soon as the app is back.';
-  return `Saved ${where === 'phone' ? 'on this phone' : 'in this browser'} – it goes to your PC as soon as it is reachable.`;
+  return `Saved ${where === 'phone' ? 'on this phone' : 'in this browser'} – it goes by itself as soon as there is a connection.`;
 }
 
 export function sendAgainLabel(busy: boolean): string {

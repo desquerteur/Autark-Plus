@@ -2,7 +2,7 @@
 // arbeitet"): one slim line per agent – or part of a split agent – working for this chat right now, "● Lena · Reading
 // invoices.pdf · 2 min" (a part: "● Lena · #2 Press DACH · …"). Where it shows is the runtime's one rule
 // (runtime/chat/live.ts, the summary's `live`): the work came from this chat or posted into it. A line is a button to
-// the agent's page with its activity log; its title says what it runs on (model · effort · temperature). Feedback F21
+// the agent's Work page with its activity log (the log lives there since F11, 16.11.2026); its title says what it runs on (model · effort · temperature). Feedback F21
 // (16.11.2026): at its right end, in a fixed slot, that agent's own Stop (StopRun.tsx – only this run, others keep
 // working; a split part has none, its slot stays empty). A run on another of the person's PCs shows here too
 // (runtime/devices/sync/live.ts) and its Stop reaches that PC. The bar
@@ -59,7 +59,7 @@ export function LiveBar(props: { chat: Pick<ConversationSummary, 'live'> }) {
         const stop = barStopRun(run, stops);
         return (
           <div key={run.runId} class="live-bar-row">
-            <button type="button" class="live-bar-line" data-run-id={run.runId} onClick={() => go.agent(run.agentId)}
+            <button type="button" class="live-bar-line" data-run-id={run.runId} onClick={() => go.work(run.agentId)}
               title={[`${name} · ${text}`, model].filter(Boolean).join('\n')}>
               <span class="live-bar-dot" aria-hidden="true" />
               <span class="live-bar-name">{name}</span>

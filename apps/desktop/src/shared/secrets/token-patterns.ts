@@ -1,6 +1,6 @@
 // Keys and tokens that show what they are by their shape: a typed prefix and generated characters – sk-/pk-/rk- keys
 // (OpenAI, Anthropic, OpenRouter), Stripe's sk_/rk_ keys, GitHub, Slack, AWS and Google keys, JWTs, the credential after
-// Bearer or Basic and a PEM private key. The feedback redactor (runtime/feedback/redact.ts) replaces every match by its
+// Bearer or Basic and a PEM private key. The feedback redactor (shared/secrets/redact-text.ts) replaces every match by its
 // `mark`; chat (owner 16.11.2026: "dass irgendwie sogar Token erkennt") takes a match that also looks generated – 16
 // characters or more, letters and digits (a private key always) – as a key someone pasted, by the stricter `chat`
 // shape where a pattern has one (a stored value is masked for agents everywhere, so a branch name or "basic
@@ -9,7 +9,7 @@
 // like Google's is public there, and the page needs it as written; appRanges), and a secret:// handle is stored
 // already (inHandle).
 // Owns: the patterns, findKeys, appRanges, inHandle, maskKey and handleCount. Never: prose rules ("password: x" – the
-// word after "password" is no key by its shape; feedback/redact.ts keeps that rule for reports).
+// word after "password" is no key by its shape; redact-text.ts keeps that rule for reports).
 
 export type KeyKind = 'api_key' | 'token' | 'note';
 /** `chat`: the shape a pasted key has in chat where it is stricter than the report redactor's `pattern`. */
@@ -23,6 +23,7 @@ export const KEY_PATTERNS: readonly KeyPattern[] = [
     chat: /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{32,}/g, name: 'API key', kind: 'api_key', mark: '[key]',
   },
   { pattern: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, name: 'Stripe key', kind: 'api_key', mark: '[key]' },
+  { pattern: /\bwhsec_[A-Za-z0-9]{16,}\b/g, name: 'Stripe webhook secret', kind: 'token', mark: '[token]' },
   { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, name: 'GitHub token', kind: 'token', mark: '[token]' },
   { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, name: 'GitHub token', kind: 'token', mark: '[token]' },
   { pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, name: 'Slack token', kind: 'token', mark: '[token]' },
@@ -62,9 +63,9 @@ export function inHandle(text: string, value: string): boolean {
 }
 
 /** The keys in `text` in reading order (overlaps: the first, then the longest); a handle's id and an app's own key are never one. */
-export function findKeys(text: string): FoundKey[] {
+export function findKeys(text: string, options: { apps?: boolean } = {}): FoundKey[] {
   if (!text) return [];
-  const apps = appRanges(text);
+  const apps = options.apps === false ? [] : appRanges(text); // apps: false – a tool's output has no app page whose own key must stay
   const all: FoundKey[] = [];
   for (const { pattern, chat, name, kind } of KEY_PATTERNS) {
     for (const match of text.matchAll(chat ?? pattern)) {

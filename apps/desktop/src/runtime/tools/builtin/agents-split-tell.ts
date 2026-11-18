@@ -1,7 +1,8 @@
 // agents.split_tell – the agent talking with its parts while they work, both ways, as one being:
-//   part → origin: the note goes into the origin's running turn on the group's thread (dispatcher.tell, like a folded line),
-//     else – or when that turn ends without having taken it – it wakes the origin there with it ('child', the group's
-//     coalesce key – notes not yet read join one wake);
+//   part → origin: the note rides in the result of the call that waits for this part (decision 10 of 17.11.2026,
+//     SplitService.tellWaiting), else it goes into the origin's running turn on the group's thread (dispatcher.tell, like
+//     a folded line), else – or when that turn ends without having taken it – it wakes the origin there with it ('child',
+//     the group's coalesce key – notes not yet read join one wake);
 //   origin → part, part → another part ('all': every other part): a working part reads it at its next step
 //     (dispatcher.tell on its lane; a turn that ends without it hands it to the part's retry), a part not started yet at
 //     its start (SplitService.noteFor); model, effort and temperature go on the part's row for its next start
@@ -11,6 +12,8 @@
 //     and no groupId ends every active group of this thread.
 // A part's note to its origin is journaled with the summary "To my origin: …" (TOLD_ORIGIN) – "My parts" shows the last.
 // Also here: ownThread and myGroup, which agents-split.ts uses (one direction, no import cycle).
+// KI-Runde 17.11.2026 (90 origin turns woken by parts' notes cost more than the parts): the description says what a note
+// to the origin costs.
 // Owns: this tool's wording, schema and where a note goes. Never: starts parts, routes a turn or posts in a chat.
 
 import type { ToolContext } from '../types.ts';
@@ -46,11 +49,15 @@ export function myGroup(ctx: ToolContext, groupId?: string): SplitGroupView | un
   return mine.find((group) => group.thread === thread) ?? mine[0];
 }
 
-const DESCRIPTION = 'Talks with my split parts while they work, steers or stops them. From a part I tell my origin what changes how I or another part works.';
+const DESCRIPTION = 'Talks with my split parts while they work, steers or stops them. From a part, a note wakes my origin for a whole turn – or rides in the call that waits for me – so I send one when I need its answer to go on; what I found goes in my last words.';
 
-/** The origin's running main turn folds the note in; else – or when that turn ends without it – the origin wakes there with it. */
+/**
+ * A note for my origin: it rides in the result of the call that waits for me (decision 10) – else the origin's running
+ * main turn folds it in, and else, or when that turn ends without it, the origin wakes there with it.
+ */
 async function toOrigin(ctx: ToolContext, group: SplitGroupView, note: string): Promise<string> {
-  const { dispatcher, wakes } = ctx.services;
+  const { dispatcher, wakes, splits } = ctx.services;
+  if (ctx.split && splits?.tellWaiting?.(ctx.split.splitId, note)) return 'my origin reads it in the result of the call it waits in';
   const wake = () => wakes.wake({
     agentId: ctx.agent.id, reason: 'child', note, coalesceKey: coalesceKey(group.id),
     ...(group.conversationId ? { conversationId: group.conversationId } : {}), ...(group.taskId ? { taskId: group.taskId } : {}),

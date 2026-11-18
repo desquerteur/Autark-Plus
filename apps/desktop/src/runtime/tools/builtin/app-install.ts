@@ -21,7 +21,6 @@ const appInstall = defineTool<{ installer: string }>({
     additionalProperties: false,
   },
   category: 'write_system',
-  anyMode: true,
   describe: (args) => ({ summary: 'Install an Autark build and restart', resource: args.installer, external: false }),
   async run(args, ctx) {
     if (typeof args.installer !== 'string' || !args.installer.trim()) return failure('installer is the full path of the Setup .exe.');

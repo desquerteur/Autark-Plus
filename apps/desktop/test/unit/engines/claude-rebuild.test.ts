@@ -165,13 +165,15 @@ test('claude transcript (B-049 neutral mapping): a Codex PowerShell line → Pow
   ];
   const context = { sessionId: 's', cwd: '/w', version: 'v', model: 'claude-opus-5-5', accountId: 'acc_claude', offered, uuid: () => 'u', now: 0 };
   const recs = claudeTranscript(items, { ...context, platform: 'win32' }).lines.map((line) => JSON.parse(line));
-  assert.deepEqual(recs.map((rec) => rec.type), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(recs.map((rec) => rec.type), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
   assert.deepEqual(recs[1].message.content, [{ type: 'tool_use', id: 'exec-1', name: 'PowerShell', input: { command: 'Get-ChildItem' } }]);
   assert.deepEqual(recs[2].message.content, [{ type: 'tool_result', tool_use_id: 'exec-1', content: 'a.ts' }]);
   assert.deepEqual(recs[3].message.content, [{ type: 'tool_use', id: 'toolu_r', name: 'Read', input: { file_path: 'C:\\w\\a.ts', offset: 5 } }]);
-  assert.deepEqual(recs[5].message.content, [{ type: 'text', text: '[ran apply_patch: a.ts]' }]);
-  assert.equal(recs[6].message.content, '[output of apply_patch]\nupdate a.ts\n-1\n+2');
-  assert.deepEqual(recs[7].message.content, [{ type: 'text', text: END_MARK }]);
+  // BEFUND §3 (17.11.2026): a call with no native counterpart is a user-side record, never assistant text to imitate
+  assert.deepEqual(recs[4].message.content.at(-1), { type: 'text', text: '[record of an earlier call, not replayable here – apply_patch: a.ts]\n[its output]\nupdate a.ts\n-1\n+2' });
+  assert.deepEqual(recs[5].message.content, [{ type: 'text', text: END_MARK }]);
+  const said = recs.filter((rec) => rec.type === 'assistant').flatMap((rec) => rec.message.content).filter((part: { type: string }) => part.type === 'text');
+  assert.ok(said.every((part: { text: string }) => !/^\[(ran|record)/.test(part.text)), 'no assistant text reads as a call');
   const linux = claudeTranscript(items.slice(0, 2), { ...context, platform: 'linux' }).lines.map((line) => JSON.parse(line));
   assert.equal(linux[1].message.content[0].name, 'Bash', 'no PowerShell tool off Windows: the whole line from Bash');
 });

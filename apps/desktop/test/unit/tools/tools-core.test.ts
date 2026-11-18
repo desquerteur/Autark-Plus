@@ -75,14 +75,14 @@ test('offerFor: the engine decides the execution core (every engine reaches the 
   const codex = names(registry.offerFor(tom, general, CODEX));
   const hub = names(registry.offerFor(tom, general, HUB));
   const http = names(registry.offerFor(tom, general, HTTP));
-  assert.ok(!codex.includes('files.write') && !codex.includes('shell.exec'), 'Codex brings its own shell and file tools');
+  assert.ok(!codex.includes('files.write') && codex.includes('shell.exec'), 'Codex brings its own file tools; shell.exec is in the base core (a linked PC, a stored secret – KI-Runde 17.11.2026)');
   assert.ok(!hub.includes('files.write'), 'the hub engine brings its own tools too');
   assert.ok(http.includes('files.write') && http.includes('shell.exec') && http.includes('files.list'), 'an engine without own tools gets ours');
   for (const name of OWN_ENGINE_HAS) {
     assert.ok(http.includes(name), `HTTP: ${name} direct`);
     assert.ok(!codex.includes(name) && !hub.includes(name), `Claude/Codex: ${name} only through tools.call (they read, search and browse with their own)`);
   }
-  // 04.11.2026: a linked PC's terminal for every engine – reachable through tools.find / tools.call, never direct for a CLI engine.
+  // 04.11.2026: a linked PC's terminal for every engine – direct since KI-Runde 17.11.2026 (25 lookups by name).
   // B-080 (exec-env-gaps): files.write too – a screenshot's bytes leave a Codex script through it, not the command line.
   for (const engine of [CODEX, HUB]) {
     const reachable = registry.specsFor(tom, general, engine);
@@ -91,11 +91,11 @@ test('offerFor: the engine decides the execution core (every engine reaches the 
     assert.equal(rankTools(reachable, 'save a screenshot image to a file', 1)[0]?.name, 'files.write', 'tools.find finds files.write for bytes');
     for (const query of ['run a command', 'terminal command', 'run a powershell script']) assert.equal(rankTools(reachable, query, 1)[0]?.name, 'shell.exec', query);
   }
-  assert.ok(!codex.includes('schedules.remind') && names(registry.specsFor(tom, general, CODEX)).includes('schedules.remind'), 'schedules stay reachable, not direct');
+  assert.ok(codex.includes('schedules.remind') && !codex.includes('schedules.list') && names(registry.specsFor(tom, general, CODEX)).includes('schedules.list'), 'schedules.remind is direct, the rest reachable');
 
-  const learned = names(registry.offerFor(tom, general, CODEX, ['schedules.remind', 'computer.click', 'no.such']));
-  assert.ok(learned.includes('schedules.remind'), 'a learned tool joins');
-  assert.ok(!learned.includes('computer.click') && !learned.includes('no.such'), 'never one the mode does not allow');
+  const learned = names(registry.offerFor(tom, general, CODEX, ['schedules.list', 'computer.click', 'phone.say', 'no.such']));
+  assert.ok(learned.includes('schedules.list') && learned.includes('computer.click'), 'a learned tool joins, in every mode');
+  assert.ok(!learned.includes('phone.say') && !learned.includes('no.such'), 'never one that cannot work here');
 
   const writing = names(registry.offerFor(agentIn('writing'), modes.get('writing'), CODEX));
   assert.ok(!writing.includes('ui.help') && !writing.includes('agents.handoff'), 'writing has no general essentials');

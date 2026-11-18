@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
-import { connect, waitForNew } from '../e2e/lib/runtime-client.mjs';
+import { connect, MESSAGE_EVENTS, waitForNew } from '../e2e/lib/runtime-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
@@ -55,7 +55,7 @@ test('Agent activity log: every turn in order, steps open in place, live turns w
   await rpc.call('events.subscribe', { topics: ['chats', 'org', `chat:${chat.id}`] });
   const answer = async (body) => {
     const sent = await rpc.call('messages.send', { conversationId: chat.id, body });
-    return rpc.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id
+    return rpc.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id
       && message.state === 'final' && message.seq > sent.seq, 60_000);
   };
   await answer('Hello there');
@@ -71,13 +71,13 @@ test('Agent activity log: every turn in order, steps open in place, live turns w
   assert.ok(logged.items.some((item) => item.runId === worked.runId && item.kind === 'tool_call'));
 
   // The page: the turn's system line, step lines, the answer open, the closing line.
-  await page.evaluate((id) => { location.hash = `#/team/${id}`; }, manager.id);
+  await page.evaluate((id) => { location.hash = `#/team/${id}/work`; }, manager.id);
   const turn = page.locator('.agent-log .log-turn', { has: page.locator('.run-item.tool .run-item-head[title="agents.list"]') }).last();
   await turn.waitFor({ timeout: 20_000 });
   await turn.scrollIntoViewIfNeeded();
   assert.equal((await page.locator('.agent-log .agent-section-title').textContent())?.trim(), 'Activity log');
   const start = ((await turn.locator('.log-system').first().locator('.log-system-text').textContent()) ?? '').trim();
-  assert.match(start, /^Message · (?:.+ · )?Launch prep · Fake model$/, `the start line says what started it and where (${start})`);
+  assert.match(start, /^Message · (?:.+ · )?Launch prep · fake-1$/, `the start line says what started it and where (${start})`);
   assert.match(((await turn.locator('.log-system').first().locator('.log-time').textContent()) ?? '').trim(), /^\d{1,2}:\d{2}/);
   assert.equal(await turn.locator('.run-item.tool').count(), calls.length, 'one step line per tool call');
   const answerText = turn.locator('.run-item.answer .run-item-text');

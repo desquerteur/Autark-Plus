@@ -16,7 +16,7 @@
 
 import { promises as fsp } from 'node:fs';
 import type { Account, AccountLimits, Effort, EngineId } from '../../../shared/model/providers.ts';
-import type { AccountCheck, Engine, EngineCaps, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, RealtimeLink, RebuildProbe } from '../types.ts';
+import type { AccountCheck, Engine, EngineCaps, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, KeepOpenInput, RealtimeLink, RebuildProbe } from '../types.ts';
 import { injectTrace, probeCodexRebuild, responseItems, revertThread, startRebuiltThread } from './rebuild.ts';
 import { rebuiltTurnFailed } from '../rebuild-text.ts';
 import { traceInput } from '../trace-text.ts';
@@ -61,6 +61,8 @@ export interface CodexEngineDeps {
   /** Account-level limit pushes (also outside turns) → AccountService.updateLimits. */
   onLimits?: (accountId: string, limits: AccountLimits) => void;
   env?: NodeJS.ProcessEnv;
+  /** A warning for the runtime log (CodexServer: why a connection closed). */
+  log?: (message: string, data: Record<string, unknown>) => void;
   /** The real path of a thread's cwd (one more spelling to mark untrusted); default fs.realpath. */
   realpath?: (dir: string) => Promise<string>;
   /** Variables every agent shell gets (I02: gitSafeEnv; applied after Codex's KEY/SECRET/TOKEN excludes). */
@@ -108,6 +110,7 @@ export class CodexEngine implements Engine {
         version: this.deps.version, idleMs: this.deps.idleMs, env: this.deps.env,
         onLimits: (params) => this.limitsPushed(account.id, params),
         onExit: () => { this.loaded.delete(account.id); },
+        log: this.deps.log,
       });
       this.servers.set(account.id, server);
     }
@@ -176,7 +179,8 @@ export class CodexEngine implements Engine {
     // A runtime helper turn (decision, verifier, compaction … – no tools, no hub, never resumed) runs on an ephemeral thread: nothing lands in
     // the account's Codex history (like Claude Code's --no-session-persistence), and the thread is unloaded after the turn (thread/unsubscribe).
     // LEAN: that thread has no environment and none of Codex's own tools or context blocks (helper-thread.ts).
-    const helper = !ref && !input.mcp && input.tools.length === 0;
+    // KI-Runde 17.11.2026: `keep` (a call's voice) stays on its lean helper thread for every line of the call.
+    const helper = (!ref || input.keep === true) && !input.mcp && input.tools.length === 0;
     const open = untilStopped(rpc, input.signal, () => server.beginTurn()); // B-075: the turn's signal also ends the open; B-080: the server stays up meanwhile
     try {
       if (ref) {
@@ -206,7 +210,8 @@ export class CodexEngine implements Engine {
         const id = str(started?.thread?.id);
         if (!id) return { text: '', stop: 'error', error: ERR.failed('Codex did not start a session.') };
         threadId = id;
-        if (!helper) { loaded.set(threadId, input.cwd); try { input.onEvent({ type: 'session', ref: threadId, generation }); } catch { /* isolate */ } } // bound at once
+        if (!helper || input.keep) loaded.set(threadId, input.cwd); // a kept helper thread is live in this server: the next line needs no resume
+        if (!helper) { try { input.onEvent({ type: 'session', ref: threadId, generation }); } catch { /* isolate */ } } // bound at once
       }
     } catch (error) {
       if (input.signal.aborted) return { text: '', stop: 'interrupted', error: ERR.cancelled() }; // as a turn stopped while it opened (turn.ts)
@@ -231,7 +236,7 @@ export class CodexEngine implements Engine {
         helper, // a silent helper turn is cut (turn.ts HELPER_SILENT_MS)
       });
       if (result.error?.details?.codeHost) await pickAgain(this.deps.finder, this.servers.values());
-      if (!helper) result.session = { ref: threadId, generation, ...(control.turnId ? { turn: control.turnId } : {}) }; // B-049 F7: the turn id per run
+      if (!helper || input.keep) result.session = { ref: threadId, generation, ...(control.turnId ? { turn: control.turnId } : {}) }; // B-049 F7: the turn id per run
       else delete result.session;
       if (refused) result.traceAsText = refused;
       if (rebuilt && !control.turnId && result.stop === 'interrupted') this.fresh.add(threadId); // stopped before its first turn: still un-run
@@ -243,7 +248,7 @@ export class CodexEngine implements Engine {
     } finally {
       set.delete(watcher);
       this.running.delete(input.runId);
-      if (helper) void dropThread(rpc, threadId); // nobody resumes a helper thread – nothing of it keeps running
+      if (helper && !input.keep) void dropThread(rpc, threadId); // nobody resumes a helper thread – nothing of it keeps running (a call's voice says the next line on it)
     }
   }
 
@@ -344,6 +349,22 @@ export class CodexEngine implements Engine {
   }
 
   /** B-057 (splits/release.ts): a released split thread leaves the running app-server's memory (thread/unsubscribe, like a helper thread); its rollout stays for the session sweep's thread/delete. */
+  /**
+   * KI-Runde 17.11.2026 (decision 7.1, fix B9; real run 18.11.: without it the first line paid the thread's start, 2.9 s to its
+   * first words against about 1 s on the later lines): a call started – its voice's lean helper thread opens now with the
+   * stable part as its instructions and no turn, and stays loaded; each line runs on it (run with `keep` and this ref).
+   */
+  async keepOpen(input: KeepOpenInput): Promise<{ ref: string; generation: number }> {
+    const rpc = await (await this.server(input.account)).rpc();
+    const started = await startHelperThread(rpc, { ...await this.settings(input), dynamicTools: [] });
+    const id = str(started?.thread?.id);
+    if (!id) throw new WorkforceError('unavailable', 'Codex did not start a session.');
+    const loaded = this.loaded.get(input.account.id) ?? new Map<string, string>();
+    this.loaded.set(input.account.id, loaded);
+    loaded.set(id, input.cwd);
+    return { ref: id, generation: 1 };
+  }
+
   async unload(account: Account, ref: string): Promise<void> {
     if (!this.loaded.get(account.id)?.delete(ref)) return; // not loaded here: nothing in memory
     const rpc = this.servers.get(account.id)?.current; // C4: the open connection only – never a (re)start for this

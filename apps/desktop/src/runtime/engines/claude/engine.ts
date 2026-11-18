@@ -1,10 +1,11 @@
 // Claude Code engine: one `claude -p` stream-json process per active turn.
 // Owns: command line (session id/resume, model, effort, system prompt, MCP hub config,
-// bypassPermissions), the stream → events mapping, interrupt/steer through stdin (a turn with
-// steered lines ends its input at the first result and waits for their answers or the CLI's end), limits,
-// the reported context window and the answer (every main-thread text block, parser.answer()). B-080: while the CLI's own
+// bypassPermissions), limits, the reported context window and the answer (every main-thread text block, parser.answer()).
+// turns.ts runs a turn's process: the stream → events mapping, interrupt/steer through stdin (a turn with
+// steered lines ends its input at the first result and waits for their answers or the CLI's end). B-080: while the CLI's own
 // background work runs (stream.ts state.background) a successful result ends nothing and the input stays open – the turn
-// ends at the first result after it, as in Claude Code, or at an error result (a limit, an outage); setModel (control_request set_model; no effort inside a turn); a fresh
+// ends at the first result after it, as in Claude Code, or at an error result (a limit, an outage); setModel (control_request set_model; no effort inside a turn –
+// FIXES-3 C1: the turn's 'model' event comes when a request runs on the new model, so a run names the model of its requests); a fresh
 // --session-id is announced at its system/init ('session'). A session Claude Code cannot find any more is reported as ended
 // (details.rebase): the executor renews it (compaction + new session with the full projection).
 // Claude Code keeps a session per working folder, so a session this process ran in another folder
@@ -41,6 +42,9 @@
 // every turn's user message (shared.ts contextText), on a new session as on a resumed one.
 // B-057 (fork.ts): fork() reserves a split's forked session; its first turn adds `--resume <parent> --fork-session
 // --session-id <new>` (a pending fork is the one piece of session state a restart loses: that turn then renews).
+// KI-Runde 17.11.2026 (kept.ts): a helper turn with `keep` – a call's voice – runs in one process kept for the call: the
+// call's start (keepOpen) or its first line starts it (no transcript on disk), each later line with its ref is one more
+// user message there, a ref whose process is gone answers 'conflict', and unload() at the call's end lets it end by itself.
 // Never: reads CLAUDE_CONFIG_DIR files or tokens but the transcript of a session the app created (it writes there only a rebuilt
 // transcript in the app's own home and that transcript's trace records, and deletes there only transcripts of sessions the app created); never passes API keys in the env (they would
 // silently override the user's subscription login); keeps session state a restart would lose;
@@ -50,31 +54,27 @@
 import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import type { Account, Effort, EngineId } from '../../../shared/model/providers.ts';
-import type { AccountCheck, Engine, EngineCaps, EngineEvent, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, RebuildProbe } from '../types.ts';
+import type { AccountCheck, Engine, EngineCaps, EngineEvent, EngineForkInput, EngineForkResult, EngineModel, EngineRebuildInput, EngineRebuildResult, EngineTurnInput, EngineTurnResult, KeepOpenInput, RebuildProbe } from '../types.ts';
 import { hasTrace } from '../../../shared/model/subconscious.ts';
 import { rebuiltTurnFailed } from '../rebuild-text.ts';
 import { traceInput } from '../trace-text.ts';
-import type { Supervisor, Lease } from '../../system/supervisor.ts';
+import type { Supervisor } from '../../system/supervisor.ts';
 import type { ExecutableFinder } from '../../accounts/executables.ts';
 import { CLAUDE_EXIT_GRACE_MS } from '../../accounts/cli.ts';
 import { ClaudeStatus, USER_SETTINGS_ONLY } from './status.ts';
-import { ClaudeStreamParser, HUB_SERVER } from './stream.ts';
+import { HUB_SERVER } from './stream.ts';
 import { claudeModels, cliModel, rememberWindows } from './models.ts';
-import { ERR, contextText, isRecord, readJsonLines, sameFolder } from '../shared.ts';
+import { ERR, contextText, sameFolder } from '../shared.ts';
 import { purgeHistories } from './purge.ts';
 import { claudeDown, providerDownMessage } from '../provider-outage.ts'; // B-059 #184
 import { ClaudeForks } from './fork.ts'; // B-057
 import { ClaudeRebuilder } from './rebuilder.ts';
-import { LEAN_ENV, coreTools, hubConfig, promptArgs } from './lean.ts';
+import { AGENT_ENV, LEAN_ENV, coreTools, hubConfig, promptArgs } from './lean.ts';
 import { asAgent } from '../wf-shim.ts'; // B-085
+import { ClaudeKept, KEPT_GONE } from './kept.ts'; // KI-Runde 17.11.2026: a call voice's kept process
+import { ClaudeTurns, type Attempt } from './turns.ts';
 
 export { CLAUDE_MODELS } from './models.ts';
-
-/** One CLI process of a turn; `model`: the one it ended on (B-080 setModel). */
-interface Attempt { parser: ClaudeStreamParser; broken: boolean; interrupted: boolean; model: string; started: boolean }
-
-/** B-080: a running turn's events, its model and effort now, and its set_model requests the CLI has not answered (request id → the model before). */
-interface LiveTurn { emit(event: EngineEvent): void; model: string; effort: Effort; asked: Map<string, string> }
 
 /** Claude Code's answer to --resume with an id it no longer has (2.1.303: `errors: ["No conversation found with session ID: …"]`, verified live 23.10.). */
 const MISSING_SESSION = /no conversation found|session .*not found/i;
@@ -126,16 +126,14 @@ export class ClaudeEngine implements Engine {
   private readonly now: () => number;
   private readonly uuid: () => string;
   private readonly status: ClaudeStatus;
-  private readonly running = new Map<string, Lease>();
-  /** runId → user lines steered into the running turn (17:09): the turn ends only once each was answered or the CLI ended. */
-  private readonly steered = new Map<string, number>();
-  private readonly live = new Map<string, LiveTurn>(); // B-080: runId → the running turn (setModel)
   private readonly windows = new Map<string, Map<string, number>>(); // account id → model → window from modelUsage
   private readonly noEffort = new Set<string>(); // models the CLI lists without effort support (no --effort)
   private readonly folders = new Map<string, string>(); // session id → the folder its turns ran in (this process)
   /** Wave 2: account id → its running `claude purge`; a turn of that account starts only after it. */
   private readonly purging = new Map<string, Promise<unknown>>();
   private readonly forks = new ClaudeForks({ files: () => this.rebuilds.files, uuid: () => this.uuid() }); // B-057: pending forks (fork.ts)
+  private readonly kept: ClaudeKept; // KI-Runde 17.11.2026: the processes kept for calls' voices (kept.ts)
+  private readonly turns: ClaudeTurns; // the running turns' processes (turns.ts)
 
   constructor(deps: ClaudeEngineDeps) {
     this.deps = deps;
@@ -147,6 +145,8 @@ export class ClaudeEngine implements Engine {
       supervisor: deps.supervisor, finder: deps.finder, tempDir: deps.tempDir, files: this.files, env: deps.env, envFor: (account) => this.status.envFor(account),
       uuid: this.uuid, now: this.now, transcriptsDir: deps.transcriptsDir, accountsRoots: deps.accountsRoots,
     });
+    this.kept = new ClaudeKept({ supervisor: deps.supervisor, graceMs: deps.graceMs ?? CLAUDE_EXIT_GRACE_MS, now: this.now });
+    this.turns = new ClaudeTurns({ supervisor: deps.supervisor, graceMs: deps.graceMs, now: this.now, uuid: this.uuid, noEffort: this.noEffort, purging: this.purging });
   }
 
   async listModels(account: Account): Promise<EngineModel[]> {
@@ -170,40 +170,16 @@ export class ClaudeEngine implements Engine {
     catch { return { state: 'error', message: 'Claude Code did not answer the account check.' }; }
   }
 
-  async steer(runId: string, text: string): Promise<boolean> {
-    const stdin = this.running.get(runId)?.child.stdin;
-    if (!stdin || stdin.destroyed || stdin.writableEnded) return false; // the turn already answered: the next turn reads it
-    stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })}\n`);
-    this.steered.set(runId, (this.steered.get(runId) ?? 0) + 1);
-    return true;
-  }
+  /** A line steered into the running turn (turns.ts). */
+  steer(runId: string, text: string): Promise<boolean> { return this.turns.steer(runId, text); }
 
-  /** B-080 (model.set now): the running CLI takes `model` from its next request (set_model); it sets no effort inside a turn, so another effort is false. */
-  async setModel(runId: string, model: string, effort: Effort): Promise<boolean> {
-    const turn = this.live.get(runId);
-    const stdin = this.running.get(runId)?.child.stdin;
-    if (!turn || !stdin || stdin.destroyed || stdin.writableEnded || (effort !== turn.effort && !this.noEffort.has(model))) return false;
-    const id = `set_model_${this.uuid().slice(0, 8)}`;
-    stdin.write(`${JSON.stringify({ type: 'control_request', request_id: id, request: { subtype: 'set_model', model: cliModel(model) } })}\n`);
-    turn.asked.set(id, turn.model);
-    this.switched(turn, model);
-    return true;
-  }
-
-  /** B-080: the CLI's answer to a set_model request – an error puts the turn back on the model before. */
-  private answered(runId: string, message: Record<string, unknown>): void {
-    const response = isRecord(message.response) ? message.response : {};
-    const turn = this.live.get(runId);
-    const before = turn?.asked.get(String(response.request_id));
-    if (!turn || before === undefined || !turn.asked.delete(String(response.request_id)) || response.subtype !== 'error') return;
-    this.switched(turn, before);
-  }
-
-  private switched(turn: LiveTurn, model: string): void { turn.model = model; turn.emit({ type: 'model', model, effort: turn.effort }); }
+  /** B-080 (model.set now): the running turn takes `model` from its next request (turns.ts). */
+  setModel(runId: string, model: string, effort: Effort): Promise<boolean> { return this.turns.setModel(runId, model, effort); }
 
   async run(input: EngineTurnInput): Promise<EngineTurnResult> {
     const exe = await this.deps.finder.find('claude');
     if (!exe) return { text: '', stop: 'error', error: ERR.unavailable('Claude Code is not installed.') };
+    if (input.keep && !input.mcp && input.tools.length === 0) return this.keptTurn(exe, input);
     let resume = input.session?.ref;
     const ranIn = resume ? this.folders.get(resume) : undefined;
     if (ranIn !== undefined && !sameFolder(ranIn, input.cwd)) return { text: '', stop: 'error', error: ERR.folder('Claude Code') };
@@ -244,9 +220,9 @@ export class ClaudeEngine implements Engine {
       if (input.outputSchema) args.push('--json-schema', JSON.stringify(input.outputSchema));
       args.push(...(target ? ['--resume', target.resume, ...(target.fork ? ['--fork-session', '--session-id', target.fork] : [])] : ['--session-id', sessionId]));
       const content = await this.content(traceRefused ? { ...input, input: [traceInput(input.trace!.calls), ...input.input] } : input);
-      const env = asAgent({ ...this.status.envFor(input.account), ...LEAN_ENV, ...target?.env }, agentTurn ? input.agentId : undefined); // B-085: its wf writes as the agent
+      const env = asAgent({ ...this.status.envFor(input.account), ...LEAN_ENV, ...(agentTurn ? AGENT_ENV : {}), ...target?.env }, agentTurn ? input.agentId : undefined); // B-085: its wf writes as the agent; AGENT_ENV: a one-hour cache for an agent's session
       const fresh = !resume && agentTurn ? { ref: sessionId, generation } : undefined; // B-080: announced at the CLI's system/init
-      ran = await this.attempt(exe.command, args, env, input, content, fresh);
+      ran = await this.turns.attempt(exe.command, args, env, input, content, fresh);
     } finally {
       for (const file of temp) await this.files.rm(file).catch(() => {});
     }
@@ -281,76 +257,55 @@ export class ClaudeEngine implements Engine {
     return result;
   }
 
-  /** One CLI process of a turn: the user message, then its stream until the result or its end; `fresh`: the new session it announces (B-080). */
-  private async attempt(command: string, args: string[], env: NodeJS.ProcessEnv, input: EngineTurnInput, content: Array<Record<string, unknown>>, fresh?: { ref: string; generation: number }): Promise<Attempt> {
-    // Wave 2: never while this account's histories are being purged (nothing awaits between here and the spawn).
-    for (let purge = this.purging.get(input.account.id); purge; purge = this.purging.get(input.account.id)) await purge.catch(() => undefined);
-    // Stopped while the turn was being prepared (a look before it, a purge): no CLI and no model call after the Stop, as on Codex (codex/turn.ts).
-    if (input.signal.aborted) return { parser: new ClaudeStreamParser(() => {}, this.now), broken: false, interrupted: true, model: input.model, started: false };
-    const lease = this.deps.supervisor.spawn({ command, args, owner: `claude:${input.runId}`, kind: 'heavy', cwd: input.cwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
-    this.running.set(input.runId, lease);
+  /**
+   * KI-Runde 17.11.2026 (kept.ts): one line of a call's voice. A ref whose process still runs takes the line as one more
+   * user message; a ref whose process is gone (it idled out, ended or was let go after a stop) answers 'conflict' and starts
+   * nothing, so the caller says the line again with the call so far in front. Without a ref a new process starts as a
+   * helper turn does (our prompt only, no tools, nothing on disk), and its session id is the ref the next line brings.
+   */
+  private async keptTurn(exe: NonNullable<Awaited<ReturnType<ExecutableFinder['find']>>>, input: EngineTurnInput): Promise<EngineTurnResult> {
+    let ref = input.session?.ref;
+    if (ref && !this.kept.has(ref)) return { text: '', stop: 'error', error: KEPT_GONE };
+    ref ??= await this.startKept(exe, input);
     const emit = (event: EngineEvent) => { try { input.onEvent(event); } catch { /* isolate */ } };
-    const turn: LiveTurn = { emit, model: input.model, effort: input.effort, asked: new Map() };
-    this.live.set(input.runId, turn);
-    const parser = new ClaudeStreamParser(emit, this.now);
-    let broken = false;
-    let lines = 0;
-    let open = true; // the turn has not returned yet; afterwards the lines of a CLI ending by itself are not part of it
-    let stopWaiting = () => {};
-    const finished = new Promise<void>((resolve) => {
-      stopWaiting = () => resolve();
-      if (!lease.child.stdout) { broken = true; resolve(); return; }
-      let results = 0;
-      readJsonLines(lease.child.stdout, (message) => {
-        if (!open) return;
-        lines++;
-        lease.touch();
-        if (isRecord(message) && message.type === 'control_response') this.answered(input.runId, message); // B-080: set_model
-        parser.push(message);
-        if (fresh && parser.state.sessionId) { emit({ type: 'session', ref: parser.state.sessionId, generation: fresh.generation }); fresh = undefined; } // B-080: bound at once
-        if (!parser.state.done) return;
-        const result = isRecord(message) && message.type === 'result';
-        if (result) results++;
-        if (parser.state.background.size > 0 && !parser.state.isError) return; // B-080: its own background work is part of the turn (the CLI answers its notification itself); an error result ends it now
-        // Steered lines (17:09) are taken into this turn or answered as their own: no more input, then each
-        // answer (one result per line) or the CLI's end – a steered line is never left unanswered.
-        if (results > (this.steered.get(input.runId) ?? 0)) { if (result) resolve(); }
-        else if (lease.child.stdin && !lease.child.stdin.writableEnded) { try { lease.child.stdin.end(); } catch { /* gone */ } }
-      }, () => { broken = true; resolve(); });
-      lease.exited.then(() => resolve());
-    });
-    let interrupted = false;
-    const onAbort = () => {
-      interrupted = true;
-      try { lease.child.stdin?.write(`${JSON.stringify({ type: 'control_request', request_id: 'interrupt', request: { subtype: 'interrupt' } })}\n`); } catch { /* gone */ }
-      setTimeout(() => stopWaiting(), 3000).unref?.(); // login guard 03.11.: no kill at once – it may be refreshing the sign-in (finally)
-    };
-    input.signal.addEventListener('abort', onAbort, { once: true });
-    try {
-      lease.child.stdin?.on('error', () => {});
-      lease.child.stdin?.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
-      if (input.signal.aborted) onAbort();
-      await finished;
-    } finally {
-      input.signal.removeEventListener('abort', onAbort);
-      this.running.delete(input.runId);
-      this.steered.delete(input.runId);
-      this.live.delete(input.runId);
-      try { lease.child.stdin?.end(); } catch { /* gone */ }
-      void lease.releaseAfter(this.deps.graceMs ?? CLAUDE_EXIT_GRACE_MS); // it ends by itself; its tree is killed only after the grace
-    }
-    // `exited` may come before the last stdout data: a start without a line counts only once stdout ended (at most 2 s).
-    const stdout = lease.child.stdout;
-    if (!lines && stdout && !stdout.readableEnded) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(done, 2000);
-        function done() { clearTimeout(timer); resolve(); }
-        stdout.once('end', done); stdout.once('close', done);
-      });
-    }
-    open = false;
-    return { parser, broken, interrupted, model: turn.model, started: lines > 0 };
+    const line = await this.kept.say(ref, await this.content(input), emit, input.signal);
+    const s = line.parser.state;
+    this.rememberWindows(input.account.id, s.contextWindows);
+    const result: EngineTurnResult = { text: line.parser.answer(), stop: 'done', usage: s.usage, contextTokens: s.contextTokens, session: { ref, generation: input.session?.generation ?? 1 } };
+    if (line.interrupted || input.signal.aborted) return { ...result, stop: 'interrupted', error: ERR.cancelled() };
+    if (line.parser.limited()) { this.kept.close(ref); return { ...result, stop: 'limit', error: ERR.limit(s.resetsAt ? Math.max(0, s.resetsAt - this.now()) : undefined) }; }
+    if (line.parser.signedOut()) { this.kept.close(ref); return { ...result, stop: 'error', error: ERR.unavailable('Claude Code is not signed in for this account.') }; }
+    // A process that ended under a line it had from an earlier one is gone like an idled one; one that never answered could not start.
+    if (line.broken) { this.kept.close(ref); return { ...result, stop: 'error', error: input.session ? KEPT_GONE : ERR.unavailable('Claude Code stopped unexpectedly.') }; }
+    if (s.isError) return { ...result, stop: 'error', error: claudeDown(s.assistantError, s.errorText) ? ERR.unavailable(providerDownMessage('Anthropic')) : ERR.failed() };
+    return result;
   }
+
+  /** KI-Runde 17.11.2026 (decision 7.1): a call started – its voice's process starts before the first line and waits for it. */
+  async keepOpen(input: KeepOpenInput): Promise<{ ref: string; generation: number }> {
+    const exe = await this.deps.finder.find('claude');
+    if (!exe) throw Object.assign(new Error('Claude Code is not installed.'), { code: 'unavailable' });
+    return { ref: await this.startKept(exe, input), generation: 1 };
+  }
+
+  /** A new kept process (kept.ts) as a helper turn starts (our prompt only, no tools, nothing on disk); its ref is its session id. */
+  private async startKept(exe: NonNullable<Awaited<ReturnType<ExecutableFinder['find']>>>, input: KeepOpenInput): Promise<string> {
+    for (let purge = this.purging.get(input.account.id); purge; purge = this.purging.get(input.account.id)) await purge.catch(() => undefined);
+    const ref = this.uuid();
+    await this.files.mkdir(this.deps.tempDir);
+    const promptFile = input.system.stable ? path.join(this.deps.tempDir, `claude-kept-${ref.slice(0, 8)}.prompt.md`) : undefined;
+    if (promptFile) await this.files.writeFile(promptFile, input.system.stable);
+    const args = [...exe.prefixArgs, '-p', ...USER_SETTINGS_ONLY, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '--model', cliModel(input.model), ...(this.noEffort.has(input.model) ? [] : ['--effort', input.effort === 'none' ? 'low' : input.effort]), ...promptArgs(promptFile, []),
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--permission-prompts', 'none', '--no-session-persistence', '--session-id', ref];
+    // the CLI has read the prompt file once its first line ended (or it ended)
+    const read = promptFile ? () => { void this.files.rm(promptFile).catch(() => {}); } : undefined;
+    this.kept.start(ref, input.account.id, { command: exe.command, args, cwd: input.cwd, env: asAgent({ ...this.status.envFor(input.account), ...LEAN_ENV }, undefined) }, read);
+    return ref;
+  }
+
+  /** KI-Runde 17.11.2026: the call ended – its voice's kept process ends by itself (kept.ts). */
+  async unload(_account: Account, ref: string): Promise<void> { this.kept.close(ref); }
 
   /** The ledger's history as a fresh transcript for the probed tier; the next turn resumes it (rebuilder.ts). */
   rebuild(input: EngineRebuildInput): Promise<EngineRebuildResult> { return this.rebuilds.rebuild(input); }
@@ -410,6 +365,7 @@ export class ClaudeEngine implements Engine {
    */
   purgeHistories(account: Account): Promise<{ purged: boolean; message?: string }> {
     if (this.purging.has(account.id)) return Promise.reject(Object.assign(new Error("Claude Code is already deleting this account's histories."), { code: 'conflict' }));
+    this.kept.closeAll(account.id); // a call voice of this account ends with its histories; its next line opens a new one after the purge
     const job = (async () => {
       const exe = await this.deps.finder.find('claude');
       if (!exe) throw Object.assign(new Error('Claude Code is not installed.'), { code: 'unavailable' });
@@ -423,7 +379,7 @@ export class ClaudeEngine implements Engine {
   }
 
   async dispose(): Promise<void> {
-    await Promise.all([...this.running.values()].map((lease) => lease.release()));
-    this.running.clear();
+    this.kept.closeAll();
+    await this.turns.dispose();
   }
 }

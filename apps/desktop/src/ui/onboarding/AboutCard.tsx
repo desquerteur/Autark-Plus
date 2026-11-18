@@ -5,15 +5,17 @@
 // line (with careful, the Manager's SYSTEM.md gets the careful line first), and the Manager answers it; then the short
 // spotlight tour (ui/tour/Spotlight.tsx) runs once over that chat.
 // No dictation button here: the app's dictation hooks belong to their own fields (chat, My day, feedback).
-// The typed name, company and the access choice survive a remount (desktop ↔ phone shell) and Back until Start.
-// Owns: this card. Never: creates agents, changes a setting other than the profile, or draws the tour.
+// 17.11.2026 (owner 06.11.: sharing stays on by default; it must be seen and easy to turn off): under the access rows one
+// ticked box, "Public library" – unticked, Start writes settings.library.publish false (Settings › Security has the switch).
+// The typed name, company, the access choice and the tick survive a remount (desktop ↔ phone shell) and Back until Start.
+// Owns: this card. Never: creates agents, changes a setting other than the profile and library.publish, or draws the tour.
 
 import { useState } from 'preact/hooks';
 import { settings, updateSettings } from '../lib/store.ts';
 import { toastError } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
 import { startSpotlight } from '../tour/Spotlight.tsx';
-import { previousStep, profilePatch, type PcAccess } from './first-run-model.ts';
+import { libraryPatch, previousStep, profilePatch, type PcAccess } from './first-run-model.ts';
 import { finishFirstRun, goStep } from './first-run.ts';
 import { Card, StatusLine } from './parts.tsx';
 import { ACCESS_LEVELS } from './pc-access.ts';
@@ -21,7 +23,11 @@ import { ACCESS_LEVELS } from './pc-access.ts';
 const value = (event: Event) => (event.currentTarget as HTMLInputElement).value;
 
 /** What the person typed and chose outlives a remount (the window switching between desktop and phone shell) until Start. */
-const draft: { name?: string; company?: string; access?: PcAccess } = {};
+const draft: { name?: string; company?: string; access?: PcAccess; share?: boolean } = {};
+
+/** The tick's text (the README's "The public library" says the same in full). */
+export const SHARE_TITLE = 'Public library';
+export const SHARE_TEXT = 'Your agents may share skills and notes worth sharing with everyone (public, CC0). Each text is checked for secrets, paths, e-mail addresses and internal names first, and what fails a check stays here.';
 
 export function AboutCard() {
   const profile = settings.value?.profile;
@@ -31,6 +37,8 @@ export function AboutCard() {
   const setName = (next: string) => { draft.name = next; setNameState(next); };
   const setCompany = (next: string) => { draft.company = next; setCompanyState(next); };
   const setAccess = (next: PcAccess) => { draft.access = next; setAccessState(next); };
+  const [share, setShareState] = useState(draft.share ?? settings.value?.library?.publish !== false);
+  const setShare = (next: boolean) => { draft.share = next; setShareState(next); };
   const [busy, setBusy] = useState<'start' | 'back' | null>(null);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -39,9 +47,10 @@ export function AboutCard() {
     setError(undefined);
     try {
       const patch = profilePatch(settings.value?.profile, name, company, access);
-      if (patch) await updateSettings({ profile: patch });
+      const library = libraryPatch(settings.value?.library, share);
+      if (patch || library) await updateSettings({ ...(patch ? { profile: patch } : {}), ...(library ? { library } : {}) });
       await finishFirstRun();
-      delete draft.name; delete draft.company; delete draft.access; // saved: a later "Set up again" starts from the settings
+      delete draft.name; delete draft.company; delete draft.access; delete draft.share; // saved: a later "Set up again" starts from the settings
       startSpotlight(); // B-085: the short tour over the Manager's chat the first run just opened
     } catch (failure) { toastError(failure, 'Could not start'); setError('Could not start – try again.'); } finally { setBusy(null); }
   };
@@ -76,6 +85,10 @@ export function AboutCard() {
           </label>
         ))}
       </fieldset>
+      <label class={`first-run-access-row first-run-share${share ? ' chosen' : ''}`}>
+        <input type="checkbox" checked={share} onChange={(event) => setShare(event.currentTarget.checked)} />
+        <span class="first-run-access-text"><span class="first-run-access-title">{SHARE_TITLE}</span> – {SHARE_TEXT}</span>
+      </label>
       <StatusLine text={error} tone="error" />
     </Card>
   );

@@ -17,6 +17,7 @@ import { useFileUrl } from '../../lib/files.ts';
 import { playerGuard, streamUrl } from '../../lib/media-stream.ts';
 import { platform } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
+import { learnKinds, videoFacts } from '../../lib/media-kinds.ts';
 import { activeConversationId } from '../../lib/store.ts';
 import { Icon } from '../../lib/ui.tsx';
 import { openMedia } from '../../workspace/pages.ts';
@@ -85,7 +86,12 @@ export function MediaImage(props: { src: string; fileId?: string; alt?: string }
 }
 
 export function MediaPlayer(props: { src: string; fileId?: string; kind: 'audio' | 'video' }) {
-  const media = useMediaUrl(props.src, props.fileId, { stream: true });
+  // 17.11.2026: a stored heavy video plays its light copy (the library's previewFileId); the file itself stays what "Open" and downloads give
+  const stored = props.fileId && isFileId(props.fileId) ? props.fileId : isFileId(props.src) ? props.src : null;
+  const conversationId = activeConversationId.value;
+  useEffect(() => { if (props.kind === 'video' && stored) learnKinds(conversationId ?? undefined); }, [props.kind, stored, conversationId]);
+  const copy = props.kind === 'video' && stored ? videoFacts.value.get(stored)?.previewFileId : undefined;
+  const media = useMediaUrl(props.src, copy ?? props.fileId, { stream: true });
   if (media.url) {
     const guard = playerGuard(media.url);
     return props.kind === 'audio'

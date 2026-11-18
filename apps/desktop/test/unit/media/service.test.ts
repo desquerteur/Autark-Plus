@@ -83,6 +83,21 @@ test('message attachments link a file to the first chat it appears in (also file
   } finally { temp.cleanup(); }
 });
 
+test('list by file ids: the same bytes sent in a second chat are found by id, though the row belongs to the first chat (Mika 18.11.)', async () => {
+  const { temp, media, chat, other, put, attach } = mediaSetup();
+  try {
+    const clip = await put(new TextEncoder().encode('same bytes'), 'drone.txt');
+    attach(chat.id, clip);
+    await media.idle();
+    attach(other.id, clip); // the second chat: no row of its own
+    await media.idle();
+    assert.deepEqual(media.list({ conversationId: other.id }).map((info) => info.fileId), [], 'the second chat has no row');
+    assert.deepEqual(media.list({ fileIds: [clip.id] }).map((info) => info.fileId), [clip.id], 'found by id');
+    assert.deepEqual(media.list({ fileIds: [] }), [], 'no ids, nothing');
+    assert.deepEqual(media.list({ fileIds: ['f'.repeat(64)] }), [], 'an unknown id');
+  } finally { temp.cleanup(); }
+});
+
 test('list: chat and kind filters, folded search over name/description/tags, all words first, then any, then substring', async () => {
   const { temp, media, chat, put, attach } = mediaSetup();
   try {

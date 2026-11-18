@@ -94,3 +94,18 @@ test('the owner and a phone holding todo on a secure transport reach side.*; a p
     assert.equal(scopeDenial(rule, { kind: 'peer', deviceId: 'dev_b' } as unknown as ClientScope), 'scope');
   }
 });
+
+test('side.open with another PC\'s id opens the page in that PC\'s pane over the link; without it, in this one', async () => {
+  const r = rig();
+  const opened: unknown[] = [];
+  const services = { devices: { self: () => ({ id: 'dev_self', name: 'office-pc' }), call: async (device: string, method: string, params: unknown) => { r.calls.push({ device, method, params }); return { ok: true, tab: 'web-9999' }; } },
+    host: { sideBrowser: async (args: unknown) => { opened.push(args); return { ok: true, tab: 'web-1234' }; } } } as unknown as RuntimeServices;
+  const call = async (params: unknown): Promise<unknown> => r.table.get('side.open')!.handler(params as never, { scope: OWNER, services, extras: {} as never, topics: new Set(), signal: new AbortController().signal, secure: true } as unknown as HandlerContext);
+  assert.deepEqual(await call({ url: 'https://calendar.example/', device: 'dev_b' }), { ok: true, tab: 'web-9999' });
+  assert.deepEqual(r.calls, [{ device: 'dev_b', method: 'side.open', params: { url: 'https://calendar.example/' } }]);
+  assert.equal(opened.length, 0, 'nothing opened here');
+  assert.deepEqual(await call({ url: 'https://calendar.example/', device: 'dev_self' }), { ok: true, tab: 'web-1234' });
+  assert.equal(opened.length, 1);
+  await assert.rejects(call({ url: 'javascript:alert(1)', device: 'dev_b' }), (error: unknown) => code(error) === 'bad_request');
+  assert.equal(r.calls.length, 1, 'a bad address never leaves this PC');
+});

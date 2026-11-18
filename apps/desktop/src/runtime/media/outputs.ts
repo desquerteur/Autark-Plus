@@ -124,12 +124,10 @@ function refsOf(raw: Obj, depth = 0): Ref[] {
         { holder: raw, key: firstKey(raw, ['src', 'url', 'path', 'file']), idKey: 'fileId', kind: true },
         ...objects(raw.items).map((item): Ref => ({ holder: item, key: firstKey(item, ['src', 'url']), idKey: 'fileId', kind: true })),
       ];
-    case 'file':
-      return [{ holder: raw, key: firstKey(raw, ['path', 'file', 'src', 'url']), idKey: 'fileId', absolute: true }];
-    case 'cards':
-      return objects(raw.items ?? raw.cards ?? raw.links).map((item): Ref => ({ holder: item, key: firstKey(item, ['image']) }));
-    case 'tabs':
-      return depth < 3 ? objects(raw.tabs ?? raw.items).flatMap(tabBlocks).flatMap((inner) => refsOf(inner, depth + 1)) : [];
+    case 'file': return [{ holder: raw, key: firstKey(raw, ['path', 'file', 'src', 'url']), idKey: 'fileId', absolute: true }];
+    case 'record': return firstKey(raw, ['video']) || typeof raw.fileId === 'string' ? [{ holder: raw, key: firstKey(raw, ['video']), idKey: 'fileId' }] : []; // a voice-over's video (task_2xr88cmc): a workspace path becomes its stored file
+    case 'cards': return objects(raw.items ?? raw.cards ?? raw.links).map((item): Ref => ({ holder: item, key: firstKey(item, ['image']) }));
+    case 'tabs': return depth < 3 ? objects(raw.tabs ?? raw.items).flatMap(tabBlocks).flatMap((inner) => refsOf(inner, depth + 1)) : [];
     default:
       return [];
   }
@@ -140,6 +138,7 @@ function sourcesOf(block: UiBlock, depth = 0): Array<{ source?: unknown; id?: un
   switch (block.type) {
     case 'media': return [{ source: block.src, id: block.fileId }, ...objects(block.items).map((item) => ({ source: item.src ?? item.url, id: item.fileId }))];
     case 'file': return [{ source: block.path, id: block.fileId }];
+    case 'record': return block.video !== undefined || block.fileId !== undefined ? [{ source: block.video, id: block.fileId }] : [];
     case 'cards': return objects(block.items).map((item) => (FILE_ID.test(String(item.image ?? '')) ? { id: item.image } : { source: item.image }));
     case 'tabs': return depth < 3 ? objects(block.tabs).flatMap((tab) => objects(tab.blocks)).flatMap((inner) => sourcesOf(inner as UiBlock, depth + 1)) : [];
     default: return [];

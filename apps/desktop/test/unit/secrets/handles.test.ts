@@ -21,7 +21,7 @@ import { maskValues } from '../../../src/runtime/secrets/handles.ts';
 import { fileTools, type ShellSpawn } from '../../../src/runtime/tools/builtin/files.ts';
 import { webTools, type FetchFn } from '../../../src/runtime/tools/builtin/web.ts';
 import { handlesIn } from '../../../src/runtime/secrets/handles.ts';
-import { EVERY_MODE, Registry } from '../../../src/runtime/tools/registry.ts';
+import { Registry } from '../../../src/runtime/tools/registry.ts';
 import { ModeLibrary } from '../../../src/runtime/modes/service.ts';
 import { agent } from '../chat/harness.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
@@ -125,7 +125,6 @@ test('29.10.2026: a password saved from a website and a login\'s field work in a
 
 test('shell.exec: every engine in every mode, a stored secret in its env (Codex in browser and writing mode had none)', async (t) => {
   const f = setup(t);
-  assert.ok(EVERY_MODE.has('shell.exec'));
   const registry = new Registry({ services: () => ({}) as RuntimeServices });
   registry.register(f.exec);
   const modes = new ModeLibrary({ resources: path.resolve('resources'), clock: new ManualClock() });
@@ -245,4 +244,15 @@ ${card.slice(8)}`, values);
   const basic = `Authorization: Basic ${Buffer.from(`mira:${pass}`).toString('base64')}`;
   assert.equal(maskValues(basic, values), 'Authorization: Basic secret://pw');
   assert.equal(maskValues('nothing to see here', values), 'nothing to see here');
+});
+
+test('maskValues (BEFUND §6, 17.11.2026): a word that shares a short piece with a password stays whole; halves and grouped card numbers are masked', () => {
+  const pass = 'Xk9-acmeco-Q2!pw77';
+  const card = '4242424242424242';
+  const values = new Map([['pw', pass], ['card', card]]);
+  assert.equal(maskValues('Login: hello@acmecolab.com auf acmecolab.com', values), 'Login: hello@acmecolab.com auf acmecolab.com', 'before: hello@secret://pw…lab.com');
+  assert.equal(maskValues(`erste Hälfte ${pass.slice(0, 9)}, zweite ${pass.slice(9)}`, values), 'erste Hälfte secret://pw, zweite secret://pw');
+  assert.equal(maskValues(`Passwort: ${pass}`, values), 'Passwort: secret://pw');
+  assert.equal(maskValues('Karte 4242 4242 4242 4242, gültig', values), 'Karte secret://card, gültig');
+  assert.equal(maskValues('Karte 4242-4242-4242-4242', values), 'Karte secret://card');
 });

@@ -18,6 +18,7 @@ import com.teydralab.autark.android.phoneuse.UseLink;
 import com.teydralab.autark.android.relay.Crypto;
 import com.teydralab.autark.android.relay.NetworkWake;
 import com.teydralab.autark.android.relay.PhoneConnection;
+import com.teydralab.autark.android.relay.WebRtc;
 import java.io.IOException;
 import java.util.List;
 
@@ -62,7 +63,7 @@ final class CompanyLink {
     /** Starts the company's connection on its port (any free one when taken) and its phone-use socket. */
     static CompanyLink open(Context context, String company, PhoneConnection.Paired paired, int port, String gate, Events events) throws IOException {
         Context app = context.getApplicationContext();
-        PhoneConnection connection = new PhoneConnection(paired, events::status);
+        PhoneConnection connection = new PhoneConnection(paired, events::status, new WebRtc(app)); // F25: WebRTC way
         connection.onLinked(events::linked);
         String origin = connection.start(port, gate);
         UseLink use = new UseLink(app, origin, gate, paired.token, paired.deviceId, (pcs) -> {

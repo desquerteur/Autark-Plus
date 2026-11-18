@@ -5,9 +5,9 @@
 // - NO_OWN_TOOLS_CORE: what an engine without its own shell, file and web tools needs (HTTP/local models) – Claude Code
 //   and Codex read, search and browse with their own;
 // - META_TOOLS: tools.find and tools.call, beside every core set.
-// The registry intersects a core set with what the mode offers the agent (registry.ts offerFor). Learned tools join at
-// a fresh session (learned.ts).
-// Owns: these lists and their reasons. Never: widens what a mode allows.
+// The registry intersects a core set with what can work here (registry.ts offerFor); every other tool stays reachable
+// through tools.call in every mode. Learned tools join whenever a session starts anew (learned.ts).
+// Owns: these lists and their reasons. Never: a tool in a core set for a reason the data has not shown.
 
 import type { ModeInfo } from '../../shared/model/knowledge.ts';
 
@@ -30,6 +30,13 @@ export const BASE_CORE: Reasons = {
   'knowledge.find': 'the one finder of skills, notes, references and documents; the skills line names it',
   'knowledge.open': 'opens what knowledge.find returns and loads a skill by name (the skills index says to load one before that kind of work)',
   subconscious: 'owner 15.10./01.11.2026: the main AI can start the subconscious itself with any text; its answer is the tool output – ~110 tokens',
+  // KI-Runde 17.11.2026 (tools-friction 1.4): the tools every agent called through tools.call in every mode and looked up again and again
+  'tasks.get': '235 calls through tools.call in 2.5 days, the top tool outside the core set',
+  'shell.exec': '555 calls, 25 lookups by name; a command on a linked PC or with a stored secret',
+  'schedules.remind': '62 calls, 15 lookups by name: my own follow-ups',
+  'memory.write': '69 calls, 14 lookups by name: what I learned stays',
+  'agents.split': '32 calls, 23 lookups by name: parts of me for parallel pieces',
+  'agents.split_tell': '209 calls, 26 lookups by name: talking with my parts while they work',
 };
 
 const BROWSER_BASICS: Reasons = {
@@ -65,12 +72,10 @@ export const MODE_CORE: Readonly<Record<string, Reasons>> = {
     'calendar.list': 'appointments and the person\'s day',
     'calendar.add': 'putting an appointment into the calendar',
     'todos.prepare': 'the rules: the person\'s to-dos are prepared, never ticked off (has_todos)',
-    'schedules.remind': 'mode text: self-reminders for the agent\'s own follow-ups',
   },
   research: {
     'browser.open': 'primary sources that need a real browser',
     'browser.extract': 'reading such a page',
-    'memory.write': 'mode text: save durable findings with source and date',
   },
   writing: {},
   browser: {
@@ -125,7 +130,6 @@ export const NO_OWN_TOOLS_CORE: Reasons = {
   'web.search': 'an engine without its own web search searches with ours',
   'files.list': 'an engine without its own file tools lists folders with ours',
   'files.write': 'an engine without its own file tools writes with ours',
-  'shell.exec': 'an engine without its own shell runs commands with ours',
 };
 
 function modeCore(mode: Pick<ModeInfo, 'key' | 'tools'>): Reasons {

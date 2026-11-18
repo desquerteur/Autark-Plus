@@ -13,6 +13,7 @@ import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { callLogOf, createCalls, stopCalls } from '../../../src/runtime/calls/wiring.ts';
 import { ALREADY_NOTE, CALL_NOTE, MOVED_NOTE, RINGING_NOTE, callTools } from '../../../src/runtime/tools/builtin/call-tool.ts';
 import { agent, harness } from '../chat/harness.ts';
+import { fakeVoice } from '../calls/voice-fake.ts';
 
 const timers = { set: () => 0, clear: () => undefined };
 const tool = callTools.find((one) => one.name === 'chat.call')!;
@@ -24,7 +25,7 @@ function setup() {
   h.org.add(agent('ag_lena', 'Lena'));
   Object.assign(h.services, { secrets: { redact: (text: string) => text }, settings: { get: () => ({ profile: { name: 'Gerd' } }) } });
   const services = h.services as RuntimeServices;
-  createCalls(services, { run: async () => ({ text: '', by: 'x' }), timers });
+  createCalls(services, { voice: fakeVoice(() => '').opener, timers });
   const withPerson = h.chats.create({ agentIds: ['ag_ava', 'ag_ben'], createdBy: HUMAN_ID, lead: 'ag_ava' });
   const agentsOnly = h.chats.create({ agentIds: ['ag_ava', 'ag_lena'], humans: false, createdBy: 'ag_ava' });
   const ctx = (conversationId?: string): ToolContext => ({ agent: ava, runId: 'run_1', mode: 'general', services, signal: new AbortController().signal, status: () => undefined, ...(conversationId ? { conversationId } : {}) });

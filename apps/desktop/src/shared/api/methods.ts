@@ -38,6 +38,8 @@ export interface Methods {
   'events.unsubscribe': { params: { topics: Topic[] }; result: { ok: true } };
   'settings.get': { params: void; result: Settings };
   'settings.update': { params: SettingsPatch; result: Settings };
+  /** 16.11.2026: Settings › Security's change log – who changed the access level or the line for every agent, when, old → new (newest first). */
+  'settings.securityLog': { params: void; result: import('../model/security-log.ts').SecurityChange[] };
   'ui.state': { params: void; result: { drafts: Record<string, string>; secretDrafts?: Record<string, string[]>; draftFiles?: Record<string, Attachment[]>; lastConversationId?: string } };
   'ui.saveDraft': { params: { conversationId: string; text: string; attachments?: Attachment[]; secrets?: string[] }; result: { ok: true } };
   /** Added for the desktop updater (package B): may the app restart now without losing work? */
@@ -130,6 +132,7 @@ export interface Methods {
   /** Gives the task to `to` (as tasks.create); the receiver hears at once, the giver hears how it ends. */
   'tasks.give': { params: { id: string; to: string; note?: string }; result: TaskView };
   /** Ends a task: done (default; a to-do with a widget is answered) or dropped. */
+  'tasks.undo': { params: { id: string; changeId?: string }; result: TaskView }; // 17.11.2026: takes back the latest logged change of a task within 24 hours (the person's "Undo"; tasks/changes.ts)
   'tasks.finish': { params: { id: string; status?: 'done' | 'dropped'; answer?: unknown; note?: string; clientId?: string }; result: TaskView };
   'tasks.reorder': { params: { ids: string[] }; result: { ok: true } };
   'tasks.delete': { params: { id: string }; result: { ok: true } };

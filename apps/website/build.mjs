@@ -34,8 +34,8 @@ const appDir = join(appRoot, ...APP_BASE.split('/').filter(Boolean));
 const outApp = (rel, data) => write(join(appDir, rel), data);
 
 // ── 1. current release facts ──
-async function fetchText(url) {
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 8000);
+async function fetchText(url, ms = 8000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
   try { const r = await fetch(url, { signal: ctl.signal, headers: { 'user-agent': 'autark-site-build' } }); return r.ok ? await r.text() : null; } catch { return null; } finally { clearTimeout(t); }
 }
 async function releaseFacts() {
@@ -85,6 +85,12 @@ async function releaseFacts() {
     const size = y?.match(new RegExp(`url:\\s*${asset.replace(/\./g, '\\.')}[\\s\\S]*?size:\\s*(\\d+)`))?.[1];
     if (v) rel[os] = { version: v, date: d || rel[os].date, sizeMb: size ? Math.round(Number(size) / 1e6) : rel[os].sizeMb };
   }
+  // SHA-256 of every file of the newest release (SHA256SUMS.txt: "<hash>  <file>"), shown on the download pages.
+  let sums = null;
+  for (let attempt = 0; attempt < 3 && !sums; attempt++) sums = await fetchText(release.asset('SHA256SUMS.txt'), 25000); // a missing list would drop the hashes from the pages (18.11.2026: a slow answer did)
+  rel.sums = {};
+  for (const line of (sums || '').split(/\r?\n/)) { const m = /^([0-9a-f]{64})\s+\*?(\S+)\s*$/i.exec(line); if (m) rel.sums[m[2]] = m[1].toLowerCase(); }
+  if (!Object.keys(rel.sums).length) console.warn('WARNING: SHA256SUMS.txt of the newest release could not be read: the pages carry no SHA-256 values. Run again before deploying.');
   return rel;
 }
 
@@ -139,9 +145,12 @@ console.log('app', `${appUrl}/`, '→', appDir);
 // ── 3. stable file links ──
 // /get/<id> (and the old /download/checksums) answer with the newest file: vercel.json redirects them
 // on Vercel; these small pages do the same on any other host.
+// 18.11.2026: no address of this site answers with an installer any more: /get/<id> leads to that platform's page, whose button
+// goes to the release page on GitHub. Only the checksum list, a text file, is still sent as itself.
+const fileTarget = (d) => (d.id === 'checksums' ? release.asset(d.file) : `${site.url}/download/${d.id === 'mac-zip' ? 'mac' : d.id}/`);
 const fileRedirect = (d) => {
-  const target = release.asset(d.file);
-  return `<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Downloading ${site.name} · ${d.os}</title><meta http-equiv="refresh" content="0;url=${target}"><link rel="canonical" href="${site.url}/download/"><p>Your download starts. If not, <a href="${target}">click here</a>.</p><script>location.replace(${JSON.stringify(target)})</script>`;
+  const target = fileTarget(d);
+  return `<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Downloading ${site.name} · ${d.os}</title><meta http-equiv="refresh" content="0;url=${target}"><link rel="canonical" href="${site.url}/download/"><p>Taking you to the page for it. If not, <a href="${target}">click here</a>.</p><script>location.replace(${JSON.stringify(target)})</script>`;
 };
 const byId = Object.fromEntries(downloads.map((d) => [d.id, d]));
 const fileLinks = [...downloads.map((d) => ({ path: d.path, d })), ...legacyFileLinks.map((l) => ({ path: l.path, d: byId[l.id] }))];
@@ -204,7 +213,7 @@ ${platforms.map((p) => `- [${site.name} for ${p.os}](${site.url}/download/${p.id
 
 ## Downloads (always the newest file)
 
-${downloads.map((d) => `- ${d.os}: ${site.url}/${d.path} → ${release.asset(d.file)}`).join('\n')}
+${downloads.map((d) => `- ${d.os}: ${site.url}/${d.path} → ${fileTarget(d)}`).join('\n')}
 - All releases: ${release.releasesUrl}
 
 ## Maker
@@ -243,11 +252,12 @@ await out('facts.json', JSON.stringify({
     iphone: { page: `${site.url}/download/iphone/`, app: `${appUrl}/`, status: 'web app on the Home Screen, shows the user\'s PC interface', minIos: 17, appStore: false, phoneControl: false, connects: 'by the PC Remote ID through the meeting server, end-to-end encrypted' },
   },
   repository: release.repoUrl,
-  downloads: Object.fromEntries(downloads.map((d) => [d.id, { stable: `${site.url}/${d.path}`, direct: release.asset(d.file) }])),
+  downloads: Object.fromEntries(downloads.map((d) => [d.id, { stable: `${site.url}/${d.path}`, page: fileTarget(d) }])),
   engines: { available: ['OpenAI Codex (ChatGPT plan)', 'Claude Code (paid Claude plan)'], early: ['API keys: OpenAI, Anthropic, Google, OpenRouter, DeepInfra, Groq, Mistral, xAI, DeepSeek, Kimi, Qwen, any server speaking a supported protocol', 'Local servers: Ollama, LM Studio, llama.cpp, vLLM', 'Plan CLIs over ACP: Gemini CLI, GitHub Copilot CLI, Kimi Code (never seen in a live run)'] },
   access: { sandbox: false, approvalPrompts: false, permissionGate: false, guardianModel: false, moneyLimit: false, firstQuestion: 'a question in the chat, not a technical barrier', stopAllAgentWork: 'this PC only, holds across a restart' },
   privacy: { dataLocation: 'user\'s own computer', vendorServersHoldData: false, meetingServer: 'run by Teydra Lab, connects devices, end-to-end encrypted, replaceable', analytics: false, appReadsProviderTokens: false },
-  openSource: false,
+  openSource: true,
+  license: 'Apache-2.0',
   statusLabels: STATUS,
   capabilities: allFeatures.map(({ id, title, status, text, groupTitle }) => ({ id, group: groupTitle, title, status, text })),
   faq,
@@ -266,8 +276,8 @@ await outRoot('vercel.json', JSON.stringify({
   cleanUrls: false,
   trailingSlash: true,
   redirects: fileLinks.flatMap(({ path, d }) => [
-    { source: `${BASE}${path}`, destination: release.asset(d.file), permanent: false },
-    { source: `${BASE}${path}/`, destination: release.asset(d.file), permanent: false },
+    { source: `${BASE}${path}`, destination: fileTarget(d), permanent: false },
+    { source: `${BASE}${path}/`, destination: fileTarget(d), permanent: false },
   ]).concat(movedPages.flatMap(({ from, to }) => [
     { source: `${BASE}${from}`, destination: `${BASE}${to}/`, permanent: true },
     { source: `${BASE}${from}/`, destination: `${BASE}${to}/`, permanent: true },

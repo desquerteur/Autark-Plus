@@ -6,7 +6,7 @@
    Owns: .live-bar*. Never: colours outside tokens.css. */
 .live-bar {
   --col-inset: clamp(16px, 5cqi, 24px);
-  display: flex; flex: none; flex-direction: column; box-sizing: border-box; width: min(var(--message-max), 100cqi - 2 * var(--col-inset));
+  display: flex; flex: none; flex-direction: column; box-sizing: border-box; width: min(var(--message-max), calc((100cqi - 2 * var(--col-inset)) / var(--chat-zoom, 1)));
   max-height: calc(4 * 28px + 8px); margin: 0 auto 6px; padding: 4px; overflow-y: auto; scrollbar-gutter: stable;
   border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
 }
@@ -19,7 +19,7 @@
 .live-bar-stop > .stop-run { height: 28px; border-radius: 8px; }
 .live-bar-line:hover { background: var(--hover); color: var(--text); }
 .live-bar-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: avatar-working 1.2s ease-in-out infinite alternate; }
-.live-bar-name { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; }
+.live-bar-name { flex: 0 0 auto; max-width: 40%; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; } /* 17.11.2026 (Mika): never squeezed by a long text – "Theo", not "T." – only past 40% it is cut */
 .live-bar-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .live-bar-text::before { content: '· '; color: var(--muted); }
 .live-bar-time { flex: none; color: var(--muted); font-size: 12px; }

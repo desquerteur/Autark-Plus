@@ -14,6 +14,8 @@
 // its browser (place.ts tabLine).
 // B-081: browser.batch glides by default like browser.act (motion.ts, ≤ 300 ms per pointed step); `instant` jumps in
 // the agent's own browser when it passes it – the person's browser glides whatever is passed.
+// 18.11.2026 (owner: "the AI can always see each human's tabs"): browser.tabs in chat or global also lists what that
+// space holds on the person's other PCs (other-pc-tabs.ts) – a chat's area is what everyone in that chat sees.
 // Owns: schemas, where a call goes, summaries and outputs. Never: puts secret values into outputs.
 
 import type { ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
@@ -34,6 +36,8 @@ import { openInOwnChrome, type OwnChromeOptions } from './own-chrome.ts';
 import { typedText } from '../secrets/handles.ts'; // a stored link (secret://<id>) in browser.open's url
 import { inspectTools } from './inspect-tools.ts';
 import { secretTools } from './secret-tools.ts';
+import { otherPcTabs } from './other-pc-tabs.ts';
+import { GLOBAL_SPACE } from '../../shared/api/workspace-browser.ts';
 
 const ACTIONS: BrowserAction[] = [
   'click', 'double_click', 'right_click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover', 'scroll_into_view', 'upload', 'scroll', 'back', 'forward', 'reload',
@@ -55,6 +59,9 @@ const STEP_PROPS = {
   key: { type: 'string', maxLength: 40, description: 'For press, e.g. Enter, Control+A.' },
   files: { type: 'array', items: { type: 'string', maxLength: 1000 }, minItems: 1, maxItems: 20, description: 'For upload: workspace paths.' },
   amount: { type: 'integer', minimum: -20_000, maximum: 20_000, description: 'Scroll pixels, positive is down.' },
+  // fb_1m7mtty0aszywt5y0 (17.11.2026): a point inside an element – an image CAPTCHA's tile in its iframe, a canvas, a map
+  x: { type: 'number', minimum: 0, maximum: 20_000, description: 'With y: click or hover at this point, CSS px from the top-left of the element (an image tile, a canvas); without an element, in the visible page (the person’s browser).' },
+  y: { type: 'number', minimum: 0, maximum: 20_000 },
   submit: { type: 'boolean', description: 'true when it sends, posts, pays, books or signs in; journaled as an outside effect.' },
 };
 
@@ -71,12 +78,14 @@ const targetOf = (args: BrowserTarget): BrowserTarget | undefined => (hasTarget(
 /** 'click element e3', 'fill field "Email" (stored secret)'. */
 function stepSummary(args: ActArgs): string {
   const secret = args.value && SECRET.test(args.value) ? ' (stored secret)' : '';
-  return `${args.action.replace(/_/g, ' ')} ${describeTarget(targetOf(args))}${args.action === 'press' ? ` ${args.key ?? ''}` : ''}${secret}`.trim();
+  const at = args.x !== undefined && args.y !== undefined ? ` at ${Math.round(args.x)},${Math.round(args.y)}` : '';
+  return `${args.action.replace(/_/g, ' ')} ${describeTarget(targetOf(args))}${at}${args.action === 'press' ? ` ${args.key ?? ''}` : ''}${secret}`.trim();
 }
 
 function ownStep(args: ActArgs): BatchStep {
   const secretId = args.value !== undefined ? SECRET.exec(args.value)?.[1] : undefined;
-  return { action: args.action, target: targetOf(args), ...(secretId ? { secretId } : { value: args.value }), values: args.values, key: args.key, files: args.files, amount: args.amount };
+  const offset = args.x !== undefined && args.y !== undefined ? { offset: { x: args.x, y: args.y } } : {};
+  return { action: args.action, target: targetOf(args), ...(secretId ? { secretId } : { value: args.value }), values: args.values, key: args.key, files: args.files, amount: args.amount, ...offset };
 }
 
 /** Runs steps in either browser and answers like one call (browser.act is one step). */
@@ -279,7 +288,7 @@ export function browserTools(browser: BrowserService, computer?: ComputerService
 
   const tabs = defineTool<{ close?: string; activate?: string; where?: On['where'] }>({
     name: 'browser.tabs',
-    description: 'Lists the open tabs and recent downloads, closes one or switches to one of mine.',
+    description: "Lists the open tabs and recent downloads, closes one or switches to one of mine. In chat and global I also see that space's tabs on the person's other PCs – what the people there have open.",
     inputSchema: { type: 'object', properties: { close: TAB_ID, activate: TAB_ID, where: WHERE_PROP }, additionalProperties: false },
     category: 'read', ...device,
     describe: (args) => ({ summary: args.close ? `Close tab ${args.close}` : 'List browser tabs', reversible: true, external: false }),
@@ -290,7 +299,8 @@ export function browserTools(browser: BrowserService, computer?: ComputerService
         const { space } = sideOn(ctx, place, {});
         const result = await sideCall(ctx, args.close ? { action: 'close', tab: args.close, space } : { action: 'tabs', space });
         const lines = (result.tabs ?? []).map((tab) => `- ${tab.id}${tab.active ? ' (the person looks at it)' : ''} · ${tab.url} · "${tab.title}"${tab.by ? ` · opened by ${tab.by}` : ''}`);
-        return { ...text(lines.length ? lines.join('\n') : 'No open tabs.'), structured: { tabs: result.tabs ?? [] } };
+        const others = args.close ? [] : otherPcTabs(ctx.services, space ?? GLOBAL_SPACE);
+        return { ...text([lines.length ? lines.join('\n') : 'No open tabs.', ...others].join('\n')), structured: { tabs: result.tabs ?? [] } };
       }
       const result = await browser.tabs(ctx.agent.id, { close: args.close, activate: args.activate, use: useOf(ctx) });
       const lines = result.tabs.map((tab) => `- ${tab.tab}${tab.active ? ' (current)' : ''} · ${tab.url} · "${tab.title}"`);

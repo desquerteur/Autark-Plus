@@ -21,7 +21,7 @@ import {
 import { WorkforceError } from '../../shared/errors.ts';
 import { KvRepo } from '../store/kv.ts';
 import { audioType } from './letter.ts';
-import { redactText } from './redact.ts';
+import { redactText } from '../../shared/secrets/redact-text.ts';
 import { sealReport } from './seal.ts';
 import { dropSealed, NOT_SET_UP } from './drop.ts';
 import type { ReceiverConfig } from './receiver.ts';

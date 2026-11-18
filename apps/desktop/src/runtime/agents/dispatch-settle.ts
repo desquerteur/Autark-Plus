@@ -14,6 +14,7 @@
 //   B-057: a split lane is released the same way – its run closed and its cut calls marked, no bubble, groups or task –
 //   and its lane frees; the split service hears the person's Stop then (dispatch-runs.ts release → split-turn.ts
 //   turnEndedEarly), a shutdown's cut only from the hung turn's own late end (no second turn on its session meanwhile).
+// KI-Runde 17.11.2026: a context fold's turn (reason 'fold') never gets a failed bubble – its chat is only where it shows.
 // Owns: those settle steps, each best effort. Never: re-runs a turn, decides a split's lifecycle (the split service
 // does), or decides what runs next.
 
@@ -84,7 +85,7 @@ function markCut(services: RuntimeServices, runId: string): void {
 
 /** #17: the crashed turn's failed bubble with Retry at the end of its chat (13.11.2026: a run has no row there to end). */
 function failedBubble(services: RuntimeServices, entry: RunEntry): void {
-  if (!entry.conversationId || entry.split || entry.control.stopKind) return;
+  if (!entry.conversationId || entry.split || entry.reason === 'fold' || entry.control.stopKind) return; // a context fold's turn posts nothing (its chat is only where it shows)
   try {
     services.chats.postAgentMessage(entry.conversationId, entry.agentId, entry.runId, { body: '', state: 'failed', meta: { error: CRASH_NOTE } });
   } catch (error) {

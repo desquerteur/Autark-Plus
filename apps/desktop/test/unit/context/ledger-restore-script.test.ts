@@ -78,18 +78,16 @@ test('a script that printed much more than its restore keeps its output (the res
   } finally { h.cleanup(); }
 });
 
-test('a restore alone rebuilds nothing; the next mark of the subconscious brings it along and counts in full (q-r2d s15)', async () => {
+test('a restore and its condensed result about balance; a mark after it counts in full (q-r2d s15)', async () => {
   const h = ledgerSetup();
   try {
     await fileThenThree(h);
     await restoreInScript(h);
     const alone = h.ledger.needsRebuild(h.tom.id, 'main')!;
-    assert.equal(alone.marked, false, 'a restore moves its item back; it takes nothing off');
     assert.ok(Math.abs(alone.saves) < 500, `the restore and its condensed result about balance: ${alone.saves}`);
     h.ledger.mark(h.tom.id, 'main', [{ itemId: 't2', state: 'hidden', reason: 'asked run', by: 'subconscious' }]);
     const withHide = h.ledger.needsRebuild(h.tom.id, 'main')!;
-    assert.equal(withHide.marked, true);
-    assert.ok(withHide.saves > 0, `a small hide after a restore is worth a rebuild: ${withHide.saves}`);
+    assert.ok(withHide.saves > 0, `a small hide after a restore takes something off: ${withHide.saves}`);
   } finally { h.cleanup(); }
 });
 

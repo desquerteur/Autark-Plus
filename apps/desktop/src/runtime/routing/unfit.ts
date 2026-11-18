@@ -1,7 +1,8 @@
 // Routing limits shared by router.ts and model-list.ts (moved out of router.ts unchanged, RT4):
 // the error that says why no model fits a turn (no model, a missing capability, "never" priors, the policy band,
 // or every account limited – with the earliest moment one is back; D8 (B-080): "paused" while they only cool for a few
-// minutes after a provider error), and D1 (B-083): why a model I named cannot run now – the lead of my route's reason.
+// minutes after a provider error), and D1 (B-083): why a model I named – or the one my live session is on (cannotRun,
+// 17.11.2026) – cannot run now: the lead of my route's reason.
 // F28/F02 (16.11.2026): when every fitting account is out, the reason names the accounts – which is used up or paused
 // until when, which is signed out, failing or switched off ("Codex used up until 18 Nov 08:26 · Claude Code, Claude Code 2,
 // Claude Code 3 switched off"); the fixed sentence read as wrong while plans with quota left were switched off.
@@ -144,15 +145,24 @@ export function askedMiss(input: AskedInput): string {
   return `asked for ${input.named?.name ?? input.request.previous?.modelId ?? 'a model'} – ${missWhy(input)}`;
 }
 
-interface AskedInput { s: RuntimeServices; request: RouteRequest; pool: Pool; named?: ModelInfo; category: string; now: number }
+/**
+ * 17.11.2026 (the model settles): "<name> cannot run now – <why>", the lead of the reason of a route that leaves the model
+ * its live session is on – the one thing besides my own model.set with now that moves a model there. The mode's tier is a
+ * wish for a new start, never a reason to leave (`settled`).
+ */
+export function cannotRun(input: AskedInput): string {
+  return `${input.named?.name ?? 'my model'} cannot run now – ${missWhy({ ...input, settled: true })}`;
+}
 
-function missWhy({ s, request, pool, named, category, now }: AskedInput): string {
+interface AskedInput { s: RuntimeServices; request: RouteRequest; pool: Pool; named?: ModelInfo; category: string; now: number; settled?: boolean }
+
+function missWhy({ s, request, pool, named, category, now, settled }: AskedInput): string {
   if (!named || !named.available) return 'no account of it is connected';
   const exclude = new Set(request.exclude ?? []);
   if (exclude.has(named.id) || named.accounts.some((id) => exclude.has(id))) return 'it just failed in this turn';
   const why = pool.unusable(named) ?? (pool.inBand(named) ? undefined : 'policy');
   if (why) return pinProblem(why, category);
-  if (!pool.tiered.some((model) => model.id === named.id)) return 'below the tier this mode asks for';
+  if (!settled && !pool.tiered.some((model) => model.id === named.id)) return 'below the tier this mode asks for';
   if (pool.accountsFor(named).length) return 'only a pay-per-use key runs it';
   const back = backAt(s, [named], now);
   const when = back.until !== undefined ? ` (${pausedOnly(back, now) ? 'paused' : 'limited'} until ${stampText(back.until, profileZone(s), now)})` : '';

@@ -161,6 +161,12 @@ declare module '../api/methods.ts' {
     'calls.decline': { params: { callId: string }; result: { ok: true } };
     /** B-081: the ringing and running calls (also pushed as the event calls.live on topic chats). */
     'calls.live': { params: void; result: { calls: LiveCall[] } };
+    /**
+     * One call turn as the device measured it (ui/chat/call/turn-meter.ts), in ms after the end of the person's speech:
+     * heard, the answer's first word, the answer handed to the reading voice; who heard it (voice.transcribe's `by`) and who
+     * answered (the talker, the agent's turn or the program's own line, with the model). Written as one log line.
+     */
+    'calls.turn': { params: { callId: string; heardMs: number; answerMs: number; speakMs: number; heardBy: string; answeredBy: 'talker' | 'turn' | 'program'; model?: string }; result: { ok: true } };
     /** Opens a realtime voice session for this device in a chat (only with a connected realtime model); B-081: a callId takes that call. */
     'calls.realtimeOpen': { params: { conversationId: string; callId?: string }; result: { sessionId: string; model: string; agentId: string } };
     /** Microphone audio: base64 PCM16 LE mono 24 kHz. */

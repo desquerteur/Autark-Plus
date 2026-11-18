@@ -35,7 +35,6 @@ export const vectorEmbed: ToolDef = defineTool<{ paths: string[] }>({
     required: ['paths'], additionalProperties: false,
   },
   category: 'read',
-  anyMode: true,
   requires: 'embeddings',
   describe: (args) => ({ summary: `Embed ${clip(args.paths.join(', '), 120)}`, resource: args.paths[0], reversible: true, external: false }),
   async run(args, ctx) {

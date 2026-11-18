@@ -25,7 +25,7 @@
 // a raw call line, so heldBack does not apply – goes into the running turn as it is (steerRelay); 'next' only
 // on an engine whose steered text waits for the turn's next model request (LANDS_AT_NEXT_REQUEST; B-080: Claude Code
 // too – a stdin line without priority is queued "next" and folded in between tool calls, live 07.11.2026 23:41). It moves no
-// cursor: the call lines it speaks of reach the next turn's delta as usual.
+// cursor: the call lines it speaks of reach the next turn's delta as usual. Its text is journaled, so it stands in my record.
 // 07.11.2026 (owner: a normal line reaches the agent at its next step, from any chat): steerOther folds the unseen lines of
 // ANOTHER chat into the agent's running main turn – 13.11.2026: one context, so they come as plain new lines (each names its
 // chat). Its cursor is per chat in control.others, from the agent's read cursor there – which the fold never moves; the
@@ -341,6 +341,7 @@ export async function steerRelay(
     services.log.info('relay steer failed', { agentId: run.agentId, error: String(error) });
   }
   if (!ok || !stillRunning()) return false;
-  try { services.runs.item(run.runId, { kind: 'note', data: { relayed: { mode, chars: text.length } }, effectStatus: 'none' }); } catch { /* audit is best effort */ }
+  // journaled with its text: the ledger keeps it in my record, so a failover, rebuild or fold still has it (context/ledger/capture.ts)
+  try { services.runs.item(run.runId, { kind: 'note', data: { relayed: { mode, chars: text.length }, text }, effectStatus: 'none' }); } catch { /* audit is best effort */ }
   return true;
 }

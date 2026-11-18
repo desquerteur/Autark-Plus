@@ -1,7 +1,7 @@
 // B-058: speech to text through a listening model – the last way the transcription service (transcribe.ts)
 // turns a take into text, for dictation and agents hearing recordings alike, when this PC's own model cannot
 // hear it (none downloaded, refused, failed to load) and no transcription service is connected. One one-shot
-// turn of decision/engine-runner.ts createListener (a model that hears audio through the compatible chat
+// turn of decision/listener.ts createListener (a model that hears audio through the compatible chat
 // adapter's input_audio: WAV or MP3 up to AUDIO_INPUT_BYTES). Only free and plan accounts listen here
 // (allowPaid false): nobody judged a price, so createListener keeps pay-per-use accounts out and refuses a
 // routed one before anything is sent – the spend rule of media.listen. The prompt asks for the words as
@@ -14,7 +14,7 @@
 import type { RuntimeServices } from '../contracts.ts';
 import type { FileRef } from '../../shared/model/system.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { createListener, listenOptions, type Listener } from '../decision/engine-runner.ts';
+import { createListener, listenOptions, type Listener } from '../decision/listener.ts';
 import { AUDIO_INPUT_BYTES, audioFormat } from '../engines/http/base.ts';
 import { LISTENER_MARK_RULES } from '../../shared/voice/marks.ts';
 

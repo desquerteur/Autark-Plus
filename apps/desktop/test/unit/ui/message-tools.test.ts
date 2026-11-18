@@ -49,7 +49,7 @@ test('the menu: Copy uses the selection read when it opens; Select text only on 
   const actions = read('src/ui/chat/MessageActions.tsx');
   assert.match(actions, /const selected = menuSelection\(open\);[^\n]*\n\s*if \(message\.body && message\.state !== 'streaming'\) items\.push\(\{ label: 'Copy', onSelect: \(\) => void copy\(copyText\(message\.body, selected\)\) \}\);/);
   assert.match(actions, /if \(open\.touch && copyable\(message\)\) items\.push\(\{ label: 'Select text', onSelect: actions\.selectText \}\);/);
-  assert.match(read('src/ui/chat/MessageItem.tsx'), /useContextMenu\(\(open\) => messageMenu\(message, open, \{ edit: \(\) => setEditing\(true\), selectText: \(\) => setSelecting\(true\) \}\)\)/);
+  assert.match(read('src/ui/chat/MessageItem.tsx'), /const build = \(open: MenuOpen\) => messageMenu\(message, open, \{ edit: \(\) => setEditing\(true\), selectText: \(\) => setSelecting\(true\) \}\);\s*const menu = useContextMenu\(build, \{ touchByButton: true \}\);/, '17.11.2026: a finger selects natively, the menu is the More button');
   const menu = read('src/ui/lib/context-menu.tsx');
   assert.match(menu, /if \(touch\.current\) dropTouchSelection\(\);\s*openContextMenu\(x, y, build\(\{ touch: touch\.current, at \}\), container\);/, 'a touch open drops the browser\'s one-word pick: one menu');
   assert.match(menu, /touch\.current = event\.pointerType === 'touch';/);
@@ -71,9 +71,9 @@ test('the meta row: Copy and Reply on finished text messages only, after the tim
   assert.match(actions, /<IconButton icon="copy" label="Copy" size="small" iconSize=\{14\} class="message-tool" onClick=\{\(\) => void copy\(message\.body\)\} \/>/);
   assert.match(actions, /\{canReply\(message\) && <IconButton icon="arrow-bend-up-left" label="Reply" [^>]*class="message-tool" onClick=\{\(\) => \{ reply\(message\); \}\} \/>\}/);
   const item = read('src/ui/chat/MessageItem.tsx');
-  assert.match(item, /<div class="message-actions">\s*\{props\.own && <MessageTools message=\{message\} \/>\}/, 'own bubble: before the markers, the time keeps the edge');
-  assert.match(item, /imported<\/span>\}\s*\{!props\.own && <MessageTools message=\{message\} \/>\}\s*<\/div>/, 'others: after the time');
-  assert.match(item, /<Actions message=\{message\} own=\{human\} \/>/);
+  assert.match(item, /<div class="message-actions">\s*\{props\.own && <MessageTools message=\{message\} menu=\{props\.menu\} \/>\}/, 'own bubble: before the markers, the time keeps the edge');
+  assert.match(item, /imported<\/span>\}\s*\{!props\.own && <MessageTools message=\{message\} menu=\{props\.menu\} \/>\}\s*<\/div>/, 'others: after the time');
+  assert.match(item, /<Actions message=\{message\} own=\{human\} menu=\{build\} \/>/);
 });
 
 test('the tools never move anything: always rendered, opacity only, 24 px inside the 26 px row, always seen on touch', () => {

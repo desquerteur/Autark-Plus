@@ -96,6 +96,13 @@ export function signInHint(provider: ProviderId | undefined, away = false): stri
 }
 
 /** The plan CLIs the PC scan looks for, in the order the model setup lists them. */
+/** 17.11.2026 (Mika): a plan's tier as the person knows it – "Max plan", "Pro plan"; a tier not listed stays as the provider wrote it. */
+const PLAN_NAMES: Record<string, string> = { max: 'Max plan', pro: 'Pro plan', plus: 'Plus plan', team: 'Team plan', business: 'Business plan', enterprise: 'Enterprise plan', free: 'Free plan', api: 'API key' };
+export function planLabel(plan: string | undefined): string | undefined {
+  const value = plan?.trim();
+  return value ? PLAN_NAMES[value.toLowerCase()] ?? value : undefined;
+}
+
 export const PC_CLIS: ReadonlyArray<DetectionReport['clis'][number]['provider']> = ['claude', 'codex', 'kimi-cli', 'gemini-cli', 'copilot'];
 
 export interface CliRowView {

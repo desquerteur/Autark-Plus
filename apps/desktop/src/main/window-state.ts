@@ -16,7 +16,8 @@ export interface WindowState {
   theme?: ThemePreference;
 }
 
-export const MIN_WIDTH = 640;
+/** 17.11.2026 (Theo, portrait videos): narrow enough for the phone layout (below 720 px) at a 1080×1920 recording. */
+export const MIN_WIDTH = 400;
 export const MIN_HEIGHT = 480;
 export const DEFAULT_WIDTH = 1180;
 export const DEFAULT_HEIGHT = 800;

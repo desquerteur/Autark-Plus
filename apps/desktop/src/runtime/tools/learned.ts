@@ -1,11 +1,10 @@
-// Learned from use: a tool an agent ran successfully through tools.call joins its direct tools at its next fresh native
-// session (agents/turn-prepare.ts promotes after the session choice), never mid-session, so a resumed session keeps
-// the offer and prompt key it started with. Per agent (one context per agent), so a promotion for one engine's fresh
-// session renews another engine's session at its next turn.
+// Learned from use: a tool an agent ran successfully through tools.call joins its direct tools whenever its session
+// starts anew – a fresh one or a rebuilt one (agents/turn-prepare.ts promotes there), never mid-session, so a resumed
+// session keeps the offer and prompt key it started with. Per agent (one context per agent).
 // State: kv ns 'tools.learned', key `<agentId>`, value { core, used }: `core` is offered with the core set (at most
 // MAX_LEARNED, the newest kept), `used` ran through tools.call since the last promotion (at most MAX_USED).
 // Also the engine offer the turn (agents/session-key.ts), the MCP hub and the prompt's tool list use (engineOffer).
-// Owns: that state, its bounds, the promotion and the engine offer. Never: offers a tool the mode does not allow.
+// Owns: that state, its bounds, the promotion and the engine offer. Never: offers a tool that cannot work here.
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
@@ -41,7 +40,7 @@ export function noteLearned(services: Pick<RuntimeServices, 'db' | 'clock'>, age
   } catch { /* learning is an optimisation: the tool stays reachable through tools.call */ }
 }
 
-/** Moves `used` into `core` (newest kept); true when the learned list changed. Called only where a fresh session starts. */
+/** Moves `used` into `core` (newest kept); true when the learned list changed. Called where a session starts anew. */
 export function promoteLearned(services: Pick<RuntimeServices, 'db' | 'clock'>, agentId: string): boolean {
   try {
     const db = services.db;

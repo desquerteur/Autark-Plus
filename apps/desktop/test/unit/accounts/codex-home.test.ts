@@ -57,6 +57,7 @@ test('a Codex login found in the default home runs on a copy in a home of its ow
     writeFileSync(path.join(f.codex, 'auth.json'), auth('r1', '2026-11-10T00:00:00Z'));
     const h = harness({ accounts: f.accounts, homeDir: f.user });
     await h.service.detect();
+    await h.service.useFound('codex:default'); // 17.11.2026: found, then used after the person's "Use"
     await h.settle();
     const codex = h.service.list().find((account) => account.provider === 'codex')!;
     assert.equal(codex.home, path.join(f.accounts, 'codex', codex.id));
@@ -92,6 +93,7 @@ test('a signed-out copy takes the default home\'s newer login before it counts a
     writeFileSync(path.join(f.codex, 'auth.json'), auth('r1', '2026-11-10T00:00:00Z'));
     const h = harness({ accounts: f.accounts, homeDir: f.user });
     await h.service.detect();
+    await h.service.useFound('codex:default'); // 17.11.2026: found, then used after the person's "Use"
     await h.settle();
     const codex = h.service.list().find((account) => account.provider === 'codex')!;
 

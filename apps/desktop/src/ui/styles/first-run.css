@@ -25,6 +25,8 @@
 .first-run-rows > .set-row:last-child { border-bottom: 0; }
 .first-run-rows .set-row-text { flex-basis: 160px; }
 .first-run-rows .set-row-control { flex-wrap: nowrap; }
+/* the first run only connects a plan: the extra-usage and "all PCs" switches and "Remove" (Settings › Models, 17.11.2026) stay out of this card, so its rows keep their height */
+.first-run-rows .account-extra, .first-run-rows .account-share, .first-run-rows .account-foot { display: none; }
 
 /* The "Open sign-in page" / "Get a key" link cell (onboarding/sign-in-link.tsx, settings/account-forms.tsx): the link, or an inert
    placeholder of the same text and size */
@@ -65,6 +67,7 @@
 .first-run-access-row.chosen { border-color: var(--text); color: var(--text); }
 .first-run-access-row > input { flex: none; margin: 3px 0 0; }
 .first-run-access-title { color: var(--text); font-weight: 600; }
+.first-run-share { margin-top: 8px; } /* 17.11.2026: the public-library tick under the access rows (AboutCard.tsx) */
 
 @media (max-width: 640px) {
   .first-run-card { padding: 16px; }

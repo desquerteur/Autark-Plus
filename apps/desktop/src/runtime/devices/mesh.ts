@@ -15,8 +15,9 @@
 // on the larger id too, at 5 s – the smaller id's own 1 s dial normally comes first and its link cancels it. A dial
 // leaves out this PC's own addresses; the smaller id's link survives one dial of the other PC in the race window (a second
 // shows that PC does not hold it); a PC already offline stays 'offline' while redialed.
-// Addresses: when a link comes up, and whenever this PC's own addresses change, each PC sends its addresses
-// (`device.addresses`); the receiver keeps that list plus one older address. Link kinds (sync/home.ts): a PC that joined
+// Addresses: when a link comes up, and whenever this PC's own addresses or caps change, each PC sends its addresses and
+// caps (`device.addresses`); the receiver keeps that address list plus one older address, and the caps as sent (so a
+// phone that attaches to one PC shows in every PC's prompt, phone/linked.ts). Link kinds (sync/home.ts): a PC that joined
 // as an employee (`personId`) reaches only methods registered for 'employee' (ping, caps, addresses, sync.rows – only its
 // person's own lines and task changes, sync/employee.ts – and what any module opens with `register(m, h, kinds)`, e.g.
 // device.sibling, calendar.ask); my own PCs and an employer reach every other method.
@@ -89,7 +90,8 @@ export class DeviceMesh implements DeviceService {
   private unreachable = new Set<string>();
   private handlers = new Map<string, { handler: PeerHandler; kinds: ReadonlySet<LinkKind> }>();
   private meeting?: MeshMeeting;
-  private ownAddresses = '';
+  /** The addresses and caps this PC last sent its links (a change goes out, sendAddresses). */
+  private ownState = '';
   private closed = false;
 
   constructor(deps: MeshDeps) {
@@ -171,7 +173,7 @@ export class DeviceMesh implements DeviceService {
     return this.view(record);
   }
 
-  /** Updates this device's advertised addresses/caps/name; new addresses go to every online PC. */
+  /** Updates this device's advertised addresses/caps/name; new addresses and caps go to every online PC. */
   updateSelf(patch: { addresses?: string[]; caps?: DeviceCaps; name?: string }): Device {
     const current = this.repo.get(this.deps.identity.deviceId)!;
     const next = this.repo.patch(current.id, {
@@ -180,9 +182,9 @@ export class DeviceMesh implements DeviceService {
       name: patch.name ?? current.name,
     })!;
     this.deps.bus.emit('device.upserted', publicDevice(next));
-    const own = JSON.stringify(next.addresses);
-    if (own !== this.ownAddresses) {
-      this.ownAddresses = own;
+    const own = JSON.stringify([next.addresses, next.caps]);
+    if (own !== this.ownState) {
+      this.ownState = own;
       for (const id of this.links.keys()) if (this.online(id)) this.sendAddresses(id);
     }
     return publicDevice(next);
@@ -246,11 +248,11 @@ export class DeviceMesh implements DeviceService {
   // ---------------------------------------------------------------- connections
 
   /** Server side of `/peer` (the HTTP server, the peer listener or a meeting-server tunnel); undefined: the other link stays (race). */
-  async accept(socket: SocketLike): Promise<string | undefined> {
+  async accept(socket: SocketLike, expect?: string): Promise<string | undefined> { // expect: only this PC (pc-rtc.ts)
     const channel = await acceptSecure(socket, this.signer(), (peerPub) => {
       const record = this.repo.byFingerprint(fingerprintOf(peerPub));
-      return record && this.linkable(record) && record.publicKey === b64url(peerPub) ? record.id : undefined;
-    });
+      return record && this.linkable(record) && record.publicKey === b64url(peerPub) && (!expect || record.fingerprint === expect) ? record.id : undefined;
+    }); (socket as { trusted?: () => void }).trusted?.(); // a data channel (rtc-socket.ts) lifts its pre-handshake caps
     const peer = this.peerOf(channel.peerId, channel);
     return this.attach(channel.peerId, peer, channel.peerId) === peer ? channel.peerId : undefined;
   }
@@ -295,7 +297,7 @@ export class DeviceMesh implements DeviceService {
 
   /**
    * Direct first: every stored and meeting-seen address is opened at once and the first socket that
-   * opens runs the handshake; else a tunnel through the meeting server. `refused`: a socket opened and
+   * opens runs the handshake; else WebRTC agreed on through the meeting server; else a tunnel through it. `refused`: a socket opened and
    * the other PC closed it before answering the handshake – it does not accept this PC.
    */
   private async dial(record: DeviceRecord): Promise<RpcPeer> {
@@ -306,7 +308,7 @@ export class DeviceMesh implements DeviceService {
     const direct = [...new Set([...record.addresses, ...(this.meeting?.addresses(record) ?? [])])].filter((address) => validAddress(address) && !own.has(originOf(address)));
     const routes: Array<() => Promise<SocketLike>> = [];
     if (direct.length) routes.push(() => firstOpen(direct.map((address) => () => this.deps.dial(address))));
-    routes.push(() => this.meeting?.tunnel(record) ?? Promise.reject(new Error('not at the meeting server')));
+    routes.push(() => this.meeting?.rtc?.(record) ?? Promise.reject(new Error('no direct path')), () => this.meeting?.tunnel(record) ?? Promise.reject(new Error('not at the meeting server')));
     const live = () => { const link = this.links.get(deviceId); return link && !link.peer.channel.closed ? link.peer : undefined; };
     const result = await openChannel(routes, this.signer(), record.fingerprint, () => Boolean(live()));
     if ('stale' in result) {
@@ -386,21 +388,25 @@ export class DeviceMesh implements DeviceService {
     return peer;
   }
 
-  /** `device.addresses` from an authenticated linked PC: its own list becomes the truth (plus one older one). */
+  /** `device.addresses` from an authenticated linked PC: its own list becomes the truth (plus one older one), and its
+   *  caps as it sends them now (an older PC sends none: the ones it answered at link-up stay). */
   private received(params: unknown, from: string): { ok: true } {
-    const list = (params as { addresses?: unknown })?.addresses;
-    const addresses = Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string' && validAddress(item)).slice(0, MAX_ADDRESSES) : [];
+    const sent = (params ?? {}) as { addresses?: unknown; caps?: unknown };
+    const addresses = Array.isArray(sent.addresses) ? sent.addresses.filter((item): item is string => typeof item === 'string' && validAddress(item)).slice(0, MAX_ADDRESSES) : [];
     const record = this.repo.get(from);
     if (!record || !this.linkable(record)) return { ok: true };
     const next = mergeAddresses(addresses, record.addresses);
     if (JSON.stringify(next) !== JSON.stringify(record.addresses)) this.repo.patch(from, { addresses: next });
+    const caps = sent.caps && typeof sent.caps === 'object' && !Array.isArray(sent.caps) ? (sent.caps as DeviceCaps) : undefined;
+    if (caps && JSON.stringify(caps) !== JSON.stringify(record.caps)) { this.repo.patch(from, { caps }); this.emit(from); }
     return { ok: true };
   }
 
   private sendAddresses(deviceId: string): void {
     const addresses = this.selfInfo().addresses;
+    const caps = this.self().caps; // with them, so a phone that attaches here shows on that PC too (phone/linked.ts)
     const peer = this.links.get(deviceId)?.peer;
-    void peer?.call(ADDRESSES_METHOD, { addresses }, { timeoutMs: 10_000 }).catch(() => undefined);
+    void peer?.call(ADDRESSES_METHOD, { addresses, caps }, { timeoutMs: 10_000 }).catch(() => undefined);
   }
 
   /** A linked PC this mesh connects to: not revoked, not this PC. */
@@ -425,14 +431,9 @@ export class DeviceMesh implements DeviceService {
     if (this.repo.patch(deviceId, { status, lastSeenAt: this.deps.clock.now() })) this.emit(deviceId);
   }
 
-  private emit(deviceId: string): void {
-    const record = this.repo.get(deviceId);
-    if (record) this.deps.bus.emit('device.upserted', this.view(record));
-  }
+  private emit(deviceId: string): void { const record = this.repo.get(deviceId); if (record) this.deps.bus.emit('device.upserted', this.view(record)); }
 
-  private view(record: DeviceRecord): Device {
-    return publicDevice({ ...record, status: this.statusOf(record) });
-  }
+  private view(record: DeviceRecord): Device { return publicDevice({ ...record, status: this.statusOf(record) }); }
 
   private statusOf(record: DeviceRecord): Device['status'] {
     if (record.revokedAt) return 'revoked';
@@ -442,8 +443,5 @@ export class DeviceMesh implements DeviceService {
     return this.unreachable.has(record.id) ? 'offline' : 'connecting'; // B-087: offline while redialed, no flip per retry
   }
 
-  private signer() {
-    const identity = this.deps.identity;
-    return { deviceId: identity.deviceId, publicKey: identity.publicKey, sign: (data: Uint8Array) => identity.sign(data) };
-  }
+  private signer() { const id = this.deps.identity; return { deviceId: id.deviceId, publicKey: id.publicKey, sign: (data: Uint8Array) => id.sign(data) }; }
 }

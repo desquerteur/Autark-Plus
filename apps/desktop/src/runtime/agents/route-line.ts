@@ -1,9 +1,11 @@
 // The quiet switch line of one turn (RT5; B-083: with the agent's name and the turn's temperature), for agents/turn.ts announceSwitch.
-// 14.11.2026 (Unterbewusstsein v1 routes nearly every turn; owner: a stable UI where nothing shifts, the status in the status line): the
-// chat gets a line for a switch someone asked for – my own request (model.set, or my task's from its delegator: a route by request
-// without my subconscious's why), my own temperature, or the start model set since the chat's last turn began (ModelPolicy.pinBy.at)
-// that this turn runs on. A switch routing made – my subconscious's call before the turn, the router's rules, the return after a
-// request – leaves no line: the live bar shows what the turn runs on (ui/chat/LiveBar.tsx: model · effort · temperature) and the
+// 17.11.2026 (the model settles): a turn on another model than my last one is rare now – a boundary, a model that cannot
+// run, my own model.set with now – and each one gets its line with the route's own why ("requested by me", "my start
+// model", "executing runs on the strong tier's best value", "<model> cannot run now – …"). An effort alone moves on any
+// turn; the chat gets a line for one somebody asked for – my own model.set, my task's from its giver, or the fixed effort
+// set with a start model since my last turn began (ModelPolicy.pinBy.at) – and for my own temperature. The effort my
+// subconscious sets before a turn and the lift a person's line gives it leave no line (owner 14.11.2026: a stable UI where
+// nothing shifts): the live bar shows what the turn runs on (ui/chat/LiveBar.tsx: model · effort · temperature) and the
 // run's route says why (the agent's log, ui/team/AgentLog.tsx).
 //   "<Agent> → <model> · <effort>[ · temperature T] – <why>" (switch-line.ts)
 // postRunLine posts one quiet line of a run in its chat (the agent's own, meta.fromRun) – turn.ts, and turn-attempt.ts for
@@ -19,19 +21,19 @@ import { REQUESTED_WHY, reasonParts, subconsciousWhy, switchText, switchWhy } fr
 
 export interface RouteLine { text: string; details: Record<string, unknown> }
 
-/** What the chat's last turn ran on (turn.ts switchedFrom; B-083: with its temperature), and when it began. */
+/** What my last done turn ran on (turn.ts switchedFrom; B-083: with its temperature), and when it began. */
 export interface SwitchFrom { modelId: string; effort: Effort; temperature?: number; at?: number }
 
 /** Whose line it is, how the turn's temperature reaches its model (sent), whether that temperature is my own request, and when my start model was set (ModelPolicy.pinBy.at). */
 export interface LineOf { agent: string; sent?: boolean; ownTemperature?: boolean; pinAt?: number }
 
-/** The line of this route when it is a switch someone asked for; `from` = what the chat's last turn ran on (none: a first turn, no switch). */
+/** The line of this route when its model differs from my last turn's, or its effort does because somebody asked; `from` = what my last turn ran on (none: a first turn, no line). */
 export function routeLine(route: RouteDecision, modelName: string, from: SwitchFrom | undefined, of: LineOf): RouteLine | undefined {
   if (!from) return undefined;
-  const moved = from.modelId !== route.modelId || from.effort !== route.effort;
-  const mine = route.by === BY_REQUEST && !subconsciousWhy(route.reason);
+  const model = from.modelId !== route.modelId;
+  const mine = route.by === BY_REQUEST && !subconsciousWhy(route.reason); // my own model.set or my task's
   const started = of.pinAt !== undefined && from.at !== undefined && of.pinAt > from.at && reasonParts(route.reason).includes(PIN_TEXT.agent);
-  const asked = moved && (mine || started);
+  const asked = model || (from.effort !== route.effort && (mine || started));
   const warmth = of.ownTemperature === true && from.temperature !== route.temperature;
   if (!asked && !warmth) return undefined;
   const to = { modelName, effort: route.effort, temperature: route.temperature, sent: of.sent };

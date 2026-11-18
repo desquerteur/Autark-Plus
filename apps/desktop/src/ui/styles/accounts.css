@@ -19,11 +19,37 @@
 .set-row .account-slot > .button.button { width: 100%; min-height: 0; height: 30px; padding-block: 0; white-space: nowrap; }
 /* B-083: an API key's "Plan credits" switch – its quiet name and the switch on one line, the switch at the slot's right edge */
 .account-credits { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; width: 100%; color: var(--secondary); font-size: 12px; white-space: nowrap; cursor: pointer; }
+/* 17.11.2026 (Konrad task_bgykyzcx): the row's On/Off switch right of the slot, always in view (the right-click menu keeps Disable / Enable) */
+.account-power { display: inline-flex; flex: none; align-items: center; justify-content: flex-end; gap: 6px; min-width: 52px; color: var(--secondary); font-size: 12px; white-space: nowrap; cursor: pointer; }
+/* a plan's "When the plan is empty: use extra usage" switch and its cost line under the bars; where the plan has none the switch is off and the line says why */
+.account-extra { display: grid; gap: 2px; margin-top: 8px; max-width: 460px; }
+.account-extra-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--secondary); font-size: 12px; line-height: 18px; cursor: pointer; }
+.account-extra[data-possible=false] .account-extra-switch { cursor: default; }
+.account-extra-hint { color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; text-wrap: wrap; }
+/* a plan login's "On all PCs of this company" switch (Account.thisPcOnly) and its line – the same look as the extra-usage switch */
+.account-share { display: grid; gap: 2px; margin-top: 8px; max-width: 460px; }
+.account-share-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--secondary); font-size: 12px; line-height: 18px; cursor: pointer; }
+.account-share-hint { color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; text-wrap: wrap; }
+/* before a plan's first limit reading: no empty bars (they would read as used up), one quiet line */
+.account-limit-pending { color: var(--muted); font-size: 12px; line-height: 18px; }
+/* the visible "Remove from this company": a quiet text button under the row's lines, in view without a right-click */
+.account-foot { display: flex; justify-content: flex-start; margin-top: 6px; }
+.set-row .account-foot > .button.account-remove { height: 28px; min-height: 0; margin-left: -13px; padding-block: 0; color: var(--secondary); font-size: 12px; }
+.set-row .account-foot > .button.account-remove:hover:not(:disabled) { color: var(--danger); }
+@media (pointer: coarse) { .set-row .account-foot > .button.account-remove { min-height: 44px; } }
+/* a plan login on offer (ModelSetup FoundRow): the two choices side by side in the control column */
+.found-actions { display: inline-flex; flex: none; align-items: center; justify-content: flex-end; gap: 8px; }
+.set-row.found-row .set-row-label { font-weight: 500; }
+/* the decision is made: a declined login is a quiet line, not an open question */
+.set-row.found-row.declined .set-row-label { color: var(--secondary); font-weight: 400; }
 /* the slot sits on the label's line (not centred on label, hint and bars) */
 .set-row.account-row { align-items: flex-start; }
 .set-row.account-row > .set-row-control { flex-wrap: nowrap; height: calc(14px * 1.4); }
 @container (max-width: 460px) {
   .set-row.account-row > .set-row-control { height: auto; justify-content: flex-end; }
+  /* a phone (Mika 17.11.2026): the On/Off switch stays up beside the name – an empty slot gives its width back, the control no longer drops under the text */
+  .set-row.account-row:not(.stack) > .set-row-control { flex: 0 0 auto; margin-left: auto; }
+  .set-row.account-row .account-slot:empty { display: none; }
 }
 
 /* ---------------------------------------------------------------- the four buttons and the inline forms */

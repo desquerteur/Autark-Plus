@@ -152,11 +152,41 @@ export function deviceHint(device: Device, personName: (id: string) => string | 
 
 /** F29: "Direct · 12.4 MB direct, 310 KB via the meeting server today" – a phone's way to this PC now and its bytes. */
 export function phoneLinkHint(link: PhoneLink, now: number, clock: (at: number) => string): string {
-  const way = link.via === 'direct' ? 'Direct' : link.via === 'relay' ? 'Via the meeting server' : 'Not connected';
+  const way = link.via === 'direct' || link.via === 'rtc' ? 'Direct' : link.via === 'relay' ? 'Via the meeting server' : 'Not connected'; // F25: WebRTC is direct too
   const midnight = new Date(now).setHours(0, 0, 0, 0);
   const period = link.since <= midnight ? 'today' : `since ${clock(link.since)}`;
-  return `${way} · ${fileSize(link.direct)} direct, ${fileSize(link.relay)} via the meeting server ${period}`;
+  return `${way} · ${fileSize(link.direct + link.rtc)} direct, ${fileSize(link.relay)} via the meeting server ${period}`;
 }
 
-/** The iPhone web app's connection row: a page can't open ws:// to a PC's address, so it stays on the tunnel. */
-export const IPHONE_LINK = 'Always via the meeting server, sealed end to end – a web app on iPhone can’t open a direct connection to a PC';
+/** The iPhone web app's connection row (18.11.2026, F25 P3: the web app goes direct over WebRTC too, ui/hosted/rtc.ts). */
+export const IPHONE_LINK = 'Directly to the PC when the network allows, else via the meeting server – encrypted end to end either way';
+
+/** 18.11.2026: the one line on how devices connect, over the Connection rows, and where the privacy notice is. */
+export const CONNECTION_LINE = 'End-to-end encrypted, directly device to device. The meeting server only helps your devices find each other.';
+export const PRIVACY_URL = 'https://openautark.com/privacy/#meeting-server';
+
+/** The meeting server's fallback today: its daily limit is used up, or its operator paused it (RelayState.held). */
+export function heldLine(held: RelayState['held']): string {
+  if (held === 'quota') return ' · fallback at today’s limit, direct only';
+  if (held === 'off') return ' · fallback paused, direct only';
+  return '';
+}
+
+/** "Your own meeting server": the line that starts the server shipped with this app (PowerShell on Windows, else sh). */
+export function ownServerCommand(meet: { program: string; file: string }): string {
+  if (/^[A-Za-z]:\\|\\/.test(meet.program)) return `$env:ELECTRON_RUN_AS_NODE=1; $env:RELAY_PORT=8787; & "${meet.program}" "${meet.file}"`;
+  const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
+  return `ELECTRON_RUN_AS_NODE=1 RELAY_PORT=8787 ${quote(meet.program)} ${quote(meet.file)}`;
+}
+
+/** The same server as a container, built straight from the public source. */
+export const OWN_SERVER_DOCKER = 'docker build -t autark-meet https://github.com/teydra/OpenAutark.git#main:services/remote-relay && docker run -d --restart unless-stopped -p 127.0.0.1:8787:8787 autark-meet';
+
+/** The meeting server's state in a few words (pure). */
+export function relayLine(relay: RelayState | undefined, address: string): string {
+  // 'off' with an address: the runtime keeps it unused (as the Remote ID row says) – never "Connecting…" forever
+  if (!address || relay?.status === 'off') return 'Off · PCs in other networks find each other there by Remote ID';
+  if (relay?.status === 'connected') return `Connected · ${relay.peersOnline} linked ${relay.peersOnline === 1 ? 'PC' : 'PCs'} online there${heldLine(relay.held)}`;
+  if (relay?.status === 'error') return `Not connected${relay.error ? `: ${relay.error}` : ''}`;
+  return 'Connecting…';
+}

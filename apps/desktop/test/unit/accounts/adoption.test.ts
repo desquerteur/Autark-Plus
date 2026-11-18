@@ -1,5 +1,5 @@
-// Detection → accounts (PR5, accounts/adoption.ts + dismissed.ts): a login in the default CLI home
-// and a running local server become 'detected' accounts once (detecting again is idempotent);
+// Detection → accounts (PR5, accounts/adoption.ts + dismissed.ts): a running local server becomes a 'detected' account once
+// (detecting again is idempotent); a login in the default CLI home is only offered (17.11.2026, consent.test.ts) until "Use";
 // removing one dismisses it – detection, also after a restart, no longer adds it and the report
 // marks it – until "Add again" (accounts.add {detected} for a login, adding the server's URL). A Codex login runs in a
 // home of its own (<accounts>/codex/<id>, cli-homes.ts found); removing it keeps that home (16.11.2026: it is the login's)
@@ -20,9 +20,13 @@ async function ollama(url: string): Promise<Response> {
   throw new Error('offline');
 }
 
-test('adoption: the default-home Codex login and the local Ollama server are added once; detecting again changes nothing', async () => {
+test('adoption: the local Ollama server is added once, the default-home Codex login only after "Use"; detecting again changes nothing', async () => {
   const h = harness({ fetch: ollama });
   await h.service.detect();
+  await h.settle();
+  assert.deepEqual(h.service.list().map((account) => account.provider), ['ollama'], 'the login is offered, not an account: nothing uses it before the person says so');
+  assert.deepEqual(h.checks, []);
+  await h.service.useFound('codex:default');
   await h.settle();
   const codex = h.service.list().find((account) => account.provider === 'codex')!;
   const server = h.service.list().find((account) => account.provider === 'ollama')!;
@@ -54,9 +58,10 @@ test('lastDetection: the newest report without a scan – every rescan replaces 
 test('dismissal: a removed detected login or server stays away – also after a restart – until "Add again"', async () => {
   const h = harness({ fetch: ollama });
   await h.service.detect();
+  await h.service.useFound('codex:default');
   const found = h.service.list().find((account) => account.provider === 'codex')!;
   for (const account of h.service.list()) await h.service.remove(account.id);
-  assert.deepEqual(new DismissedLogins(h.db, () => 0).list(), ['codex:default', `codex:${found.id}`, `ollama:${OLLAMA}`]);
+  assert.deepEqual(new DismissedLogins(h.db, () => 0).list(), [`ollama:${OLLAMA}`, 'codex:default', `codex:${found.id}`], 'the server was added first, the login after "Use"');
   const scans = h.calls.length;
   const last = h.service.lastDetection();
   assert.deepEqual([last?.clis.find((cli) => cli.provider === 'codex')?.dismissed, last?.localServers[0]?.dismissed], [true, true], 'lastDetection marks them like detect() (RT7)');

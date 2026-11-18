@@ -12,21 +12,7 @@
 // split (the person's Stop in a chat ends them through the split service – rpc/handlers/chats.ts messages.stop), but every
 // person's Stop of a turn stops the groups it split that have not started, at once (split-stop.ts);
 // urgent/steer/relay and the quiet pickup address the main lane only; B-083: tell() and continueNow() reach split lanes too (dispatch-lanes.ts).
-// Important messages steer a running turn in that chat when the engine can, otherwise the
-// running turn is interrupted (its wakes are kept) and that chat runs next. Such an interrupt waits
-// for the turn's next tool boundary (dispatch-boundary.ts: no call doing work; one quiet line says so) – a call in flight, maybe an outside effect, is never cut mid-way;
-// only the person's own Stop aborts at once. A normal message of the person in the chat of a running turn is folded into it
-// when the engine can steer (steer(); else its queued wake runs the next turn). 07.11.2026: a line in ANOTHER chat while
-// the agent's turn runs elsewhere (or chat-free) is folded the same way, framed as another chat's (dispatch-steer.ts
-// steerOther; the waiting chat's read cursor stays), that chat runs first after this turn (an urgent pick, no cut).
-// B-080: a fold the engine refused
-// (its turn had not started yet) is tried again while that turn runs (dispatch-fold.ts); hear() folds a person's line
-// in a group chat into every member's running turn (no pick); an important line from another chat
-// is folded too before anything is cut. urgent() with a task id (continueNow() sends one for a task's turn; no task tool
-// does since tasks/urgent.ts went) runs that task next and interrupts the agent's turn on less urgent work; a turn on that
-// or another priority-2 task, or one serving the person's answer, finishes first. Picks run in the order named
-// (dispatch-groups.ts nextGroup) – B-080 wave 3: a chat where a person waits before those of agents only (addPick).
-// D15: relay() hands a call's live-voice text to the running turn in that chat (dispatch-steer.ts steerRelay).
+// Lines for an agent whose main turn runs – urgent(), steer(), hear(), relay(): dispatch-incoming.ts.
 // B-048 E4.2: continueNow() – the agent's model.set now: its turn is cut at the next tool boundary the urgent way and its chat
 // (task) runs again at once with a note, on the new route. B-080: a model on the turn's engine and account is switched inside the
 // running turn instead (Engine.setModel) – no cut; another engine or account cuts as before; wave 3: a target it already runs on changes nothing.
@@ -47,23 +33,29 @@
 // lines, their tasks' results) goes back to the queue and the agent waits for those turns – when one ended,
 // handOver() pumps it (event-driven, `awaiting`); an urgent pick never waits. A hand-over or follow-up group (handoff, retry or review
 // only) of a finished task is settled without a turn, and a hand-over the agent already answered in its chat without it carries answeredNote.
+// KI-Runde 17.11.2026 (the context fold, agents/context-fold.ts): a main-lane turn that ended done and whose session calls for a
+// fold (RunEntry.fold) is followed by the fold's turn, before the agent's own queued work – it waits only for a wake a person
+// caused or a call the agent takes part in (foldWaitsFor), for its parts and for the person's Stop of that turn (foldAfter); a
+// fold that cannot start now is not kept, the next turn's end asks again. While a fold's turn runs it takes no line: a person's
+// line for the agent cuts it at its next tool boundary and runs as its own turn (nothing is marked then); a person's line for
+// someone else, a colleague's line (a push line too) and an urgent task wait the one turn it takes, and no live voice is
+// relayed into it.
 // Linked PCs (owner 31.10.2026): an agent runs on its home PC – one whose home is another CEO PC starts no turn and no
 // quiet pickup here; its due wakes go there (devices/sync/home.ts homeElsewhere, rows.ts hands them over).
-// Owns: when and what runs – pump gates, interrupt/urgent/steer/stop, held (paused) agents, the idle moment.
+// Owns: when and what runs – pump gates, interrupt/stop, held (paused) agents, the idle moment.
 // Never: runs two main-lane turns for one agent, drops wakes of a paused agent, or polls.
 
 import type { Dispatcher, RuntimeServices, SplitLane } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
-import type { Task } from '../../shared/model/tasks.ts';
 import { SPLIT_LIMITS } from '../../shared/model/splits.ts';
 import {
   addPick, answeredNote, groupWakes, isStaleHandOver, isStaleMessageGroup, isUrgent, nextGroup, settleWithin, taskFacts,
   waitsFor, wakeIds, type UrgentPick, type WakeGroup,
 } from './dispatch-groups.ts';
-import { hasPerson, steerOtherResult, steerRelay, steerTurnResult, type SteerResult } from './dispatch-steer.ts';
+import { hasPerson, type SteerResult } from './dispatch-steer.ts';
 import { FoldRetries } from './dispatch-fold.ts'; // B-080
-import { noteDeferred } from './dispatch-boundary.ts';
+import { IncomingLines, SETTLE_MS, taskOf } from './dispatch-incoming.ts';
 import { LiveStatus } from './dispatch-live.ts';
 import { abortTurn, RunningTurns, setModelInTurn, type RunEntry, type TurnDeps } from './dispatch-runs.ts';
 import type { Effort } from '../../shared/model/providers.ts';
@@ -73,8 +65,8 @@ import { recordShutdownRuns } from '../runs/journal.ts';
 import { pickUpQuiet, QUIET_DELAY_MS } from '../chat/quiet-pickup.ts';
 import { homeElsewhere } from '../devices/sync/home.ts';
 import { noteAway } from './dispatch-wait-lines.ts'; // B-079: why a line waits, in its chat
-
-const SETTLE_MS = 5000;
+import type { FoldWhy } from './compaction-policy.ts';
+import { foldWaitsFor } from './context-fold.ts'; // KI-Runde 17.11.2026: what holds a context fold back
 
 export class DispatcherImpl implements Dispatcher {
   private readonly deps: TurnDeps;
@@ -89,6 +81,7 @@ export class DispatcherImpl implements Dispatcher {
   private readonly folds = new FoldRetries(); // B-080: refused folds, tried again while their turn runs
   private told = 0; // B-083: each note its own fold (a retry re-sends that note only)
   private readonly live: LiveStatus;
+  private readonly lines: IncomingLines; // urgent/steer/hear/relay into a running turn (dispatch-incoming.ts)
   private readonly unsubscribe: Array<() => void> = [];
   private started = false;
   private paused = false;
@@ -97,12 +90,13 @@ export class DispatcherImpl implements Dispatcher {
   constructor(deps: TurnDeps) {
     this.deps = deps;
     this.live = new LiveStatus(deps.services, () => this.activity());
-    this.runs = new RunningTurns(deps, this.live, (agentId, split) => this.handOver(agentId, split));
+    this.runs = new RunningTurns(deps, this.live, (agentId, split, ended) => this.handOver(agentId, split, ended));
     this.lanes = new SplitLanes({
       services: deps.services, runs: this.runs,
       gate: () => (this.halted ? 'refused' : !this.started || this.paused ? 'busy' : 'ok'),
       hold: (agentId) => { this.held.add(agentId); },
     });
+    this.lines = new IncomingLines(deps, this.runs, this.folds, this.urgentPick);
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -193,80 +187,12 @@ export class DispatcherImpl implements Dispatcher {
     stopPendingSplits(this.deps.services(), entry); // B-057 S13: the groups this turn split never start (split-stop.ts)
   }
 
-  /** Important message – or, with `taskId`, a task made urgent (T10): that chat (task) runs next. */
-  async urgent(agentId: string, conversationId: string, taskId?: string): Promise<void> {
-    const services = this.deps.services();
-    const entry = this.runs.get(agentId);
-    const live = entry && !entry.controller.signal.aborted ? entry : undefined;
-    if (taskId && live?.taskId === taskId) return; // already working on it
-    // B-080: an important line goes into the running turn like a normal one ("mittendrin", not cut) – also from another chat
-    // (that chat still runs next) and while the turn's engine is not ready yet (the fold is tried again); only a line the
-    // turn cannot take (a live-call line, a recording, an engine that never steers) is cut for.
-    if (!taskId && live && (await this.fold(live, conversationId)) !== 'held') {
-      if (live.conversationId !== conversationId) {
-        this.urgentPick.set(agentId, addPick(this.urgentPick.get(agentId), { conversationId, person: hasPerson(services, conversationId) }));
-        services.wakes.wake({ agentId, reason: 'message', conversationId, coalesceKey: `chat:${conversationId}` });
-      }
-      return;
-    }
-    // No steer: this chat (task) runs next, after the ones named before; an interrupted turn keeps its
-    // wakes for later. The task's own wake comes from the task service, a message needs the chat's wake.
-    this.urgentPick.set(agentId, addPick(this.urgentPick.get(agentId), taskId ? { conversationId, taskId } : { conversationId, person: hasPerson(services, conversationId) }));
-    if (!taskId) services.wakes.wake({ agentId, reason: 'message', conversationId, coalesceKey: `chat:${conversationId}` });
-    const current = this.runs.get(agentId);
-    // Interrupt other work: a turn that started in this chat while we tried to steer already reads
-    // the new message; urgent task work cuts off only less urgent work (yields).
-    const overtaken = taskId ? current !== undefined && this.yields(services, current, taskId) : current === entry || current?.conversationId !== conversationId;
-    if (current && overtaken && !current.controller.signal.aborted) {
-      // At the turn's next tool boundary: a call in flight is never cut mid-way (dispatch-boundary.ts).
-      const reason = taskId ? 'Interrupted by urgent work.' : 'Interrupted by an important message.';
-      const before = current.boundary.deferred;
-      // Never after the person's Stop or a shutdown (abortTurn also drops it): that turn's work must not come back.
-      if (current.boundary.at(() => { if (!current.controller.signal.aborted) abortTurn(current, reason, 'urgent', 'release'); })) await settleWithin([current.finished], SETTLE_MS);
-      else if (!taskId && !before) noteDeferred(services, agentId, conversationId);
-    }
-  }
+  // ------------------------------------------------------------------ lines for a running turn (dispatch-incoming.ts)
 
-  /**
-   * A normal line for the agent while its main turn runs: steered in when its engine can (read at its next step); false =
-   * the queued wake runs next turn. 07.11.2026: from another chat too – framed as that chat's (steerOther), that chat runs
-   * first after this turn. No turn running: the wake starts one now.
-   */
-  async steer(agentId: string, conversationId: string): Promise<boolean> {
-    const entry = this.runs.get(agentId);
-    if (!entry || entry.controller.signal.aborted) return false;
-    const services = this.deps.services();
-    if (entry.conversationId === conversationId) return (await this.fold(entry, conversationId)) === 'all';
-    this.urgentPick.set(agentId, addPick(this.urgentPick.get(agentId), { conversationId, person: hasPerson(services, conversationId) })); // right after, before other work
-    return (await this.fold(entry, conversationId)) === 'all';
-  }
-
-  /**
-   * B-080: a person's line in a group chat for an agent the pick may not choose – folded into its running main turn here or
-   * in another chat, with no pick of that chat; nothing when no turn runs.
-   */
-  async hear(agentId: string, conversationId: string): Promise<boolean> {
-    const entry = this.runs.get(agentId);
-    if (!entry || entry.controller.signal.aborted) return false;
-    return (await this.fold(entry, conversationId)) === 'all';
-  }
-
-  /** B-080: the unseen lines of `conversationId` into `entry`'s running turn – its own chat or another – one fold at a time per chat, a refused one tried again (dispatch-fold.ts). */
-  private fold(entry: RunEntry, conversationId: string): Promise<SteerResult> {
-    const services = this.deps.services();
-    const stillRunning = () => this.runs.get(entry.agentId) === entry && !entry.controller.signal.aborted;
-    const attempt = () => (entry.conversationId === conversationId
-      ? steerTurnResult(services, entry, conversationId, stillRunning)
-      : steerOtherResult(services, entry, conversationId, stillRunning));
-    return this.folds.fold(`${entry.agentId}:${conversationId}`, attempt, stillRunning);
-  }
-
-  /** D15: a live voice's relay text into the agent's running turn in this chat (calls/talker.ts, dispatch-steer.ts steerRelay); false = not steered. */
-  async relay(agentId: string, conversationId: string, text: string, mode: 'now' | 'next'): Promise<boolean> {
-    const entry = this.runs.get(agentId);
-    if (!entry || entry.controller.signal.aborted || entry.conversationId !== conversationId) return false;
-    return steerRelay(this.deps.services(), entry, text, mode, () => this.runs.get(agentId) === entry && !entry.controller.signal.aborted);
-  }
+  urgent(agentId: string, conversationId: string, taskId?: string): Promise<void> { return this.lines.urgent(agentId, conversationId, taskId); }
+  steer(agentId: string, conversationId: string): Promise<boolean> { return this.lines.steer(agentId, conversationId); }
+  hear(agentId: string, conversationId: string): Promise<boolean> { return this.lines.hear(agentId, conversationId); }
+  relay(agentId: string, conversationId: string, text: string, mode: 'now' | 'next'): Promise<boolean> { return this.lines.relay(agentId, conversationId, text, mode); }
 
   /**
    * B-048 E4.2 – model.set now: the run ends at its next tool boundary like an urgent interrupt (its wakes
@@ -280,7 +206,7 @@ export class DispatcherImpl implements Dispatcher {
     if (lane?.split) return lane.agentId === agentId && !lane.controller.signal.aborted && target !== undefined // B-083: inside its turn or not at all
       && switchLane(this.deps.services(), lane, target, (text) => { void this.tell(agentId, runId, text); });
     const entry = this.runs.get(agentId);
-    if (!entry || entry.runId !== runId || entry.controller.signal.aborted || !entry.conversationId) return false;
+    if (!entry || entry.runId !== runId || entry.controller.signal.aborted || !entry.conversationId || entry.reason === 'fold') return false; // a context fold's turn stays on its session's model: nothing continues it elsewhere
     if (target && entry.route?.model === target.modelId && (target.effort === undefined || target.effort === entry.route.effort)) return true; // B-080 wave 3: already on it – no switch, no cut; the stored request stays
     const conversationId = entry.conversationId;
     const cut = () => entry.boundary.at(() => {
@@ -298,12 +224,6 @@ export class DispatcherImpl implements Dispatcher {
   /** B-083: a note of the agent to itself into its running turn `runId` (main or split lane; dispatch-lanes.ts tellRun – a refused one is tried again, `onLost` when that turn ends without it). */
   tell(agentId: string, runId: string, text: string, onLost?: () => void): Promise<SteerResult> {
     return tellRun({ services: this.deps.services(), runs: this.runs, folds: this.folds }, `${agentId}:note:${++this.told}`, { agentId, runId, text }, onLost);
-  }
-
-  /** Whether a running turn gives way to urgent task work: not one on that or another priority-2 task, or serving the person's answer or approval. */
-  private yields(services: RuntimeServices, entry: RunEntry, taskId: string): boolean {
-    if (entry.taskId === taskId || entry.reason === 'answer' || entry.reason === 'approval') return false;
-    return !entry.taskId || this.taskOf(services, entry.taskId)?.priority !== 2;
   }
 
   activity(): AgentActivity[] { return this.runs.activity(); }
@@ -360,14 +280,14 @@ export class DispatcherImpl implements Dispatcher {
     const wakes = services.wakes.claim(agentId);
     if (!wakes.length) return false;
     const groups = groupWakes(wakes);
-    const stale = groups.filter((group) => isStaleMessageGroup(services.chats, agentId, group) || isStaleHandOver(group, (id) => this.taskOf(services, id)?.status));
+    const stale = groups.filter((group) => isStaleMessageGroup(services.chats, agentId, group) || isStaleHandOver(group, (id) => taskOf(services, id)?.status));
     if (stale.length) services.wakes.done(wakeIds(stale));
     const picks = this.urgentPick.get(agentId);
     // B-050: what only answers colleagues' running turns goes back unannounced (release without a due time) until they end.
     const waiting = groups.filter((group) => !stale.includes(group) && this.waitsForColleagues(services, agentId, group, picks));
     if (waiting.length) services.wakes.release(wakeIds(waiting), undefined, true);
     const live = groups.filter((group) => !stale.includes(group) && !waiting.includes(group));
-    taskFacts(live, (id) => this.taskOf(services, id), services.clock.now());
+    taskFacts(live, (id) => taskOf(services, id), services.clock.now());
     const { group, left } = nextGroup(live, picks);
     if (left.length) this.urgentPick.set(agentId, left);
     else this.urgentPick.delete(agentId);
@@ -388,21 +308,39 @@ export class DispatcherImpl implements Dispatcher {
     return colleagues.length > 0;
   }
 
-  /** The task a group works on, for its priority, due state and – stale hand-overs – status (a failed read counts as normal work). */
-  private taskOf(services: RuntimeServices, id: string): Pick<Task, 'priority' | 'dueAt' | 'status'> | undefined {
-    try { return services.tasks.get(id); } catch { return undefined; }
-  }
-
   /** A turn of `agentId` ended and its wakes are settled (dispatch-runs.ts): its next turn and the colleagues it answered; every lane's end starts waiting splits (there are no global places; a split whose start failed is tried again). */
-  private handOver(agentId: string, split?: boolean): void {
+  private handOver(agentId: string, split: boolean, ended: RunEntry): void {
     if (split) { this.lanes.fire(); return; }
     const stopped = this.stopped.delete(agentId);
     const answering = this.awaiting.get(agentId); // B-050: the colleagues its turn wrote to answer now
     this.awaiting.delete(agentId);
-    this.pump(agentId);
+    // The fold runs before the agent's own background work: that work then reads the small context (KI-Runde 17.11.2026).
+    if (stopped || ended.fold === undefined || !this.foldAfter(ended, ended.fold)) this.pump(agentId);
     for (const id of answering ?? []) this.pump(id);
     if (!stopped && !this.runs.has(agentId)) this.idle(agentId);
     this.lanes.fire(); // B-080 review: also the retry for a split whose start failed with 'busy' (no other lane may end soon)
+  }
+
+  /**
+   * KI-Runde 17.11.2026: the context fold after a turn whose session calls for one – it runs before the agent's own queued
+   * work, and waits only for a wake a person caused or a call the agent takes part in (context-fold.ts foldWaitsFor) and for
+   * its parts. True when it started; else nothing is kept and the next turn's end asks again.
+   */
+  private foldAfter(ended: RunEntry, why: FoldWhy): boolean {
+    const agentId = ended.agentId;
+    if (!this.started || this.paused || this.halted || this.runs.has(agentId) || this.runs.lanes(agentId).length) return false;
+    const services = this.deps.services();
+    try {
+      const agent = services.org.get(agentId);
+      if (!agent || agent.archivedAt || agent.status === 'paused' || homeElsewhere(services, agentId)) return false;
+      const waits = foldWaitsFor(services, agentId);
+      if (waits) return false; // a person's line, answer or approval, or a live call: that goes first
+      this.runs.fold(services, ended, why);
+      return true;
+    } catch (error) {
+      services.log.warn('the context fold did not start', { agentId, error: String(error) });
+      return false;
+    }
   }
 
   /** K4: the agent finished and nothing is due for it – the person's quiet lines it has not seen get a review wake (chat/quiet-pickup.ts), `delayMs` later. */

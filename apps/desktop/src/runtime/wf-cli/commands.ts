@@ -12,10 +12,12 @@
 // 80 characters in the error, so the caller sees what its shell delivered (run.ts redacts the owner token there too).
 
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { TaskStatus, TaskView } from '../../shared/model/tasks.ts';
-import { flag, integer, text, type Parsed } from './args.ts';
+import { flag, integer, text, values, type Parsed } from './args.ts';
 import type { Rpc } from './client.ts';
 import { exportCommand } from './chat-files.ts';
 import { feedbackCommand } from './feedback.ts'; // B-055: wf feedback setup | receive | status | list | show | mark
@@ -164,9 +166,9 @@ const read: Command = {
 };
 
 const send: Command = {
-  usage: 'send <chat> <text… | -> [--important | --silent] [--wait [--timeout s]]',
-  summary: 'Send a message as the agent running it (from an agent\'s own shell or script), otherwise as the person who owns this PC (@Name in the text mentions an agent). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s).',
-  options: ['important', 'silent', 'wait', 'timeout'],
+  usage: 'send <chat> <text… | -> [--file <path>]… [--important | --silent] [--wait [--timeout s]]',
+  summary: 'Send a message as the agent running it (from an agent\'s own shell or script), otherwise as the person who owns this PC (@Name in the text mentions an agent). --file attaches a file on this PC (repeat it for more; a missing one sends nothing). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s). From Python on Windows call wf.cmd.',
+  options: ['important', 'silent', 'wait', 'timeout', 'file'],
   arity: [2, Number.POSITIVE_INFINITY],
   defaultTimeoutMs: (parsed) => (flag(parsed, 'wait') ? SEND_WAIT_MS : undefined),
   timeoutMessage: (parsed) => (flag(parsed, 'wait') ? NO_REPLY : undefined),
@@ -181,19 +183,34 @@ const send: Command = {
     if (!body.trim()) throw new CliError('bad_request', 'Nothing to send.');
     const { chat, name } = await resolveChat(ctx.rpc, ref);
     const title = chatTitle(chat, name);
+    // 17.11.2026 (BEFUND-RUNTIME-JAN §4): --file – every file is checked first and stored (files.uploadPath), then the one
+    // message carries them; a missing file sends nothing, so there is never a half message.
+    const paths = values(ctx.parsed, 'file').map((file) => path.resolve(file));
+    for (const file of paths) {
+      let ok = false;
+      try { ok = (await stat(file)).isFile(); } catch { /* missing */ }
+      if (!ok) throw new CliError('bad_request', `No file at ${file}; nothing was sent.`);
+    }
+    const attachments: Array<{ fileId: string; name: string }> = [];
+    for (const file of paths) {
+      const stored = await ctx.rpc.call('files.uploadPath', { path: file }) as { id: string };
+      attachments.push({ fileId: stored.id, name: path.basename(file) });
+    }
     // Subscribe before sending, so a fast reply is not missed. Sent by an agent, its own later lines are no reply.
     let sender: string | undefined;
     const waiter = flag(ctx.parsed, 'wait') ? await replyWaiter({ ...ctx, rpc: withoutAuthor(ctx.rpc, () => sender) }, chat.id) : undefined;
     const message = await ctx.rpc.call('messages.send', {
       conversationId: chat.id, body, priority: flag(ctx.parsed, 'important') ? 'important' : undefined, silent: flag(ctx.parsed, 'silent') || undefined, clientId: `wf-${randomUUID()}`,
+      ...(attachments.length ? { attachments } : {}),
     }) as Message;
     if (message.authorKind === 'agent') sender = message.authorId;
+    const sent = `Sent to ${title} (#${message.seq}, ${message.id}${attachments.length ? `, ${attachments.length} file${attachments.length === 1 ? '' : 's'}` : ''})`;
     if (!waiter) {
       if (ctx.json) ctx.out.json(message);
-      else ctx.out.line(`Sent to ${title} (${message.id}).`);
+      else ctx.out.line(`${sent}.`);
       return;
     }
-    ctx.out.note(`Sent to ${title} (${message.id}). Waiting for a reply…`);
+    ctx.out.note(`${sent}. Waiting for a reply…`);
     const reply = await waiter.after(message.seq);
     if (ctx.json) ctx.out.json({ message, reply });
     else ctx.out.lines(formatMessage(reply, name, ctx.now()));

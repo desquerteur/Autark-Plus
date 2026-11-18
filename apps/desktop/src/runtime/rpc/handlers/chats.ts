@@ -138,7 +138,7 @@ export function modelOf(o: Obj): string | undefined {
 }
 
 /** Agents to stop in a chat: running there now (dispatcher), or still streaming a message. */
-function runningIn(services: RuntimeServices, conversationId: string, agentId?: string): string[] {
+export function runningIn(services: RuntimeServices, conversationId: string, agentId?: string): string[] {
   const out = new Set<string>();
   for (const item of services.dispatcher.activity()) {
     if (!item.split && item.conversationId === conversationId && (!agentId || item.agentId === agentId)) out.add(item.agentId); // B-057: a split's lane is stopped through its group

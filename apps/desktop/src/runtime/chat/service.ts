@@ -26,7 +26,10 @@
 // 13.11.2026: no run is a row in the history – who works for a chat is its live bar (chat/live.ts, the summary's `live`),
 // and what a run says reaches a chat as a plain message carrying its runId. F07: send()'s runtime-only `deliver: false`
 // (the first run's start line, onboarding/service.ts) stores and announces a message without delivering it – no wake,
-// no notification, no chat title from it; messages.send never sets it (its params are a fixed list).
+// no notification, no chat title from it; messages.send never sets it (its params are a fixed list). KI-Runde 17.11.2026:
+// a silent line (a status line, an agent's quiet line) leaves the chat's last_message_at and updated_at alone, so it
+// moves no row in anyone's list – the list, the day's chat rank and the preview all go by the lines that draw someone.
+// An agent's quiet text that @mentions a person is a normal line (quietUnlessPerson, as a quiet run answer).
 // Owns: every write to conversations/members/messages/drafts and the chat events.
 // Never: decides who gets woken (DeliveryService does, after commit), never copies message
 // text into other tables (tasks reference messages by id) and never removes a file itself.
@@ -51,7 +54,7 @@ import { deleteMessage, demoteMessage, editMessage } from './message-edits.ts';
 import { pickLead } from './lead.ts';
 import { changeMembers } from './members-change.ts';
 import { mentionCandidates } from './mentions.ts';
-import { postAgentMessage, type AnswerFinal } from './publish-message.ts';
+import { postAgentMessage, quietUnlessPerson, type AnswerFinal } from './publish-message.ts';
 import { canReclaim, chatFileIds, messageFileIds, queueReclaim } from './reclaim.ts';
 import { unmarked, withSpeech } from './speech-meta.ts';
 import { addressedAgents, applyStickyModel, cleanSettings, modelTag } from './sticky-model.ts';
@@ -195,7 +198,8 @@ export class ChatServiceImpl implements ChatService {
       mentions,
       priority: input.priority ?? 'normal',
       state: 'final',
-      silent: input.silent ?? input.kind === 'status',
+      // an agent's quiet text that names a person is a normal line, as its quiet run answer (publish-message.ts)
+      silent: authorKind === 'agent' && (input.kind ?? 'text') === 'text' ? quietUnlessPerson(input.silent, mentions) : input.silent ?? input.kind === 'status',
       // SM8: a dictated/spoken human message carries the recognizer's uncertainty (validated, capped).
       meta: authorKind === 'human' ? withSpeech(input.meta ?? {}, input.speech, input.body, input.marks) : input.meta ?? {}, // B-082: + meta.marks
       createdAt: now,
@@ -219,7 +223,7 @@ export class ChatServiceImpl implements ChatService {
         const tag = modelTag(conversation.settings, addressedAgents(message, members)[0]);
         message.meta = tag ? { ...meta, modelHint: tag } : meta;
       }
-      message.seq = this.convs.nextSeq(conversation.id, now);
+      message.seq = this.convs.nextSeq(conversation.id, now, { quiet: message.silent }); // a silent line moves no row in the list
       this.msgs.insert(message, input.clientId);
       // A human who writes has read the chat; an agent has only "seen" its own line when it
       // was caught up before (its cursor is otherwise advanced by the turn integration).

@@ -14,6 +14,7 @@ import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
 import { ULTRA_NOTE } from '../../../src/runtime/context/split-section.ts';
 import { NOTHING_BACK, turnEndedEarly } from '../../../src/runtime/agents/split-turn.ts';
+import { recordStart, startOf } from '../../../src/runtime/agents/session-key.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
 import type { RouteRequest, RuntimeServices, SplitService } from '../../../src/runtime/contracts.ts';
 import type { SplitRunEnd } from '../../../src/runtime/contracts/splits.ts';
@@ -31,7 +32,7 @@ function setup(caps: Partial<EngineCaps> = {}) {
   const agentId = f.vid.id;
   const chat = f.chats.create({ title: 'Launch video', agentIds: [agentId], createdBy: 'human' });
   const inputs: EngineTurnInput[] = [];
-  const state: { stop: EngineTurnResult['stop']; text?: string; onRun?: (input: EngineTurnInput) => Promise<unknown> } = { stop: 'done' };
+  const state: { stop: EngineTurnResult['stop']; text?: string; costUsd?: number; sameRef?: boolean; onRun?: (input: EngineTurnInput) => Promise<unknown> } = { stop: 'done' };
   const toolCtxs: ToolContext[] = [];
   const engineCaps: EngineCaps = { sessions: false, dynamicTools: false, mcp: false, images: false, rebase: false, structured: false, ownTools: false, ...caps } as EngineCaps;
   const forks: EngineForkInput[] = [];
@@ -42,9 +43,9 @@ function setup(caps: Partial<EngineCaps> = {}) {
       inputs.push(input);
       await state.onRun?.(input);
       return {
-        text: state.text ?? 'Part done: three cuts.', stop: state.stop, usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.12 },
+        text: state.text ?? 'Part done: three cuts.', stop: state.stop, usage: { inputTokens: 100, outputTokens: 20, costUsd: state.costUsd ?? 0.12 },
         ...(state.stop === 'error' ? { error: { code: 'internal', message: 'boom' } } : {}),
-        ...(engineCaps.sessions ? { session: { ref: `sess_${inputs.length}`, generation: 1 } } : {}),
+        ...(engineCaps.sessions ? { session: { ref: state.sameRef && input.session ? input.session.ref : `sess_${inputs.length}`, generation: 1 } } : {}),
       } as EngineTurnResult;
     },
   } as unknown as Engine;
@@ -131,11 +132,13 @@ test('a split turn runs on its own thread, internal: no cursor, no post; cost an
   assert.deepEqual(h.calls.ends, [{ splitId: 'sp_2', end: { runId: 'run_s2', status: 'done' } }]);
   assert.deepEqual(h.calls.after, [], 'a split turn is no parent turn');
   assert.deepEqual(h.calls.asked, [], 'a split never gets split results');
-  // Its input: the brief; its route: the parent's model and effort ('same') as an explicit request, without a chat.
+  // Its input: the brief; its route, without a chat: a fresh part that names no model starts from its origin's model and effort – the
+  // router keeps it there or, when the origin is above what executing needs, takes the executing default (17.11.2026).
   assert.match(String(h.inputs[0].input[0].type === 'text' ? h.inputs[0].input[0].text : ''), /cut the middle section to 40 seconds/);
   assert.equal(h.routes[0].conversationId, undefined);
-  assert.deepEqual(h.routes[0].split, { splitId: 'sp_2' });
-  assert.deepEqual(h.routes[0].previous, { modelId: h.opus.id, effort: 'high', explicit: true });
+  assert.deepEqual(h.routes[0].split, { splitId: 'sp_2', fresh: true });
+  assert.deepEqual(h.routes[0].previous, { modelId: h.opus.id, effort: 'high' }, 'nobody asked for a model: not an explicit request');
+  assert.equal(h.routes[0].boundary, true, 'no session of its own yet');
 });
 
 test('the volatile split section is there; the agent\'s own turn has none', async () => {
@@ -238,6 +241,34 @@ test('a split\'s first turn is seeded once (here: a native fork) and bound under
   await h.runSplit('run_s3', h.splitTurn({ splitId: 'sp_3', idx: 3, title: 'Outro', context: 'fork', firstTurn: false }));
   assert.equal(h.forks.length, 1, 'not a first turn: no seed');
   assert.equal(h.inputs[2].session, undefined);
+});
+
+test('FIXES-3 B1: a native fork carries its parent\'s running cost total (Claude Code, measured 18.11.2026) – the part\'s first turn stores only its own cost', async () => {
+  const h = setup({ sessions: true, fork: true });
+  const store = new SessionStore(h.s.db);
+  store.save({ agentId: h.agentId, conversationId: h.chat.id, engine: 'claude', accountId: 'acc_api', ref: 'parent_sess', generation: 1, cursorSeq: 0, contextTokens: 1000, updatedAt: 0 });
+  store.setCostTotal(h.agentId, h.chat.id, 'claude', { ref: 'parent_sess', usd: 0.237647 });
+  Object.assign(h.state, { sameRef: true, costUsd: 0.249378 }); // the CLI's total for the fork: its parent's 0.237647 and its own request
+  await h.runSplit('run_s2', h.splitTurn({ context: 'fork' }));
+  assert.equal(h.inputs[0].session?.ref, 'fork_1');
+  assert.equal(h.s.runs.get('run_s2')?.costUsd, 0.011731, 'its own share, not the parent\'s session');
+  assert.deepEqual(store.get(h.agentId, 'split:sp_2', 'claude')?.costTotal, { ref: 'fork_1', usd: 0.249378 });
+  assert.deepEqual(store.get(h.agentId, h.chat.id, 'claude')?.costTotal, { ref: 'parent_sess', usd: 0.237647 }, 'the parent\'s total is untouched');
+});
+
+test('S2 (FIXES-2 C.6): a native fork part starts from its parent session\'s start record and gets what changed since as lines', async () => {
+  const h = setup({ sessions: true, fork: true });
+  const store = new SessionStore(h.s.db);
+  const started = '# My SYSTEM.md\nI write tight.';
+  store.save({ agentId: h.agentId, conversationId: h.chat.id, engine: 'claude', accountId: 'acc_api', ref: 'parent_sess', generation: 1, cursorSeq: 0, contextTokens: 1000, updatedAt: 0, promptKey: 'parent-key' });
+  recordStart(h.s.db, { agentId: h.agentId, thread: h.chat.id, engine: 'claude' }, { key: 'parent-key', native: [], hub: [], sections: [{ name: 'system-md', text: started }] }, 0);
+  await h.runSplit('run_s2', h.splitTurn({ context: 'fork' }));
+  const first = h.inputs[0];
+  assert.equal(first.session?.ref, 'fork_1');
+  assert.equal(first.system.stable, started, 'the system text the forked session holds: its parent\'s start');
+  assert.match(first.system.volatile, /Parts of my standing text changed since this session began\./, 'the sections that changed since, as lines');
+  assert.equal(store.get(h.agentId, 'split:sp_2', 'claude')?.promptKey, 'parent-key', 'the part runs on that start');
+  assert.ok(startOf(h.s.db, { agentId: h.agentId, thread: 'split:sp_2', engine: 'claude' }, 'parent-key'), 'recorded on the part\'s thread');
 });
 
 test('a retry routed to another account than its earlier attempt\'s session starts as the parent again (seeded), never blind', async () => {

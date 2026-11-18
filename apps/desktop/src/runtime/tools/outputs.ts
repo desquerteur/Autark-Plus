@@ -1,6 +1,8 @@
 // Post-processing of tool outputs before they reach a model or the run journal.
-// Owns: secret redaction in every text part, truncation of big text into blob references,
-// and the compact journal form of args/outputs.
+// Owns: secret redaction in every text part, truncation of big text into blob references (an output a tool marked whole
+// – KI-Runde 17.11.2026: chat.read of one line – up to WHOLE_CHARS, past it its head and tail around the stored file's
+// path), the one bound of "whole" (WHOLE_CHARS, also a person's line in the turn, context/render.ts) and the compact
+// journal form of args/outputs.
 // Never: drops error flags or effect receipts, or stores secret values anywhere.
 // B-089 (11.11.2026, code audit): a cut output pointed to "file <id>", which no tool opens. The head now ends at a whole
 // line and the note names the stored text's path with the files.read call that goes on after it (device "this": the
@@ -9,9 +11,32 @@
 
 import type { FileStore, SecretService } from '../contracts.ts';
 import type { ToolOutput } from './types.ts';
+import { maskKeyShapes } from '../secrets/redact.ts';
 
 /** Text parts larger than this go to the blob store; the model gets head + reference. */
 export const MAX_TEXT_CHARS = 24_000;
+
+/** Outputs a tool hands on whole, past MAX_TEXT_CHARS (chat.read of one line: a person's long line is read in one piece). */
+const WHOLE = new WeakSet<ToolOutput>();
+
+/** The one bound of "whole" (a person's line in the turn, chat.read of one line): past it the head and the tail. */
+export const WHOLE_CHARS = 100_000;
+
+/** Room beside a whole body for its line's label (chat.read: chat, author, time, #seq), so a body that arrives whole in
+ *  the turn also comes whole from chat.read. */
+const LABEL_CHARS = 1_000;
+
+/** `value`'s head and tail, WHOLE_CHARS together, with `between(left out)` as the line between them. */
+export function headAndTail(value: string, between: (left: number) => string): string {
+  const half = WHOLE_CHARS / 2;
+  return `${value.slice(0, half)}\n${between(value.length - 2 * half)}\n${value.slice(-half)}`;
+}
+
+/** Marks `output` to reach the model whole (redacted as every output). */
+export function whole(output: ToolOutput): ToolOutput {
+  WHOLE.add(output);
+  return output;
+}
 const HEAD_CHARS = 6_000;
 
 /**
@@ -45,15 +70,19 @@ export async function finalizeOutput(output: ToolOutput, deps: { secrets: Secret
   for (const part of output.content ?? []) {
     if (part.type !== 'text') { content.push(part); continue; }
     let value = safeRedact(deps.secrets, part.text);
-    if (value.length > MAX_TEXT_CHARS) {
-      const { head, nextLine } = headOf(value);
+    const whole = WHOLE.has(output);
+    if (value.length > (whole ? WHOLE_CHARS + LABEL_CHARS : MAX_TEXT_CHARS)) {
       let stored: string | undefined;
       try {
         const ref = await deps.files.put(new TextEncoder().encode(value), `${name.replace(/[^a-z0-9_.-]/gi, '_')}-output.txt`, 'text/plain');
         blobIds.push(ref.id);
         try { stored = deps.files.path(ref.id); } catch { stored = undefined; }
       } catch { /* not stored: the note says so */ }
-      value = `${head}${cutNote(value, head, nextLine, stored)}`;
+      if (whole) value = headAndTail(value, (left) => `… [${left} chars left out here; ${stored ? `all of it is stored – files.read path: ${JSON.stringify(stored)}, device: "this"` : 'no stored copy'}] …`);
+      else {
+        const { head, nextLine } = headOf(value);
+        value = `${head}${cutNote(value, head, nextLine, stored)}`;
+      }
     }
     content.push({ type: 'text', text: value });
   }
@@ -61,8 +90,11 @@ export async function finalizeOutput(output: ToolOutput, deps: { secrets: Secret
   return { output: { ...output, content, structured }, blobIds };
 }
 
-function safeRedact(secrets: SecretService, value: string): string {
-  try { return secrets.redact(value); } catch { return value; }
+/** The vault's known values first, then what shows itself as a key by its shape (secrets/redact.ts maskKeyShapes). */
+export function safeRedact(secrets: SecretService, value: string): string {
+  let out = value;
+  try { out = secrets.redact(out); } catch { /* the shape rule below still runs */ }
+  try { return maskKeyShapes(out); } catch { return out; }
 }
 
 function redactDeep(secrets: SecretService, value: unknown, depth = 0): unknown {

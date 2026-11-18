@@ -320,6 +320,12 @@ test('first run: choice → AI (model setup, plan flow) → About you → the st
   assert.equal(await access.getByRole('radio').count(), 2, 'Whole PC and Careful');
   assert.equal(await access.getByRole('radio', { name: /^Full access/ }).isChecked(), true, 'Whole PC is the default');
   assert.equal(await access.getByRole('radio', { name: /^Careful/ }).isChecked(), false);
+  // 17.11.2026: sharing in the public library is asked here, ticked by default; this run unticks it.
+  const share = about.getByRole('checkbox', { name: /^Public library/ });
+  assert.equal(await share.isChecked(), true, 'sharing in the public library is on by default and visible');
+  assert.notEqual((await settings()).library?.publish, false, 'sharing is on until Start says otherwise');
+  await shot('first-run-04b-about-library-default'); // the starting state: the box ticked, before this run unticks it
+  await expectStable(page, ['.first-run-card', '.first-run-actions'], async () => { await share.uncheck(); });
   t.diagnostic(`card heights: AI ${aiHeight}px, About ${await cardHeight()}px`);
   await shot('first-run-05-about-light');
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -344,6 +350,7 @@ test('first run: choice → AI (model setup, plan flow) → About you → the st
   assert.deepEqual([done.profile.name, done.profile.company], ['Test Person', 'Test GmbH']);
   assert.deepEqual(done.onboarding, { completed: true, step: 'done' });
   assert.notEqual(done.profile.pcAccess, 'careful', 'Whole PC kept (absent = whole)');
+  assert.equal(done.library?.publish, false, 'unticked: sharing in the public library is off');
   // The spotlight tour opens over the Manager's chat once; Skip ends it (it is a modal dialog over the window).
   const spotlight = page.locator('dialog.spotlight');
   await spotlight.waitFor({ timeout: 15_000 });

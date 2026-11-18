@@ -1,5 +1,6 @@
 // Context: the one context service of the runtime (ARCHITECTURE §4 "assemble context").
-// prompt() builds {stable, volatile} (B-049 F6: and the volatile part by section); delta() renders unseen chat lines from the canonical
+// prompt() builds {stable, volatile} (B-049 F6: and the volatile part by section; S2: the stable part by section too, and with
+// `direct` the More-tools list against the tools a resumed session holds); delta() renders unseen chat lines from the canonical
 // store; checkpoint() makes the portable Handoff; prepare() extracts attachment text ahead of delta() (optional, async).
 // 13.11.2026: no chat summaries any more – an agent's context is its own record (agents/history-text.ts).
 // Owns: wiring of the sub-builders, the lazily loaded prompt templates (B-044: the runtime's shared set, which
@@ -13,7 +14,7 @@ import type { Handoff, ModeInfo } from '../../shared/model/knowledge.ts';
 import type { RouteDecision } from '../../shared/model/providers.ts';
 import path from 'node:path';
 import { PromptTemplates } from './templates.ts';
-import { buildStable } from './prompt-stable.ts';
+import { stableSections } from './prompt-stable.ts';
 import { volatileSections } from './prompt-volatile.ts';
 import { buildDelta, unseenAttachments, type DeltaInput, type DeltaResult } from './delta.ts';
 import { buildCheckpoint } from './checkpoint.ts';
@@ -43,13 +44,16 @@ export class Context implements ContextService {
   }
 
   // Everything returned to the engine passes the secret redactor (known values → secret://).
-  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision }): PromptParts {
+  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision; direct?: readonly string[] }): PromptParts {
     const services = this.deps.services();
+    const stable = stableSections(services, this.templates, { agent: input.agent, mode: input.mode, route: input.route, ...(input.direct ? { direct: input.direct } : {}) })
+      .map((section) => ({ ...section, text: redactText(services, section.text) }));
     // B-049 F6: the volatile part also by section (built once – some sections show once), each redacted.
     const sections = volatileSections(services, { agent: input.agent, conversationId: input.conversationId, taskId: input.taskId, thread: input.thread, mode: input.mode, route: input.route })
       .map((section) => ({ ...section, text: redactText(services, section.text) }));
     return {
-      stable: redactText(services, buildStable(services, this.templates, { agent: input.agent, mode: input.mode, route: input.route })),
+      stable: stable.map((section) => section.text).join('\n\n'),
+      stableSections: stable,
       volatile: sections.filter((section) => !section.failed).map((section) => section.text).join('\n\n'),
       sections,
     };

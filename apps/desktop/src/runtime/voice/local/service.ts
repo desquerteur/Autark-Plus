@@ -11,12 +11,15 @@
 // B-058 G3: the language a model runs in never silently translates (modelLanguage, speechLanguage).
 // B-058 G1: pull(id, { auto }) is also the runtime's own download (auto.ts); the tagger (purpose 'tagging',
 // AUDIO_TAGGER) is downloaded like the others but never chosen as a setting.
+// KI-Runde 17.11.2026 (an agent's voice-over made this PC's voice the person's reading voice): a pull whose `choose` says
+// no leaves the settings as they are – a generation's pull passes it (media/generate-local.ts) – and speak uses the chosen
+// voice, else a downloaded one, so a voice-over speaks without becoming the voice that reads to the person.
 // Owns: these rules, the pull jobs and their events, the language choice per model. Never: decodes
 // compressed audio itself, sends audio anywhere, or changes a setting other than localStt / localTts.
 
 import os from 'node:os';
 import type { RuntimeServices } from '../../contracts.ts';
-import { fitLocalSpeech, localSpeechModel, SILERO_VAD, SMART_TURN, type LocalSpeechModel, type LocalSpeechModels, type LocalSpeechOffer, type LocalSpeechPull, type SpeechHardware, type SpokenAudio } from '../../../shared/model/local-speech-models.ts';
+import { fitLocalSpeech, LOCAL_SPEECH_MODELS, localSpeechModel, SILERO_VAD, SMART_TURN, type LocalSpeechModel, type LocalSpeechModels, type LocalSpeechOffer, type LocalSpeechPull, type SpeechHardware, type SpokenAudio } from '../../../shared/model/local-speech-models.ts';
 import { pcm16Bytes, type MonoAudio } from '../../../shared/voice/wav.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { hearFormat, hostDecodes, pcmOf, WHOLE_BYTES } from '../../media/hear-any.ts';
@@ -171,7 +174,8 @@ export class LocalSpeech {
   /**
    * voice.pullLocal: downloads `id` (and Silero VAD with a speech-to-text model), then chooses it; the audio
    * tagger (B-058) is only downloaded. `auto`: the runtime's own download (G1, auto.ts) – its events say so;
-   * `choose` (auto): asked once it is there – false keeps the settings as they are (the person chose meanwhile).
+   * `choose`: asked once it is there – false keeps the settings as they are (the person chose meanwhile, or the pull is a
+   * generation's, which never changes the person's reading voice).
    */
   pull(id: string, options: { auto?: boolean; choose?: () => boolean } = {}): Promise<{ ok: true }> {
     const model = localSpeechModel(id);
@@ -266,13 +270,12 @@ export class LocalSpeech {
     }
   }
 
-  /** voice.speak: one line in the chosen local voice (`voice`: the speaker number, '0' …); after `signal` aborted no further sentence is spoken (engine.ts synthesize). */
+  /** voice.speak: one line in the chosen local voice, else a downloaded one (`voice`: the speaker number, '0' …); after `signal` aborted no further sentence is spoken (engine.ts synthesize). */
   async speak(input: { text: string; voice?: string; language?: string; signal?: AbortSignal }): Promise<SpokenAudio> {
-    const model = this.ttsModel();
-    if (!model) {
-      this.fetchChosenVoice();
-      throw new WorkforceError('unavailable', `No local voice is downloaded on this PC (${WHERE}).`);
-    }
+    const chosen = this.ttsModel();
+    if (!chosen) this.fetchChosenVoice();
+    const model = chosen ?? LOCAL_SPEECH_MODELS.find((entry) => entry.purpose === 'tts' && this.installed(entry));
+    if (!model) throw new WorkforceError('unavailable', `No local voice is downloaded on this PC (${WHERE}).`);
     const text = input.text.replace(/\s+/g, ' ').trim();
     if (!text) return { audio: '', sampleRate: 0, durationMs: 0 };
     if (text.length > MAX_SPEAK_CHARS) throw new WorkforceError('bad_request', `One spoken line holds at most ${MAX_SPEAK_CHARS} characters.`);

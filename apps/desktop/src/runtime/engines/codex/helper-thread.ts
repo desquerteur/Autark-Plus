@@ -3,6 +3,8 @@
 // tool (`tools.experimental_request_user_input`) are off, so the model reads only Autark's instructions and tools.
 // - A helper thread (decisions, verifier, compaction, widget fills …) is ephemeral, has no environment (`environments: []`:
 //   no shell or patch tool) and gets HELPER_NOTE: in code mode Codex still offers `exec`/`wait`, which reach nothing there.
+//   KI-Runde 17.11.2026: a turn with `keep` (a call's voice) holds its helper thread open for the call – it stays loaded in
+//   the app-server and the turn answers with it, so each spoken line is one input on the thread the call started with.
 // - An agent thread keeps the shell with its patch tool, the shell snapshot, view_image (the only way it sees a stored image),
 //   image_generation (the plan's own pictures) and Codex's live web search; a new one asks for raw Responses items
 //   (code-mode.ts reads its exec calls there) and is stored as 'chatgpt_hidden', so the Codex desktop app does not list it.

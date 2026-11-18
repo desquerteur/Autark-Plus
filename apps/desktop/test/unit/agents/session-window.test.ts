@@ -1,5 +1,5 @@
 // B-080 – SessionStore.reportedWindow: the context window an engine last reported for a model on any agent's thread (the
-// window it really runs with – splits/fork.ts and turn-prepare.ts chooseSession use it before the catalog's): the newest
+// window it really runs with – splits/fork.ts and session-choice.ts chooseSession use it before the catalog's): the newest
 // row of that engine and model with a window; rows of other models or engines and rows without a window do not count.
 // Owns: these checks. Never: an engine.
 

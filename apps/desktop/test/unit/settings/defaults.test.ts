@@ -25,7 +25,8 @@ test('an unusable language gives English; a usable one its code', () => {
   assert.equal(languageOf('zh-Hans-CN'), 'zh');
   for (const value of ['Deutsch', '!!', '', '1-2']) assert.equal(languageOf(value), 'en', value);
   assert.equal(defaultSettings({ locale: 'Deutsch' }).profile.language, 'en');
-  assert.equal(defaultSettings({ locale: 'es-MX' }).profile.language, 'es');
+  assert.equal(defaultSettings({ locale: 'es-MX' }).profile.language, 'en', 'owner 18.11.2026: English on every PC');
+  assert.equal(defaultSettings({ locale: 'de-AT' }).profile.language, 'en');
 });
 
 test('the desktop app hands the display language to the runtime; none when Electron has none', () => {

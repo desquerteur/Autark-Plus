@@ -170,6 +170,7 @@ video.w-record-playback { max-height: 360px; background: var(--chrome); }
 
 /* ---------------------------------------------------------------- confirm + review */
 .w-confirm .md { color: var(--text); }
+.w-confirm .md:empty { display: none; } /* 17.11.2026: a confirm that only said its title has no instructions left (day/day-repeat.ts) */
 .w-review { display: grid; gap: 10px; min-width: 0; }
 .w-review > .w-question, .w-review > .w-actions { margin: 0; }
 .w-review-media { min-width: 0; }
@@ -193,4 +194,26 @@ video.w-record-playback { max-height: 360px; background: var(--chrome); }
 @container (max-width: 420px) {
   .w-record-device { flex: 1 1 100%; margin-left: 0; }
   .w-record-device .w-record-select { flex: 1 1 auto; max-width: none; }
+}
+
+/* ---------------------------------------------------------------- voice-over (record block with video + cues; task_2xr88cmc) */
+.w-voice-video { display: block; width: 100%; max-height: min(52vh, 480px); border-radius: var(--r-lg); background: var(--chrome); object-fit: contain; }
+.w-voice-stage { position: relative; display: grid; gap: 8px; min-height: 9.5em; align-content: start; padding: 14px 18px; border-radius: var(--r-lg); background: var(--surface); }
+.w-voice-now { color: var(--text); font-size: clamp(22px, 4.2cqw, 32px); font-weight: 500; line-height: 1.35; letter-spacing: -.2px; overflow-wrap: anywhere; }
+.w-voice-now.is-waiting { color: var(--muted); }
+.w-voice-bar { height: 8px; overflow: hidden; border-radius: 8px; background: var(--selected); }
+.w-voice-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--text); }
+.w-voice-bar.is-late > span { background: var(--danger); }
+.w-voice-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; color: var(--secondary); font-size: 13px; }
+.w-voice-meta .is-hint { color: var(--text); }
+.w-voice-next { color: var(--muted); font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+.w-voice-count { position: absolute; inset: 0; display: grid; place-items: center; border-radius: inherit; background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text); font-size: 72px; font-weight: 600; }
+.w-voice-lines { margin: 0; padding-left: 1.4em; max-height: 12em; overflow: auto; color: var(--secondary); font-size: 14px; line-height: 1.5; }
+.w-voice-lines .tabular { margin-right: 8px; color: var(--muted); }
+.w-voice-playback { display: grid; gap: 8px; }
+.w-voice-playback audio { width: 100%; height: 40px; }
+@container (max-width: 420px) {
+  .w-voice-stage { padding: 12px 14px; }
+  .w-voice-count { font-size: 56px; }
 }

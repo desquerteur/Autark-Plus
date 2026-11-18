@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSocket } from 'node:dgram';
-import { broadcastAddresses, discover, DiscoveryResponder, loopbackTargets, MAX_HELLO_ANSWERS, parseAnswer, type Candidate, type UdpSocket } from '../../../src/runtime/devices/discovery.ts';
+import { broadcastAddresses, discover, DiscoveryResponder, loopbackOnly, loopbackTargets, MAX_HELLO_ANSWERS, parseAnswer, type Candidate, type UdpSocket } from '../../../src/runtime/devices/discovery.ts';
 import { remoteIdOf } from '../../../src/runtime/remote/id.ts';
 
 const FP = 'a'.repeat(64);
@@ -81,6 +81,25 @@ test('asking: one entry per device and key, never itself, only its own probe, wr
     flood.deliver({ a: 'wf-hello', v: 1, n, ...identity(`dev_${String(i).padStart(12, '0')}`), fingerprint, remoteId: remoteIdOf(fingerprint) });
   }
   assert.equal((await many).length, MAX_HELLO_ANSWERS);
+});
+
+test('a test profile (WORKFORCE_TEST_DATA) never leaves this PC: responder and probe stay on 127.0.0.1, nothing is broadcast (no Windows Firewall question)', async () => {
+  const env = { WORKFORCE_TEST_DATA: 'C:/tmp/profile' };
+  assert.equal(loopbackOnly(env), true);
+  assert.equal(loopbackOnly({ ...env, WORKFORCE_TEST_LAN: '1' }), false, 'a real network check opts out');
+  assert.equal(loopbackOnly({}), false, 'a normal start is unchanged');
+  assert.deepEqual(loopbackTargets(env), ['127.0.0.1']);
+  const responderSocket = fakeSocket();
+  new DiscoveryResponder({ socket: () => responderSocket.socket, env }).answer(() => identity());
+  assert.deepEqual([responderSocket.bound(), responderSocket.boundAddress()], [47813, '127.0.0.1']);
+  const joiner = fakeSocket();
+  const found = discover({ socket: () => joiner.socket, env, timeoutMs: 10 });
+  assert.equal(joiner.boundAddress(), '127.0.0.1', 'the asking socket is bound to loopback, too');
+  assert.deepEqual(joiner.sent.map((item) => item.address), ['127.0.0.1']);
+  assert.deepEqual(await found, []);
+  const lan = fakeSocket();
+  void discover({ socket: () => lan.socket, env: { WORKFORCE_TEST_DATA: 'x', WORKFORCE_TEST_LAN: '1' }, timeoutMs: 10, targets: () => [] });
+  assert.equal(lan.boundAddress(), undefined, 'WORKFORCE_TEST_LAN=1 binds as in a normal start');
 });
 
 test('test-only override: probes go to loopback only, the responder listens there, nothing is broadcast', async () => {

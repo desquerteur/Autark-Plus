@@ -10,7 +10,8 @@
 // name stays; the merged copy then travels back as its change); a section only the joiner has reaches the other PC.
 // API connections (`providers`) travel here; their keys are handles, the values go with the secrets. B-078: profile.notes
 // travels as its own unit 'profile.notes' (OWN_UNITS), so PCs on 0.3.2/0.3.3 skip it like the new section library;
-// B-085: profile.pcAccess the same way for PCs up to 0.3.4; 16.11.2026: profile.forEveryAgent for PCs up to 0.3.8.
+// B-085: profile.pcAccess the same way for PCs up to 0.3.4; 16.11.2026: profile.forEveryAgent for PCs up to 0.3.8;
+// 17.11.2026: notifications.computerUse for PCs up to 0.3.9.
 // B-080 (live 07.11.–08.11.: a newer PC's voice.dictation made an older one refuse every section of each link-up): a key
 // of a known section this PC does not know is left out of the patch, as settings.json leaves it out (settings/read.ts),
 // and the rest of the section applies.
@@ -32,6 +33,7 @@ const OWN_UNITS: Readonly<Record<string, readonly [section: string, key: string]
   'profile.notes': ['profile', 'notes'],
   'profile.pcAccess': ['profile', 'pcAccess'], // B-085: a PC on 0.3.4 that wins the profile never clears it
   'profile.forEveryAgent': ['profile', 'forEveryAgent'], // 16.11.2026: a PC on 0.3.8 that wins the profile never resets it
+  'notifications.computerUse': ['notifications', 'computerUse'], // 17.11.2026: the same for PCs up to 0.3.9 and the notifications section
 };
 const isUnit = (name: string): boolean => Object.prototype.hasOwnProperty.call(OWN_UNITS, name);
 

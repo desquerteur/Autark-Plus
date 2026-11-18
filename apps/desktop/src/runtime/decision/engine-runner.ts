@@ -2,19 +2,9 @@
 // cheapest suitable model (category 'cheap-chat', economy) and returns its (structured) answer.
 // Up to 'strong' first; when nothing in that band is usable (e.g. only frontier models are
 // connected, or all their accounts are limited) the economy pick of any tier. Used by the subconscious, the LLM
-// decision fallback, the verifier and widget fills.
+// decision fallback, the verifier and widget fills. Its listening turn (MM10) is listener.ts.
 // The model is the Decisions use (settings.json routing.decision; "auto" = the helper default below) – the router's
 // Settings use pin (routing/pins.ts), falling back to the cheap pick with a reason when it is not usable.
-// MM10: createListener – the same one-shot turn with one recording (media.listen) on a model
-// that hears audio (caps.audioIn; while the catalog does not say, a known listening family).
-// Recordings go through the compatible chat adapter (input_audio): compatible models, and
-// OpenAI API models, whose API speaks the same chat completions. B-058 G7: a plan CLI model whose
-// catalog entry says it hears audio (caps.audioIn – Codex inputModalities, an ACP agent's audio
-// capability) listens on its own engine (Codex localAudio, ACP audio blocks); no name guess there.
-// Every other model is excluded from the route, and `avoid` keeps accounts out. Pay-per-use accounts listen only with
-// `allowPaid` (media.listen: listenOptions says whether the route may pick one); without it they are excluded and a routed one is refused before the
-// call, also one that became usable while the router worked. Category 'cheap-chat' (economy)
-// until routing knows 'audio-analysis' (models/priors.ts CATEGORIES).
 // SG: without an explicit choice the router prefers the helper default (routing/helper-default.ts:
 // a Codex plan's small model at low effort); a caller's `effort` reaches it as an effort-only
 // request (RouteRequest.previous asked 'effort'), and the answer says which effort ran and which
@@ -35,18 +25,22 @@
 // (one account at the provider), the failover skips them all, and `log` says which way answered.
 // What a call used goes to `onUsage` and with its answer as the engine reported it: all input, the cached part of it, the output.
 // B-078 D14: a caller's `temperature` goes with the engine turn; an engine that takes one honours it, the others ignore it.
-// Owns: the synthetic runtime agent, the one-shot engine call, its one failover and which models can listen.
-// Never: tools, sessions, approvals (every native approval is denied), the agent's own context,
-// a recording sent to a model that cannot hear it, or to a pay-per-use account without allowPaid.
+// KI-Runde 17.11.2026 (decision 7.1): createChatOpener keeps one such lean conversation open for as long as a call runs –
+// it opens at the call's start, its stable part is sent once, each spoken line is one input on the kept session, and the
+// text reaches the caller as the model writes it (calls/talker.ts). A stopped line keeps the session; a session that is
+// gone, and an engine that keeps none, get the call so far as text. A lane that runs out goes once to another account.
+// What each line used (model, kept, time to the first text, tokens) is one 'call voice line' in the log.
+// Owns: the synthetic runtime agent, the one-shot engine call, the kept call conversation, and its one failover.
+// Never: tools, sessions, approvals (every native approval is denied), the agent's own context.
 
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Agent } from '../../shared/model/org.ts';
-import type { Account, Effort, EngineId, ModelInfo, RouteDecision } from '../../shared/model/providers.ts';
-import type { AccountService, Clock, EngineRegistry, Logger, ModelCatalog, NotificationService, Paths, RouteRequest, Router, SettingsService } from '../contracts.ts';
+import type { Account, Effort, EngineId, RouteDecision } from '../../shared/model/providers.ts';
+import type { AccountService, Clock, EngineRegistry, Logger, ModelCatalog, NotificationService, Paths, RouteRequest, Router } from '../contracts.ts';
 import type { EngineEvent, EngineTurnResult, TurnInputItem } from '../engines/types.ts';
 import { accountFailure, recordAccountFailure } from '../accounts/failure.ts';
-import { chargeOf } from '../models/pricing.ts';
+import { cachedInput } from '../engines/shared.ts';
 import { GENERAL_MODE } from '../modes/service.ts';
 import { SYSTEM_ID, newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
@@ -119,15 +113,16 @@ export function callLimitMs(deps: Pick<EngineRunnerDeps, 'timeoutMs'>, deadlineM
 export const HELPER_DIR = 'helper';
 
 /** The signal of one helper call: its time limit (callLimitMs) and the caller's own signal. */
-function callSignal(deps: Pick<EngineRunnerDeps, 'timeoutMs'>, signal: AbortSignal | undefined, deadlineMs?: number): AbortSignal {
+export function callSignal(deps: Pick<EngineRunnerDeps, 'timeoutMs'>, signal: AbortSignal | undefined, deadlineMs?: number): AbortSignal {
   const limit = callLimitMs(deps, deadlineMs);
   const timeout = AbortSignal.timeout(Math.max(1, Math.round(limit)));
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-/** One tool-less, session-less engine turn on a routed account and model. */
-async function runOnce(deps: Pick<EngineRunnerDeps, 'engines' | 'paths' | 'clock'>, engine: EngineId, target: { account: Account; model: string; effort: Effort },
-  turn: { system: string; input: TurnInputItem[]; schema?: Record<string, unknown>; signal: AbortSignal; onEvent?: (event: EngineEvent) => void; temperature?: number }): Promise<EngineTurnResult> {
+/** One tool-less engine turn on a routed account and model – session-less, or on the kept session of a call's voice (`session`, `keep`). */
+export async function runOnce(deps: Pick<EngineRunnerDeps, 'engines' | 'paths' | 'clock'>, engine: EngineId, target: { account: Account; model: string; effort: Effort },
+  turn: { system: string; input: TurnInputItem[]; schema?: Record<string, unknown>; signal: AbortSignal; onEvent?: (event: EngineEvent) => void; temperature?: number;
+    session?: { ref: string; generation: number }; keep?: true }): Promise<EngineTurnResult> {
   const cwd = path.join(deps.paths.temp, HELPER_DIR);
   await mkdir(cwd, { recursive: true, mode: 0o700 }); // temp is scratch: the folder may be gone
   return deps.engines.get(engine).run({
@@ -143,6 +138,8 @@ async function runOnce(deps: Pick<EngineRunnerDeps, 'engines' | 'paths' | 'clock
     readOnly: true,
     onEvent: turn.onEvent ?? (() => {}),
     signal: turn.signal,
+    ...(turn.session ? { session: turn.session } : {}),
+    ...(turn.keep ? { keep: turn.keep } : {}),
     ...temperatureOf(turn.temperature), // B-078 D14: an engine that takes a temperature reads it, the others ignore the field
   });
 }
@@ -194,122 +191,159 @@ export function createEngineRunner(deps: EngineRunnerDeps): StructuredRunner {
   };
 }
 
-// ------------------------------------------------------------------ listening (MM10)
-
-export const NO_LISTENER = 'No connected model can listen to recordings. Connect one that hears audio in Settings › Models – for example Gemini (a Google API key or OpenRouter) or GPT-4o audio (an OpenAI API key); a local server works when its model hears audio.';
-export const PAID_OFF = 'Listening now needs a pay-per-use account, and pay-per-use fallback is off here.';
-
-/** Engines whose models reach the compatible chat adapter (OpenAI: the same chat completions API). */
-const LISTEN_ENGINES: ReadonlySet<EngineId> = new Set(['compatible', 'openai']);
-/** B-058 G7: plan CLI engines that send a recording themselves – only for a model the catalog says hears audio. */
-const OWN_AUDIO_ENGINES: ReadonlySet<EngineId> = new Set(['codex', 'acp']);
-
-/** Families that hear audio through chat completions, for models whose catalog entry has no audioIn flag. */
-const KNOWN_LISTENERS = /(?:^|[/:])(?:gpt-4o(?:-mini)?-audio|gpt-audio|gemini-(?![\w.-]*(?:embed|tts|image|live|omni|nano-banana))|voxtral|qwen[\w.-]*omni|phi-4-multimodal)/i;
-
-/** Can this model hear a recording (input_audio, or its CLI engine's own audio input)? Media function specialists (FN1) never chat. */
-export function hearsAudio(model: Pick<ModelInfo, 'engine' | 'model' | 'caps' | 'functions'>): boolean {
-  if (model.functions?.length) return false;
-  if (OWN_AUDIO_ENGINES.has(model.engine)) return model.caps.audioIn === true;
-  if (!LISTEN_ENGINES.has(model.engine)) return false;
-  return model.caps.audioIn ?? KNOWN_LISTENERS.test(model.model);
-}
-
-/** The engine a listening turn runs on: the CLI's own for Codex/ACP models, else the compatible chat adapter. */
-export function listenEngine(model: Pick<ModelInfo, 'engine'>): EngineId {
-  return OWN_AUDIO_ENGINES.has(model.engine) ? model.engine : 'compatible';
-}
-
-export interface ListenerDeps extends Omit<EngineRunnerDeps, 'accounts' | 'catalog'> {
-  accounts: Pick<AccountService, 'get' | 'candidates'>;
-  catalog: Pick<ModelCatalog, 'get' | 'list'>;
-  settings: Pick<SettingsService, 'get'>;
-}
-
-export interface ListenOptions {
-  /** Connected models that can hear a recording. */
-  models: ModelInfo[];
-  /** Pay-per-use accounts that can run one of them. */
-  paid: Account[];
-  /** A free (local) or plan account can run one of them. */
-  free: boolean;
-  /** The route may pick one of `paid`: Settings allow the paid spill-over, or nothing else can listen (routing/pool.ts). */
-  mayPay: boolean;
-}
-
-/** What listening can run on right now (cheap: no network). */
-export function listenOptions(deps: Pick<ListenerDeps, 'accounts' | 'catalog' | 'settings'>): ListenOptions {
-  const models = deps.catalog.list().filter((model) => model.available && hearsAudio(model));
-  const paid = new Map<string, Account>();
-  let free = false;
-  for (const model of models) {
-    for (const account of deps.accounts.candidates(model.engine, model.model)) {
-      if (account.provider !== model.provider || (model.accounts.length && !model.accounts.includes(account.id))) continue;
-      if (chargeOf(account) === 'paid') paid.set(account.id, account);
-      else free = true;
-    }
-  }
-  let allowPaid = false;
-  try { allowPaid = deps.settings.get().routing.allowPaidFallback; } catch { allowPaid = false; }
-  return { models, paid: [...paid.values()], free, mayPay: paid.size > 0 && (allowPaid || !free) };
-}
-
-export interface ListenInput {
-  audio: { path: string; name: string; mime: string };
-  system: string;
-  prompt: string;
-  /**
-   * A pay-per-use account may listen (listenOptions mayPay). Without it
-   * they are kept out of the route, and a route to one (an account that became usable while the
-   * router worked) is refused with PAID_OFF before anything is sent.
-   */
-  allowPaid: boolean;
-  /** Account ids the turn may not use. */
-  avoid?: readonly string[];
-  signal?: AbortSignal;
-}
-
-export interface Heard {
-  text: string;
-  modelId: string;
-  /** The turn ran on a pay-per-use account (models/pricing.ts chargeOf). */
-  paid: boolean;
-  /** The provider's own price of the turn (OpenRouter), when it reported one. */
-  costUsd?: number;
-}
-
-export type Listener = (input: ListenInput) => Promise<Heard>;
+// ------------------------------------------------------------------ KI-Runde 17.11.2026: a conversation kept for a call
 
 /**
- * One listening turn. Fails with a user-safe WorkforceError: NO_LISTENER without a model,
- * PAID_OFF when only a pay-per-use account could listen and `allowPaid` is not set, the
- * router's reason when none can run now, or the engine's error with details { modelId, paid,
- * billed } – billed: the provider reported tokens, so a paid turn was charged.
+ * One line said to a kept conversation: its text, the caller's signal and budget, and the answer as it is written –
+ * `onRestart` comes before a line that runs once more (a session that is gone, another account): its text starts anew.
  */
-export function createListener(deps: ListenerDeps): Listener {
-  return async ({ audio, system, prompt, allowPaid, avoid = [], signal }) => {
-    const options = listenOptions(deps);
-    const hearing = new Set(options.models.map((model) => model.id));
-    if (!hearing.size) throw new WorkforceError('unavailable', NO_LISTENER, { details: { setup: true } });
-    const keepOut = allowPaid ? avoid : [...avoid, ...options.paid.map((account) => account.id)];
-    const exclude = [...deps.catalog.list().filter((model) => !hearing.has(model.id)).map((model) => model.id), ...keepOut];
-    const route = await routeHelper(deps, 'listen', { exclude });
-    const account = deps.accounts.get(route.accountId);
-    const model = deps.catalog.get(route.modelId);
-    if (!account || !model || !hearing.has(model.id)) throw new WorkforceError('unavailable', NO_LISTENER);
-    const paid = chargeOf(account) === 'paid';
-    if (paid && !allowPaid) throw new WorkforceError('unavailable', PAID_OFF, { details: { modelId: model.id, paid: false, billed: false } });
-    const result = await runOnce(deps, listenEngine(model), { account, model: model.model, effort: route.effort }, {
-      system, input: [{ type: 'text', text: prompt }, { type: 'audio', ...audio }], signal: callSignal(deps, signal),
-    });
-    const costUsd = result.usage?.costUsd;
-    if (result.stop !== 'done') {
-      const billed = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0) > 0;
-      const code = result.stop === 'interrupted' ? 'cancelled' : result.error?.code ?? 'internal';
-      throw new WorkforceError(code, result.error?.message ?? 'The model could not listen to the recording.', {
-        retryAfterMs: result.error?.retryAfterMs, details: { modelId: model.id, paid, billed, ...(costUsd !== undefined ? { costUsd } : {}) },
-      });
-    }
-    return { text: result.text, modelId: model.id, paid, ...(costUsd !== undefined ? { costUsd } : {}) };
+export interface ChatLine { input: string; signal?: AbortSignal; deadlineMs?: number; onText?: (delta: string) => void; onRestart?: () => void }
+
+/** What one line answered: the whole text, the model that said it, and whether the session carried the earlier lines. */
+export interface ChatSaid { text: string; by: string; kept: boolean }
+
+/** A small model's conversation that lives as long as a call (calls/talker.ts): opened once with its stable part, one input per spoken line. */
+export interface KeptChat {
+  /** The call started: the lane is routed and, where the engine can, the session opens before the first line. Never throws. */
+  open(): void;
+  /** One line; lines run one after the other, so a stopped line has ended before the next one runs on its session. */
+  say(line: ChatLine): Promise<ChatSaid>;
+  /** The call ended: the session is let go (a shared process frees it where it can), also one a line still opens. */
+  close(): void;
+}
+
+/** Opens such a conversation: its purpose for the route, its stable part as the system prompt and the effort it runs at. */
+export type ChatOpener = (open: { purpose: string; system: string; effort?: Effort }) => KeptChat;
+
+/** How the call so far opens a line that has no kept session to carry it. */
+const EARLIER = 'Earlier in this call, in order:';
+const ANSWERED = 'I answered:';
+const EARLIER_LINES = 24;
+const EARLIER_CHARS = 8000;
+
+/** The route and session one kept conversation runs on. */
+interface Held { route: RouteDecision; account: Account; model: string; session?: { ref: string; generation: number } }
+
+/** One line's run on a held route: whether a session carried it, and what the engine answered. */
+interface Ran { on: Held; kept: boolean; result: EngineTurnResult }
+
+/**
+ * A kept, tool-less conversation on the helper lane (routeHelper, as one-shot helper calls): the call's start routes it and
+ * opens the session where the engine can (Engine.keepOpen), else the first line does; each later line is one input on it,
+ * and the text reaches `onText` as the model writes it. A stopped line keeps the session. A session that is gone ('conflict':
+ * its process ended or idled out) is noticed, and the line runs once more on a new one with the call so far in front – as
+ * every line on an engine that keeps no session. A line whose account fails is recorded as a helper call records it and runs
+ * once more on another account; when none can run, it fails as 'unavailable'. A line that runs once more calls `onRestart`
+ * first, so its text starts anew. Nothing it opened outlives `close`.
+ */
+export function createChatOpener(deps: EngineRunnerDeps): ChatOpener {
+  return ({ purpose, system, effort }) => {
+    let held: Held | undefined;
+    let closed = false;
+    let queue: Promise<unknown> = Promise.resolve();
+    const earlier: string[] = []; // the lines of this call and what I answered, for a turn that has no kept session
+    const drop = (on: Held, ref: string | undefined) => {
+      if (!ref) return;
+      try { void deps.engines.get(on.route.engine).unload?.(on.account, ref)?.catch?.(() => undefined); } catch { /* the session idles out by itself */ }
+    };
+    const letGo = () => {
+      const gone = held;
+      held = undefined;
+      if (gone) drop(gone, gone.session?.ref);
+    };
+    const lane = async (exclude?: string[]): Promise<Held> => {
+      const route = await routeHelper(deps, purpose, exclude ? { exclude } : {}, effort);
+      if (exclude?.includes(route.accountId)) throw new WorkforceError('unavailable', 'No other account can run the call voice now.');
+      const account = deps.accounts.get(route.accountId);
+      const model = deps.catalog.get(route.modelId);
+      if (!account || !model) throw new Error('call voice: routed account/model vanished');
+      return { route, account, model: model.model };
+    };
+    const attempt = async (line: ChatLine, cut: AbortSignal): Promise<Ran> => {
+      held ??= await lane();
+      const on = held;
+      const kept = on.session !== undefined;
+      // Without a kept session (an engine that keeps none, or a session that is gone) the call so far comes as text first.
+      const before = kept || !earlier.length ? '' : `${EARLIER}\n${earlier.join('\n\n')}\n\n`;
+      const began = Date.now();
+      let firstMs: number | undefined;
+      const other: Record<string, number> = {}; // what else the model did: a commentary, a reach for a tool (the log line names it)
+      const onEvent = (event: EngineEvent) => {
+        if (event.type === 'commentary' || event.type === 'tool_start') other[event.type] = (other[event.type] ?? 0) + 1;
+        if (event.type === 'text') { firstMs ??= Date.now() - began; try { line.onText?.(event.delta); } catch { /* the reader's own business */ } return; }
+        if (event.type !== 'limits') return;
+        try { deps.accounts.updateLimits(on.account.id, event.limits); } catch { /* bookkeeping only */ }
+      };
+      const result = await runOnce(deps, on.route.engine, { account: on.account, model: on.model, effort: on.route.effort },
+        { system, input: [{ type: 'text', text: `${before}${line.input}` }], signal: cut, onEvent, keep: true, ...(on.session ? { session: on.session } : {}) });
+      if (result.usage) { try { deps.onUsage?.({ account: on.account, route: on.route, usage: result.usage }); } catch { /* bookkeeping only */ } }
+      // Real run 18.11.2026: what each line of the voice used is seen nowhere else (no run, no transcript) – one line in the log.
+      const use = result.usage ? { use: { input: result.usage.inputTokens, cached: cachedInput(result.usage), write: result.usage.cacheWriteTokens, output: result.usage.outputTokens } } : {};
+      try { deps.log?.info('call voice line', { model: on.route.modelId, kept, stop: result.stop, ms: Date.now() - began, ...(firstMs !== undefined ? { firstMs } : {}), ...(Object.keys(other).length ? { other } : {}), ...use }); } catch { /* log only */ }
+      const failed = accountFailure(result);
+      if (failed) {
+        for (const one of [on.account, ...sameKey(deps, on.account)]) { try { recordAccountFailure(deps, one, on.model, result); } catch { /* the call's own error reaches the caller */ } }
+      }
+      const session = result.session && deps.engines.get(on.route.engine).caps.sessions ? { ref: result.session.ref, generation: result.session.generation } : undefined;
+      if (closed || held !== on) drop(on, session?.ref); // the call ended while the line ran: nothing of it outlives the call
+      else if (failed || (result.stop !== 'done' && result.stop !== 'interrupted')) {
+        if (session?.ref !== on.session?.ref) drop(on, session?.ref);
+        letGo(); // the next line opens a new session
+      } else {
+        if (on.session && on.session.ref !== session?.ref) drop(on, on.session.ref);
+        on.session = session; // a stopped line keeps it: the next line runs on it
+      }
+      return { on, kept, result };
+    };
+    const speak = async (line: ChatLine): Promise<ChatSaid> => {
+      if (closed) throw new WorkforceError('unavailable', 'This call voice is closed.');
+      const cut = callSignal(deps, line.signal, line.deadlineMs);
+      const again = () => { try { line.onRestart?.(); } catch { /* the reader's own business */ } return attempt(line, cut); };
+      let ran = await attempt(line, cut);
+      const gone = ran.kept && ran.result.stop === 'error' && ran.result.error?.code === 'conflict';
+      if (gone && !closed && !cut.aborted) ran = await again();
+      if (accountFailure(ran.result) && !closed && !cut.aborted) {
+        const away = [ran.on.account.id, ...sameKey(deps, ran.on.account).map((one) => one.id)];
+        held = await lane(away); // no other account: 'unavailable', so the call hears the no-lane line
+        ran = await again();
+        if (accountFailure(ran.result)) throw new WorkforceError('unavailable', `No account can run the call voice now (${ran.on.route.modelId}).`);
+      }
+      const { on, kept, result } = ran;
+      if (result.stop !== 'done') throw new WorkforceError(result.error?.code ?? 'internal', result.error?.message ?? `The call voice could not answer (${on.route.modelId}).`);
+      earlier.push(`${line.input}\n${ANSWERED} ${result.text.trim() || '(nothing)'}`);
+      while (earlier.length > EARLIER_LINES || earlier.join('').length > EARLIER_CHARS) earlier.shift();
+      return { text: result.text, by: on.route.modelId, kept };
+    };
+    const opening = async () => {
+      if (closed || held) return;
+      const on = await lane();
+      if (closed || held) return;
+      held = on;
+      const engine = deps.engines.get(on.route.engine);
+      if (!engine.keepOpen) { await engine.prewarm?.(on.account); return; }
+      const cwd = path.join(deps.paths.temp, HELPER_DIR);
+      await mkdir(cwd, { recursive: true, mode: 0o700 });
+      const session = await engine.keepOpen({ account: on.account, model: on.model, effort: on.route.effort, system: { stable: system, volatile: '' }, cwd });
+      if (closed || held !== on || on.session) drop(on, session.ref);
+      else on.session = session;
+    };
+    const after = <T>(work: () => Promise<T>): Promise<T> => {
+      const next = queue.then(work);
+      queue = next.catch(() => undefined);
+      return next;
+    };
+    return {
+      open(): void {
+        void after(opening).catch(() => undefined); // without a lane now, the first line routes again
+      },
+      say(line: ChatLine): Promise<ChatSaid> {
+        if (closed) return Promise.reject(new WorkforceError('unavailable', 'This call voice is closed.'));
+        return after(() => speak(line));
+      },
+      close(): void {
+        closed = true;
+        letGo();
+      },
+    };
   };
 }

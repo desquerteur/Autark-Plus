@@ -55,6 +55,7 @@ function footer(root) {
       <div class="ftr__intro">
         <a class="brand" href="${root}">${mark('', { ink: 'var(--moon)' })}<span class="brand__word">${site.name}</span></a>
         <p>${site.descriptor}. A company of AI agents that works on its own, on the AI plans you already pay for.</p>
+        <p class="ftr__community"><a href="${maker.discordUrl}" rel="noopener">Join the Teydra Lab Discord</a> – talk AI agents, get help with OpenAutark.</p>
       </div>
       ${col('Product', [['Overview', root], ['All capabilities', `${root}product/`], ['How it works', `${root}how-it-works/`], ['Access and data', `${root}access/`], ['Compare', `${root}compare/`], ['Download', `${root}download/`], ['Changelog', `${root}changelog/`]])}
       ${col('Resources', [['FAQ', `${root}faq/`], ['In the press', `${root}press/`], ['Brand and press kit', `${root}brand/`], ['Releases on GitHub', release.releasesUrl, 1], ['Report a problem', maker.feedbackUrl, 1], ['llms.txt', `${root}llms.txt`], ['Facts (JSON)', `${root}facts.json`]])}
@@ -64,7 +65,7 @@ function footer(root) {
     <div class="ftr__giant">${kword().replace('class="kword ', 'class="kword ftr__kword ')}</div>
     <div class="ftr__base">
       <span>© ${new Date().getFullYear()} ${maker.company} · ${maker.location}</span>
-      <nav aria-label="Legal"><a href="${maker.imprintUrl}" rel="noopener">Imprint</a><a href="${maker.privacyUrl}" rel="noopener">Privacy</a></nav>
+      <nav aria-label="Legal"><a href="${maker.imprintUrl}" rel="noopener">Imprint</a><a href="${maker.privacyUrl}" rel="noopener">Privacy</a><a href="https://toolradar.com/tools/autark">Autark on Toolradar</a></nav>
     </div>
   </div>
 </footer>`;
@@ -214,7 +215,7 @@ export function pageHero({ root, crumb, trail = [], title, lead, actions = '', d
 // The main button. `auto`: site.js points it at the visitor's own platform page (Mac, Linux, Android, iPhone);
 // without JS, and on Windows, it stays the Windows installer.
 export function downloadButton(root, { size = 'lg', cls = 'btn--ink', label = 'Download for Windows', auto = false } = {}) {
-  return `<a class="btn ${cls} btn--${size}" href="${release.asset(release.files.windows)}" data-dl="windows"${auto ? ' data-dl-auto' : ''} rel="nofollow">${icon('windows')}<span data-dl-label>${label}</span><span class="btn__meta" data-rel="windows-meta">v${release.fallback.windows.version} · ${release.fallback.windows.sizeMb} MB</span></a>`;
+  return `<a class="btn ${cls} btn--${size}" href="${root}download/windows/" data-dl="windows"${auto ? ' data-dl-auto' : ''}>${icon('windows')}<span data-dl-label>${label}</span><span class="btn__meta" data-rel="windows-meta">v${release.fallback.windows.version} · ${release.fallback.windows.sizeMb} MB</span></a>`;
 }
 
 // PC first, then phone: one row per kind, one tile per platform, each opening its own page.

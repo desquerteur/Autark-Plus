@@ -106,7 +106,6 @@ const logTool = defineTool<{ agentId?: string; before?: string; turns?: number }
     additionalProperties: false,
   },
   category: 'read',
-  anyMode: true,
   describe: (args) => internal(`Read the activity log of ${args.agentId?.trim() || 'myself'}`),
   async run(args, ctx) {
     const agent = findAgent(ctx, args.agentId);

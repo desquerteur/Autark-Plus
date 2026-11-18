@@ -149,8 +149,8 @@ declare module '../api/methods.ts' {
     /**
      * 16.11.2026: a page opened in a new tab of this PC's pane (global), shown there at once – the phone's pane is the
      * PC's, so a page that has to run on the PC (a sign-in whose answer returns to the PC's own address) is done from the
-     * phone; `tab`: its id there.
+     * phone; `tab`: its id there. `device`: another PC of the owner's, whose pane opens it (18.11.2026).
      */
-    'side.open': { params: { url: string }; result: { ok: true; tab?: string } };
+    'side.open': { params: { url: string; device?: string }; result: { ok: true; tab?: string } };
   }
 }

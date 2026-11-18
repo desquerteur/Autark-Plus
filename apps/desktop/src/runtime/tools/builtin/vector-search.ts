@@ -32,7 +32,6 @@ export const vectorSearch: ToolDef = defineTool<{ query: string; in: string[]; l
     required: ['query', 'in'], additionalProperties: false,
   },
   category: 'read',
-  anyMode: true,
   requires: 'embeddings',
   describe: (args) => ({ summary: `Search by meaning for "${clip(args.query, 80)}" in ${clip(args.in.join(', '), 80)}`, resource: args.in[0], reversible: true, external: false }),
   async run(args, ctx) {

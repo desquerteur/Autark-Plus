@@ -9,6 +9,7 @@
 // phone list view; on desktop it shows the last chat or the empty main slot; `owner` – O5, "All
 // work" on an agent's page – narrows the task lists to one agent or the team; `task` is the task
 // open in Work's detail; F11 16.11.2026: an agent's `work` page – what it does now, its active tasks and its log.) An in-app `<a href="#/…">` navigates through routeLink.
+// '#/chat/<id>?call=1' (owner 18.11.2026, the floating to-do button) also asks for that chat's call (callRequest).
 // Owns: the current route signal, parsing/formatting, navigation, in-app link clicks and back.
 // Never: loads data – views react to the route themselves.
 
@@ -139,9 +140,21 @@ export function back(): void {
   else navigate({ view: 'home' });
 }
 
+/** Owner 18.11.2026 (the floating to-do button): the chat whose call starts once its header shows (CallHeader.tsx). */
+export const callRequest = signal<string | null>(null);
+
+/** '#/chat/<id>?call=1' asks for that chat's call: the request is noted and the address loses its query. */
+export function takeCallRoute(hash: string): void {
+  const next = parseRoute(hash);
+  if (next.view !== 'chat' || !/[?&]call=1(&|$)/.test(hash)) return;
+  callRequest.value = next.id;
+  history.replaceState(null, '', formatRoute(next));
+}
+
 export function startRouter(): void {
+  takeCallRoute(location.hash);
   window.addEventListener('popstate', () => { route.value = parseRoute(location.hash); });
-  window.addEventListener('hashchange', () => { route.value = parseRoute(location.hash); });
+  window.addEventListener('hashchange', () => { takeCallRoute(location.hash); route.value = parseRoute(location.hash); });
 }
 
 /** Convenience helpers used across the app. */

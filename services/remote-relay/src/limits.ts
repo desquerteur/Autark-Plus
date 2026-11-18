@@ -30,6 +30,13 @@ export interface Limits {
   /** A receiver whose send buffer exceeds this is too slow: its tunnel closes at once. */
   maxBufferedBytes: number;
   pingIntervalMs: number;
+  /**
+   * Tunnel bytes one device key, and also one client source, may send through this server per UTC day (18.11.2026:
+   * the server is a meeting point first – a tunnel is the rare fallback, so it gets a daily budget, not a flat rate).
+   */
+  tunnelBytesPerDay: number;
+  /** Tunnel bytes of all devices together per UTC day: the cost ceiling (meeting and direct links go on above it). */
+  tunnelBytesPerDayTotal: number;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -49,6 +56,8 @@ export const DEFAULT_LIMITS: Limits = {
   stallMs: 20_000,
   maxBufferedBytes: 16 * 1024 * 1024,
   pingIntervalMs: 30_000,
+  tunnelBytesPerDay: 256 * 1024 * 1024,
+  tunnelBytesPerDayTotal: 10 * 1024 * 1024 * 1024,
 };
 
 const ENV: Record<keyof Limits, string> = {
@@ -68,6 +77,8 @@ const ENV: Record<keyof Limits, string> = {
   stallMs: 'RELAY_STALL_MS',
   maxBufferedBytes: 'RELAY_MAX_BUFFERED_BYTES',
   pingIntervalMs: 'RELAY_PING_INTERVAL_MS',
+  tunnelBytesPerDay: 'RELAY_TUNNEL_BYTES_PER_DAY',
+  tunnelBytesPerDayTotal: 'RELAY_TUNNEL_BYTES_PER_DAY_TOTAL',
 };
 
 /** Defaults with positive integer overrides from the environment (invalid values are ignored). */
@@ -92,6 +103,35 @@ export function sourceOf(address: string): string {
   const right = tail ? tail.split(':') : [];
   const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
   return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, '') || '0').join(':')}::/64`;
+}
+
+/** Tunnels on unless the environment says RELAY_TUNNELS=off (the emergency stop: meeting and direct links go on). */
+export function tunnelsFromEnv(env: Record<string, string | undefined>): boolean {
+  return (env.RELAY_TUNNELS ?? '').trim().toLowerCase() !== 'off';
+}
+
+/** Bytes per key within the current UTC day; a new day starts every count at 0. Bounded: a flood of keys clears it. */
+export class DayCounter {
+  private readonly counts = new Map<string, number>();
+  private day = '';
+  private readonly now: () => number;
+
+  constructor(now: () => number) { this.now = now; }
+
+  private roll(): void {
+    const day = new Date(this.now()).toISOString().slice(0, 10);
+    if (day !== this.day) { this.day = day; this.counts.clear(); }
+  }
+
+  get(key: string): number { this.roll(); return this.counts.get(key) ?? 0; }
+
+  add(key: string, bytes: number): number {
+    this.roll();
+    if (this.counts.size > 100_000 && !this.counts.has(key)) this.counts.clear();
+    const next = (this.counts.get(key) ?? 0) + bytes;
+    this.counts.set(key, next);
+    return next;
+  }
 }
 
 /** Token bucket: `rate` tokens per second, at most `burst`; refilled lazily from the clock. */

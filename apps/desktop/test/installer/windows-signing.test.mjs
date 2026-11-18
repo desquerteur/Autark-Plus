@@ -49,6 +49,50 @@ test('signed configuration retains the package identity, includes DLL/node, and 
   }
 });
 
+test('a certificate in the store of this PC (certum): the configuration needs its thumbprint and the publisher, nothing of Azure', async () => {
+  const names = ['AUTARK_WINDOWS_SIGNING', 'AUTARK_SIGNING_THUMBPRINT', ...keys];
+  const saved = names.map(key => process.env[key]);
+  try {
+    names.forEach(key => { delete process.env[key]; });
+    process.env.AUTARK_WINDOWS_SIGNING = 'certum';
+    process.env.AUTARK_SIGNING_PUBLISHER = 'Open Source Developer, Fixture Publisher';
+    delete require.cache[configPath];
+    assert.throws(() => require(configPath), /AUTARK_SIGNING_THUMBPRINT/);
+    process.env.AUTARK_SIGNING_THUMBPRINT = 'not-a-thumbprint'; delete require.cache[configPath];
+    assert.throws(() => require(configPath), /SHA-1 thumbprint/);
+    process.env.AUTARK_SIGNING_THUMBPRINT = '0123456789ABCDEF0123456789abcdef01234567'; delete require.cache[configPath];
+    const config = require(configPath);
+    assert.equal(config.forceCodeSigning, true);
+    assert.equal(config.win.verifyUpdateCodeSignature, true);
+    assert.deepEqual(config.win.signExts, ['.dll', '.node']);
+    assert.equal(config.win.signtoolOptions.publisherName, 'Open Source Developer, Fixture Publisher');
+    await require('app-builder-lib/out/util/config/config.js').validateConfiguration(config, { add() {} });
+    delete process.env.AUTARK_SIGNING_PUBLISHER; delete require.cache[configPath];
+    assert.throws(() => require(configPath), /AUTARK_SIGNING_PUBLISHER/);
+  } finally {
+    names.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; });
+    delete require.cache[configPath];
+  }
+});
+
+test('certum: an unsigned file is not signed while the certificate is missing from the store', { skip: process.platform !== 'win32' }, async t => {
+  const root = await fixture(t); const node = path.join(root, 'addon.node');
+  const source = require.resolve('sherpa-onnx-win-x64/sherpa-onnx.node'); // copied bytes, never the installed module
+  const bytes = await readFile(source);
+  await writeFile(node, bytes);
+  const names = ['AUTARK_WINDOWS_SIGNING', 'AUTARK_SIGNING_THUMBPRINT', 'AUTARK_SIGNING_PUBLISHER'];
+  const saved = names.map(key => process.env[key]);
+  try {
+    process.env.AUTARK_WINDOWS_SIGNING = 'certum';
+    process.env.AUTARK_SIGNING_THUMBPRINT = '0123456789ABCDEF0123456789ABCDEF01234567'; // no such certificate
+    process.env.AUTARK_SIGNING_PUBLISHER = 'Open Source Developer, Fixture Publisher';
+    await assert.rejects(inspectFile(node, 'Sign', false), /not in the store of this user/);
+    assert.deepEqual(await readFile(node), bytes, 'the file is untouched');
+  } finally {
+    names.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; });
+  }
+});
+
 test('PE hidden inside ASAR is rejected; unpacked PE is inventoried physically', async t => {
   const root = await fixture(t); const source = await fixture(t);
   await pe(path.join(source, 'nested/module.dat'));

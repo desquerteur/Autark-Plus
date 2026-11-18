@@ -27,7 +27,7 @@ import { isMobile, settings } from '../lib/store.ts';
 import { isPhoneApp } from '../pwa/native.ts';
 import { useDictation } from './bridge.ts';
 import { currentClient } from './client.ts';
-import { appendDraftText, canSubmit, clearDraft, feedbackDraft, reportText, updateDraft } from './draft.ts';
+import { appendDraftText, canSubmit, clearDraft, feedbackDraft, reportText, sentDraft, shownDraft, updateDraft } from './draft.ts';
 import type { FeedbackDraft } from './draft.ts';
 import { announceSent, canSendAgain, closesAtOnce, doneText, heldText, notSentLine, sendAgainLabel, sendLabel, sendReport, useFeedbackSending } from './delivery.ts';
 import { talkError, talkState } from './FeedbackButton.tsx';
@@ -74,6 +74,7 @@ function focusBack(): void {
 function fitField(area: HTMLTextAreaElement | null): void {
   if (!area) return;
   area.style.height = '';
+  if (!area.scrollHeight) return; // not laid out yet (the overlay opens after the form): the stylesheet's height holds
   area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`;
 }
 
@@ -82,9 +83,10 @@ function fitField(area: HTMLTextAreaElement | null): void {
  * message of theirs for the message slot; `onInbox`: the team's inbox opens (the overlay closes).
  */
 export function FeedbackForm(props: { onClose: () => void; onInbox: () => void; tools?: ComponentChildren; note?: string | null }) {
-  const draft = feedbackDraft.value;
+  const draft = shownDraft(); // while a send is on its way: the draft as sent (17.11.2026)
   const sending = useFeedbackSending(); // undefined until known: "Save" (never sends) meanwhile
-  const [busy, setBusy] = useState(false);
+  const [submittingNow, setBusy] = useState(false);
+  const busy = submittingNow || sentDraft.value !== null; // a form opened again during a send shows it, disabled
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<ReportLine | null>(null);
   const [held, setHeld] = useState(false); // the PC was not reached: the report waits in this page (outbox.ts)
@@ -131,6 +133,7 @@ export function FeedbackForm(props: { onClose: () => void; onInbox: () => void; 
       await snapshotSettled(); // a new snapshot on its way: the report carries it (bounded)
       const entry = await entryOf(feedbackDraft.peek(), send);
       await feedbackOutbox.put(entry); // kept before anything goes out
+      sentDraft.value = feedbackDraft.peek(); // shown, disabled, until the outcome: what the person sent
       clearDraft(); // the outbox holds it now; the next press takes a fresh screenshot
       setTried(send);
       const delivery = feedbackOutbox.deliver(entry);
@@ -140,8 +143,9 @@ export function FeedbackForm(props: { onClose: () => void; onInbox: () => void; 
     } catch (err) {
       setError(errorText(err)); // nothing left the page (the image could not be prepared): the draft is still here
     } finally {
+      sentDraft.value = null;
       submitting.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -183,13 +187,14 @@ export function FeedbackForm(props: { onClose: () => void; onInbox: () => void; 
   const listening = dictation.state === 'listening';
   const transcribing = dictation.state === 'transcribing' || talkState.value === 'transcribing';
   const message = error ?? dictation.error ?? talkError.value ?? props.note ?? null;
+  const phone = isMobile.value;
   return (
     <div class="feedback-dock" role="group" aria-label="Feedback">
       <div class="feedback-dock-row">
         {props.tools}
         {(dictation.available || draft.audio.length > 0) && <RecordingRow draft={draft} disabled={busy} />}
         <CrashRow draft={draft} disabled={busy} />
-        <p class="feedback-message" role="alert" title={message ?? undefined}>{message}</p>
+        {!phone && <p class="feedback-message" role="alert" title={message ?? undefined}>{message}</p>}
         <FeedbackInboxEntry shown onOpen={props.onInbox} />
       </div>
       <div class="feedback-dock-main">
@@ -220,7 +225,9 @@ export function FeedbackForm(props: { onClose: () => void; onInbox: () => void; 
           {sendLabel(sending, busy)}
         </button>
       </div>
-      <FeedbackPrivacyNote sending={sending === true} />
+      {phone && message // the phone's narrow row has no room for it: a message takes the note's line while it stands
+        ? <p class="feedback-message feedback-message-foot" role="alert" title={message}>{message}</p>
+        : <FeedbackPrivacyNote sending={sending === true} />}
     </div>
   );
 }

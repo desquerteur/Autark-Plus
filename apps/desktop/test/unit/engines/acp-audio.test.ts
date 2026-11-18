@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { parseAgentInfo } from '../../../src/runtime/engines/acp/protocol.ts';
 import { promptBlocks } from '../../../src/runtime/engines/acp/turn.ts';
 import type { TurnInputItem } from '../../../src/runtime/engines/types.ts';
-import { hearsAudio } from '../../../src/runtime/decision/engine-runner.ts';
+import { hearsAudio } from '../../../src/runtime/decision/listener.ts';
 import { account } from './fakes.ts';
 import { setup } from './acp-fixture.ts';
 

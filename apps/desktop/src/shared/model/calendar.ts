@@ -131,7 +131,7 @@ export interface Briefing {
   ownerId: string;
   date: string;
   at: number;
-  lines: string[]; // ≤3 short sentences (helper model, from titles/counts only) – may be []
+  lines: string[]; // today's counts in one line (runtime/day/briefing.ts countLines; no model since 17.11.2026) – may be []
   doneTaskIds: string[];
   preparedTaskIds: string[];
   waitingToStart: number;
@@ -143,7 +143,7 @@ export interface Briefing {
 }
 /** B-059: one sleep of the PC (suspend → resume, epoch ms). */
 export interface SleepSpan { from: number; to: number }
-export const BRIEFING_LIMITS = Object.freeze({ lines: 3, chats: 5, reason: 80 });
+export const BRIEFING_LIMITS = Object.freeze({ chats: 5, reason: 80 });
 
 // ---------------------------------------------------------------- B-078 (D20): a person's calendar on their page
 

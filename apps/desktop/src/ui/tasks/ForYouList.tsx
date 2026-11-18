@@ -24,6 +24,7 @@ import type { Leaving } from './model.ts';
 import { HumanItem, holdsTake, letGoOfTake } from './HumanItem.tsx';
 import { dayGroups, handedOffRows } from '../day/day-groups.ts';
 import { dayTitle } from '../day/day-format.ts';
+import { firstStale } from '../day/day-next.ts';
 import { revealRequest, shownDate, today } from '../day/day-state.ts';
 import { HandedOffList, ownerName } from '../day/HandedOff.tsx';
 
@@ -111,10 +112,11 @@ export function ForYouList() {
     if (expanded && !listed.some((task) => task.id === expanded)) setExpanded(null);
   }, [listed, expanded]);
 
-  // Another part of My day asks for a row (the calendar's "Show in list", a handed-off step): open and show it.
+  // Another part of My day asks for a row (the calendar's "Show in list", a handed-off step, Next's Start): open and show it.
   const reveal = revealRequest.value;
   useEffect(() => {
     if (!reveal) return;
+    revealRequest.value = null; // once: a list mounted later (back on My day) neither opens it again nor scrolls away from Next
     if (groups.later.some((task) => task.id === reveal.id)) setLaterOpen(true);
     if (!all.some((task) => task.id === reveal.id)) return;
     setExpanded(reveal.id);
@@ -128,8 +130,11 @@ export function ForYouList() {
     if (!(await letGoOfTake(task))) return; // "Discard recording?" – Cancel keeps it open
     setExpanded((current) => (current === task.id ? null : current));
   };
+  // Several rows past their planned time: the first asks in a box, the others are a slim line until tapped.
+  const asking = firstStale([...needsRows, ...todayRows, ...unplannedRows, ...laterRows].filter((entry) => !entry.leaving).map((entry) => entry.item), slots, now);
   const row = ({ item: task, leaving }: { item: TaskView; leaving: boolean }) => (
-    <HumanItem key={task.id} task={task} leaving={leaving} expanded={isOpen(task)} now={now} slot={slots.get(task.id)} onToggle={() => void toggle(task)} />
+    <HumanItem key={task.id} task={task} leaving={leaving} expanded={isOpen(task)} now={now} slot={slots.get(task.id)}
+      staleCollapsed={asking !== undefined && task.id !== asking} onToggle={() => void toggle(task)} />
   );
 
   const empty = !needsRows.length && !todayRows.length && !unplannedRows.length && !handed.length && !groups.later.length;

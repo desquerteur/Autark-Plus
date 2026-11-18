@@ -1,6 +1,7 @@
 // Model policies at three scopes and how the router combines them:
 //   agent        → agents.model_policy (org.update)          – set by the user or a manager; `pin` is the agent's start
-//                  model and `pinBy` who set it (B-083)
+//                  model and `pinBy` who set it (B-083). 17.11.2026: it is the explicit choice that stands – the model
+//                  the agent runs on from where its context next starts anew (router.ts); without one Auto settles it
 //   chat + agent → conversation.settings.modelHints (else an older chat's models) / efforts / temperatures[agentId] –
 //                  the person's suggestion in the chat (the composer chip). 13.11.2026 (owner: "einfach nur da, wird der
 //                  KI so erklärt"): information for the AI, never routing – chatChoice reads it for the person's new
@@ -215,8 +216,9 @@ export function createPolicyApi(services: () => RuntimeServices): PolicyApi {
 
 /** The policy the router applies for one agent, with where each part came from. */
 export interface EffectivePolicy {
-  /** B-083: the agent's start model; the agent's own request beats it. */
-  pin?: { modelId: string; source: 'agent' };
+  /** B-083: the agent's start model – it runs where the agent's context starts anew; the agent's own request there beats it.
+   *  `self`: the agent set it itself (model.set) – it runs inside the band on the accounts Auto uses (router.ts). */
+  pin?: { modelId: string; source: 'agent'; self?: true };
   /** Fixed effort of the agent policy (the agent's own request comes first – previous.ts startEffort). */
   agentEffort?: Effort;
   defaultEffort?: Effort;
@@ -239,7 +241,7 @@ export function effectivePolicy(services: RuntimeServices, agent: Agent): Effect
     else floorTier = undefined;
   }
   return {
-    ...(agentPolicy.pin ? { pin: { modelId: agentPolicy.pin, source: 'agent' as const } } : {}),
+    ...(agentPolicy.pin ? { pin: { modelId: agentPolicy.pin, source: 'agent' as const, ...(agentPolicy.pinBy?.self ? { self: true as const } : {}) } } : {}),
     agentEffort: agentPolicy.effort, defaultEffort: global.effort, floorTier, ceilingTier,
     costMode: agentPolicy.costMode ?? global.costMode,
     prefer: [...new Set([...(agentPolicy.prefer ?? []), ...(global.prefer ?? [])])],

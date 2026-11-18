@@ -28,13 +28,17 @@
 // changed it – runtime listeners only; task.upserted carries every change to the lists), and phone use's own
 // 'phoneUse.reply' / 'phoneUse.attached'. B-078: 'phoneUse.request' (on 'system') reaches exactly the device it names –
 // not even the owner's window (it can carry text to type) – the phone's topic phoneUse:<deviceId> in effect.
+// 18.11.2026 (phone traffic): a device hears an agent.upserted whose only news is the status, step note or time without
+// the agent's instructions once that connection got them (`deviceAgent`) – they are its SYSTEM.md, ~27 KB a time.
 // Owns: topic syntax, the per-scope topic/event filter and per-scope event payloads (also the
 // external agent's chat view, `externalChat`).
 // Never: method permissions.
 
+import { createHash } from 'node:crypto';
 import type { EventName } from '../../shared/api/events.ts';
 import type { ClientScope, Topic } from '../../shared/api/protocol.ts';
 import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { isIdLike } from './params.ts';
 import { scopeHas } from './table.ts';
 
@@ -141,6 +145,21 @@ export function externalChat(chat: ConversationSummary): ConversationSummary {
     ...rest, settings: {}, pinned: false, unread: 0,
     members: chat.members.filter((member) => member.leftAt === undefined).map((member) => ({ ...member, readSeq: 0 })),
   };
+}
+
+/**
+ * A device's agent.upserted (phone traffic, 18.11.2026): `sent` – agent id → what this connection last got of that agent
+ * besides status, statusNote and updatedAt. When only those changed, the agent goes without `instructions` (the UI keeps
+ * the ones it holds: ui/lib/store-events.ts); anything else, the first time on a connection and an archived agent go whole.
+ */
+export function deviceAgent(sent: Map<string, string>, agent: Agent): Agent | Omit<Agent, 'instructions'> {
+  const { status: _status, statusNote: _note, updatedAt: _at, ...rest } = agent;
+  const key = createHash('sha256').update(JSON.stringify(rest)).digest('base64');
+  const same = sent.get(agent.id) === key;
+  sent.set(agent.id, key);
+  if (!same || agent.archivedAt !== undefined) return agent;
+  const { instructions: _instructions, ...slim } = agent;
+  return slim;
 }
 
 /** The payload `scope` receives for an event it may see (messages for an external agent). */

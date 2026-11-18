@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fileUrl, fileUrlReady } from '../../../src/ui/lib/files.ts';
 import { rpc } from '../../../src/ui/lib/rpc.ts';
-import { viewKind } from '../../../src/ui/workspace/media-facts.ts';
+import { textKind, viewKind } from '../../../src/ui/workspace/media-facts.ts';
+import { APP_CSP } from '../../../src/runtime/http/static.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (name: string): string => readFileSync(path.join(ROOT, name), 'utf8');
@@ -54,10 +55,12 @@ test('on the phone a chip opens in the chat area for what the media layer shows;
   const source = read('src/ui/chat/Attachments.tsx');
   assert.match(source, /export function opensInPane\(attachment: Attachment, desktop = platform === 'desktop'\): boolean \{/);
   assert.match(source, /if \(desktop\) return attachment\.mime\.startsWith\('image\/'\) \|\| attachment\.mime\.startsWith\('video\/'\);/);
-  assert.match(source, /return viewKind\(attachment\.mime, attachment\.name\) !== 'file';/);
-  // the phone path: awaited bytes, the app's Downloads first, else the old blob download
+  assert.match(source, /return viewKind\(attachment\.mime, attachment\.name\) !== 'file' \|\| textKind\(attachment\.mime, attachment\.name\) !== null;/);
+  // the phone path: the Android app saves as the Media tab does (its /files route), a browser waits for the bytes
+  assert.match(source, /if \(isAndroidApp\(\)\) \{ await saveFile\(\{ id: attachment\.fileId,/);
   assert.match(source, /const url = await fileUrlReady\(attachment\.fileId\);/);
-  assert.match(source, /if \(isAndroidApp\(\) && await saveToPhone\(await \(await fetch\(url\)\)\.blob\(\), attachment\.name\)\) return;/);
+  // 17.11.2026 "Could not open file · Failed to fetch": the page's CSP has no connect to blob:, so no fetch() of one here
+  assert.doesNotMatch(source, /fetch\(url\)/);
   assert.doesNotMatch(source, /fileUrl\(attachment\.fileId\)\.value;\s*if \(!url\) return;/, 'no silent first tap');
   // what the layer shows (pure viewKind): image, video, recording, PDF – a zip is saved
   assert.deepEqual(['image/png', 'video/mp4', 'audio/ogg', 'application/pdf', 'application/zip'].map((mime) => viewKind(mime, 'x')), ['image', 'video', 'audio', 'pdf', 'file']);
@@ -68,4 +71,26 @@ test('Settings › Devices › Connection reaches my phone: no platform gate, th
   const group = read('src/ui/settings/DevicesGroup.tsx');
   assert.match(group, /\{can\('settings\.update'\) && can\('remote\.relay'\) && <ConnectionGroup /);
   assert.doesNotMatch(group, /platform === 'desktop' && can\('settings\.update'\)/);
+});
+
+test('17.11.2026: an agent Markdown or text attachment reads in the phone Media tab; the desktop keeps its own app', () => {
+  // opensInPane (Attachments.tsx, JSX – read as source): the desktop's rule is unchanged, the phone adds textKind
+  const phone = (mime: string, name: string) => viewKind(mime, name) !== 'file' || textKind(mime, name) !== null;
+  assert.equal(phone('text/markdown', 'PROMPT-GROSSE-SITZUNG.md'), true, 'phone: in the chat area');
+  assert.equal(phone('text/plain', 'notes.txt'), true);
+  assert.equal(phone('application/zip', 'data.zip'), false, 'a zip is still saved');
+  assert.equal(textKind('text/markdown', 'x.md'), 'markdown');
+  assert.equal(textKind('application/octet-stream', 'README.markdown'), 'markdown', 'by its name too');
+  assert.equal(textKind('text/plain; charset=utf-8', 'a'), 'plain');
+  assert.equal(textKind('application/json', 'a'), 'plain');
+  assert.equal(textKind('application/pdf', 'a.pdf'), null, 'a PDF stays the PDF view');
+  assert.equal(textKind('image/png', 'a.md.png'), null);
+  assert.equal(textKind('application/zip', 'a.zip'), null);
+  const view = read('src/ui/workspace/MediaView.tsx');
+  assert.match(view, /else if \(text\) stage = <TextStage file=\{file\} kind=\{text\} \/>;/);
+  assert.match(view, /rpc\.call\('files\.read', \{ id: file\.id, maxBytes: TEXT_VIEW_MAX \}\)/);
+});
+
+test('17.11.2026: the app page may read its own blob: URLs (connect-src)', () => {
+  assert.match(APP_CSP, /connect-src 'self' ws: wss: blob:( https:\/\/firestore\.googleapis\.com)?(;|$)/); // 18.11.: the phone's own feedback upload
 });

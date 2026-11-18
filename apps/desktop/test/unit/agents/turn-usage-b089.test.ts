@@ -1,6 +1,7 @@
 // B-089 (11.11.2026: what a run costs, written down): a finished turn stores its cached input (summed over its attempts)
 // and its model calls on the run, and its route says where the effort came from (effortBy); after a failover the count
-// stays out. An attempt counts model calls only on an engine whose usage events come one per request (Codex).
+// stays out. An attempt counts model calls on an engine whose usage events come one per request (Codex) or carry the count
+// (package C, Claude Code: turn-own-cost.test.ts).
 // Owns: these assertions only. Never: real engines.
 
 import { test } from 'node:test';
@@ -67,5 +68,5 @@ test('an attempt counts model calls from per-request usage (Codex) and none from
   assert.equal(counted.modelCalls, 3);
   assert.equal(counted.usage.cachedInputTokens, 1_500);
   const claude = await runAttempt(h.services, plan, h.routed(), h.request(), undefined);
-  assert.equal(claude.modelCalls, undefined, 'Claude reports running totals: no count');
+  assert.equal(claude.modelCalls, undefined, 'usage events without a count: none');
 });

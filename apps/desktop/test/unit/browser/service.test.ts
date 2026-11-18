@@ -64,7 +64,7 @@ class FakePage implements PageLike {
   async bringToFront() {}
   async close() { this.closed = true; }
   isClosed() { return this.closed; }
-  async evaluate(expression: string) { return expression.includes('type=password') ? this.passwords : expression.includes('otpauth') ? this.links : undefined; }
+  async evaluate(expression: string) { return expression.includes('type=password') || expression.includes("type === 'password'") ? this.passwords : expression.includes('otpauth') ? this.links : undefined; } // the second: the hidden-field read (BEFUND §6)
   keyboard = { press: async (key: string) => { this.actions.push({ selector: 'keyboard', name: 'press', value: key }); } };
   mouse = { wheel: async (_x: number, y: number) => { this.actions.push({ selector: 'mouse', name: 'wheel', value: y }); } };
   downloads: Array<(download: DownloadLike) => void> = [];

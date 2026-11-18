@@ -39,7 +39,7 @@ test('model.set now on the model and effort the turn already runs: true, no cut,
     assert.deepEqual(asked, [], 'the engine is not asked');
     assert.equal(h.executor.calls.length, 1, 'no second turn');
     assert.deepEqual(openWakes(h.db).filter((wake) => wake.claimed_at === null), [], 'no model-now wake');
-    const row = h.db.get<{ value: string }>("SELECT value FROM kv WHERE ns = 'next_route' AND key = ?", ['ag_jonas']);
+    const row = h.db.get<{ value: string }>("SELECT value FROM kv WHERE ns = 'next_model' AND key = ?", ['ag_jonas']);
     assert.equal(row ? (JSON.parse(row.value) as { modelId?: string }).modelId : undefined, LUNA.id, 'the stored request stays');
     first.finish();
     await flush();

@@ -146,7 +146,7 @@ test('no Manager: the computer-mode agent gets the sign-in task and is offered a
   const computer: ModeInfo = { key: 'computer', name: 'Computer', description: '', skills: [], tools: ['computer.*', 'shell.*'], category: 'computer-use', workspace: 'computer', instructions: '' };
   const research: ModeInfo = { key: 'research', name: 'Research', description: '', skills: [], tools: ['web.*', 'files.*'], category: 'research', instructions: '' };
   assert.ok(registry.specsFor(operator, computer).some((spec) => spec.name === 'accounts.sign_in'));
-  assert.ok(registry.specsFor(operator, research).some((spec) => spec.name === 'accounts.sign_in'), 'every mode starts a sign-in (registry EVERY_MODE)');
+  assert.ok(registry.specsFor(operator, research).some((spec) => spec.name === 'accounts.sign_in'), 'every mode starts a sign-in (every tool in every mode)');
 });
 
 test('the account removed or switched off: its open sign-in work is cancelled', () => {

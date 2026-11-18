@@ -8,12 +8,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { tempDir } from '../store/helpers.ts';
-import { setNextRoute, takeNextRoute } from '../../../src/runtime/agents/next-route.ts';
+import { setNextRoute, takeNextModel, takeNextRoute } from '../../../src/runtime/agents/next-route.ts';
 import { mergeAttempts, TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { Journal } from '../../../src/runtime/runs/journal.ts';
 import { buildTurn, planTurn, routeRequest } from '../../../src/runtime/agents/turn-prepare.ts';
 import { canFailover, runAttempt } from '../../../src/runtime/agents/turn-attempt.ts';
 import { finishTurn } from '../../../src/runtime/agents/turn-finish.ts';
+import { MessageRepo } from '../../../src/runtime/chat/message-repo.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import type { EngineTurnInput, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { RouteRequest } from '../../../src/runtime/contracts.ts';
@@ -22,13 +23,19 @@ import { setup } from './fixture.ts';
 
 const LIMIT: EngineTurnResult = { text: '', stop: 'limit', error: { code: 'rate_limited', message: 'The usage limit of this account was reached.' } };
 
-test('spoken answers carry the call id, typed messages during a call remain normal answers', async () => {
+test('spoken answers carry the call id while that call runs, typed messages during a call remain normal answers', async () => {
   const h = setup();
   h.services.router = { route: async () => h.route } as typeof h.services.router;
   h.state.script = async input => {
     input.onEvent({ type: 'commentary', text: 'Checking the plan.' });
     return { text: 'Ready.', stop: 'done' };
   };
+  // KI-Runde 17.11.2026 (decision 8.3): the call's own row says whether it still runs; without it no turn is a call turn.
+  const callRow = (id: string, endedAt?: number) => h.chats.send({
+    conversationId: h.chat.id, body: `Call ${id}`, kind: 'status', silent: true, authorId: 'system', authorKind: 'system',
+    meta: { status: { type: 'note', text: `Call ${id}` }, call: { id, participant: 'device:pc', name: 'You', startedAt: 1, lines: [], ...(endedAt ? { endedAt } : {}) } },
+  });
+  callRow('call_one');
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken question', meta: { call: { id: 'call_one', participant: 'device:pc', name: 'You' } } });
   const spoken = await new TurnExecutor(() => h.services).execute(h.request());
   assert.equal(spoken.status, 'done');
@@ -40,6 +47,57 @@ test('spoken answers carry the call id, typed messages during a call remain norm
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Typed question' });
   const typed = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_2' }));
   assert.equal(h.chats.message(typed.messageId!)?.meta.call, undefined);
+
+  // A line of a call that has ended: its turn is no call turn any more, so the answer carries no call and is not read aloud.
+  callRow('call_two', 5);
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Said in the ended call', meta: { call: { id: 'call_two', participant: 'device:pc', name: 'You' } } });
+  const stale = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_3' }));
+  assert.ok(stale.messageId, 'the person\'s line said in an ended call gets this turn\'s answer');
+  assert.equal(h.chats.message(stale.messageId)?.body, 'Ready.');
+  assert.equal(h.chats.message(stale.messageId)?.meta.call, undefined);
+
+  // A call that ends while its turn runs: the answer is no longer spoken in it.
+  const three = callRow('call_three');
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken, then hung up', meta: { call: { id: 'call_three', participant: 'device:pc', name: 'You' } } });
+  h.state.script = async () => {
+    new MessageRepo(h.services.db).update({ ...three, meta: { ...three.meta, call: { ...three.meta.call!, endedAt: 9 } } as typeof three.meta });
+    return { text: 'Ready.', stop: 'done' };
+  };
+  const late = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_4' }));
+  assert.equal(late.status, 'done');
+  assert.ok(late.messageId, 'a line whose call ended during its turn still gets that turn\'s answer');
+  assert.equal(h.chats.message(late.messageId)?.body, 'Ready.');
+  assert.equal(h.chats.message(late.messageId)?.meta.call, undefined);
+
+  // A call that ends while its turn runs: what the turn addressed to the call's chat is posted there as a normal line (review r2-4 finding 2).
+  const four = callRow('call_four');
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken, hung up, answered in a block', meta: { call: { id: 'call_four', participant: 'device:pc', name: 'You' } } });
+  h.state.script = async () => {
+    new MessageRepo(h.services.db).update({ ...four, meta: { ...four.meta, call: { ...four.meta.call!, endedAt: 9 } } as typeof four.meta });
+    return { text: `<chat to="${h.chat.id}">Die Zahlen sind da: 3,2 Mio.</chat>`, stop: 'done' };
+  };
+  await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_5' }));
+  const posted = h.chats.messages(h.chat.id, { limit: 5 }).filter((message) => message.authorKind === 'agent' && message.body.includes('3,2 Mio.'));
+  assert.equal(posted.length, 1, 'the addressed block is not lost');
+  assert.equal(posted[0].meta.call, undefined, 'a normal line, not spoken in the ended call');
+  assert.equal(posted[0].silent, false);
+});
+
+test('a line of a running call does not wait for the subconscious, also when it resumes my task (FIXES-3 D2, review R2)', async () => {
+  const h = setup();
+  const heard: Array<string | undefined> = [];
+  h.services.subconscious.beforeTurn = async (input) => { heard.push(input.callId); return undefined; };
+  h.chats.send({
+    conversationId: h.chat.id, body: 'Call call_one', kind: 'status', silent: true, authorId: 'system', authorKind: 'system',
+    meta: { status: { type: 'note', text: 'Call call_one' }, call: { id: 'call_one', participant: 'device:pc', name: 'You', startedAt: 1, lines: [] } },
+  });
+  const task = h.tasks.create({ conversationId: h.chat.id, title: 'VAT rate', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: 'human' });
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Neunzehn Prozent.', meta: { call: { id: 'call_one', participant: 'device:pc', name: 'You' } } });
+  const plain = await planTurn(h.services, h.request());
+  const onTask = await planTurn(h.services, h.request({ runId: 'run_2', taskId: task.id }));
+  assert.deepEqual(heard, ['call_one', 'call_one']);
+  assert.equal(plain?.callId, 'call_one');
+  assert.equal(onTask?.callId, undefined, 'a task turn\'s answer is no spoken call answer');
 });
 
 test('the subconscious gets the mode the turn runs in before it; nothing of it runs after', async () => {
@@ -60,27 +118,32 @@ test('the subconscious gets the mode the turn runs in before it; nothing of it r
   assert.deepEqual(seen, [['before', 'video']], 'the agent\'s own mode (plan.mode.key), never a chat\'s');
 });
 
-test('a model.set request reaches the router as an explicit previous choice, once', async () => {
+test('a model.set request reaches the router as an explicit previous choice: its effort for one turn, its model until a turn could apply it', async () => {
   const h = setup();
   h.runs.push({ id: 'run_0', agentId: h.tom.id, conversationId: h.chat.id, model: 'codex:gpt-6.1-sol', effort: 'low', status: 'done' });
 
   setNextRoute(h.db, h.tom.id, { modelId: 'claude:claude-opus-5-5', effort: 'high', at: h.clock.now() });
   const asked = (await planTurn(h.services, h.request()))!;
-  // B-083 D1: `from` – the model my newest done run in this chat ran on; the turn stays there while the named one cannot run
+  // B-083 D1: `from` – the model I am on (my newest done run); the turn stays there off a boundary and while the named one cannot run
   assert.deepEqual(asked.previous, { modelId: 'claude:claude-opus-5-5', effort: 'high', explicit: true, from: 'codex:gpt-6.1-sol' });
   assert.equal(routeRequest(asked).previous?.explicit, true);
+  assert.equal(routeRequest(asked).boundary, true, 'no session yet: the turn stands at a boundary (agents/boundary.ts)');
 
-  // Effort only: the new effort, still the agent's own choice; the model follows the usual rules (RT2).
+  // 17.11.2026: an effort alone replaces my step; the model I asked for keeps waiting in its own row.
+  h.clock.advance(1_000);
   setNextRoute(h.db, h.tom.id, { effort: 'xhigh', at: h.clock.now() });
-  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'xhigh', explicit: true, asked: 'effort' });
+  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'claude:claude-opus-5-5', effort: 'xhigh', explicit: true, from: 'codex:gpt-6.1-sol' });
 
-  // B-080: planning leaves it (a turn that fails before its engine keeps it); taken as the engine starts, the plain
-  // return rule is not explicit.
+  // B-080: planning leaves both (a turn that fails before its engine keeps them); taken as the engine starts, the plain
+  // choice is not explicit.
   const again = (await planTurn(h.services, h.request()))!;
   assert.equal(again.previous?.explicit, true);
-  assert.equal(again.nextStepAt, h.clock.now(), 'the plan carries the at of the request it read');
-  assert.equal(takeNextRoute(h.db, h.tom.id, again.nextStepAt! - 1), undefined, 'another request (an older at) is not taken');
+  assert.equal(again.nextStepAt, h.clock.now(), 'the plan carries the at of the step it read');
+  assert.equal(again.nextModelAt, h.clock.now() - 1_000, 'and of the model I asked for, since this turn can apply it');
+  assert.equal(takeNextRoute(h.db, h.tom.id, again.nextStepAt! - 1), undefined, 'another step (an older at) is not taken');
   takeNextRoute(h.db, h.tom.id, again.nextStepAt);
+  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'claude:claude-opus-5-5', effort: 'low', explicit: true, asked: 'model', from: 'codex:gpt-6.1-sol' }, 'the step is used up; the model is still asked for');
+  takeNextModel(h.db, h.tom.id, again.nextModelAt!);
   const plain = (await planTurn(h.services, h.request()))!;
   assert.deepEqual(plain.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'low' });
   assert.equal(routeRequest(plain).previous?.explicit, undefined);

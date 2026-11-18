@@ -8,6 +8,10 @@
 //   deletes the entry. A report the PC could not be reached for stays ('held'); every (re)connect flushes the entries,
 //   oldest first, one round at a time. A report the runtime refuses as invalid is deleted and put back into an empty
 //   draft, so its words are still there. Entries older than OUTBOX_MAX_AGE_MS go.
+// 18.11.2026 (owner: "das soll doch einfach direkt zu uns gehen"): on a phone and in a browser a Send goes straight to
+// the team's mailbox (direct.ts) – the PC is only the way where this page cannot seal it, or when the mailbox refused it.
+// Such a report is not kept on the PC; it waits in this page until the mailbox has it (flushed at start, on every
+// (re)connect and when the device is online again).
 // Owns: the outbox entries, the kept draft and their delivery. Never: sends a report without the person's Send/Save, or
 // keeps an entry after the PC holds its report.
 
@@ -20,6 +24,8 @@ import { pushToast } from '../lib/toasts.ts';
 import type { KeyValue } from '../lib/take-store.ts';
 import { idbDelete, idbGet, idbSet, idbSweep } from '../pwa/idb.ts';
 import { dataUrlToBlob } from './bridge.ts';
+import { sendDirect } from './direct.ts';
+import { bridge } from '../lib/platform.ts';
 import { announceSent, notSentLine } from './delivery.ts';
 import { FEEDBACK_AUDIO_MAX } from '../../shared/model/feedback-delivery.ts';
 import { CRASH_ONLY_TEXT, EMPTY_DRAFT, UNTRANSCRIBED_TEXT, feedbackDraft, isEmptyDraft } from './draft.ts';
@@ -71,6 +77,8 @@ export interface OutboxDeps {
   send(id: string): Promise<FeedbackReport>;
   /** Uploads a file; its file id. */
   upload(blob: Blob, name: string): Promise<string>;
+  /** Straight to the team (direct.ts sendDirect): the sent line, null when this page cannot (the PC sends). */
+  direct?(entry: OutboxEntry): Promise<ReportLine | null>;
   /** The link to the PC is open now. */
   online(): boolean;
   now(): number;
@@ -139,9 +147,18 @@ export class FeedbackOutbox {
 
   /** Uploads and files one entry (see the header); never two deliveries of the same entry at once. */
   async deliver(entry: OutboxEntry): Promise<Outcome> {
-    if (this.busy.has(entry.clientId) || !this.deps.online()) return { kind: 'held' };
+    if (this.busy.has(entry.clientId)) return { kind: 'held' };
     this.busy.add(entry.clientId);
     try {
+      if (entry.send && !entry.reportId && this.deps.direct) {
+        try {
+          const sent = await this.deps.direct(entry);
+          if (sent) { await this.remove(entry.clientId); return { kind: 'sent', report: sent }; }
+        } catch (error) {
+          if (!this.deps.online()) return { kind: 'held', error }; // no way out now: it waits here and goes later
+        } // refused or no connection from here while the PC is there: the PC tries
+      }
+      if (!this.deps.online()) return { kind: 'held' };
       let report: ReportLine | undefined;
       let id = entry.reportId;
       if (!id) {
@@ -261,6 +278,7 @@ export const feedbackOutbox = new FeedbackOutbox({
   kv: typeof indexedDB === 'undefined' ? null : pageStorage,
   create: (params) => rpc.call('feedback.create', params),
   send: (id) => rpc.call('feedback.send', { id }),
+  ...(bridge ? {} : { direct: (entry: OutboxEntry) => sendDirect(entry) }), // the PC window: its own runtime sends (with its diagnostics)
   upload: async (blob, name) => (await uploadRef(blob, name)).id,
   online,
   now: () => Date.now(),
@@ -301,6 +319,7 @@ export function startFeedbackOutbox(): Promise<void> {
     });
   })();
   rpc.onOpen(() => { void flushFeedback(); });
-  if (online()) void flushFeedback();
+  if (typeof window !== 'undefined' && !bridge) window.addEventListener('online', () => { void flushFeedback(); });
+  if (online() || !bridge) void flushFeedback();
   return restored;
 }

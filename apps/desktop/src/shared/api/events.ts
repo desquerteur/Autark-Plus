@@ -51,6 +51,8 @@ export interface EventMap {
   /** A skill was saved or deleted (skills are plain SKILL.md folders); topic 'system' (owner). */
   'skills.changed': { name?: string };
   // org
+  /** To a device (phone/browser) without `instructions` when only status, step note and time changed since that connection
+   *  got the agent (runtime/rpc/scopes.ts deviceAgent; the UI keeps the known ones). A new step note alone is no agent.upserted. */
   'agent.upserted': Agent;
   'agent.removed': { id: string };
   'agent.activity': { active: AgentActivity[] };
@@ -84,9 +86,11 @@ export interface EventMap {
   'media.upserted': MediaInfo;
   /** A chat bridge was created or changed status (disconnect = status 'stopped'). */
   'bridge.upserted': Bridge;
-  /** Something that deserves the human's attention (UI decides toast vs OS notification).
+  /** Something that deserves the human's attention (UI decides toast vs OS notification); 'call': an agent rings (the window
+   *  shows its own call notice from calls.live; the Android app shows an incoming call notice, and the same kind with
+   *  `call.until` already past ends that notice wherever the ring was answered, declined or missed).
    *  `toast` (C3): the runtime's decision for the in-window toast (the chat's notification level); absent from older runtimes. */
-  'notify': { kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info'; title: string; body: string; conversationId?: string; taskId?: string; toast?: boolean };
+  'notify': { kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info' | 'call'; title: string; body: string; conversationId?: string; taskId?: string; toast?: boolean; call?: { id: string; until: number } };
   /** MP7: agents' computer use on this PC (at most one per second) and the person's Stop/Resume (topic: system). */
   'computer.activity': ComputerActivityState;
   /** 21.10. 17:09: the person's emergency stop of all agent work on this PC and its Resume (topic: system). */

@@ -1,16 +1,16 @@
 // B-089 (11.11.2026, live 10.11.: every model call re-sends the whole session; sessions sat at the window's ceiling) – the lean history
-// and the rebuild for savings (agents/rebuild.ts, context/ledger/window.ts leanMarks). At every native rebuild the tool work of
-// finished runs keeps its call in place and leaves its output, their reasoning is hidden; chat lines, the agent's own words, the
-// newest run, the open task's runs and pins stay. On the same engine a rebuild for savings runs when it pays: a cold cache needs any
-// saving, a warm one saves × calls ≥ 9 × resend. Review fixes (11.11.): the rows' estimate is weighed again with the view's figures and a
-// refusal is remembered until the rows show clearly more; n is one run's calls (its stored count, else input over context); rows that
-// size the rebuild no smaller than the live session read no view.
+// (agents/rebuild.ts, context/ledger/window.ts leanMarks). At every native rebuild the tool work of finished runs keeps its call in
+// place and leaves its output, their reasoning is hidden; chat lines, the agent's own words, the newest run, the open task's runs
+// and pins stay.
+// KI-Runde 17.11.2026: the lean history and the subconscious's marks ride on a rebuild that happens anyway – a warm session is
+// never rebuilt for a saving (no weighing, no "does not pay yet" note); a session that rested past the cache starts anew with them.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, view } from './rebuild-harness.ts';
-import { CACHE_COLD_MS, leanKeep } from '../../../src/runtime/agents/rebuild.ts';
-import { LEAN_REASON, LEAN_TEXT, entryTokens, leanCost, leanMarks, leanRows, leanText, rowTokens, rowsResend, type LeanMark } from '../../../src/runtime/context/ledger/window.ts';
+import { leanKeep } from '../../../src/runtime/agents/rebuild.ts';
+import { CACHE_COLD_MS } from '../../../src/runtime/agents/compaction-policy.ts';
+import { LEAN_REASON, LEAN_TEXT, entryTokens, leanCost, leanMarks, leanText } from '../../../src/runtime/context/ledger/window.ts';
 import { compactStamp, type LedgerItem, type LedgerViewItem } from '../../../src/shared/model/context-ledger.ts';
 
 const entry = (itemId: string, kind: LedgerViewItem['kind'], chars: number, extra: Partial<LedgerViewItem> = {}): LedgerViewItem => ({
@@ -28,7 +28,7 @@ test('leanMarks: finished runs leave their outputs (call in place) and their rea
   const marks = leanMarks(entries, { runs: new Set(['newest', 'task']), pinned: new Set(['t6']) });
   assert.deepEqual(marks.map((mark) => [mark.itemId, mark.state]), [['t2', 'condensed'], ['r3', 'hidden']], 'a loaded skill (s8) stays: its body is instructions, not finished output');
   assert.equal(marks[0].saves, entryTokens(entries[1]) - leanCost(entries[1]), 'the saving is the output minus the condensed form');
-  assert.equal(marks[1].saves, 300);
+  assert.equal(marks[1].saves, 450);
   assert.equal(marks[0].text, leanText(entries[1].call!.output), 'the condensed text is the output\'s lean text');
   const condensed = `${leanText(entries[1].call!.output)}\n${compactStamp('t2', entryTokens(entries[1]))}`;
   assert.equal(leanCost(entries[1]), entryTokens({ text: '', call: { name: '', args: { command: 'npm test' }, callId: '', output: condensed } }), 'arguments, text and stamp');
@@ -91,24 +91,6 @@ const rowOf = (item: LedgerViewItem, tokens = entryTokens(item)): LedgerItem => 
   ...(item.runId ? { runId: item.runId } : {}), ...(item.nested ? { nested: true } : {}),
 });
 
-test('leanRows picks what leanMarks picks without reading an original; rowsResend sizes the lean history from the rows', () => {
-  const entries = [
-    entry('m1', 'message', 900, { runId: 'old' }), entry('t2', 'tool', 9000, { runId: 'old' }), entry('r3', 'reasoning', 900, { runId: 'old' }),
-    entry('a4', 'assistant', 900, { runId: 'old' }), entry('t5', 'tool', 9000, { runId: 'old', nested: true }), entry('f6', 'file', 9000, { runId: 'old' }),
-    entry('t7', 'tool', 9000, { runId: 'old', state: 'condensed' }), entry('t8', 'tool', 9000, { runId: 'new' }), entry('t9', 'tool', 9000, { runId: 'old' }),
-  ];
-  const keep = { runs: new Set(['new']), pinned: new Set(['t9']) };
-  const rows = entries.map((item) => rowOf(item));
-  const pick = (marks: LeanMark[]) => marks.map((mark) => [mark.itemId, mark.state]);
-  assert.deepEqual(pick(leanRows(rows, keep)), pick(leanMarks(entries, keep)));
-  assert.deepEqual(pick(leanRows(rows, keep)), [['t2', 'condensed'], ['r3', 'hidden'], ['f6', 'condensed']]);
-  const huge = rowOf(entry('t2', 'tool', 9000, { runId: 'old' }), 400_000);
-  assert.equal(rowTokens(huge, 24_000), 8_000, 'a row counts at most what a rebuild shows of it');
-  const lean = leanRows(rows, keep);
-  const resend = rowsResend(rows, lean);
-  assert.ok(resend < rows.reduce((sum, row) => sum + row.tokens, 0) - 8_000 && resend > 2 * 3_000 + 600, `${resend}: t8, t9 and the lines in full, the rest short`);
-});
-
 type Harness = ReturnType<typeof setup>;
 /** The fake ledger applies hides only and its rows carry no run or size; here a condensed mark also reaches the view as view.ts
  *  renders it, and the rows are the view's (run, state, size) plus the hidden ones. */
@@ -160,52 +142,11 @@ test('a switch rebuilds with the lean history: the finished run leaves its outpu
   const native = h.notes('run_2').find((note) => note.rebuild === 'native')!;
   const lean = native.lean as { condensed: number; hidden: number; before: number; after: number };
   assert.deepEqual([lean.condensed, lean.hidden], [1, 1]);
-  assert.ok(lean.before > 30_000 && lean.after < 12_000, JSON.stringify(lean));
+  assert.ok(lean.before > 60_000 && lean.after < 18_000, JSON.stringify(lean));
   assert.equal(native.tokens, lean.after);
 });
 
-test('the same engine: a warm saving that does not pay waits (silent for a lean saving alone, a note while marks wait); a cold cache rebuilds; a restore alone does not', async () => {
-  const h = setup();
-  condensing(h);
-  h.codex.state.reply = () => ({ usage: { inputTokens: 250_000, outputTokens: 10 }, contextTokens: 50_000 }); // five calls of ~50k
-  h.send('Hello');
-  await h.turn('codex');
-  const seen = h.cursor();
-  lastingView(h, seen, 6_000); // the finished run's output: 2,000 tokens
-  h.ledgerState.need = undefined;
-  h.send('Next');
-  await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 0);
-  assert.equal(h.ledgerState.marks.length, 0, 'nothing written for a rebuild that does not run');
-  assert.ok(!h.notes('run_2').some((note) => note.rebuild), 'a lean saving alone waits in silence');
-  assert.equal(h.codex.calls[1].session?.ref, 'codex-s1', 'the session goes on cached');
-
-  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 100, marked: true };
-  h.send('Then');
-  await h.turn('codex');
-  const skipped = h.notes('run_3').find((note) => note.rebuild)!;
-  const finished = h.s.runs.list(h.agent.id, 10).filter((run) => run.id !== 'run_3' && run.status === 'done');
-  assert.deepEqual(finished.map((run) => run.inputTokens), [250_000, 250_000], 'two finished runs of five calls each lie behind it');
-  assert.deepEqual([skipped.rebuild, skipped.why, skipped.calls], ['skipped', 'does not pay yet', 5], 'marks of the subconscious wait: the journal says why – the calls of one run, not of both');
-  assert.ok(Number(skipped.saves) > 1_900 && Number(skipped.saves) * 5 < 9 * Number(skipped.resend), JSON.stringify(skipped));
-
-  h.ledgerState.need = { since: 2, reason: '1 restored', saves: -400, marked: false };
-  h.ledgerState.view = h.ledgerState.view.map((item) => ({ ...item, runId: 'run_newest' })); // nothing finished to set aside
-  h.send('Again');
-  await h.turn('codex');
-  assert.ok(!h.notes('run_4').some((note) => note.rebuild), 'a restore alone rides along with the next saving');
-
-  lastingView(h, seen, 6_000);
-  h.ledgerState.need = undefined;
-  h.clock.set(h.clock.now() + 61 * 60_000); // the session rested past a provider cache
-  h.send('Later');
-  await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 1, 'cold: the next call is uncached either way – the smaller session wins');
-  assert.equal(h.notes('run_5').find((note) => note.rebuild)?.rebuild, 'native');
-  assert.deepEqual(h.ledgerState.marks.map((mark) => mark.itemId), ['t2', 'r3']);
-});
-
-test('the same engine, warm: a saving worth nine re-sends over the run\'s calls rebuilds at once', async () => {
+test('the same engine, warm: no rebuild for a saving – not for the lean history, not for waiting marks, however much they would take off; nothing is weighed, written or noted', async () => {
   const h = setup();
   condensing(h);
   h.codex.state.reply = () => ({ usage: { inputTokens: 250_000, outputTokens: 10 }, contextTokens: 120_000 }); // two calls of ~120k
@@ -219,125 +160,50 @@ test('the same engine, warm: a saving worth nine re-sends over the run\'s calls 
   h.ledgerState.view = view([
     [`m${seen}`, 'message', 'user', '[09:00] Alex: Hello'], ...old.map((row) => [...row] as Parameters<typeof view>[0][number]),
     ['t20', 'tool', 'tool', work(30_000), { name: 'shell', args: {}, callId: 'c20', output: work(30_000) }], ['a21', 'assistant', 'assistant', 'Built.'],
-  ]).map((item) => ({ ...item, runId: item.itemId === 't20' || item.itemId === 'a21' ? 'run_newest' : 'run_old' })); // 96,000 tokens of finished output
+  ]).map((item) => ({ ...item, runId: item.itemId === 't20' || item.itemId === 'a21' ? 'run_newest' : 'run_old' })); // 144,000 tokens of finished output
+  // Until 17.11.2026 this saving ("worth nine re-sends over the run's calls") rebuilt the warm session at once; measured, such
+  // rebuilds took 11 % off and each paid a full cache write – a written token costs 40 read ones.
   h.ledgerState.need = undefined;
   h.send('Next');
   await h.turn('codex');
-  assert.equal(h.codex.rebuilds.length, 1);
-  const native = h.notes('run_2').find((note) => note.rebuild === 'native')!;
-  assert.equal(native.why, 'marks');
-  assert.ok((native.lean as { after: number }).after < 15_000, JSON.stringify(native.lean));
+  assert.equal(h.codex.rebuilds.length, 0, 'the lean saving waits for a rebuild that happens anyway');
+  h.ledgerState.need = { since: 2, reason: '4 condensed', saves: 80_000 };
+  h.send('Then');
+  await h.turn('codex');
+  assert.equal(h.codex.rebuilds.length, 0, 'and so do the subconscious\'s marks');
+  assert.equal(h.ledgerState.marks.length, 0, 'nothing written for a rebuild that does not run');
+  assert.ok(![...h.notes('run_2'), ...h.notes('run_3')].some((note) => note.rebuild), 'no "does not pay yet" note: there is no weighing');
+  assert.equal(h.codex.calls[2].session?.ref, 'codex-s1', 'the session goes on cached');
+
+  h.clock.set(h.clock.now() + 61 * 60_000); // the session rested past a provider cache
+  h.send('Later');
+  await h.turn('codex');
+  assert.equal(h.codex.rebuilds.length, 1, 'cold: the next call is uncached either way – the marks and the lean history land');
+  const native = h.notes('run_4').find((note) => note.rebuild === 'native')!;
+  assert.equal(native.why, 'cold');
+  assert.equal((native.lean as { condensed: number }).condensed, 12, 'every finished output set aside at once');
+  assert.ok((native.lean as { after: number }).after < 22_000, JSON.stringify(native.lean));
 });
 
-/** Counts the fake ledger's view reads (each reads every original in the real ledger). */
-function viewReads(h: Harness): { count: number } {
-  const ledger = h.s.ledger as unknown as { view: (...args: unknown[]) => LedgerViewItem[] };
-  const read = ledger.view.bind(ledger);
-  const counter = { count: 0 };
-  ledger.view = (...args) => { counter.count++; return read(...args); };
-  return counter;
-}
-type Row = Parameters<typeof view>[0][number];
-/** `count` finished calls of run `run` with long arguments and a one-line output (the rows count the arguments, the lean form keeps them). */
-const longArgs = (from: number, count: number): Row[] => Array.from({ length: count }, (_, index) => {
-  const id = `t${from + index}`;
-  return [id, 'tool', 'tool', 'ok', { name: 'files.write', args: { path: `src/f${index}.ts`, content: 'c'.repeat(6_000) }, callId: id, output: 'ok' }];
-});
-
-test('weighed again with the view: long arguments and one-line outputs pass the rows but save nothing – no rebuild, nothing written, the view not read again until the rows show clearly more', async () => {
+test('a cold session with a lean saving alone starts anew; one with nothing to set aside and no marks goes on as it is', async () => {
   const h = setup();
   condensing(h);
-  const reads = viewReads(h);
-  h.codex.state.reply = () => ({ usage: { inputTokens: 1_000_000, outputTokens: 10 }, contextTokens: 50_000 }); // twenty calls of ~50k
   h.send('Hello');
   await h.turn('codex');
   const seen = h.cursor();
-  const build = (count: number) => {
-    h.ledgerState.view = view([[`m${seen}`, 'message', 'user', '[09:00] Alex: Write the files'], ...longArgs(2, count), ['a90', 'assistant', 'assistant', 'Written.']])
-      .map((item) => ({ ...item, runId: item.itemId === 'a90' ? 'run_newest' : 'run_old' }));
-  };
-  build(12);
+  lastingView(h, seen, 6_000);
   h.ledgerState.need = undefined;
-  reads.count = 0;
-  h.send('Next');
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
+  h.send('Later');
   await h.turn('codex');
-  assert.equal(reads.count, 1, 'the rows estimate passed: the view was read once');
-  assert.equal(h.codex.rebuilds.length, 0, 'the view finds nothing to save');
-  assert.equal(h.ledgerState.marks.length, 0, 'nothing written');
-  assert.ok(!h.notes('run_2').some((note) => note.rebuild), 'no marks of the subconscious wait: silent');
+  assert.equal(h.codex.rebuilds.length, 1, 'the finished run\'s output is set aside: something lands');
+  assert.deepEqual(h.ledgerState.marks.map((mark) => mark.itemId), ['t2', 'r3']);
 
-  h.send('Again');
+  h.ledgerState.view = h.ledgerState.view.map((item) => ({ ...item, runId: 'run_newest' })); // nothing finished to set aside
+  h.ledgerState.need = undefined;
+  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1);
+  h.send('Much later');
   await h.turn('codex');
-  assert.equal(reads.count, 1, 'the same rows: the refusal holds, no view read');
-
-  build(14); // about 17 % more by the rows: not clearly more
-  h.send('A bit more');
-  await h.turn('codex');
-  assert.equal(reads.count, 1, 'below 1.25× the refused saving: still no view read');
-
-  build(24); // twice the refused saving
-  h.send('Much more');
-  await h.turn('codex');
-  assert.equal(reads.count, 2, 'clearly more: read again');
-  assert.equal(h.codex.rebuilds.length, 0, 'and refused again – the arguments stay in the lean form');
-});
-
-test('calls of one run: a stored count of model calls is n (0 counts as unknown and falls back to input over context)', async () => {
-  const h = setup();
-  condensing(h);
-  h.codex.state.reply = () => ({ usage: { inputTokens: 250_000, outputTokens: 10 }, contextTokens: 50_000 }); // input over context: 5
-  h.send('Hello');
-  await h.turn('codex');
-  lastingView(h, h.cursor(), 6_000);
-  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 100, marked: true };
-  h.s.runs.finish('run_1', { status: 'done', modelCalls: 3 });
-  h.send('Next');
-  await h.turn('codex');
-  assert.equal(h.notes('run_2').find((note) => note.rebuild)?.calls, 3, 'the stored count');
-  h.s.runs.finish('run_2', { status: 'done', modelCalls: 0 });
-  h.send('Again');
-  await h.turn('codex');
-  assert.equal(h.notes('run_3').find((note) => note.rebuild)?.calls, 5, '0 is unknown: input over context');
-});
-
-test('the saving of finished runs builds up over warm turns until saves × calls ≥ 9 × resend – then one rebuild', async () => {
-  const h = setup();
-  condensing(h);
-  h.codex.state.reply = () => ({ usage: { inputTokens: 250_000, outputTokens: 10 }, contextTokens: 50_000 }); // five calls a run
-  h.send('Hello');
-  await h.turn('codex');
-  const seen = h.cursor();
-  const finishedOutputs: Row[] = [];
-  let rebuiltAt = 0;
-  for (let turn = 1; turn <= 30 && !rebuiltAt; turn++) {
-    finishedOutputs.push([`t${turn + 1}`, 'tool', 'tool', work(3_000), { name: 'shell', args: { command: `step ${turn}` }, callId: `c${turn}`, output: work(3_000) }]); // 1,000 tokens
-    h.ledgerState.view = view([[`m${seen}`, 'message', 'user', '[09:00] Alex: Go on'], ...finishedOutputs, ['a99', 'assistant', 'assistant', 'Next step.']])
-      .map((item) => ({ ...item, runId: item.itemId === 'a99' ? 'run_newest' : 'run_old' }));
-    h.ledgerState.need = undefined;
-    h.send(`Step ${turn}`);
-    await h.turn('codex');
-    if (h.codex.rebuilds.length) rebuiltAt = turn;
-  }
-  assert.ok(rebuiltAt > 1, `the first finished output alone did not pay; rebuilt at turn ${rebuiltAt}`);
-  assert.equal(h.codex.rebuilds.length, 1, 'one rebuild');
-  const native = h.notes(`run_${rebuiltAt + 1}`).find((note) => note.rebuild === 'native')!;
-  assert.equal((native.lean as { condensed: number }).condensed, rebuiltAt, 'every finished output set aside at once');
-});
-
-test('rows that already size the rebuilt history no smaller than the live session read no view', async () => {
-  const h = setup();
-  condensing(h);
-  const reads = viewReads(h);
-  h.codex.state.reply = () => ({ usage: { inputTokens: 25_000, outputTokens: 10 }, contextTokens: 5_000 }); // the engine's own small count
-  h.send('Hello');
-  await h.turn('codex');
-  lastingView(h, h.cursor(), 6_000); // the newest run alone holds 10,000 tokens: more than the live 5,000
-  h.ledgerState.need = { since: 2, reason: '1 condensed', saves: 100, marked: true };
-  h.clock.set(h.clock.now() + CACHE_COLD_MS + 1); // cold: any saving would pay – only the size check stands between it and the view
-  reads.count = 0;
-  h.send('Next');
-  await h.turn('codex');
-  assert.equal(reads.count, 0, 'no original read for a rebuild that could not make the session smaller');
-  assert.equal(h.codex.rebuilds.length, 0);
-  assert.equal(h.codex.calls[1].session?.ref, 'codex-s1');
+  assert.equal(h.codex.rebuilds.length, 1, 'the session holds the record as the ledger has it: it resumes');
+  assert.equal(h.codex.calls[2].session?.ref, 'codex-r1');
 });

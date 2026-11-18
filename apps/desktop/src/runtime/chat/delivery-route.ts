@@ -25,7 +25,8 @@
 // dispatcher.hear) – the pick still names the one who answers; an agent that answers only when @mentioned hears only its mentions.
 // 07.11.2026: a message's wake handed over from another PC is delivered here like a local line (deliverHandedOver).
 // Owns: those routing steps, the guards' counters and the decisions in flight. Never: notifies the person, decides
-// what counts as important (delivery does), or writes messages other than the guard's status lines.
+// what counts as important (delivery does), or writes messages other than the guard's status lines. A line of the one a
+// task waits on wakes its owner with that task; a colleague's line opens it, a person's leaves the wait to its owner.
 
 import type { RuntimeServices } from '../contracts.ts';
 import { messageLevel, type Member, type Message } from '../../shared/model/chat.ts';
@@ -212,7 +213,7 @@ export class DeliveryRouter {
         ...(options.dueAt !== undefined ? { dueAt: options.dueAt } : {}),
         ...(waiting ? { taskId: waiting } : options.note ? { note: options.note } : {}),
       });
-      if (waiting) this.opened(waiting, message.authorId);
+      if (waiting && message.authorKind !== 'human') this.opened(waiting, message.authorId); // a wait on a person stays until its owner moves it
     }
     // A person's line is the woken agents' own – a provisional wake's not yet: the pick may choose another (settle marks).
     if (options.dueAt === undefined) markAddressed(this.s, message, agentIds);
@@ -242,7 +243,9 @@ export class DeliveryRouter {
 
   /**
    * The agent's one task waiting on the writer (a person or an agent) – here, or anywhere when this is our 1:1; nobody's
-   * words settle a wait on someone else. Their line opens it (tasks/owners.ts onPersonLine) and its wake carries it.
+   * words settle a wait on someone else. Its wake carries it; a colleague's line opens it, a person's leaves it waiting
+   * until its owner changes it (KI-Runde 17.11.2026: every line of the person re-opened an umbrella task that its owner
+   * then parked again – two status lines per line of theirs).
    */
   private waitingTask(conversationId: string, agentId: string, authorId: string): string | undefined {
     if (!this.s.tasks) return undefined;

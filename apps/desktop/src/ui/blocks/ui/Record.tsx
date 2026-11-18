@@ -24,6 +24,7 @@ import { PROMPTER_SPEEDS, READ_AT, followScript, followSpeed, prompterPace, prom
 import { canRecordLive, useRecorder } from './recorder.ts';
 import type { RecordMode } from './recorder.ts';
 import { RecordDevice } from './RecordDevice.tsx';
+import { VoiceoverWidget, canVoiceover } from './Voiceover.tsx';
 import { s, strings } from './util.ts';
 
 const START_LABEL: Record<RecordMode, string> = { audio: 'Start microphone', video: 'Start camera', screen: 'Choose screen' };
@@ -162,7 +163,13 @@ function Preview(props: { stream: MediaStream | null; mirrored: boolean }) {
   return <video ref={ref} class={`w-record-preview${props.mirrored ? ' is-mirrored' : ''}`} muted playsInline autoplay />;
 }
 
+/** A block with a `video` is a voice-over (Voiceover.tsx) where this page can tape the microphone itself; else the plain recorder. */
 export function RecordWidget(props: AskWidgetProps) {
+  const voiceover = (s(props.block.video) || s(props.block.fileId)) && canVoiceover();
+  return voiceover ? <VoiceoverWidget {...props} /> : <PlainRecordWidget {...props} />;
+}
+
+function PlainRecordWidget(props: AskWidgetProps) {
   const { block } = props;
   const mode: RecordMode = s(block.mode) === 'video' || s(block.mode) === 'screen' ? (s(block.mode) as RecordMode) : 'audio';
   const maxSeconds = typeof block.maxSeconds === 'number' && block.maxSeconds > 0 ? block.maxSeconds : undefined;

@@ -1,4 +1,6 @@
-# Owns: one candidate file's Authenticode sign/verify operation using the configured Azure profile.
+# Owns: one candidate file's Authenticode sign/verify operation using the configured Azure profile, or (16.11.2026,
+# AUTARK_WINDOWS_SIGNING=certum) a certificate in this user's store named by its thumbprint – Certum SimplySign, whose
+# key stays on its virtual card; SignTool asks the card, nothing is read or exported here.
 # Never: overwrites an invalid existing signature, exports credentials, or changes Windows trust settings.
 param(
     [Parameter(Mandatory)][string]$FilePath,
@@ -33,7 +35,23 @@ $embedded = Has-EmbeddedSignature
 # A valid local Windows catalog alone is not a portable embedded publisher signature.
 if ($embedded -and -not (Verify-EmbeddedSignature)) { throw 'Existing embedded signature is invalid; no untrusted signature is overwritten.' }
 $signedHere = $false
-if (-not $embedded -and $signature.Status -in @('NotSigned','Valid') -and $Mode -eq 'Sign') {
+if (-not $embedded -and $signature.Status -in @('NotSigned','Valid') -and $Mode -eq 'Sign' -and $env:AUTARK_WINDOWS_SIGNING -eq 'certum') {
+    foreach ($key in @('AUTARK_SIGNING_THUMBPRINT','AUTARK_SIGNING_PUBLISHER')) {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key))) { throw "Missing signing setting: $key" }
+    }
+    $thumbprint = $env:AUTARK_SIGNING_THUMBPRINT.Trim().ToUpperInvariant()
+    if ($thumbprint -notmatch '^[0-9A-F]{40}$') { throw 'Expected the signing certificate SHA-1 thumbprint.' }
+    $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -ErrorAction SilentlyContinue
+    if (-not $certificate -or -not $certificate.HasPrivateKey) { throw 'The signing certificate is not in the store of this user with its key: is SimplySign Desktop signed in?' }
+    $subject = $certificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)
+    if ($subject -cne $env:AUTARK_SIGNING_PUBLISHER) { throw 'Certificate publisher does not match the verified release identity.' }
+    if (-not $env:AUTARK_SIGNTOOL_PATH) { throw 'Pinned SignTool path is missing.' }
+    & $env:AUTARK_SIGNTOOL_PATH sign /sha1 $thumbprint /fd SHA256 /tr 'http://time.certum.pl' /td SHA256 /q $file.FullName *> $null
+    if ($LASTEXITCODE -ne 0) { throw "SignTool could not sign $($file.Name) (exit $LASTEXITCODE)." }
+    $signedHere = $true
+    $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+    $embedded = Has-EmbeddedSignature
+} elseif (-not $embedded -and $signature.Status -in @('NotSigned','Valid') -and $Mode -eq 'Sign') {
     foreach ($key in @('AUTARK_SIGNING_ENDPOINT','AUTARK_SIGNING_ACCOUNT','AUTARK_SIGNING_PROFILE','AUTARK_SIGNING_PUBLISHER')) {
         if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key))) { throw "Missing signing setting: $key" }
     }

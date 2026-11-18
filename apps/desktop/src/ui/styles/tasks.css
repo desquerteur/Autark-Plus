@@ -69,19 +69,24 @@
 .for-you > .empty-state { padding: 10px 4px; }
 .todo-list { margin: 0; padding: 0; list-style: none; }
 .todo-item { border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
-.todo-row { display: flex; align-items: center; gap: 2px; min-height: 52px; }
-.todo-open { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; padding: 8px 6px; border-radius: var(--r-md); color: var(--text); text-align: left; }
+/* the row's parts sit at its top: a two-line title, its meta and its why grow the row downwards (17.11.2026) */
+.todo-row { display: flex; align-items: flex-start; gap: 2px; min-height: 52px; }
+.todo-open { display: flex; align-items: flex-start; gap: 12px; flex: 1 1 auto; min-width: 0; padding: 8px 6px; border-radius: var(--r-md); color: var(--text); text-align: left; }
 .todo-open:hover:not(:disabled) { background: var(--hover); }
 .todo-open:disabled { opacity: 1; }
 .todo-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--hover); color: var(--secondary); }
 .todo-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.todo-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 1.4; }
-.todo-item.expanded .todo-title { white-space: normal; overflow-wrap: anywhere; } /* the weight stays: selection never changes a box (§2) */
+/* up to two lines (a phone shows the whole ask without a tap), the rest once it is open */
+.todo-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-size: 14px; line-height: 1.4; }
+.todo-item.expanded .todo-title { -webkit-line-clamp: none; } /* the weight stays: selection never changes a box (§2) */
 /* the parts' dots spaced like the dots inside a part ("21:30 · 30 min"): one even rhythm */
 .todo-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .3em; min-width: 0; color: var(--muted); font-size: 12px; }
 .todo-meta > :not(:first-child)::before { content: '·'; margin-right: .3em; color: var(--muted); }
 .todo-chat { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .todo-priority { color: var(--warn); }
+/* the asker's one sentence why, under the meta: two lines, whole once open */
+.todo-why-line { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin-top: 1px; color: var(--secondary); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.todo-item.expanded .todo-why-line { -webkit-line-clamp: none; }
 .todo-menu { display: inline-flex; flex: none; opacity: 0; transition: opacity .12s; }
 .todo-item:hover .todo-menu, .todo-item.expanded .todo-menu, .todo-menu:focus-within { opacity: 1; }
 .todo-body { padding: 2px 6px 16px 50px; }
@@ -94,8 +99,8 @@
 .todo-item.leaving .todo-icon { color: var(--success); }
 .todo-item.leaving .todo-title { color: var(--muted); text-decoration: line-through; }
 @keyframes wf-todo-leave {
-  0% { opacity: 1; transform: none; max-height: 96px; }
-  55% { opacity: 0; transform: translateX(16px); max-height: 96px; }
+  0% { opacity: 1; transform: none; max-height: 200px; }
+  55% { opacity: 0; transform: translateX(16px); max-height: 200px; }
   100% { opacity: 0; transform: translateX(16px); max-height: 0; border-bottom-width: 0; }
 }
 .todo-add { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 4px 6px; color: var(--muted); }

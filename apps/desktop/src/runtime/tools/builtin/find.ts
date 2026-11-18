@@ -1,4 +1,4 @@
-// The one finder and the one opener, offered in every mode (tools/registry.ts EVERY_MODE):
+// The one finder and the one opener, offered in every mode (tools/registry.ts: every tool in every mode):
 //  - knowledge.find lists candidates – skills (by words, and by meaning where a person chose an embedding model), memory notes (all of the tree or
 //    the `in` folders), the person's or a colleague's references, the home project's entries (the public library is its own search, library.find)
 //    and the secrets catalog's entries (F19: kind 'secret' of the same find, with their handles, never a value) – with id, kind,

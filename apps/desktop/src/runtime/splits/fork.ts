@@ -8,15 +8,17 @@
 // (a) a native engine fork – the worker's routed engine has caps.fork, the parent's splitting run ran on that engine and
 //     account, and the session my main self's splitting turn ended with (B-080: recorded when the group started –
 //     recordedParent, SplitGroup.parentSession – so a later turn of the parent that renews or moves its binding changes
-//     nothing) is of that engine and account and fits the worker's model window (pastFit; B-080: the window the engine
-//     reported for that model, else the catalog's – windowOf): engine.fork (Codex
+//     nothing; FIXES-3 B1: for a splitting turn that still runs – agents.split with wait, on Claude Code only, FORKS_IN_TURN –
+//     the session it runs on, which Claude Code forks as its transcript stands, the running turn up to the split's call
+//     included; its size and model are those before the turn) is of that engine and account and fits the worker's model
+//     window (pastFit; B-080: the window the engine reported for that model, else the catalog's – windowOf): engine.fork (Codex
 //     thread/fork through that turn – lastTurn, Claude --resume --fork-session) – also with another model or effort of
 //     that account; a recorded ref the parent replaced since stays forkable (the session sweep keeps it ≥ 24 h);
 // (b) else a text fallback – the checkpoint of the parent's task (context.checkpoint: goal, done, open, constraints,
 //     artifacts – no "next step": the part is the worker's next step) and my own record as text (agents/history-text.ts, the
 //     part's copy of it, else the parent thread's context ledger, marks applied – 13.11.2026: never a chat's history), within half the worker model's
 //     fit, returned as `inputPrefix`; nothing to carry → fresh.
-// A 'brief' part starts fresh. The turn pipeline (agents/turn-prepare.ts chooseSession) calls this for a split's first turn
+// A 'brief' part starts fresh. The turn pipeline (agents/session-choice.ts chooseSession) calls this for a split's first turn
 // when its thread `split:<id>` has no binding yet, binds `ref` under (agent, split thread, engine) with the current
 // promptKey and puts `inputPrefix` in front of the turn's input. The choice is noted on the worker's run
 // ({splitSeed: how, condensed?, parentRef?, fellBack?} – not for a brief), recorded as the split's `fork` (services.splits.markFork)
@@ -29,18 +31,28 @@ import type { Db } from '../db/database.ts';
 import type { Engine } from '../engines/types.ts';
 import type { TurnPlan } from '../agents/turn-types.ts';
 import type { ToolSpec } from '../tools/types.ts';
-import type { Account, Effort, RouteDecision } from '../../shared/model/providers.ts';
+import type { Account, Effort, EngineId, RouteDecision } from '../../shared/model/providers.ts';
 import type { Handoff } from '../../shared/model/knowledge.ts';
 import type { Run } from '../../shared/model/runs.ts';
 import { PAST_WINDOW, splitThread, type SplitFork, type SplitGroup, type SplitParentSession, type SplitTurn } from '../../shared/model/splits.ts';
 import { SessionStore } from '../agents/sessions.ts';
 import { turnsOn } from '../agents/native-turns.ts';
-import { fitLimit, pastFit } from '../agents/compaction-policy.ts';
+import { CACHE_COLD_MS, fitLimit, pastFit } from '../agents/compaction-policy.ts';
 import { historyText } from '../agents/history-text.ts';
-import { CACHE_COLD_MS, CACHED_PRICE_RATIO } from '../agents/rebuild.ts';
+import { priorFor } from '../models/catalog-merge.ts';
+import { cachePrices } from '../models/pricing.ts';
+import { Priors } from '../models/priors.ts';
 import { tokensOf } from '../context/ledger/window.ts';
+import { engineUnit } from '../../shared/model/context-ledger.ts';
 import { turnCwd } from '../git/records.ts';
 import { quoteHeaders } from '../context/projection.ts';
+
+/**
+ * FIXES-3 B1, measured 18.11.2026 on a 34–46k-token origin: the engines whose fork of a turn that still runs reads that
+ * origin's context from its cache. Claude Code: 46,845 of 48,570 input tokens cached, 1,723 written, per part. Codex
+ * (thread/fork through the last finished turn): 16,768 and 0 of 34,980 cached – its parts start from the text seed.
+ */
+const FORKS_IN_TURN: ReadonlySet<EngineId> = new Set(['claude']);
 
 /** The text fallback's checkpoint: at most CHECKPOINT_CHARS (my record follows within half the worker model's fit). */
 const CHECKPOINT_CHARS = 2_000;
@@ -147,20 +159,28 @@ async function nativeFork(s: RuntimeServices, args: SeedArgs, cwd: string): Prom
 /**
  * B-080: the session the parent's splitting turn ended with – its binding on (agent, the group's thread, the run's engine),
  * with that run's native turn on it (agents/native-turns.ts; Codex names its turns) – recorded when the group starts
- * (splits/runner.ts startGroup; turn-finish saved the binding before it started the group). Undefined: the run named no
- * engine or left no session there (its 'fork' parts start from the text seed).
+ * (splits/runner.ts startGroup; turn-finish saved the binding before it started the group). FIXES-3 B1: a splitting turn
+ * that still runs (agents.split with wait) – `live`, what the dispatcher says it runs on – has the session it runs on: the
+ * binding saved before the run started (a session bound during the turn is new in it), on the engines of FORKS_IN_TURN only.
+ * Claude Code forks it as its transcript stands, the running turn up to the split's call included; `contextTokens` – what
+ * the window and cost checks weigh – is its size before the turn (measured 18.11.2026: 46,464 recorded, 48,570 read).
+ * Undefined: no engine named or no such session (its 'fork' parts start from the text seed).
  */
-export function recordedParent(db: Db, run: Pick<Run, 'engine' | 'startedAt'> | undefined, group: Pick<SplitGroup, 'agentId' | 'thread' | 'parentRunId'>): SplitParentSession | undefined {
-  if (!run?.engine) return undefined;
+export function recordedParent(db: Db, run: Pick<Run, 'engine' | 'startedAt' | 'status'> | undefined, group: Pick<SplitGroup, 'agentId' | 'thread' | 'parentRunId'>, live?: { engine?: EngineId; model?: string }): SplitParentSession | undefined {
+  const running = run?.status === 'running';
+  const engine = running ? live?.engine : run?.engine;
+  if (!engine || (running && !FORKS_IN_TURN.has(engine))) return undefined;
   try {
-    const binding = new SessionStore(db).get(group.agentId, group.thread, run.engine);
+    const binding = new SessionStore(db).get(group.agentId, group.thread, engine);
     // B-080 review: only the binding the splitting run left – an older turn's session lacks the split's own context
-    if (!binding || (run.startedAt !== undefined && binding.updatedAt < run.startedAt)) return undefined;
-    const turn = turnsOn(db, { agentId: group.agentId, conversationId: group.thread, engine: run.engine }, binding.ref)
-      .find((entry) => entry.runId === group.parentRunId)?.turn;
+    const before = run?.startedAt !== undefined && binding !== undefined && binding.updatedAt < run.startedAt;
+    if (!binding || before !== running) return undefined;
+    const turns = turnsOn(db, { agentId: group.agentId, conversationId: group.thread, engine }, binding.ref);
+    const turn = turns.find((entry) => entry.runId === group.parentRunId)?.turn; // a running turn has none yet
     return {
       engine: binding.engine, ...(binding.accountId ? { accountId: binding.accountId } : {}), ref: binding.ref,
       ...(binding.contextTokens !== undefined ? { contextTokens: binding.contextTokens } : {}), ...(turn ? { turn } : {}),
+      ...(running && live?.model ? { model: live.model } : {}),
     };
   } catch { return undefined; }
 }
@@ -177,7 +197,7 @@ function textSeed(s: RuntimeServices, args: SeedArgs, fellBack: string[]): SeedR
     try { checkpoint = clip(quoteHeaders(checkpointText(s.context.checkpoint({ agentId, taskId, conversationId: chat }))), CHECKPOINT_CHARS); }
     catch (error) { fellBack.push(`checkpoint: ${reason(error)}`); }
   }
-  const budget = Math.floor(fitLimit(windowOf(s, args)) / 2);
+  const budget = Math.floor(fitLimit(windowOf(s, args)) / 2 * engineUnit(args.route.engine.id)); // the window's tokens in the record's unit
   // F26: the part's copy of my record (its subconscious's marks applied), else mine
   const record = historyText(s, agentId, splitThread(args.split.splitId), budget) ?? historyText(s, agentId, args.split.parentThread, budget) ?? '';
   if (!checkpoint.trim() && !record.trim()) return { how: 'fresh' };
@@ -204,11 +224,27 @@ async function condenseCopy(s: RuntimeServices, args: SeedArgs): Promise<number>
   }
 }
 
+/** What a cache write costs in cached reads where the price table knows no price for that model (measured on Claude Code 15.–17.11.2026: about 40). */
+const WRITE_IN_READS = 40;
+
+/**
+ * What one written token costs in cached read tokens for that model, from the price table (the prior's write price against its
+ * cached price, else the input price against a tenth of it, models/pricing.ts): on Claude Code about 40, on Codex about 10.
+ */
+function writeInReads(s: RuntimeServices, modelId: string): number {
+  try {
+    const info = s.catalog.get(modelId);
+    const prior = priorFor(Priors.shipped(s.paths?.resources), info?.model ?? modelId.slice(modelId.indexOf(':') + 1), modelId);
+    const { write, read } = cachePrices(prior, info);
+    return write && read ? write / read : WRITE_IN_READS;
+  } catch { return WRITE_IN_READS; }
+}
+
 /**
  * F26: whether my native fork costs less than the part's condensed record. The fork re-reads my session on each model call, cached
- * while my cache is warm on the same model (agents/rebuild.ts CACHE_COLD_MS); the record with the turn's prompt and tools is read once
- * uncached, then cached – the fork wins while the record's saving over the calls of my splitting run stays below CACHED_PRICE_RATIO
- * reads of it (rebuild.ts pays). No warm fork to weigh (another engine, account or model, a cold cache, past the window, no size): false.
+ * while my cache is warm on the same model (agents/compaction-policy.ts CACHE_COLD_MS); the record with the turn's prompt and tools is read once
+ * uncached, then cached – the fork wins while the record's saving over the calls of my splitting run stays below what writing it
+ * costs in reads (writeInReads). No warm fork to weigh (another engine, account or model, a cold cache, past the window, no size): false.
  */
 function forkPays(s: RuntimeServices, args: SeedArgs, record: string): boolean {
   try {
@@ -216,10 +252,12 @@ function forkPays(s: RuntimeServices, args: SeedArgs, record: string): boolean {
     const { engine, account, route } = args.route;
     if (!engine.caps.fork || !parent?.contextTokens || parent.engine !== engine.id || parent.accountId !== account.id || pastFit(parent.contextTokens, windowOf(s, args))) return false;
     const ran = s.runs.get(args.split.parentRunId);
-    if (!ran?.model || ran.model !== route.modelId || s.clock.now() - (ran.endedAt ?? ran.startedAt ?? 0) > CACHE_COLD_MS) return false;
-    const lean = tokensOf(record.length + args.system.stable.length + args.system.volatile.length + JSON.stringify(args.tools).length);
+    const model = ran?.model ?? parent.model; // FIXES-3 B1: a splitting turn that still runs names its model only in its recorded session
+    if (!ran || !model || model !== route.modelId || s.clock.now() - (ran.endedAt ?? ran.startedAt ?? 0) > CACHE_COLD_MS) return false;
+    // in the engine's own tokens, as the parent's count is (shared/model/context-ledger.ts engineUnit)
+    const lean = tokensOf(record.length + args.system.stable.length + args.system.volatile.length + JSON.stringify(args.tools).length) / engineUnit(parent.engine);
     const calls = Math.max(1, ran.modelCalls || Math.round((ran.inputTokens ?? 0) / parent.contextTokens));
-    return (parent.contextTokens - lean) * calls < CACHED_PRICE_RATIO * lean;
+    return (parent.contextTokens - lean) * calls < writeInReads(s, route.modelId) * lean;
   } catch { return false; }
 }
 
@@ -236,7 +274,7 @@ export function checkpointText(handoff: Handoff): string {
 }
 
 /**
- * The worker model's context window for the fit – B-080: the main path's rule (agents/turn-prepare.ts chooseSession): the
+ * The worker model's context window for the fit – B-080: the main path's rule (agents/session-choice.ts chooseSession): the
  * window its engine reported for this model (the one it really runs with), else the catalog's; neither → DEFAULT_WINDOW.
  */
 function windowOf(s: RuntimeServices, args: SeedArgs): number | undefined {

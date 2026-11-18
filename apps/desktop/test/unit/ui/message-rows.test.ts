@@ -1,4 +1,4 @@
-// The message list's rows (src/ui/chat/message-rows.ts): consecutive status lines form one burst,
+// The message list's rows (src/ui/chat/message-rows.ts): consecutive status lines and agents' quiet lines form one burst,
 // and a jump (C4) to a line of a collapsed burst lands on its newest line the person sees –
 // agents' edit and delete notices (C6) are hidden in the burst, so they are never the target. A call is one
 // bubble at its row: the rows its lines name fold into it and show there in full (callEntries), every other row – a later
@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { Message } from '../../../src/shared/model/chat.ts';
 import { callLength, type CallRecord } from '../../../src/shared/model/call.ts';
-import { burstLineFor, callEntries, groupRows, rowHas } from '../../../src/ui/chat/message-rows.ts';
+import { burstLineFor, burstView, callEntries, groupRows, isQuietLine, quietLineText, rowHas } from '../../../src/ui/chat/message-rows.ts';
 
 const text = (seq: number): Message => ({
   id: `msg_${seq}`, conversationId: 'cv_rows', seq, authorId: 'human', authorKind: 'human', kind: 'text', body: `#${seq}`, attachments: [], mentions: [],
@@ -99,4 +99,44 @@ test('13.11.2026: only messages – a row an older version left streaming is a p
   const old = agentMsg(2, { state: 'streaming', runId: 'run_1', body: 'Half' });
   const rows = groupRows([text(1), old, status(3), agentMsg(4, { runId: 'run_0' })]);
   assert.deepEqual(rows.map((row) => (row.kind === 'message' ? row.message.id : row.kind)), ['msg_1', 'msg_2', 'status', 'msg_4']);
+});
+
+test('an agent\'s quiet line joins the status burst as a compact row; loud lines, the person\'s and a call\'s stay rows of their own', () => {
+  const quiet = agentMsg(2, { silent: true, body: 'Ich habe die Aufgabe an Lena gegeben. Sie meldet sich mit dem Ergebnis.' });
+  const said = agentMsg(5, { silent: true, meta: { call: { id: 'call_b', participant: 'agent:ag_tom', name: 'Tom' } } });
+  const rows = groupRows([text(1), quiet, status(3), agentMsg(4), said, { ...text(6), silent: true }]);
+  assert.deepEqual(rows.map((row) => (row.kind === 'message' ? row.message.id : row.messages.map((message) => message.id).join('+'))),
+    ['msg_1', 'msg_2+msg_3', 'msg_4', 'msg_5', 'msg_6']);
+  assert.equal(isQuietLine(quiet), true);
+  assert.equal(isQuietLine(agentMsg(7)), false, 'a normal agent line is a bubble');
+  assert.equal(burstLineFor(rows, 'msg_2'), 'msg_3', 'a jump to the quiet line lands on its burst');
+  assert.equal(quietLineText(quiet, 'Tom'), 'Tom: Ich habe die Aufgabe an Lena gegeben');
+});
+
+test('a quiet line that carries files is a result: it stays a bubble, never a row in the burst', () => {
+  const image = agentMsg(2, { silent: true, body: '', attachments: [{} as Message['attachments'][number]] });
+  assert.equal(isQuietLine(image), false);
+  const rows = groupRows([status(1), image, status(3)]);
+  assert.deepEqual(rows.map((row) => (row.kind === 'message' ? row.message.id : row.messages.map((message) => message.id).join('+'))), ['msg_1', 'msg_2', 'msg_3']);
+});
+
+test('one burst has one shape for one line and for many: nothing above an opened line appears or moves when the next arrives', () => {
+  const quiet = agentMsg(2, { silent: true, body: 'Ich lese die Logs.' });
+  const shape = (items: ReturnType<typeof burstView>) => items.map((item) => (item.kind === 'line' ? item.id : `${item.kind} ${item.count}`));
+  const none = new Set<string>();
+  // One line: its row, nothing above or below it.
+  assert.deepEqual(shape(burstView([quiet], false, none)), ['msg_2']);
+  // Two lines: the earlier one folds into a row in its place, the newest stands under it; open, a hide row comes last.
+  assert.deepEqual(shape(burstView([quiet, status(3)], false, none)), ['earlier 1', 'msg_3']);
+  assert.deepEqual(shape(burstView([quiet, status(3)], true, none)), ['msg_2', 'msg_3', 'hide 1']);
+  // A line opened before the second arrives: the same rows above it as before (none), the new line only below it.
+  const opened = new Set([quiet.id]);
+  assert.deepEqual(shape(burstView([quiet], false, opened)), ['msg_2']);
+  assert.deepEqual(shape(burstView([quiet, status(3)], false, opened)), ['msg_2', 'msg_3']);
+  assert.deepEqual(shape(burstView([quiet, status(3), status(4)], false, opened)), ['msg_2', 'msg_3', 'msg_4']);
+  // The newest of three opened: the row above it stays the one fold row, the next line comes below.
+  const newest = new Set(['msg_4']);
+  assert.deepEqual(shape(burstView([quiet, status(3), status(4)], false, none)), ['earlier 2', 'msg_4']);
+  assert.deepEqual(shape(burstView([quiet, status(3), status(4)], false, newest)), ['earlier 2', 'msg_4']);
+  assert.deepEqual(shape(burstView([quiet, status(3), status(4), status(5)], false, newest)), ['earlier 2', 'msg_4', 'msg_5']);
 });

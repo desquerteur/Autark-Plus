@@ -28,6 +28,7 @@ import { installBuild } from '../../tasks/recover-notes.ts'; // B-080
 import { bad, id, input, isIdLike, optBool, optText, text } from '../params.ts';
 import { onDevice, PATH_RULE } from './files-path.ts'; // B-081: system.root of a linked CEO PC
 import { fromMain } from './security.ts'; // 16.11.2026: system.prepareRestart answers main's own link only
+import { actingAs, actorOf, readSecurityChanges } from '../../settings/security-log.ts'; // 16.11.2026: Settings › Security's change log
 import { isTopic, maySubscribe } from '../scopes.ts';
 import { scopeHas } from '../table.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
@@ -91,7 +92,10 @@ function updateSettings(params: unknown, ctx: HandlerContext) {
       if (!secure && PC_PREFERENCES.has(key)) throw new WorkforceError('forbidden', 'This setting changes the PC; change it on the PC or from the paired phone app over a secure connection.', { details: { section: 'preferences', key } });
     }
   }
-  return ctx.services.settings.update(patch);
+  // 16.11.2026: the Security tab's two settings are logged with the caller (settings/security-log.ts)
+  const { services } = ctx;
+  const by = actorOf(ctx.scope, { person: () => services.settings.get().profile.name || 'The owner', agent: (agentId) => services.org.get(agentId)?.name });
+  return actingAs(by, patch, () => services.settings.update(patch));
 }
 
 /** B-044 system.root: <data>, the workspace, the map (written now when it is missing) and the settings file's quiet notice. */
@@ -172,6 +176,7 @@ export function register(table: HandlerTable): void {
 
   table.add('settings.get', (_params, ctx) => ctx.services.settings.get(), TODO);
   table.add('settings.update', (params, ctx) => updateSettings(params, ctx), SETTINGS);
+  table.add('settings.securityLog', (_params, ctx) => readSecurityChanges(new KvRepo(ctx.services.db)), SETTINGS);
 
   table.add('ui.state', (_params, ctx) => uiState(ctx), TODO);
   table.add('ui.saveDraft', (params, ctx) => {

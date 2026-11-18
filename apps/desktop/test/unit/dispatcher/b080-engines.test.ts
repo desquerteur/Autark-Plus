@@ -1,6 +1,6 @@
 // B-080 – the dispatcher's side of the engines package: model.set now switches inside the running turn when the model
 // runs on the turn's engine and its own account (TurnRoute.accountId; Engine.setModel: no cut, a {modelSet: 'in-turn'}
-// run note, the next-step request ends – 'now' is this turn's; the activity row never shows the account); another
+// run note, the request stays until a request of the turn runs on it – FIXES-3 C1; the activity row never shows the account); another
 // engine, a model the turn's account does not run, or a refusal cut at the next tool boundary and continue at once as
 // before, on that request (B-083: a switch the engine does not apply is logged once); an important line folded from
 // another chat writes that chat's one waiting line.
@@ -41,7 +41,7 @@ async function working(answer: boolean | 'throw' = true) {
 }
 
 const nextStep = (h: Awaited<ReturnType<typeof working>>['h'], conversationId: string) => {
-  const row = h.db.get<{ value: string }>("SELECT value FROM kv WHERE ns = 'next_route' AND key = ?", ['ag_tom']);
+  const row = h.db.get<{ value: string }>("SELECT value FROM kv WHERE ns = 'next_model' AND key = ?", ['ag_tom']);
   return row ? JSON.parse(row.value) as { modelId?: string } : undefined;
 };
 
@@ -64,7 +64,7 @@ test('model.set now on the turn\'s engine and account: switched inside the turn 
   assert.equal(h.executor.calls.length, 1, 'no second turn');
   const note = h.runItems.find((item) => item.kind === 'note' && item.data.modelSet === 'in-turn');
   assert.deepEqual(note?.data, { modelSet: 'in-turn', model: 'claude:claude-sonnet-5', effort: 'high', from: 'claude:claude-opus-5-5' }, 'from: the model the turn ran on before (a part\'s head names its start model)');
-  assert.equal(nextStep(h, chat.id), undefined, "'now' is this turn's: the next-step request ended");
+  assert.equal(nextStep(h, chat.id)?.modelId, 'claude:claude-sonnet-5', 'FIXES-3 C1: the request stays until a request of the turn runs on it (turn-attempt.ts ends it then)');
   // The engine's 'model' event reaches the activity through the turn's onRoute (turn-attempt.ts):
   first.request.onRoute?.({ model: 'claude:claude-sonnet-5', modelName: 'Claude Sonnet 5', effort: 'high', engine: 'claude', accountId: 'acc_a' });
   assert.equal(h.dispatcher.activity()[0].model, 'claude:claude-sonnet-5');

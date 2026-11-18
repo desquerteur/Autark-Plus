@@ -87,7 +87,7 @@ test('send: body from words or stdin, @mentions stay in the text, --important, a
   t.after(() => runtime.stop());
   const sent = await wf(['send', 'Launch', 'Hello', '@Manager', 'please'], { runtime });
   assert.equal(sent.code, 0, sent.err);
-  assert.equal(sent.out, 'Sent to Launch (msg_sent).\n');
+  assert.equal(sent.out, 'Sent to Launch (#5, msg_sent).\n');
   const params = runtime.calls.filter((call) => call.method === 'messages.send').map((call) => call.params as Record<string, unknown>);
   assert.equal(params[0].body, 'Hello @Manager please');
   assert.equal(params[0].conversationId, launch.id);
@@ -101,6 +101,34 @@ test('send: body from words or stdin, @mentions stay in the text, --important, a
   assert.equal(JSON.parse(piped.out).id, 'msg_sent');
   const empty = await wf(['send', 'Launch', '   '], { runtime });
   assert.deepEqual([empty.code, empty.err], [2, 'wf: Nothing to send.\n']);
+});
+
+test('send --file (BEFUND §4, 17.11.2026): each file stored by path, one message with all; --attach works too; a missing file sends nothing', async (t) => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = await mkdtemp(path.join(tmpdir(), 'wf-send-file-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, 'a.png'), 'png');
+  await writeFile(path.join(dir, 'b.pdf'), 'pdf');
+  let stored = 0;
+  const runtime = await fakeRuntime({
+    'files.uploadPath': () => ({ id: `${String(++stored).repeat(64)}`.slice(0, 64) }),
+    'messages.send': (params) => message({ id: 'msg_sent', seq: 9, conversationId: launch.id, body: (params as { body: string }).body }),
+  });
+  t.after(() => runtime.stop());
+  const sent = await wf(['send', 'Launch', 'Bericht', '--file', path.join(dir, 'a.png'), '--attach', path.join(dir, 'b.pdf')], { runtime });
+  assert.equal(sent.code, 0, sent.err);
+  assert.equal(sent.out, 'Sent to Launch (#9, msg_sent, 2 files).\n');
+  const uploads = runtime.calls.filter((call) => call.method === 'files.uploadPath').map((call) => (call.params as { path: string }).path);
+  assert.deepEqual(uploads, [path.join(dir, 'a.png'), path.join(dir, 'b.pdf')]);
+  const params = runtime.calls.find((call) => call.method === 'messages.send')!.params as { attachments: Array<{ fileId: string; name: string }> };
+  assert.deepEqual(params.attachments, [{ fileId: '1'.repeat(64), name: 'a.png' }, { fileId: '2'.repeat(64), name: 'b.pdf' }]);
+  const before = runtime.calls.length;
+  const missing = await wf(['send', 'Launch', 'Bericht', '--file', path.join(dir, 'a.png'), '--file', path.join(dir, 'fehlt.md')], { runtime });
+  assert.equal(missing.code, 2);
+  assert.match(missing.err, /No file at .*fehlt\.md; nothing was sent\./);
+  assert.ok(!runtime.calls.slice(before).some((call) => call.method === 'messages.send' || call.method === 'files.uploadPath'), 'nothing stored, nothing sent');
 });
 
 test('send --wait: subscribed before sending, so a reply pushed even before the answer is caught; failed replies exit 1', async (t) => {
@@ -118,7 +146,7 @@ test('send --wait: subscribed before sending, so a reply pushed even before the 
   const human = await wf(['send', 'Launch', 'hi', '--wait'], { runtime });
   assert.equal(human.code, 0, human.err);
   assert.equal(human.out, '14:02  Manager: Echo: hi\n');
-  assert.match(human.err, /Sent to Launch \(msg_sent\)\. Waiting for a reply/);
+  assert.match(human.err, /Sent to Launch \(#5, msg_sent\)\. Waiting for a reply/);
   const order = runtime.calls.map((call) => call.method);
   assert.ok(order.indexOf('events.subscribe') < order.indexOf('messages.send'), 'subscribe first');
   const json = await wf(['send', 'Launch', 'hi', '--wait', '--json'], { runtime });

@@ -1,7 +1,8 @@
 // The voice conversation's capture and self barge-in (src/ui/chat/composer/conversation-audio.ts,
 // src/ui/lib/barge-in.ts, shared/voice/conversation.ts bargeIn): the turn detector cuts a take from the 16 kHz PCM, the
 // take is a WAV that starts PRE_ROLL_MS before the voice (the first word whole) and goes to the loop as one upload; a
-// take is dropped when the loop moves on; nothing is taken while this device reads aloud (echo guard); with echo
+// take is dropped when the loop starts reading; words said while the last line is heard are kept and go to the loop
+// after it, in order (KI-Runde 17.11.); nothing is taken while this device reads aloud (echo guard); with echo
 // cancellation on, a voice clearly above the reading's echo, held long enough, stops this device's own reading and is
 // taken at once – a cough, the echo itself or a microphone without echo cancellation never does; the loop stops
 // reading and listens.
@@ -25,27 +26,29 @@ const UNIT = rms(Float32Array.from({ length: 512 }, (_, i) => harmonics(i)));
 /** One 85 ms block of a voice whose RMS is `level` (0: silence); `at` keeps the waveform continuous. */
 const block = (level: number, at: number) => Float32Array.from({ length: BLOCK }, (_, i) => (level / UNIT) * harmonics(at + i));
 
-function rig(options: { aec?: boolean; bargeIn?: () => boolean; speaking?: () => boolean; turnModels?: () => Promise<TurnModels> } = {}) {
+function rig(options: { aec?: boolean; bargeIn?: () => boolean; speaking?: () => boolean; turnModels?: () => Promise<TurnModels>; utterance?: (fileId: string) => Promise<void>; upload?: (index: number) => Promise<void> } = {}) {
   let now = 0;
   let sample = 0;
   let feed: ((samples: Float32Array, rate: number) => void) | undefined;
   const uploads: Array<{ blob: Blob; name: string }> = [];
   const utterances: string[] = [];
   const barged: string[] = [];
+  const spoke: number[] = [];
   const stream = { getAudioTracks: () => [{ getSettings: () => ({ echoCancellation: options.aec === true }) }] } as unknown as MediaStream;
   const capture = new ConversationCapture({
-    utterance: async (_id, fileId) => { utterances.push(fileId); },
+    utterance: async (_id, fileId) => { utterances.push(fileId); await options.utterance?.(fileId); },
+    spoke: (_id, at) => { spoke.push(at); },
     ...(options.bargeIn ? { bargeIn: (id: string) => { barged.push(id); return options.bargeIn!(); } } : {}),
   }, () => undefined, {
     openMicrophone: async (listener) => { feed = listener; return { stream, close: () => undefined }; },
-    upload: async (blob, name) => { uploads.push({ blob, name }); return { id: `file_${uploads.length}` }; },
+    upload: async (blob, name) => { uploads.push({ blob, name }); const index = uploads.length; await options.upload?.(index); return { id: `file_${index}` }; },
     now: () => now,
     speaking: options.speaking,
     turnModels: options.turnModels,
   });
   const run = (level: number, ms: number) => { for (let t = 0; t < ms; t += BLOCK_MS) { now += BLOCK_MS; feed!(block(level, sample), RATE); sample += BLOCK; } };
   const view = (status: VoiceSessionView['status']) => capture.follow({ id: 'mic_1', conversationId: 'ch_a', status });
-  return { capture, run, view, uploads, utterances, barged, tick: () => new Promise<void>((resolve) => setImmediate(resolve)) };
+  return { capture, run, view, uploads, utterances, barged, spoke, now: () => now, tick: () => new Promise<void>((resolve) => setImmediate(resolve)) };
 }
 
 /** The take's samples (16 kHz floats after the 44-byte WAV header). */
@@ -57,8 +60,9 @@ test('a take starts with the pre-roll before the voice, ends after the silence a
   r.view('listening');
   r.run(0, 600);
   r.run(0.1, 800);
-  r.view('transcribing'); // the loop moved on: the take is dropped
+  r.view('speaking'); // the loop reads a reply: the take is dropped
   r.run(0.1, 100);
+  r.view('listening');
   r.run(0, 1400);
   await r.tick();
   assert.equal(r.uploads.length, 0, 'nothing of the dropped take');
@@ -205,4 +209,33 @@ test('B-082: the turn models load with the conversation and decide from the next
     assert.equal(failing.uploads.length, 1, 'the level detector cut the line');
     assert.equal(warned.length, 1, 'one log line');
   } finally { console.warn = warn; }
+});
+
+test('words said while the last line is heard are kept: taken while the loop transcribes, uploaded at once, handed over after the line before, in order', async () => {
+  let release = () => {};
+  const firstHeard = new Promise<void>((resolve) => { release = resolve; });
+  let slowFirst = () => {};
+  const firstUpload = new Promise<void>((resolve) => { slowFirst = resolve; });
+  const r = rig({ utterance: (fileId) => (fileId === 'file_1' ? firstHeard : Promise.resolve()), upload: (index) => (index === 1 ? firstUpload : Promise.resolve()) });
+  await r.capture.open();
+  r.view('listening');
+  r.run(0, 600);
+  r.run(0.1, 800);
+  r.run(0, 1400); // the first line ends: its upload starts
+  const firstEnd = r.now();
+  r.view('transcribing'); // the loop hears it
+  r.run(0.1, 800);
+  r.run(0, 1400); // said meanwhile: kept, its upload starts at once
+  await r.tick();
+  assert.equal(r.uploads.length, 2, 'both uploads run');
+  assert.deepEqual(r.utterances, [], 'the second waits for the first, whose upload is slower');
+  slowFirst();
+  await r.tick();
+  assert.deepEqual(r.utterances, ['file_1']);
+  release();
+  await r.tick();
+  assert.deepEqual(r.utterances, ['file_1', 'file_2'], 'the next line, in the order said');
+  assert.equal(r.spoke.length, 2, 'the end of each take’s speech goes to the sink');
+  assert.ok(r.spoke[0] <= firstEnd && r.spoke[1] > firstEnd, 'at the take’s end');
+  r.capture.close();
 });

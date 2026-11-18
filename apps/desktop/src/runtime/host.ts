@@ -4,6 +4,7 @@
 // Never: lets the runtime import `electron` – everything Electron-specific comes through here.
 
 import type { AppInfo, DecodedAudio, HostOps, ImageRegion, Keyframes, NormalizedImage, PowerEvent } from '../shared/api/host-bridge.ts';
+import type { VideoPreview } from '../shared/model/video-preview.ts';
 import type { SideBrowserCall, SideBrowserResult } from '../shared/model/side-browser.ts'; // B-055
 import type { CompanyStart } from '../shared/model/companies.ts'; // B-078
 
@@ -29,6 +30,12 @@ export interface HostMedia {
    * 0..1). Missing on hosts without app windows; rejects with a user-safe WorkforceError (HEIC/TIFF not supported).
    */
   image?(input: { fileId: string; mime?: string; maxPx?: number; region?: ImageRegion }): Promise<NormalizedImage>;
+  /**
+   * 17.11.2026 (task_d4pdwppg): a light copy of a stored video (blob id) – H.264 in MP4 with its index in front, short edge ≤ 720 px, ≈ 2.5 Mbit/s
+   * (shared/model/video-preview.ts) – written by main's hidden preview window to a temp file of main's own; the caller stores it and removes the
+   * file. Missing on hosts without app windows. Rejects with a user-safe WorkforceError (not supported, too long, no encoder, timeout, busy).
+   */
+  preview?(input: { fileId: string; mime?: string }): Promise<VideoPreview>;
 }
 
 export interface HostCapture {

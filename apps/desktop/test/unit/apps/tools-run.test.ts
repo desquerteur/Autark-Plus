@@ -1,4 +1,4 @@
-// Connector tools end to end with a fake host: every listed tool is offered in every mode (anyMode) with its read or
+// Connector tools end to end with a fake host: every listed tool is offered in every mode (no tool.modes, tools/registry.ts) with its read or
 // write category, a call reaches the host with the MCP name, secret://<id> handles in the arguments are filled from
 // the vault and masked in the answer, answers are marked untrusted, and failures are user-safe (unknown effect after a
 // send without answer, the sign-in line, a turned-off connector).
@@ -40,7 +40,7 @@ test('offer: one tool per listed MCP tool, in every mode, read or write by the r
   const { host } = fakeHost({ status: 'ok' }, async () => ({ content: [] }));
   const defs = appToolDefs(connector, TOOLS, host);
   assert.deepEqual(defs.map((def) => def.name), ['app.notion.search', 'app.notion.create-page']);
-  assert.ok(defs.every((def) => def.anyMode));
+  assert.ok(defs.every((def) => def.modes === undefined));
   assert.equal(byName(defs, 'search').category, 'read');
   assert.equal(byName(defs, 'create-page').category, 'write_system');
   assert.equal(byName(defs, 'create-page').describe!({}, ctx()).external, true);

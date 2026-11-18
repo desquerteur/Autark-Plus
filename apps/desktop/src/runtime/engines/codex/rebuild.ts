@@ -5,7 +5,7 @@
 // tools through neutral-calls.ts (B-049: a shell call of Claude or Codex as Codex's own exec_command
 // function_call + output, Claude's Read/Grep/Glob as our files.read/files.search when the thread has them, an
 // edit as a note with its diff or content); every other native tool as an assistant note
-// "[ran <tool>: <summary>]" plus its output as a user-side note; reasoning as a reasoning item only with
+// one user-side "[record of an earlier call …]" with its output (BEFUND §3, never assistant text); reasoning as a reasoning item only with
 // encrypted content of the same account and model family, else not at all (as assistant text it reads as words the model never said); a
 // condensed item's restore stamp stays in its text –, the injection in chunks (thread/inject_items), the
 // check with thread/items/list where this Codex lists injected items before a turn (the probe says so per
@@ -35,7 +35,7 @@ import type { RpcClient } from './rpc.ts';
 import { RpcError } from './rpc.ts';
 import { HIDDEN_THREAD, THREAD_OPEN_MS, untilStopped } from './helper-thread.ts';
 import { isRecord, str, toWireName } from '../shared.ts';
-import { boundOutput, noteText, oursCall, outputNote, sameReasoningSource, withStamp } from '../rebuild-text.ts';
+import { boundOutput, oursCall, recordText, sameReasoningSource, withStamp } from '../rebuild-text.ts';
 import { CODEX_NATIVE, mapNativeCall, type Mapped } from '../neutral-calls.ts';
 
 /** Items per thread/inject_items call, and characters per call (Codex sets no limit; requests stay moderate). */
@@ -70,8 +70,8 @@ export function responseItems(items: RebuildItem[], target: { offered: ReadonlyS
     if (call) {
       const mapped: Mapped | undefined = oursCall(call) ? undefined : mapNativeCall(call, item.origin?.engine, mapTarget);
       if (mapped?.as === 'note') {
-        out.push(message('assistant', noteText(call, mapped.detail, item.calls)));
-        out.push(message('user', outputNote(call, item.stamp)));
+        // 17.11.2026 (BEFUND §3): one user-side record, never assistant text the model would imitate
+        out.push(message('user', recordText(call, { ...(mapped.detail ? { detail: mapped.detail } : {}), ...(item.calls ? { calls: item.calls } : {}), ...(item.stamp ? { stamp: item.stamp } : {}) })));
         continue;
       }
       let callId = call.callId?.trim() || `call_${item.itemId}`;

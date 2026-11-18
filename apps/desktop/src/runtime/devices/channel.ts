@@ -82,6 +82,9 @@ export class SecureChannel {
   private listeners: Array<(message: unknown) => void> = [];
   /** Messages opened before the first listener registered (bounded). */
   private backlog: unknown[] = [];
+  /** 18.11.2026: the backlog goes out in a microtask, to every listener registered by then (phone.ts registers the
+   * streams and then the WebRTC signalling – a phone's early rtc hello must reach the second one too). */
+  private flushing = false;
   private closeListeners: Array<(code?: number) => void> = [];
   closed = false;
 
@@ -125,7 +128,7 @@ export class SecureChannel {
     if (this.closed) return;
     const message = this.open(frame);
     if (message === undefined) return this.close();
-    if (!this.listeners.length) {
+    if (!this.listeners.length || this.flushing) { // while the backlog waits for its flush, newer ones queue behind it
       if (this.backlog.length >= 256) return this.close();
       this.backlog.push(message);
       return;
@@ -135,7 +138,12 @@ export class SecureChannel {
 
   onMessage(listener: (message: unknown) => void): void {
     this.listeners.push(listener);
-    for (const message of this.backlog.splice(0)) listener(message); // in order, before anything newer
+    if (!this.backlog.length || this.flushing) return;
+    this.flushing = true;
+    queueMicrotask(() => { // in order, before anything newer, to all listeners of this synchronous run
+      this.flushing = false;
+      for (const message of this.backlog.splice(0)) for (const each of [...this.listeners]) each(message);
+    });
   }
   /** `code`: the socket's close code (1000 when this side closed it). */
   onClose(listener: (code?: number) => void): void { this.closeListeners.push(listener); }

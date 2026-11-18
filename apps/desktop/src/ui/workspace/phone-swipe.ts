@@ -10,6 +10,8 @@
 // message while the messages show replies to that message (chatSwipe) – the composer's reply quote and its field's
 // focus are the feedback. With the area open the same swipe still goes back to the messages; a swipe towards the left
 // still opens the area; a start on a status line, a task card or empty room is no reply.
+// 17.11.2026 (the owner: copying text on the phone): a touch that selects text – a long press that began a selection, or a drag of its handles – is never a
+// swipe: with a selection at the start or the end of the touch the gesture does nothing, so extending a selection sideways cannot reply or switch the area.
 // Owns: the gesture and its thresholds. Never: what the area shows, or swipes outside a chat.
 
 /** 24 dp from each edge stays the system's (CSS pixels are dp in a phone's browser). */
@@ -37,6 +39,11 @@ export function chatSwipe(to: Exclude<SwipeTurn, null>, messageId: string | unde
 /** The message a touch starts on: a text message's row (`article.message`), not a status line or a task card. */
 export const SWIPED_MESSAGE = 'article.message[data-message-id]';
 
+/** True while the page has selected text (a long press or a drag of the selection handles made it): then a sideways move is the selection's. */
+export function hasSelection(): boolean {
+  try { return (getSelection()?.toString() ?? '') !== ''; } catch { return false; }
+}
+
 /** Elements whose sideways moves are their own: fields, touch surfaces of the PC browser/screen, `.no-swipe`. */
 export const OWNS_SIDEWAYS = 'input, textarea, select, [contenteditable="true"], [role="application"], .browser-touch, .no-swipe';
 
@@ -60,14 +67,14 @@ export function watchChatSwipe(root: HTMLElement, chat: () => string | undefined
   let start: { x: number; y: number; messageId?: string } | undefined;
   const down = (event: TouchEvent) => {
     const on = (event.target as Element | null)?.closest?.(SWIPED_MESSAGE)?.getAttribute('data-message-id') ?? undefined;
-    start = event.touches.length === 1 && chat() && !ownsSideways(event.target) ? { x: event.touches[0].clientX, y: event.touches[0].clientY, ...(on ? { messageId: on } : {}) } : undefined;
+    start = event.touches.length === 1 && chat() && !hasSelection() && !ownsSideways(event.target) ? { x: event.touches[0].clientX, y: event.touches[0].clientY, ...(on ? { messageId: on } : {}) } : undefined;
   };
   const up = (event: TouchEvent) => {
     const from = start;
     start = undefined;
     const id = chat();
     const touch = event.changedTouches[0];
-    if (!from || !id || !touch) return;
+    if (!from || !id || !touch || hasSelection()) return; // a touch that selected text is no swipe
     const to = swipeTurn(from, { x: touch.clientX, y: touch.clientY }, window.innerWidth);
     if (to) turn(id, to, from.messageId);
   };

@@ -6,7 +6,7 @@
 // guard), unless the person talks over it (barge-in). The screen stays on (wake lock); on a phone every conversation
 // ends when the page is hidden (app switched, screen locked) – a phone never keeps listening in the background.
 // B-081: start with a callId takes that call (an agent's ring or a call on another device); agents' names for the
-// reading voice come from the org store.
+// reading voice come from the org store. Each call turn's times go out once as calls.turn (ui/chat/call/turn-meter.ts).
 // Owns: the page side (capture, speaking, wake lock, hide, the chat topics it holds). Never: audio processing beyond
 // the capture, API keys (the runtime transcribes), or messages the loop did not send.
 
@@ -19,6 +19,7 @@ import { recordingProblem } from '../../lib/dictation.ts';
 import { platform } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
 import { activeConversationId, agentMap, settings } from '../../lib/store.ts';
+import { TurnMeter } from '../call/turn-meter.ts';
 import { browserCapture, browserSpeech, ConversationCapture } from './conversation-audio.ts';
 import type { CaptureDeps, SpeechOutput } from './conversation-audio.ts';
 
@@ -52,6 +53,7 @@ export class ConversationCancelled extends Error {
 export class PageConversation {
   private readonly deps: PageConversationDeps;
   private readonly sessions: VoiceSessions;
+  private readonly meter: TurnMeter;
   private capture: ConversationCapture | null = null;
   private opening: Promise<void> | null = null; // the microphone opening (a second tap meanwhile waits for it)
   private stops = 0; // bumped by every stop: a start that a stop overtook gives up quietly
@@ -59,14 +61,23 @@ export class PageConversation {
 
   constructor(deps: PageConversationDeps) {
     this.deps = deps;
+    const meter = new TurnMeter(() => deps.capture.now(), (note) => { void deps.rpc.call('calls.turn', note).catch(() => undefined); });
+    this.meter = meter;
+    deps.rpc.on('message.created', (message) => meter.seen(message));
+    deps.rpc.on('message.updated', (message) => meter.seen(message));
+    const call = deps.rpc.call.bind(deps.rpc) as (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
     this.sessions = new VoiceSessions({
       rpc: {
-        call: deps.rpc.call.bind(deps.rpc),
+        call: (async (method: string, params?: unknown, timeoutMs?: number) => {
+          const result = await call(method, params, timeoutMs);
+          meter.answered(method, params, result);
+          return result;
+        }) as ConversationRpc['call'],
         on: deps.rpc.on.bind(deps.rpc),
         subscribe: async (topic) => deps.holdTopic(topic),
       },
       publish: (mic, error, chats) => this.published(mic, error, chats),
-      speak: (micId, text) => deps.speech.speak(text, () => this.sessions.spokenDone(micId)),
+      speak: (micId, text) => { meter.spoken(); deps.speech.speak(text, () => this.sessions.spokenDone(micId)); },
       silence: () => deps.speech.cancel(),
       newId: deps.newId,
       after: deps.after,
@@ -115,7 +126,7 @@ export class PageConversation {
     const problem = this.deps.microphoneProblem();
     if (problem) throw new Error(problem);
     const capture = new ConversationCapture(
-      { utterance: (micId, fileId) => this.sessions.utterance(micId, fileId), bargeIn: (micId) => this.sessions.bargeIn(micId) },
+      { utterance: (micId, fileId) => this.sessions.utterance(micId, fileId), bargeIn: (micId) => this.sessions.bargeIn(micId), spoke: (_micId, at) => this.meter.spoke(at) },
       (error) => { if (this.capture === capture) this.stopAll(error instanceof Error ? error.message : 'The utterance could not be sent.'); },
       this.deps.capture,
     );

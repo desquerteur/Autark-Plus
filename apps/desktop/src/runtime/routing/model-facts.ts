@@ -10,8 +10,7 @@
 // B-089 (11.11.2026, live 10.11.: "(+387 more in models.list)" became "(+385 more …)" within an hour – a relist, a price
 // refresh, an account that cools or signs out move the line – and every agent's sessions started cold): the line is no
 // longer in the stable prompt but the volatile section 'models' (context/prompt-volatile.ts), sent to a resumed session
-// only when it changes. The subconscious's routing call has its own list from the router's pool (subconscious/route-turn.ts
-// modelLines, with priceText, sourceOf and strengthOverview from here).
+// only when it changes.
 // Owns: these texts. Never: ranks or decides (router.ts, model-list.ts do) or writes anything.
 
 import type { Account, Effort, ModelInfo } from '../../shared/model/providers.ts';

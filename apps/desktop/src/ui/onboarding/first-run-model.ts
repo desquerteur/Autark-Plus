@@ -74,3 +74,11 @@ export function profilePatch(current: Pick<Settings['profile'], 'name' | 'compan
   if (access && access !== (current?.pcAccess ?? 'whole')) patch.pcAccess = access;
   return Object.keys(patch).length ? patch : undefined;
 }
+
+/**
+ * 17.11.2026: the About card's "share in the public library" tick (settings.library.publish; absent = on). Only what
+ * changed is written: left ticked on a new PC nothing is, unticked it is `publish: false`.
+ */
+export function libraryPatch(current: Settings['library'] | undefined, share: boolean): { publish: boolean } | undefined {
+  return share === (current?.publish !== false) ? undefined : { publish: share };
+}

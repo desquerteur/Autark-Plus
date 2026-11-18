@@ -1,7 +1,8 @@
 // B-080 – a 'fork' part forks the session its parent's splitting turn ended with (runtime/splits/fork.ts recordedParent,
 // SplitGroup.parentSession, migration 092): recorded when the group starts – with that run's native turn id – it stays the
 // fork source when the parent's next turn renews or saves its binding again; the fork goes through that turn (Codex
-// lastTurnId); another engine or account, or no recorded session, falls back to the text seed.
+// lastTurnId); another engine or account, or no recorded session, falls back to the text seed. FIXES-3 B1: a turn that still
+// waits for its parts (agents.split with wait) records, on Claude Code, the session it runs on (Claude Code forks its transcript up to the split's call).
 // Owns: these checks. Never: a real engine or the real dispatcher.
 
 import { test } from 'node:test';
@@ -70,6 +71,46 @@ test('the parent renews or saves its binding again after the split: the part sti
     const part1 = w.splits.list({ groupId })[0].splits[0];
     assert.deepEqual(part1.fork, { how: 'native', engine: 'codex', accountId: 'acc_1', parentRef: 'thr_parent' }, later);
   }
+});
+
+/**
+ * FIXES-3 B1: Ava's turn still runs on `engine` (the dispatcher's activity says so; its run's row names none yet) and waits for
+ * one 'fork' part (agents.split with wait); her session there was bound at `boundAt`, with one finished native turn on it.
+ */
+function waitOn(w: World, engine: 'claude' | 'codex', boundAt: number) {
+  new SessionStore(w.db).save({ ...binding('thr_parent', boundAt), engine });
+  recordTurn(w.db, { agentId: 'ag_ava', conversationId: CHAT, engine }, 'thr_parent', 'run_older', 'turn_6', boundAt);
+  Object.assign(w.lanes, { activity: () => [{ agentId: 'ag_ava', runId: PARENT, note: '', startedAt: T, engine, model: 'codex:gpt-6.1-sol' }] });
+  const group = w.splits.create(w.ctx(), { goal: 'Check the release', parts: [part('Notes', { context: 'fork' })], wait: true });
+  return { groupId: group.id, turn: w.lanes.turns[0].turn, runId: w.lanes.lanes.get(w.lanes.started[0])!.runId };
+}
+
+test('a waited part on Claude Code: the group records the session the running turn runs on, and the part forks it (FIXES-3 B1)', async () => {
+  const w = world();
+  const { groupId, turn, runId } = waitOn(w, 'claude', T - 60_000);
+  const recorded = { engine: 'claude', accountId: 'acc_1', ref: 'thr_parent', contextTokens: 50_000, model: 'codex:gpt-6.1-sol' };
+  assert.deepEqual(w.splits.list({ groupId })[0].parentSession, recorded, 'recorded while the splitting turn runs');
+  const { forks, result } = seed(w, turn, runId, { engine: 'claude' });
+  assert.equal((await result).how, 'native');
+  assert.deepEqual(forks.map((fork) => [fork.parentRef, fork.lastTurn]), [['thr_parent', undefined]], 'Claude Code forks the transcript as it takes it – no turn names a fork point (review R6)');
+});
+
+test('a waited part on Codex keeps the text seed: its fork in the middle of a turn read 0 and 16,768 of 34,980 tokens cached (measured 18.11.2026)', async () => {
+  const w = world();
+  Object.assign(w.services, { ledger: RECORD });
+  const { groupId, turn, runId } = waitOn(w, 'codex', T - 60_000);
+  assert.equal(w.splits.list({ groupId })[0].parentSession, undefined);
+  const { forks, result } = seed(w, turn, runId);
+  assert.equal((await result).how, 'text');
+  assert.equal(forks.length, 0);
+});
+
+test('a waited part whose running turn started its session (a first turn, a renewal): nothing finished to fork, the text seed', async () => {
+  const w = world();
+  Object.assign(w.services, { ledger: RECORD });
+  const { groupId, turn, runId } = waitOn(w, 'claude', T + 1_000); // bound during the turn
+  assert.equal(w.splits.list({ groupId })[0].parentSession, undefined);
+  assert.equal((await seed(w, turn, runId, { engine: 'claude' }).result).how, 'text');
 });
 
 test('another engine or account, or a group without a recorded session, starts from the text seed', async () => {

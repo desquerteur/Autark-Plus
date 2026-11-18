@@ -144,6 +144,9 @@ interface ConfirmRequest {
   danger?: boolean;
   /** askText: the field's label and starting value (no text field without it). */
   field?: { label: string; value: string };
+  /** choose: the options (radio buttons) and the one picked at the start. */
+  choices?: Array<{ value: string; label: string; hint?: string }>;
+  choice?: string;
   resolve: (answer: string | null) => void;
 }
 
@@ -170,16 +173,32 @@ export async function askText(options: { title: string; label: string; value?: s
   return text?.trim() || null;
 }
 
+/** Asks to pick one of a few options (radio buttons, `value` the one picked first); resolves the picked value, or null when cancelled. */
+export async function choose(options: { title: string; body?: string; choices: Array<{ value: string; label: string; hint?: string }>; value: string; confirmLabel?: string }): Promise<string | null> {
+  return ask({ title: options.title, ...(options.body ? { body: options.body } : {}), confirmLabel: options.confirmLabel ?? 'Confirm', choices: options.choices, choice: options.value });
+}
+
 /** Mounted once by the shell. */
 export function ConfirmHost() {
   const request = pending.value;
   const [text, setText] = useState('');
-  useLayoutEffect(() => { setText(request?.field?.value ?? ''); }, [request]);
+  const [picked, setPicked] = useState('');
+  useLayoutEffect(() => { setText(request?.field?.value ?? ''); setPicked(request?.choice ?? ''); }, [request]);
   const done = (answer: string | null) => { request?.resolve(answer); pending.value = null; };
   return (
     <Dialog open={!!request} onClose={() => done(null)} title={request?.title} width={400}>
-      <form onSubmit={(event) => { event.preventDefault(); done(text); }}>
+      <form onSubmit={(event) => { event.preventDefault(); done(request?.choices ? picked : text); }}>
         {request?.body && <p class="dialog-text">{request.body}</p>}
+        {request?.choices && (
+          <div class="dialog-choices" role="radiogroup" aria-label={request.title}>
+            {request.choices.map((choice) => (
+              <label key={choice.value} class={`dialog-choice${picked === choice.value ? ' on' : ''}`}>
+                <input type="radio" name="dialog-choice" value={choice.value} checked={picked === choice.value} onChange={() => setPicked(choice.value)} />
+                <span class="dialog-choice-text"><span>{choice.label}</span>{choice.hint && <small>{choice.hint}</small>}</span>
+              </label>
+            ))}
+          </div>
+        )}
         {request?.field && (
           <input class="input dialog-field" value={text} aria-label={request.field.label} maxLength={120} autoFocus
             onInput={(event) => setText((event.currentTarget as HTMLInputElement).value)} />

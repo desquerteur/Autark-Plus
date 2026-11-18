@@ -6,7 +6,8 @@
 //   shell there); a helper turn none (`--json-schema` keeps its answer tool, measured 02.11.2026). E1: WebSearch is the
 //   plan's own search; web.fetch reads a page, so WebFetch stays out.
 // - `--disable-slash-commands`, `--settings {"disableAllHooks":true}`: no skills, commands or hooks; nothing is widened.
-// - LEAN_ENV: no CLAUDE.md of any level, no auto memory, no git workflow text.
+// - LEAN_ENV: no CLAUDE.md of any level, no auto memory, no git workflow text. AGENT_ENV (an agent turn only): the prompt
+//   cache is asked for one hour, whatever login the account has.
 // - The hub entry loads its tools upfront (`alwaysLoad`) and a hub call runs up to HUB_CALL_MS.
 // What Claude Code still adds on its own (run1 recording 12.11.2026, 2.1.322, 191 requests): a billing header and its
 // identity line ("You are a Claude agent, built on Anthropic's Claude Agent SDK.") as two system blocks before ours; a
@@ -36,6 +37,14 @@ export function coreTools(platform: NodeJS.Platform = process.platform): string[
 export const LEAN_ENV: Readonly<Record<string, string>> = {
   CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '1',
 };
+
+/**
+ * An agent turn's process on top of LEAN_ENV (KI-Runde 17.11.2026): its session rests up to an hour between turns and is read
+ * again whole on every call, so its cache is asked for one hour (Claude Code 2.1.242+). On a plan login that is Claude Code's own
+ * default for the main conversation (measured 15.–17.11.2026: all 15,807 calls asked for one hour); on an API-key login it
+ * would be five minutes. A helper turn is never resumed and keeps the default.
+ */
+export const AGENT_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' };
 
 /** Session settings of every turn (`--settings`): only narrowing keys. */
 export const LEAN_SETTINGS = '{"disableAllHooks":true}';

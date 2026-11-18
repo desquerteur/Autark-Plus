@@ -14,7 +14,7 @@ import type { MotionStyle } from '../../shared/model/pointer-motion.ts';
 import { findSetupKeys, type TotpParams } from '../secrets/totp.ts';
 import type { BrowserChannel } from './channel.ts';
 import type { Launcher } from './launch.ts';
-import { hostOf, locate, maskPasswords, normaliseUrl, passwordValues, readField, safeTitle, snapshotText, translateError, type PageLike } from './page.ts';
+import { hiddenValues, hostOf, locate, maskPasswords, normaliseUrl, readField, safeTitle, snapshotText, translateError, type PageLike } from './page.ts';
 import { workspaceFile } from './downloads.ts';
 import { activePage, BrowserSessions, openPages, type BrowserChange, type Session, type ViewSession } from './sessions.ts';
 import { PERSON_USING, Takeovers, type UseContext } from './takeover.ts';
@@ -231,7 +231,7 @@ export class BrowserService {
   private async state(session: Session, page: PageLike): Promise<PageState> {
     let snapshot: { text: string; truncated: boolean };
     try { snapshot = await snapshotText(page); } catch (error) { throw translateError(error, undefined); }
-    const text = maskPasswords(snapshot.text, await passwordValues(page));
+    const text = maskPasswords(snapshot.text, await hiddenValues(page)); // BEFUND §6: card, code and password fields in every frame
     const url = page.url();
     const title = await safeTitle(page);
     session.texts.set(page, text);

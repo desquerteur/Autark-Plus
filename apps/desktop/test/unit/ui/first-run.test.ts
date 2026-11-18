@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 import type { Settings } from '../../../src/shared/model/system.ts';
 import {
-  CARDS, TOUR_STEP, firstRunShown, nextStep, noUsableModel, previousStep, profilePatch, stepText,
+  CARDS, TOUR_STEP, firstRunShown, libraryPatch, nextStep, noUsableModel, previousStep, profilePatch, stepText,
 } from '../../../src/ui/onboarding/first-run-model.ts';
 
 const account = (extra: Partial<Account> = {}): Account => ({ id: 'acc', provider: 'codex', auth: 'cli', enabled: true, state: 'ok', ...extra }) as Account;
@@ -42,6 +42,14 @@ test('About you writes the trimmed name and company and the PC access, only what
   assert.equal(profilePatch({ name: 'Ada', company: '' }, 'Ada', '', 'whole'), undefined, 'absent is whole: no write');
   assert.deepEqual(profilePatch({ name: 'Ada', company: '', pcAccess: 'careful' }, 'Ada', '', 'whole'), { pcAccess: 'whole' }, 'set up again: back to whole');
   assert.equal(profilePatch({ name: 'Ada', company: '', pcAccess: 'careful' }, 'Ada', ''), undefined, 'Back without the choice keeps it');
+});
+
+test('the public-library tick writes only a change: left ticked nothing, unticked publish false', () => {
+  assert.equal(libraryPatch(undefined, true), undefined, 'a new PC, left ticked: absent counts as on, no write');
+  assert.deepEqual(libraryPatch(undefined, false), { publish: false }, 'unticked on the first run');
+  assert.deepEqual(libraryPatch({ publish: true }, false), { publish: false });
+  assert.equal(libraryPatch({ publish: false }, false), undefined, 'set up again with sharing already off: kept');
+  assert.deepEqual(libraryPatch({ publish: false }, true), { publish: true }, 'ticked again');
 });
 
 test('no usable model: a loaded list decides, else a connected account that can serve', () => {

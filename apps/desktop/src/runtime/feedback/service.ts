@@ -24,7 +24,7 @@ import { WorkforceError } from '../../shared/errors.ts';
 import { KvRepo } from '../store/kv.ts';
 import { FeedbackRepo } from '../store/feedback.ts';
 import { FIRST_FOLDER } from '../../shared/model/companies.ts';
-import { redactText } from './redact.ts';
+import { redactText } from '../../shared/secrets/redact-text.ts';
 import { deliver, OUTBOX, resendable, type OutboxEntry } from './delivery.ts';
 import type { DropReason } from './drop.ts';
 import { FeedbackInbox } from './inbox.ts';

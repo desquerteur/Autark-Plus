@@ -1,8 +1,8 @@
-// RT5: a model switch someone asked for says why – B-083: "<Agent> → <model> · <effort> – <first reason>" (at most 120
-// characters): the agent's own model.set request ("requested by me", RT2), a start model set since the chat's last turn, and a
-// failover (limit or outage of the model before; the same model on another account names no account); the agent reads the same
-// line in its delta. 14.11.2026: a switch routing made (the router's rules, the return after a request) leaves no chat line – the
-// live bar shows what the turn runs on; judged against the chat's last turn, a first turn in a chat is none.
+// RT5: a turn on another model than my last one says why – B-083: "<Agent> → <model> · <effort> – <first reason>" (at most 120
+// characters): the agent's own model.set request ("requested by me", RT2), its start model, its kind's default after a
+// stand-in, and a failover (limit or outage of the model before; the same model on another account names no account); the agent reads the same
+// line in its delta. 17.11.2026 (the model settles): such a turn is rare now, so each one gets its line; an effort alone gets one
+// when somebody asked for it. Judged against my last done turn; a first turn is none.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,22 +35,26 @@ async function switchSetup(route: (request: RouteRequest) => RouteDecision) {
   return { h, routing, lines, agentSees, run: (runId = 'run_1') => new TurnExecutor(() => h.services).execute(h.request({ runId })) };
 }
 
-test('a video turn after a Sol run: the router says why it left Sol, and the chat gets no line – routing made the switch', async () => {
+test('back from a stand-in where the context starts anew: the router says why it leaves the stand-in, and the chat gets that line', async () => {
+  // Opus stood in while Sol could not run; at the boundary my kind decides again (review 2, 17.11.2026: the test pinned the
+  // removed rule that a model weak for this turn's work moves at a boundary – fits is the kind's tier alone now)
   const routing = await standardSetup();
-  const decision = await routing.router.route({ agent: agent('ag_1'), mode: mode('video-animation', { minTier: 'strong' }), previous: { modelId: 'codex:gpt-6.1-sol', effort: 'medium' } });
-  assert.equal(decision.modelId, 'claude:claude-opus-5-5');
-  assert.match(decision.reason, /^GPT-6\.1 Sol is weak at video animation · /, 'the router puts the switch reason first');
+  const decision = await routing.router.route({ agent: agent('ag_1'), mode: mode('chat'), previous: { modelId: 'claude:claude-opus-5-5', effort: 'medium', standIn: true } });
+  assert.equal(decision.modelId, 'codex:gpt-6.1-sol');
+  assert.match(decision.reason, /^executing runs on the frontier tier's first choice · /, 'the router puts the switch reason first');
 
-  const s = await switchSetup(() => ({ ...decision, accountId: 'acc_claude' }));
-  s.h.runs.push({ id: 'run_0', agentId: s.h.tom.id, conversationId: s.h.chat.id, model: 'codex:gpt-6.1-sol', effort: 'medium', status: 'done' });
+  const s = await switchSetup(() => ({ ...decision, accountId: 'acc_codex' }));
+  s.h.runs.push({ id: 'run_0', agentId: s.h.tom.id, conversationId: s.h.chat.id, model: 'claude:claude-opus-5-5', effort: 'medium', status: 'done' });
   const outcome = await s.run();
   assert.equal(outcome.status, 'done');
 
-  assert.deepEqual(s.lines(), [], "the live bar shows the model, the run's route says why");
-  assert.ok(!s.agentSees().some((seen) => seen.includes('Tom → ')));
+  // On the code before 17.11.2026 a switch routing made left no line.
+  const line = "Tom → GPT-6.1 Sol · medium – executing runs on the frontier tier's first choice";
+  assert.deepEqual(s.lines().map((item) => item.body), [line]);
+  assert.ok(s.agentSees().some((seen) => seen.includes(line)), 'the agent reads why it runs elsewhere');
 });
 
-test("a start model the person set since the chat's last turn: the turn on it gets the line, a later return to it none", async () => {
+test("a start model the person set since my last turn: the turn that moves onto it gets the line, the turns on it after that none", async () => {
   const OPUS = 'claude:claude-opus-5-5';
   const pin: RouteDecision = { modelId: OPUS, engine: 'claude', accountId: 'acc_claude', effort: 'high', category: 'chat', reason: 'my start model · chat', by: 'pin', alternatives: [] };
   const s = await switchSetup(() => pin);
@@ -63,8 +67,8 @@ test("a start model the person set since the chat's last turn: the turn on it ge
   assert.deepEqual(line?.meta.status?.details, { from: 'codex:gpt-6.1-sol', to: OPUS, effort: 'high', reason: pin.reason, by: 'pin' });
   assert.ok(s.agentSees().some((seen) => seen.endsWith(`] · ${line?.body}`)), 'the agent sees the same text in its delta');
 
-  // Back on the start model after my subconscious chose another: routing's switch, no line.
-  s.h.runs.unshift({ id: 'run_1', agentId: s.h.tom.id, conversationId: s.h.chat.id, model: 'codex:gpt-6.1-sol', effort: 'low', status: 'done', startedAt: 3_000 });
+  // The next turn on it: nothing changed, nothing to say.
+  s.h.runs.unshift({ id: 'run_1', agentId: s.h.tom.id, conversationId: s.h.chat.id, model: OPUS, effort: 'high', status: 'done', startedAt: 3_000 });
   await s.run('run_2');
   assert.equal(s.lines().length, 1);
 });
@@ -168,8 +172,8 @@ test('RT2: a request for another model says so; a first turn in a chat is no swi
 });
 
 test('switch why: an effort-only request names it, else the first reason', () => {
-  const base: RouteDecision = { modelId: 'm1', engine: 'claude', accountId: 'a', effort: 'max', category: 'coding', reason: 'continues on the previous model · coding · effort requested by the agent', by: 'request' as RouteDecision['by'], alternatives: [] };
+  const base: RouteDecision = { modelId: 'm1', engine: 'claude', accountId: 'a', effort: 'max', category: 'coding', reason: 'continues on my model · coding · effort requested by the agent', by: 'request' as RouteDecision['by'], alternatives: [] };
   assert.equal(switchWhy(base, { modelId: 'm1' }), 'effort requested by me');
-  assert.equal(switchWhy(base, { modelId: 'm0' }), 'continues on the previous model', 'another model: the reason for the model');
+  assert.equal(switchWhy(base, { modelId: 'm0' }), 'continues on my model', 'another model: the reason for the model');
   assert.equal(switchWhy({ ...base, reason: 'my start model · coding · my subconscious: a decision ahead' }, { modelId: 'm0' }), 'my start model', 'a new start model, my subconscious set its effort');
 });

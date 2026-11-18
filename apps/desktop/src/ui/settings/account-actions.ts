@@ -29,8 +29,13 @@ export function repairText(account: Account): string {
     : 'The key is missing or was rejected – remove this connection and add it again with a valid key';
 }
 
-/** What removing an account does (the confirm text). */
+/** What removing an account does (the confirm text); 17.11.2026: it also leaves this company's other PCs, where the account row travels to. */
 export function removeText(account: Account): string {
+  const base = removeWhat(account);
+  return account.detected && account.auth !== 'cli' ? base : `${base} It also goes from this company's other PCs.`;
+}
+
+function removeWhat(account: Account): string {
   if (account.home && !foundHere(account)) return 'Autark stops using this account and deletes its separate sign-in profile on this PC.';
   if (account.auth === 'env') return `Autark stops using the key in ${account.envVar}; the variable itself stays as it is.`;
   if (account.secretId?.startsWith('secret://')) return 'Autark stops using this connection; its key stays in Settings › Secrets.';

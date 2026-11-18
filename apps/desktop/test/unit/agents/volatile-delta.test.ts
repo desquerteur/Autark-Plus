@@ -2,7 +2,8 @@
 // finished turn (agents/volatile-delta.ts), with one line naming the sections no longer current; a new, renewed or
 // rebuilt session gets them all. Unit cases on volatileDelta and its kv state, then the real
 // turn path (TurnExecutor, the real context service, a recording Codex-like engine with sessions): new session full,
-// resumed + unchanged, resumed + changed, a failed turn records nothing, a renewed session full again.
+// resumed + unchanged, resumed + changed, a failed turn records nothing, a renewed session full again. S2: the stable
+// delta (stableDelta, changedLines): the changed stable sections as was / now lines under their own name.
 // Owns: these assertions only. Never: real engines.
 
 import { test } from 'node:test';
@@ -10,9 +11,10 @@ import assert from 'node:assert/strict';
 import { fixture, model } from '../context/fixture.ts';
 import { account } from '../models/harness.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
+import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import { journalAnswer } from '../../../src/runtime/agents/publishing.ts';
-import { forgetSent, recordSent, sectionTitle, sentTo, volatileDelta, type VolatileSection } from '../../../src/runtime/agents/volatile-delta.ts';
+import { CHANGED_MAX, changedLines, forgetSent, recordSent, sectionTitle, sentTo, STABLE_CHANGED, stableDelta, volatileDelta, type VolatileSection } from '../../../src/runtime/agents/volatile-delta.ts';
 import type { Engine, EngineCaps, EngineTurnInput, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
 import type { ModelInfo, RouteDecision } from '../../../src/shared/model/providers.ts';
@@ -58,12 +60,54 @@ test('volatileDelta: a section whose builder threw keeps its last record – not
   assert.deepEqual(Object.keys(fresh.sections), ['now']);
 });
 
+test('S2 stableDelta: only the changed stable sections, as their changed lines under their own name; a new and a gone section count against nothing', () => {
+  const md = (text: string) => ({ name: 'system-md', text: `# My SYSTEM.md\nMy whole standing text.\n# How I work\n- I own outcomes.\n${text}\n## My role\nDesk.` });
+  const env = { name: 'environment', text: '## My environment\nThis PC: Tower.' };
+  const held = Object.fromEntries([md('- I write tight.'), env].map((section) => [section.name, section.text]));
+  assert.deepEqual(stableDelta([md('- I write tight.'), env], held), { text: '', stable: held }, 'nothing changed: nothing to send');
+  const changed = stableDelta([md('- I write tight and warm.\n- A new line.'), env, { name: 'human', text: '## From Alex\nNo calls before ten.' }], held);
+  assert.equal(changed.text, [
+    STABLE_CHANGED,
+    '## My SYSTEM.md\nwas: - I write tight.\nnow: - I write tight and warm.\nnow: - A new line.',
+    '## From Alex\nnow: ## From Alex\nnow: No calls before ten.',
+  ].join('\n\n'));
+  assert.ok(!changed.text.includes('This PC: Tower'), 'an unchanged section is not repeated');
+  const gone = stableDelta([md('- I write tight and warm.\n- A new line.'), env], changed.stable);
+  assert.equal(gone.text, [STABLE_CHANGED, '## From Alex\nwas: ## From Alex\nwas: No calls before ten.'].join('\n\n'));
+  assert.deepEqual(Object.keys(gone.stable), ['system-md', 'environment']);
+  assert.deepEqual(changedLines('a\nb\nc\nd', 'a\nB\nc\nd\ne'), ['was: b', 'now: B', 'now: e'], 'each replaced run: was before now, in order');
+});
+
+test('S2 fix: a line that only lost or gained trailing whitespace reads the same, so it is no change', () => {
+  assert.deepEqual(changedLines('## X\n- one line', '## X\n- one line  '), [], 'trailing blanks are no change');
+  assert.deepEqual(changedLines('## X\n- one line', '## X\n -one line'), ['was: - one line', 'now:  -one line'], 'a change inside the line is one');
+  const section = { name: 'environment', text: '## My environment\nThis PC: Tower.' };
+  assert.equal(stableDelta([{ ...section, text: `${section.text}   ` }], { environment: section.text }).text, '', 'and reaches no session');
+});
+
+test('S2 fix: a change longer than the bound comes as the part itself, or names the file the part is', () => {
+  const long = (line: string) => `# My SYSTEM.md\nMy whole standing text.\n${Array.from({ length: 400 }, (_, index) => `- line ${index} ${line}`).join('\n')}`;
+  const before = { name: 'system-md', text: long('as it was') };
+  const after = { name: 'system-md', text: long('as it reads now') };
+  assert.ok(changedLines(before.text, after.text).join('\n').length > CHANGED_MAX);
+  const file = stableDelta([after], { 'system-md': before.text });
+  assert.equal(file.text, `${STABLE_CHANGED}\n\n## My SYSTEM.md\nMore of this part changed than reads as lines; it is my SYSTEM.md, and the whole of it as it reads now stands there.`);
+  assert.equal(file.stable['system-md'], after.text, 'the session holds the new text either way');
+  // A part that is no file of mine comes whole as it reads now.
+  const human = (line: string) => `## From Alex\n${Array.from({ length: 400 }, (_, index) => `- ${index} ${line}`).join('\n')}`;
+  const whole = stableDelta([{ name: 'human', text: human('now') }], { human: human('before') });
+  assert.equal(whole.text, `${STABLE_CHANGED}\n\n## From Alex\nMore of this part changed than reads as lines, so it stands here as it reads now:\n${human('now')}`);
+  // A part that is gone says so instead of its lines.
+  const left = stableDelta([], { human: human('before') });
+  assert.equal(left.text, `${STABLE_CHANGED}\n\n## From Alex\nThis part is not in my standing text any more.`);
+});
+
 test('sentTo / recordSent: per agent, chat and engine, bound to the session ref', () => {
   const f = fixture();
   const key = { agentId: 'ag_1', conversationId: 'c_1', engine: 'codex' as const };
   assert.equal(sentTo(f.db, key, 'thr_1'), undefined);
-  recordSent(f.db, key, 'thr_1', { now: { hash: 'a', title: 'Now' } }, 1);
-  assert.deepEqual(sentTo(f.db, key, 'thr_1'), { now: { hash: 'a', title: 'Now' } });
+  recordSent(f.db, key, 'thr_1', { sections: { now: { hash: 'a', title: 'Now' } } }, 1);
+  assert.deepEqual(sentTo(f.db, key, 'thr_1'), { sections: { now: { hash: 'a', title: 'Now' } } });
   assert.equal(sentTo(f.db, key, 'thr_2'), undefined, 'another session ref holds nothing of it');
   assert.equal(sentTo(f.db, { ...key, engine: 'claude' }, 'thr_1'), undefined);
   assert.equal(sentTo(f.db, { ...key, conversationId: 'c_2' }, 'thr_1'), undefined);
@@ -147,7 +191,7 @@ test('turn path: new session full; resumed only what changed; a failed turn reco
   await h.turn();
   assert.ok(!volatileOf(h.calls[4]).includes('## My tasks'), 'held after a finished turn');
 
-  h.org.add({ ...h.org.require(h.vic.id), mode: 'computer' }); // the agent's own mode
+  new SessionStore(h.db).remove(h.vic.id, 'main', 'codex'); // S2: the session starts anew (a mode switch alone keeps it)
   h.send('Take a screenshot');
   await h.turn();
   const renewed = h.calls[5];
@@ -182,11 +226,11 @@ test('forgetSent: drops the record of that key only', () => {
   const f = fixture();
   const key = { agentId: 'ag_1', conversationId: 'c_1', engine: 'codex' as const };
   const other = { ...key, conversationId: 'c_2' };
-  recordSent(f.db, key, 'thr_1', { now: { hash: 'a', title: 'Now' } }, 1);
-  recordSent(f.db, other, 'thr_2', { now: { hash: 'b', title: 'Now' } }, 1);
+  recordSent(f.db, key, 'thr_1', { sections: { now: { hash: 'a', title: 'Now' } } }, 1);
+  recordSent(f.db, other, 'thr_2', { sections: { now: { hash: 'b', title: 'Now' } } }, 1);
   forgetSent(f.db, key);
   assert.equal(sentTo(f.db, key, 'thr_1'), undefined);
-  assert.deepEqual(sentTo(f.db, other, 'thr_2'), { now: { hash: 'b', title: 'Now' } });
+  assert.deepEqual(sentTo(f.db, other, 'thr_2'), { sections: { now: { hash: 'b', title: 'Now' } } });
 });
 
 test('turn path: a new session gets my latest answers from the run log right after the <live> block, not inside it', async () => {
@@ -194,7 +238,7 @@ test('turn path: a new session gets my latest answers from the run log right aft
   h.send('Hello');
   await h.turn();
   journalAnswer(h.services, 'run_1', 'Die Liste ist geprüft, drei Punkte offen.', 'internal');
-  h.org.add({ ...h.org.require(h.vic.id), mode: 'computer' }); // a new session
+  new SessionStore(h.db).remove(h.vic.id, 'main', 'codex'); // a new session
   h.send('And?');
   await h.turn();
   const renewed = h.calls[1];

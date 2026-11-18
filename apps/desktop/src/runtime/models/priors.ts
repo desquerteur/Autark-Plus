@@ -1,9 +1,9 @@
 // Curated model priors (resources/model-priors.json): OUR judgement per model and task category – the one score source
 // of routing. Optional curated list prices (`priceInputPerM`/`priceOutputPerM`, USD per 1M tokens; `priceCachedInputPerM` for
-// cached input) price paid turns whose provider reported no cost (PR9, models/pricing.ts). B-078 (D16): `smarts` – how capable
+// cached input, `priceCacheWritePerM` for input written into the cache) price paid turns whose provider reported no cost (PR9, models/pricing.ts). B-078 (D16): `smarts` – how capable
 // a model is overall, 0..100 (curated from public rankings), and relCost derived from both list prices when the entry sets
 // none (relCostOfPrices), so price and relative cost never drift apart. An agent may refresh the file from public benchmarks.
-// A model newer than every curated version of its family (claude-fable-5-2 while the file knows claude-fable-5-1) takes
+// A model newer than every curated version of its family (claude-fable-5-3 while the file knows claude-fable-5-2) takes
 // its newest predecessor's entry without its name and prices (forNewer): a provider's new release is scored, tiered and
 // routed like the model it follows from the day it appears; the daily price list prices it.
 // 14.11. (global model rating): Priors.shipped is the one priors object of the process – the catalog, routing and turn
@@ -34,6 +34,8 @@ export interface PriorEntry {
   priceOutputPerM?: number;
   /** The list price per 1M cached input tokens (cache reads), only verified ones: the cached part of an attempt's input counts at it (pricing.ts). */
   priceCachedInputPerM?: number;
+  /** Package C (17.11.2026): the list price per 1M input tokens written into the cache (Claude: the 1-hour write), only verified ones (pricing.ts). */
+  priceCacheWritePerM?: number;
   /** B-078: overall capability 0..100 (curated; a person's request weighs it against the price, routing/person-turn.ts). */
   smarts?: number;
 }
@@ -90,10 +92,24 @@ export class Priors {
     this.compiled = data.models.map(entry => ({ entry, pattern: globToRegExp(entry.match) }));
   }
 
-  /** Takes another copy's entries in place, so everyone holding this object reads them from now on (priors-feed.ts). */
+  /**
+   * Takes another copy's entries in place, so everyone holding this object reads them from now on (priors-feed.ts). The
+   * copy's models are the list; a field it does not carry for one of them stays as it is here (package C, 17.11.2026: the
+   * cached-read and cache-write prices of the Claude models survive a copy built before the generator lists them).
+   */
   adopt(next: Priors): void {
-    this.data = next.data;
-    this.compiled = next.compiled;
+    const before = new Map(this.data.models.map((entry) => [entry.match, entry]));
+    const models = next.data.models.map((entry) => {
+      const old = before.get(entry.match);
+      if (!old) return entry;
+      const merged = { ...entry };
+      for (const [field, value] of Object.entries(old)) {
+        if (merged[field as keyof PriorEntry] === undefined) (merged as Record<string, unknown>)[field] = value;
+      }
+      return merged;
+    });
+    this.data = { ...next.data, models };
+    this.compiled = models.map((entry) => ({ entry, pattern: globToRegExp(entry.match) }));
     this.newest = undefined;
   }
 
@@ -121,6 +137,7 @@ export class Priors {
     delete inherited.priceInputPerM;
     delete inherited.priceOutputPerM;
     delete inherited.priceCachedInputPerM;
+    delete inherited.priceCacheWritePerM;
     if (priced) delete inherited.relCost;
     return inherited;
   }
@@ -189,9 +206,13 @@ export class Priors {
   }
 }
 
-function pricesOf(value: Record<string, unknown>): Pick<PriorEntry, 'priceInputPerM' | 'priceOutputPerM' | 'priceCachedInputPerM'> {
+function pricesOf(value: Record<string, unknown>): Pick<PriorEntry, 'priceInputPerM' | 'priceOutputPerM' | 'priceCachedInputPerM' | 'priceCacheWritePerM'> {
   const input = price(value.priceInputPerM);
   const output = price(value.priceOutputPerM);
   const cached = price(value.priceCachedInputPerM);
-  return { ...(input !== undefined ? { priceInputPerM: input } : {}), ...(output !== undefined ? { priceOutputPerM: output } : {}), ...(cached !== undefined ? { priceCachedInputPerM: cached } : {}) };
+  const write = price(value.priceCacheWritePerM);
+  return {
+    ...(input !== undefined ? { priceInputPerM: input } : {}), ...(output !== undefined ? { priceOutputPerM: output } : {}),
+    ...(cached !== undefined ? { priceCachedInputPerM: cached } : {}), ...(write !== undefined ? { priceCacheWritePerM: write } : {}),
+  };
 }

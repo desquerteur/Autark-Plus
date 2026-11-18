@@ -19,7 +19,8 @@ import type { SubconsciousTrace } from '../../shared/model/subconscious.ts';
 import type { ActionCategory, ToolSpec } from '../tools/types.ts';
 import { CODE_EXEC, CODE_WAIT } from '../engines/code-mode.ts'; // B-080: the script wrapper is no work in itself
 import type { SessionBinding } from './sessions.ts';
-import type { SentSections } from './volatile-delta.ts';
+import type { Held } from './volatile-delta.ts';
+import type { SessionStart } from './session-key.ts'; // S2
 
 /** One tool call of a turn: our tools with their category, engine-native ones by name. */
 export interface ToolUse {
@@ -110,8 +111,12 @@ export interface TurnPlan {
   focus?: string;
   /** What the subconscious shows this turn, as real tool calls in the main AI's history (subconscious/service.ts beforeTurn). */
   trace?: SubconsciousTrace;
-  /** Model/effort to return to; `explicit` when the agent itself asked for it (model.set), `asked`/`category` as in RouteRequest (RT2). */
+  /** The model I am on with my last effort there; `explicit` when a request is in force on it (model.set, my task's or my subconscious's effort), `asked`/`category` as in RouteRequest. */
   previous?: RouteRequest['previous'];
+  /** 17.11.2026: whether the turn's context starts anew anyway (agents/boundary.ts, asked once in planTurn) – RouteRequest.boundary; absent on a part's later plans that did not ask. */
+  boundary?: boolean;
+  /** The `at` of the model I asked for (next-route.ts) when this turn could apply it – at a boundary, or at once with now; turn.ts ends that one as its engine starts. */
+  nextModelAt?: number;
   /** B-078/B-080: the temperature (0..2) the agent's model.set request in force asked for (next step over task) – engines that take one send it. */
   temperature?: number;
   /** B-080: the `at` of the next-step model.set request this turn read (next-route.ts) – turn.ts deletes that one as its engine starts; one written since holds for the next turn. */
@@ -134,12 +139,16 @@ export interface RoutedTurn {
   prompt: PromptParts;
   /** Our tools passed natively to the engine (buildTurn: the same offer the prompt key covers). */
   tools?: ToolSpec[];
+  /** S2: the tool names the MCP hub serves this turn (its lease) – the same offer the prompt key covers. */
+  hubTools?: string[];
   /** sha256 of the stable prompt + sorted offered tool names; saved with the session (SES2). */
   promptKey?: string;
+  /** S2: what the session that starts (or is accepted) this turn holds – recorded with its binding once it exists (turn-finish.ts). */
+  sessionStart?: SessionStart;
   input: Array<{ type: 'text'; text: string } | { type: 'image'; path: string; mime: string }>;
   lastSeq: number;
-  /** B-049 F6: the volatile sections the session holds once this turn finishes (turn-finish records them; volatile-delta.ts). */
-  volatileSent?: SentSections;
+  /** B-049 F6: the volatile sections – and (S2) the stable texts – the session holds once this turn finishes (turn-finish records them; volatile-delta.ts). */
+  volatileSent?: Held;
   /** B-057 S6: the split parts whose results ("Split results") are in this turn's input (gathered when it ends 'done'). */
   splitParts?: string[];
   /** The subconscious's calls for this turn (TurnPlan.trace), handed to the engine (EngineTurnInput.trace). */
@@ -162,6 +171,8 @@ export interface AttemptResult {
   /** After a failover (mergeAttempts) `usage` sums both attempts (run, budget); this is the final
    *  attempt's own usage – the model outcome's cost, like `ms`, is per attempt. */
   lastUsage?: AttemptResult['usage'];
+  /** Package C: the running total the engine reported for the session this attempt ended on (finishTurn keeps it with that session's binding). */
+  costTotal?: { ref: string; usd: number };
   ms: number;
 }
 

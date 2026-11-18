@@ -5,7 +5,8 @@
 // app clears them. Each bundled chat carries its number of messages for the launcher's icon badge; a task is one
 // outstanding notice. Asks once for the notification permission on Android 13+. Also the look every notification of the
 // app shares (branded: the Autark mark res/drawable/ic_stat_autark, which Android tints for light and dark bars, and the
-// Autark orange in the shade). Never: shows anything while the app is open, or a route that is not one of the phone UI's places.
+// Autark orange in the shade). A ring ('notify' of kind 'call') is CallNotice's. Never: shows anything while the app is
+// open, or a route that is not one of the phone UI's places.
 package com.teydralab.autark.android;
 
 import android.Manifest;
@@ -19,6 +20,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Bundle;
 import android.service.notification.StatusBarNotification;
 import com.teydralab.autark.android.relay.Json;
 import java.util.Map;
@@ -41,10 +43,15 @@ public final class AppNotices {
     /** MainActivity: true in onResume, false in onPause. */
     public static void resumed(boolean value) { resumed = value; }
 
+    /** The app is on screen now (phoneuse/AskNotice: a question then needs no notification). */
+    public static boolean onScreen() { return resumed; }
+
     /** One 'notify' event's data ({kind, title, body, conversationId?, taskId?, toast?, route?}) from the PC. */
     public static void event(Context context, Map<String, Object> data) {
+        if ("call".equals(Json.str(data, "kind"))) { CallNotice.show(context, data); return; }
         String route = PhoneRoutes.forNotice(Json.str(data, "kind"), data.get("toast"), Json.str(data, "conversationId"), Json.str(data, "route"));
         if (route == null) return;
+        if (PhoneRoutes.isDue(Json.str(data, "kind"), Json.str(data, "title"))) { notifyDue(context, Json.str(data, "title"), Json.str(data, "body")); return; }
         notify(context, Json.str(data, "title"), Json.str(data, "body"), route, PhoneRoutes.tag(Json.str(data, "conversationId"), Json.str(data, "taskId")));
     }
 
@@ -65,6 +72,33 @@ public final class AppNotices {
                 .setContentText(line).setStyle(new Notification.BigTextStyle().bigText(line)).setContentIntent(tap).setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_MESSAGE).setShowWhen(true).setNumber(count(manager, tag));
         try { manager.notify(tag, ID, builder.build()); } catch (RuntimeException error) { /* notifications not allowed */ }
+    }
+
+    /**
+     * A to-do that fell due: ONE notification for all of them (tag "due", a newer replaces the older and names what is due now – "3 to-dos due" with their titles),
+     * opening My day, removed by Android itself after PhoneRoutes.DUE_SHOW_MS (17.11.2026, the owner: three stacked cards that stay far too long).
+     */
+    static void notifyDue(Context context, String title, String text) {
+        if (resumed) return;
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        Context app = context.getApplicationContext();
+        String open = null;
+        for (StatusBarNotification shown : manager.getActiveNotifications()) {
+            if (shown.getId() == ID && PhoneRoutes.DUE_TAG.equals(shown.getTag())) open = shown.getNotification().extras.getString("autark.due");
+        }
+        String[] group = PhoneRoutes.dueGroup(open, title, text);
+        Intent tapIntent = new Intent(app, MainActivity.class).putExtra(PhoneRoutes.EXTRA, "#/day").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent tap = PendingIntent.getActivity(app, PhoneRoutes.DUE_TAG.hashCode(), tapIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH);
+        channel.setShowBadge(true);
+        manager.createNotificationChannel(channel);
+        Notification.Builder builder = branded(new Notification.Builder(app, CHANNEL));
+        Bundle extras = new Bundle();
+        extras.putString("autark.due", group[2]);
+        builder.setContentTitle(group[0]).setContentText(group[1]).setStyle(new Notification.BigTextStyle().bigText(group[1])).setContentIntent(tap).setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_REMINDER).setShowWhen(true).setTimeoutAfter(PhoneRoutes.DUE_SHOW_MS).addExtras(extras);
+        try { manager.notify(PhoneRoutes.DUE_TAG, ID, builder.build()); } catch (RuntimeException error) { /* notifications not allowed */ }
     }
 
     /** Active notifications are the count's source: a dismissed or read chat starts again at one. */
@@ -88,8 +122,9 @@ public final class AppNotices {
         return intent == null ? null : PhoneRoutes.valid(intent.getStringExtra(PhoneRoutes.EXTRA));
     }
 
-    /** The app came on screen: its message notifications have done their job. */
+    /** The app came on screen: its message notifications and a ringing call's notice have done their job. */
     public static void clear(Context context) {
+        CallNotice.clear(context);
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager == null) return;
         for (StatusBarNotification shown : manager.getActiveNotifications()) {

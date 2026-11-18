@@ -16,6 +16,9 @@ export const MAX_ADDRESSES = 8;
 export interface MeshMeeting {
   /** The addresses the server saw that PC on (dialed together with the stored ones). */
   addresses(device: DeviceRecord): string[];
+  /** 18.11.2026: a WebRTC data channel straight to that PC, agreed on through the server (rendezvous/pc-rtc.ts);
+   * undefined when there is no try now (off, failed lately, not there). */
+  rtc?(device: DeviceRecord): Promise<SocketLike> | undefined;
   /** A tunnel through the server – the last fallback; undefined when that PC is not there. */
   tunnel(device: DeviceRecord): Promise<SocketLike> | undefined;
 }
@@ -73,7 +76,9 @@ export async function openChannel(
     // Only an explicit refusal (4003) stops retries; tunnels without close codes can fail in transit.
     socket.onClose((code) => { if (!answered && code === REFUSED_CLOSE) closedUnanswered = true; });
     try {
-      return { channel: await connectSecure(socket, signer, fingerprint) };
+      const channel = await connectSecure(socket, signer, fingerprint);
+      (socket as { trusted?: () => void }).trusted?.(); // a data channel (rtc-socket.ts) lifts its pre-handshake caps
+      return { channel };
     } catch (failure) {
       if (failure instanceof WorkforceError && failure.code === 'not_found') throw failure;
       socket.close();

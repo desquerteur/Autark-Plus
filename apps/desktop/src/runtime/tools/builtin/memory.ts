@@ -5,7 +5,7 @@
 // host or process name normalised – knowledge/scope-id.ts –, company/modes/<mode>, references/<person> or any topic
 // folder); a file of the same title, or clearly the same content, in that folder is updated – never a duplicate, the old
 // version kept as history; `pinned` moves it into or out of its place's pinned/ folder (withPinned); into references/ it
-// keeps the person's own words with a reference kind (references/references.ts captureReference). memory.* is anyMode.
+// keeps the person's own words with a reference kind (references/references.ts captureReference).
 // Owns: these tools and their wording (folderText also for the subconscious's memory.browse).
 
 import type { ToolContext, ToolDef } from '../types.ts';
@@ -176,4 +176,4 @@ const forget = defineTool<{ path: string }>({
   },
 });
 
-export const memoryTools: ToolDef[] = [browse, read, write, forget].map((tool) => ({ ...tool, anyMode: true as const }));
+export const memoryTools: ToolDef[] = [browse, read, write, forget];

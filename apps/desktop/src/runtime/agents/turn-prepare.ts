@@ -1,13 +1,17 @@
 // Turn phase 1 – plan and route: who runs, in which mode, on which model/account, with
 // which session, prompt and input. Owns: mode resolution (the agent's own mode), the focus
 // text for routing, the subconscious's trace of this turn (owner 01.11.2026: real tool calls in the main AI's history, never
-// a hint in a prompt; subconscious/service.ts beforeTurn: on a person's message with content – or a colleague's when no person wrote, else the turn's task – one call first, bounded, which sets model and effort and opens the hits of the word search it chooses, v2 15.11.2026), the previous-model rule (RT2, next-route.ts: a model.set request for the
-// next step or the task's turns – B-083: or my subconscious's for this turn, read after its look –, else the last run no request shaped), session choice
-// (CTX7, compaction-policy.ts; B-080: no working set – a session lives on, the subconscious's marks keep it lean item by
+// a hint in a prompt; subconscious/service.ts beforeTurn: on a person's message with content – or a colleague's when no person wrote, else the turn's task – one call first, bounded, which sets the turn's effort and opens the hits of the word search it chooses, v2 15.11.2026), the model the turn starts from (17.11.2026: the model the
+// session is on and whether the turn stands at a boundary – boundary.ts, asked once; next-route.ts: the request in force on top, read after the look), session choice
+// (session-choice.ts; CTX7, compaction-policy.ts; B-080: no working set – a session lives on, the subconscious's marks keep it lean item by
 // item, and only a context that no longer fits the model's window has its oldest tool work hidden or, when even that is not
-// enough, is renewed = dropped binding; SES2: a session resumes only while its prompt key – stable prompt + offered tools – matches,
-// else it is rebuilt with its history (B-080), after a mode switch with "Mode changed from X to Y"; a row from before SES2 is
-// accepted once; another engine rebuilds from the record too). 13.11.2026 evening (owner: "der Kontext geht nie verloren … nie
+// enough, is renewed = dropped binding; S2 17.11.2026: a changed prompt key – stable prompt + offered tools – keeps the
+// session: it resumes on the system text and tool names it started with (session-key.ts start record) and gets each changed
+// stable section once as changed lines in front of its live block (volatile-delta.ts stableDelta); a session that starts
+// anew takes the current prompt and offer and its start is recorded with its binding (turn-finish.ts); a Codex revert keeps
+// the thread, so it keeps its start; a session bound before the record existed, whose key differs, gets every current
+// section once; the first turn after a mode switch says "My mode is now Y (was X)"; a row from
+// before SES2 is accepted once; another engine rebuilds from the record too). 13.11.2026 evening (owner: "der Kontext geht nie verloren … nie
 // auf null angefangen oder mit einem Chat"): a turn without a session that holds the context – a rebuild that could not run, a
 // session-less engine – starts its input with the agent's own record as text (history-text.ts), never a chat's history; the
 // wake's chat gives only its new lines. The tool offer, attachment extraction before the delta, and one note for cut-off work
@@ -27,7 +31,10 @@
 // 13.11.2026 (owner: one context per agent): the plan's thread is the agent's main thread (shared/model/origin.ts) – one
 // native session, volatile-delta record and ledger for every wake, whatever chat, task or source it comes from; the wake's
 // chat only decides which lines the input carries.
-// A native rebuild from the context ledger (agents/rebuild.ts) on an engine switch, a missing session or worthwhile marks; a turn
+// A native rebuild from the context ledger (agents/rebuild.ts) where the session starts anew anyway – an engine switch, a missing
+// session, a fold waiting to be replayed, past the fit, a cold cache – and nowhere else (KI-Runde 17.11.2026: no rebuild of a
+// warm session for a saving); a session that starts anew, rebuilt ones included, takes the agent's learned tools. A fold's own
+// turn (agents/context-fold.ts) is planned there and resumes its session as it stands with the fold note as its whole input. A turn
 // whose history starts from the projection gets the call naming what is condensed or hidden there (turnTrace).
 // B-057 (agents/split-turn.ts): a split's turn plans, routes, seeds its session and gets its parent's tool offer there (F26: a
 // 'fork' part's first start condenses its own copy of my record before it is seeded – splits/fork.ts); the
@@ -39,7 +46,7 @@ import type { RuntimeServices, RouteRequest } from '../contracts.ts';
 import type { ModeInfo } from '../../shared/model/knowledge.ts';
 import type { WakeReason } from '../../shared/model/runs.ts';
 import type { TaskView } from '../../shared/model/tasks.ts';
-import type { EngineId, RouteDecision } from '../../shared/model/providers.ts';
+import type { RouteDecision } from '../../shared/model/providers.ts';
 import { MAIN_THREAD } from '../../shared/model/origin.ts';
 import { hasTrace, type SubconsciousTrace } from '../../shared/model/subconscious.ts';
 import type { Engine } from '../engines/types.ts';
@@ -55,42 +62,53 @@ import { fromPerson } from './publishing.ts';
 import { isExternalAgent } from '../../shared/model/external-agents.ts';
 import { SessionStore, type SessionBinding } from './sessions.ts';
 import { pendingRoute, returnChoice } from './next-route.ts';
-import { modeChangeNote, offeredTools, promptKey } from './session-key.ts';
+import { boundaryOf } from './boundary.ts';
+import { modeChangeNote, offeredTools, promptKey, sessionOffer, startOf } from './session-key.ts';
 import { promoteLearned } from '../tools/learned.ts'; // B-049 F4 (TOOLS-CORE)
-import { forgetSent, sentTo, volatileDelta } from './volatile-delta.ts'; // B-049 F6
+import { forgetSent, sentTo, stableDelta, volatileDelta } from './volatile-delta.ts'; // B-049 F6, S2
 import { isPaused } from '../../shared/model/tasks.ts';
-import { fitLimit, pastFit } from './compaction-policy.ts';
+import { fitLimit } from './compaction-policy.ts';
+import { engineUnit } from '../../shared/model/context-ledger.ts';
 import { historyText } from './history-text.ts';
-import { nativeRebuild, rebuildFellBack } from './rebuild.ts';
+import { chooseSession, type SeedContext } from './session-choice.ts';
+import { foldNote, planFold } from './context-fold.ts'; // KI-Runde 17.11.2026: the fold's own turn
+import { callRunning } from '../calls/call-log.ts'; // KI-Runde 17.11.2026: a call turn only while that call runs
 import { carriedCalls, marksCall, marksOf } from '../context/ledger/marks.ts';
 import type { RoutedTurn, TurnPlan, TurnRequest } from './turn-types.ts';
-import type { ToolOffer } from './session-key.ts';
-import type { Account } from '../../shared/model/providers.ts';
-import { planSplit, seedSplit, splitResults, splitRoute } from './split-turn.ts'; // B-057
+import { planSplit, splitResults, splitRoute } from './split-turn.ts'; // B-057
 import { visionInputs } from '../media/vision-image.ts'; // B-058 G10 (T4): image inputs normalized for every engine
 import { interruptionNote } from './interruption-context.ts';
 import { noteLabel, scheduleSubject, taskSubject } from './note-label.ts';
 
-/** Runs read for the choice to return to (a task request makes many runs the return rule skips). */
+/** Runs read for the effort and kind of work of my newest done run on the model I am on. */
 const RETURN_WINDOW = 50;
 /** Wakes the human caused (a retry of a stopped answer is 'manual'): the only ones that end the human's pause of a task. */
 const BY_HUMAN: ReadonlySet<WakeReason> = new Set(['answer', 'approval', 'manual']);
 /** Task states in which a bare 'task' wake has nothing to continue (the owner set the work aside, or it is over). */
 const SET_ASIDE: ReadonlySet<string> = new Set(['waiting', 'done', 'dropped']);
 
+/** Unknown mode keys already logged (once per key while the runtime runs). */
+const unknownModes = new Set<string>();
+
 /** The turn's mode: the first key the mode library answers (the agent's own; a split part's first) – an unknown
- *  (deleted) key is answered with general. Experience notes use it too (experience.ts). */
+ *  (deleted, never defined) key is answered with general and logged once. Experience notes use it too (experience.ts). */
 export function resolveMode(services: RuntimeServices, keys: Array<string | undefined>): ModeInfo {
   for (const key of keys) {
     if (!key) continue;
-    try { return services.modes.get(key); } catch { /* unknown mode → next candidate */ }
+    try { return services.modes.get(key); } catch {
+      if (!unknownModes.has(key)) {
+        unknownModes.add(key);
+        services.log?.warn('unknown mode key – the turn runs in general', { mode: key });
+      }
+    }
   }
   return services.modes.get('general');
 }
 
-/** Loads agent, task, chat and mode; the subconscious's trace; then reads the request in force – model.set's or my subconscious's for this turn (B-080: turn.ts takes a next step's). */
+/** Loads agent, task, chat and mode; the subconscious's trace; then asks whether the turn stands at a boundary and reads the request in force – model.set's, my task's or my subconscious's for this turn (B-080: turn.ts takes what the turn used up). */
 export async function planTurn(services: RuntimeServices, request: TurnRequest): Promise<TurnPlan | undefined> {
   if (request.split) return planSplit(services, request, resolveMode); // B-057: a split's own plan (agents/split-turn.ts)
+  if (request.fold) return planFold(services, request, resolveMode); // KI-Runde 17.11.2026: a context fold's own plan (agents/context-fold.ts)
   const agent = services.org.get(request.agentId);
   if (!agent || agent.archivedAt || agent.status === 'paused') return undefined;
   let task = request.taskId ? services.tasks.get(request.taskId) : undefined;
@@ -121,7 +139,13 @@ export async function planTurn(services: RuntimeServices, request: TurnRequest):
   const memberCursor = member?.readSeq ?? 0;
   const unseen = conversationId ? services.chats.messages(conversationId, { afterSeq: memberCursor, limit: 40 }) : [];
   const lastInput = unseen.filter(message => message.authorKind === 'human' && message.kind !== 'status').at(-1);
-  const callId = !task && request.reason === 'message' ? lastInput?.meta.call?.id : undefined;
+  // KI-Runde 17.11.2026 (decision 8.3): a turn is a call turn only while that call still runs; the lines of an ended call
+  // read as said in a call that has ended (context/speech-notes.ts) and the turn posts only what it addresses.
+  // FIXES-3 D2 (review R2): a line of a running call does not wait for the subconscious, also when it resumes my task
+  // (onCall); its answer is spoken only from a turn without a task (callId).
+  const lineCall = request.reason === 'message' ? lastInput?.meta.call?.id : undefined;
+  const onCall = lineCall && conversationId && callRunning(services, conversationId, lineCall) ? lineCall : undefined;
+  const callId = task ? undefined : onCall;
   // Routing reads what I am asked now: the person's newest line, else my task. Colleagues' reports, paths and
   // addresses in this chat name the topics of the work, not its kind (routing/categories.ts). The card of my task
   // (its title only) reads as the whole task, so every turn of a task has one kind.
@@ -139,25 +163,29 @@ export async function planTurn(services: RuntimeServices, request: TurnRequest):
   const taskNote = request.reason === 'message' ? undefined : request.notes.at(-1)?.text;
   const taskText = task ? [task.title, taskNote ?? task.notes].map((part) => part.trim()).filter(Boolean).join('\n') : undefined;
   // v2 15.11.2026: the entries the call before the turn opened come first in it (subconscious/look.ts), then a kept trace.
-  const trace = await subconsciousTrace(services, request.signal, { agent, thread, conversationId, taskId: task?.id, mode: mode.key, said, woke, ...(taskText ? { taskText } : {}), ...(needsVision ? { vision: true } : {}), signal: request.signal });
-  // Return rule (RT2, next-route.ts returnRun): with a next step in force my newest done run, with a task's request alone that task's,
-  // else the last done run no request shaped; a request in force – the next step's over its task's – wins, marked explicit (it beats
-  // default pins and weak priors, never the policy bounds). B-080: taken by turn.ts as the engine starts (that one: its `at` rides
-  // on the plan, as its temperature does). B-083: read after the look, so what my subconscious set for this turn
-  // (subconscious/route-turn.ts) runs it; a failing read gives the trace it took back to the thread.
+  const trace = await subconsciousTrace(services, request.signal, { agent, thread, conversationId, taskId: task?.id, mode: mode.key, said, woke, ...(taskText ? { taskText } : {}), ...(needsVision ? { vision: true } : {}), ...(onCall ? { callId: onCall } : {}), signal: request.signal }); // FIXES-3 D2: a running call's line does not wait for it
+  // 17.11.2026 (the model settles): the one question whether this turn's context starts anew anyway (boundary.ts) – off a
+  // boundary the router keeps the model the session is on, whoever asks for another; the model I am on is that session's,
+  // else my newest done run's (next-route.ts returnChoice). A request in force – my step's effort over my task's, the model
+  // I asked for – rides on it, marked explicit. B-080: taken by turn.ts as the engine starts (those it read: their `at`
+  // rides on the plan, as the temperature does). B-083: read after the look, so the effort my subconscious set for this
+  // turn (subconscious/route-turn.ts) runs it; a failing read gives the trace it took back to the thread.
   let requested: ReturnType<typeof pendingRoute>;
   let previous: ReturnType<typeof returnChoice>;
+  let boundary: ReturnType<typeof boundaryOf>;
   try {
+    boundary = boundaryOf(services, agent.id, thread);
     requested = pendingRoute(services.db, agent.id, task?.id, (taskId) => finished(services, taskId));
-    previous = returnChoice(services.runs.list(agent.id, RETURN_WINDOW), requested, { taskId: task?.id });
+    previous = returnChoice(services.runs.list(agent.id, RETURN_WINDOW), requested, { on: boundary.on?.modelId });
   } catch (error) {
     if (trace) services.subconscious.putBack?.(agent.id, thread, trace);
     throw error;
   }
   return {
     agent, mode, task, conversationId, ...(origin ? { origin } : {}), thread,
-    memberCursor, callId, focus, ...(trace ? { trace } : {}), previous, ...(requested?.temperature !== undefined ? { temperature: requested.temperature } : {}),
-    ...(requested?.stepAt !== undefined ? { nextStepAt: requested.stepAt } : {}), needsVision,
+    memberCursor, callId, focus, ...(trace ? { trace } : {}), previous, boundary: boundary.at, ...(requested?.temperature !== undefined ? { temperature: requested.temperature } : {}),
+    ...(requested?.stepAt !== undefined ? { nextStepAt: requested.stepAt } : {}),
+    ...(requested?.modelAt !== undefined && (boundary.at || requested.now) ? { nextModelAt: requested.modelAt } : {}), needsVision,
   };
 }
 
@@ -212,7 +240,7 @@ export const IMAGES_HIDDEN_NOTE = 'I cannot see the images in this chat right no
 export function routeRequest(plan: TurnPlan, exclude?: string[]): RouteRequest {
   return {
     agent: plan.agent, conversationId: plan.conversationId, taskId: plan.task?.id, mode: plan.mode, text: plan.focus,
-    previous: plan.previous, exclude, needs: plan.needsVision ? { vision: true } : undefined,
+    previous: plan.previous, ...(plan.boundary !== undefined ? { boundary: plan.boundary } : {}), exclude, needs: plan.needsVision ? { vision: true } : undefined,
     ...splitRoute(plan), // B-057 S10: a split's own model choice (routing/split-route.ts)
   };
 }
@@ -231,86 +259,6 @@ export function noteLines(request: Pick<TurnRequest, 'reason' | 'notes' | 'origi
 function scheduleTitleOf(services: RuntimeServices, origin: TurnRequest['origin']): string | undefined {
   if (!origin?.source.startsWith('schedule:')) return undefined;
   try { return services.scheduler.get(origin.source.slice('schedule:'.length))?.title; } catch { return undefined; }
-}
-
-/**
- * Session renewal: the native session binding is dropped; the next build rebuilds the session from the agent's record
- * (agents/rebuild.ts) or, where that cannot run, starts with the record as text (history-text.ts) – nothing of the context is lost.
- * 'mode'/'prompt' (SES2): the session's prompt key no longer matches – run note {fresh, …details}.
- * 'folder': bound to another working folder (Codex, I02; note {fresh: 'folder'}).
- */
-export async function renewSession(services: RuntimeServices, plan: TurnPlan, engine: EngineId, runId: string, reason: 'context' | 'overflow' | 'mode' | 'prompt' | 'folder', details: Record<string, unknown> = {}): Promise<void> {
-  if (reason === 'overflow') rebuildFellBack(services, plan.agent.id, plan.thread, engine, runId); // a session this run rebuilt that ended on its first turn: no rebuild of the thread for a while
-  new SessionStore(services.db).remove(plan.agent.id, plan.thread, engine, services.clock.now()); // B-048: the ref is recorded as superseded
-  const data = reason === 'mode' || reason === 'prompt' || reason === 'folder' ? { fresh: reason, ...details } : { sessionRenewed: reason };
-  services.runs.item(runId, { kind: 'note', data, effectStatus: 'none' });
-}
-
-interface SessionChoice {
-  session?: SessionBinding;
-  contextWindow?: number;
-  /** Delta start: the agent's cursor in the wake's chat. */
-  sinceSeq: number;
-  /** Told to the agent after a renewal for a mode switch. */
-  note?: string;
-  /** B-057: a split's session seeded from its parent (it holds the earlier context). */
-  seeded?: boolean;
-  /** B-057: a split's seed text (splits/fork.ts text fallback), put before the turn's input. */
-  prefix?: string;
-}
-
-/** What seeding a split's session from its parent needs besides the plan (agents/split-turn.ts seedSplit). */
-interface SeedContext { account: Account; model: string; offer: ToolOffer; prompt: { stable: string; volatile: string } }
-
-/**
- * The native session for this turn: none for another account; rebuilt with its history when its prompt key
- * differs (SES2: 'mode' when the mode changed, else 'prompt'; B-080: the rebuild first, so the new prompt keeps the work –
- * renewed with a summary only when no rebuild can be made; a row without a key, from before SES2, is accepted once and
- * stamped); past the fit of the window (B-080 pastFit: the window the engine reported for this model – the one it really
- * runs with: the bound session's, else the newest any session of that model got (SessionStore.reportedWindow, so a model's
- * first session in a thread gets it too; splits/fork.ts uses the same rule) –, else the catalog's) the marks and the fit
- * come first and a renewal only when they cannot bring it in.
- */
-async function chooseSession(services: RuntimeServices, plan: TurnPlan, request: TurnRequest, engine: Engine, accountId: string, route: RouteDecision, catalogWindow: number | undefined, key: string, native?: SeedContext): Promise<SessionChoice> {
-  const store = new SessionStore(services.db);
-  let session = engine.caps.sessions ? store.get(plan.agent.id, plan.thread, engine.id) : undefined;
-  // A native session lives in one account home (CODEX_HOME / CLAUDE_CONFIG_DIR): no cross-account resume.
-  if (session && session.accountId && session.accountId !== accountId) session = undefined;
-  const contextWindow = (session && session.model === route.modelId ? session.contextWindow : undefined) ?? store.reportedWindow(engine.id, route.modelId) ?? catalogWindow;
-  // The native rebuild, when this turn's case holds (undefined: the path below).
-  const rebuild = async (current: SessionBinding | undefined, renewed?: 'mode' | 'prompt', overLimit?: boolean) => (native && engine.caps.rebuild
-    ? nativeRebuild(services, { plan, request, engine, account: native.account, route, model: native.model, session: current, offer: native.offer, prompt: native.prompt, promptKey: key, contextWindow, renewed, overLimit })
-    : undefined);
-  // B-057: a split's first turn without a session on its thread starts from its parent (agents/split-turn.ts seedSplit).
-  const seeded = session ? undefined : await seedSplit(services, plan, request, engine, route, key, native);
-  if (seeded) return { session: seeded.session, contextWindow, sinceSeq: plan.memberCursor, prefix: seeded.prefix, seeded: seeded.session !== undefined };
-
-  if (session && session.promptKey === undefined) store.stamp(plan.agent.id, plan.thread, engine.id, key, plan.mode.key);
-  else if (session && session.promptKey !== key) {
-    // A resumed session keeps the prompt and tools it started with: a new one under the new prompt, with the history the
-    // ledger holds (B-080: before the summary – a summary first would cut the part the session holds down to the last lines).
-    const from = session.mode && session.mode !== plan.mode.key ? session.mode : undefined;
-    const reason = from ? 'mode' : 'prompt';
-    const details = from ? { from, to: plan.mode.key } : {};
-    const note = from ? modeChangeNote(services, from, plan.mode) : undefined;
-    const rebuilt = await rebuild(undefined, reason);
-    if (rebuilt) {
-      services.runs.item(request.runId, { kind: 'note', data: { fresh: reason, ...details, history: 'rebuilt' }, effectStatus: 'none' });
-      return { session: rebuilt.session, contextWindow, sinceSeq: rebuilt.sinceSeq, note, seeded: true };
-    }
-    await renewSession(services, plan, engine.id, request.runId, reason, details);
-    return { contextWindow, sinceSeq: plan.memberCursor, note };
-  }
-  // Every engine with sessions. The subconscious's marks and the fit come first: the renewal is the backstop for a context nothing brings into the window.
-  if (session && pastFit(session.contextTokens, contextWindow)) {
-    const marked = await rebuild(session, undefined, true);
-    if (marked) return { session: marked.session, contextWindow, sinceSeq: marked.sinceSeq, seeded: true };
-    await renewSession(services, plan, engine.id, request.runId, 'context');
-    return { contextWindow, sinceSeq: plan.memberCursor };
-  }
-  const rebuilt = await rebuild(session);
-  if (rebuilt) return { session: rebuilt.session, contextWindow, sinceSeq: rebuilt.sinceSeq, seeded: true };
-  return { session, contextWindow, sinceSeq: plan.memberCursor };
 }
 
 /**
@@ -357,14 +305,53 @@ export async function buildTurn(services: RuntimeServices, plan: TurnPlan, reque
   let offer = offeredTools(services, plan, engine.caps); // B-049 F4: may grow by learned tools below (fresh session only); a part gets its agent's, like its parent
   let key = promptKey(prompt.stable, offer.names);
   // B-057: a split's seeded session starts with this turn's prompt (its volatile part as below).
-  const native: SeedContext = { account, model, offer, prompt: { stable: prompt.stable, volatile: prompt.volatile } };
-  const { session, contextWindow, sinceSeq, note, seeded: rebuilt, prefix } = await chooseSession(services, plan, request, engine, account.id, route, info?.caps.contextTokens, key, native);
-  // B-049 F4 (TOOLS-CORE): tools this agent ran through tools.call in this chat join its offer where a fresh native
-  // session starts (new, renewed, dropped, stateless engine) – never in a resumed or rebuilt one (tools/learned.ts); never for a split (B-057).
-  if (!plan.split && !session && !rebuilt && promoteLearned(services, plan.agent.id)) {
-    prompt = services.context.prompt(promptInput); // its "More tools" list no longer names what became direct
-    offer = offeredTools(services, plan, engine.caps);
-    key = promptKey(prompt.stable, offer.names);
+  // B-049 F4 (TOOLS-CORE), KI-Runde 17.11.2026: tools this agent ran through tools.call join its offer whenever its session
+  // starts anew – a fresh one (new, renewed, dropped, stateless engine) or a rebuilt one, which asks here once it is certain
+  // to run – never in a resumed one (tools/learned.ts); never for a split (B-057).
+  const anew = () => {
+    if (!plan.split && promoteLearned(services, plan.agent.id)) {
+      prompt = services.context.prompt(promptInput); // its "More tools" list no longer names what became direct
+      offer = offeredTools(services, plan, engine.caps);
+      key = promptKey(prompt.stable, offer.names);
+    }
+    return { offer, prompt: { stable: prompt.stable, volatile: prompt.volatile }, promptKey: key };
+  };
+  const native: SeedContext = { account, model, offer, prompt: { stable: prompt.stable, volatile: prompt.volatile }, anew };
+  // The first turn after my mode changed says so (the binding keeps the mode of its last turn).
+  const bound = engine.caps.sessions ? new SessionStore(services.db).get(plan.agent.id, plan.thread, engine.id) : undefined;
+  const note = bound?.mode && bound.mode !== plan.mode.key ? modeChangeNote(services, bound.mode, plan.mode) : undefined;
+  const { session, contextWindow, sinceSeq, seeded: rebuilt, prefix } = await chooseSession(services, plan, request, engine, account.id, route, info?.caps.contextTokens, key, native);
+  if (!session && !rebuilt) anew(); // a fresh session takes my learned tools here; a rebuilt one took them as it was built
+  // S2 (session-key.ts): a resumed session runs on the system text and tools it started with – its "More tools" counted
+  // against those – and gets its changed stable sections below; a session that starts now records what it starts with.
+  // A revert rebuilds the thread the session already holds (rebuild.ts, Codex), and a native fork part runs on its parent's
+  // start (split-turn.ts seedSplit records it on the part's thread): both keep the start they run on, like a resume.
+  const revert = Boolean(rebuilt && session && bound && session.ref === bound.ref);
+  const forked = Boolean(plan.split && rebuilt && session && startOf(services.db, { agentId: plan.agent.id, thread: plan.thread, engine: engine.id }, session.promptKey));
+  const resumed = session && (!rebuilt || revert || forked) ? session : undefined;
+  const heldKey = revert ? bound?.promptKey : resumed?.promptKey; // the key the session was bound with before this turn
+  const start = resumed ? startOf(services.db, { agentId: plan.agent.id, thread: plan.thread, engine: engine.id }, heldKey) : undefined;
+  // A session bound before the start record existed, whose prompt changed since: it gets every current section once.
+  const whole = Boolean(resumed && !start && heldKey !== undefined && heldKey !== key);
+  if (start && start.key !== key) {
+    const own = sessionOffer(services, start);
+    if (own.names.join('\n') !== offer.names.join('\n')) prompt = services.context.prompt({ ...promptInput, direct: own.names });
+    offer = own;
+    key = start.key;
+  }
+  const system = start ? start.sections.map((section) => section.text).join('\n\n') : prompt.stable;
+  // What a session that starts (or is accepted) this turn holds – recorded where its binding is saved, once it exists (turn-finish.ts).
+  const sessionStart = !start && engine.caps.sessions && prompt.stableSections
+    ? { key, native: offer.native.map((tool) => tool.name), hub: offer.hub, sections: prompt.stableSections } : undefined;
+  if (plan.fold) { // the context fold's own turn (agents/context-fold.ts): the session as it stands, no live block, the note as its whole input
+    if (!resumed) throw new WorkforceError('unavailable', 'The session to fold is not there to resume.');
+    return {
+      // No start is recorded here and the session keeps its own key: the fold sends no changed lines, so a session without a
+      // record gets them on its next turn.
+      route, engine, account, model, modelName: info?.name ?? model, contextWindow, session: resumed, prompt: { ...prompt, stable: system, volatile: '' }, tools: offer.native, hubTools: offer.hub,
+      promptKey: start ? key : heldKey ?? key,
+      input: [{ type: 'text', text: `${noteLabel(services.clock.now(), services.settings.get().profile.timezone)} ${foldNote(resumed.contextTokens)}` }], lastSeq: plan.memberCursor,
+    };
   }
 
   let delta: DeltaResult = { text: '', images: [], lastSeq: 0 };
@@ -377,7 +364,7 @@ export async function buildTurn(services: RuntimeServices, plan: TurnPlan, reque
     delta = services.context.delta(query);
   }
   // No session holds my context (a rebuild that could not run, a session-less engine, a part not forked): my own record as text.
-  const history = !session && !prefix ? historyText(services, plan.agent.id, plan.thread, Math.floor(fitLimit(contextWindow) / 2)) : undefined;
+  const history = !session && !prefix ? historyText(services, plan.agent.id, plan.thread, Math.floor(fitLimit(contextWindow) / 2 * engineUnit(engine.id))) : undefined; // the window's tokens in the record's unit
 
   const timezone = services.settings.get().profile.timezone;
   // A seeded split session holds its parent's context already.
@@ -403,16 +390,22 @@ export async function buildTurn(services: RuntimeServices, plan: TurnPlan, reque
   // B-049 F6: a resumed (not seeded) native session gets only the volatile sections changed since its last finished turn.
   const sentKey = { agentId: plan.agent.id, conversationId: plan.thread, engine: engine.id };
   if (rebuilt) forgetSent(services.db, sentKey); // a seeded session starts without the old record
-  const shown = prompt.sections ? volatileDelta(prompt.sections, session && !rebuilt ? sentTo(services.db, sentKey, session.ref) : undefined) : undefined;
-  const volatile = shown ? shown.text : prompt.volatile;
+  const sent = resumed ? sentTo(services.db, sentKey, resumed.ref) : undefined;
+  const shown = prompt.sections ? volatileDelta(prompt.sections, sent?.sections) : undefined;
+  // S2: the stable sections changed since the session's start (or since the change it last got), as changed lines first;
+  // a session from before the start record counts against nothing, so every current section comes once.
+  const held = start ? Object.fromEntries(start.sections.map((section) => [section.name, section.text])) : whole ? {} : undefined;
+  const changed = held && prompt.stableSections ? stableDelta(prompt.stableSections, sent?.stable ?? held) : undefined;
+  const volatile = [changed?.text, shown ? shown.text : prompt.volatile].filter(Boolean).join('\n\n');
   // B-066: what goes out this turn, readable; B-076: the main lane only, like last-run.md beside it.
   const dataDir = plan.split ? undefined : services.paths?.data;
-  if (dataDir) writeLastPrompt(dataDir, plan.agent.id, { system: prompt.stable, input: services.secrets.redact([contextText(volatile), ...input.map(inputLine)].filter(Boolean).join('\n\n')) }, (message, data) => services.log?.debug(message, data));
+  if (dataDir) writeLastPrompt(dataDir, plan.agent.id, { system, input: services.secrets.redact([contextText(volatile), ...input.map(inputLine)].filter(Boolean).join('\n\n')) }, (message, data) => services.log?.debug(message, data));
 
   const trace = turnTrace(services, plan, session, engine, request.runId);
   return {
-    route, engine, account, model, modelName: info?.name ?? model, contextWindow, session, prompt: { ...prompt, volatile }, tools: offer.native, promptKey: key,
-    input, lastSeq: Math.max(delta.lastSeq, plan.memberCursor), ...(shown ? { volatileSent: shown.sections } : {}), ...(trace ? { trace } : {}),
+    route, engine, account, model, modelName: info?.name ?? model, contextWindow, session, prompt: { ...prompt, stable: system, volatile }, tools: offer.native, hubTools: offer.hub, promptKey: key,
+    ...(sessionStart ? { sessionStart } : {}),
+    input, lastSeq: Math.max(delta.lastSeq, plan.memberCursor), ...(shown ? { volatileSent: { sections: shown.sections, ...(changed ? { stable: changed.stable } : {}) } } : {}), ...(trace ? { trace } : {}),
     ...(results ? { splitParts: results.splitIds } : {}), // B-057: these parts are gathered when this turn ends done
   };
 }

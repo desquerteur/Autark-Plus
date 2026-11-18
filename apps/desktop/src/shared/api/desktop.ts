@@ -71,7 +71,8 @@ export type PickKind = 'files' | 'folder' | 'images' | 'audio' | 'video';
 /** What a picked folder is for – main chooses the dialog's title and button from it (Settings › About: the backup to restore). */
 export type FolderPurpose = 'backup' | 'restore' | 'chats';
 
-export interface NavigateRequest { conversationId?: string; taskId?: string }
+/** Where the app window opens: a chat or a task; `call` (the floating to-do button, owner 18.11.2026) starts the chat's call there. */
+export interface NavigateRequest { conversationId?: string; taskId?: string; call?: true }
 
 /**
  * `window.workforce` (desktop only; the PWA has no such object).

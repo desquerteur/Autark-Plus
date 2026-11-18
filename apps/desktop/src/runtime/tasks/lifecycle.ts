@@ -1,6 +1,8 @@
 // Who hears of a task change (the TaskService writes the rows, this decides the rest):
 // - created: its owner hears at once ("<giver> gave me …", tasks/give.ts tellGiven) – a person by a notification or push;
-// - changed: a quiet status line for a wait, a reopen; an agent owner hears when someone else opened its work again;
+// - changed: a quiet status line for a wait, a reopen; a wait whose reason changed replaces the task's last wait line
+//   instead of adding one (KI-Runde 17.11.2026: one line per wait); an agent owner hears when someone else opened its
+//   work again;
 // - finished (done or dropped): a quiet line (none for an answered or withdrawn ask), queued wakes and a running turn
 //   end, a to-do stops ringing, its open asks and its owner's own pieces end with it, whoever gave it hears how it ended
 //   ("I had asked: …"; the person by a notification, a colleague by a push – nobody when it ends quietly), the owner of
@@ -40,6 +42,7 @@ export class TaskLifecycle {
   changed(before: Task, task: Task, by: string): void {
     if (before.status === task.status && before.waitingOn?.why === task.waitingOn?.why) return;
     if (!task.parentId && !withdrawnAsk(task, by)) {
+      if (before.status === 'waiting' && task.status === 'waiting') dropWaitLine(this.t, task); // only the why changed
       const text = task.status === 'waiting' ? `Waiting: ${excerpt(task.title, 60)}${task.waitingOn ? ` · ${excerpt(task.waitingOn.why, 80)}` : ''}`
         : isFinished(before.status) ? `Reopened: ${excerpt(task.title, 60)}` : `Open again: ${excerpt(task.title, 60)}`;
       this.t.line(task, { type: 'note', text, details: { taskId: task.id, status: task.status } }, by);
@@ -138,6 +141,18 @@ function runLine(t: TaskServiceImpl, task: Task, line: StatusLine, by: string): 
   if (!fromRun || !task.conversationId) { t.line(task, line, by); return; }
   try { t.s.chats.status(task.conversationId, line, { authorId: by, taskId: task.parentId ?? task.id, fromRun }); } catch (error) {
     t.s.log?.warn('task status line failed', { taskId: task.id, error: String(error) });
+  }
+}
+
+/** The task's newest line, when it is its wait line, goes – the line about the new reason stands for it. */
+function dropWaitLine(t: TaskServiceImpl, task: Task): void {
+  if (!task.conversationId) return;
+  try {
+    const last = t.s.chats.messages(task.conversationId, { limit: 50 }).reverse()
+      .find((message) => message.kind === 'status' && message.meta.status?.details?.taskId === task.id);
+    if (last?.meta.status?.details?.status === 'waiting') t.s.chats.removeMessage(last.id, SYSTEM_ID);
+  } catch (error) {
+    t.s.log?.warn('the last wait line was not replaced', { taskId: task.id, error: String(error) });
   }
 }
 

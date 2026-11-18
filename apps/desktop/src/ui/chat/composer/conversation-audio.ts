@@ -1,7 +1,10 @@
 // The microphone feed of a voice conversation (pwa-conversation.ts runs the loop in this page, on the desktop
 // and the phone alike): the turn detector (ui/lib/turn-detect.ts) cuts utterances from the 16 kHz PCM; each one is a
-// WAV with a PRE_ROLL_MS pre-roll in front (the first word is never cut), uploaded and handed to the sink, only while the microphone's view is 'listening' and not right after a reply was spoken (echo guard: its
-// tail may still reach the microphone). Replies are read through the page's one speech output (device-speech.ts);
+// WAV with a PRE_ROLL_MS pre-roll in front (the first word is never cut), uploaded at once and handed to the sink in the
+// order it was said, while the microphone's view is 'listening' or 'transcribing' (words said while the last line is
+// still heard are the next line, KI-Runde 17.11.) and not right after a reply was spoken (echo guard: its tail may still
+// reach the microphone). The sink also hears when each take's speech ended (`spoke`, for the call turn's log line,
+// ui/chat/call/turn-meter.ts). Replies are read through the page's one speech output (device-speech.ts);
 // while anything is read (and its tail) the capture takes nothing. Self barge-in (`bargeIn`): with the browser's
 // echo cancellation on, a voice clearly above the reading's echo stops the reading and is taken at once
 // (ui/lib/barge-in.ts); without it the echo guard stays as it was. B-082: Silero VAD + Smart Turn (ui/lib/turn-models.ts, a
@@ -29,6 +32,8 @@ const PRE_ROLL_BYTES = (PRE_ROLL_MS * PCM_RATE * 2) / 1000;
 export interface CaptureSink {
   /** One uploaded utterance. */
   utterance(micId: string, fileId: string): Promise<void>;
+  /** A take's speech ended at `at` (its upload starts now). */
+  spoke?(micId: string, at: number): void;
   /** Self barge-in: the person talks over this device's own reading; true when the reading stopped for it. */
   bargeIn?(micId: string): boolean;
 }
@@ -70,7 +75,7 @@ export class ConversationCapture {
   private detector = createTurnDetector();
   private models: TurnModels | null = null; // loaded, waiting for the gap between two lines
   private readonly barge = new BargeInDetector();
-  private busy = false; // an utterance is being uploaded and handed over
+  private handing: Promise<void> = Promise.resolve(); // the takes go to the sink one after another, in the order said
   private closed = false;
   private quietUntil = 0;
   private aec = false; // the browser cancels this device's echo on the microphone
@@ -121,7 +126,7 @@ export class ConversationCapture {
     const echo = this.deps.speaking?.() === true; // another reader of this device is heard aloud
     const now = this.deps.now();
     const level = rms(samples);
-    if (this.status === 'speaking' && this.aec && this.sink.bargeIn && !this.busy && this.barge.feed(level, now) && this.sink.bargeIn(micId)) {
+    if (this.status === 'speaking' && this.aec && this.sink.bargeIn && this.barge.feed(level, now) && this.sink.bargeIn(micId)) {
       this.barged = true; // talked over this device's own reading: take it now, no echo tail
       this.status = 'listening';
       this.quietUntil = 0;
@@ -130,8 +135,8 @@ export class ConversationCapture {
       this.record();
       return;
     }
-    if (this.status !== 'listening' || this.busy || now < this.quietUntil || (echo && !this.barged)) {
-      this.discard(); // the loop ignores utterances while it transcribes or speaks
+    if ((this.status !== 'listening' && this.status !== 'transcribing') || now < this.quietUntil || (echo && !this.barged)) {
+      this.discard(); // nothing is taken while the loop starts or speaks
       this.detector.reset();
       return;
     }
@@ -156,7 +161,7 @@ export class ConversationCapture {
     const take = this.take;
     this.take = null;
     this.barged = false;
-    if (take) void this.send(new Blob([wavFile(take).buffer as ArrayBuffer], { type: 'audio/wav' }));
+    if (take) this.send(new Blob([wavFile(take).buffer as ArrayBuffer], { type: 'audio/wav' }));
   }
 
   /** Drops a running take. */
@@ -165,18 +170,21 @@ export class ConversationCapture {
     this.barged = false;
   }
 
-  private async send(blob: Blob): Promise<void> {
+  /** Uploads the take at once; it reaches the sink after the takes before it. */
+  private send(blob: Blob): void {
     const micId = this.micId;
     if (this.closed || !micId || !blob.size) return;
-    this.busy = true;
-    try {
-      const ref = await this.deps.upload(blob, 'Utterance.wav');
-      if (!this.closed) await this.sink.utterance(micId, ref.id);
-    } catch (error) {
-      if (!this.closed) this.onFailure(error);
-    } finally {
-      this.busy = false;
-    }
+    this.sink.spoke?.(micId, this.deps.now());
+    const upload = this.deps.upload(blob, 'Utterance.wav');
+    upload.catch(() => undefined); // its failure is reported in its turn below
+    this.handing = this.handing.then(async () => {
+      try {
+        const ref = await upload;
+        if (!this.closed) await this.sink.utterance(micId, ref.id);
+      } catch (error) {
+        if (!this.closed) this.onFailure(error);
+      }
+    });
   }
 }
 

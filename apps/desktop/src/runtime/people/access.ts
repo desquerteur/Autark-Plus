@@ -156,10 +156,18 @@ export function readableTasksSql(personId: string): { sql: string; params: strin
   };
 }
 
+/** The video a stored blob is the light copy of (media.preview_file_id), if it is one. */
+function previewOriginal(db: Db, id: string): string | undefined {
+  try { return db.get<{ f: string }>('SELECT file_id AS f FROM media WHERE preview_file_id = ? LIMIT 1', [id])?.f; } catch { return undefined; }
+}
+
 /** A stored file the person may fetch: attached to a message of one of their chats from their visible time on, or an avatar. */
-export function mayReadFile(db: Db, personId: string, fileId: string, options: { ownUploads?: boolean } = {}): boolean {
+export function mayReadFile(db: Db, personId: string, fileId: string, options: { ownUploads?: boolean; viaCopy?: boolean } = {}): boolean {
   if (!/^[0-9a-f]{64}$/i.test(fileId)) return false;
   const id = fileId.toLowerCase();
+  // 17.11.2026: a video's light copy may be read by whoever may read the video - one step only (`viaCopy`: the video is not sent on again, so a ring of rows ends)
+  const original = options.viaCopy ? undefined : previewOriginal(db, id);
+  if (original && original !== id) return mayReadFile(db, personId, original, { ...options, viaCopy: true });
   const rows = db.all<{ settings: string; joined_at: number; created_at: number }>(
     `SELECT c.settings, m.joined_at, msg.created_at FROM messages msg
        JOIN members m ON m.conversation_id = msg.conversation_id AND m.member_id = ? AND m.left_at IS NULL

@@ -162,8 +162,14 @@ export class RowSync {
     try {
       if (name === 'agents') placeSchedules(this.s, id); // its home may have moved (here or on another PC)
       if (!gone) table.settle?.(id, this.s);
-      const row = gone ? undefined : readRow(this.s, table, id, selfId(this.s.db));
-      if (!gone && !row) return; // it stays here (an environment key found here) or went already
+      let row = gone ? undefined : readRow(this.s, table, id, selfId(this.s.db));
+      if (!gone && !row) {
+        // it stays here (an environment key found here, a login kept on this PC) or went already – one that travelled before is gone for the others
+        const sent = this.stamps.get(`${name}/${id}`);
+        if (!table.retract || !sent || sent.gone || !this.s.db.get(`SELECT 1 FROM ${name} WHERE ${keyOf(name)} = ?`, [id])) return;
+        gone = true;
+        row = undefined;
+      }
       if (row && name !== 'files') this.filesIn(row);
       const key = `${name}/${id}`;
       const h = row ? hashOf(compared(table, row)) : '';

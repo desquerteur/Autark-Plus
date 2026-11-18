@@ -13,6 +13,11 @@
 // `keep: false` ends a pin for good, so the subconscious may condense the item again); a plain restore never shortens a
 // pin that holds longer. B-049 F9: a nested item (a call inside a code-mode script, store.ts) shows as `nested` and is
 // left out of what a rebuild would change (needsRebuild) and never marked by the subconscious: the native session never held it.
+// KI-Runde 17.11.2026 (the fold, agents/context-fold.ts): fold() pins the hand-over a run wrote (its checkpoint items) for good
+// and hides everything of the agent's own work before it by 'fold' (window.ts foldHides; what stays: the chat lines, the words
+// the agent posted in a chat, the tasks.finish calls since the hand-over before it, at the first fold those of the run that just ended – staysInFold – and pins); a checkpoint is
+// never condensed or hidden by a mark – only a later fold takes it out of view. lines() is the thread's chat lines, the others'
+// and the agent's own posted words, which share one reach.
 // Never: posts, routes or rebuilds sessions itself; treats ledger text as instructions; lets a capture
 // failure reach the journal or the turn.
 
@@ -30,6 +35,7 @@ import { forgetChat, prune, pruneAll, type RetentionDeps } from './retention.ts'
 import { forgetInLedger, type LedgerForget } from './forget.ts';
 import { LedgerStore, toItem, type LedgerRow } from './store.ts';
 import { goneWithScript, viewItem, type ViewDeps } from './view.ts';
+import { FOLD_REASON, foldHides } from './window.ts';
 
 /** Condensed texts and mark reasons are capped (a condensed text is keywords, never a second original). */
 const CONDENSED_CHARS = 4000;
@@ -42,9 +48,11 @@ const STAMP_TOKENS = 20;
 export const KEEP_PIN = Number.MAX_SAFE_INTEGER;
 /**
  * B-050 K5: at most this many tokens per agent and chat are kept for good; a keep beyond it pins for PIN_TURNS turns.
- * B-080 wave 3: 10,000 in chars/3 (shared CHARS_PER_TOKEN) – the same ~30k characters the 8,000 held in chars/4.
+ * 17.11.2026: 15,000 at two characters per token (shared CHARS_PER_TOKEN) – the same ~30k characters the 10,000 held at three.
  */
-export const KEEP_TOKENS = 10_000;
+export const KEEP_TOKENS = 15_000;
+/** The call a fold leaves in view: its arguments are the task's summary, evidence and follow-ups. */
+const FINISH_CALL = 'tasks.finish';
 
 export interface LedgerOptions {
   services: () => RuntimeServices;
@@ -131,6 +139,7 @@ export class ContextLedgerService implements ContextLedger {
         const row = this.store.row(agentId, conversationId, String(mark.itemId ?? '').trim().toLowerCase());
         if (!row) continue;
         if (mark.by === 'subconscious' && Number(row.nested)) continue; // B-049 F9: nothing to save – the context never held it
+        if (row.kind === 'checkpoint' && mark.state !== 'keep') continue; // a hand-over stays whole until a later fold
         const condensed = (mark.condensed?.trim() || row.condensed || '').slice(0, CONDENSED_CHARS);
         if (mark.state === 'condensed' && !condensed) continue; // nothing to show in its place
         let pinnedUntil: number | undefined;
@@ -149,6 +158,47 @@ export class ContextLedgerService implements ContextLedger {
       }
     });
     try { prune(this.retention(), agentId, conversationId); } catch (error) { this.s.log.warn('context ledger retention failed', { agentId, conversationId, error: String(error) }); }
+  }
+
+  /** The thread's chat lines in order: the others' lines and the agent's own words it posted in a chat (they share one reach). */
+  lines(agentId: string, conversationId: string): LedgerItem[] {
+    const posted = this.store.postedItems(agentId, conversationId);
+    const turns = this.turns(agentId, conversationId);
+    return this.store.rows(agentId, conversationId, undefined, ['message', 'assistant'])
+      .filter((row) => row.kind === 'message' || posted.has(row.item_id))
+      .map((row) => this.item(row, turns));
+  }
+
+  fold(agentId: string, conversationId: string, runId: string): { checkpoint: string[]; hidden: number } | undefined {
+    const now = this.s.clock.now();
+    const done = this.s.db.tx(() => {
+      const turns = this.turns(agentId, conversationId);
+      const rows = this.store.rows(agentId, conversationId);
+      const written = rows.filter((row) => row.kind === 'checkpoint' && row.run_id === runId && row.state === 'keep');
+      if (!written.length) return undefined;
+      const before = Number(written[0].order);
+      const hides = new Set(foldHides(rows.map((row) => toItem(row, turns)), before, this.staysInFold(agentId, conversationId, rows, before, runId)));
+      for (const row of rows) if (hides.has(row.item_id)) this.store.setMark(row, { state: 'hidden', condensed: row.condensed, by: 'fold', reason: FOLD_REASON, at: now });
+      for (const row of written) this.store.pin(row, KEEP_PIN);
+      return { checkpoint: written.map((row) => row.item_id), hidden: hides.size };
+    });
+    if (done) try { prune(this.retention(), agentId, conversationId); } catch (error) { this.s.log.warn('context ledger retention failed', { agentId, conversationId, error: String(error) }); }
+    return done;
+  }
+
+  /**
+   * What a fold leaves in view besides the chat lines and the pins: the agent's own words it posted in a chat (they follow the
+   * chat lines' reach from then on) and the tasks.finish calls made since the hand-over before this one – what was finished
+   * earlier is one line in that earlier hand-over, so those calls' arguments are no longer needed whole. At my first fold
+   * (no hand-over before it) they are the calls of the run that just ended: the newest run of mine before the fold's own.
+   */
+  private staysInFold(agentId: string, conversationId: string, rows: readonly LedgerRow[], before: number, foldRun: string): Set<string> {
+    const earlier = rows.reduce((max, row) => (row.kind === 'checkpoint' && Number(row.order) < before ? Math.max(max, Number(row.order)) : max), 0);
+    const ended = earlier ? undefined : rows.filter((row) => row.kind !== 'message' && row.run_id && row.run_id !== foldRun && Number(row.order) < before).at(-1)?.run_id;
+    const finishes = this.store.callItems(agentId, conversationId, FINISH_CALL);
+    const stays = this.store.postedItems(agentId, conversationId);
+    for (const row of rows) if (finishes.has(row.item_id) && (earlier ? Number(row.order) > earlier : row.run_id === ended)) stays.add(row.item_id);
+    return stays;
   }
 
   original(agentId: string, conversationId: string, itemId: string): { text: string; pruned: boolean; args?: string } | undefined {
@@ -189,19 +239,17 @@ export class ContextLedgerService implements ContextLedger {
     if (!changed.length) return undefined;
     const count = { condensed: 0, hidden: 0, restored: 0 };
     let saves = 0;
-    let marked = false;
     for (const row of changed) {
       const tokens = Number(row.tokens);
       const condensedCost = estimateTokens(row.condensed ?? '') + STAMP_TOKENS;
       const held = row.applied === 'hidden' ? 0 : row.applied === 'condensed' ? condensedCost : tokens;
       const next = row.state === 'hidden' ? 0 : row.state === 'condensed' ? condensedCost : tokens;
       saves += held - next;
-      marked ||= row.marked_by === 'subconscious' && row.state !== 'keep';
       if (row.state === 'keep') count.restored++;
       else count[row.state]++;
     }
     const parts = (Object.entries(count) as Array<[string, number]>).filter(([, n]) => n > 0).map(([what, n]) => `${n} ${what}`);
-    return { since: Number(changed[0].order), reason: `${parts.join(', ')} since the last rebuild`, saves, marked };
+    return { since: Number(changed[0].order), reason: `${parts.join(', ')} since the last rebuild`, saves };
   }
 
   rebuilt(agentId: string, conversationId: string, upTo: number): void {

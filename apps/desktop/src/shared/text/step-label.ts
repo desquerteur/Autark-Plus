@@ -250,3 +250,11 @@ export function reasoningHeadline(summary: string): string {
   const sentence = /^(.+?[.!?:])(?:\s|$)/.exec(flat)?.[1] ?? flat;
   return oneLine(sentence.replace(/[.:]$/, ''), 80);
 }
+
+/** The first sentence of what an agent said, on one line, at most `max` characters ('' for an empty text) – the live
+ *  bar's step (runtime/chat/live.ts) and a quiet line's row in the chat (ui/chat/message-rows.ts). */
+export function firstSentence(text: string, max = 120): string {
+  const flat = text.replace(/\*\*|`/g, '').replace(/\s+/g, ' ').trim();
+  const sentence = /^(.+?[.!?])(?:\s|$)/.exec(flat)?.[1] ?? flat;
+  return oneLine(sentence.replace(/\.$/, ''), max);
+}

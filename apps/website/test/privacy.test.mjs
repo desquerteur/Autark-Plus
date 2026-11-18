@@ -30,3 +30,8 @@ test('web and next desktop notice disclose automatic diagnostic attachment', () 
     assert.ok(!text.includes('enabled diagnostic sharing'));
   }
 });
+
+test('the meeting server section says what it processes, that content stays end to end, and how to run your own (18.11.2026)', () => {
+  const html = privacy(release.fallback);
+  for (const term of ['id="meeting-server"', 'IP address', 'in memory only', 'cannot read or change', 'stun.cloudflare.com', 'services/remote-relay', 'Settings › Devices › Connection', 'Article 6(1)(b) GDPR']) assert.ok(html.includes(term), term);
+});

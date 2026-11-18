@@ -19,6 +19,9 @@
 // Owns: the mesh hook, the request route, the relay client and its state.
 // Never: links a PC, or talks to a server the person did not configure.
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Bus } from '../../bus.ts';
 import type { Clock, Logger } from '../../contracts.ts';
 import type { Db } from '../../db/database.ts';
@@ -34,6 +37,7 @@ import { fingerprintOf, fromB64url } from '../keys.ts';
 import type { DeviceMesh, Timers } from '../mesh.ts';
 import { DevicesRepo, type DeviceRecord } from '../repo.ts';
 import { relayPhone, type PhoneBridge } from './phone.ts';
+import { PcRtc, pcOffer } from './pc-rtc.ts';
 import { RelayClient, type RelayClientDeps } from './relay-client.ts';
 import type { RelayTunnel } from './tunnel.ts';
 
@@ -69,6 +73,9 @@ export interface MeetingDeps {
   socket?: RelayClientDeps['socket'];
   /** Phone apps over the server: their tunnels (F29: and their traffic, direct and through the server). */
   phones?: Pick<PhoneBridge, 'accept' | 'closeAll'> & Partial<Pick<PhoneBridge, 'counts' | 'onChange' | 'prune'>>;
+  /** 18.11.2026: the STUN servers for PC ↔ PC over WebRTC (settings.devices.stun; undefined while devices.rtc is off).
+   * Absent: linked PCs in other networks go through a tunnel only. */
+  stun?(): readonly string[] | undefined;
 }
 
 const linkedPc = (record: DeviceRecord | undefined): record is DeviceRecord =>
@@ -90,8 +97,19 @@ export class Meeting {
   /** My person code (B-084): the server also finds me under it while my chain proves it. */
   private readonly code: PersonCode;
 
+  /** 18.11.2026: PC ↔ PC over WebRTC (rendezvous/pc-rtc.ts). */
+  private readonly pcRtc?: PcRtc;
+
   constructor(deps: MeetingDeps) {
     this.deps = deps;
+    const stun = deps.stun;
+    if (stun) {
+      this.pcRtc = new PcRtc({
+        log: deps.log, stun,
+        tunnel: (fp) => (this.relay.online(fp) ? this.relay.open(fp) : undefined),
+        accept: (socket, fp) => deps.mesh.accept(socket, fp),
+      });
+    }
     this.repo = new DevicesRepo(deps.db);
     this.code = openCode(deps.db, deps.identity, () => deps.clock.now());
     this.relay = new RelayClient({
@@ -109,6 +127,7 @@ export class Meeting {
     const { bus, mesh } = this.deps;
     mesh.setMeeting({
       addresses: (record) => this.relay.addresses(record.fingerprint),
+      rtc: (record) => this.pcRtc?.dial(record.fingerprint),
       tunnel: (record) => (this.relay.online(record.fingerprint) ? this.relay.open(record.fingerprint) : undefined),
     });
     this.offs.push(
@@ -142,8 +161,9 @@ export class Meeting {
       return relayPhone(record) ? [{ ...count, name: record.name }] : [];
     });
     return {
-      status: relay.status, ...(relay.url ? { url: relay.url } : {}), ...(relay.error && relay.status !== 'connected' ? { error: relay.error } : {}),
+      status: relay.status, ...(relay.url ? { url: relay.url } : {}), ...(relay.error && relay.status !== 'connected' ? { error: relay.error } : {}), ...(relay.held ? { held: relay.held } : {}),
       peersOnline: ids(relay.online).length, relayed: ids(relay.tunnels), ...(phones.length ? { phones } : {}),
+      ...(meet() ? { meet: meet() } : {}),
     };
   }
 
@@ -225,9 +245,22 @@ export class Meeting {
       });
       return;
     }
-    void this.deps.mesh.accept(tunnel as SocketLike).catch((error: unknown) => {
+    const accept = (socket: SocketLike) => void this.deps.mesh.accept(socket).catch((error: unknown) => {
       this.deps.log.debug('meeting tunnel refused', { error: String((error as Error)?.message ?? error) });
       tunnel.close();
+    });
+    const rtc = this.pcRtc;
+    if (!rtc) { accept(tunnel); return; }
+    // 18.11.2026: the first frame decides – an offer for a direct path (pc-rtc.ts), else the handshake of a tunnel link
+    const held = new HeldSocket(tunnel);
+    let first = true;
+    tunnel.onMessage((data, isText) => {
+      if (!first) return;
+      first = false;
+      const offer = pcOffer(data, isText);
+      if (offer) { rtc.answer(tunnel, tunnel.peer, offer); return; }
+      held.start(data, isText);
+      accept(held);
     });
   }
 
@@ -299,4 +332,48 @@ function keyOf(pub: unknown, fp: string): boolean {
   if (typeof pub !== 'string' || pub.length > 64) return false;
   const raw = fromB64url(pub);
   return raw.length === 32 && fingerprintOf(raw) === fp;
+}
+
+let shipped: { program: string; file: string } | null | undefined;
+/** 18.11.2026: app/meet.mjs beside this runtime bundle (app.asar.unpacked when packaged) and the program that runs it
+ * as Node (ELECTRON_RUN_AS_NODE) – the own meeting server Settings offers; undefined when the build has none. */
+function meet(): { program: string; file: string } | undefined {
+  if (shipped === undefined) {
+    let file = '';
+    try { file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'meet.mjs').replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2'); } catch { /* no file URL */ }
+    shipped = file && existsSync(file) ? { program: process.execPath, file } : null;
+  }
+  return shipped ?? undefined;
+}
+
+/** An incoming tunnel whose first frame was read already: it hands that frame and every later one to the handshake. */
+class HeldSocket implements SocketLike {
+  private readonly inner: SocketLike;
+  private readonly listeners: Array<(data: Buffer, isText: boolean) => void> = [];
+  private queue: Array<[Buffer, boolean]> = [];
+  private started = false;
+
+  constructor(inner: SocketLike) { this.inner = inner; }
+
+  start(data: Buffer, isText: boolean): void {
+    this.queue.push([data, isText]);
+    this.started = true;
+    this.inner.onMessage((more, text) => this.deliver(more, text));
+  }
+
+  private deliver(data: Buffer, isText: boolean): void {
+    if (!this.listeners.length) { this.queue.push([data, isText]); return; }
+    for (const listener of this.listeners) listener(data, isText);
+  }
+
+  send(data: Buffer | string): void { this.inner.send(data); }
+  close(code?: number, reason?: string): void { this.inner.close(code, reason); }
+  onClose(listener: (code?: number) => void): void { this.inner.onClose(listener); }
+  onMessage(listener: (data: Buffer, isText: boolean) => void): void {
+    this.listeners.push(listener);
+    if (!this.started) return;
+    const queued = this.queue;
+    this.queue = [];
+    for (const [data, isText] of queued) listener(data, isText);
+  }
 }

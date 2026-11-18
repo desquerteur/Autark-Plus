@@ -21,6 +21,7 @@ import { chatMemberTools } from './chat-members.ts';
 import { chatRoomTools } from './chat-rooms.ts';
 import { chatMessageTools } from './chat-messages.ts';
 import { hitLines, readLines } from './chat-lines.ts';
+import { whole } from '../outputs.ts';
 import { CHAT_DAYS } from '../../context/ledger/window.ts';
 
 /** What one read shows at most; the rest is named with where it goes on. */
@@ -77,7 +78,7 @@ const readChat = defineTool<{ chatId?: string; beforeSeq?: number; afterSeq?: nu
     if (args.seq !== undefined) {
       const one = ctx.services.chats.messages(conversationId, { afterSeq: args.seq - 1, limit: 1 }).filter((message) => message.seq === args.seq);
       const lines = readLines(ctx, one, { full: true });
-      return text(lines.length ? lines.join('\n') : `No message #${args.seq} in this chat.`);
+      return lines.length ? whole(text(lines.join('\n'))) : text(`No message #${args.seq} in this chat.`); // one line comes whole
     }
     let afterSeq = args.afterSeq;
     if (args.from !== undefined) {

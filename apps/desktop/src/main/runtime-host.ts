@@ -47,11 +47,18 @@ export interface RuntimeHostDeps<P> {
   now?(): number;
   setTimer?(fn: () => void, ms: number): unknown;
   clearTimer?(handle: unknown): void;
-  bootTimeoutMs?: number; // default 30 s
+  bootTimeoutMs?: number; // default 90 s, then 2x and 3x after a start in a row that missed it (18.11.2026: BOOT_TIMEOUT_MS)
   restoreBootMs?: number; // default 20 min: boot wait after the runtime announced a restore
   stopTimeoutMs?: number; // default 8 s
   backoff?: Backoff;
 }
+
+/**
+ * How long main waits for `ready` at the first start. 18.11.2026 (live, a maintainer's PC, after Windows' 02:00 update restarts): 30 s was too
+ * short for a cold PC, three starts in a row were killed as slow, and the third crash made the next start the repair screen
+ * ("crash_loop") – the whole company stood still for 1.5 h. A start that missed the wait gets two and then three times as long.
+ */
+export const BOOT_TIMEOUT_MS = 90_000;
 
 /** How long main waits for `ready` once the runtime said it applies a staged restore. */
 export const RESTORE_BOOT_MS = 20 * 60_000;
@@ -71,6 +78,7 @@ export class RuntimeHost<P> {
   /** A restart is under way: the coming exit reports 'restarting' and start() follows. */
   private restartWanted = false;
   private restarting: Promise<void> | null = null;
+  private bootMisses = 0; // starts in a row that were killed for missing the ready wait
 
   constructor(deps: RuntimeHostDeps<P>) {
     this.deps = deps;
@@ -176,10 +184,11 @@ export class RuntimeHost<P> {
     child.postMessage({ type: 'init', token: deps.token, protocol: HOST_BRIDGE_PROTOCOL, app: deps.app });
     this.bootTimer = this.timer(() => {
       if (this.child === child && !this.up) {
+        this.bootMisses++;
         deps.logLine?.('runtime did not become ready in time; restarting');
         child.kill();
       }
-    }, deps.bootTimeoutMs ?? 30_000);
+    }, (deps.bootTimeoutMs ?? BOOT_TIMEOUT_MS) * (1 + Math.min(this.bootMisses, 2)));
   }
 
   private receive(child: RuntimeChild, raw: unknown): void {
@@ -193,6 +202,7 @@ export class RuntimeHost<P> {
         return;
       }
       this.clear('bootTimer');
+      this.bootMisses = 0;
       this.up = true;
       const queued = this.queued;
       this.queued = [];

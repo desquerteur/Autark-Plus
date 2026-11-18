@@ -3,8 +3,7 @@
 // '## App status (live)' text, so an agent can check what is connected
 // on demand. G1 (01.11.2026): named setup.status before – the name matched "einrichten" and a Codex Manager called it
 // first and took the request as configuring the app. No turn carries these facts (E1); this tool is where they are.
-// No `requires`, but it is not a core tool: the registry offers it
-// only in modes whose tool patterns match it (today manager, general and secretary with '*').
+// No `requires`, and not a core tool: every mode reaches it through tools.call (KI-Runde 17.11.2026).
 // Owns: the tool definition (category read, any agent role).
 // Never: collects or renders facts itself (context/setup-facts.ts does) or returns emails, homes, base URLs, secret
 // ids or tokens.

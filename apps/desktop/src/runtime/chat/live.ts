@@ -2,10 +2,14 @@
 // the history any more – three working agents had pushed the person's newest line far up). Who works for a chat right
 // now, one entry per running turn or split part, by ONE rule: a running run (or part) shows in a chat when it came
 // from that chat (its conversationId: the chat whose line woke it, a part's the chat its group came from) or when it
-// posted a message into that chat during this run (a message carrying its runId). Nothing else – a chat nothing comes
-// from right now shows nothing.
+// posted a message into that chat during this run (a message carrying its runId) – that second way only POST_CHAT_MS
+// after its last post there (Konrad 17.11.2026: a run that posted into sixteen chats over a day is not "working" in
+// all sixteen). A run with no chat of its own (a schedule's) shows in the chat of its last post for as long as it runs.
+// Nothing else – a chat nothing comes from right now shows nothing.
 // Fed by what this PC runs: the dispatcher's activity snapshot (agent.activity: the running runs and parts, their note,
-// model · effort), the run journal (run.item: the step it is on – itemStep, thoughtStep) and posted messages
+// model · effort), the run journal (run.item: the step it is on – itemStep, thoughtStep, and the agent's own sentence:
+// the first sentence of its newest working note 'Update' outside its <chat> blocks, which stays the step until its next one, so the bar says in
+// the agent's words what it is on instead of its newest tool label – KI-Runde 17.11.2026) and posted messages
 // (message.created). A chat whose entries changed gets its summary announced again (`announce`: conversation.upserted
 // with ConversationSummary.live) – the first change after a quiet moment at once, further ones together after GAP_MS –
 // so windows, phones and runtime readers all read the same list. Feedback F10 (16.11.2026): what the person's other PCs
@@ -20,13 +24,18 @@
 import type { Bus } from '../bus.ts';
 import type { LiveRun, LiveStep } from '../../shared/model/chat.ts';
 import type { AgentActivity, RunItem } from '../../shared/model/runs.ts';
-import { oneLine, reasoningHeadline, stepLabel, stepText, type StepKind } from '../../shared/text/step-label.ts';
+import { chatBlocks } from '../agents/chat-out.ts';
+import { firstSentence, oneLine, reasoningHeadline, stepLabel, stepText, type StepKind } from '../../shared/text/step-label.ts';
 
 /** At most one announcement of a chat per this many ms. */
 export const GAP_MS = 500;
+/** A chat a run only posted into counts as one it works for this long after its last post there. */
+export const POST_CHAT_MS = 3 * 60_000;
 
 /** A step's target (the journal keeps the longer one). */
 const TARGET_MAX = 100;
+/** The agent's own sentence in the bar. */
+const SENTENCE_MAX = 120;
 const KINDS: ReadonlySet<string> = new Set<StepKind>([
   'command', 'read', 'edit', 'search', 'list', 'web', 'browser', 'computer', 'chat', 'task', 'agent', 'memory', 'image', 'mcp', 'plan', 'tool',
 ]);
@@ -54,15 +63,22 @@ export function thoughtStep(item: Pick<RunItem, 'data'>): LiveStep | undefined {
   return { kind: 'plan', verb: 'Thought', active: 'Thinking', target: headline, thought: true, ...(item.data.live === true ? { running: true as const } : {}) };
 }
 
-/** The bar's step text for one journaled item: a call while it runs ("Reading a.pdf"), after it ("Read a.pdf"), a thought's headline. */
+/** True for the agent's own working note between its steps (turn-attempt.ts journals it as note 'Update'). */
+export function isSaid(item: Pick<RunItem, 'kind' | 'name'>): boolean {
+  return item.kind === 'note' && item.name === 'Update';
+}
+
+/** The bar's step text for one journaled item: a call while it runs ("Reading a.pdf"), after it ("Read a.pdf"), a thought's headline, the agent's own sentence. */
 export function stepOf(item: RunItem): string | undefined {
+  if (isSaid(item)) return firstSentence(chatBlocks(str(item.data.text), { final: true }).rest, SENTENCE_MAX) || undefined; // its words outside <chat> blocks
   if (item.kind === 'tool_call') return stepText(itemStep(item), true);
   if (item.kind === 'tool_result') return undefined; // the call's own line stays until the next step
   if (item.kind === 'reasoning') return thoughtStep(item)?.target;
   return undefined;
 }
 
-interface Work { activity: AgentActivity; step?: string; posted: Set<string> }
+/** `said`: the step is the agent's own sentence – only its next sentence replaces it. */
+interface Work { activity: AgentActivity; step?: string; said?: boolean; posted: Map<string, number>; lastPosted?: string }
 
 /** One running run as it travels to the person's other PCs (sync.live): its activity, its step and the chats it shows in. */
 export interface LiveShare { activity: AgentActivity; step?: string; chats: string[] }
@@ -79,10 +95,16 @@ function entryOf(work: Pick<Work, 'activity' | 'step'>): LiveRun {
   };
 }
 
-/** The chats a running run shows in (the rule in the header). */
-function chatsOf(work: Work): string[] {
-  return [...new Set([...(work.activity.conversationId ? [work.activity.conversationId] : []), ...work.posted])];
+/** The chats a running run shows in at `at` (the rule in the header). */
+function chatsOf(work: Work, at: number): string[] {
+  const origin = work.activity.conversationId;
+  if (!origin) return work.lastPosted ? [work.lastPosted] : [];
+  const out = [origin];
+  for (const [chat, postedAt] of work.posted) if (chat !== origin && at - postedAt < POST_CHAT_MS) out.push(chat);
+  return out;
 }
+
+const sameChats = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((chat) => b.includes(chat));
 
 /** One runtime's ChatLive, by its bus (the RPC side reaches it through ctx.services.bus). */
 const lives = new WeakMap<object, ChatLive>();
@@ -105,6 +127,8 @@ export class ChatLive {
   private readonly remote = new Map<string, LiveShare[]>();
   private readonly listeners = new Set<() => void>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** `<runId>|<chatId>`: when a chat the run only posted into stops counting (POST_CHAT_MS after its last post there). */
+  private readonly expiries = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly last = new Map<string, number>();
   private readonly offs: Array<() => void>;
   private readonly bus: Bus;
@@ -122,16 +146,23 @@ export class ChatLive {
       bus.on('run.item', (item) => {
         const work = this.runs.get(item.runId);
         const step = work ? stepOf(item) : undefined;
-        if (!work || !step || step === work.step) return;
+        if (!work || !step || step === work.step || (work.said && !isSaid(item))) return;
         work.step = step;
-        this.changed(chatsOf(work));
+        work.said = isSaid(item);
+        this.changed(chatsOf(work, Date.now()));
         this.moved();
       }),
       bus.on('message.created', (message) => {
         const work = message.runId ? this.runs.get(message.runId) : undefined;
-        if (!work || work.posted.has(message.conversationId)) return;
-        work.posted.add(message.conversationId);
-        this.changed([message.conversationId]);
+        if (!work || !message.runId) return;
+        const at = Date.now();
+        const before = chatsOf(work, at);
+        work.posted.set(message.conversationId, at);
+        work.lastPosted = message.conversationId;
+        this.expireLater(message.runId, work, message.conversationId);
+        const after = chatsOf(work, at);
+        if (sameChats(before, after)) return; // the chat already counted: its timer starts over, nothing to announce
+        this.changed([...new Set([...before, ...after])]);
         this.moved();
       }),
     ];
@@ -139,7 +170,8 @@ export class ChatLive {
 
   /** The chat's live bar: every running run or part that shows there – this PC's and the other PCs' –, in start order. */
   of(chatId: string): LiveRun[] {
-    const here = [...this.runs.values()].filter((work) => chatsOf(work).includes(chatId)).map(entryOf);
+    const at = Date.now();
+    const here = [...this.runs.values()].filter((work) => chatsOf(work, at).includes(chatId)).map(entryOf);
     const there = [...this.remote].flatMap(([deviceId, shares]) => remoteIn(shares, chatId)
       .filter((share) => !this.runs.has(share.activity.runId)).map((share) => ({ ...entryOf(share), deviceId })));
     return [...here, ...there].sort((a, b) => a.startedAt - b.startedAt);
@@ -147,7 +179,8 @@ export class ChatLive {
 
   /** This PC's running runs as they travel to the person's other PCs. */
   snapshot(): LiveShare[] {
-    return [...this.runs.values()].map((work) => ({ activity: work.activity, ...(work.step ? { step: work.step } : {}), chats: chatsOf(work) }));
+    const at = Date.now();
+    return [...this.runs.values()].map((work) => ({ activity: work.activity, ...(work.step ? { step: work.step } : {}), chats: chatsOf(work, at) }));
   }
 
   /** `listener` hears every change of this PC's own running work (not the other PCs'); returns its off switch. */
@@ -176,6 +209,8 @@ export class ChatLive {
     for (const off of this.offs) off();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    for (const timer of this.expiries.values()) clearTimeout(timer);
+    this.expiries.clear();
     this.listeners.clear();
     if (lives.get(this.bus) === this) lives.delete(this.bus);
   }
@@ -189,25 +224,52 @@ export class ChatLive {
   /** A new snapshot of what runs: runs that ended go, new ones come, changed ones are announced in their chats. */
   private activity(active: readonly AgentActivity[]): void {
     const chats = new Set<string>();
+    const at = Date.now();
     const now = new Set(active.map((entry) => entry.runId));
     let moved = false;
     for (const [runId, work] of this.runs) {
       if (now.has(runId)) continue;
       this.runs.delete(runId);
+      this.dropExpiries(runId);
       moved = true;
-      for (const chat of chatsOf(work)) chats.add(chat);
+      for (const chat of chatsOf(work, at)) chats.add(chat);
     }
     for (const entry of active) {
       if (entry.deviceId) continue; // another PC's run never counts as this PC's
       const work = this.runs.get(entry.runId);
       if (work && JSON.stringify(entryOf(work)) === JSON.stringify(entryOf({ ...work, activity: entry })) && work.activity.conversationId === entry.conversationId) continue;
-      const next: Work = { activity: entry, posted: work?.posted ?? new Set(), ...(work?.step ? { step: work.step } : {}) };
-      for (const chat of [...(work ? chatsOf(work) : []), ...chatsOf(next)]) chats.add(chat);
+      const next: Work = { activity: entry, posted: work?.posted ?? new Map(), ...(work?.lastPosted ? { lastPosted: work.lastPosted } : {}), ...(work?.step ? { step: work.step } : {}), ...(work?.said ? { said: true } : {}) };
+      for (const chat of [...(work ? chatsOf(work, at) : []), ...chatsOf(next, at)]) chats.add(chat);
       this.runs.set(entry.runId, next);
       moved = true;
     }
     this.changed([...chats]);
     if (moved) this.moved();
+  }
+
+  /** A chat the run only posted into stops counting POST_CHAT_MS after its last post: announce it then (a run with no chat of its own keeps its last one). */
+  private expireLater(runId: string, work: Work, chat: string): void {
+    const origin = work.activity.conversationId;
+    if (!origin || chat === origin) return;
+    const key = `${runId}|${chat}`;
+    const old = this.expiries.get(key);
+    if (old) clearTimeout(old);
+    const timer = setTimeout(() => {
+      this.expiries.delete(key);
+      if (!this.runs.has(runId)) return;
+      this.changed([chat]);
+      this.moved();
+    }, POST_CHAT_MS + 50); // a little after, so `at - postedAt < POST_CHAT_MS` is false when it runs
+    (timer as { unref?: () => void }).unref?.();
+    this.expiries.set(key, timer);
+  }
+
+  private dropExpiries(runId: string): void {
+    for (const [key, timer] of this.expiries) {
+      if (!key.startsWith(`${runId}|`)) continue;
+      clearTimeout(timer);
+      this.expiries.delete(key);
+    }
   }
 
   private changed(chats: readonly string[]): void {

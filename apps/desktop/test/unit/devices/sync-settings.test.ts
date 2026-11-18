@@ -271,7 +271,7 @@ test('B-080: a newer PC\'s key in a known section is left out of the patch; the 
 const SHARED_KEYS: Record<string, string[]> = {
   profile: ['name', 'company', 'avatarFileId', 'language', 'timezone', 'notes', 'pcAccess', 'forEveryAgent'], // notes, pcAccess, forEveryAgent: OWN_UNITS
   preferences: ['theme', 'sidebarOpen', 'sidebarWidth', 'workspaceOpen', 'workspaceWidth', 'enterSends', 'closeToTray', 'openAtLogin', 'autoDownloadUpdates'],
-  notifications: ['enabled', 'sound', 'quietHours', 'pushFor'],
+  notifications: ['enabled', 'sound', 'computerUse', 'quietHours', 'pushFor'], // computerUse: OWN_UNITS
   voice: ['ttsVoice', 'vocabulary', 'realtime', 'talker', 'localStt', 'localTts'],
   routing: ['work', 'decision', 'voice', 'stt', 'tts', 'image', 'video', 'music', 'sound', 'embeddings', 'costMode', 'allowPaidFallback'],
   providers: [],

@@ -18,6 +18,10 @@ by dropping the `//` lines; `settings.schema.json` beside it describes the same 
 
 Before something that cannot be undone (a lower data retention deletes older data), I check the value once.
 
+Two keys are logged in Settings › Security: `profile.pcAccess` and `profile.forEveryAgent`. These two I change with
+`wf call settings.update` (`{"profile":{"forEveryAgent":"…"}}`) rather than in the file – then the change log names
+me, and the person sees who changed what; an edit of the file shows there only as "settings.json".
+
 Each page of the Settings window is a view on this file or on a file beside it, and its header opens that file. Some
 keys have no row in the window (language, time zone, notification categories and quiet hours, the day's buffer); they
 work the same, and I change them here when the person wants something different.
@@ -29,7 +33,9 @@ texts follow. Anything more special – German for business, English for code re
 they like to be called – I write as one short line into `profile.notes` (up to 600 characters). Every agent reads both
 in "My environment" of its prompt, so I keep the note short and change it only when something really changed: each
 change renews every agent's cached prompt once. To-dos for the person, blockers and important messages always reach
-them; `notifications.sound` is the one switch they see.
+them; `notifications.sound` is the one switch they see. A line at the bottom of the window while an agent uses this
+PC's screen is off by default (`notifications.computerUse`, 17.11.2026: the person did not want it); I turn it on only
+when they ask for it.
 
 The person's lines to every agent are `profile.forEveryAgent` (Settings › Security): the last part of each agent's
 instructions, after that agent's own `HUMAN.md` in its folder under `agents/`. I change either like any other text

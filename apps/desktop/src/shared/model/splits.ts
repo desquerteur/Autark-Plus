@@ -19,9 +19,10 @@ export type SplitContext = 'fork' | 'brief';
 export type SplitStatus = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'skipped';
 export type SplitGroupStatus = 'pending' | 'running' | 'settled' | 'gathered' | 'stopped';
 export const SPLIT_TERMINAL: readonly SplitStatus[] = ['done', 'failed', 'stopped', 'skipped'];
-/** B-080: runningPerAgent is the one bound on parallel turns – an agent runs at most that many of its parts at once; its own turn and every other lane start at once. */
+/** B-080: runningPerAgent is the one bound on parallel turns – an agent runs at most that many of its parts at once; its own turn and every other lane start at once.
+ *  KI-Runde 17.11.2026: a brief holds 12,000 characters – a fresh part knows only its brief, and briefs near 4,000 were squeezed. */
 export const SPLIT_LIMITS = { partsPerCall: 12, activeGroupsPerAgent: 3, runningPerAgent: 4, attempts: 2,
-  resultChars: 24_000, briefChars: 4_000, titleChars: 80, goalChars: 400, returnsChars: 400 } as const;
+  resultChars: 24_000, briefChars: 12_000, titleChars: 80, goalChars: 400, returnsChars: 400 } as const;
 
 /** One part as the agent asks for it (agents.split input). B-083: `temperature` (0..2) like model and effort – engines that take one send it. */
 export interface SplitPartInput { title: string; brief: string; returns?: string; context?: SplitContext;
@@ -33,9 +34,12 @@ export interface SplitFork { how: 'native' | 'ledger' | 'text' | 'fresh'; engine
 /**
  * B-080: the native session the parent's splitting turn ended with, recorded when the group started (runtime/splits/fork.ts
  * recordedParent) – the source of a 'fork' part's native fork, through that turn (`turn`: its native turn id, when the engine
- * names turns). A later turn of the parent that renews or moves that session changes nothing here.
+ * names turns). A later turn of the parent that renews or moves that session changes nothing here. FIXES-3 B1: for a turn
+ * that still runs (agents.split with wait; Claude Code only – runtime/splits/fork.ts FORKS_IN_TURN) it is the session that
+ * turn runs on – Claude Code forks its transcript up to the split's call; `contextTokens` is its size before the turn – and
+ * `model` is the model that turn runs on (its run's row names one only at its end).
  */
-export interface SplitParentSession { engine: EngineId; accountId?: string; ref: string; contextTokens?: number; turn?: string }
+export interface SplitParentSession { engine: EngineId; accountId?: string; ref: string; contextTokens?: number; turn?: string; model?: string }
 
 /** `ultra`: the person had suggested Ultra on their latest message in the chat when the agent split (MessageMeta.ultra). */
 export interface SplitGroup { id: string; agentId: string; parentRunId: string; conversationId?: string; taskId?: string;

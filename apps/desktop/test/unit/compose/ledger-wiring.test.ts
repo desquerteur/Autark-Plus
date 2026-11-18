@@ -26,6 +26,6 @@ test('a turn attempt attaches its run to the ledger of its thread with the route
 test('context.restore is built in and on demand: found through tools.find, in no core set', () => {
   const tool = builtinTools().find((entry) => entry.name === 'context.restore');
   assert.ok(tool);
-  assert.equal(tool.anyMode, true);
+  assert.equal(tool.modes, undefined);
   for (const key of ['general', 'manager']) assert.equal(coreNames({ key, tools: [] }).has('context.restore'), false, key);
 });

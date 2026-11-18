@@ -28,7 +28,7 @@ const ctx = { agent: agent('ag_1', 'Mira'), runId: 'run_1', mode: 'computer', de
 test('every device tool exists with the right category, remote flag and visibility', () => {
   const expected = [
     'computer.screenshot', 'computer.windows', 'computer.ui_tree', 'computer.act', 'computer.click', 'computer.type', 'computer.key',
-    'computer.scroll', 'computer.drag', 'browser.open', 'browser.snapshot', 'browser.act', 'browser.screenshot', 'browser.extract',
+    'computer.scroll', 'computer.drag', 'computer.wait', 'computer.batch', 'browser.open', 'browser.snapshot', 'browser.act', 'browser.screenshot', 'browser.extract',
     'browser.tabs', 'browser.batch', 'browser.find', 'browser.console', 'browser.network', 'browser.eval', 'browser.wait', // B-055 Q7 (track E)
     'phone.devices', 'phone.screenshot', 'phone.ui_tree', 'phone.tap', 'phone.swipe', 'phone.type', 'phone.key',
     'phone.open', 'phone.say', 'phone.pair', 'phone.connect', 'phone.disconnect', 'devices.list', 'devices.send_file',
@@ -44,9 +44,9 @@ test('every device tool exists with the right category, remote flag and visibili
     if ((tool.name.startsWith('computer.') || tool.name.startsWith('browser.')) && tool.name !== 'browser.save_totp' && tool.name !== 'browser.save_secret') assert.equal(tool.remote, true, tool.name);
     if (tool.name !== 'devices.list' && tool.name !== 'devices.send_file') assert.equal(tool.requires, 'device', tool.name);
   }
-  // devices.send_file is offered in every mode (tools/types.ts anyMode), so it needs no device mode.
+  // devices.send_file is offered in every mode (no tool.modes, tools/registry.ts), so it needs no device mode.
   assert.equal(byName.get('devices.send_file')!.requires, undefined);
-  assert.equal(byName.get('devices.send_file')!.anyMode, true);
+  assert.equal(byName.get('devices.send_file')!.modes, undefined);
   for (const name of ['browser.open', 'browser.snapshot', 'browser.screenshot', 'browser.extract', 'browser.tabs', 'browser.find', 'browser.console', 'browser.network', 'browser.wait']) assert.equal(byName.get(name)!.category, 'read');
   for (const name of ['browser.act', 'browser.batch', 'browser.eval']) assert.equal(byName.get(name)!.category, 'device', name);
   assert.equal(byName.get('browser.save_secret')!.category, 'write_local');
@@ -122,6 +122,17 @@ test('B-080: computer.ui_tree of a Chrome window without a page document says it
   // Live 09.11.: 18 of 23 reads of these windows asked for depth 25–35 – deeper than a plain read, so the whole tree.
   assert.equal((await rig.run('computer.ui_tree', { window: 41, depth: 30 })).split('\n')[1], CHROME_FRAME);
   assert.equal((await rig.run('computer.ui_tree', { window: 41, depth: TREE_DEPTH })).split('\n')[1], CHROME_FRAME);
+});
+
+test('KI-Runde 17.11.2026: a cut search says maxNodes finds more only while a higher one would', async () => {
+  const node = (i: number) => ({ d: 1, p: -1, rid: `1.${i}`, role: 'button', name: `Senden ${i}`, patterns: ['invoke'] });
+  let count = 20;
+  const rig = computerRig({ find: () => ({ hwnd: 7, truncated: true, nodes: Array.from({ length: count }, (_, i) => node(i)) }) });
+  assert.match(await rig.run('computer.ui_tree', { name: 'Senden' }), /\(search stopped at 20 – maxNodes up to 100 finds more, a narrower name or role fewer\)/);
+  count = 100;
+  const full = await rig.run('computer.ui_tree', { name: 'Senden', maxNodes: 100 });
+  assert.match(full, /\(search stopped at 100 – a narrower name or role finds fewer\)/);
+  assert.doesNotMatch(full, /maxNodes/, 'at 100 there is nothing left to raise');
 });
 
 test('B-080 frameOnly: Chrome and Edge titles (Edge with its zero-width space), a document line anywhere, other titles', () => {

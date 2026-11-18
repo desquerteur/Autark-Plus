@@ -74,6 +74,18 @@ test('tools/list: the agent\'s tools for its mode via MCP, under MCP-safe wire n
   assert.deepEqual(specsFor[0].engine, { ownTools: true, via: 'mcp' });
 });
 
+test('S2: a lease given tool names serves exactly those that are registered – a resumed session\'s own offer, not the mode\'s current one', async () => {
+  const { hub, specsFor } = setup();
+  const registered = new Map(SPECS.map((spec) => [spec.name, spec]));
+  const services = (hub as unknown as { deps: { services: () => RuntimeServices } }).deps.services() as unknown as { tools: Record<string, unknown> };
+  services.tools.get = (name: string) => registered.get(name);
+  const lease = hub.lease({ agent: AGENT, runId: 'run_3', mode: 'video' }, ['tasks.create', 'gone.tool']);
+  const reply = await hub.handle(lease.token, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, {});
+  const tools = (reply.body as { result: { tools: Array<{ name: string }> } }).result.tools;
+  assert.deepEqual(tools.map((tool) => tool.name), ['tasks__create'], 'a name no longer registered is left out');
+  assert.equal(specsFor.length, 0, 'the mode\'s offer is not consulted');
+});
+
 test('tools/call maps the wire name back and calls the registry with the lease context', async () => {
   const { rpc, calls } = setup(async (call) => (call.name === 'tasks.create'
     ? { content: [{ type: 'text', text: '{"id":"task_9"}' }, { type: 'image', mime: 'image/png', dataBase64: 'iVBO' }], structured: { id: 'task_9' } }

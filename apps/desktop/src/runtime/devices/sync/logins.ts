@@ -104,7 +104,8 @@ export class LoginSync {
 
   /** The CLI plans whose login is a file this PC knows. */
   private plans(): Account[] {
-    return this.s.accounts.list().filter((account) => account.auth === 'cli' && loginFiles(account.provider, this.platform).length > 0);
+    // 17.11.2026: a login the person kept on this PC (`thisPcOnly`) is neither sent nor watched for sending
+    return this.s.accounts.list().filter((account) => account.auth === 'cli' && !account.thisPcOnly && loginFiles(account.provider, this.platform).length > 0);
   }
 
   private homeOf(account: Account): string | undefined {

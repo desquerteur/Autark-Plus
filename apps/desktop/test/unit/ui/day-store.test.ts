@@ -67,11 +67,16 @@ test('withEvent / withoutEvent: the caller\'s rows that overlap the window, sort
   assert.equal(withoutEvent(window, 'nope'), window);
 });
 
-test('nextDayChange: the next block start or end, else local midnight', () => {
+test('nextDayChange: the next block start or end, the moment a planned to-do\'s time has passed, else local midnight', () => {
   const blocks = [event('a'), event('b', { startAt: D2410 + 11 * H, endAt: D2410 + 12 * H })];
   assert.equal(nextDayChange(blocks, D2410 + 8 * H, TZ), D2410 + 9 * H, 'the next start');
   assert.equal(nextDayChange(blocks, D2410 + 9.5 * H, TZ), D2410 + 10 * H, 'the end of the running block');
   assert.equal(nextDayChange(blocks, D2410 + 13 * H, TZ), D2410 + 24 * H, 'midnight');
+  const short = event('c', { startAt: D2410 + 9 * H, endAt: D2410 + 9.25 * H });
+  assert.equal(nextDayChange([short], D2410 + 9.3 * H, TZ), D2410 + 9.5 * H, 'half an hour after its start its row asks for a new time');
+  const meeting = event('m', { kind: 'event', taskId: undefined, startAt: D2410 + 9 * H, endAt: D2410 + 9.25 * H });
+  assert.equal(nextDayChange([meeting], D2410 + 9.3 * H, TZ), D2410 + 24 * H, 'a meeting has no such moment');
+  assert.equal(nextDayChange([{ ...short, state: 'done' }], D2410 + 9.3 * H, TZ), D2410 + 24 * H, 'nor a done block');
 });
 
 test('handed off: the person\'s own work others own; replaced, added and dropped by task events', () => {

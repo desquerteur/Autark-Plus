@@ -1,7 +1,8 @@
 // Owner moves of tasks:
 // - an agent that is given a task joins the task's chat, so its chat tools work there – when the person, the system or a
-//   member of that chat gives it; a chat-free task has no chat to join, a 1:1 is never joined (the task moves into the
-//   giver's 1:1 with the receiver instead, routeOwner);
+//   member of that chat gives it; a chat-free task has no chat to join; out of a 1:1 or a chat a person is in, work
+//   handed on by a member or the person moves into the giver's 1:1 with the receiver instead (chat/direct.ts
+//   keepsItsMembers, routeOwner) – only the system still seats an archived agent's successor there;
 // - an archived agent's unfinished tasks are given to its successor (tasks/give.ts): the agent named when it was
 //   archived, else its next active manager, else a manager agent of its space, else a company-wide manager; a task of
 //   the archived agent's 1:1 goes to the successor's own 1:1 with that partner. With no manager left a task waits on the
@@ -21,7 +22,7 @@ import type { Agent } from '../../shared/model/org.ts';
 import { PAUSED_REASON, isFinished, isPaused, type Task } from '../../shared/model/tasks.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import type { OrgService, RuntimeServices } from '../contracts.ts';
-import { workRoomFor } from '../chat/direct.ts';
+import { keepsItsMembers, workRoomFor } from '../chat/direct.ts';
 import type { TaskServiceImpl } from './service.ts';
 import { giveTask, nameOf, tell } from './give.ts';
 import { nextLook } from './next.ts';
@@ -38,13 +39,17 @@ export function mayBringIn(t: TaskServiceImpl, conversationId: string | undefine
 }
 
 /**
- * Adds a new agent owner to the task's chat. Only the human, the system or a member brings an
- * agent in; no-op for members, unknown or archived agents, assignments by outside agents and a 1:1
- * (B-078 D7: it stays two; the work reaches the agent in the giver's 1:1 with it, chat/direct.ts workRoomFor).
+ * Adds a new agent owner to the task's chat. Only the human, the system or a member brings an agent in; no-op for
+ * members, unknown or archived agents, assignments by outside agents and a 1:1 (B-078 D7: it stays two). Work a
+ * member or the person hands on out of a chat a person is in never seats anyone – workRoomFor moves it to the giver's
+ * 1:1 with the receiver, and when no room can be made the task stays in its chat with nobody seated; only the system
+ * still takes a seat there (an archived agent's successor).
  */
 export function joinChat(t: TaskServiceImpl, conversationId: string | undefined, agentId: string, by: string): void {
   if (!conversationId) return; // B-054: a chat-free task – nobody joins anything
-  if (t.s.chats.get(conversationId)?.settings.direct) return;
+  const chat = t.s.chats.get(conversationId);
+  if (!chat || chat.settings.direct) return;
+  if (keepsItsMembers(t.s, chat) && by !== SYSTEM_ID) return; // a chat a person is in keeps its members, also when no work room was found
   const members = t.s.chats.members(conversationId);
   if (members.some(member => member.memberId === agentId)) return;
   if (!mayBringIn(t, conversationId, by)) return;
@@ -122,13 +127,14 @@ export function moveTaskChat(s: Pick<RuntimeServices, 'db' | 'clock'> & Partial<
 }
 
 /**
- * B-078 D7: brings a new agent owner to a task given by `by`: into the task's chat (joinChat), or – out of a 1:1 the
- * agent is not in – the task moves into `by`'s own 1:1 with the agent (workRoomFor), so its wakes and answers land
+ * B-078 D7: brings a new agent owner to a task given by `by`: into the task's chat (joinChat), or – out of a 1:1 or a
+ * chat a person is in that the agent is not in – the task moves into `by`'s own 1:1 with the agent (workRoomFor), so its wakes and answers land
  * where it is a member. Returns the chat the task is in now. For tasks/service.ts assign (before its mutate).
  */
 export function routeOwner(t: TaskServiceImpl, task: Pick<Task, 'id' | 'conversationId'>, agentId: string, by: string): string | undefined {
   const chatId = task.conversationId;
-  if (chatId && t.s.chats.get(chatId)?.settings.direct && mayBringIn(t, chatId, by)) {
+  const chat = chatId ? t.s.chats.get(chatId) : undefined;
+  if (chatId && chat && keepsItsMembers(t.s, chat) && mayBringIn(t, chatId, by)) {
     let room: string | undefined;
     try {
       room = workRoomFor(t.s, chatId, by, agentId);

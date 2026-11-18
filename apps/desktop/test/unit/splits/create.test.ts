@@ -51,7 +51,7 @@ test('the input checks, each with a clear sentence, and nothing is stored', () =
     [[{ brief: 'x' }], /^Part #1's title is missing\.$/],
     [[part('x'.repeat(SPLIT_LIMITS.titleChars + 1))], /^Part #1's title is 81 characters long; at most 80\.$/],
     [[{ title: 'A', brief: '   ' }], /^Part #1's brief is empty\.$/],
-    [[part('A', { brief: 'b'.repeat(SPLIT_LIMITS.briefChars + 1) })], /brief is 4001 characters long; at most 4000/],
+    [[part('A', { brief: 'b'.repeat(SPLIT_LIMITS.briefChars + 1) })], /brief is 12001 characters long; at most 12000/],
     [[part('A', { returns: 'r'.repeat(401) })], /returns is 401 characters long; at most 400/],
     [[part('A', { context: 'full' as never })], /^Part #1: context must be fork or brief\.$/],
     [[part('A', { effort: 'minimal' as never })], /^Part #1: effort must be one of none, low, medium, high, xhigh, max\.$/],

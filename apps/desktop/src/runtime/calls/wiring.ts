@@ -1,15 +1,16 @@
 // Composition of calls (compose/services.ts calls createCalls once the accounts, catalog and chats exist): the call rows
-// (call-log.ts – one value per call in its chat), the realtime sessions over `ws` (realtime/session.ts), the call talker on
-// the Decisions use (talker.ts), an agent's rings (ring.ts, B-081) and the lookups the RPC handlers and the chat.call tool
-// use (callLogOf, realtimeOf, talkerOf, ringsOf). A call otherwise runs on the device (shared/voice/conversation.ts).
+// (call-log.ts – one value per call in its chat), the realtime sessions over `ws` (realtime/session.ts), the call voice as
+// one kept conversation per call on the helper lane (talker.ts with decision/engine-runner.ts createChatOpener; the end of
+// a call reaches it through CallLog.onEnd), an agent's rings (ring.ts, B-081) and the lookups the RPC handlers, the
+// chat.call tool and the context fold use (callLogOf, realtimeOf, talkerOf, ringsOf, inLiveCall). A call otherwise runs on
+// the device (shared/voice/conversation.ts).
 // Shutdown: stopCalls (compose/lifecycle.ts); start-up: endCallsLeftOpen (main.ts reconciliation, after the sync listens).
 // Owns: that wiring. Never: provider protocol.
 
 import WebSocket from 'ws';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { RuntimeServices } from '../contracts.ts';
-import { createEngineRunner } from '../decision/engine-runner.ts';
-import type { StructuredRunner } from '../decision/types.ts';
+import { createChatOpener, type ChatOpener } from '../decision/engine-runner.ts';
 import type { PushFetch } from '../devices/sync/held-push.ts';
 import { CallLog } from './call-log.ts';
 import type { EngineSocket, SocketFactory } from './realtime/engine.ts';
@@ -30,10 +31,12 @@ const realtimes = new WeakMap<object, RealtimeCalls>();
 const talkers = new WeakMap<object, CallTalker>();
 const rings = new WeakMap<object, Rings>();
 
-export function createCalls(services: RuntimeServices, options: { connect?: SocketFactory; timers?: CallTimers; run?: StructuredRunner; fetch?: PushFetch } = {}): { log: CallLog; realtime: RealtimeCalls; talker: CallTalker; rings: Rings } {
+export function createCalls(services: RuntimeServices, options: { connect?: SocketFactory; timers?: CallTimers; voice?: ChatOpener; fetch?: PushFetch } = {}): { log: CallLog; realtime: RealtimeCalls; talker: CallTalker; rings: Rings } {
   const log = new CallLog(() => services);
   const realtime = new RealtimeCalls({ services: () => services, log, connect: options.connect ?? wsConnect, timers: options.timers ?? timers });
-  const talker = new CallTalker({ services: () => services, run: options.run ?? createEngineRunner(services), calls: log });
+  const talker = new CallTalker({ services: () => services, voice: options.voice ?? createChatOpener(services), calls: log });
+  log.onStart((conversationId, callId) => talker.started(conversationId, callId)); // the voice's session opens with the call (decision 7.1)
+  log.onEnd((conversationId, callId, handOver) => talker.ended(conversationId, callId, handOver)); // the voice's last act (decision 8.4)
   const ring = new Rings({ services: () => services, log, timers: options.timers ?? timers, fetch: options.fetch });
   logs.set(services, log);
   realtimes.set(services, realtime);
@@ -50,6 +53,12 @@ export const talkerOf = (services: object): CallTalker | undefined => talkers.ge
 
 /** B-081: the runtime's rings (chat.call, calls.decline/live), or undefined (tests, headless setups). */
 export const ringsOf = (services: object): Rings | undefined => rings.get(services);
+
+/**
+ * KI-Runde 17.11.2026: whether this agent is in a call running on this PC right now (CallLog.inCall). The context fold
+ * starts no fold turn while it is (agents/context-fold.ts); without a call log there is no call either.
+ */
+export const inLiveCall = (services: object, agentId: string): boolean => logs.get(services)?.inCall(agentId) ?? false;
 
 /** Start-up reconciliation: the calls this PC left open end now, so their end travels to the other PCs. Returns how many. */
 export function endCallsLeftOpen(services: object): number {

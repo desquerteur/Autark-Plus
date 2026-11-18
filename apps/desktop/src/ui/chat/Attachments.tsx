@@ -8,6 +8,8 @@
 // (onRetry; the field keeps its focus, so the text goes to its caret) and deletes (x; a chip held in this page,
 // lib/take-store.ts, leaves the page's store too). A sent message whose dictation was not heard
 // (meta.dictation.failed) shows "Transcribe again" beside its player (voice.retranscribe).
+// 17.11.2026 (the owner via Clara): a recording plays in the draft chip before it is sent and in the message after – also the app's own takes, which the runtime
+// stores as `video/webm` (it names a file by its bytes): lib/media-kinds.ts isRecording decides by the media library's kind or the take's name, not by the type alone.
 // Owns: attachment markup and these actions. Never: uploads (lib/files.ts), hearing (composer/voice.ts) or message state.
 
 import { signal } from '@preact/signals';
@@ -16,21 +18,26 @@ import type { Attachment, Message } from '../../shared/model/chat.ts';
 import { Icon, IconButton, Spinner } from '../lib/ui.tsx';
 import { fileUrlReady, useFileUrl } from '../lib/files.ts';
 import { fileSize } from '../lib/format.ts';
+import { durationLabel } from '../workspace/media-facts.ts';
 import { platform } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
+import { isRecording, learnFiles, learnKinds, mediaKinds, videoFacts } from '../lib/media-kinds.ts';
 import { heldKey, takeStore } from '../lib/take-store.ts';
 import { toastError } from '../lib/toasts.ts';
 import { isAndroidApp } from '../pwa/native.ts';
-import { saveToPhone } from '../pwa/phone-download.ts';
-import { viewKind } from '../workspace/media-facts.ts';
+import { textKind, viewKind } from '../workspace/media-facts.ts';
+import { saveFile } from '../workspace/media-save.ts';
 import { showMedia, showVideo } from './side-pane.ts';
 
 async function openFile(attachment: Attachment): Promise<void> {
   try {
     if (platform === 'desktop') { await rpc.call('files.open', { id: attachment.fileId }); return; }
+    // 17.11.2026 (the owner: "Could not open file · Failed to fetch" on an agent's .md): the Android app no longer
+    // fetch()es the preview's blob: URL – the page's CSP allowed no connect to blob: – but saves as the Media tab's
+    // "Save to phone" does (media-save.ts: the page's own /files route, ≤ 25 MB to Downloads, else the app's download).
+    if (isAndroidApp()) { await saveFile({ id: attachment.fileId, name: attachment.name, mime: attachment.mime, size: attachment.size, createdAt: 0 }); return; }
     const url = await fileUrlReady(attachment.fileId); // a first tap waits for the bytes
-    if (isAndroidApp() && await saveToPhone(await (await fetch(url)).blob(), attachment.name)) return;
     const link = document.createElement('a');
     link.href = url;
     link.download = attachment.name;
@@ -40,11 +47,11 @@ async function openFile(attachment: Attachment): Promise<void> {
 
 /**
  * Whether this attachment of a message opens in the chat's area: on the desktop an image or a video; on the phone
- * everything the media layer shows (image, video, recording, PDF – media-facts.ts viewKind).
+ * everything the media layer shows (image, video, recording, PDF – media-facts.ts viewKind; text and Markdown – textKind).
  */
 export function opensInPane(attachment: Attachment, desktop = platform === 'desktop'): boolean {
   if (desktop) return attachment.mime.startsWith('image/') || attachment.mime.startsWith('video/');
-  return viewKind(attachment.mime, attachment.name) !== 'file';
+  return viewKind(attachment.mime, attachment.name) !== 'file' || textKind(attachment.mime, attachment.name) !== null; // a text or Markdown file reads in the Media tab
 }
 
 /** A click: the side pane for an image or video, else the file itself. */
@@ -77,11 +84,14 @@ function AudioPlayer(props: { attachment: Attachment }) {
 
 function FileChip(props: { attachment: Attachment; conversationId?: string; onRemove?: () => void; busy?: boolean }) {
   const { attachment } = props;
+  const video = attachment.mime.startsWith('video/');
+  const length = video ? videoFacts.value.get(attachment.fileId)?.durationMs : undefined; // 17.11.2026 (Mika): a video says it plays, and for how long
   return (
     <span class="file-chip">
       <button type="button" class="file-chip-open" title={attachment.name} onClick={() => openAttachment(attachment, props.conversationId)}>
-        {props.busy ? <Spinner size={14} /> : <Icon name={attachment.mime.startsWith('image/') ? 'image' : 'paperclip'} size={16} />}
+        {props.busy ? <Spinner size={14} /> : <Icon name={attachment.mime.startsWith('image/') ? 'image' : video ? 'play' : 'paperclip'} size={16} />}
         <span class="file-chip-name">{attachment.name}</span>
+        {length ? <span class="file-chip-size tabular">{durationLabel(length)}</span> : null}
         {attachment.size > 0 && <span class="file-chip-size tabular">{fileSize(attachment.size)}</span>}
       </button>
       {props.onRemove && <IconButton icon="x" label={`Remove ${attachment.name}`} size="small" iconSize={14} onClick={props.onRemove} />}
@@ -114,9 +124,13 @@ function HearAgain(props: { messageId: string }) {
  * (MessageItem) – its recording that was not heard gets "Transcribe again".
  */
 export function AttachmentList(props: { attachments: Attachment[]; conversationId?: string; message?: Message }) {
+  useEffect(() => { learnKinds(props.conversationId); }, [props.conversationId]);
+  // the same bytes sent in another chat belong to that chat's library row: ask for this message's own files by id
+  useEffect(() => { learnFiles(props.attachments.filter((attachment) => /^(video|audio)\//i.test(attachment.mime)).map((attachment) => attachment.fileId)); }, [props.attachments]);
+  const kinds = mediaKinds.value; // a probe that finishes later turns a file chip into a player
   const images = props.attachments.filter((attachment) => attachment.mime.startsWith('image/'));
-  const audio = props.attachments.filter((attachment) => attachment.mime.startsWith('audio/'));
-  const files = props.attachments.filter((attachment) => !attachment.mime.startsWith('image/') && !attachment.mime.startsWith('audio/'));
+  const audio = props.attachments.filter((attachment) => isRecording(attachment, kinds));
+  const files = props.attachments.filter((attachment) => !attachment.mime.startsWith('image/') && !isRecording(attachment, kinds));
   const unheard = unheardRecording(props.message);
   return (
     <div class="attachments">
@@ -185,11 +199,13 @@ function AudioChip(props: { attachment: Attachment; onRemove: () => void; onRetr
 }
 
 /** Composer chips: uploaded attachments (a recording plays inline and can be heard again) + uploads in progress. */
-export function ComposerAttachments(props: { attachments: Attachment[]; uploading: string[]; onRemove: (fileId: string) => void; onRetry?: (attachment: Attachment) => void | Promise<void> }) {
+export function ComposerAttachments(props: { attachments: Attachment[]; uploading: string[]; conversationId?: string; onRemove: (fileId: string) => void; onRetry?: (attachment: Attachment) => void | Promise<void> }) {
+  useEffect(() => { learnKinds(props.conversationId); }, [props.conversationId]);
+  const kinds = mediaKinds.value;
   if (!props.attachments.length && !props.uploading.length) return null;
   return (
     <div class="composer-attachments">
-      {props.attachments.map((attachment) => (attachment.mime.startsWith('audio/')
+      {props.attachments.map((attachment) => (isRecording(attachment, kinds)
         ? <AudioChip key={attachment.fileId} attachment={attachment} onRemove={() => props.onRemove(attachment.fileId)} onRetry={props.onRetry} />
         : <FileChip key={attachment.fileId} attachment={attachment} onRemove={() => props.onRemove(attachment.fileId)} />))}
       {props.uploading.map((name) => <FileChip key={`up-${name}`} attachment={{ fileId: '', name, mime: '', size: 0 }} busy />)}

@@ -26,7 +26,7 @@ export const APP_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  "connect-src 'self' ws: wss:",
+  "connect-src 'self' ws: wss: blob: https://firestore.googleapis.com", // 18.11.2026: a phone's feedback goes straight to the team's mailbox (ui/feedback/direct.ts) // 17.11.2026: the page may read back its own blob: URLs (a phone's attachment save failed with "Failed to fetch")
   "frame-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'none'",

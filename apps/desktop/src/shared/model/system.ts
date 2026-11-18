@@ -47,6 +47,8 @@ export interface Preferences {
 export interface NotificationSettings {
   enabled: boolean;
   sound: boolean;
+  /** A line at the bottom while an agent uses this PC, with Watch (default false: feedback 17.11.2026 – agents use the PC all day). */
+  computerUse: boolean;
   quietHours?: { from: string; to: string };
   /** What may interrupt: human to-dos, blockers, important messages (always quiet otherwise). */
   pushFor: Array<'todo' | 'blocker' | 'important' | 'done' | 'reply'>;
@@ -135,6 +137,11 @@ export interface DeviceSettings {
    * each other at. Absent = Autark's own (DEFAULT_RELAY); empty = off.
    */
   relay?: string;
+  /** F25: a phone app may reach this PC over a WebRTC data channel it sets up through its tunnel. Absent = on. */
+  rtc?: boolean;
+  /** F25: the STUN servers ("stun:host:port", ≤ 4) offered for it; empty = none (then only on the same network or
+   * tailnet). Absent = DEFAULT_STUN (shared/model/relay.ts). */
+  stun?: string[];
 }
 
 /** Partial deep update accepted by settings.update. */

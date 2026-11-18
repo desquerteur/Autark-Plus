@@ -18,6 +18,8 @@ import { validateLifecycle } from '../knowledge/lifecycle-settings.ts';
 import { clockMinutes } from '../../shared/model/day-settings.ts';
 import { MAX_WORDS } from '../../shared/voice/vocabulary.ts';
 import { NOTES_MAX, PATTERNS, SECTIONS, optionsOf, rangeOf } from './schema.ts';
+
+const STUN_URL = new RegExp(PATTERNS.stun); // F25: settings.devices.stun
 import { MAX_HUMAN_MD } from '../../shared/model/agent-core.ts';
 
 type Plain = Record<string, unknown>;
@@ -127,6 +129,7 @@ export function validateSettings(s: Settings): void {
   const n = s.notifications;
   boolean(n.enabled, 'notifications.enabled');
   boolean(n.sound, 'notifications.sound');
+  boolean(n.computerUse, 'notifications.computerUse');
   subset(n.pushFor, 'notifications.pushFor');
   if (n.quietHours !== undefined) {
     if (!isPlain(n.quietHours) || !HHMM.test(String(n.quietHours.from)) || !HHMM.test(String(n.quietHours.to)) || Object.keys(n.quietHours).length !== 2) {
@@ -161,6 +164,9 @@ export function validateSettings(s: Settings): void {
   intIn(s.devices.peerPort, 'devices.peerPort'); // 0 = any free port
   if (s.devices.findable !== undefined) boolean(s.devices.findable, 'devices.findable'); // Remote (absent = on)
   if (s.devices.relay !== undefined && (typeof s.devices.relay !== 'string' || (s.devices.relay !== '' && relayAddress(s.devices.relay) !== s.devices.relay))) bad('devices.relay', 'a relay address (wss://…) or empty');
+  if (s.devices.rtc !== undefined) boolean(s.devices.rtc, 'devices.rtc'); // F25 (absent = on)
+  const stun = s.devices.stun;
+  if (stun !== undefined && (!Array.isArray(stun) || stun.length > 4 || stun.some((url) => typeof url !== 'string' || !STUN_URL.test(url)))) bad('devices.stun', 'up to 4 "stun:host:port" addresses, or [] (none)');
   if (s.lifecycle !== undefined) validateLifecycle(s.lifecycle); // LIFECYCLE: retention days
   if (s.day !== undefined) validateDay(s.day);
   if (s.calendar !== undefined) {

@@ -7,20 +7,20 @@
 //   unless it holds a plan's monthly API credits (B-083 `credits`: prepaid, lost at the month's end → a plan).
 //   Local runtimes and servers without a key are free; every other account is a plan.
 // * The price of one attempt's tokens, first source that knows it: the cost the provider or
-//   engine reported (OpenRouter usage.cost, Claude Code total_cost_usd) → tokens × the curated price in
-//   model-priors.json → tokens × the daily keyless OpenRouter list price (B-078, price-feed.ts) → none:
-//   a paid attempt is booked with amount 0 and flagged 'unpriced'. A list price is used only
-//   when it covers every kind of token the attempt used (output tokens need an output price).
+//   engine reported for this attempt (OpenRouter usage.cost; Claude Code's total_cost_usd made the turn's own by
+//   agents/turn-attempt.ts) → tokens × the curated price in model-priors.json → tokens × the daily keyless OpenRouter
+//   list price (B-078, price-feed.ts) → none: a paid attempt is booked with amount 0 and flagged 'unpriced'. A list price
+//   is used only when it covers every kind of token the attempt used (output tokens need an output price).
 // * A failover turn is priced per attempt (each on its own account and model) and combined: the
 //   paid amounts add up, the plan attempts' notional costs add up, and the weakest paid basis
 //   names the run (one unpriced attempt flags the whole run).
-// Every input token counts at the list input price, except the cached input the engine reported (Codex's
-// cached input, Claude's cache reads) when the curated prior has a cached price (priceCachedInputPerM):
-// that part then counts at it. Cache writes are billed a little higher and count at the input price, so
-// without a cached price the estimate with prompt caching usually errs high. On a paid account a cached
-// price in the priors makes budgets and the daily cap count less than the plain input price would.
-// Owns: chargeOf, attemptCost, combineCosts. Never: I/O, invents a price, books spend
-// (agents/turn-cost.ts does).
+// Package C (17.11.2026): the input has three parts on every path (list, prior, feed). The cached input the engine
+// reported (Codex's cached input, Claude's cache reads) counts at the cached price – the prior's priceCachedInputPerM, else
+// a tenth of the input price (CACHED_SHARE, Anthropic's and OpenAI's discount); the input the turn wrote into the cache
+// (Claude's cache writes) counts at the write price – the prior's priceCacheWritePerM, else the input price; the rest at
+// the input price.
+// Owns: chargeOf, tokenPrice, cachePrices (the write and read price of one model – splits/fork.ts, subconscious/route-turn.ts),
+// listPrice, attemptCost, combineCosts. Never: I/O, books spend (agents/turn-cost.ts does).
 
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import type { CostBasis } from '../../shared/model/runs.ts';
@@ -70,25 +70,49 @@ export interface RunCost {
 
 const round = (usd: number) => Math.round(usd * 1e6) / 1e6;
 
-/** Tokens × list prices per 1M (the cached input at `cachedInputPerM` when given); undefined when a needed price is missing. */
-export function tokenPrice(usage: Pick<TokenUsage, 'inputTokens' | 'outputTokens' | keyof CacheTokens>, prices: { inputPerM?: number; outputPerM?: number; cachedInputPerM?: number }): number | undefined {
+/** A cached input token's share of the input price where no cached price is known (Anthropic and OpenAI: a tenth). */
+export const CACHED_SHARE = 0.1;
+
+/** The prices a prior may carry (pricing reads these). */
+export type PriorPrices = Pick<PriorEntry, 'priceInputPerM' | 'priceOutputPerM' | 'priceCachedInputPerM' | 'priceCacheWritePerM'>;
+
+/** One model's price for a token written into the cache and one read from it: the prior's, else the input price (the prior's,
+ *  else the model's list price) for a write and a tenth of it for a read; undefined where no price is known. */
+export function cachePrices(prior: PriorPrices | undefined, model: Pick<ModelInfo, 'price'> | undefined): { write?: number; read?: number } {
+  const input = prior?.priceInputPerM ?? model?.price?.inputPerM;
+  return { write: prior?.priceCacheWritePerM ?? input, read: prior?.priceCachedInputPerM ?? (input !== undefined ? input * CACHED_SHARE : undefined) };
+}
+
+/**
+ * Tokens × prices per 1M: the cached input at `cachedInputPerM` (else a tenth of the input price), the written input at
+ * `cacheWritePerM` (else the input price), the rest at the input price; undefined when a needed price is missing.
+ */
+export function tokenPrice(usage: Pick<TokenUsage, 'inputTokens' | 'outputTokens' | keyof CacheTokens>, prices: { inputPerM?: number; outputPerM?: number; cachedInputPerM?: number; cacheWritePerM?: number }): number | undefined {
   const input = Math.max(0, usage.inputTokens || 0);
   const output = Math.max(0, usage.outputTokens || 0);
   if ((input > 0 && prices.inputPerM === undefined) || (output > 0 && prices.outputPerM === undefined)) return undefined;
   if (prices.inputPerM === undefined && prices.outputPerM === undefined) return undefined;
-  const cached = prices.cachedInputPerM === undefined ? 0 : Math.min(input, cachedInput(usage));
-  return round(((input - cached) * (prices.inputPerM ?? 0) + cached * (prices.cachedInputPerM ?? 0) + output * (prices.outputPerM ?? 0)) / 1_000_000);
+  const inputPerM = prices.inputPerM ?? 0;
+  const cached = Math.min(input, cachedInput(usage));
+  const written = Math.min(input - cached, Math.max(0, usage.cacheWriteTokens ?? 0));
+  const usd = (input - cached - written) * inputPerM + cached * (prices.cachedInputPerM ?? inputPerM * CACHED_SHARE)
+    + written * (prices.cacheWritePerM ?? inputPerM) + output * (prices.outputPerM ?? 0);
+  return round(usd / 1_000_000);
 }
 
 /**
  * The list price of the tokens: the model's own list price when its row carries one (older rows), else the curated prior
- * (with its cached price, when it has one), else the daily keyless list's price on the model (B-078, models/price-feed.ts).
+ * (with its cached and write prices, when it has them), else the daily keyless list's price on the model (B-078,
+ * models/price-feed.ts).
  */
-export function listPrice(usage: TokenUsage, model?: Pick<ModelInfo, 'scores' | 'price'>, prior?: Pick<PriorEntry, 'priceInputPerM' | 'priceOutputPerM' | 'priceCachedInputPerM'>): { usd: number; basis: 'list-price' | 'prior-price' } | undefined {
+export function listPrice(usage: TokenUsage, model?: Pick<ModelInfo, 'scores' | 'price'>, prior?: PriorPrices): { usd: number; basis: 'list-price' | 'prior-price' } | undefined {
   const scores = model?.scores;
   const listed = scores ? tokenPrice(usage, { inputPerM: valid(scores.priceInputPerM), outputPerM: valid(scores.priceOutputPerM) }) : undefined;
   if (listed !== undefined) return { usd: listed, basis: 'list-price' };
-  const curated = prior ? tokenPrice(usage, { inputPerM: valid(prior.priceInputPerM), outputPerM: valid(prior.priceOutputPerM), cachedInputPerM: valid(prior.priceCachedInputPerM) }) : undefined;
+  const curated = prior ? tokenPrice(usage, {
+    inputPerM: valid(prior.priceInputPerM), outputPerM: valid(prior.priceOutputPerM),
+    cachedInputPerM: valid(prior.priceCachedInputPerM), cacheWritePerM: valid(prior.priceCacheWritePerM),
+  }) : undefined;
   if (curated !== undefined) return { usd: curated, basis: 'prior-price' };
   const fed = model?.price?.source === 'feed' ? tokenPrice(usage, { inputPerM: valid(model.price.inputPerM), outputPerM: valid(model.price.outputPerM) }) : undefined;
   return fed !== undefined ? { usd: fed, basis: 'list-price' } : undefined;
@@ -104,7 +128,7 @@ function reported(usage: TokenUsage): number | undefined {
 }
 
 /** The cost of one attempt on its account and model (see the header). */
-export function attemptCost(input: { account?: Pick<Account, 'auth' | 'provider' | 'plan'>; usage: TokenUsage; model?: Pick<ModelInfo, 'scores' | 'price'>; prior?: Pick<PriorEntry, 'priceInputPerM' | 'priceOutputPerM' | 'priceCachedInputPerM'> }): AttemptCost {
+export function attemptCost(input: { account?: Pick<Account, 'auth' | 'provider' | 'plan'>; usage: TokenUsage; model?: Pick<ModelInfo, 'scores' | 'price'>; prior?: PriorPrices }): AttemptCost {
   const charge = chargeOf(input.account);
   if (charge === 'free') return { basis: 'free' };
   const own = reported(input.usage);

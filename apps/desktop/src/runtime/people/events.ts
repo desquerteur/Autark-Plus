@@ -3,6 +3,7 @@
 // becomes 'conversation.removed', ids only), 'chat:<id>' (messages of a chat they belong to, from their visible
 // time on), 'tasks' (tasks they may read) and 'org' (the agents they see as colleagues, the people directory,
 // activity of those agents, their spaces) – each payload seen from the person's perspective (perspective.ts).
+// 18.11.2026: from 'system' only tabs.changed, as the tabs shared with them (rpc-pane.ts sharedPane).
 // Also the rights key of a person's connection
 // (personRights): changed rights close it (rpc/server.ts).
 // F13: a CEO's device hears every company chat it reads (access.ts chatAccess) and their tasks (readsTask), and gets
@@ -21,6 +22,8 @@ import type { TaskView } from '../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { chatAccess, chatIdsOf, companyChat, isCeo, maySeeSpace, ownersOwnAgent, personUnreadCounts, readsTask, visibleAgents } from './access.ts';
 import { viewAgent, viewMessage, viewPerson, viewSummary, viewTaskFor } from './perspective.ts';
+import { sharedPane } from './rpc-pane.ts';
+import type { PaneTabs } from '../../shared/api/methods-tabs.ts';
 import type { SplitGroupView } from '../../shared/model/splits.ts';
 import type { SplitService } from '../contracts/splits.ts';
 
@@ -54,7 +57,7 @@ function access(s: Services, personId: string, id: string) {
 
 /** May a person's device hold a subscription to `topic`? ('chat:<id>' only for a chat they read.) */
 export function personMaySubscribe(s: Services, scope: PersonScope, topic: Topic): boolean {
-  if (topic === 'chats' || topic === 'tasks' || topic === 'org') return true;
+  if (topic === 'chats' || topic === 'tasks' || topic === 'org' || topic === 'system') return true; // system: tabs.changed only
   const match = /^chat:(.+)$/.exec(topic);
   return Boolean(match && access(s, scope.personId, match[1]));
 }
@@ -81,6 +84,7 @@ export function personMayReceive(s: Services, scope: PersonScope, topic: Topic, 
     if (event !== 'task.upserted') return false;
     return readsTask(s.db, self, data as TaskView);
   }
+  if (topic === 'system') return event === 'tabs.changed';
   if (topic === 'org') {
     if (!ORG_EVENTS.has(event)) return false;
     if (event !== 'agent.upserted' && event !== 'space.upserted') return true; // ids only, the directory, activity (filtered in personView)
@@ -122,6 +126,8 @@ export function personView(s: Services, scope: PersonScope, event: EventName, da
     }
     case 'person.upserted':
       return viewPerson(self, data as Person, isCeo(s.db, self));
+    case 'tabs.changed':
+      return sharedPane(s, self, data as PaneTabs);
     case 'agent.activity':
       return { active: personActivity(s, self, (data as { active?: AgentActivity[] }).active ?? []) };
     default:

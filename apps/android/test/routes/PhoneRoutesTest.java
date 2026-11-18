@@ -32,8 +32,39 @@ public final class PhoneRoutesTest {
         check("#/chat/abc".equals(PhoneRoutes.place("#/chat/abc")));
         for (String url : new String[] {null, "", "http://127.0.0.1:47920/", "http://127.0.0.1:47920/#", "http://127.0.0.1:47920/#/",
                 "http://127.0.0.1:47920/#token=abc", "#/chat/a'b", "#/a b", "#/x?y=1", "#/" + "x".repeat(301)}) check(PhoneRoutes.place(url) == null);
+        todoRoutes();
+        dueNotices();
         noticeCounts();
         System.out.println(assertions + " phone route, notice and badge assertions passed.");
+    }
+
+    /** 18.11.2026: the to-do button opens exactly two more forms – a chat that starts a call, and one task – and a notice never does. */
+    private static void todoRoutes() {
+        check("#/chat/c_1-a.B~2?call=1".equals(PhoneRoutes.valid("#/chat/c_1-a.B~2?call=1")));
+        check("#/tasks?task=t_9".equals(PhoneRoutes.valid("#/tasks?task=t_9")));
+        check("#/chat/abc?call=1".equals(PhoneRoutes.call("abc")) && "#/tasks?task=t1".equals(PhoneRoutes.task("t1")));
+        for (String route : new String[] {"#/chat/abc?call=0", "#/chat/abc?call=1&x=2", "#/chat/abc?call=1'", "#/chat/?call=1", "#/chat/a b?call=1",
+                "#/tasks?task=", "#/tasks?task=a'b", "#/tasks?task=a/b", "#/tasks?task=a&b", "#/tasks?id=1", "#/tasks?task=" + "x".repeat(201),
+                "#/chats?call=1", "#/day?task=1", "#/settings/devices?call=1"}) check(PhoneRoutes.valid(route) == null);
+        check(PhoneRoutes.call(null) == null && PhoneRoutes.call("a'b") == null && PhoneRoutes.call("a\\b") == null);
+        check(PhoneRoutes.task(null) == null && PhoneRoutes.task("x');alert(1)//") == null);
+        check("#/chat/abc".equals(PhoneRoutes.forNotice("important", null, "abc", "#/chat/abc?call=1"))); // a notice's tap never calls
+        check("#/day".equals(PhoneRoutes.forNotice("important", null, null, "#/tasks?task=t1")));
+        check(PhoneRoutes.place("http://127.0.0.1:47920/#/chat/abc?call=1") == null); // a recreated activity never calls again
+    }
+
+    /** 17.11.2026: Due notices share one tag and group: one title keeps its text, more say how many (each title once, the newest five). */
+    private static void dueNotices() {
+        check(PhoneRoutes.isDue("todo", "Due: Call the tax office") && !PhoneRoutes.isDue("todo", "Ida: Check") && !PhoneRoutes.isDue("reply", "Due: x") && !PhoneRoutes.isDue("todo", null));
+        check("due".equals(PhoneRoutes.DUE_TAG) && PhoneRoutes.DUE_SHOW_MS == 20_000);
+        String[] one = PhoneRoutes.dueGroup(null, "Due: Call the tax office", "notes");
+        check("Due: Call the tax office".equals(one[0]) && "notes".equals(one[1]) && "Call the tax office".equals(one[2]));
+        String[] two = PhoneRoutes.dueGroup(one[2], "Due: Recording", "");
+        check("2 to-dos due".equals(two[0]) && "Call the tax office · Recording".equals(two[1]));
+        check("2 to-dos due".equals(PhoneRoutes.dueGroup(two[2], "Due: Recording", "")[0]));
+        String keep = null;
+        for (String name : new String[] {"a", "b", "c", "d", "e", "f"}) keep = PhoneRoutes.dueGroup(keep, "Due: " + name, "")[2];
+        check("b\nc\nd\ne\nf".equals(keep));
     }
 
     /** Several chats plus task notices: the launcher's sum represents messages, not just the number of chat cards. */

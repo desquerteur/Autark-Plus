@@ -26,6 +26,7 @@ import { recoveryRuns } from './splits/reconcile.ts'; // B-057
 import { reviewPromptOverrides } from './context/prompt-updates.ts';
 import { startStandards } from './org/standard.ts';
 import { runKontext1311 } from './bridge/kontext-1311.ts';
+import { runCost1117 } from './bridge/cost-1117.ts';
 import { loginsFolder } from './root/companies.ts';
 import { runB078Repairs } from './system/b078-repairs.ts';
 import { startSync } from './devices/sync/service.ts';
@@ -105,6 +106,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const offDirects = keepOwnerDirects(s);
   runB078Repairs(s); // data from before B-078 brought to its rules once (system/b078-repairs.ts)
   runKontext1311(s); // the one-time conversions of the 13.11.2026 context rebuild (deleted in the version after the bridge)
+  runCost1117(s); // runs priced before 17.11.2026 get their notional cost from their own tokens, once (deleted with the bridge)
   reviewPromptOverrides(s); // an own prompt file follows the release while untouched; an edited one gets one review
   s.prompts?.invalidate();
   const offStandards = startStandards(s); // every SYSTEM.md keeps the team's standard as its last comment (owner 14.11.2026)

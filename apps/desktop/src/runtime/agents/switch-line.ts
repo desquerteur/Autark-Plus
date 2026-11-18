@@ -2,11 +2,12 @@
 // temperatures in the chat, "jeweil Agent Name", "und dass es wirklich auch stimmt"): "<Agent> → <model> · <effort>
 // [· temperature T[ (stance)]] – <why>", at most 120 characters. The chat shows the text (whose line it is stays readable
 // in a group) and the agent reads the same text in its delta ("· Mara → …", context/render.ts), so both know why it changed.
-// 14.11.2026: the line is for a switch someone asked for (route-line.ts decides which); a switch routing made shows in the live bar.
-//   why = the first segment of the route reason ("my start model", "requested by me", a need's text, what I asked for that
-//   cannot run); a bare category label joins what follows ("strongest fit for coding"); the router's "requested by the agent"
-//   reads in the agent's own voice ("requested by me"). An effort change on the same model that I asked for myself (model.set)
-//   says "effort requested by me" (RT2).
+// 17.11.2026: the line is for a turn on another model than my last one and for an effort somebody asked for (route-line.ts
+// decides which); the effort my subconscious sets shows in the live bar.
+//   why = the first segment of the route reason ("my start model", "requested by me", a need's text, my kind's default, the
+//   model that cannot run now or that I asked for in vain); a bare category label joins what follows ("strongest fit for
+//   coding"); the router's "requested by the agent" reads in the agent's own voice ("requested by me"). An effort change on
+//   the same model names whose it is: "effort requested by me" (model.set, RT2) or "effort from my task (given by <name>)".
 //   temperature: the turn's (the agent's own request – 13.11.2026: the chat's suggestion never routes); "(stance)" where the model samples at
 //   its own setting.
 //   failover = what happened to the model before ("GPT-6.1 Sol hit its usage limit"); the same
@@ -16,7 +17,7 @@
 import type { Effort, RouteDecision } from '../../shared/model/providers.ts';
 import { temperatureText } from '../../shared/model/runs.ts';
 import { categoryLabel } from '../routing/categories.ts';
-import { EFFORT_REQUESTED } from '../routing/previous.ts';
+import { EFFORT_OF_TASK, EFFORT_REQUESTED, MODEL_REQUESTED, SUBCONSCIOUS } from '../routing/previous.ts';
 
 /** Longest status text (the chat line and the agent's delta stay one short line). */
 export const STATUS_MAX = 120;
@@ -24,11 +25,8 @@ const SEGMENT = ' · ';
 
 /** B-083: why of a temperature the agent asked for (model.set) and of its model.set inside the running turn. */
 export const REQUESTED_WHY = 'requested by me';
-/** How router.ts opens the reason of a request my subconscious set ("my subconscious: <why>"). */
-const SUBCONSCIOUS = 'my subconscious';
-
 /** The router's words for the agent's own request, in the agent's voice (the line is its own). */
-const MINE: Readonly<Record<string, string>> = { 'requested by the agent': REQUESTED_WHY, [EFFORT_REQUESTED]: 'effort requested by me' };
+const MINE: Readonly<Record<string, string>> = { [MODEL_REQUESTED]: REQUESTED_WHY, [EFFORT_REQUESTED]: 'effort requested by me' };
 
 /** What a turn runs on, as the line names it. */
 export interface SwitchTo { modelName: string; effort: Effort; temperature?: number; sent?: boolean }
@@ -77,15 +75,15 @@ export function failoverText(agent: string, to: SwitchTo, input: { failedName: s
 }
 
 /**
- * The why of a switch someone asked for, away from `from` (what the chat's last turn ran on): an effort-only change I asked for
- * names the request, else the first reason.
+ * The why of a switch away from `from` (what my last turn ran on): an effort-only change somebody asked for names whose
+ * request it is – mine or my task's –, else the first reason.
  */
 export function switchWhy(route: Pick<RouteDecision, 'modelId' | 'reason' | 'category'>, from: { modelId: string }): string | undefined {
-  if (route.modelId === from.modelId && reasonParts(route.reason).includes(EFFORT_REQUESTED)) return MINE[EFFORT_REQUESTED];
-  return firstReason(route.reason, route.category);
+  const effort = route.modelId === from.modelId ? reasonParts(route.reason).find((part) => part === EFFORT_REQUESTED || part.startsWith(EFFORT_OF_TASK)) : undefined;
+  return effort ? MINE[effort] ?? effort : firstReason(route.reason, route.category);
 }
 
-/** B-083: the reason segment of a request my subconscious set before the turn ("my subconscious: <why>", routing/router.ts). */
+/** B-083: the reason segment of the effort my subconscious set before the turn ("my subconscious: <why>", routing/previous.ts effortSource). */
 export function subconsciousWhy(reason: string): string | undefined {
   return reasonParts(reason).find((segment) => segment.startsWith(SUBCONSCIOUS));
 }

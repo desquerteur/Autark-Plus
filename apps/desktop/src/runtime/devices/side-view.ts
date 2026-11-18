@@ -3,7 +3,8 @@
 // or its phone's pulls (`via`: the caller there – its frame gap and its own slot here). Only the CEO's own PCs reach
 // them: they are no open methods (mesh.ts), and each call checks that the link is a CEO link, like files and secrets.
 // Every param is checked again here: the input is mapped onto this PC's newest frame, never taken as DevTools commands.
-// Owns: these four handlers and their link check. Never: forwards a call further, or logs what is typed.
+// 18.11.2026: side.open opens a page in this PC's pane for another PC of the owner's (its "Open on", its phone).
+// Owns: these five handlers and their link check. Never: forwards a call further, or logs what is typed.
 
 import { WorkforceError } from '../../shared/errors.ts';
 import { SIDE_PART_BYTES } from '../../shared/model/side-view.ts';
@@ -12,11 +13,12 @@ import { inputOf } from '../browser/input-wire.ts';
 import { sideCaller, sideNavOf, sidePartOf, sidePullOf, sideTab, sideViewOf } from '../browser/side-view.ts';
 import { OWNER_CALLER } from '../browser/view-pull.ts';
 import { input as paramsOf, onlyKeys, type Obj } from '../rpc/params.ts';
+import { openInPane, openUrlOf } from '../rpc/handlers/side-view.ts';
 import { DevicesRepo } from './repo.ts';
 import type { PeerHandler } from './rpc-peer.ts';
 import { linkOf } from './sync/home.ts';
 
-export const SIDE_METHODS = ['side.pull', 'side.pullPart', 'side.input', 'side.nav'] as const;
+export const SIDE_METHODS = ['side.pull', 'side.pullPart', 'side.input', 'side.nav', 'side.open'] as const;
 const VIA = /^[A-Za-z0-9_.:@-]{1,128}$/;
 
 /** Throws unless `from` is one of the CEO's own PCs linked here. */
@@ -31,7 +33,7 @@ function viaOf(o: Obj): string {
   return o.via;
 }
 
-/** Registers the four methods on the mesh once at startup (compose/network.ts). */
+/** Registers the five methods on the mesh once at startup (compose/network.ts). */
 export function registerSideView(mesh: { register(method: string, handler: PeerHandler): void }, services: () => RuntimeServices): void {
   mesh.register('side.pull', async (params, from, signal) => {
     const s = services();
@@ -61,5 +63,13 @@ export function registerSideView(mesh: { register(method: string, handler: PeerH
     onlyKeys(o, ['tab', 'url', 'action', 'dialog']);
     await sideViewOf(s).nav(sideTab(o), sideNavOf(o));
     return { ok: true };
+  });
+  mesh.register('side.open', async (params, from) => {
+    const s = services();
+    ceoOnly(s, from);
+    const o = paramsOf(params);
+    onlyKeys(o, ['url']);
+    const tab = await openInPane(s, openUrlOf(o));
+    return { ok: true, ...(tab ? { tab } : {}) };
   });
 }

@@ -42,6 +42,7 @@ export const ENTRIES = [
   'src/ui/pwa/sw.ts',
   'src/ui/sandbox/wf.ts',
   'src/ui/lib/pcm-worklet.ts', // D13: the microphone's AudioWorklet module, bundled as its own file (app/ui/pcm-worklet.js)
+  'src/ui/preview/page.ts', // 17.11.2026: the video preview window's page with mediabunny inside (app/media-preview-page.js, main/media-preview.ts)
   'src/ui/hosted/shell.ts', // the iPhone web app's shell (apps/website/src/app/shell.js, scripts/hosted-bundle.mjs)
   'src/ui/hosted/sw.ts', // its service worker (apps/website/src/app/sw.js)
   'src/ui/tour/phone-page.tsx', // the Android app's feedback video page (assets/tour.html, scripts/tour-page.mjs)

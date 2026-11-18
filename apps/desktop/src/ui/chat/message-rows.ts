@@ -1,18 +1,54 @@
-// The message list's rows (split from MessageList.tsx): consecutive status lines form one burst,
-// which StatusGroup (MessageItem.tsx) renders as one expandable line under the id of its newest
-// line the person sees – agents' edit and delete notices are hidden there (C6). 13.11.2026: only
+// The message list's rows (split from MessageList.tsx): consecutive status lines and agents' quiet lines (isQuietLine:
+// what an agent wrote on the way, `quiet` – KI-Runde 17.11.2026: a compact row, its first sentence, the whole line on a
+// click; a line with files stays a bubble) form one burst, which StatusGroup (MessageItem.tsx) renders under the id of
+// its newest line the person sees, in one shape for one line and for many (burstView: earlier lines fold into one row in
+// their place, a new line comes below, an opened line keeps its place) – agents' edit and delete notices are hidden
+// there (C6). 13.11.2026: only
 // real messages – who works shows in the live bar (LiveBar.tsx). A call is one bubble at its row (meta.call with its lines,
 // runtime/calls/call-log.ts): the rows its lines name fold into it, wherever they stand, and show there in full
 // (callEntries); every other row – an answer that came after the call ended too – stays a row, so nothing is hidden.
-// Owns: the grouping, which rendered line a message is found under and a call bubble's entries. Never: renders, scrolls or reads the DOM (MessageList.tsx looks the line up).
+// Owns: the grouping, what a burst shows, which rendered line a message is found under and a call bubble's entries. Never: renders, scrolls or reads the DOM (MessageList.tsx looks the line up).
 
 import { callRecord, type CallLine } from '../../shared/model/call.ts';
 import type { Message } from '../../shared/model/chat.ts';
 import { isAgentNotice } from '../../shared/model/message-changes.ts';
+import { firstSentence } from '../../shared/text/step-label.ts';
 
 export type Row = { kind: 'message'; message: Message } | { kind: 'status'; messages: Message[] } | { kind: 'call'; callId: string; messages: Message[] };
 
 type CallRow = Extract<Row, { kind: 'call' }>;
+
+/** An agent's quiet line: a text it wrote silent, without files, not said in a call – it stands in the burst, not as a
+ *  bubble (a line that carries files is a result and stays a bubble). */
+export function isQuietLine(message: Pick<Message, 'authorKind' | 'kind' | 'silent' | 'meta' | 'attachments'>): boolean {
+  return message.authorKind === 'agent' && message.kind === 'text' && message.silent && !message.attachments.length && !message.meta.call;
+}
+
+/** A quiet line's row text: "<name>: <its first sentence>". */
+export function quietLineText(message: Pick<Message, 'body'>, name: string): string {
+  return `${name}: ${firstSentence(message.body)}`;
+}
+
+/** A row of a burst: one of its lines, the fold row standing for the `count` lines before them, or the row that folds
+ *  those `count` lines again. */
+export type BurstItem = { kind: 'line'; id: string } | { kind: 'earlier' | 'hide'; count: number };
+
+/**
+ * What a burst (StatusGroup) shows, top to bottom – one shape for one line and for many: its lines from the first one
+ * the person opened (`opened`: their ids, kept by the burst), else its newest; the lines before them folded into one
+ * 'earlier' row in their place; all of them while the burst is open, with a 'hide' row under them. A line that arrives
+ * comes below: nothing above an opened line appears or moves.
+ */
+export function burstView(list: readonly Pick<Message, 'id'>[], open: boolean, opened: ReadonlySet<string>): BurstItem[] {
+  const firstOpened = list.findIndex((message) => opened.has(message.id));
+  const folded = firstOpened >= 0 ? firstOpened : Math.max(0, list.length - 1); // the lines a closed burst folds
+  const from = open ? 0 : folded;
+  return [
+    ...(from > 0 ? [{ kind: 'earlier' as const, count: from }] : []),
+    ...list.slice(from).map((message) => ({ kind: 'line' as const, id: message.id })),
+    ...(open && folded > 0 ? [{ kind: 'hide' as const, count: folded }] : []),
+  ];
+}
 
 /** Rows in order; a call's row first in its bubble's messages, then the rows its lines name. */
 export function groupRows(list: readonly Message[]): Row[] {
@@ -32,7 +68,7 @@ export function groupRows(list: readonly Message[]): Row[] {
     const into = folded.get(message.id);
     if (into) { into.messages.push(message); continue; }
     const last = rows[rows.length - 1];
-    if (message.kind === 'status') {
+    if (message.kind === 'status' || isQuietLine(message)) {
       if (last?.kind === 'status') last.messages.push(message);
       else rows.push({ kind: 'status', messages: [message] });
     } else rows.push({ kind: 'message', message });

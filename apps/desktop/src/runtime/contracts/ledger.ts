@@ -31,8 +31,6 @@ export interface RebuildNeed {
   reason: string;
   /** Addition: tokens the rebuild removes (negative when restores bring more back than marks take out). */
   saves: number;
-  /** False when no mark of the subconscious is among the changes: a restore alone only moves its items back into place (its result condensed), it takes nothing off. */
-  marked?: boolean;
 }
 
 export interface ContextLedger {
@@ -42,6 +40,18 @@ export interface ContextLedger {
   items(agentId: string, conversationId: string, opts?: { since?: number; kinds?: LedgerKind[] }): LedgerItem[];
   /** Unknown ids are skipped; the subconscious never marks a pinned item; 'restore' pins for PIN_TURNS turns, or for good with keep (KEEP_PIN, within KEEP_TOKENS per agent and chat); keep: false ends a pin for good; a plain restore never shortens a longer pin. */
   mark(agentId: string, conversationId: string, marks: LedgerMark[]): void;
+  /**
+   * Addition (KI-Runde 17.11.2026, the fold): the hand-over `runId` wrote – its checkpoint items – is pinned for good and everything of
+   * the agent's own work before it is hidden by 'fold' (the chat lines, the tasks.finish calls since the hand-over before it
+   * and pinned items stay); returns the checkpoint's ids and how many items it hid, undefined when the run left no checkpoint
+   * (nothing is marked then).
+   */
+  fold?(agentId: string, conversationId: string, runId: string): { checkpoint: string[]; hidden: number } | undefined;
+  /**
+   * Addition (KI-Runde 17.11.2026): the thread's chat lines in order – the others' lines and the agent's own words it posted in
+   * a chat; they share one reach (context/ledger/window.ts oldChatLines).
+   */
+  lines?(agentId: string, conversationId: string): LedgerItem[];
   /** The full original (undefined: no such item). `pruned`: the original is gone – `text` is what is left (condensed text or title). */
   original(agentId: string, conversationId: string, itemId: string): { text: string; pruned: boolean; args?: string } | undefined;
   /** Items in order with the marks applied – what the next native rebuild contains (hidden items left out). */

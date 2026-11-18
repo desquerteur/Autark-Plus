@@ -5,6 +5,9 @@
 // theirs (they own it, made it or gave it) and finish what they own – recorded as theirs ('reported_by_human', by their
 // id), never as the owner's answer or approval; a form asking for a password or key is never theirs to answer (secrets
 // go into the owner's vault). Ids are seen from the person's perspective.
+// tasks.quickCreate (the to-do button, the task composer): one quick task with the person's own uploads as files –
+// for themselves ("me"), an agent, a branch or a team they may give to, or, without a target, for the one owner Autark
+// picks among those (people/task-rules.ts decides).
 // F13: a CEO reads the company's work (people/access.ts readsTask) and changes, gives on and drops it like the owner;
 // they finish as done what is not another human's to-do (people answer their own).
 // Owns: these person variants. Never: the owner's handlers, or a change to work that is not theirs.
@@ -15,9 +18,11 @@ import type { TaskFilter, TaskStatus, TaskView } from '../../shared/model/tasks.
 import type { TaskPatch } from '../tasks/service.ts';
 import { formsOf } from '../secrets/capture.ts';
 import { MAX_DECLINE_REASON, declineAnswer } from '../tasks/decline.ts';
-import { bad, capJson, id, input, notFound, onlyKeys, optBool, optId, optNum, optOneOf, optStrings, optText, text, type Obj } from '../rpc/params.ts';
+import { bad, capJson, id, input, notFound, onlyKeys, optBool, optId, oneOf, optNum, optObj, optOneOf, optStrings, optText, text, type Obj } from '../rpc/params.ts';
 import type { HandlerContext, HandlerTable } from '../rpc/table.ts';
-import { chatAccess, membership, readsTask } from './access.ts';
+import { quickCreate } from '../tasks/quick.ts';
+import { attachmentsOf } from '../rpc/handlers/chats.ts';
+import { chatAccess, membership, readsTask, uploadedBy } from './access.ts';
 import { realId, viewTaskFor } from './perspective.ts';
 import { caller } from './rpc-base.ts';
 import { mayChange } from './task-rules.ts';
@@ -91,6 +96,23 @@ export function registerPersonTasks(table: HandlerTable): void {
     }, toOf(person, o));
     return viewTaskFor(ctx.services, person.id, view);
   });
+  table.addPerson('tasks.quickCreate', async (params, ctx) => {
+    const person = caller(ctx);
+    const o = input(params);
+    onlyKeys(o, ['text', 'attachments', 'target', 'priority', 'dueAt', 'clientId']);
+    const raw = optObj(o, 'target');
+    if (raw) onlyKeys(raw, ['kind', 'id'], 'target');
+    const kind = raw ? oneOf(raw, 'kind', ['me', 'agent', 'branch', 'team'] as const) : undefined; // a colleague: through tasks.create
+    const target = kind ? { kind, id: kind === 'me' ? person.id : text(raw!, 'id', { max: 120 }) } : undefined;
+    const attachments = attachmentsOf(ctx.services, o.attachments);
+    if (attachments.some((file) => !uploadedBy(ctx.services.db, person.id, file.fileId))) bad('attachments', 'files you uploaded');
+    const priority = optNum(o, 'priority', { min: 0, max: 2 });
+    const { task } = await quickCreate(ctx.services, {
+      text: optText(o, 'text', { max: 8000, multiline: true, allowEmpty: true }) ?? '', attachments, ...(target ? { target } : {}),
+      priority: priority === undefined ? undefined : ([0, 1, 2] as const)[priority], dueAt: optNum(o, 'dueAt', { min: 0 }), clientId: optText(o, 'clientId', { max: 100 }),
+    }, person.id);
+    return { task: viewTaskFor(ctx.services, person.id, task) };
+  });
   table.addPerson('tasks.update', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
@@ -107,6 +129,13 @@ export function registerPersonTasks(table: HandlerTable): void {
     if ('plan' in raw) patch.plan = optStrings(raw, 'plan', { maxItems: 20, max: 300 }) ?? [];
     if (optOneOf(raw, 'status', ['open'] as const)) patch.status = 'open';
     return viewTaskFor(ctx.services, person.id, ctx.services.tasks.update(task.id, patch, person.id, optNum(o, 'rev', { min: 0 })));
+  });
+  table.addPerson('tasks.undo', (params, ctx) => { // 17.11.2026: takes back the latest logged change of work that is theirs (tasks/changes.ts)
+    const person = caller(ctx);
+    const o = input(params);
+    onlyKeys(o, ['id', 'changeId']);
+    const task = changeable(readable(ctx, person, id(o)), person);
+    return viewTaskFor(ctx.services, person.id, ctx.services.tasks.undo(task.id, person.id, optText(o, 'changeId', { max: 40 })));
   });
   table.addPerson('tasks.give', async (params, ctx) => {
     const person = caller(ctx);

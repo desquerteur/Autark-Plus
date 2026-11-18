@@ -47,6 +47,8 @@ export function fakeLedger() {
     view: () => state.view,
     needsRebuild: () => state.need,
     items: (_a: string, _c: string, opts?: { since?: number }) => [...state.view.map(item), ...state.marked].filter((entry) => entry.order >= (opts?.since ?? 0)),
+    // KI-Runde 17.11.2026: the thread's chat lines (the real ledger adds the agent's own posted words; this fake records none).
+    lines: () => [...state.view.map(item), ...state.marked].filter((entry) => entry.kind === 'message'),
     rebuilt: (_a: string, _c: string, upTo: number) => { state.rebuilt.push(upTo); state.need = undefined; },
     record: () => { throw new Error('not used'); }, original: () => undefined,
     mark: (_a: string, _c: string, marks: Array<{ itemId: string; state: LedgerItem['state']; by: string }>) => { // B-080: the fit's hides leave the view and stand as marks

@@ -8,7 +8,10 @@
 // agents leaves out those that never ran and are in no chat and no task (store/agents.ts listWithArchived).
 // Wave 3: the agent's SYSTEM.md (agent-core/service.ts) is written before an edit that changes the
 // instructions is saved, and a hire gets its folder (setCoreFiles; absent in tests = DB only).
-// Emits 'agent.upserted', 'agent.removed', 'agent.activity' ('space.upserted' via spaces.ts).
+// Emits 'agent.upserted', 'agent.removed', 'agent.activity' ('space.upserted' via spaces.ts); a live status with only a new
+// step note is 'agent.activity' alone (18.11.2026), a changed status both.
+// FIXES-3b F3: an edit that changes the start model (ModelPolicy.pin) ends the agent's older model.set request for another
+// model (agents/next-route.ts startModelSet) – the newest choice holds; an edit of any other field ends nothing.
 // Never: runs agents, or gives the seed Manager a space – it spans all areas; spaces appear when the first agent of an
 // area is hired.
 
@@ -32,6 +35,7 @@ import { cleanText } from './validate.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import { activePerson, personManagerId } from '../people/repo.ts';
 import { reportsUpTo } from '../people/manager.ts';
+import { startModelSet } from '../agents/next-route.ts';
 
 export interface OrgDeps {
   db: Db;
@@ -269,8 +273,11 @@ export class Org implements OrgService {
   setStatus(id: string, status: Agent['status'], note?: string): void {
     if (!STATUSES.includes(status)) throw new WorkforceError('bad_request', 'Invalid agent status.');
     const clean = note === undefined ? undefined : cleanText(note, 'status', 200).slice(0, 200) || undefined;
+    const before = this.agents.get(id)?.status;
     if (!this.agents.setStatus(id, status, clean, this.deps.clock.now())) throw new WorkforceError('not_found', 'This agent no longer exists.');
-    this.deps.bus.emit('agent.upserted', this.require(id));
+    // 18.11.2026 (phone traffic): a new step note travels in agent.activity alone – the whole agent (its SYSTEM.md, ~27 KB)
+    // went to every window and phone and to every agent.upserted listener at each step of every turn (~1 GB a day to one phone).
+    if (before !== status) this.deps.bus.emit('agent.upserted', this.require(id));
     this.emitActivity();
   }
 
@@ -300,6 +307,7 @@ export class Org implements OrgService {
     this.coreFiles?.beforeSave(agent, next); // wave 3: SYSTEM.md first – a refused write saves nothing
     this.agents.save(next);
     const saved = this.require(id);
+    if (agent.modelPolicy?.pin !== saved.modelPolicy?.pin) startModelSet(this.deps.db, id, saved.modelPolicy?.pin); // F3: the newest choice of a model holds
     this.deps.bus.emit('agent.upserted', saved);
     if (Object.hasOwn(patch, 'status') || Object.hasOwn(patch, 'statusNote')) this.emitActivity();
     return saved;

@@ -91,6 +91,25 @@ export interface SupervisorDeps {
   log?: { warn(message: string, data?: Record<string, unknown>): void };
   /** I02: decorates every child's env (undefined = the inherited env); e.g. the safe git env. */
   env?: (env: NodeJS.ProcessEnv | undefined) => NodeJS.ProcessEnv;
+  /**
+   * BEFUND-RUNTIME-JAN §5 (17.11.2026): ends what a heavy lease (an engine CLI) left running after it exited – its
+   * orphaned children. Default: the real one with the real spawn (Windows: one process listing; POSIX: its group);
+   * none with an injected spawn (tests), unless given.
+   */
+  reapOrphans?: (root: { pid: number; since: number; until: number }) => Promise<number>;
+}
+
+/** One line per process: pid, parent pid, creation time in ms (Windows PowerShell, always present). */
+const PROCESS_LIST = "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }";
+
+/**
+ * The orphans of `root` in a process list: its children created while it ran (a child keeps its parent's pid after the
+ * parent ended; a later process reusing the pid has later children), then theirs. Only the top ones are returned – a
+ * tree kill takes their children along.
+ */
+export function orphansOf(list: ReadonlyArray<{ pid: number; parent: number; created: number }>, root: { pid: number; since: number; until: number }): number[] {
+  const slack = 2_000; // clock and listing granularity
+  return list.filter((entry) => entry.parent === root.pid && entry.pid !== root.pid && entry.created >= root.since - slack && entry.created <= root.until + slack).map((entry) => entry.pid);
 }
 
 export class Supervisor {
@@ -100,6 +119,7 @@ export class Supervisor {
   private readonly killTreeFn: (pid: number) => Promise<void>;
   readonly log?: SupervisorDeps['log']; // B-052: also the Codex server's short notes
   private readonly envFn?: SupervisorDeps['env'];
+  private readonly reapFn?: SupervisorDeps['reapOrphans'];
   private readonly active = new Map<number, Lease>();
   private sequence = 0;
 
@@ -113,6 +133,27 @@ export class Supervisor {
     this.log = deps.log;
     this.envFn = deps.env;
     this.killTreeFn = deps.killTree ?? ((pid) => this.defaultKillTree(pid));
+    this.reapFn = deps.reapOrphans ?? (deps.spawn ? undefined : (root) => this.defaultReap(root));
+  }
+
+  /** BEFUND §5: ends the orphans a heavy lease left behind (see SupervisorDeps.reapOrphans); the count it ended. */
+  private async defaultReap(root: { pid: number; since: number; until: number }): Promise<number> {
+    if (this.os.platform !== 'win32') {
+      try { process.kill(-root.pid, 'SIGKILL'); return 1; } catch { return 0; } // its own process group (detached)
+    }
+    const out = await new Promise<string>((resolve) => {
+      let text = '';
+      const lister = this.spawnFn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PROCESS_LIST], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+      const timer = setTimeout(() => { try { lister.kill(); } catch { /* gone */ } resolve(''); }, 20_000);
+      timer.unref?.();
+      lister.stdout?.on('data', (chunk: Buffer) => { text += chunk.toString('utf8'); });
+      lister.once('exit', () => { clearTimeout(timer); resolve(text); });
+      lister.once('error', () => { clearTimeout(timer); resolve(''); });
+    });
+    const list = out.split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number)).filter((parts) => parts.length === 3 && parts.every(Number.isFinite)).map(([pid, parent, created]) => ({ pid: pid!, parent: parent!, created: created! }));
+    const orphans = orphansOf(list, root);
+    for (const pid of orphans) await this.killTreeFn(pid).catch(() => undefined);
+    return orphans.length;
   }
 
   /**
@@ -182,6 +223,14 @@ export class Supervisor {
       if (idleTimer) clearTimeout(idleTimer);
       this.active.delete(id);
       resolveExit(code);
+      // BEFUND §5: a tree kill reaches a CLI's children only while the CLI lives; one that ended by itself (the normal
+      // end after stdin closes) left its background shells, grep and rg running without a parent (12 found 17.11.).
+      if (lease.kind === 'heavy' && child.pid && this.reapFn) {
+        const root = { pid: child.pid, since: lease.startedAt, until: this.now() };
+        void this.reapFn(root).then((count) => {
+          if (count) this.log?.warn('ended processes a CLI left behind', { owner: input.owner, count });
+        }, () => undefined);
+      }
     };
     child.once('exit', (code) => finish(code));
     child.once('error', () => finish(null));

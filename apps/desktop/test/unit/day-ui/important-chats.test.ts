@@ -2,7 +2,7 @@
 // – an agent waits on the person (an open to-do someone else raised there) > important unread >
 // unread (not muted) > an agent working > the person wrote there in the last 24 h – newer activity
 // first within a signal; the briefing's picks first while they still have a signal, with the live
-// reason; at most 5 rows, beyond 3 only strong ones; app chats, agent-only rooms, archived chats and
+// reason; at most three, each with its few words in My day's line; app chats, agent-only rooms, archived chats and
 // people's own chats never count.
 // Owns: these assertions only. Never: the DOM, rpc or real timers.
 
@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import type { ConversationSummary, Member } from '../../../src/shared/model/chat.ts';
 import type { TaskView } from '../../../src/shared/model/tasks.ts';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
-import { CHATS_MAX, importantChats } from '../../../src/ui/day/important-chats.ts';
+import { CHATS_MAX, chatNote, importantChats } from '../../../src/ui/day/important-chats.ts';
 import { peoplesOwnChat as ownedByPeople, rankable as listable, waitingByChat } from '../../../src/shared/model/chat-rank.ts';
 import { rankChats } from '../../../src/runtime/day/briefing-chats.ts';
 import { workingIds } from '../../../src/ui/chat/live-text.ts';
@@ -137,16 +137,31 @@ test('the briefing\'s picks first in its order while they still have a live sign
   assert.equal(rows[0].reason, 'Mara is working', 'the live reason, not the morning\'s count');
 });
 
-test('at most 5 rows; beyond the first 3 only strong ones (picked, waiting, unread)', () => {
+test('at most three, the best first; the briefing\'s picks among them', () => {
+  assert.equal(CHATS_MAX, 3);
   const weak = Array.from({ length: 4 }, (_, index) => chat({ working: [MARA], lastMessageAt: NOW - index * M }));
   assert.equal(rank(weak).length, 3, 'only working chats: 3');
   const strong = Array.from({ length: 7 }, () => chat({ unread: 1 }));
-  assert.equal(rank(strong).length, CHATS_MAX);
+  assert.equal(rank(strong).length, 3);
   const mixed = rank([...weak, chat({ unread: 2 }), chat({ unread: 1 }), chat({ unread: 3 })]);
-  assert.deepEqual(mixed.map((row) => row.signal), ['unread', 'unread', 'unread'], 'three strong fill the first places; no weak one after them');
+  assert.deepEqual(mixed.map((row) => row.signal), ['unread', 'unread', 'unread'], 'three strong fill the line; no weak one after them');
   const picked = rank(weak, [], weak.map((entry) => ({ conversationId: entry.id })));
-  assert.equal(picked.length, 4, 'the briefing\'s picks count as strong');
+  assert.deepEqual(ids(picked), weak.slice(0, 3).map((entry) => entry.id), 'the picks in the briefing\'s order, three of them');
   assert.deepEqual(rank([]), []);
+});
+
+test('the few words after a name: "2 open", "1 important", "3 unread", "working", none for the person\'s own message', () => {
+  const asked = chat();
+  const important = chat({ importantUnread: 1, unread: 4 } as Partial<ConversationSummary>);
+  const unread = chat({ unread: 3 });
+  const working = chat({ working: [MARA] });
+  const recent = chat({ lastPreview: { authorId: HUMAN_ID, text: 'Thanks', at: NOW - H } });
+  const notes = new Map([...rank([asked, important, unread], [todo(asked.id), todo(asked.id)]), ...rank([working, recent])].map((row) => [row.chat.id, chatNote(row)]));
+  assert.equal(notes.get(asked.id), '2 open');
+  assert.equal(notes.get(important.id), '1 important');
+  assert.equal(notes.get(unread.id), '3 unread');
+  assert.equal(notes.get(working.id), 'working');
+  assert.equal(notes.get(recent.id), '');
 });
 
 test('one ranking with the morning briefing (shared/model/chat-rank.ts): the same chats in the same order, never one Home drops', () => {

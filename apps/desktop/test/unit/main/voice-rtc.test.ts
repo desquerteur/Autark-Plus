@@ -170,7 +170,8 @@ test('the page: the take into a stream track (never the speaker), offer after ga
     addEventListener: (type: string, listener: () => void) => { listeners[type] = listener; }, close: () => { log.push('close'); },
   };
   const env: RtcPageEnv = {
-    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 2)),
+    // short waits stay short; the 5/15 s limits get 100 ms – clamped to 2 ms they raced the fake's 1 ms events (18.11.)
+    setTimeout: (fn, ms) => setTimeout(fn, ms >= 5000 ? 100 : Math.min(ms, 2)),
     fetch: async (path, init) => {
       if (path === 'spec') return Response.json({ rate: 16_000, leadMs: 1000, tailMs: 2000, gatherMs: 5000, connectMs: 15000 });
       if (path === 'pcm') return new Response(new Uint8Array([0, 64, 0, 192]));

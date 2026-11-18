@@ -55,7 +55,8 @@
 //    (their important lines steer and cut work of agents the owner shares – also the owner's work in
 //    other chats – so spreading them over chats must not lift the limit); they keep the composer's Important level.
 //  * a message of the person to an agent whose one task in that chat waits on them (tasks/transitions.ts waitIn)
-//    wakes it for that task, so the task can continue – never one the owner wrote in a bridged messenger (C9).
+//    wakes it for that task, so the task can continue – never one the owner wrote in a bridged messenger (C9); the task
+//    stays waiting until its owner changes it (a colleague's line it waits on opens it).
 //  * crash safety (C3, F-44): before the decision model is asked, the lead gets a provisional
 //    durable wake (key `pick:<chat>`, due in 15 s), so a crash or quit during the decision cannot
 //    lose the message. When the decision returns, the picked agents are woken now (`chat:<chat>`)
@@ -77,10 +78,12 @@
 //    quiet line that mentions nobody also tells the dispatcher (quietArrived), so an agent with no turn
 //    running picks it up a little later instead of waiting for unrelated work (after 2 minutes). 13.11.2026: an agent's quiet line
 //    is nobody's to pick up – it is for the record; an @mention in it still reaches that member (an agent into its
-//    running turn, the person as a push);
-//  * the human is notified for non-silent messages in chats they are in, and for an @mention of them in any (an @mention of the
-//    person – by profile name or alias, chat/mentions.ts – and priority 'important' notify as
-//    'important'); agent-only rooms and rooms an agent hid from the list (chat section 'team')
+//    running turn, the person as a notification);
+//  * the human is notified for non-silent messages in chats they are in, and for an @mention of them in any. Priority
+//    'important' notifies as 'important' (it rings); an @mention of the person – by profile name or alias,
+//    chat/mentions.ts – does too when a person wrote it, while an agent's @mention only addresses the line and stays a
+//    'reply' (KI-Runde 17.11.2026: naming whom a line is for is not ringing them – an agent rings with `push`), except in a
+//    chat the person set to "Mentions and tasks", where a mention is what they asked to hear (notify/levels.ts); agent-only rooms and rooms an agent hid from the list (chat section 'team')
 //    never notify. The notification's title is the chat as the owner sees it (B-050 K2, chat/titles.ts):
 //    in a room of two the author's name, with " · topic" when it has one; in a larger room "Author · chat". The chat's level and sound apply
 //    centrally in notify/service.ts.
@@ -218,7 +221,9 @@ export class DeliveryServiceImpl implements DeliveryService {
       const chat = this.s.chats.get(message.conversationId);
       if (chat && chatSection({ settings: chat.settings, members }) === 'team') return; // muted under Team activity
       const external = message.authorKind === 'external';
-      const important = isImportant || (!external && message.mentions.includes(HUMAN_ID));
+      // an agent rings with push only – its @mention rings only where the person set the chat to "Mentions and tasks"
+      const mention = !external && message.mentions.includes(HUMAN_ID) && (message.authorKind !== 'agent' || chat?.settings.notifications === 'mentions');
+      const important = isImportant || mention;
       // External ids end with their display label ('ext:tg:<id>:<name> (Telegram)').
       const author = external ? message.authorId.split(':').pop() ?? message.authorId
         : isPersonId(message.authorId) ? this.s.people?.nameOf(message.authorId) ?? 'Colleague' : this.s.org?.get(message.authorId)?.name ?? message.authorId; // F-52

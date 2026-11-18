@@ -5,13 +5,16 @@
 // subscriptions and those of the other PCs, devices/sync/held-push.ts) – whatever the chat's notification level says,
 // the call is the agent's own decision. Every PC follows call rows on its bus (also synced ones): a newly ringing row
 // rings this PC's window once (host.notify; the window's notice and ring tone come from calls.live,
-// ui/chat/call/call-notices.ts), and the list of ringing and running calls goes out as 'calls.live' when it changes (a
+// ui/chat/call/call-notices.ts) and goes out once as a 'notify' event of kind 'call' (the Android app, which has no web push,
+// shows it as an incoming call notice with Accept and Decline: apps/android CallNotice), and the list of ringing and running calls goes out as 'calls.live' when it changes (a
 // running call only while the PC holding it is this one or reachable – a stopped PC's row would stay "running"; chat.call's
 // current() reads it the same way, so such a row rings anew).
 // The device that accepts takes the row (call-log.ts take); then answered() posts the agent's opening line. A ring
 // nobody takes is missed after RING_MS: its writer writes the end. Any device may decline (any PC writes it; last
-// writer wins). The PC that holds the row when the ring ends closes the phones' ring notices (pwa/read-clear.ts
-// clearNotice, its own call tag) and, for a decline or a missed ring, wakes the agent once with a first-person note.
+// writer wins). Wherever the ring ends, each PC that saw it sends the 'notify' of kind 'call' once more with its time
+// up (until 0, past on any clock), so the app phone's notice stops ringing. The PC that holds the row closes the phones'
+// ring notices (pwa/read-clear.ts clearNotice, its own call tag) and, for a decline or a missed ring, wakes the agent once with a
+// first-person note.
 // An employee's seat PC ('employer' link) neither rings nor lists the owner's calls (employees: after B-080).
 // Owns: rings, the live list, the ring alerts and the decline. Never: holds a device's call (call-log.ts) or audio.
 
@@ -192,7 +195,12 @@ export class Rings {
       this.entries.set(record.id, entry);
       if (state === 'ringing' && entry.timer === undefined) {
         entry.timer = this.deps.timers.set(() => this.expire(record.id), Math.max(0, record.ring!.until - now));
-        if (alert && !before && !this.seat()) quiet(() => void s.host.notify({ title: `${this.nameOf(record.ring!.by)} calls`, body: record.ring!.why, tag: `call:${record.id}` }).catch(() => false), undefined);
+        if (alert && !before && !this.seat()) {
+          const title = `${this.nameOf(record.ring!.by)} calls`;
+          quiet(() => void s.host.notify({ title, body: record.ring!.why, tag: `call:${record.id}` }).catch(() => false), undefined);
+          // the 'notify' event of its own kind (never a toast: the window has its call notice; the ring pushed already)
+          quiet(() => s.bus.emit('notify', { kind: 'call', title, body: record.ring!.why, conversationId: message.conversationId, toast: false, call: { id: record.id, until: record.ring!.until } }), undefined);
+        }
       }
       if (state === 'running' && entry.timer !== undefined) { this.deps.timers.clear(entry.timer); entry.timer = undefined; }
       if (state === 'running' && before?.record.ring && before.record.ring.answeredAt === undefined && record.pc !== pc) this.deps.log.keep(message.id, false); // another PC took the ring
@@ -214,13 +222,16 @@ export class Rings {
     this.emit();
   }
 
-  /** Once per ring, on the PC holding the row: the phones' ring notices close; a decline or a missed ring wakes the agent. */
+  /** Once per ring: every device hears that the ring is over (the app phone's notice); on the PC holding the row the phones' ring notices close and a decline or a missed ring wakes the agent. */
   private ended(message: Message, record: CallRecord, state: string, pc: string | undefined, now: number): void {
     const ring = record.ring!;
     const at = ring.answeredAt ?? ring.declined?.at ?? record.endedAt ?? ring.until;
-    if (record.pc !== pc || this.done.includes(record.id) || now - at > FRESH_MS) return;
+    if (this.done.includes(record.id) || now - at > FRESH_MS) return;
     this.done = [...this.done, record.id].slice(-100);
     const s = this.s;
+    // the ring's own kind once more with its time up: the app phone's call notice goes, wherever the ring was answered or declined
+    quiet(() => s.bus.emit('notify', { kind: 'call', title: `${this.nameOf(ring.by)} calls`, body: ring.why, conversationId: message.conversationId, toast: false, call: { id: record.id, until: 0 } }), undefined); // 0 is past on every clock: a phone whose clock is behind stops too
+    if (record.pc !== pc) return; // the rest is the holding PC's: the web-push notices and the agent's wake
     const { url } = pushTarget({ kind: 'important', conversationId: message.conversationId });
     void clearNotice(s, `call:${record.id}`, this.deps.fetch, { id: record.id, title: `${this.nameOf(ring.by)} calls`, body: ring.why, url })
       .catch((error: unknown) => s.log.debug('ring notices not cleared', { error: String(error) }));

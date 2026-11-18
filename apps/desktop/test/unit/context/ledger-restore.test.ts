@@ -78,13 +78,13 @@ test('verifier K5-3: keep has a room per chat; keep: false lets a part kept for 
   const t = ledgerSetup();
   try {
     const run = t.turn();
-    t.ourCall(run, 'files.read', { path: 'big.log' }, 'x'.repeat(28_000), 'c1'); // B-080 wave 3: 9,340 tokens in chars/3, within KEEP_TOKENS 10,000
-    t.ourCall(run, 'files.read', { path: 'mid.log' }, 'y'.repeat(8_000), 'c2'); // 2,673: together over the room
+    t.ourCall(run, 'files.read', { path: 'big.log' }, 'x'.repeat(28_000), 'c1'); // 17.11.2026: about 14,010 tokens at two characters per token, within KEEP_TOKENS 15,000
+    t.ourCall(run, 'files.read', { path: 'mid.log' }, 'y'.repeat(8_000), 'c2'); // about 4,010: together over the room
     await t.journal.settled();
     const item = (id: string) => t.ledger.items(t.tom.id, 'main').find((entry) => entry.itemId === id)!;
     assert.match(textOf(await restoreTool.run({ ids: ['f1'], keep: true }, ctxOf(t, run))), /^Restored f1 – kept in my context for good\./);
     const over = textOf(await restoreTool.run({ ids: ['f2'], keep: true }, ctxOf(t, run)));
-    assert.match(over, /^Restored f2 – kept in my context for the next 3 turns\.\nNot kept for good: f2 – at most 10000 tokens stay for good; keep: false/);
+    assert.match(over, /^Restored f2 – kept in my context for the next 3 turns\.\nNot kept for good: f2 – at most 15000 tokens stay for good; keep: false/);
     assert.equal(item('f1').pinnedUntil, KEEP_PIN);
     assert.notEqual(item('f2').pinnedUntil, KEEP_PIN, 'beyond the room: the 3-turn pin');
     await restoreTool.run({ ids: ['f1'], keep: false }, ctxOf(t, run));

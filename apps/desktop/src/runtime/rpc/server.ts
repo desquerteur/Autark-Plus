@@ -33,7 +33,8 @@ import { parseFrame } from './connection.ts';
 import type { RpcConnection } from './connection.ts';
 import type { RpcExtras } from './extras.ts';
 import { createHandlerTable } from './handlers/index.ts';
-import { mayReceive, visibleData } from './scopes.ts';
+import { deviceAgent, mayReceive, visibleData } from './scopes.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { scopeDenial, secureScope } from './table.ts';
 import { serveTokenless, type HttpCallMeta } from './tokenless.ts';
 import { personMayReceive, personRemoval, personRights, personView } from '../people/events.ts';
@@ -62,6 +63,8 @@ interface Client {
   closed: boolean;
   /** F-52: a person's rights when the connection was attached (people/events.ts personRights). */
   rights?: string;
+  /** A device's agents as last sent on this connection (scopes.ts deviceAgent). */
+  agents?: Map<string, string>;
   detach(): void;
 }
 
@@ -237,6 +240,10 @@ export class RpcServer {
       if (client.closed || !client.topics.has(topic)) continue;
       if (client.scope.kind === 'person') { this.forwardPerson(client, topic, event, data); continue; }
       if (!mayReceive(client.scope, topic, event, data)) continue;
+      if (event === 'agent.upserted' && client.scope.kind === 'device') { // a phone: no SYSTEM.md again for a status change
+        this.send(client, { event, data: deviceAgent(client.agents ??= new Map(), data as Agent) });
+        continue;
+      }
       const visible = visibleData(client.scope, event, data); // per-scope payload (an external agent's messages)
       this.send(client, visible === data ? (frame ??= { event, data }) : { event, data: visible });
     }

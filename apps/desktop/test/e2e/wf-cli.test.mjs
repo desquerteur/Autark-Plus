@@ -83,7 +83,7 @@ test('wf terminal client against the headless runtime (fake engine)', { timeout:
     const reply = client.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === managerChat.id && message.authorId === manager.id && message.state === 'final' && /From the terminal/.test(message.body), 90_000);
     const sent = await wf(['send', managerChat.id, 'From the terminal', '@Manager'], { data: dataDir });
     assert.equal(sent.code, 0, sent.stderr);
-    assert.match(sent.stdout, /^Sent to .+ \(msg_[0-9a-z]+\)\.\n$/);
+    assert.match(sent.stdout, /^Sent to .+ \(#\d+, msg_[0-9a-z]+\)\.\n$/); // the line's seq, then its id (wf-cli/commands.ts send)
     await reply;
     const read = await wf(['read', managerChat.id, '--limit', '10'], { data: dataDir });
     assert.equal(read.code, 0, read.stderr);

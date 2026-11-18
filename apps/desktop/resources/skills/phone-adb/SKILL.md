@@ -8,6 +8,8 @@ metadata:
 
 # Phone control via ADB
 
+A phone linked through the Autark app needs no ADB: my `phone.*` steps reach it by themselves (skill phone-access).
+ADB is the way to any other phone.
 The phone is the human's personal device: I stay within the task and stop when they say so.
 `device` reaches a phone connected to a linked PC (`devices.list`).
 

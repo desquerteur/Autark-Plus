@@ -3,14 +3,15 @@
 // on the Screen tab Mark a region; Keep tab on an agent's preview tab; All tabs (the list of the surface's tabs, a popover
 // at this cell – TabsMenu.tsx); in the desktop app History (Ctrl+H, a popover at this cell too) and Reopen closed tab; on
 // a computer Full view. B-081: on a file, folder or media-by-path tab "Open on" – This PC and each linked CEO PC
-// (linked-pcs.ts; "Offline" as its hint), the one it is on ticked – opens the same path there in the tab's place. A fixed
+// (linked-pcs.ts; "Offline" as its hint), the one it is on ticked – opens the same path there in the tab's place.
+// 18.11.2026: on a website (this PC's or another's) "Open on" another PC's pane and "Share in chat" (share-tab.ts). A fixed
 // cell; the menu is text only, and over a page the native view hides while it is open (native-surface.ts).
 // Owns: the cell and its items. Never: what they do (pages.ts, file-tabs.ts, send-page.ts, full-view.ts, RegionDialog.tsx).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { modKey, openExternal } from '../lib/platform.ts';
 import { can } from '../lib/session.ts';
-import { isMobile } from '../lib/store.ts';
+import { conversations, isMobile } from '../lib/store.ts';
 import { toastError } from '../lib/toasts.ts';
 import { IconButton, Menu, type MenuSection } from '../lib/ui.tsx';
 import type { TabEntry } from './browser-model.ts';
@@ -21,6 +22,7 @@ import { linkedPcs, watchLinkedPcs } from './linked-pcs.ts';
 import { browserPages, command, goTo, hasPersonalBrowser, historyAsk, openFind, openWebsite, reopenTab, shownEntry, tabsOf } from './pages.ts';
 import { markPage, markScreen } from './RegionDialog.tsx';
 import { sendPageToChat } from './send-page.ts';
+import { shareSections } from './share-tab.ts';
 import { useSpace } from './space.ts';
 import { tabInfosOf } from './tab-list.ts';
 import { AllTabs, copyAddress, keepTab } from './TabsMenu.tsx';
@@ -66,7 +68,8 @@ export function PaneMenu(props: { id: string | undefined }) {
   const tabs = tabInfosOf(space);
   const shownTab = tabs.find((tab) => tab.id === id);
   const kind = shownTab?.kind;
-  const onPcs = openOnSection(tabsOf(space).find((entry) => entry.id === id), space);
+  const shownEntryHere = tabsOf(space).find((entry) => entry.id === id);
+  const onPcs = openOnSection(shownEntryHere, space);
   const website = kind === 'website';
   const page = website ? browserPages.value.find((item) => item.id === id) : undefined;
   const url = page?.url ?? '';
@@ -88,6 +91,8 @@ export function PaneMenu(props: { id: string | undefined }) {
       { label: 'Open in system browser', disabled: !url, onSelect: () => openExternal(url) },
       { label: 'Send page to chat', disabled: !url, onSelect: () => void sendPageToChat(id).catch((error) => toastError(error)) },
     ] }] : []),
+    ...(website ? shareSections(url, space, undefined, linkedPcs.value, conversations.value) : []),
+    ...(shownEntryHere?.kind === 'remote' ? shareSections(shownEntryHere.url, space, shownEntryHere.device, linkedPcs.value, conversations.value) : []),
     ...(kind === 'screen' && can('computer.preview') ? [{ items: [{ label: 'Mark a region', onSelect: () => void markScreen() }] }] : []),
     ...onPcs,
     { items: [

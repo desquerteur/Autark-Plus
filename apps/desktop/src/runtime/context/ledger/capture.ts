@@ -6,7 +6,9 @@
 //   tool_result  our calls (the registry's result, tools/journal.ts) and engine-native calls (tool_end.output,
 //                turn-attempt) → t; knowledge.open of a skill → s; files.read → f (the call's name and args from its tool_call row)
 //   reasoning    a closed block (live: false; a later authoritative text updates it) → r
-//   note         the 'Answer' parts (agents/publishing.ts) and commentary updates → a; a steer note
+//   note         the 'Answer' parts (agents/publishing.ts) and commentary updates → a; the hand-over of a fold turn
+//                ({checkpoint: true, text}, agents/context-fold.ts) → c; my call voice's hand-over steered into the turn
+//                ({relayed: {mode, chars}, text}, agents/dispatch-steer.ts) → a; a steer note
 //                ({steered: {upToSeq, fromSeq, conversationId?}}, agents/dispatch-steer.ts) → the steered lines of that chat as m items at that point
 // Origin = the attempt's engine and model (a failover attaches again with its own). The run is let go when it
 // ends ('run.upserted' with a final status). A context.restore result is condensed to its first line at once: the
@@ -222,11 +224,14 @@ export class LedgerCapture {
       return;
     }
     const answer = item.name === ANSWER && item.data.answer === true;
-    if (!answer && item.data.commentary !== true) return;
+    const checkpoint = item.data.checkpoint === true; // the hand-over a fold turn wrote
+    const relayed = item.data.relayed !== undefined; // my call voice's hand-over steered into this turn ({relayed, text}, agents/dispatch-steer.ts)
+    if (!answer && !checkpoint && !relayed && item.data.commentary !== true) return;
     const text = str(item.data.text).trim();
     if (!text) return;
     this.deps.record(run.agentId, run.thread, {
-      kind: 'assistant', runId: item.runId, ref: `item:${item.id}`, origin: this.origin(run), title: ledgerTitle(text.split('\n')[0], answer ? 'Answer' : 'Update'), text,
+      kind: checkpoint ? 'checkpoint' : 'assistant', runId: item.runId, ref: `item:${item.id}`, origin: this.origin(run),
+      title: ledgerTitle(text.split('\n')[0], checkpoint ? 'Hand-over' : relayed ? 'Live call hand-over' : answer ? 'Answer' : 'Update'), text,
     });
   }
 }

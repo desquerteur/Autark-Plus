@@ -67,7 +67,7 @@ dialog.feedback-overlay:focus-visible { outline: none; }
 
 /* the field (one line to start, it grows with its text up to about six lines, then scrolls) with the mic inside it */
 .feedback-input { position: relative; flex: 1 1 auto; min-width: 0; }
-.feedback-input .set-textarea { height: auto; min-height: 0; max-height: 140px; padding: 8px 44px 8px 12px; overflow-y: auto; resize: none; }
+.feedback-input .set-textarea { height: auto; min-height: 38px; max-height: 140px; padding: 8px 44px 8px 12px; overflow-y: auto; resize: none; }
 :root:not([data-platform=desktop]) .feedback-input .set-textarea { font-size: 16px; } /* a phone zooms into smaller text */
 .feedback-input .mic { position: absolute; right: 4px; bottom: 4px; width: 30px; height: 30px; }
 .feedback-input .mic.active { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
@@ -103,6 +103,18 @@ dialog.feedback-overlay:focus-visible { outline: none; }
   .feedback-dock-row { height: 40px; }
   .feedback-chip { height: 34px; }
   .feedback-paint button { min-height: 32px; }
+  /* feedback 16.11.2026 C2CC3D50 ("Textfeld größer … mehr Platz"): the field starts two lines tall, the recording's
+     empty hint goes (its title keeps it), the note stays one line in small type */
+  .feedback-input .set-textarea { min-height: 64px; }
+  .feedback-shot-hint { width: 120px; }
+  .feedback-shot-hint.empty { display: none; }
+  /* Mika 17.11.: a greyed icon nobody can use (no take yet) is guessing work on a phone – the label stands alone */
+  .feedback-recording:has(.feedback-thumb.empty) { grid-template-columns: auto; }
+  .feedback-thumb.empty { display: none; }
+  .feedback-send { min-width: 0; padding: 0 18px; } /* as wide as its word: the field gets the room */
+  .feedback-shot-text:has(.feedback-shot-hint.empty) { grid-template-rows: auto; }
+  .feedback-privacy-note { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .feedback-message-foot { flex: none; }
 }
 
 /* ---------------------------------------------------------------- the team's inbox */

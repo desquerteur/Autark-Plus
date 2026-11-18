@@ -1,9 +1,9 @@
 // RT9 – the decide tool through the real registry with a fake decision service: the three outcomes
 // (choice / none_fit / unsure with the hint, also without a decision model), a read source whose output
 // reaches only the decision context (never the result or the decide journal items), refused sources
-// (write category, unknown, masked in the mode, invalid arguments – also without a decision model), a
+// (write category, unknown, one that cannot work here, invalid arguments – also without a decision model), a
 // stopped turn, argument bounds (also
-// options differing only in case), the core-tool offer, and the run note { decision } without
+// options differing only in case), the offer in a narrow mode, and the run note { decision } without
 // context. Two cases run the real DecisionHub (a backend's confident "none" ends as none_fit; a
 // stop aborts the backend call).
 // Owns: these assertions only. Never: real engines, network or timers.
@@ -15,6 +15,7 @@ import { Registry } from '../../../src/runtime/tools/registry.ts';
 import { builtinTools } from '../../../src/runtime/tools/builtin/index.ts';
 import { DECIDE_TIMEOUT_MS, STOPPED, UNSURE_HINT, UNSURE_SOURCE_HINT, decideTools } from '../../../src/runtime/tools/builtin/decide.ts';
 import { DecisionHub } from '../../../src/runtime/decision/service.ts';
+import { cannotWork } from '../../../src/runtime/tools/builtin/tools-meta.ts';
 import type { DecisionRequest, RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
 import type { ModeInfo } from '../../../src/shared/model/knowledge.ts';
@@ -35,6 +36,7 @@ function rig() {
   registry.register(tool('files.write', 'write_local', { run: reads('files.write', 'written') }));
   registry.register(tool('web.broken', 'read', { run: async () => ({ content: [{ type: 'text', text: 'HTTP 500' }], isError: true }) }));
   registry.register(tool('files.find', 'read', { inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }, run: reads('files.find', 'found') }));
+  registry.register(tool('phone.ui_tree', 'read', { run: reads('phone.ui_tree', 'screen') })); // no phone is linked here: it cannot work
   const services = h.services as RuntimeServices;
   services.tools = registry;
   const modes = { general: mode('general', ['*']), narrow: mode('narrow', ['chat.*']) } as Record<string, ModeInfo>;
@@ -145,16 +147,19 @@ test('numeric choices reject ambiguous text labels and non-finite or non-scalar 
   assert.equal(h.decisions.calls.length, 0);
 });
 
-test('sources: a write tool, an unknown tool, decide itself, a masked tool and invalid arguments are refused; wire names resolve', async () => {
+test('sources: a write tool, an unknown tool, decide itself, one that cannot work here and invalid arguments are refused; wire names resolve', async () => {
   const { h, ran, decide, reply } = rig();
   const write = await decide({ ...ask, source: { tool: 'files.write', args: { path: 'x', content: 'y' } } });
   assert.equal(write.isError, true);
   assert.match(textOf(write), /files\.write cannot be a source: a source only reads \(its category is write_local\)/);
   assert.match(textOf(await decide({ ...ask, source: { tool: 'files.nope' } })), /^Unknown source tool "files\.nope"/);
   assert.match(textOf(await decide({ ...ask, source: { tool: 'decide' } })), /decide cannot be a source/);
-  const masked = await decide({ ...ask, source: { tool: 'files.list' } }, { mode: 'narrow' });
-  assert.equal(masked.isError, true, 'decide itself runs in the narrow mode (core tool), its source does not');
-  assert.match(textOf(masked), /not available in mode "narrow"/);
+  // KI-Runde 17.11.2026: a mode no longer masks a tool (the offer test below), but a source that cannot work here at
+  // all – a phone tool while no phone is linked – is still refused before anything runs.
+  const noPhone = await decide({ ...ask, source: { tool: 'phone.ui_tree' } });
+  assert.equal(noPhone.isError, true);
+  assert.equal(textOf(noPhone), `${cannotWork('phone.ui_tree')} So it cannot be a source.`, 'the registry’s own reason');
+  assert.deepEqual(ran, [], 'the source never ran');
   assert.match(textOf(await decide({ ...ask, source: { tool: 'files.find', args: {} } })), /^Invalid arguments for the source files\.find:\nquery: required/);
   const broken = await decide({ ...ask, source: { tool: 'web.broken' } });
   assert.match(textOf(broken), /^The source web\.broken gave no output for the decision: HTTP 500/);
@@ -164,7 +169,7 @@ test('sources: a write tool, an unknown tool, decide itself, a masked tool and i
   // The refusal does not depend on a decision model being up.
   h.decisions.up = false;
   assert.match(textOf(await decide({ ...ask, source: { tool: 'files.write' } })), /files\.write cannot be a source/);
-  assert.match(textOf(await decide({ ...ask, source: { tool: 'files.list' } }, { mode: 'narrow' })), /not available in mode "narrow"/);
+  assert.match(textOf(await decide({ ...ask, source: { tool: 'phone.ui_tree' } })), /phone\.ui_tree/);
   assert.equal(h.runItems.filter((item) => item.kind === 'note').length, 0, 'a refused source leaves no decision note');
   h.decisions.up = true;
 
@@ -212,10 +217,15 @@ test('arguments: 2..255 distinct options (also ignoring case), no "none" option,
   assert.equal(many.isError, undefined, '255 options are allowed (the hub chunks them)');
 });
 
-test('decide is a core think tool among the builtins, offered in a mode that masks everything else', () => {
-  const { registry, h, modes } = rig();
+test('decide is a think tool among the builtins, offered in a narrow mode like every other tool that can work here', async () => {
+  const { registry, h, modes, decide, ran } = rig();
   const entry = builtinTools().find((candidate) => candidate.name === 'decide');
   assert.equal(entry?.category, 'think');
   const offered = registry.specsFor(h.org.require('ag_tom'), modes.narrow).map((spec) => spec.name);
-  assert.deepEqual(offered, ['decide']);
+  // KI-Runde 17.11.2026: the mode's patterns shape the core set, not the offer – only a phone tool without a phone drops out.
+  assert.deepEqual(offered, ['decide', 'files.find', 'files.list', 'files.write', 'web.broken']);
+  h.decisions.answer({ choice: 'report-final.pdf', confidence: 0.9, by: 'fake', outcome: 'choice' });
+  const narrow = await decide({ ...ask, source: { tool: 'files.list' } }, { mode: 'narrow' });
+  assert.equal(narrow.isError, undefined, textOf(narrow));
+  assert.deepEqual(ran, [{ name: 'files.list', args: {} }], 'the source ran in the narrow mode too');
 });

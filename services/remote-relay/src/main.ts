@@ -3,11 +3,11 @@
 // RELAY_HOST (default 0.0.0.0; 127.0.0.1 with RELAY_TRUST_PROXY=1, so only the local TLS reverse
 // proxy reaches the raw port and nobody else can claim an X-Forwarded-For address), RELAY_IP_HEADER
 // (with it: the header that carries the client address, cf-connecting-ip behind Cloudflare/Render)
-// and the RELAY_* limits of limits.ts. Logs one line per start/stop and nothing about devices.
+// the RELAY_* limits of limits.ts and RELAY_TUNNELS=off (the emergency stop: no tunnels, meeting goes on). Logs one line per start/stop and nothing about devices.
 // Owns: reading the environment, starting and stopping the server on signals. Never: logic.
 
 import { createRelay } from './relay.ts';
-import { limitsFromEnv } from './limits.ts';
+import { limitsFromEnv, tunnelsFromEnv } from './limits.ts';
 
 const env = process.env;
 const port = Number(env.RELAY_PORT ?? 8787);
@@ -27,6 +27,7 @@ const relay = await createRelay({
   trustProxy,
   ipHeader: env.RELAY_IP_HEADER || undefined,
   limits: limitsFromEnv(env),
+  tunnels: tunnelsFromEnv(env),
   log: (message, data) => console.log(JSON.stringify({ at: new Date().toISOString(), message, ...data })),
 });
 let stopping = false;

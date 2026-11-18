@@ -2,7 +2,8 @@
 // listening chat (marked live), the agent's reply is read aloud and the microphone listens again; nothing
 // heard asks to say it again; speech while a reply is awaited goes out at once; parallel chats (simplest
 // form): the chat started or focused last hears, replies are read one at a time with another chat's title in
-// front; talking over the reading stops it; B-082: every line is heard live (`live: true`), a line that cannot be heard
+// front; talking over the reading stops it; a take said while a line is heard or a reply is read waits and goes out in
+// its order once the loop is free; B-082: every line is heard live (`live: true`), a line that cannot be heard
 // goes as its recording and the call goes on. Each talking chat is a
 // call (calls.start/end, its id on every line; a page without calls talks too); the wait for a reply goes on while an
 // agent of the chat works and opens again when one starts later. B-081: a start with a callId takes that call and reads
@@ -101,16 +102,33 @@ test('utterance → transcription → a live message; the reply is read and the 
   assert.equal(t.mic()?.status, 'listening');
 });
 
-test('no words heard asks to say it again; an utterance while a reply is read is not taken', async () => {
-  const t = setup(['', 'hello', 'not taken']);
+// KI-Runde FIXES-3 E3 (18.11.2026): the main work's call answer as it came in the real run (Codex, line 08) – a bold
+// heading, a paragraph, a link to a file. What is read is its words, and a line that ends without a stop still ends there.
+test('a main work\'s answer with Markdown is read as speech: no markup, the link\'s words, a pause after a line without a stop', async () => {
+  const t = setup(['Schick mir die Website-Texte.']);
+  const view = await t.voice.start('ch_a');
+  await t.voice.utterance(view.id, 'f1');
+  t.reply('ch_a', 'Hier ist die fertige Startseitenfassung:\n\n**Gestaltung, Druck und Webauftritt**\n\nWir unterstützen dich bei Gestaltung, Druck und deinem Webauftritt. Kontaktiere uns – wir freuen uns auf dein Projekt.\n\n[Textdatei öffnen](C:/Users/x/work/calls/website/startseite-neu.txt)');
+  assert.deepEqual(t.spoken, ['Hier ist die fertige Startseitenfassung: Gestaltung, Druck und Webauftritt. Wir unterstützen dich bei Gestaltung, Druck und deinem Webauftritt. Kontaktiere uns – wir freuen uns auf dein Projekt. Textdatei öffnen']);
+  assert.equal(speakable('- Website: 2.000 €\n- Logo: 1.500 €'), 'Website: 2.000 €. Logo: 1.500 €', 'each list line is its own piece');
+});
+
+// KI-Runde 17.11.2026, fix after the review: a take that arrived while the reply was read was dropped without a trace.
+test('no words heard asks to say it again; an utterance while a reply is read waits and goes out when the reading ends', async () => {
+  const t = setup(['', 'hello', 'said over the reply']);
   const view = await t.voice.start('ch_a');
   await t.voice.utterance(view.id, 'f1');
   assert.equal(t.mic()?.hint, REPEAT_HINT);
   assert.equal(t.sent.length, 0);
   await t.voice.utterance(view.id, 'f2');
   t.reply('ch_a', 'Hi.');
-  await t.voice.utterance(view.id, 'f3'); // the echo guard: the reading would be heard
+  assert.deepEqual(t.spoken, ['Hi.']);
+  await t.voice.utterance(view.id, 'f3'); // said while the reply is read: kept, not heard yet
   assert.deepEqual(t.sent.map((line) => line.body), ['hello']);
+  t.voice.spokenDone(view.id);
+  await tick();
+  assert.deepEqual(t.transcribed.map((params) => params.fileId), ['f1', 'f2', 'f3']);
+  assert.deepEqual(t.sent.map((line) => line.body), ['hello', 'said over the reply']);
 });
 
 test('speech while a reply is awaited goes out at once; that reply is then not read', async () => {
@@ -268,4 +286,142 @@ test('B-081: a pin goes into a talking chat as a line of its call and its reply 
   assert.deepEqual(t.sent.map((line) => line.body), ['Pinned on localhost (tab web-1):\nbutton · button.buy', 'und das hier']);
   t.reply('ch_a', 'Zwei Pixel kleiner?');
   assert.deepEqual(t.spoken, ['Zwei Pixel kleiner?']);
+});
+
+// KI-Runde 17.11.2026: words said while the last line was still heard were thrown away.
+test('an utterance said while the last one is heard is kept and goes out as the next line', async () => {
+  const t = setup(['Erstens', 'Zweitens']);
+  const view = await t.voice.start('ch_a');
+  const first = t.voice.utterance(view.id, 'file_1');
+  const second = t.voice.utterance(view.id, 'file_2'); // the first is still being heard
+  await Promise.all([first, second]);
+  await tick();
+  assert.deepEqual(t.transcribed.map((params) => params.fileId), ['file_1', 'file_2']);
+  assert.deepEqual(t.sent.map((line) => line.body), ['Erstens', 'Zweitens']);
+});
+
+// KI-Runde 17.11.2026, fix after the review: the capture hands takes over strictly one after another, so a take that
+// arrived while the reply of the one before was read was lost exactly when the call voice answered quickly.
+test('three takes in the capture\'s order: the first reply is read while the second is heard, and the third still goes out', async () => {
+  const sent: string[] = [];
+  const spoken: string[] = [];
+  const waits = new Map<string, (text: string) => void>();
+  const listeners: Array<(message: Message) => void> = [];
+  let seq = 10;
+  const rpc = {
+    call: async (method: string, params: Record<string, unknown>) => {
+      if (method === 'chats.get') return { id: 'ch_a', title: 'Main', working: [] };
+      if (method === 'calls.start') return { callId: 'call_a', holder: '/device:pc' };
+      if (method === 'voice.transcribe') return await new Promise((resolve) => waits.set(params.fileId as string, (text) => resolve({ text })));
+      if (method === 'messages.send') { sent.push(params.body as string); return { seq: ++seq, meta: { call: { id: 'call_a' } } }; }
+      return { ok: true };
+    },
+    on: (event: string, listener: (message: Message) => void) => { if (event === 'message.created') listeners.push(listener); return () => undefined; },
+    subscribe: async () => () => undefined,
+  } as unknown as ConversationRpc;
+  const voice = new VoiceSessions({ rpc, publish: () => undefined, speak: (_micId, text) => spoken.push(text), silence: () => undefined, newId: () => `id${++seq}`, after: () => () => undefined, language: () => 'de' });
+  const view = await voice.start('ch_a');
+  const chain = (async () => { await voice.utterance(view.id, 'A'); await voice.utterance(view.id, 'B'); await voice.utterance(view.id, 'C'); })();
+  await tick();
+  waits.get('A')!('erster Teil');
+  await tick(); // A's line went out; B is being heard now
+  for (const listener of listeners) listener({ id: 'm_a', conversationId: 'ch_a', seq: ++seq, authorKind: 'agent', authorId: 'ag_ava', kind: 'text', state: 'final', body: 'Antwort auf A.', meta: {} } as unknown as Message);
+  assert.deepEqual(spoken, ['Antwort auf A.'], 'the reply is read while B is still heard');
+  waits.get('B')!('zweiter Teil');
+  await chain;
+  await tick();
+  assert.equal(waits.has('C'), false, 'C waits for the reading to end instead of being thrown away');
+  voice.spokenDone(view.id);
+  await tick();
+  waits.get('C')!('dritter Teil');
+  await tick();
+  assert.deepEqual(sent, ['erster Teil', 'zweiter Teil', 'dritter Teil']);
+});
+
+test('a take held while a held take is heard stays when a reply starts reading meanwhile, and is heard after it (review r2-1 blocker)', async () => {
+  const sent: string[] = [];
+  const spoken: string[] = [];
+  const waits = new Map<string, (text: string) => void>();
+  const listeners: Array<(message: Message) => void> = [];
+  let seq = 10;
+  const rpc = {
+    call: async (method: string, params: Record<string, unknown>) => {
+      if (method === 'chats.get') return { id: 'ch_a', title: 'Main', working: [] };
+      if (method === 'calls.start') return { callId: 'call_a', holder: '/device:pc' };
+      if (method === 'voice.transcribe') return await new Promise((resolve) => waits.set(params.fileId as string, (text) => resolve({ text })));
+      if (method === 'messages.send') { sent.push(params.body as string); return { seq: ++seq, meta: { call: { id: 'call_a' } } }; }
+      return { ok: true };
+    },
+    on: (event: string, listener: (message: Message) => void) => { if (event === 'message.created') listeners.push(listener); return () => undefined; },
+    subscribe: async () => () => undefined,
+  } as unknown as ConversationRpc;
+  const voice = new VoiceSessions({ rpc, publish: () => undefined, speak: (_micId, text) => spoken.push(text), silence: () => undefined, newId: () => `id${++seq}`, after: () => () => undefined, language: () => 'de' });
+  const reply = (body: string) => { for (const listener of listeners) listener({ id: `m${++seq}`, conversationId: 'ch_a', seq, authorKind: 'agent', authorId: 'ag_ava', kind: 'text', state: 'final', body, meta: {} } as unknown as Message); };
+  const view = await voice.start('ch_a');
+  const a = voice.utterance(view.id, 'A');
+  await tick();
+  waits.get('A')!('eins');
+  await a;
+  await tick();
+  reply('Antwort eins.');
+  await voice.utterance(view.id, 'B'); // held: a reply is read
+  voice.spokenDone(view.id); // the reading ends: B is heard
+  await tick();
+  await voice.utterance(view.id, 'C'); // held: B is being heard
+  reply('Antwort zwei.'); // a reply starts reading while B is heard
+  waits.get('B')!('zwei');
+  await tick();
+  assert.equal(waits.has('C'), false, 'C waits while the reply is read');
+  voice.spokenDone(view.id);
+  await tick();
+  assert.ok(waits.has('C'), 'C is heard once the reading ended');
+  waits.get('C')!('drei');
+  await tick();
+  assert.deepEqual(sent, ['eins', 'zwei', 'drei']);
+  assert.deepEqual(spoken, ['Antwort eins.', 'Antwort zwei.']);
+});
+
+test('the program\'s line in my call (no model can answer) is read; a system line of another call or of a page without a call is not', async () => {
+  const t = setup(['Hallo?']);
+  const view = await t.voice.start('ch_a');
+  await t.voice.utterance(view.id, 'file_1');
+  await tick();
+  const system = (seq: number, call?: string) => ({ id: `s${seq}`, conversationId: 'ch_a', seq, authorKind: 'system', authorId: 'system', kind: 'text', state: 'final', body: 'Gerade kann kein Modell antworten.', silent: false, meta: call ? { call: { id: call, participant: 'system', name: 'Autark' } } : {} }) as unknown as Message;
+  t.emit('message.created', system(90, 'call_other'));
+  assert.deepEqual(t.spoken, []);
+  t.emit('message.created', system(91, 'call_ch_a'));
+  assert.deepEqual(t.spoken, ['Gerade kann kein Modell antworten.']);
+
+  const noCall = setup(['Hallo?'], { noCalls: true }); // a person's page talks without a call row
+  const other = await noCall.voice.start('ch_a');
+  await noCall.voice.utterance(other.id, 'file_1');
+  await tick();
+  noCall.emit('message.created', system(92));
+  assert.deepEqual(noCall.spoken, [], 'a system line without a call is not the program speaking in my call');
+});
+
+// KI-Runde 17.11.2026, decision 7.3: the live voice writes its line while it speaks, and nothing was read until it ended.
+test('the live voice\'s row: every finished sentence is read as it completes, the rest when the row is final', async () => {
+  const t = setup(['Wie weit ist der Build?']);
+  const view = await t.voice.start('ch_a');
+  await t.voice.utterance(view.id, 'file_1');
+  await tick();
+  const voiced = (seq: number, body: string, state: Message['state'], call = 'call_ch_a') => ({
+    id: 'm_voice', conversationId: 'ch_a', seq, authorKind: 'agent', authorId: 'ag_ava', kind: 'text', state, body, silent: false,
+    meta: { via: 'voice', call: { id: call, participant: 'agent:ag_ava', name: 'Ava', voice: 'talker' } },
+  }) as unknown as Message;
+  t.emit('message.created', voiced(90, 'Der Build läuft noch', 'streaming'));
+  assert.deepEqual(t.spoken, [], 'nothing is read while the first sentence is unfinished');
+  t.emit('message.updated', voiced(90, 'Der Build läuft noch durch. Danach', 'streaming'));
+  assert.deepEqual(t.spoken, ['Der Build läuft noch durch.'], 'the finished sentence goes at once');
+  t.voice.spokenDone(view.id);
+  t.emit('message.updated', voiced(90, 'Der Build läuft noch durch. Danach schicke ich die Zahlen.', 'final'));
+  assert.deepEqual(t.spoken, ['Der Build läuft noch durch.', 'Danach schicke ich die Zahlen.'], 'only what was not read yet');
+
+  const once = setup(['Und sonst?']);
+  const second = await once.voice.start('ch_a');
+  await once.voice.utterance(second.id, 'file_1');
+  await tick();
+  once.emit('message.created', voiced(90, 'Alles ruhig hier, nichts Neues.', 'final'));
+  assert.deepEqual(once.spoken, ['Alles ruhig hier, nichts Neues.'], 'a row that was final at once is read whole');
 });

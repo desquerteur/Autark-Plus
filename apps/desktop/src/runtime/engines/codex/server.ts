@@ -52,6 +52,8 @@ export interface CodexServerOptions {
   idleMs?: number;
   onLimits?: (params: Record<string, unknown>) => void;
   onExit?: () => void;
+  /** A warning for the runtime log (the reason a connection closed). */
+  log?: (message: string, data: Record<string, unknown>) => void;
 }
 
 /** A file's stamp ("<mtime>:<size>"), '' when it is missing or unreadable. */
@@ -198,8 +200,13 @@ export class CodexServer {
     const client = new RpcClient(lease.child);
     client.handler = (method, params) => this.route(method, params);
     client.onNotification((note) => this.dispatch(note));
-    client.onClose(() => {
+    client.onClose((closed) => {
       if (this.client === client) { this.client = undefined; this.lease = undefined; }
+      // 18.11.2026: the process of a closed connection ends with it. Before, the lease was only forgotten: every closed connection
+      // left its app-server running (four at once on the server), the next call started another, and a thread delete found
+      // its thread "already has an active writer" in the one left behind.
+      void lease.release().catch(() => undefined);
+      if (!/disposed/.test(closed.message)) this.options.log?.('codex connection closed', { account: this.key, reason: closed.message });
       for (const handler of this.threads.values()) handler.onNotification({ method: 'workforce/closed', params: {} });
       this.threads.clear();
       this.options.onExit?.();

@@ -19,6 +19,7 @@ import { ownBytes, type DisplayInfo, type Shot } from './capture.ts';
 import { keyframeRequest, type KeyframeRequest } from './media-keyframes.ts';
 import { audioRequest, type AudioRequest } from './media-audio.ts'; // B-058 T2
 import { imageRequest, type ImageRequest } from './media-image.ts';
+import { previewRequest, type PreviewRequest } from '../shared/model/video-preview.ts'; // 17.11.2026
 import { externalUrl } from './security.ts';
 import type { SideBrowserCall, SideBrowserResult } from '../shared/model/side-browser.ts'; // B-055
 
@@ -52,6 +53,8 @@ export interface HostServicesDeps {
     analyze(request: KeyframeRequest): Promise<Keyframes>;
     audio?(request: AudioRequest): Promise<HostOps['media.audio']['result']>;
     image?(request: ImageRequest): Promise<HostOps['media.image']['result']>;
+    /** 17.11.2026: the light preview copy of a stored video (main/media-preview.ts). */
+    preview?(request: PreviewRequest): Promise<HostOps['media.preview']['result']>;
   };
   /** B-055: agents in the person's side browser (main/side-driver); missing = 'unavailable'. */
   sideBrowser?: (call: SideBrowserCall) => Promise<SideBrowserResult>;
@@ -125,6 +128,7 @@ export class HostServices {
   async handle(request: HostRequest): Promise<unknown> {
     const args = request.args as Record<string, unknown>;
     switch (request.op) {
+      case 'storage.ready': return { available: !this.storageProblem() };
       case 'encrypt': return this.encrypt(args as Args<'encrypt'>);
       case 'decrypt': return this.decrypt(args as Args<'decrypt'>);
       case 'notify': return this.notify(args as Args<'notify'>);
@@ -140,6 +144,7 @@ export class HostServices {
       // B-058 (T2): decoding any recording/video and normalizing images on the media analyzer.
       case 'media.audio': return this.decodeAudio(args as Args<'media.audio'>);
       case 'media.image': return this.prepareImage(args as Args<'media.image'>);
+      case 'media.preview': return this.makePreview(args as Args<'media.preview'>);
       case 'sideBrowser': // B-055: main/side-driver answers when wired
         if (!this.deps.sideBrowser) throw new WorkforceError('unavailable', 'The side browser is not available in this window.');
         return this.deps.sideBrowser(args as unknown as Args<'sideBrowser'>); // main/side-driver checks every field
@@ -175,12 +180,22 @@ export class HostServices {
     this.blockers.clear();
   }
 
-  private secureStorage(): void {
-    if (!this.deps.safeStorage.isEncryptionAvailable()) throw new WorkforceError('unavailable', 'Secure storage is not available on this system.');
+  private storageProblem(): string | undefined {
+    try {
+      if (!this.deps.safeStorage.isEncryptionAvailable()) return 'Secure storage is not available on this system.';
+    } catch { return 'Secure storage is not available on this system.'; }
     let backend: string | undefined;
     try { backend = this.deps.safeStorage.getSelectedStorageBackend?.(); } catch { backend = undefined; }
-    // Linux without a keyring: Chromium would "encrypt" with a fixed key – refuse instead.
-    if (backend === 'basic_text') throw new WorkforceError('unavailable', 'No system keyring is available, so secrets cannot be stored safely.');
+    // Linux without a verifiable keyring: never accept Chromium's fixed-key fallback.
+    if (backend === 'basic_text' || (process.platform === 'linux' && (!backend || backend === 'unknown'))) {
+      return 'No system keyring is available, so secrets cannot be stored safely.';
+    }
+    return undefined;
+  }
+
+  private secureStorage(): void {
+    const problem = this.storageProblem();
+    if (problem) throw new WorkforceError('unavailable', problem);
   }
 
   private encrypt(args: Args<'encrypt'>): Result<'encrypt'> {
@@ -309,6 +324,13 @@ export class HostServices {
     if (!this.deps.media?.image) throw new WorkforceError('unavailable', 'Preparing images is not available in this build of the app.');
     const result = await this.deps.media.image(request);
     return { ...result, data: ownBytes(result.data) };
+  }
+
+  /** 17.11.2026: blob id and MIME type checked here (bad_request) and again by the preview maker; the copy is a temp file of main's own the runtime removes. */
+  private async makePreview(args: Args<'media.preview'>): Promise<Result<'media.preview'>> {
+    const request = previewRequest(args);
+    if (!this.deps.media?.preview) throw new WorkforceError('unavailable', 'Video previews are not available in this build of the app.');
+    return this.deps.media.preview(request);
   }
 
   private keepAwake(args: Args<'keepAwake'>): Result<'keepAwake'> {

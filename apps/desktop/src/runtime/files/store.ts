@@ -191,6 +191,7 @@ export class Blobs implements FileStore, Reclaimer {
     let finish: () => void = () => undefined;
     this.removing.set(id, new Promise<void>((resolve) => { finish = resolve; }));
     try {
+      const preview = new MediaRepo(this.deps.db).previewOf(id); // 17.11.2026: a video's light copy has no row of its own and goes with it
       await rm(this.path(id), { force: true });
       if (this.writing.has(id)) return false; // a put of these bytes waits for us and writes the blob again; its row stays
       this.deps.db.tx(() => {
@@ -198,6 +199,7 @@ export class Blobs implements FileStore, Reclaimer {
         this.repo.remove(id);
       });
       this.stored.delete(id);
+      if (preview && preview !== id) await this.remove(preview); // the copy is a removal of its own: it has no row but its file's, and no other use
       return true;
     } catch (error) {
       this.deps.log.warn('file not removed', { id, error: String(error) });

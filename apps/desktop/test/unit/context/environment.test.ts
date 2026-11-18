@@ -66,15 +66,21 @@ test('stable environment: this PC, the workspace, web and screen lines from the 
   const api = environmentSection(f.services, { ...input, route: { ...route(), engine: 'openai' } }, undefined, WIN);
   assert.ok(api.includes('Web: web.search finds pages (title, link, snippet), web.fetch reads one.'), api);
   assert.ok(!text.includes('Results are outside content'), 'B-049 F5: the rules say once that outside content is data');
+  // KI-Runde 17.11.2026: no line sends web or screen work to another mode or another agent – every tool is in reach.
   const none = environmentSection(bare.services, { agent: bare.vid, mode: GENERAL, route: { ...route(), engine: 'openai' } }, undefined, WIN);
-  assert.ok(none.includes('Web: no web tools in this mode – web work I give a colleague in research mode (tasks.create to them).'), none);
-  assert.ok(none.includes('Screen: the browser and computer tools live in the modes of those names'), none);
+  assert.ok(!none.includes('Web:'), `no web tool registered: no web line – ${none}`);
+  assert.ok(!none.includes('Screen:'), 'no screen tools registered: no screen line');
+  assert.ok(!/colleague in (research|computer) mode/.test(none), none);
+  const fetchOnly = setup({ tools: ['web.fetch'] });
+  const fetchLine = environmentSection(fetchOnly.services, { agent: fetchOnly.vid, mode: GENERAL, route: { ...route(), engine: 'openai' } }, undefined, WIN);
+  assert.ok(fetchLine.includes('Web: web.fetch reads a page whose address I know.'), fetchLine);
   assert.ok(!none.includes('web.search') && !none.includes('browser.*'), 'never a tool the mode does not offer');
   // B-072 (live 03.11.2026: a social agent asked for a sign-in its person's own Chrome already had): a browser-only mode
   // names the person's own browsers and the way to them.
   const browserOnly = setup({ tools: ['browser.act', 'browser.show'] });
   const social = environmentSection(browserOnly.services, { agent: browserOnly.vid, mode: GENERAL, route: route() }, undefined, WIN);
-  assert.ok(social.includes("Screen: browser.* browses websites in my own profile (the person can watch and take over); the person's own browsers on this screen keep their logins and autofill – a colleague in computer mode reaches them (tasks.create to them)."), social);
+  assert.ok(social.includes("Screen: browser.* browses websites in my own profile (the person can watch and take over); the person's own browsers on this screen keep their logins and autofill."), social);
+  assert.ok(!/colleague in computer mode/.test(social), 'the person\'s own browsers need no other mode now');
   assert.ok(!social.includes('computer.*'), 'no computer tool named where the mode has none');
   assert.ok(social.split('\n').includes(`Browser, where: ${whereHint(false)}`), 'B-080: without computer.* the Browser line leaves the person\'s own Chrome out');
   assert.equal(osName({ platform: 'darwin', version: 'Darwin Kernel', release: '24.1.0', hostname: 'mac' }), 'macOS (Darwin 24.1.0)');

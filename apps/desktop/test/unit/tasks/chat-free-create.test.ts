@@ -12,6 +12,7 @@ import { agent, harness } from '../chat/harness.ts';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import { taskSpace } from '../../../src/runtime/tasks/space.ts';
 import type { ChatService } from '../../../src/runtime/contracts.ts';
+import { findDirect } from '../../../src/runtime/chat/direct.ts';
 
 function setup() {
   const h = harness();
@@ -52,14 +53,15 @@ test('space: the creating agent\'s, else the parent\'s; origin: the input, else 
   assert.deepEqual(given.origin, { source: 'approvals', label: 'Mara: Delete item 8' }, 'the caller\'s, cleaned');
 });
 
-test('a chat keeps working as before: the anchor is posted, the owner joins; a missing chat is still refused', () => {
+test('a chat keeps working as before: the anchor is posted; an owner outside a chat of the person gets it in the 1:1 of the giver (KI-Runde 17.11.2026); a missing chat is still refused', () => {
   const h = setup();
   const chat = h.chats.create({ title: 'Launch', agentIds: ['ag_tom'], createdBy: HUMAN_ID });
   const task = h.tasks.create({ conversationId: chat.id, title: 'Prepare the offer', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: HUMAN_ID });
-  assert.equal(task.conversationId, chat.id);
+  assert.equal(task.conversationId, findDirect(h.services, HUMAN_ID, 'ag_mara'), 'a chat of the person keeps its members: the work is in their 1:1 with Mara');
   assert.ok(task.messageId, 'anchored');
   assert.equal(h.chats.message(task.messageId!)?.kind, 'task');
-  assert.ok(h.chats.members(chat.id).some((member) => member.memberId === 'ag_mara'), 'the owner joined');
+  assert.ok(!h.chats.members(chat.id).some((member) => member.memberId === 'ag_mara'), 'nobody is seated in a chat of the person');
+  assert.equal(h.tasks.create({ conversationId: chat.id, title: 'Draft', assigneeKind: 'agent', assigneeId: 'ag_tom', createdBy: HUMAN_ID }).conversationId, chat.id, 'a member keeps the chat');
   assert.equal(task.origin, undefined, 'a chat task needs no origin');
   assert.throws(() => h.tasks.create({ conversationId: 'conv_missing', title: 'x', createdBy: HUMAN_ID }), /Chat not found/);
 });

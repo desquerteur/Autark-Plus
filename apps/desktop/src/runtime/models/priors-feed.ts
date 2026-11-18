@@ -38,9 +38,9 @@ export function feedCopy(json: unknown): Priors | undefined {
 export function adoptCopy(priors: Priors, copy: Priors | undefined): boolean {
   if (!copy) return false;
   if (DATED.test(priors.data.version) && copy.data.version < priors.data.version) return false;
-  if (JSON.stringify(copy.data) === JSON.stringify(priors.data)) return false;
-  priors.adopt(copy);
-  return true;
+  const before = JSON.stringify(priors.data);
+  priors.adopt(copy); // package C: a field the copy does not carry stays, so the comparison is of what the priors hold afterwards
+  return JSON.stringify(priors.data) !== before;
 }
 
 function stored(db: Db): Stored | undefined {

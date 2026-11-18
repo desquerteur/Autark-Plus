@@ -10,7 +10,7 @@
 // migration changes none of them), runs a restore while the database is open (normal mode
 // refuses), or counts an agent's call as the person's (the methods are owner-only).
 
-import { copyFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DiagnosticsExport, RepairState, StartProblem } from '../../shared/model/repair.ts';
 import { WorkforceError } from '../../shared/errors.ts';
@@ -42,7 +42,16 @@ export interface RepairDeps {
   problem?: StartProblem;
   now?: () => number;
   log?: Logger;
+  /** A crash loop starts normally again by itself after this long (default 2 min; 0 = never). */
+  autoRetryMs?: number;
 }
+
+/** 18.11.2026: a crash loop after a cold boot (three starts that the host killed for being slow) stood on the repair screen for
+ *  1.5 h until someone pressed Retry – the whole company stood still. It now retries once by itself, at most twice an hour. */
+export const AUTO_RETRY_MS = 120_000;
+const AUTO_RETRY_MAX = 2;
+const AUTO_RETRY_WINDOW_MS = 3_600_000;
+const AUTO_RETRY_FILE = 'boot-auto-retry.json';
 
 export class RepairService {
   private readonly deps: RepairDeps;
@@ -50,6 +59,24 @@ export class RepairService {
 
   constructor(deps: RepairDeps) {
     this.deps = deps;
+    if (deps.problem?.code === 'crash_loop' && (deps.autoRetryMs ?? AUTO_RETRY_MS) > 0) {
+      const timer = setTimeout(() => { void this.autoRetry(); }, deps.autoRetryMs ?? AUTO_RETRY_MS);
+      timer.unref?.();
+    }
+  }
+
+  /** The crash loop's own Retry, when this hour has not used its two yet (boot-auto-retry.json: the times of the last ones). */
+  private async autoRetry(): Promise<void> {
+    const file = path.join(this.deps.dataDir, AUTO_RETRY_FILE);
+    const now = (this.deps.now ?? Date.now)();
+    let times: number[] = [];
+    try { const read = JSON.parse(readFileSync(file, 'utf8')) as unknown; if (Array.isArray(read)) times = read.filter((n): n is number => typeof n === 'number'); } catch { /* none yet */ }
+    times = times.filter((at) => now - at < AUTO_RETRY_WINDOW_MS);
+    if (times.length >= AUTO_RETRY_MAX) { this.deps.log?.warn('repair: crash loop stays (two automatic retries in the last hour)', {}); return; }
+    try { writeFileSync(file, `${JSON.stringify([...times, now])}
+`, { mode: 0o600 }); } catch { /* the retry still runs */ }
+    this.deps.log?.info('repair: automatic retry after a crash loop');
+    try { await this.retry(); } catch (error) { this.deps.log?.warn('repair: automatic retry failed', { error: String(error) }); }
   }
 
   get active(): boolean { return this.deps.problem !== undefined; }
@@ -78,6 +105,7 @@ export class RepairService {
   restore(id: string): Promise<{ ok: true; kept: string }> {
     return this.once(async () => {
       this.assertActive();
+      if (this.deps.problem?.code === 'keyring_unavailable') throw new WorkforceError('conflict', 'Set up the system keyring before restoring data.');
       const source = typeof id === 'string' ? upgradeBackupFile(this.deps.dataDir, id) : undefined;
       if (!source) throw new WorkforceError('not_found', 'This copy is no longer there.', { details: { id } });
       const copy = listUpgradeBackups(this.deps.dataDir).find((info) => info.id === id);

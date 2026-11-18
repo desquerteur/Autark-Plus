@@ -48,7 +48,7 @@ import { readsTake, serviceLanguage, type LocalSpeech } from './local/service.ts
 import { systemEnvironment } from '../settings/defaults.ts';
 import { canListen, listenerReady, listenTranscript } from './listen-transcribe.ts';
 import { audioExtension, endpointHeard, partialNote, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
-import type { Listener } from '../decision/engine-runner.ts';
+import type { Listener } from '../decision/listener.ts';
 import { planMissing, planReady, planTranscribe, type PlanTranscription } from './plan-transcribe.ts';
 import { correctDictation } from './correct-dictation.ts';
 import { helperOf } from '../day/helper.ts';
@@ -71,7 +71,7 @@ export interface TranscriberDeps {
   timeoutMs?: number; // per request, default 120 s
   /** This PC's local speech models (absent: the service and listener only). */
   local?: LocalSpeech;
-  /** The listening turn (default: decision/engine-runner.ts createListener over the services; tests). */
+  /** The listening turn (default: decision/listener.ts createListener over the services; tests). */
   listener?: Listener;
   /** The OS locale (default: Intl, settings/defaults.ts systemEnvironment). */
   systemLocale?: () => string;
@@ -288,7 +288,7 @@ export class Transcriber implements VoiceApi, SpeechToText {
   }
 
   localModels(): LocalSpeechModels { return this.localSpeech().models(); }
-  pullLocal(id: string): Promise<{ ok: true }> { return this.localSpeech().pull(id); }
+  pullLocal(id: string, options?: { choose?: () => boolean }): Promise<{ ok: true }> { return this.localSpeech().pull(id, options); }
   /** `signal`: the caller gave up (stop, deadline) – the local voice speaks no further sentence (local/engine.ts). */
   speak(input: { text: string; voice?: string; language?: string; signal?: AbortSignal }): Promise<SpokenAudio> { return this.localSpeech().speak(input); }
 

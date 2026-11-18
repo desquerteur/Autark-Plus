@@ -167,6 +167,8 @@ const LIMIT_NOTES: Record<string, string> = {
   table: `Max ${LIMITS.tableRows} rows; columns: [string | {key,label,align?}], rows: [[…]] or [{…}].`,
   chart: `Max ${LIMITS.chartPoints} points; "y" may be one key or a list of keys (several series).`,
   choice: `Max ${LIMITS.choiceOptions} options: [string | {label,value?,hint?}].`,
+  record: 'Voice-over: with "video" the person hears nothing and speaks to the picture; the take is a WAV whose second 0 is second 0 of the video (audio/wav, attached). Up to 200 lines, text ≤ 400 characters, start < end, a line may overlap the one before by 0.3 s at most.\n'
+    + 'Example: {"type":"record","video":"exports/drone-v3.mp4","cues":[{"text":"Welcome to the valley.","start":0,"end":3.5},{"text":"Here the camera turns left.","start":4,"end":9}],"instructions":"Speak calmly"}',
 };
 
 const EXAMPLES: Record<string, string> = {

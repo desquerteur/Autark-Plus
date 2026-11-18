@@ -14,8 +14,13 @@
 // shows another holder in the synced row lets it go without an end (`taken`): a late line of the old device still joins
 // that call (start returns its id) instead of opening a second bubble. A row another PC holds now is not ended here at
 // the next start.
-// Owns: the open calls, their rows and lines, the takes, and the list of them kept for the next start (kv 'calls'/'open').
-// Never: audio, wakes, rings, another PC's call row while it holds it, or a line's own row.
+// KI-Runde 17.11.2026: the calls open here are the live state everything else reads – `running` and `inCall` say which
+// calls run on this PC and whether an agent is in one (the context fold starts no turn then), and `onEnd` tells the call's
+// voice that it ended, so it can do its last act with the whole call in its session (talker.ts) – `onStart` that it opened,
+// so the voice's session opens with it. A call that leaves this PC without an end (another PC took it, its row was
+// deleted) is told as such: its voice closes without a hand-over.
+// Owns: the open calls, their rows and lines, the takes, the list of them kept for the next start (kv 'calls'/'open') and
+// who is told of an end. Never: audio, wakes, rings, another PC's call row while it holds it, or a line's own row.
 
 import { WorkforceError } from '../../shared/errors.ts';
 import { HUMAN_ID, SYSTEM_ID, newId } from '../../shared/ids.ts';
@@ -32,6 +37,9 @@ const KV_KEY = 'open';
 const LISTING = `SELECT id FROM messages WHERE conversation_id = ? AND kind = 'status' AND instr(meta, ?) > 0`;
 
 interface OpenCall { id: string; rowId: string; conversationId: string; device: CallDevice; seq: number; off: () => void }
+
+/** KI-Runde 17.11.2026: a call running on this PC right now – its chat, so the fold and the voice can read the live state. */
+export interface RunningCall { callId: string; conversationId: string }
 
 const quiet = <T>(read: () => T, fallback: T): T => { try { return read(); } catch { return fallback; } };
 
@@ -68,6 +76,19 @@ export function callRowId(s: Pick<RuntimeServices, 'db'>, conversationId: string
   return quiet(() => s.db.get<{ id: string }>(`SELECT id FROM messages WHERE conversation_id = ? AND kind = 'status' AND json_extract(meta, '$.call.id') = ? LIMIT 1`, [conversationId, callId])?.id, undefined);
 }
 
+/**
+ * KI-Runde 17.11.2026 (decision 8.3): whether that call is still running – a ring nobody took yet counts, an ended call
+ * does not. Read from the call's own row, so it holds on every PC. Unknown call: false.
+ */
+export function callRunning(s: Pick<RuntimeServices, 'db' | 'chats' | 'clock'>, conversationId: string, callId: string): boolean {
+  const rowId = callRowId(s, conversationId, callId);
+  const row = rowId ? quiet(() => s.chats.message(rowId), undefined) : undefined;
+  const record = row ? callRecord(row) : undefined;
+  if (!record) return false;
+  const state = callState(record, quiet(() => s.clock.now(), Date.now()));
+  return state === 'running' || state === 'ringing';
+}
+
 /** Changes a call row's record; the row is saved and announced (it syncs) when it changed. False without such a row. */
 export function writeCallRow(s: RuntimeServices, rowId: string, change: (record: CallRecord) => CallRecord): boolean {
   try {
@@ -95,6 +116,10 @@ export class CallLog {
   private readonly listening: Array<() => void>;
   /** Calls another device took from this PC (newest last, bounded): a late line of the old device joins them. */
   private taken: string[] = [];
+  /** Who is told that a call of this PC ended (the call voice's hand-over; `handOver` false: it left this PC another way). */
+  private ending: Array<(conversationId: string, callId: string, handOver: boolean) => void> = [];
+  /** Who is told that a call opened on this PC (the call voice opens its session). */
+  private starting: Array<(conversationId: string, callId: string) => void> = [];
 
   constructor(services: () => RuntimeServices) {
     this.services = services;
@@ -189,12 +214,43 @@ export class CallLog {
     call.off();
     this.write(call.rowId, (record) => ({ ...record, endedAt: this.s.clock.now() }));
     this.keep(call.rowId, false);
+    // KI-Runde 17.11.2026 (decision 8.4): the call's voice does its last act with the whole call in its session.
+    this.tell(call, true);
+  }
+
+  /** The listeners of a call's end; `handOver` false: it left this PC without an end here (taken by another PC, its row deleted). */
+  private tell(call: OpenCall, handOver: boolean): void {
+    for (const listener of this.ending) { try { listener(call.conversationId, call.id, handOver); } catch (error) { this.s.log.warn('call end listener failed', { callId: call.id, error: String(error) }); } }
+  }
+
+  /** KI-Runde 17.11.2026: told when a call of this PC ends (the voice's hand-over, wiring.ts); returns its end. */
+  onEnd(listener: (conversationId: string, callId: string, handOver: boolean) => void): () => void {
+    this.ending.push(listener);
+    return () => { this.ending = this.ending.filter((other) => other !== listener); };
+  }
+
+  /** KI-Runde 17.11.2026 (decision 7.1): told when a call opens on this PC – started or taken (the voice opens its session); returns its end. */
+  onStart(listener: (conversationId: string, callId: string) => void): () => void {
+    this.starting.push(listener);
+    return () => { this.starting = this.starting.filter((other) => other !== listener); };
+  }
+
+  /** KI-Runde 17.11.2026: the calls running on this PC right now (the fold asks whether its agent is in one). */
+  running(): RunningCall[] {
+    return [...this.calls.values()].map((call) => ({ callId: call.id, conversationId: call.conversationId }));
+  }
+
+  /** Whether an agent of this company is in a call running on this PC right now (a member of its chat). */
+  inCall(agentId: string): boolean {
+    return this.running().some((call) => quiet(() => this.s.chats.members(call.conversationId), []).some((member) => member.memberId === agentId && member.kind === 'agent' && member.leftAt === undefined));
   }
 
   /** Shutdown: the calls are let go; their rows end at the next start (endLeftOpen), when the end can travel. */
   stop(): void {
     for (const call of this.calls.values()) call.off();
     this.calls.clear();
+    this.ending = []; // a shutdown is no end of a call: the voice's own stop() handles its open lines
+    this.starting = [];
     for (const off of this.listening.splice(0)) off();
   }
 
@@ -234,7 +290,7 @@ export class CallLog {
    */
   private follow(conversationId: string, messageId: string, message?: Message): void {
     for (const call of [...this.calls.values()]) {
-      if (!message && call.rowId === messageId) { this.calls.delete(call.id); call.off(); this.keep(call.rowId, false); }
+      if (!message && call.rowId === messageId) { this.calls.delete(call.id); call.off(); this.keep(call.rowId, false); this.tell(call, false); }
     }
     const s = this.s;
     const rows = quiet(() => s.db.all<{ id: string }>(LISTING, [conversationId, JSON.stringify(messageId)]), []);
@@ -256,14 +312,15 @@ export class CallLog {
     signal?.addEventListener('abort', ended, { once: true });
     this.calls.set(call.id, { ...call, off: () => signal?.removeEventListener('abort', ended) });
     this.keep(call.rowId, true);
-    if (signal?.aborted) this.end(call.id);
+    if (signal?.aborted) { this.end(call.id); return; }
+    for (const listener of this.starting) { try { listener(call.conversationId, call.id); } catch (error) { this.s.log.warn('call start listener failed', { callId: call.id, error: String(error) }); } }
   }
 
   /** B-081: an open call's row shows another holder (another device took it, here or by sync): it goes without an end. */
   private left(message: Message): void {
     const record = callRecord(message);
     const call = record ? this.calls.get(record.id) : undefined;
-    if (record && call && call.rowId === message.id && this.holder(call.id) !== callHolder(record)) this.letGo(call);
+    if (record && call && call.rowId === message.id && this.holder(call.id) !== callHolder(record)) { this.letGo(call); this.tell(call, false); }
   }
 
   /** The call is another device's now: no end is written, and a late line of the old device still joins it (start). */

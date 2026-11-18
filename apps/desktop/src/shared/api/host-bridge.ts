@@ -18,6 +18,7 @@ import type { SideBrowserCall, SideBrowserResult } from '../model/side-browser.t
 import type { PointerPoint } from '../model/pointers.ts'; // B-055 F1
 import type { SideCastUpdate, SideCommand, SidePage } from '../model/side-view.ts'; // B-076
 import type { CompanyStart } from '../model/companies.ts'; // B-078
+import type { VideoPreview } from '../model/video-preview.ts'; // 17.11.2026
 
 export const HOST_BRIDGE_PROTOCOL = 1;
 
@@ -26,6 +27,7 @@ export type PowerEvent = 'resume' | 'suspend' | 'lock' | 'unlock' | 'online';
 
 /** Ops the runtime may ask the host for, with argument and result types. */
 export interface HostOps {
+  'storage.ready': { args: Record<string, never>; result: { available: boolean } };
   encrypt: { args: { plain: string }; result: { cipher: Uint8Array } };
   decrypt: { args: { cipher: Uint8Array }; result: { plain: string } };
   /** Native notification; result.clicked is true when the user clicked it (false on close/timeout). */
@@ -54,6 +56,8 @@ export interface HostOps {
   'media.audio': { args: { fileId: string; mime?: string; startMs?: number; maxMs?: number }; result: DecodedAudio };
   /** B-058 G10: a stored image (blob id) normalized by main's media analyzer – JPEG/PNG, longest edge ≤ maxPx, optionally a region (IMAGE_LIMITS). */
   'media.image': { args: { fileId: string; mime?: string; maxPx?: number; region?: ImageRegion }; result: NormalizedImage };
+  /** 17.11.2026: a light copy of a stored video (blob id) made by main's hidden preview window (main/media-preview.ts) – H.264/MP4, short edge ≤ 720, ≈ 2.5 Mbit/s, index in front (PREVIEW_LIMITS); the result names a temp file the runtime stores and removes. */
+  'media.preview': { args: { fileId: string; mime?: string }; result: VideoPreview };
   /** B-072: opens a company on this PC (main/companies.ts; create: a new folder first); this window goes to the tray. */
   'company.open': { args: { id?: string | null; create?: boolean; start?: CompanyStart }; result: { ok: true; id: string | null } };
   /**
@@ -133,12 +137,13 @@ export interface NormalizedImage { data: Uint8Array; mime: 'image/jpeg' | 'image
 export type HostOp = keyof HostOps;
 
 export const HOST_OPS: readonly HostOp[] = [
-  'encrypt', 'decrypt', 'notify', 'openExternal', 'openPath', 'screenshot', 'displays', 'idleSeconds',
+  'storage.ready', 'encrypt', 'decrypt', 'notify', 'openExternal', 'openPath', 'screenshot', 'displays', 'idleSeconds',
   'keepAwake', 'releaseAwake', 'setBadge',
   'runtime.restart', 'runtime.booting', // MM7
   'media.analyze', // MM4
   'sideBrowser', // B-055
   'media.audio', 'media.image', // B-058
+  'media.preview', // 17.11.2026
   'company.open', // B-072
   'company.remove', // 16.11.2026
   'sideCast', 'sideInput', 'sideNav', // B-076

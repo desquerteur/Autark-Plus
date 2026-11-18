@@ -5,7 +5,7 @@
 // instructions come from the template only). Placed in the template's area (areaKind/forKind in
 // org/spaces.ts), a same-kind manager's first.
 // Every new agent starts from the standard SYSTEM.md of its kind (org/standard.ts: resources/prompts/standard-manager.md
-// for mode manager, else standard-agent.md, or the person's own version in <data>/prompts) – "# How I work", then
+// for a hire from a leading template – manager, head –, else standard-agent.md, or the person's own version in <data>/prompts) – "# How I work", then
 // "## My role" with the template's or creator's text right below its lines, then "## What I have here" – and makes it its
 // own in its first turn (the standard's role part says so; skill system-prompt). The creator's instructions are the new
 // agent's "who you are"; for a template hire by an agent they stand below the template's body (withTemplateBody). A text that begins with "## My role" is the whole own part; one that begins with "# How I work" is
@@ -27,7 +27,7 @@ import { freeFirstName } from './first-names.ts';
 import { areaKind } from './spaces.ts';
 import { HAVE_HEADING, hasHavePart, isRoleHeading, ownHowIWork, WORK_HEADING } from './system-parts.ts';
 import { cleanMode, cleanName, cleanSkills, cleanText } from './validate.ts';
-import { standardKind, type StandardKind } from './standard.ts';
+import { LEAD_TEMPLATES, standardKind, type StandardKind } from './standard.ts';
 
 export type CreateInput = Parameters<OrgService['create']>[0];
 
@@ -139,7 +139,7 @@ export function hiredAgent(input: CreateInput, org: HireFacts): Agent {
     createdAt: now,
     updatedAt: now,
   };
-  agent.instructions = withSystemMd(body, org.systemMd?.({ role }, standardKind(agent.mode)));
+  agent.instructions = withSystemMd(body, org.systemMd?.({ role }, standardKind(template !== undefined && LEAD_TEMPLATES.has(template.key))));
   // After validation (no space left behind by a refused hire): the area, a same-kind manager's first.
   const area = areaKind(template);
   if (!agent.spaceId && area) agent.spaceId = org.spaceForKind(area, boss?.spaceId)?.id;

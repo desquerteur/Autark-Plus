@@ -45,6 +45,7 @@ export interface RelayClientDeps {
   timers?: Timers;
   random?: () => number;
   socket?: (url: string) => WebSocket;
+  now?: () => number;
 }
 
 const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
@@ -83,6 +84,9 @@ export class RelayClient {
   private ready = false;
   private status: RelayStatus = 'off';
   private error?: string;
+  /** 18.11.2026: the server refused or closed a tunnel today – its daily byte budget is used up ('quota') or tunnels are
+   * switched off ('off', the emergency stop). Only the fallback is gone; meeting and direct links go on. */
+  private held?: { why: 'quota' | 'off'; day: string };
   private attempt = 0;
   private retry?: unknown;
   private watchdog?: unknown;
@@ -109,8 +113,9 @@ export class RelayClient {
     this.timers = deps.timers ?? realTimers;
   }
 
-  state(): { status: RelayStatus; url?: string; error?: string; online: string[]; tunnels: string[] } {
-    return { status: this.status, ...(this.url ? { url: this.url } : {}), ...(this.error ? { error: this.error } : {}), online: [...this.present.keys()], tunnels: [...new Set([...this.tunnels.values()].map((tunnel) => tunnel.peer))] };
+  state(): { status: RelayStatus; url?: string; error?: string; held?: 'quota' | 'off'; online: string[]; tunnels: string[] } {
+    const held = this.held?.day === today(this.deps.now?.() ?? Date.now()) ? this.held.why : undefined;
+    return { status: this.status, ...(this.url ? { url: this.url } : {}), ...(this.error ? { error: this.error } : {}), ...(held ? { held } : {}), online: [...this.present.keys()], tunnels: [...new Set([...this.tunnels.values()].map((tunnel) => tunnel.peer))] };
   }
 
   /** Relay address from settings (undefined/empty = off). A change reconnects at once. */
@@ -164,6 +169,7 @@ export class RelayClient {
     const { e, cipher } = toBox(box, TUNNEL_INFO);
     const es = b64url(this.deps.identity.sign(Buffer.from(tunnelText(e, box), 'utf8')));
     const reply = await this.ask({ t: 'open', to: fp, e, es }, 'opened', OPEN_TIMEOUT_MS);
+    if (reply.held === 'quota' || reply.held === 'off') this.hold(reply.held); else this.held = undefined; // held: a signalling tunnel
     const tid = reply.tid;
     if (!Number.isInteger(tid)) throw unavailable('The meeting server did not open a tunnel.');
     return this.track(new RelayTunnel(tid as number, fp, this.link(tid as number), cipher));
@@ -245,13 +251,17 @@ export class RelayClient {
         else if (typeof frame.fp === 'string') this.gone(frame.fp);
         return;
       case 'incoming': return this.incoming(frame);
-      case 'closed': if (Number.isInteger(frame.tid)) this.tunnels.get(frame.tid as number)?.ended(); return;
+      case 'closed':
+        if (frame.code === 'quota') this.hold('quota');
+        if (Number.isInteger(frame.tid)) this.tunnels.get(frame.tid as number)?.ended();
+        return;
       case 'pair': return this.pairIn(frame);
       default: {
         const pending = typeof frame.ref === 'number' ? this.pending.get(frame.ref) : undefined;
         if (!pending || (frame.t !== pending.expect && frame.t !== 'error')) return;
         this.pending.delete(frame.ref as number);
         this.timers.clear(pending.handle);
+        if (frame.t === 'error' && (frame.code === 'quota' || frame.code === 'off')) this.hold(frame.code);
         if (frame.t === 'error') pending.reject(unavailable(`The meeting server refused this (${String(frame.code).slice(0, 20)}).`));
         else pending.resolve(frame);
       }
@@ -366,6 +376,8 @@ export class RelayClient {
   }
 
   /** The socket ended: everything on it ends, and (still configured) a reconnect is scheduled. */
+  private hold(why: 'quota' | 'off'): void { this.held = { why, day: today(this.deps.now?.() ?? Date.now()) }; }
+
   private closed(code: number): void {
     const wasReady = this.ready;
     this.drop();
@@ -417,6 +429,9 @@ export class RelayClient {
     this.deps.events.changed();
   }
 }
+
+/** The server's UTC day (its budgets start at 0 each day). */
+const today = (at: number) => new Date(at).toISOString().slice(0, 10);
 
 function socketError(error: unknown): string {
   const code = (error as { code?: unknown })?.code;

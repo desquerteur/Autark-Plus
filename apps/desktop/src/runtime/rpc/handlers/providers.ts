@@ -21,7 +21,10 @@
 // B-083: models.setPolicy for one agent (no chat) stores who set its start model – a changed pin `pinBy` = the person's
 // name (the profile name; devices are the owner's) and the time, an unchanged pin keeps its origin, no pin or 'auto'
 // none; a `pinBy` the caller sends (a getPolicy → setPolicy round trip) is ignored. accounts.update takes `credits` (an
-// API key holding a plan's monthly credits; the account service refuses it where no plan credits exist).
+// API key holding a plan's monthly credits; the account service refuses it where no plan credits exist) and `extraUsage`.
+// 17.11.2026 (Konrad task_bgykyzcx): what makes a plan login usable or lets a plan spend – accounts.useFound, accounts.declineFound,
+// accounts.add `detected` ("Add again"), accounts.update `extraUsage: true` (the provider bills it) and `thisPcOnly` (which PCs get the login) – is the person's click:
+// the desktop window or the phone (secure, 'settings'); an agent's `wf`, a script with the launch token and a `wf` by hand are refused.
 // Never: business logic, and never echoes or logs API keys –
 // `accounts.add` hands the key straight to the account service, which stores it encrypted (an
 // environment key arrives as its variable's name only).
@@ -32,8 +35,11 @@ import { DECISION_PROVIDER, ENV_KEY_PROVIDERS, type ModelPolicy, type ProviderId
 import { tryDecisionConnection } from '../../decision/systemone.ts';
 import { bad, id, input, notFound, obj, oneOf, onlyKeys, optBool, optId, optNum, optOneOf, optStrings, optText, text, type Obj } from '../params.ts';
 import { scopeHas } from '../table.ts';
+import type { ClientScope } from '../../../shared/api/protocol.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 import { returnChoice } from '../../agents/next-route.ts';
+import { boundaryOf } from '../../agents/boundary.ts';
+import { MAIN_THREAD } from '../../../shared/model/origin.ts';
 import { personName } from '../../agents/publishing.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { tryAccount } from '../../accounts/try-turn.ts';
@@ -147,6 +153,19 @@ async function openOnPc<T>(ctx: HandlerContext, result: T): Promise<T> {
   return result;
 }
 
+/**
+ * The person's own click: the desktop window or their phone - not an agent's `wf` (owner scope with agentId), not the launch token alone.
+ * Any `device` scope passes here; what keeps a device that is no person's out is the registration: every handler that asks personOnly is added with
+ * ACCOUNTS (`capability: 'settings', secure: true`, the rpc table's own check) - a handler added without it is open to every device.
+ */
+function byThePerson(scope: ClientScope): boolean {
+  return scope.kind === 'device' || (scope.kind === 'owner' && scope.window === true && !scope.agentId);
+}
+
+function personOnly(ctx: HandlerContext, what: string): void {
+  if (!byThePerson(ctx.scope)) throw new WorkforceError('forbidden', `${what} is the person's own click in Settings › Accounts – an agent or a script cannot do it for them.`);
+}
+
 /** A refresh asks providers / the catalog again: the owner and 'manage' devices only. */
 function mayRefresh(ctx: HandlerContext, params: unknown): boolean {
   return (optBool(input(params), 'refresh') ?? false) && scopeHas(ctx.scope, 'manage');
@@ -162,6 +181,7 @@ export function register(table: HandlerTable): void {
     // PR5: `envVar` names a key variable of the one table (its value never travels), `detected` = "Add again".
     const envVar = optOneOf(o, 'envVar', ENV_KEY_NAMES);
     const detected = optBool(o, 'detected');
+    if (detected) personOnly(ctx, 'Adding a found sign-in again');
     return ctx.services.accounts.add({
       provider: oneOf(o, 'provider', PROVIDERS),
       label: optText(o, 'label', { max: 80 }),
@@ -173,8 +193,8 @@ export function register(table: HandlerTable): void {
   }, ACCOUNTS);
   table.add('accounts.update', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['id', 'label', 'priority', 'enabled', 'credits']);
-    const patch: { label?: string; priority?: number; enabled?: boolean; credits?: boolean } = {};
+    onlyKeys(o, ['id', 'label', 'priority', 'enabled', 'credits', 'extraUsage', 'thisPcOnly']);
+    const patch: { label?: string; priority?: number; enabled?: boolean; credits?: boolean; extraUsage?: boolean; thisPcOnly?: boolean } = {};
     const label = optText(o, 'label', { max: 80 });
     if (label !== undefined) patch.label = label;
     const priority = optNum(o, 'priority', { min: -10_000, max: 10_000 });
@@ -183,7 +203,26 @@ export function register(table: HandlerTable): void {
     if (enabled !== undefined) patch.enabled = enabled;
     const credits = optBool(o, 'credits'); // B-083: the key holds a plan's monthly API credits (shared/model/charge.ts)
     if (credits !== undefined) patch.credits = credits;
+    const extraUsage = optBool(o, 'extraUsage'); // 17.11.2026: the plan goes on past its limit on the provider's extra usage (billed by the provider)
+    if (extraUsage === true) personOnly(ctx, 'Allowing a plan\'s extra usage');
+    if (extraUsage !== undefined) patch.extraUsage = extraUsage;
+    const thisPcOnly = optBool(o, 'thisPcOnly'); // 17.11.2026: a plan login stays on this PC, or goes to the company's PCs (the person's choice either way)
+    if (thisPcOnly !== undefined) { personOnly(ctx, 'Choosing where a sign-in is used'); patch.thisPcOnly = thisPcOnly; }
     return ctx.services.accounts.update(id(o), patch);
+  }, ACCOUNTS);
+  // 17.11.2026: a plan login on offer (accounts.detect → found) is used here only after the person's "Use"; "Not here" keeps it out
+  table.add('accounts.useFound', (params, ctx) => {
+    personOnly(ctx, 'Using a found sign-in');
+    const o = input(params);
+    onlyKeys(o, ['key', 'thisPcOnly']);
+    return ctx.services.accounts.useFound?.(text(o, 'key', { max: 300 }), { thisPcOnly: optBool(o, 'thisPcOnly') ?? true }) ?? notFound('Found sign-ins');
+  }, ACCOUNTS);
+  table.add('accounts.declineFound', async (params, ctx) => {
+    personOnly(ctx, 'Declining a found sign-in');
+    const o = input(params);
+    onlyKeys(o, ['key']);
+    await (ctx.services.accounts.declineFound?.(text(o, 'key', { max: 300 })) ?? notFound('Found sign-ins'));
+    return { ok: true as const };
   }, ACCOUNTS);
   // B-051 L4: the person's own UI gets the sign-in page the CLI printed (`url`; agent tools never do).
   // B-091: from a device (the phone) the sign-in is "away" – finished there (code/paste), the code back via accounts.loginCode.
@@ -271,19 +310,22 @@ export function register(table: HandlerTable): void {
     const agent = ctx.services.org.get(id(o, 'agentId')) ?? notFound('Agent');
     const mode = ctx.services.modes.get(optText(o, 'mode', { max: 80 }) ?? agent.mode);
     const conversationId = optId(o, 'conversationId');
-    // RT5: like a turn (agents/turn-prepare.ts), my last done run (any chat – one context) is the choice the return
-    // rule keeps (a pending model.set request is not consumed by a preview); a chat's model choice never routes
-    // (13.11.2026), so a chat's preview is what Auto runs. `ignorePin` = what the agent page's "nothing chosen"
-    // option would run: without a chat the agent's own pin does not answer.
+    // RT5: like a turn (agents/turn-prepare.ts), the model the agent is on (its session's, else its last done run's – any
+    // chat, one context) is where the preview starts, and – 17.11.2026, the model settles – it asks like the turn whether
+    // the agent's context starts anew anyway (agents/boundary.ts): in a live session the next turn stays on that model (a
+    // pending model.set request is not consumed by a preview); a chat's model choice never routes (13.11.2026), so a
+    // chat's preview is what Auto runs. `ignorePin` = what the agent page's "nothing chosen" option would run: without a
+    // chat the agent's own pin does not answer.
     const ignorePin = optBool(o, 'ignorePin');
     const { pin: _pin, ...unpinned } = agent.modelPolicy ?? {};
-    const previous = conversationId ? returnChoice(ctx.services.runs.list(agent.id, PREVIEW_RUNS), undefined) : undefined;
+    const boundary = conversationId ? boundaryOf(ctx.services, agent.id, MAIN_THREAD) : undefined;
+    const previous = conversationId ? returnChoice(ctx.services.runs.list(agent.id, PREVIEW_RUNS), undefined, { on: boundary?.on?.modelId }) : undefined;
     return ctx.services.router.route({
       agent: ignorePin && !conversationId ? { ...agent, modelPolicy: unpinned } : agent,
       conversationId,
       mode,
       text: optText(o, 'text', { max: 20_000, multiline: true, allowEmpty: true }),
-      ...(previous ? { previous } : {}),
+      ...(previous ? { previous } : {}), ...(boundary ? { boundary: boundary.at } : {}),
     });
   }, MANAGE);
   table.add('catalog.refresh', async (_params, ctx) => {

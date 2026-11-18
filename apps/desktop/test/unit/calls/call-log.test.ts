@@ -16,6 +16,7 @@ import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import { CallLog, writeCallRow } from '../../../src/runtime/calls/call-log.ts';
 import { DevicesRepo, type DeviceRecord } from '../../../src/runtime/devices/repo.ts';
 import { createCalls, stopCalls } from '../../../src/runtime/calls/wiring.ts';
+import { fakeVoice } from './voice-fake.ts';
 import { register as calls } from '../../../src/runtime/rpc/handlers/calls.ts';
 import { agent, harness } from '../chat/harness.ts';
 import { OWNER, PHONE, TestClient, rpcFixture, s1Table } from '../rpc/s1-helpers.ts';
@@ -145,8 +146,12 @@ test('a stop lets calls go; the next start ends them at their last line, announc
 
 test('B-081 take: another device of this PC takes the call over – no end, no second row; a late line of the old one joins it', () => {
   const h = setup();
+  const told: string[] = [];
+  h.log.onStart((_chat, callId) => told.push(`start ${callId}`));
+  h.log.onEnd((_chat, callId, handOver) => told.push(`end ${callId} ${handOver}`));
   const id = h.log.start(h.chat.id, PC);
   const taken = h.log.take(h.chat.id, id, PHONE_DEVICE);
+  assert.deepEqual(told, [`start ${id}`, `start ${id}`], 'the voice hears of the start (and of the take: it keeps its session), no end');
   assert.deepEqual([taken.callId, taken.answered, taken.holder], [id, false, '/device:dev_phone']);
   assert.deepEqual([h.record(id).participant, h.record(id).name, h.record(id).endedAt], ['device:dev_phone', 'Pixel', undefined]);
   assert.equal(h.log.start(h.chat.id, PC, undefined, id), id, 'a late line of the PC window joins the call');
@@ -158,14 +163,24 @@ test('B-081 take: another device of this PC takes the call over – no end, no s
   assert.ok(h.record(id).endedAt !== undefined);
   assert.throws(() => h.log.take(h.chat.id, id, PC), /already ended/);
   assert.throws(() => h.log.take(h.chat.id, 'call_none', PC), /Call not found/);
+  assert.deepEqual(told.at(-1), `end ${id} true`);
+
+  // A call whose row is deleted leaves this PC: its voice hears it, without a hand-over (review r2-2 finding 9).
+  const gone = h.log.start(h.chat.id, PC);
+  const row = h.chats.messages(h.chat.id, { limit: 20 }).find((m) => callRecord(m)?.id === gone)!;
+  h.bus.emit('message.removed', { id: row.id, conversationId: h.chat.id } as never);
+  assert.deepEqual(told.at(-1), `end ${gone} false`);
 });
 
 test('B-081 take by another PC: the synced row with another holder lets the call go here without an end; the next start leaves it', () => {
   const h = setup();
   new DevicesRepo(h.db).upsert({ id: 'dev_book', name: 'laptop', kind: 'pc', role: 'home', fingerprint: 'fp_book', addresses: [], caps: {}, status: 'online', self: true });
+  const ends: string[] = [];
+  h.log.onEnd((_chat, callId, handOver) => ends.push(`${callId} ${handOver}`));
   const id = h.log.start(h.chat.id, PC);
   const rowId = h.chats.messages(h.chat.id, { limit: 10 }).find((m) => callRecord(m)?.id === id)!.id;
   writeCallRow(h.services as RuntimeServices, rowId, (record) => ({ ...record, participant: 'device:pc', name: 'office-pc', pc: 'dev_server' })); // as the sync applies it
+  assert.deepEqual(ends, [`${id} false`], 'the voice here closes its session without a hand-over: the other PC holds the call now');
   h.say('Said on the other PC');
   assert.equal(h.record(id).lines.length, 0, 'this PC writes its lines no more');
   h.log.end(id, PC.key);
@@ -190,7 +205,7 @@ test('rpc: calls.start and calls.end with the connection\'s device; its connecti
   const f = rpcFixture({ table });
   t.after(f.cleanup);
   f.org.add(agent('ag_jonas', 'Jonas'));
-  createCalls(f.services as RuntimeServices, { run: async () => ({ text: '', by: 'x' }) });
+  createCalls(f.services as RuntimeServices, { voice: fakeVoice(() => '').opener });
   t.after(() => stopCalls(f.services));
   const chat = f.chats.create({ agentIds: ['ag_jonas'], createdBy: HUMAN_ID });
   const owner = new TestClient(f.server, OWNER);
@@ -215,7 +230,7 @@ test('B-081 rpc: calls.live lists a ring; calls.start with its id answers it wit
   t.after(f.cleanup);
   f.org.add(agent('ag_jonas', 'Jonas'));
   Object.assign(f.services, { secrets: { redact: (text: string) => text } });
-  const { rings } = createCalls(f.services as RuntimeServices, { run: async () => ({ text: '', by: 'x' }) });
+  const { rings } = createCalls(f.services as RuntimeServices, { voice: fakeVoice(() => '').opener });
   t.after(() => stopCalls(f.services));
   const chat = f.chats.create({ agentIds: ['ag_jonas'], createdBy: HUMAN_ID });
   const owner = new TestClient(f.server, OWNER);

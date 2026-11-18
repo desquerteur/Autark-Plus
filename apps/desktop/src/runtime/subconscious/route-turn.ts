@@ -1,71 +1,70 @@
-// Unterbewusstsein v1 (14.11.2026, owner 13.11.: "wie schwierig ist diese Anfrage … ein gutes Modell für den ersten Turn … vordenken"): the
-// look before a turn is one call, not a run. The cheap model reads who the agent is, the person's standing words about models and work
-// (the start model with its effort and who set it, "What I have here" of its SYSTEM.md – review 14.11.: the person's word outweighs the
-// call's weighing only when the call sees it), what wakes the turn (the person's message, a colleague's, else its task), the chat before
-// it, what a switch costs right now and the models the turn can run on now – the router's own pool, per tier, with their strong and weak
-// kinds of work (offeredModels, modelLines; the main AI's own models line stays as it is, for its cache) –, and sets the coming turn's
-// model and effort – never 'none': thinking stays on (owner 09.11.) – as the subconscious's one-step request (agents/next-route.ts, by
-// 'subconscious') – the router takes it before the person rule, a chat's suggestion or the previous model (router.ts
-// step 2). A turn runs on one model, so the choice by its hardest part, before it starts, is the thinking ahead.
-// E3 (.local/unterbewusstsein-20261113/e3-routing): on person turns too-weak picks 11 → 1 of 60; E4 (live): a switch on a warm cache cost more
-// than it saved – so the switch cost is computed here from the last turn (CACHE_WARM_MS, CACHE_COLD_MS) and given as a fact, never assumed.
-// The caller's signal is the turn's stop and its wait (service.ts ROUTE_WAIT_MS): an answer that comes after it sets nothing, so
-// it never shapes a later turn. requestHolds runs first on every turn: a step this call set for an earlier message ends (a turn that
-// never reached its engine leaves it stored), and a request of the agent itself (model.set) or of its task holds the turn's model and
-// effort whole (review 14.11.: the call replaced such a request with its temperature) – the call then leaves out the route.
+// Unterbewusstsein v1 (14.11.2026, owner 13.11.: "wie schwierig ist diese Anfrage … vordenken"): the look before a turn is one
+// call, not a run. The cheap model reads who the agent is, the person's standing words about how to work ("What I have here" of
+// its SYSTEM.md – review 14.11.: the person's word outweighs the call's weighing only when the call sees it), what wakes the turn
+// (the person's message, a colleague's, else its task) and the chat before it, and sets the coming turn's effort – never 'none':
+// thinking stays on (owner 09.11.) – as the subconscious's step for that one turn (agents/next-route.ts, by 'subconscious').
+// 17.11.2026 (the model settles; measured 15.–17.11.: the call caused 77 model switches, 64 on a live cache, 36 onto the small
+// tier inside contexts of 100k–880k tokens, its reasons repeating the prompt's own tier list; its 418 effort-only changes held –
+// a receipt took 9 s at low against 27 s at high): the call names no model. Its text has no tier list, no model list and no
+// stay-or-switch weighing; its answer has one question per field – the hardest part, whether it can be misread and whether a
+// path must be chosen are its own weighing before it names the effort, and the effort with its why is what code takes. The model is the router's
+// (routing/router.ts: the model the session is on, changed at a boundary).
+// The caller's signal is the turn's stop and its wait (service.ts): an answer that comes after it sets nothing, so it never
+// shapes a later turn. requestHolds runs first on every turn: a step this call set for an earlier message ends (a turn that
+// never reached its engine leaves it stored), and an effort already decided – the agent's own request (model.set), its task's
+// or its fixed effort – holds (review 14.11.: the call replaced such a request) – the call then leaves the effort out.
 // v2 (owner 15.11.2026: "Es gibt nur das Unterbewusstsein", one call with its own system prompt; 13:27: the three-hits rule goes, the
 // model condenses, no hand-off to a bigger model): the call the turn waits for also reads the word search's hits for what wakes the
 // turn and opens the ones it chooses as the main AI's own calls (look.ts); one system prompt, ROUTE_SYSTEM, also explains the context.
+// On a slow lane the call runs beside a turn that started already (`beside`, service.ts): it sets no effort and only opens
+// hits, and a `probe` runs it with none, so the lane is measured.
 // Beside it, on the same model and system prompt, condenseTurn reads the biggest items still whole in the agent's context and
-// condenses those whose job is done – it does not hide (measured 15.11.: every value and critical item it lost beyond code's was a
-// hide). Two calls at once, not one: with the items in it the call the turn waits for took 17–22 s instead of 7 (12 items) or
-// 13 s (5), past the wait; the marks only reach the session at the next rebuild, so nothing needs them before the turn. The switch
-// line also says whether another effort keeps the cache on the engine and model the agent ran on (effortKeepsCache, with its sources).
-// Owns: these two calls, their prompts (turnFacts, standingWords, switchLine, offeredModels + modelLines) and the request. Never: waits longer than
-// the caller allows, offers a model the router would not run for the turn, sets the effort 'none', or replaces a request of the agent's
-// own or of its task.
+// says for each one whether its job is done (17.11.2026, measured: with one list of items to condense, 35 were condensed although
+// the note said to keep them – the model lists an item to say something about it); a done one is condensed – it does not hide
+// (measured 15.11.: every value and critical item it lost beyond code's was a hide). Two calls at once, not one: with the items
+// in it the call the turn waits for took 17–22 s instead of 7 (12 items) or 13 s (5), past the wait; the marks only reach the
+// session at the next rebuild, so nothing needs them before the turn.
+// What another effort costs (effortCost): measured, an effort change keeps the cache on Claude Code and Codex, whose cache
+// lives an hour; on our own API engines the effort shapes the rendered prompt, so while their five-minute cache lives
+// (cacheLife) another effort writes the context into it again – the line says so with the price table's write and read
+// price (models/pricing.ts cachePrices), and only there.
+// Each call hands back the model that answered and its tokens for the log line (service.ts).
+// FIXES-3 D1: the why on the run's route is for the person – in their language (routeSystem) and about how heavy the turn is;
+// my text says what wakes a turn is asked of the main AI, which does the work with its own tools.
+// Owns: these two calls, their prompts (routeSystem, turnFacts, standingWords, effortCost) and the step. Never: waits longer than the caller
+// allows, names or sets a model, sets the effort 'none', or replaces an effort the agent, its task or its fixed setting decided.
 
-import type { RouteRequest, RuntimeServices } from '../contracts.ts';
+import type { RuntimeServices } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
-import type { Account, Effort, ModelInfo } from '../../shared/model/providers.ts';
+import type { Effort } from '../../shared/model/providers.ts';
 import type { StructuredRunner } from '../decision/types.ts';
 import { EFFORT_ORDER } from '../models/efforts.ts';
-import { catalogModel, pendingRoute, setNextRoute, takeNextRoute, type NextRoute } from '../agents/next-route.ts';
-import { CACHE_COLD_MS } from '../agents/rebuild.ts';
+import { pendingRoute, setNextRoute, takeNextRoute } from '../agents/next-route.ts';
+import { CACHE_COLD_MS } from '../agents/compaction-policy.ts';
 import { coreInstructions } from '../agent-core/prompt.ts';
 import { splitAtHave } from '../org/hire.ts';
-import { priceText, sourceOf, specialistKinds, strengthOverview } from '../routing/model-facts.ts';
-import { chatChoice, effectivePolicy } from '../routing/policies.ts';
+import { chatChoice } from '../routing/policies.ts';
 import { suggestionNow } from '../chat/suggestion-fresh.ts';
-import { buildPool } from '../routing/pool.ts';
-import { resolvePin, settingsPin } from '../routing/pins.ts';
-import { resolveCategory } from '../routing/categories.ts';
-import { isPaid, tierRank } from '../routing/score.ts';
-import { dayText } from '../knowledge/age.ts';
-import { profileZone } from '../context/time.ts';
+import { priorFor } from '../models/catalog-merge.ts';
+import { cachePrices } from '../models/pricing.ts';
+import { Priors } from '../models/priors.ts';
 import { languageName } from '../context/environment.ts';
 import { askContext } from './exchange.ts';
 import { contextItems, hitLines, itemLines, markItems, openHits, searchHits } from './look.ts';
 import { MAIN_THREAD } from '../../shared/model/origin.ts';
 import type { TraceCall } from '../../shared/model/subconscious.ts';
 
-export const ROUTE_SYSTEM = `I am the main AI's subconscious. Before its coming turn I set the model and effort it runs on, open what it will need from its knowledge and keep its context lean. A turn runs on one model from what wakes it – the person's message, a colleague's or its task – to its reply, so I choose before it starts, by the hardest part the turn will meet: the work it sets going, not its length. The first reply often settles which reading and which path the next turns follow, so a weak start costs more than a strong model.
-
-The model follows the kind of work:
-- Small: something checkable against what is given, with nothing hanging on meaning or tone – navigating a mailbox, opening or clicking what is named, a status, a receipt or hand-over to take note of, a fact or a sum, going on after someone did their part, writing down an instruction for later.
-- Middle: a long chain of careful steps on a way already set – going on with prepared work, working through a list, searching sources against given criteria, sorting by rules already given, a question of fact that needs looking up.
-- Strongest: judgment – what the person meant when it can be read more than one way, a path nobody gave, a decision, a text people will read or keep, money or something that cannot be undone, code that has to work, a correction of the main AI's own mistake.
+export const ROUTE_SYSTEM = `I am the main AI's subconscious. I set the effort a turn runs at, open what it will need from its knowledge and keep its context lean. What wakes a turn is asked of the main AI, which does the work with its own tools; I do none of it and weigh how heavy it is. The fields I am asked for are the ones that still hold for this turn, and the line about the coming turn says how it runs. A turn runs at one effort from what wakes it – the person's message, a colleague's or its task – to its reply, so I set it before it starts, by the hardest part the turn will meet: the work it sets going, not its length. The first reply often settles which reading and which path the next turns follow, so a start that thinks too little costs more than one that thinks well.
 
 The effort follows what is still open: low for what can be checked against what is given; medium for a clear step on a set way whose result shows at once; high – the normal for real work – wherever meaning, tone or a choice matters; xhigh for code across several parts, a bug of unknown cause, a design choice, edge cases that must hold, or a result the person was unhappy with; max where xhigh fell short. One level up when the message can be misread, a miss would be seen or cost real money, or several things must fit together; one down when it is one of many identical steps or its result is checked right away.
 
-What the person said about models or how to work – in this chat, in the agent's standing facts and agreements, or with the start model and effort they set – outweighs my weighing. A model the person picked in this chat for their newest message is what they want now: my start, which I leave only for a clear reason. One they suggested earlier and left standing is a hint from before – the work decides.
-Staying on the model the agent runs on is my default, and the effort is what I turn first: another model first reads the whole context uncached at its own input price. What that costs right now is stated below – on a cold cache any model reads uncached, so the choice is free; on a warm one a switch is worth it only for a stretch of work that clearly needs another kind of model: real judgment coming after routine, or the reverse – a strong model about to carry on with plenty of routine that does not need it, which I move back down. One turn's nuance is no reason. A turn takes about 6 model calls, so the model's price counts six times over.
+What the person said about how to work – in this chat or in the agent's standing facts and agreements – outweighs my weighing, and an effort they picked in this chat for their newest message is what they want now.
 
-A word search ran over the agent's knowledge – its memory, skills, references, documents and the secrets catalog (names and handles, never values) – with the words of what wakes the turn; its hits stand below with how each begins. An entry I open reaches the main AI before it starts and stays in its context, paid again on every later call. So I open an entry only when I can say what it changes in this turn – a rule it has to follow, a fact it has to use, a way of working it would otherwise get wrong, the login or key it will sign in or work with – and I say that with it. A hit on the same topic that changes nothing in what the turn does stays closed; most messages need none, and the main AI can still search for itself.
+A word search ran over the agent's knowledge – its memory, skills, references, documents and the secrets catalog (names and handles, never values) – with the words of what wakes the turn; its hits stand below with how each begins. An entry I open reaches the main AI – before its turn while that turn waits for me, else at its next turn – and stays in its context, paid again on every later call. So I open an entry only when I can say what it changes in this turn – a rule it has to follow, a fact it has to use, a way of working it would otherwise get wrong, the login or key it will sign in or work with – and I say that with it. A hit on the same topic that changes nothing in what the turn does stays closed; most messages need none, and the main AI can still search for itself.
 
-Everything in the main AI's context is paid again on every later model call and dilutes its attention, so I keep it lean; the biggest items still whole in it stand below. An item is still needed while the coming work will read it again or act on something that stands only there. Its job is over once what it was for went into what came after – the main AI's answer, a file it wrote, a later status that replaced it, a step that is done –, however long the task it belongs to still runs: that its topic is still open does not tell. Such an item I condense: in its place stays my note of what still matters from it – a result, a decision, an open point, in a few words –, code adds every id, path, file name and link in it, and a stamp brings the original back, so nothing I set aside loses what later work may look up. A skill or instruction the coming work still follows stays. What I leave, code condenses once its work is finished.
+Everything in the main AI's context is paid again on every later model call and dilutes its attention, so I keep it lean; the biggest items still whole in it stand below. An item is still needed while the coming work will read it again or act on something that stands only there. Its job is done once what it was for went into what came after – the main AI's answer, a file it wrote, a later status that replaced it, a step that is done –, however long the task it belongs to still runs: that its topic is still open does not tell. A done item is condensed: in its place stays my note of what still matters from it – a result, a decision, an open point, in a few words –, code adds every id, path, file name and link in it, and a stamp brings the original back, so nothing I set aside loses what later work may look up. A skill or instruction the coming work still follows is not done. What I leave, code condenses once its work is finished.
 
-I answer with the JSON asked for: the hardest part in a few words, whether it can be misread, whether a path must be chosen, the model (its name exactly as listed), the effort, and why in one short sentence in the language the person writes in; then the hits I open, each with what it changes, and the items I condense, each with my note – by their ids, empty where nothing fits.`;
+I answer with the JSON asked for. Each field is one question and I answer each on its own: the hardest part in a few words, whether it can be misread, whether a path must be chosen, the effort, and why – how heavy this turn is for the main AI, in one short sentence the person reads in the run log; the hits I open, each with what it changes; and for every item shown whether its job is done, with my note for a done one.`;
 
 const PROMPT_CHARS = 4000;
 const WHY_CHARS = 200;
@@ -77,84 +76,9 @@ const EFFORTS: readonly Effort[] = EFFORT_ORDER.filter((effort) => effort !== 'n
 const WAKE_LABEL = { person: "The person's new message:", colleague: "The colleague's message that wakes the main AI:", task: 'The task that wakes the main AI:' } as const;
 /** The agent's newest runs the prompt's lines read for its last turn. */
 const RECENT_RUNS = 50;
-/** Within this time after the last call a provider's prompt cache is still there (Anthropic's default life 5 min, OpenAI's in-memory cache 5–10 min); up to CACHE_COLD_MS it may be (review 14.11.). */
-const CACHE_WARM_MS = 5 * 60_000;
 
-/** At most this many models per tier in the call's list (the smartest of each), so the strongest, middle and small kinds all show. */
-const PER_TIER = 4;
-
-/** What the call reads to choose: the turn's mode, the text that wakes it (its kind of work), whether it shows an image, its chat. */
-export interface TurnWork { mode?: string; text: string; vision?: boolean; conversationId?: string }
-
-/** A model the call can name, with the account the router runs it on (how a turn is paid). */
-export interface Offer { model: ModelInfo; account: Account }
-
-/**
- * The models the call can name: the router's own pool for this turn (routing/pool.ts buildPool – connected and healthy now, its needs
- * met, inside the policy's bounds and the mode's tier, a paying key only where the router spills over to one), so each name it gives is
- * one the turn runs (re-review 14.11.: a name from a wider list – a cooling key's twin, a paid one – left the turn where it was). One
- * model per name, a plan's before a paying key's; per tier the PER_TIER smartest, the strongest tier first – and always the models the
- * person or the work already stand on: `start`, what the router runs with no request (the agent's start model, even outside the band,
- * router.ts step 1; else the Work model of Settings, step 3), the chat's suggestion and the model of my last turn (review 14.11.: past
- * the cap the call had to name another and overrode the person's start model) – a last turn on an older version offers its family's
- * newest instead (owner 14.11.: never Fable 5.1 while 5.2 runs; routing/pool.ts entryFor).
- */
-export function offeredModels(services: RuntimeServices, agent: Agent, work: TurnWork): { offers: Offer[]; start?: ModelInfo } {
-  try {
-    let mode: ReturnType<RuntimeServices['modes']['get']> | undefined;
-    try { mode = work.mode ? services.modes.get(work.mode) : undefined; } catch { mode = undefined; } // an unknown mode: no tier, its kind from the text
-    const models = services.catalog.list();
-    const category = resolveCategory(mode?.category, work.text);
-    const policy = effectivePolicy(services, agent);
-    const pool = buildPool({ s: services, models, category, policy, ...(work.vision ? { needs: { vision: true } } : {}), ...(mode?.minTier ? { minTier: mode.minTier } : {}) });
-    const entries = pool.entries.filter((entry) => !specialistKinds(entry.model));
-    /** `newest`: an older version offers its family's newest (my last turn on it); the person's chip offers its own model. */
-    const inPool = (id: string | undefined, newest = false): Offer | undefined => {
-      const named = id ? resolvePin(models, id) : undefined;
-      if (!named || specialistKinds(named)) return undefined;
-      const entry = newest ? pool.entryFor(named) : entries.find((item) => item.model.id === named.id);
-      const account = entry ? entry.accounts[0] : !newest && !pool.unusable(named) && pool.inBand(named) ? pool.accountsFor(named)[0] : undefined;
-      return account ? { model: entry?.model ?? named, account } : undefined;
-    };
-    // The router runs the start model as tryPin does – usable and with an account, the band aside; the Work model inside the band.
-    const pinned = policy.pin ? resolvePin(models, policy.pin.modelId) : undefined;
-    const pinAccount = pinned && !pool.unusable(pinned) ? pool.accountsFor(pinned)[0] : undefined;
-    const startOffer = pinned && pinAccount ? { model: pinned, account: pinAccount } : !policy.pin ? inPool(settingsPin(services.settings.get().routing, { agent } as RouteRequest)?.modelId) : undefined;
-    const chip = (() => { try { return chatChoice(services, work.conversationId, agent.id).pin; } catch { return undefined; } })();
-    const last = (() => { try { return services.runs.list(agent.id, RECENT_RUNS).find((run) => !run.splitId && run.model)?.model; } catch { return undefined; } })();
-    const anchors = [startOffer, inPool(chip), inPool(last, true)].filter((offer): offer is Offer => offer !== undefined);
-    const ranked = entries.map((entry) => ({ model: entry.model, account: entry.accounts[0] }))
-      .sort((a, b) => Number(isPaid(a.account)) - Number(isPaid(b.account)) || tierRank(b.model.tier) - tierRank(a.model.tier) || (b.model.smarts ?? -1) - (a.model.smarts ?? -1));
-    const names = new Set<string>();
-    const perTier = new Map<string, number>();
-    const kept: Offer[] = [];
-    for (const offer of anchors) {
-      if (names.has(offer.model.name)) continue;
-      names.add(offer.model.name);
-      kept.push(offer);
-    }
-    for (const offer of ranked) {
-      if (names.has(offer.model.name) || (perTier.get(offer.model.tier) ?? 0) >= PER_TIER) continue;
-      names.add(offer.model.name);
-      perTier.set(offer.model.tier, (perTier.get(offer.model.tier) ?? 0) + 1);
-      kept.push(offer);
-    }
-    const offers = kept.sort((a, b) => tierRank(b.model.tier) - tierRank(a.model.tier) || (b.model.smarts ?? -1) - (a.model.smarts ?? -1));
-    return { offers, ...(startOffer ? { start: startOffer.model } : {}) };
-  } catch {
-    return { offers: [] };
-  }
-}
-
-/**
- * The call's list of the models it can name – one line each with tier, price, smarts, how a turn is paid on the account the router runs
- * it on and what it is strong and weak at (routing/model-facts.ts: the main AI's own models line stays as it is, for its cache).
- */
-export function modelLines(offers: readonly Offer[]): string {
-  if (!offers.length) return '';
-  const lines = offers.map(({ model, account }) => `- ${[model.name, model.tier, priceText(model), model.smarts !== undefined ? `smarts ${model.smarts}` : undefined, sourceOf(model, account), strengthOverview(model)].filter(Boolean).join(' · ')}`);
-  return ['The models the turn can run on now (tier · $ in/out per 1M tokens · smarts 0–100 · how a turn is paid · fit -1…+1 per kind of work); a plan costs nothing per turn while its quota lasts, an API key pays every token:', ...lines].join('\n');
-}
+/** What a call used, as its runner reports it (decision/types.ts StructuredRunner). */
+export type CallUse = Pick<Awaited<ReturnType<StructuredRunner>>, 'by' | 'usage'>;
 
 /**
  * The person's standing words as the agent keeps them: its own facts – "What I have here" of its SYSTEM.md to the end, as the app splits
@@ -180,58 +104,50 @@ const finished = (services: RuntimeServices) => (taskId: string): boolean => {
 };
 
 /**
- * Before my call, on every turn: a step I set for an earlier message ends here (it was that message's); then true when the agent's own
- * request (model.set) or its task's is in force – that choice is the main AI's or its delegator's, and the turn runs on it whole.
+ * Before my call, on every turn: a step I set for an earlier message ends here (it was that message's); then true when the
+ * turn's effort is decided already – the agent's own step (model.set), its task's effort or its fixed effort. A model the
+ * agent asked for that waits for its boundary decides no effort.
  */
-export function requestHolds(services: RuntimeServices, agentId: string, taskId: string | undefined): boolean {
-  const step = pendingRoute(services.db, agentId, undefined, () => false);
-  if (step?.by) takeNextRoute(services.db, agentId, step.stepAt);
-  return pendingRoute(services.db, agentId, taskId, finished(services)) !== undefined;
+export function requestHolds(services: RuntimeServices, agent: Pick<Agent, 'id' | 'modelPolicy'>, taskId: string | undefined): boolean {
+  const step = pendingRoute(services.db, agent.id, undefined, () => false);
+  if (step?.by === 'subconscious') takeNextRoute(services.db, agent.id, step.stepAt);
+  const pending = pendingRoute(services.db, agent.id, taskId, finished(services));
+  return pending?.stepAt !== undefined || pending?.effort !== undefined || agent.modelPolicy?.effort !== undefined;
 }
 
-/** ' The person writes in German.' – their profile's language, which the AI keeps to the one they speak; '' without one. */
-function personLanguage(services: RuntimeServices): string {
+/**
+ * My system prompt (FIXES-3 D1, real run 18.11.2026: the why came in Russian, French, Spanish and Polish on an English profile):
+ * ROUTE_SYSTEM and the person's profile language as a fact, as the call voice is given it (calls/talker-prompt.ts voiceSystem) –
+ * stable per profile, so it stays in front with the rest; ROUTE_SYSTEM alone without one.
+ */
+export function routeSystem(services: RuntimeServices): string {
   try {
     const code = services.settings.get().profile?.language?.trim();
-    return code ? ` The person writes in ${languageName(code)}.` : '';
+    return code ? `${ROUTE_SYSTEM}\n\nThe person's language is ${languageName(code)}, so my why is in ${languageName(code)}.` : ROUTE_SYSTEM;
   } catch {
-    return '';
+    return ROUTE_SYSTEM;
   }
 }
 
-/** A route's parts as a line: model · effort · temperature. */
-function routeParts(services: RuntimeServices, value: { modelId?: string; effort?: string; temperature?: number }): string {
-  const model = value.modelId ? services.catalog.get(value.modelId)?.name ?? value.modelId : '';
-  return [model, value.effort ? `effort ${value.effort}` : '', value.temperature !== undefined ? `temperature ${value.temperature}` : ''].filter(Boolean).join(' · ');
-}
-
 /**
- * F22 (owner 16.11.2026): the person's suggestion as the routing call reads it – picked since their line before their newest one
- * (or after their newest one) is what they want now, one that stayed is a hint from before (chat/suggestion-fresh.ts).
+ * The line the call reads about how the coming turn runs – the model and effort of my last turn (any chat: one context), that
+ * a new message of the person runs at high at least (routing/router.ts raises it there) and the effort the person suggested
+ * in this chat: picked for their newest message it is what they want now, one that stayed is a hint from before (F22,
+ * chat/suggestion-fresh.ts); '' when nothing is known.
  */
-function suggestionFact(person: string, suggested: string, when: ReturnType<typeof suggestionNow>): string {
-  if (when === 'earlier') return `${person} suggested ${suggested} in this chat earlier and left it standing – a hint from before, the work decides; it runs when I set it`;
-  return `${person} picked ${suggested} in this chat ${when === 'now' ? 'for their newest message' : 'after their newest message'} – what they want now, left only for a clear reason; it runs when I set it`;
-}
-
-/**
- * B-083: the line the call reads about how the coming turn runs – the model of my last turn (any chat: one context), the start model with
- * the agent's fixed effort and who set it (without one of the agent's own, the Work model the person chose in Settings – review 14.11.),
- * and the person's suggestion in this chat; '' when nothing is known.
- */
-export function turnFacts(services: RuntimeServices, agent: Agent, conversationId: string | undefined): string {
+export function turnFacts(services: RuntimeServices, agent: Agent, conversationId: string | undefined, from?: keyof typeof WAKE_LABEL): string {
   try {
     const last = services.runs.list(agent.id, RECENT_RUNS).find((item) => !item.splitId && item.model);
-    const policy = agent.modelPolicy;
-    const pin = policy?.pin;
-    const setBy = pin && policy?.pinBy ? ` (set by ${policy.pinBy.self ? 'itself' : policy.pinBy.name}, ${dayText(policy.pinBy.at, profileZone(services))})` : '';
-    const work = !pin ? settingsPin(services.settings.get().routing, { agent } as RouteRequest)?.modelId : undefined;
-    const start = routeParts(services, { modelId: pin ?? work, effort: policy?.effort });
-    const startText = pin ? `start model ${start}${setBy}` : work ? `start model ${start} (the Work model in Settings)` : `start model chosen per task${policy?.effort ? ` · effort ${policy.effort}` : ''}`;
-    const parts = [last?.model ? `runs on ${routeParts(services, { modelId: last.model, effort: last.effort, temperature: last.route?.temperature })}` : 'no turn yet', startText];
-    const chip = chatChoice(services, conversationId, agent.id);
-    const suggested = routeParts(services, { modelId: chip.pin, effort: chip.effort, temperature: chip.temperature });
-    if (suggested) parts.push(suggestionFact(services.settings.get().profile?.name?.trim() || 'the person', suggested, suggestionNow(services, conversationId, agent.id))); // 13.11.2026: the chip is information, never a route
+    const name = last?.model ? services.catalog.get(last.model)?.name ?? last.model : '';
+    const parts = [name ? `its last turn ran on ${name}${last?.effort ? ` at effort ${last.effort}` : ''}` : 'no turn yet'];
+    if ((from ?? 'person') === 'person') parts.push('a new message of the person runs at effort high at least');
+    const effort = chatChoice(services, conversationId, agent.id).effort;
+    if (effort) {
+      const person = services.settings.get().profile?.name?.trim() || 'the person';
+      const when = suggestionNow(services, conversationId, agent.id);
+      parts.push(when === 'earlier' ? `${person} suggested effort ${effort} in this chat earlier and left it standing – a hint from before, the work decides`
+        : `${person} picked effort ${effort} in this chat ${when === 'now' ? 'for their newest message' : 'after their newest message'} – what they want now`);
+    }
     return `The main AI's coming turn: ${parts.join('; ')}.`;
   } catch {
     return '';
@@ -239,13 +155,14 @@ export function turnFacts(services: RuntimeServices, agent: Agent, conversationI
 }
 
 /**
- * Whether another effort keeps the prompt cache on the engine and model of the main AI's last turn (sources read 15.11.2026). Claude
- * Code – each Autark turn starts it with --resume and --effort – keeps it on Fable 5.1 and later, Opus 5.5, Sonnet 5.5 and Haiku 5.5 with
+ * Whether another effort keeps the prompt cache on the engine and model of the main AI's last turn (sources read 15.11.2026;
+ * measured 15.–17.11.2026: 388 of 388 effort changes on Claude Code read their context from the cache). Claude Code – each
+ * Autark turn starts it with --resume and --effort – keeps it on Fable 5.1 and later, Opus 5.5, Sonnet 5.5 and Haiku 5.5 with
  * a plan or key; on other models each effort has its own cache (code.claude.com/docs/en/prompt-caching, "Changing effort level"; the API
  * does it with a per-message effort, platform.claude.com/docs/en/build-with-claude/effort-per-message). Codex keeps it on GPT-6 models
  * (E4 14.11.: Sol medium → high on the app server, 99 % cached; OpenAI keeps the prefix with a configuration_update item,
  * developers.openai.com/api/docs/guides/prompt-caching). Our own API engines put the effort at the top of each request, where it shapes
- * the rendered prompt (the same two docs): another effort reads the context uncached. Undefined where nothing is known.
+ * the rendered prompt (the same two docs): another effort writes the context again. Undefined where nothing is known.
  */
 export function effortKeepsCache(engine: string | undefined, modelId: string): boolean | undefined {
   const model = modelId.slice(modelId.indexOf(':') + 1);
@@ -255,42 +172,58 @@ export function effortKeepsCache(engine: string | undefined, modelId: string): b
   return undefined;
 }
 
+/** "4", "0.2", "2.5": a price per 1M without trailing zeros. */
+const dollars = (value: number) => String(Math.round(value * 100) / 100);
+
 /**
- * What a switch costs now: cold (any model reads uncached), maybe warm, or warm (the last turn's model holds the cache; another reads the
- * context uncached first) – and on a cache that may hold, whether another effort keeps it there (effortKeepsCache).
+ * How long the prompt cache of the engine the main AI's last turn ran on lives: an hour on the plan engines (Claude Code with
+ * CLAUDE_CODE_PROMPT_CACHE_TTL=1h, Codex – measured 15.–17.11.2026), five minutes on our own API calls (anthropic.ts sends
+ * cache_control ephemeral without a ttl, the 5-minute cache; OpenAI evicts an idle prefix after 5–10 minutes).
  */
-export function switchLine(services: RuntimeServices, agent: Agent, now: number): string {
+export function cacheLife(engine: string | undefined): { ms: number; text: string } {
+  return engine === 'claude' || engine === 'codex' ? { ms: CACHE_COLD_MS, text: 'an hour' } : { ms: 5 * 60_000, text: 'five minutes' };
+}
+
+/**
+ * What another effort costs now – a line only where it costs something: the main AI's last turn ran within the life of its
+ * cache (cacheLife) on an engine where another effort does not keep it (effortKeepsCache false). The context is then written
+ * into the cache again at the price table's write price (the prior's, else its input price) instead of read at its cached
+ * price (the prior's, else a tenth of the input price); '' everywhere else – the effort is free.
+ */
+export function effortCost(services: RuntimeServices, agent: Agent, now: number): string {
   try {
     const last = services.runs.list(agent.id, RECENT_RUNS).find((run) => !run.splitId && run.model && (run.endedAt ?? run.startedAt));
-    if (!last?.model) return 'What a switch costs now: the main AI has no turn yet – any model costs the same.';
+    if (!last?.model || effortKeepsCache(last.engine, last.model) !== false) return '';
     const since = now - (last.endedAt ?? last.startedAt ?? 0);
-    const ago = Math.max(0, Math.round(since / 60_000));
-    const name = services.catalog.get(last.model)?.name ?? last.model;
-    const perCall = last.inputTokens && last.modelCalls ? Math.round(last.inputTokens / last.modelCalls / 1000) : undefined;
-    const size = perCall ? `about ${perCall}k tokens per call` : 'its context';
-    if (since > CACHE_COLD_MS) return `What a switch costs now: nothing – the main AI's last turn ended ${ago} min ago, its cache is cold, any model reads ${size} uncached.`;
-    const ran = `the main AI's last turn ran ${ago} min ago on ${name}${last.effort ? ` · ${last.effort}` : ''}`;
-    const keeps = effortKeepsCache(last.engine, last.model);
-    const effort = keeps === true ? ` Another effort on ${name} keeps it.` : keeps === false ? ` Another effort on ${name} reads it uncached too, like another model.` : '';
-    if (since > CACHE_WARM_MS) return `What a switch costs now: ${ran}; its context (${size}) may still be cached on it – a provider keeps a cache from about 5 minutes to an hour. Staying may keep that cache; another model first reads it once uncached at its own input price.${effort}`;
-    return `What a switch costs now: ${ran}; its context (${size}) is still cached on it. Staying keeps that cache; another model first reads it once uncached at its own input price.${effort}`;
+    const life = cacheLife(last.engine);
+    if (since > life.ms) return '';
+    const info = services.catalog.get(last.model);
+    const name = info?.name ?? last.model;
+    const prior = priorFor(Priors.shipped(services.paths?.resources), info?.model ?? last.model.slice(last.model.indexOf(':') + 1), last.model);
+    const { write, read } = cachePrices(prior, info);
+    const price = write !== undefined && read !== undefined ? ` – $${dollars(write)} per 1M tokens written against $${dollars(read)} read` : '';
+    const at = last.effort ? ` at effort ${last.effort}` : '';
+    return `What another effort costs now: the main AI's last turn ran ${Math.max(0, Math.round(since / 60_000))} min ago on ${name}${at}, and its cache lives ${life.text}. On this engine another effort writes the whole context into the cache again${price}; the same effort reads it from there.`;
   } catch {
     return '';
   }
 }
 
-/** What the call before a turn did: the route line it set (none: it set no route) and the hits it opened as the main AI's calls. */
-export interface Look { line?: string; calls: TraceCall[] }
+/** What the call before a turn did: the effort line it set (none: it set no effort), the hits it opened as the main AI's calls, and what the call used. */
+export interface Look extends Partial<CallUse> { line?: string; calls: TraceCall[] }
 
-/** The prompt's line where a request of the agent's own or of its task holds the turn (requestHolds): the call leaves model and effort. */
-const HELD_LINE = "The main AI's coming turn runs on the model and effort its own request (or its task's) set – I leave them.";
+/** The prompt's line where the turn's effort is decided already (requestHolds): the call leaves it. */
+const HELD_LINE = "The main AI's coming turn runs at the effort its own request, its task or its fixed setting names – I leave it.";
+
+/** The prompt's line of a call beside a turn that runs already (service.ts: the lane is slow): what it opens reaches the next turn. */
+const BESIDE_LINE = "The main AI's turn has started already; what I open reaches its next turn.";
 
 /** What both calls read about the turn: who works, the standing words, `facts` (the route call's line), the chat before and what wakes it. */
 function promptHead(services: RuntimeServices, input: { agent: Agent; conversationId?: string; said: string; from?: keyof typeof WAKE_LABEL }, facts: string): string[] {
   const { agent } = input;
   const standing = standingWords(services, agent);
   return [
-    `Agent: ${agent.name}${agent.role ? ` – ${agent.role}` : ''}${agent.mode ? ` (mode ${agent.mode})` : ''}.${personLanguage(services)}`,
+    `Agent: ${agent.name}${agent.role ? ` – ${agent.role}` : ''}${agent.mode ? ` (mode ${agent.mode})` : ''}.`,
     ...(standing ? ['What the agent has here – its standing facts and agreements (its SYSTEM.md):', standing, ''] : []), // the same each turn: early, so it is read from cache
     ...(facts ? [facts, ''] : []),
     'The chat before (oldest first):',
@@ -301,91 +234,101 @@ function promptHead(services: RuntimeServices, input: { agent: Agent; conversati
   ];
 }
 
-/**
- * The route of an answer as the subconscious's one-step request with its why; 'model · effort', or undefined when it names neither.
- * The model the router runs with no request (the start model, else the Work model): only my effort is mine – it runs as the person set it.
- */
-function takeRoute(services: RuntimeServices, agent: Agent, answer: { model?: unknown; effort?: unknown; why?: unknown; hardest?: unknown }, work: readonly ModelInfo[], start: ModelInfo | undefined): string | undefined {
-  const named = String(answer.model ?? '');
-  const info = work.find((item) => item.name === named) ?? (named ? catalogModel(services.catalog, named) : undefined);
-  const model = info && typeof info !== 'string' && work.some((item) => item.id === info.id) ? info : undefined; // one the turn runs
+/** The effort of an answer as the subconscious's step for this one turn, with its why; 'effort <e>', or undefined when it names none. */
+function takeEffort(services: RuntimeServices, agent: Agent, answer: { effort?: unknown; why?: unknown; hardest?: unknown }): string | undefined {
   const effort: Effort | undefined = EFFORTS.find((item) => item === String(answer.effort ?? '').toLowerCase());
-  if (!model && !effort) return undefined;
-  const kept = model !== undefined && model.id === start?.id;
-  const why = String(answer.why ?? answer.hardest ?? '').replace(/\s+/g, ' ').trim().slice(0, WHY_CHARS);
-  const line = `${model?.name ?? 'same model'} · ${effort ?? 'same effort'}`; // its why stays on the run's route: the log carries no chat content
-  if (kept && !effort) return line;
-  const value: NextRoute = { ...(model && !kept ? { modelId: model.id } : {}), ...(effort ? { effort } : {}), ...(why ? { reason: why } : {}), by: 'subconscious', at: services.clock.now() };
-  setNextRoute(services.db, agent.id, value);
-  return line;
+  if (!effort) return undefined;
+  const why = String(answer.why ?? answer.hardest ?? '').replace(/\s+/g, ' ').trim().slice(0, WHY_CHARS); // it stays on the run's route: the log carries no chat content
+  setNextRoute(services.db, agent.id, { effort, ...(why ? { reason: why } : {}), by: 'subconscious', at: services.clock.now() });
+  return `effort ${effort}`;
 }
 
-/** The route call's answer: the route (unless a request holds the turn) and the hits to open, each with what it changes. */
-function lookSchema(names: readonly string[], hits: readonly string[]) {
+/** The route call's answer, one question per field: the effort (unless it is decided already) and the hits to open, each with what it changes. */
+function lookSchema(effort: boolean, hits: readonly string[]) {
   const properties: Record<string, unknown> = {};
-  if (names.length) {
+  if (effort) {
     Object.assign(properties, {
-      hardest: { type: 'string' }, misread: { type: 'boolean' }, decide: { type: 'boolean' },
-      model: { type: 'string', enum: [...names] }, effort: { type: 'string', enum: [...EFFORTS] }, why: { type: 'string' },
+      hardest: { type: 'string', description: 'What is the hardest part this turn will meet, in a few words?' },
+      misread: { type: 'boolean', description: 'Can what wakes the turn be read in more than one way?' },
+      decide: { type: 'boolean', description: 'Does the turn have to choose a path nobody gave?' },
+      effort: { type: 'string', enum: [...EFFORTS], description: 'How much is still open in that hardest part?' },
+      why: { type: 'string', description: 'How heavy is this turn, in one short sentence for the person?' },
     });
   }
-  if (hits.length) properties.open = { type: 'array', items: { type: 'object', properties: { id: { type: 'string', enum: [...hits] }, changes: { type: 'string' } }, required: ['id', 'changes'], additionalProperties: false } };
+  if (hits.length) {
+    properties.open = {
+      type: 'array', description: 'Which hits change something in what this turn does?',
+      items: { type: 'object', properties: { id: { type: 'string', enum: [...hits] }, changes: { type: 'string', description: 'What does it change in this turn?' } }, required: ['id', 'changes'], additionalProperties: false },
+    };
+  }
   return { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
 }
 
 /**
- * The call the turn waits for (v2, 15.11.2026): the coming turn's model and effort as the subconscious's request – not while a request
- * of the agent's own or of its task holds the turn (`held`) – and the word search's hits it opens (look.ts openHits). No call without
- * anything to choose. Undefined when no call ran, it failed or the turn stopped waiting. Never throws.
+ * The call before a turn (v2, 15.11.2026): the coming turn's effort as the subconscious's step – unless it is decided already
+ * (`held`) or the turn does not wait for the answer (`beside`: an effort that comes late would be another message's) – and the
+ * word search's hits it opens (look.ts openHits). No call without anything to choose, except a `probe` that measures a
+ * slow lane (service.ts). Undefined when no call ran, it failed or its signal ended it. Never throws.
  */
-export async function routeTurn(services: RuntimeServices, runner: StructuredRunner, input: { agent: Agent; conversationId?: string; thread?: string; said: string; from?: keyof typeof WAKE_LABEL; mode?: string; vision?: boolean; held?: boolean; signal?: AbortSignal; deadlineMs: number }): Promise<Look | undefined> {
+export async function routeTurn(services: RuntimeServices, runner: StructuredRunner, input: { agent: Agent; conversationId?: string; thread?: string; said: string; from?: keyof typeof WAKE_LABEL; mode?: string; held?: boolean; beside?: boolean; probe?: boolean; signal?: AbortSignal; deadlineMs: number }): Promise<Look | undefined> {
   try {
     const { agent } = input;
     const mode = input.mode ?? agent.mode;
     const looked = { agent, thread: input.thread ?? MAIN_THREAD, ...(input.conversationId ? { conversationId: input.conversationId } : {}), ...(mode ? { mode } : {}) };
-    const { offers, start } = input.held ? { offers: [] as Offer[], start: undefined } : offeredModels(services, agent, { mode, text: input.said, ...(input.vision ? { vision: true } : {}), ...(input.conversationId ? { conversationId: input.conversationId } : {}) });
-    const work = offers.map((offer) => offer.model);
-    const names = work.map((model) => model.name);
+    const sets = !input.held && !input.beside;
     const hits = await searchHits(services, { ...looked, text: input.said, ...(input.signal ? { signal: input.signal } : {}) });
-    if ((!names.length && !hits.length) || input.signal?.aborted) return undefined;
-    const now = services.clock.now();
+    if ((!sets && !hits.length && !input.probe) || input.signal?.aborted) return undefined; // a probe measures the lane (service.ts)
+    const cost = sets ? effortCost(services, agent, services.clock.now()) : '';
     const prompt = [
-      ...promptHead(services, input, input.held ? HELD_LINE : names.length ? turnFacts(services, agent, input.conversationId) : ''),
+      ...promptHead(services, input, input.held ? HELD_LINE : input.beside ? BESIDE_LINE : turnFacts(services, agent, input.conversationId, input.from)),
       ...(hits.length ? ['', hitLines(hits)] : []),
-      ...(names.length ? ['', switchLine(services, agent, now), modelLines(offers)] : []),
+      ...(cost ? ['', cost] : []),
     ].join('\n');
-    const reply = await runner({ purpose: 'subconscious', system: ROUTE_SYSTEM, prompt, schema: lookSchema(names, hits.map((hit) => hit.id)), effort: 'low', deadlineMs: input.deadlineMs, ...(input.signal ? { signal: input.signal } : {}) });
+    const reply = await runner({ purpose: 'subconscious', system: routeSystem(services), prompt, schema: lookSchema(sets, hits.map((hit) => hit.id)), effort: 'low', deadlineMs: input.deadlineMs, ...(input.signal ? { signal: input.signal } : {}) });
     if (input.signal?.aborted) return undefined; // the turn runs already, or was stopped
-    const answer = (reply.structured ?? JSON.parse(reply.text)) as { model?: unknown; effort?: unknown; why?: unknown; hardest?: unknown; open?: unknown };
-    const line = names.length ? takeRoute(services, agent, answer, work, start) : undefined;
+    const answer = (reply.structured ?? JSON.parse(reply.text)) as { effort?: unknown; why?: unknown; hardest?: unknown; open?: unknown };
+    const line = sets ? takeEffort(services, agent, answer) : undefined;
     const calls = hits.length && Array.isArray(answer.open) ? await openHits(services, looked, answer.open, hits) : [];
-    return { ...(line ? { line } : {}), calls };
+    return { ...(line ? { line } : {}), calls, by: reply.by, ...(reply.usage ? { usage: reply.usage } : {}) };
   } catch (error) {
     try { services.log.debug('subconscious look failed', { error: String(error) }); } catch { /* nothing to report to */ }
     return undefined;
   }
 }
 
+/** What the call beside a turn did: how many items it condensed, and what the call used (absent: no call ran). */
+export interface Tidy extends Partial<CallUse> { condensed: number }
+
 /**
- * The call beside the turn (v2, 15.11.2026): the biggest items still whole in the agent's context (look.ts contextItems), the ones it
- * condenses marked with its note (look.ts markItems). The turn does not wait for it – its marks reach the session at the next rebuild
- * anyway (measured 15.11.: with the items in the route call the turn waited 17–22 s instead of 7). Returns how many it condensed
- * (0 without items or on failure). Never throws.
+ * The call beside the turn (v2, 15.11.2026): the biggest items still whole in the agent's context (look.ts contextItems); the
+ * answer says for every one of them whether its job is done, and the done ones are marked with its note (look.ts markItems,
+ * which checks the note's values against the item and against this prompt – what the call was shown). The turn does not wait
+ * for it – its marks reach the session at the next rebuild anyway (measured 15.11.: with the items in the route call the turn
+ * waited 17–22 s instead of 7). Returns how many it condensed (0 without items or on failure). Never throws.
  */
-export async function condenseTurn(services: RuntimeServices, runner: StructuredRunner, input: { agent: Agent; conversationId?: string; thread?: string; said: string; from?: keyof typeof WAKE_LABEL; signal?: AbortSignal; deadlineMs: number }): Promise<number> {
+export async function condenseTurn(services: RuntimeServices, runner: StructuredRunner, input: { agent: Agent; conversationId?: string; thread?: string; said: string; from?: keyof typeof WAKE_LABEL; signal?: AbortSignal; deadlineMs: number }): Promise<Tidy> {
   try {
     const thread = input.thread ?? MAIN_THREAD;
     const items = contextItems(services, input.agent.id, thread);
-    if (!items.length || input.signal?.aborted) return 0;
+    if (!items.length || input.signal?.aborted) return { condensed: 0 };
     const ids = items.map((entry) => entry.item.itemId);
     const prompt = [...promptHead(services, input, ''), '', itemLines(items, services.clock.now())].join('\n');
-    const schema = { type: 'object', properties: { condense: { type: 'array', items: { type: 'object', properties: { id: { type: 'string', enum: ids }, note: { type: 'string' } }, required: ['id', 'note'], additionalProperties: false } } }, required: ['condense'], additionalProperties: false };
-    const reply = await runner({ purpose: 'subconscious', system: ROUTE_SYSTEM, prompt, schema, effort: 'low', deadlineMs: input.deadlineMs, ...(input.signal ? { signal: input.signal } : {}) });
-    if (input.signal?.aborted) return 0; // stopped
-    const answer = (reply.structured ?? JSON.parse(reply.text)) as { condense?: unknown };
-    return markItems(services, input.agent.id, thread, items, answer.condense);
+    const item = {
+      type: 'object', required: ['id', 'done', 'note'], additionalProperties: false,
+      properties: {
+        id: { type: 'string', enum: ids },
+        done: { type: 'boolean', description: 'Did what this item was for go into what came after – is its job done?' },
+        note: { type: 'string', description: 'For a done item: what still matters from it, in a few words? Else empty.' },
+      },
+    };
+    const schema = { type: 'object', properties: { items: { type: 'array', description: 'Every item shown, one entry each.', items: item } }, required: ['items'], additionalProperties: false };
+    const reply = await runner({ purpose: 'subconscious', system: routeSystem(services), prompt, schema, effort: 'low', deadlineMs: input.deadlineMs, ...(input.signal ? { signal: input.signal } : {}) });
+    const use = { by: reply.by, ...(reply.usage ? { usage: reply.usage } : {}) };
+    if (input.signal?.aborted) return { condensed: 0, ...use }; // stopped
+    const answer = (reply.structured ?? JSON.parse(reply.text)) as { items?: unknown };
+    return { condensed: markItems(services, input.agent.id, thread, items, answer.items, prompt), ...use };
   } catch (error) {
     try { services.log.debug('subconscious condense failed', { error: String(error) }); } catch { /* nothing to report to */ }
-    return 0;
+    return { condensed: 0 };
   }
 }

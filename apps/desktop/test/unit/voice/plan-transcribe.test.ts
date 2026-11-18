@@ -1,6 +1,7 @@
 // B-088: the ChatGPT plan's one-request dictation (src/runtime/voice/plan-transcribe.ts): what goes up (the take, a language,
 // the login in the headers, no model fields), what comes back, the one refresh-and-retry through the account's own
-// Codex server, and that no token ever shows in an error.
+// Codex server, that no token ever shows in an error, and that the login comes from every account (KI-Runde 17.11.2026:
+// a used-up Codex week or a cooling account still dictates on the plan).
 // Owns: these assertions only. Never: the network, a real login or a real Codex server.
 
 import { test } from 'node:test';
@@ -9,6 +10,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
+import { selectCandidates } from '../../../src/runtime/accounts/candidates.ts';
+import type { Account } from '../../../src/shared/model/providers.ts';
 import { PLAN_TRANSCRIBE_URL, planMissing, planReady, planTranscribe } from '../../../src/runtime/voice/plan-transcribe.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { quietLog, toneWav } from './local-fixture.ts';
@@ -17,11 +20,11 @@ const FILE_ID = 'e'.repeat(64);
 
 interface Call { url: string; headers: Record<string, string>; body: FormData }
 
-function setup(options: { login?: object | null; signedIn?: boolean; state?: string; enabled?: boolean; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean; take?: { mime: string; name: string; bytes: Uint8Array } } = {}) {
+function setup(options: { login?: object | null; signedIn?: boolean; state?: string; enabled?: boolean; account?: Partial<Account>; answers?: Array<{ status: number; body?: unknown }>; refreshWrites?: object; refreshFails?: boolean; take?: { mime: string; name: string; bytes: Uint8Array } } = {}) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'plan-transcribe-'));
   const writeLogin = (login: object) => writeFileSync(path.join(home, 'auth.json'), JSON.stringify(login));
   if (options.login !== null) writeLogin(options.login ?? { auth_mode: 'chatgpt', tokens: { access_token: 'tok-first', account_id: 'acct-1' } });
-  const account = { id: 'acc_c', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'prolite', home, state: options.state ?? 'ok', priority: 0, enabled: options.enabled ?? true, detected: false, createdAt: 1 };
+  const account = { id: 'acc_c', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'prolite', home, state: options.state ?? 'ok', priority: 0, enabled: options.enabled ?? true, detected: false, createdAt: 1, ...options.account } as Account;
   const take = options.take ?? { mime: 'audio/wav', name: 'take.wav', bytes: toneWav(1) };
   const requests: string[] = [];
   const refreshes: unknown[] = [];
@@ -36,7 +39,11 @@ function setup(options: { login?: object | null; signedIn?: boolean; state?: str
   };
   const services = {
     log: quietLog,
-    accounts: { candidates: (engine?: string) => (engine === 'codex' && options.signedIn !== false ? [account] : []) },
+    accounts: {
+      list: () => (options.signedIn !== false ? [account] : []),
+      // as the router's list: an account whose window is used up or that cools steps aside
+      candidates: (engine?: string) => (engine === 'codex' && options.signedIn !== false ? selectCandidates([account], 'codex', Date.now()) : []),
+    },
     files: { get: () => ({ id: FILE_ID, mime: take.mime, name: take.name, size: take.bytes.byteLength, createdAt: 1 }), read: async () => take.bytes },
     host: { media: {} },
     engines: { get: () => ({ realtime: async () => link }) },
@@ -170,6 +177,20 @@ test('a gone or switched-off plan login is skipped without a request, and the lo
       assert.equal(planMissing(t.services), reason);
       await assert.rejects(planTranscribe(t.services, t.ref, 'de', t.fetch), (error: unknown) => error instanceof WorkforceError && error.code === 'unavailable');
       assert.equal(t.calls.length, 0, reason);
+    } finally { t.done(); }
+  }
+});
+
+// KI-Runde 17.11.2026: from 16.11. 20:58 every dictation and call line said "no_plan_login" – the Codex week stood at 100 %
+// and the router's candidates leave such an account out, although the dictation endpoint is no Codex turn.
+test('a plan login whose week is used up, or that cools, is still the login of the dictation', async () => {
+  const week = { windows: [{ name: 'weekly', windowMinutes: 10_080, usedPercent: 100, resetsAt: Date.now() + 86_400_000 }], readAt: Date.now() };
+  for (const [name, account] of [['week used up', { limits: week }], ['cooling', { state: 'cooling', coolingUntil: Date.now() + 3_600_000 }]] as const) {
+    const t = setup({ account: account as Partial<Account> });
+    try {
+      assert.equal(planReady(t.services), true, name);
+      assert.equal((await planTranscribe(t.services, t.ref, 'de', t.fetch)).text, 'Hallo Welt.', name);
+      assert.equal(t.calls.length, 1, name);
     } finally { t.done(); }
   }
 });

@@ -1,5 +1,5 @@
 // B-080 – a 'fork' part's native fork fits the worker model's window by the main path's rule (splits/fork.ts windowOf, as
-// agents/turn-prepare.ts chooseSession): the window the engine reported for that model on any thread (engine_sessions),
+// agents/session-choice.ts chooseSession): the window the engine reported for that model on any thread (engine_sessions),
 // else the catalog's, else DEFAULT_WINDOW. Live 09.11.: Codex runs Terra at 475,000 and Luna at 258,400 (the catalog
 // has none for them) and Sol at 475,000 (the catalog says 1,050,000). A parent past the fit starts from the text seed.
 // Owns: these checks. Never: a real engine or the real dispatcher.

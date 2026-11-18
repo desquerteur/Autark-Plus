@@ -17,9 +17,10 @@ test('ids: messages count apart, one counter for t/s/r/a/f, monotonic order', ()
     const c = ledger.record(tom.id, 'main', { kind: 'skill', ref: 'item:ri_c' });
     const d = ledger.record(tom.id, 'main', { kind: 'assistant', ref: 'item:ri_d' });
     const e = ledger.record(tom.id, 'main', { kind: 'file', ref: 'item:ri_e' });
-    assert.deepEqual([a, b, m, c, d, e].map((item) => item.itemId), ['t1', 'r2', 'm1', 's3', 'a4', 'f5']);
-    assert.deepEqual([a, b, m, c, d, e].map((item) => item.order), [1, 2, 3, 4, 5, 6]);
-    assert.equal(a.tokens, 14, 'about three characters per token (B-080 wave 3)');
+    const f = ledger.record(tom.id, 'main', { kind: 'checkpoint', ref: 'item:ri_f', text: 'My hand-over' });
+    assert.deepEqual([a, b, m, c, d, e, f].map((item) => item.itemId), ['t1', 'r2', 'm1', 's3', 'a4', 'f5', 'c6'], 'a hand-over (checkpoint) counts with t/s/r/a/f');
+    assert.deepEqual([a, b, m, c, d, e, f].map((item) => item.order), [1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(a.tokens, 20, 'two characters per token (measured 15.–17.11.2026)');
     assert.equal(a.state, 'keep');
   } finally { t.cleanup(); }
 });
@@ -61,13 +62,15 @@ test('items: in order, since is inclusive, kinds filter; titles are one capped l
 test('shared helpers: id shapes, stamp, estimate', () => {
   assert.equal(kindOfId('t17'), 'tool');
   assert.equal(kindOfId('m240'), 'message');
+  assert.equal(kindOfId('c12'), 'checkpoint');
+  assert.equal(normalizeItemId('C12'), 'c12');
   assert.equal(kindOfId('x1'), undefined);
   assert.equal(kindOfId('t0'), undefined);
   assert.equal(normalizeItemId(' T17 '), 't17');
   assert.equal(normalizeItemId('#12'), 'm12');
   assert.equal(normalizeItemId('t-1'), undefined);
   assert.equal(compactStamp('t17', 1240), '{"compacted":"t17","was":"1240 tokens","restore":"context.restore"}');
-  assert.equal(estimateTokens('abcde'), 2);
+  assert.equal(estimateTokens('abcde'), 3);
   assert.equal(ledgerTitle('  a\n b  '), 'a b');
 });
 

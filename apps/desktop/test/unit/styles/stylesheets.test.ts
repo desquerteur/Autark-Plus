@@ -15,7 +15,7 @@ const STYLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..
 const ALL_FILES = readdirSync(STYLES).filter((name) => name.endsWith('.css')).sort();
 const AREA_FILES = ALL_FILES.filter((name) => name !== 'index.css' && name !== 'tokens.css');
 /** Custom properties set inline by components (style={{ '--x': … }}), not by tokens.css. */
-const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width', '--lanes']);
+const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width', '--lanes', '--chat-zoom']); // --chat-zoom: chat/text-zoom.ts (Ctrl +/−/0), chat.css falls back to 1
 /** Literal colors left in area files, whole rules (open point for the CSS owner: a token for them). B-044 visual
  *  pass: the filled danger button got its tokens (--danger-fill, --danger-fill-fg), none is left. */
 const KNOWN_LITERALS: Record<string, string[]> = {};
@@ -144,7 +144,7 @@ test('one centred chat column: the text column and the composer share one axis a
   // B-078: no virtual width (pane reserve added back) and no left-edge maths any more
   assert.doesNotMatch(chat + composer, /--chat-view-w|--col-left|--col-w\b|@property/);
   // both size against the chat column (100cqi) and centre with auto margins
-  assert.match(chat, /\.message-column, \.composer-area \{[^}]*width: min\(var\(--message-max\), 100cqi - 2 \* var\(--col-inset\)\);\s*margin-inline: auto/);
+  assert.match(chat, /\.message-column, \.composer-area \{[^}]*width: min\(var\(--message-max\), calc\(\(100cqi - 2 \* var\(--col-inset\)\) \/ var\(--chat-zoom, 1\)\)\);\s*margin-inline: auto/); // 18.11.2026: divided by the chat zoom (CSS zoom scales cqi lengths too)
   assert.match(chat, /--col-inset: clamp\(16px, 5cqi, 24px\)/);
   // a gutter on both edges: the scroller's middle is the column's middle
   assert.match(chat, /\.message-scroller \{[^}]*scrollbar-gutter: stable both-edges/);

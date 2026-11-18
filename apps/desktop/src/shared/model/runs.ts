@@ -28,7 +28,8 @@ export type WakeReason =
   | 'report' // addition (T08): a manager's bundled report of its reports' finished work (org/reports.ts)
   | 'setup' // B-044: old runs only; since B-066 the first run ends with an ordinary 'message' (onboarding/service.ts)
   | 'event' // B-054: something outside happened (a new mail, a connector or webhook push) – the origin says what
-  | 'split'; // B-057: the run of a split (shared/model/splits.ts) – never a queued wake
+  | 'split' // B-057: the run of a split (shared/model/splits.ts) – never a queued wake
+  | 'fold'; // KI-Runde 17.11.2026: the run in which an agent writes its hand-over when its context is folded (runtime/agents/context-fold.ts) – never a queued wake
 
 export interface Run {
   id: string;
@@ -48,14 +49,18 @@ export interface Run {
   outputTokens?: number;
   /** B-089: the part of inputTokens the provider served from its cache, over the turn's attempts (absent: not reported). */
   cachedTokens?: number;
+  /** Package C (17.11.2026): the part of inputTokens the turn wrote into the provider's cache (absent: not reported). */
+  cacheWriteTokens?: number;
   /** B-089: how many model requests the turn made (absent: its engine gives no count – never a guess). */
   modelCalls?: number;
   costUsd?: number;
   error?: string;
   summary?: string; // one line ("edited timeline, rendered preview")
   /** B-083: `temperature` – the turn's (absent: none), `temperatureSent` – its engine put it on the wire.
-   *  B-089: `effortBy` – where the turn's effort came from (absent: an older run, or a route that did not say). */
-  route?: { reason: string; by: string; category: string; temperature?: number; temperatureSent?: boolean; effortBy?: EffortBy };
+   *  B-089: `effortBy` – where the turn's effort came from (absent: an older run, or a route that did not say).
+   *  17.11.2026: `standIn` – the model this turn ran on stands in for the one it should have run on, which could not run
+   *  (routing/router.ts); such a model is not the agent's settled one, so its next boundary lets its kind decide again. */
+  route?: { reason: string; by: string; category: string; temperature?: number; temperatureSent?: boolean; effortBy?: EffortBy; standIn?: true };
   origin?: Origin; // B-054: what started it (runs.source/source_label); absent on chat and task runs without one
   splitId?: string; // B-057: the split this run worked for (runs.split_id, shared/model/splits.ts); absent on every other run
 }
@@ -115,6 +120,8 @@ declare module './providers.ts' {
   interface RouteDecision {
     /** B-089: where `effort` came from before clamping (absent: a route built without startEffortBy). */
     effortBy?: EffortBy;
+    /** 17.11.2026: this model stands in for the one the turn should have run on, which cannot run now (routing/router.ts). */
+    standIn?: true;
   }
 }
 

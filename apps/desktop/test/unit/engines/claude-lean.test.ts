@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CORE_TOOLS, HUB_CALL_MS, LEAN_ENV, LEAN_SETTINGS, coreTools, promptArgs } from '../../../src/runtime/engines/claude/lean.ts';
+import { AGENT_ENV, CORE_TOOLS, HUB_CALL_MS, LEAN_ENV, LEAN_SETTINGS, coreTools, promptArgs } from '../../../src/runtime/engines/claude/lean.ts';
 import { turnInput } from './fakes.ts';
 import { claudeAccount, claudeSetup } from './claude-fixture.ts';
 
@@ -52,6 +52,8 @@ test('claude lean: a new hub turn – the stable prompt only, the live context f
   assert.deepEqual(flag(call.args, '--setting-sources'), 'user');
   for (const [name, value] of Object.entries(LEAN_ENV)) assert.equal(call.options.env?.[name], value, `${name}=${value}`);
   assert.deepEqual(Object.keys(LEAN_ENV).sort(), ['CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_DISABLE_CLAUDE_MDS', 'CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS']);
+  assert.deepEqual(AGENT_ENV, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' });
+  assert.equal(call.options.env?.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h', 'KI-Runde 17.11.2026: an agent turn asks for the one-hour cache, whatever login the account has');
   assert.equal(call.options.env?.CLAUDE_CODE_DISABLE_CRON, '1', 'the CLI cron stays off');
 });
 
@@ -87,6 +89,7 @@ test('claude lean: helper turns run on our system prompt only, with no built-in 
     assertLean(call.args, label, []);
     assert.ok(call.args.includes('--no-session-persistence'), `${label}: no transcript`);
     for (const [name, value] of Object.entries(LEAN_ENV)) assert.equal(call.options.env?.[name], value);
+    assert.equal(call.options.env?.CLAUDE_CODE_PROMPT_CACHE_TTL, undefined, `${label}: never resumed – it keeps Claude Code's own cache lifetime`);
   }
   assert.equal(h.written.get(flag(reader.args, '--system-prompt-file')!), 'STABLE');
 });

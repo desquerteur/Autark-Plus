@@ -125,7 +125,7 @@ test('chat.read and chat.search show the context\'s lines (their label names cha
 
   const full = await h.run('chat.read', { seq: long.seq }, ctx);
   assert.match(full.text, new RegExp(`^\\[[^\\]]*#${long.seq}\\] `));
-  assert.ok(full.text.includes(`Full text of #${long.seq}:\n${long.body}`), 'the whole body after the cut line');
+  assert.ok(full.text.includes(long.body) && !full.text.includes('[truncated'), 'the line with its whole body, once');
   assert.match((await h.run('chat.read', { seq: 99 }, ctx)).text, /No message #99/);
 
   const search = await h.run('chat.search', { query: 'photos' }, ctx);

@@ -39,15 +39,19 @@
 // is journaled with its call's tool name (by call id), so the readers of the journal see which native call failed.
 // B-080: that result's `preview` is its summary and output ("exit 1" and the error text), as our tools' preview; a fresh
 // native session the engine announces ('session') is bound at once with the turn's start cursor (finishTurn overwrites it);
-// an in-turn model switch ('model', Engine.setModel) moves the turn's route, the run's books and the activity row to it;
+// an in-turn model switch ('model', Engine.setModel – Claude Code reports it once a request runs on it, Codex once it applied
+// it, before a request did: open under FIXES-3 C1) moves the turn's
+// route, the run's books and the activity row to it, ends my now-request (next-route.ts tookInTurn) and names the model my
+// first requests ran on in the route's reason (FIXES-3 C1);
 // the engine's own background work ('background') counts as a call in flight for the stall watch.
 // B-083: the engine gets the turn's temperature – the agent's own request (plan), else the person's suggestion on the route;
 // the activity row says whether the engine sends it (liveRoute, engines/http/temperature.ts); an in-turn switch posts the
 // quiet switch line with the agent's name (route-line.ts postRunLine) – a running turn keeps its temperature.
 // B-085: a turn the person stopped (stopKind 'human') whose engine still returns 'done' ends 'interrupted'.
-// B-089 (11.11.2026: what a run costs, written down): an engine whose 'usage' events come one per model request (Codex:
-// thread/tokenUsage/updated) gives the attempt its model calls (AttemptResult.modelCalls); every other engine reports
-// running totals or one sum, so its count stays absent. An in-turn switch that changes the effort makes it the agent's own.
+// B-089 / package C (what a run costs): the attempt counts its model calls – one per 'usage' event of a per-request engine
+// (Codex), else the count the event carries (Claude Code: its main-thread message_start), else absent – and costs itself from a
+// session's running total; the engine sets, the kept total and the own cost are in agents/attempt-cost.ts.
+// An in-turn switch that changes the effort makes it the agent's own.
 // Never: decides failover or integrates the result (turn.ts / turn-finish.ts do).
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -55,7 +59,7 @@ import type { EngineEvent, EngineTurnResult } from '../engines/types.ts';
 import { addCache } from '../engines/shared.ts';
 import { WAKE_NOTE_MAX, failure, type ToolContext } from '../tools/types.ts';
 import { toErrorData, WorkforceError } from '../../shared/errors.ts';
-import { preview } from '../tools/outputs.ts';
+import { preview, safeRedact } from '../tools/outputs.ts';
 import { turnCwd } from '../git/records.ts';
 import { accountFailure } from '../accounts/failure.ts';
 import { providerOutage } from '../engines/provider-outage.ts'; // B-059 #184
@@ -73,6 +77,9 @@ import { traceInput } from '../engines/trace-text.ts';
 import { recordTurnInput } from './interruption-context.ts';
 import { runWithNativeTimeouts } from './native-timeout.ts';
 import { SessionStore } from './sessions.ts'; // B-080: a fresh native session bound at once
+import { tookInTurn } from './next-route.ts'; // FIXES-3 C1
+import { recordStart } from './session-key.ts'; // S2: with its start record
+import { PER_REQUEST_USAGE, keptTotal, ownCost } from './attempt-cost.ts'; // B-089, package C
 import type { ChatOutbox } from './chat-out.ts';
 
 /**
@@ -85,16 +92,6 @@ export function wakeNoteOf(request: Pick<TurnRequest, 'origin' | 'originNote'>):
   const line = request.originNote.split('\n').map((part) => part.trim()).find(Boolean);
   if (!line) return {};
   return { wakeNote: line.length > WAKE_NOTE_MAX ? `${line.slice(0, WAKE_NOTE_MAX - 1)}…` : line };
-}
-
-/** B-089: engines whose 'usage' events come one per model request (engines/codex/turn.ts: each thread/tokenUsage/updated). */
-const PER_REQUEST_USAGE: ReadonlySet<string> = new Set(['codex']);
-
-declare module './turn-types.ts' {
-  interface AttemptResult {
-    /** B-089: the attempt's model requests – only from an engine that reports one usage event per request (absent: no count). */
-    modelCalls?: number;
-  }
 }
 
 /** B-083: the route fields a turn reports (TurnRoute), with its temperature and whether its engine sends it. */
@@ -135,12 +132,20 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   const started = services.clock.now();
   recordTurnInput(services, plan, request, turn.lastSeq);
   const status = (note: string) => { try { request.onStatus?.(note); } catch { /* cosmetic */ } };
+  // 17.11.2026 (BEFUND-RUNTIME-JAN §1): a fresh stream buffer per attempt; a mid-turn block that did not arrive is told to
+  // this running turn at once (its next model request reads the line), not only to the next turn.
+  const steer = turn.engine.steer?.bind(turn.engine);
+  out?.attach(steer ? (line) => { steer(request.runId, line).catch(() => false); } : undefined);
   // B-044: the engine and our calls run on the watch's signal (the turn's own abort, or the stall cut).
   const watch = new StallWatch({ now: () => services.clock.now(), parent: request.signal });
+  // Our calls also end with the attempt itself (a failover starts the next one): a call still holding – a waiting
+  // agents.split – ends 'stopped' then, so its parts wake the origin instead of counting as read.
+  const ended = new AbortController();
+  const callSignal = AbortSignal.any([watch.signal, ended.signal]);
   // The routed model of this attempt (a failover brings its own).
   const toolCtx: Omit<ToolContext, 'services'> = {
     agent: plan.agent, runId: request.runId, conversationId: plan.conversationId, taskId: plan.task?.id,
-    mode: plan.mode.key, deviceId: plan.agent.deviceId, modelId: turn.route.modelId, signal: watch.signal,
+    mode: plan.mode.key, deviceId: plan.agent.deviceId, modelId: turn.route.modelId, signal: callSignal,
     status: (note) => { watch.activity(); status(note); },
     ...(plan.origin ? { origin: plan.origin } : {}), ...wakeNoteOf(request),
     ...(plan.split ? { split: plan.split } : {}), // B-057 S15: the parent's chat/task for reads
@@ -182,9 +187,9 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
   };
   const usage: AttemptResult['usage'] = { inputTokens: 0, outputTokens: 0 };
   const perRequest = PER_REQUEST_USAGE.has(turn.engine.id); // B-089: its usage events count the model calls
-  let modelCalls = 0;
+  let modelCalls: number | undefined = perRequest ? 0 : undefined; // package C: or the engine's own count on the event
+  const kept = keptTotal(services, plan, turn); // package C: the session's running total before this attempt
   const temperature = turnTemperature(plan, turn); // B-083 (T3 request 1): the agent's own, else the person's suggestion
-  let inTurnFrom: string | undefined; // B-083: the model before the last in-turn switch (a refused one puts the turn back there)
 
   const onEvent = (event: EngineEvent) => {
     watch.activity();
@@ -204,9 +209,9 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
         case 'commentary':
           thoughts.close();
           if (event.text.trim()) {
-            out?.segment(event.text);
             streamed = ''; // pre-tool text is an update, never the fallback final answer
-            services.runs.item(request.runId, { kind: 'note', name: 'Update', data: { text: services.secrets.redact(event.text).slice(0, 4000), commentary: true }, effectStatus: 'none' });
+            const update = services.runs.item(request.runId, { kind: 'note', name: 'Update', data: { text: services.secrets.redact(event.text).slice(0, 4000), commentary: true }, effectStatus: 'none' });
+            out?.segment(event.text, false, update?.id); // the note names the messages its blocks became (the ledger keeps them through a fold)
             status(services.secrets.redact(event.text).replace(/\s+/g, ' ').slice(0, 140));
           }
           break;
@@ -256,7 +261,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
             services.runs.item(request.runId, { kind: 'tool_result', name: native?.name, data: { // B-059 #182: named by its call
               callId: event.callId, ok: event.ok, summary: preview(services.secrets, event.summary, 400),
               preview: preview(services.secrets, [event.summary, event.output].filter(Boolean).join('\n'), 600), // B-080: "exit 1" and what it printed, as our tools' preview
-              ...(event.output ? { output: services.secrets.redact(event.output) } : {}), // B-048 E1 (LEDGER): kept whole by the journal (over 4,000 chars: a blob)
+              ...(event.output ? { output: safeRedact(services.secrets, event.output) } : {}), // B-048 E1 (LEDGER): kept whole by the journal (over 4,000 chars: a blob)
             }, effectStatus: 'none' });
           } else {
             // Our call (MCP hub or dynamic tool); its start may have been missed: a tool still ran.
@@ -265,7 +270,8 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
           }
           break;
         case 'usage':
-          if (perRequest) modelCalls++; // B-089
+          if (perRequest) modelCalls = (modelCalls ?? 0) + 1; // B-089
+          else if (event.modelCalls !== undefined) modelCalls = event.modelCalls; // package C: the engine's own count so far
           // Engines report running totals per turn; keep the latest (and the largest context).
           usage.inputTokens = Math.max(usage.inputTokens, event.inputTokens);
           usage.outputTokens = Math.max(usage.outputTokens, event.outputTokens);
@@ -281,14 +287,21 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
           if (ownCalls.size) break;
           status(event.note);
           break;
-        case 'session': // B-080: the engine's fresh session is bound now (as finishTurn binds it) – a kill or restart mid-turn resumes it
-          if (turn.engine.caps.sessions) new SessionStore(services.db).save({
+        case 'session': { // B-080: the engine's fresh session is bound now (as finishTurn binds it) – a kill or restart mid-turn resumes it
+          if (!turn.engine.caps.sessions) break;
+          // S2: a new ref started with this turn's prompt and gets its start record with its binding; the session the turn
+          // resumed keeps the key it was bound with (a session from before the record takes this turn's only once a turn ran through).
+          const fresh = event.ref !== turn.session?.ref;
+          new SessionStore(services.db).save({
             agentId: plan.agent.id, conversationId: plan.thread, engine: turn.engine.id, accountId: turn.account.id, ref: event.ref, generation: event.generation,
-            cursorSeq: plan.memberCursor, model: turn.route.modelId, updatedAt: services.clock.now(), promptKey: turn.promptKey, mode: plan.mode.key,
+            cursorSeq: plan.memberCursor, model: turn.route.modelId, updatedAt: services.clock.now(), promptKey: fresh ? turn.promptKey : turn.session?.promptKey ?? turn.promptKey, mode: plan.mode.key,
           });
+          if (fresh && turn.sessionStart) recordStart(services.db, { agentId: plan.agent.id, thread: plan.thread, engine: turn.engine.id }, turn.sessionStart, services.clock.now());
           break;
-        case 'model': { // B-080: Engine.setModel switched this turn – the run's route, cost and the activity row take the new model
+        }
+        case 'model': { // B-080: the engine runs this turn on my model.set now – the run's route, cost and the activity row take the new model
           const before = turn.route;
+          const beforeName = turn.modelName;
           const info = services.catalog.list().find((model) => model.engine === turn.engine.id && model.model === event.model);
           turn.route = { ...turn.route, ...(info ? { modelId: info.id } : {}), effort: event.effort, ...(event.effort !== before.effort ? { effortBy: 'request' as const } : {}) }; // B-089
           turn.model = event.model;
@@ -296,16 +309,21 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
           toolCtx.modelId = turn.route.modelId;
           try { request.onRoute?.(liveRoute(turn, temperature)); } catch { /* cosmetic */ }
           if (before.modelId === turn.route.modelId && before.effort === turn.route.effort) break;
-          // B-083: the switch inside the turn gets its quiet line too (my model.set now – or the engine refused it: back)
-          const why = turn.route.modelId === inTurnFrom ? 'back on the model before' : REQUESTED_WHY;
-          inTurnFrom = before.modelId;
+          // FIXES-3 C1: the request is used up once a request of this turn ran on it (until then my next turn takes it); a part's lane holds none
+          if (!toolCtx.split) { try { tookInTurn(services.db, plan.agent.id, services.clock.now()); } catch (error) { services.log.warn('next-step model request not ended', { runId: request.runId, error: String(error) }); } }
+          // FIXES-3 C1: the run names the model of its last request; the one its first requests ran on stands in its route's reason
+          if (before.modelId !== turn.route.modelId) turn.route = { ...turn.route, reason: [before.reason, `first requests on ${beforeName}`].filter(Boolean).join(' · ') };
+          // B-083: the switch inside the turn gets its quiet line too (my model.set now)
           const to = { modelName: turn.modelName, effort: turn.route.effort, temperature, sent: temperature !== undefined && sendsTemperature(turn) };
           postRunLine(services, { agentId: plan.agent.id, runId: request.runId, conversationId: plan.conversationId, taskId: plan.task?.id }, 'model_switched',
-            switchText(plan.agent.name, to, why), { from: before.modelId, to: turn.route.modelId, effort: turn.route.effort, inTurn: true });
+            switchText(plan.agent.name, to, REQUESTED_WHY), { from: before.modelId, to: turn.route.modelId, effort: turn.route.effort, inTurn: true });
           break;
         }
         case 'background': // B-080: the engine's own background work counts as a call in flight for the stall watch
           watch.call(`bg:${event.id}`, event.running);
+          break;
+        case 'compacted': // KI-Runde 17.11.2026 (package S1): the engine compacted the session by itself – journaled with its own figures
+          services.runs.item(request.runId, { kind: 'note', data: { compacted: 'engine', ...(event.before !== undefined ? { before: event.before } : {}), ...(event.after !== undefined ? { after: event.after } : {}), ...(event.ms !== undefined ? { ms: event.ms } : {}) }, effectStatus: 'none' });
           break;
       }
     } catch (error) {
@@ -317,7 +335,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     agent: plan.agent, runId: request.runId, conversationId: plan.conversationId, taskId: plan.task?.id, mode: plan.mode.key, deviceId: plan.agent.deviceId, modelId: turn.route.modelId,
     ...(toolCtx.origin ? { origin: toolCtx.origin } : {}), ...(toolCtx.wakeNote ? { wakeNote: toolCtx.wakeNote } : {}), // B-054: the hub's calls see what started the run too
     ...(toolCtx.split ? { split: toolCtx.split } : {}), // B-057: a split's hub calls carry it too
-  }) : undefined;
+  }, turn.hubTools) : undefined; // S2: the hub serves the turn's offer (a resumed session's own)
   // A cut (Stop, emergency stop, urgent interrupt at a boundary) ends the hub's calls and refuses late ones at once.
   const releaseLease = () => lease?.release();
   if (lease) watch.signal.addEventListener('abort', releaseLease, { once: true });
@@ -330,11 +348,11 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     result = await runWithNativeTimeouts(turn.engine, {
       runId: request.runId, agentId: plan.agent.id, account: turn.account, model: turn.model, effort: turn.route.effort,
       ...(temperature !== undefined ? { temperature } : {}), // B-078/B-083: the turn's temperature (engines whose model takes one send it)
-      session: turn.session ? { ref: turn.session.ref, generation: turn.session.generation } : undefined,
+      session: turn.session ? { ref: turn.session.ref, generation: turn.session.generation, ...(turn.session.contextTokens !== undefined ? { contextTokens: turn.session.contextTokens } : {}) } : undefined,
       system: turn.prompt, tools,
       ...(turn.trace && !turn.engine.caps.trace ? { input: [traceInput(turn.trace.calls), ...turn.input] } : { input: turn.input, ...(turn.trace ? { trace: turn.trace } : {}) }),
       callTool: async (name, args, callId) => {
-        if (watch.signal.aborted) return failure('The turn was stopped; this call did not run.'); // B-059: never after a cut
+        if (callSignal.aborted) return failure('The turn was stopped; this call did not run.'); // B-059: never after a cut or the attempt's end
         boundary(callId, true);
         watch.call(callId, true); // B-059: before the count – an overrun it triggers waits for this call to end
         try {
@@ -358,6 +376,7 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     }
   } finally {
     thoughts.close(); // a block still open ends with the attempt (live: false)
+    ended.abort();
     watch.stop();
     watch.signal.removeEventListener('abort', releaseLease);
     lease?.release();
@@ -385,7 +404,9 @@ export async function runAttempt(services: RuntimeServices, plan: TurnPlan, turn
     Object.assign(usage, addCache(result.usage, {})); // the turn's cached input as its result sums it (Codex's events count per request)
   }
   if (result.contextTokens !== undefined) usage.contextTokens = result.contextTokens;
-  return { result, streamed, reasoning: thoughts.text, toolCalls, tools: used, plan: planSteps, ...(planDone !== undefined ? { planDone } : {}), usage, ...(perRequest ? { modelCalls } : {}), ms: services.clock.now() - started };
+  const own = kept.counts && usage.costUsd !== undefined ? ownCost(services, plan, turn, result, usage.costUsd, kept.usd) : undefined;
+  if (own) usage.costUsd = own.usd;
+  return { result, streamed, reasoning: thoughts.text, toolCalls, tools: used, plan: planSteps, ...(planDone !== undefined ? { planDone } : {}), usage, ...(modelCalls !== undefined ? { modelCalls } : {}), ...(own?.total ? { costTotal: own.total } : {}), ms: services.clock.now() - started };
 }
 
 /** The full length of a call's arguments as the journal would show them uncut (B-049 F9). */

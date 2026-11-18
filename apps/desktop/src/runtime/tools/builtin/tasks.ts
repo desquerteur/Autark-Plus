@@ -4,11 +4,14 @@
 // und nicht in dem Task"): a question to a person is a line in the chat, and my task waits on who. A receiver is named as a chat names a member (an
 // id, a guessed id, a name; chat-joins.ts namedMembers), or "me" / "team". Each result says the planned next look in my
 // words, so I never plan my own re-check. A task I cannot find comes back with my open tasks.
+// KI-Runde 17.11.2026: a request on a task is an effort, never a model (the receiver stays on the model it is on –
+// a model is named where a context starts: agents.split, agents.create); dueAt is a date the world sets; one
+// tasks.update carries state, fact and plan together; a fact holds 2,000 characters.
 // Owns: those six tools, the dedupe of the same open ask, the depth limit of pieces given on.
-// Never: an alias of an old argument name, or a mode on a task (the mode is the agent's own).
+// Never: an alias of an old argument name, or a mode or a model on a task (both are the agent's own).
 
 import type { ToolContext, ToolDef } from '../types.ts';
-import { CHAT_ID_PROPERTY, EFFORT_PROPERTY, MODEL_PROPERTY, TASK_ID_PROPERTY, WHEN_PROPERTY, failure, json, text } from '../types.ts';
+import { CHAT_ID_PROPERTY, EFFORT_PROPERTY, TASK_ID_PROPERTY, WHEN_PROPERTY, failure, json, text } from '../types.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { UiBlock } from '../../../shared/blocks/catalog.ts';
@@ -20,7 +23,7 @@ import { canReadTask } from '../../tasks/access.ts';
 import { namedMembers } from './chat-joins.ts';
 import { nextWords, renderTask, taskLine } from '../../context/task-text.ts';
 import { namesFor } from '../../tasks/next.ts';
-import { askedRoute, nameOf } from '../../tasks/give.ts';
+import { nameOf } from '../../tasks/give.ts';
 import { approveNotes, normalizeAskWidget } from '../../tasks/widgets.ts';
 import { askTarget } from '../../people/ask-target.ts';
 import { placeOnMyDay } from './calendar.ts';
@@ -98,7 +101,7 @@ function openAsk(ctx: ToolContext, title: string, at: { owner: string; parentId?
 
 type CreateArgs = {
   title: string; to?: string; doneWhen?: string; notes?: string; plan?: string[]; parentId?: string; dependsOn?: string[]; dueAt?: string;
-  priority?: number; widget?: Record<string, unknown>; estimateMin?: number; model?: string; effort?: Effort; chatId?: string;
+  priority?: number; widget?: Record<string, unknown>; estimateMin?: number; effort?: Effort; chatId?: string;
 };
 
 const createTool = defineTool<CreateArgs>({
@@ -114,11 +117,11 @@ const createTool = defineTool<CreateArgs>({
       plan: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 300 }, maxItems: 20, description: 'The steps I see, one line each; "✓ " before a done one.' },
       parentId: { type: 'string', description: 'The task this is a piece of; its end wakes that task\'s owner. Default this turn\'s task when the work goes to someone else; "none" for separate work.' },
       dependsOn: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Tasks it comes after; it waits until the last of them ends.' },
-      dueAt: { ...WHEN_PROPERTY, description: `When it is due – for a person, when they do it. ${String(WHEN_PROPERTY.description)}` },
+      dueAt: { ...WHEN_PROPERTY, description: `A date the world sets – a customer's call, a release window, a lock that ends; for a person, when they do it. Work among us starts when it is given. ${String(WHEN_PROPERTY.description)}` },
       priority: { type: 'integer', minimum: 0, maximum: 2, description: '0 normal, 1 high (a person sees it above their input), 2 urgent.' },
       widget: { type: 'object', properties: { type: { type: 'string' } }, required: ['type'], description: 'How a person answers: an ask block – choice, form, confirm, checklist, record, upload, review, timer.' },
       estimateMin: { type: 'integer', minimum: 5, maximum: 720, description: "Minutes a person needs; it goes into the person's calendar." },
-      model: MODEL_PROPERTY, effort: EFFORT_PROPERTY, chatId: CHAT_ID_PROPERTY,
+      effort: EFFORT_PROPERTY, chatId: CHAT_ID_PROPERTY,
     },
     required: ['title'], additionalProperties: false,
   },
@@ -154,7 +157,7 @@ const createTool = defineTool<CreateArgs>({
       const same = openAsk(ctx, args.title, { owner: to, parentId, type: widget?.type });
       if (same) return answer(ctx, same, { already: true });
     }
-    const route = others && !toPerson ? askedRoute(ctx.services, { model: args.model, effort: args.effort, from: ctx.modelId }) : undefined;
+    const route = others && !toPerson && args.effort ? { effort: args.effort } : undefined;
     const task = await ctx.services.tasks.createTo({
       ...(conversationId ? { conversationId } : {}), ...(ctx.origin ? { origin: ctx.origin } : {}),
       title: args.title, ...(notes ? { notes } : {}), ...(args.plan?.length ? { plan: args.plan } : {}), doneWhen: args.doneWhen,
@@ -168,7 +171,7 @@ const createTool = defineTool<CreateArgs>({
   },
 });
 
-const giveTool = defineTool<{ taskId?: string; to: string; note?: string; model?: string; effort?: Effort }>({
+const giveTool = defineTool<{ taskId?: string; to: string; note?: string; effort?: Effort }>({
   name: 'tasks.give',
   description: 'Hands a task to someone else, or takes one myself. It keeps its brief, plan and facts; they hear of it at once, and when it ends I hear how.',
   inputSchema: {
@@ -177,7 +180,7 @@ const giveTool = defineTool<{ taskId?: string; to: string; note?: string; model?
       taskId: TASK_ID_PROPERTY,
       to: { type: 'string', minLength: 1, description: '"me", a colleague or a person by name or id, or "team" – Autark picks one owner now.' },
       note: { type: 'string', maxLength: 4000, description: 'What the new owner needs from me; it lands in its notes as "From <my name>: …".' },
-      model: MODEL_PROPERTY, effort: EFFORT_PROPERTY,
+      effort: EFFORT_PROPERTY,
     },
     required: ['to'], additionalProperties: false,
   },
@@ -187,7 +190,7 @@ const giveTool = defineTool<{ taskId?: string; to: string; note?: string; model?
     const task = requireTask(ctx, args.taskId ?? ctx.taskId);
     const to = receiverOf(ctx, args.to);
     if (typeof to !== 'string') return failure(to.refused);
-    const view = await ctx.services.tasks.give(task.id, to, ctx.agent.id, { note: args.note, model: args.model, effort: args.effort, ...(ctx.modelId ? { from: ctx.modelId } : {}), ...(ctx.conversationId ? { givenIn: ctx.conversationId } : {}) });
+    const view = await ctx.services.tasks.give(task.id, to, ctx.agent.id, { note: args.note, effort: args.effort, ...(ctx.conversationId ? { givenIn: ctx.conversationId } : {}) });
     return answer(ctx, view);
   },
 });
@@ -199,7 +202,7 @@ type UpdateArgs = {
 
 const updateTool = defineTool<UpdateArgs>({
   name: 'tasks.update',
-  description: "Keeps a task's state true: its wait, plan, facts and details. The right one is woken and everyone reading it sees where it stands. A wait on someone ends with their line in the task's chat or our 1:1, a wait on a task with its end; outside, I look again at until, else a day later. A question to a person goes in our chat, and I wait on who.",
+  description: "Keeps a task true: its wait, plan, facts and details in one call. I call it at the end of a stretch of work: the right one is woken and everyone reading it sees where it stands. A wait on someone ends with their line in the task's chat or our 1:1, a wait on a task with its end; outside, I look again at until, else a day later. A question to a person goes in our chat, and I wait on who.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -210,9 +213,9 @@ const updateTool = defineTool<UpdateArgs>({
       why: { type: 'string', maxLength: 500, description: 'One line.' },
       until: { ...WHEN_PROPERTY, description: `When I look at it again at the latest. ${String(WHEN_PROPERTY.description)}` },
       plan: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 300 }, maxItems: 20, description: 'The steps, one line each, "✓ " before the done ones; it replaces the old plan.' },
-      fact: { type: 'string', minLength: 1, maxLength: 500, description: 'One line I learned or decided, kept for whoever works on it next.' },
+      fact: { type: 'string', minLength: 1, maxLength: 2000, description: 'What I learned or decided, kept for whoever works on it next – in plain sentences, as they know nothing else.' },
       title: { type: 'string', minLength: 1, maxLength: 300 }, notes: { type: 'string', maxLength: 20_000 }, doneWhen: { type: 'string', maxLength: 2000 },
-      dueAt: WHEN_PROPERTY, priority: { type: 'integer', minimum: 0, maximum: 2 },
+      dueAt: { ...WHEN_PROPERTY, description: `A date the world sets; for a person, when they do it. ${String(WHEN_PROPERTY.description)}` }, priority: { type: 'integer', minimum: 0, maximum: 2 },
       dependsOn: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'The tasks it comes after; it replaces the list.' },
       rev: { type: 'integer', description: 'The rev I read; a newer change wins and I read it again.' },
     },
@@ -322,7 +325,6 @@ const getTool = defineTool<{ taskId: string }>({
   description: 'Shows one task whole: brief, plan, facts, pieces, what it waits on, next look, result.',
   inputSchema: { type: 'object', properties: { taskId: { type: 'string', minLength: 1 } }, required: ['taskId'], additionalProperties: false },
   category: 'read',
-  anyMode: true,
   describe: (args) => internal(`Read task ${args.taskId}`, args.taskId),
   async run(args, ctx) {
     const task = requireTask(ctx, args.taskId);

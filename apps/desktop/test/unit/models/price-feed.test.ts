@@ -19,7 +19,8 @@ test('shipped priors: the list prices, smarts, and relCost from the prices (Opus
   assert.deepEqual([prior('claude-opus-5-5').priceInputPerM, prior('claude-opus-5-5').priceOutputPerM], [4, 20]);
   assert.deepEqual([prior('claude-fable-5-1').priceInputPerM, prior('claude-fable-5-1').priceOutputPerM], [10, 50]);
   assert.deepEqual([prior('claude-sonnet-5-5').priceInputPerM, prior('claude-sonnet-5-5').priceOutputPerM], [2, 10]);
-  assert.deepEqual([prior('claude-haiku-5-5').priceInputPerM, prior('claude-haiku-5-5').priceOutputPerM], [0.1, 0.5]);
+  assert.deepEqual([prior('claude-haiku-5-5').priceInputPerM, prior('claude-haiku-5-5').priceOutputPerM], [0.1, 0.5], 'FIXES-3 C2: the published list price, which Claude Code books (18.11.2026: three Haiku turns to the microdollar)');
+  assert.deepEqual([prior('claude-fable-5-2').priceInputPerM, prior('claude-fable-5-2').priceOutputPerM], [8, 40]);
   assert.deepEqual([prior('gpt-6-astra').priceInputPerM, prior('gpt-6-astra').priceOutputPerM], [10, 50]);
   assert.deepEqual([prior('gpt-6.1-terra').priceInputPerM, prior('gpt-6.1-terra').priceOutputPerM], [1, 5]);
   assert.equal(prior('claude-opus-5-5').relCost, 0.4);

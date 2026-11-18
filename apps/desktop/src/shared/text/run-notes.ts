@@ -14,6 +14,7 @@ const TRIGGERS: Record<WakeReason, string> = {
   message: 'Message', task: 'Task', schedule: 'Schedule', answer: 'Answer', approval: 'Approval', handoff: 'Handoff',
   child: 'Delegated work finished', retry: 'Retry', review: 'Review', report: 'Report to manager', manual: 'Manual', setup: 'Setup',
   event: 'Event', split: 'Split', // B-057
+  fold: 'Context fold', // KI-Runde 17.11.2026: the agent writes its hand-over
 };
 
 /** What started a run: its origin's label ("New mail in office@…"), else the wake reason's (B-054). */
@@ -57,6 +58,8 @@ export function systemNoteText(item: Pick<RunItem, 'kind' | 'name' | 'data'>): s
   if (failover) return `Switched to ${str(failover.to) || 'another model'}${paren(failover.reason === 'limit' ? 'limit reached' : 'model unavailable')}`;
   if (data.modelSet !== undefined) return `Model set to ${str(data.model) || 'another model'}${str(data.from) ? ` (was ${str(data.from)})` : ''}`;
   if (data.compacted !== undefined) return `Context compacted${paren(data.compacted === 'stateless' ? '' : str(data.compacted))}`;
+  if (data.checkpoint === true) return 'Hand-over written';
+  if (data.fold !== undefined) return data.fold === 'kept' ? `Context not folded${paren(str(data.reason))}` : `Context folded: ${num(data.hidden) ?? 0} earlier parts behind the hand-over`;
   if (data.sessionRenewed !== undefined) return `New session${paren(str(data.sessionRenewed))}`;
   if (data.fresh !== undefined) return `Fresh session${paren(str(data.fresh))}${data.history === 'rebuilt' ? ', history rebuilt' : ''}`;
   if (data.sessionDropped !== undefined) return `Session dropped${paren(str(data.sessionDropped).replace(/_/g, ' '))}`;

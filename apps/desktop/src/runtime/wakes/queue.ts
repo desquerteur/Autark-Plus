@@ -27,6 +27,7 @@ type Row = Record<string, unknown>;
 const STRENGTH: Record<WakeReason, number> = {
   answer: 9, message: 8, approval: 7, child: 6, task: 5, event: 5, handoff: 4, schedule: 3, review: 2, report: 2, retry: 1, manual: 0, setup: 0,
   split: 0, // B-057: a split's run – never a queued wake
+  fold: 0, // KI-Runde 17.11.2026: a context fold's run – never a queued wake
 };
 
 function mailJson(origin: Origin | undefined): string | null {

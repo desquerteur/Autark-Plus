@@ -18,6 +18,7 @@ import type { PeerHandler } from './rpc-peer.ts';
 import type { ComputerService } from '../computer/service.ts';
 import type { BrowserService } from '../browser/service.ts';
 import type { PhoneDriver, PhoneWireless } from '../phone/driver.ts';
+import type { PhonesHere } from '../phone/drivers.ts';
 import { computerTools } from '../computer/tools.ts';
 import { browserTools } from '../browser/tools.ts';
 import { phoneTools } from '../phone/tools.ts';
@@ -30,8 +31,8 @@ import { receivePiece, sendFile } from './send-file.ts';
 export interface DeviceToolDeps {
   computer: ComputerService;
   browser: BrowserService;
-  /** ADB and the Android app's phone use behind one driver (phone/drivers.ts mergedPhones). */
-  phone: PhoneDriver & PhoneWireless;
+  /** ADB and the Android app's phone use behind one driver (phone/drivers.ts mergedPhones; PhonesHere for the caps). */
+  phone: PhoneDriver & PhoneWireless & Partial<PhonesHere>;
   /** Connecting PCs (remote/service.ts, the meeting server): devices.connect, and devices.list's Remote ID and server state. */
   link?: DeviceLink;
 }
@@ -61,13 +62,20 @@ export function watched(tool: ToolDef, activity: ComputerActivity): ToolDef {
 }
 
 /**
- * What this PC can do for agents (updateSelf); a phone list of an older run is cleared (phone.devices asks adb itself).
+ * What this PC can do for agents (updateSelf), its phones among them: the ones attached here right now as the phone
+ * driver last saw them (phone/drivers.ts PhonesHere – no adb call of its own), so every PC of mine knows which PC a
+ * phone hangs off (phone/linked.ts). Both keys are always sent, so a list of an older run is replaced.
  * F25 (16.11.2026): `version` – the app version this PC runs, so my other PCs see it (Settings › Devices, their update check).
  */
 export async function localCaps(deps: DeviceToolDeps & { version?: string }): Promise<DeviceCaps> {
   let browser = false;
   try { detectChannel(); browser = true; } catch { browser = false; }
-  return { computerUse: deps.computer.canControl(), browser, os: deps.computer.platform, adbPhones: undefined, ...(deps.version ? { version: deps.version } : {}) };
+  const phones = deps.phone.here?.() ?? { app: [], adb: [] };
+  return {
+    computerUse: deps.computer.canControl(), browser, os: deps.computer.platform,
+    adbPhones: phones.adb.length ? phones.adb : undefined, appPhones: phones.app.length ? phones.app : undefined,
+    ...(deps.version ? { version: deps.version } : {}),
+  };
 }
 
 interface RemoteCall { name: string; args: Record<string, unknown>; agentId: string; agentName?: string; runId: string; conversationId?: string; taskId?: string; mode: string }

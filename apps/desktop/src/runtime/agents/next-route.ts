@@ -1,40 +1,34 @@
-// "Use model X" requests of the agent itself (model.set tool → the routing of later turns) and
-// the choice a turn returns to (RT2).
-// Owns: in the kv table, one pending next-step request per agent (13.11.2026: one context – wherever the next turn is
-// woken, it is the same me) – the next turn that reaches its engine takes
-// it (B-080: planTurn reads it with its `at`, agents/turn.ts deletes that one with takeNextRoute just before the engine
-// starts, so a turn that fails before its engine leaves it for the next one and a request written while the turn was
-// prepared holds for the next turn) – and one task request per (agent, task): every turn of the
-// agent on that task, in any chat (B-080: a task's turns run in several chats, a review or retry wake elsewhere and a
-// handoff move it), applies it until the task is done or cancelled, then its row is dropped;
-// `returnChoice`, a turn's RouteRequest.previous:
-// the request in force (explicit; the next step's fields over the task's), else my last done run
-// (any chat – one context; `returnRun`: with a next step in force my newest done run, whatever shaped it; with a task's request
-// alone – or under a next step that names neither model nor effort (a temperature alone, 14.11.) – that task's newest done run;
-// with none, one that no request of mine or a delegation shaped) and that the interim B-044
-// small-model chat default did not route (its reason OLD_CHAT_DEFAULT: that default is gone, so a chat it
-// put on Luna never stays there by the return rule) – with that run's category; B-083 D1: a named model also carries `from`, the model I am on
-// (`onModel`: my newest done run, whatever shaped it), where the turn stays while the named one cannot run; a
-// next-step request is still this one turn's, a task request holds until its model runs (routing/router.ts).
-// `catalogModel`, the check of a model a request names (model.set, tasks.create / tasks.give, a split's part, my subconscious's
-// turn): B-083 D5 the one lookup (routing/pins.ts modelMatches), D4 no effort refused – the router clamps it;
-// `modelWord`: cheap / strong as a need relative to the model I run on.
-// B-048 E4.2: a request may name a need (stronger, cheaper, faster, vision, long_context – routing/need.ts)
-// instead of a model: it keeps the need, `from` (the model the agent ran on) and the model model.set
-// named in its answer; the router resolves the need again on the turn (RouteRequest.previous.need).
-// B-078 (D14/D16): a request may carry a temperature (0..2), kept like the effort (next step or task); B-080: planTurn
-// puts it on TurnPlan.temperature (also without a run to return to) and the turn hands it to the engine; engines
-// without one ignore it.
-// B-083: my subconscious sets the coming turn before it starts (v1: subconscious/route-turn.ts): a next-step request with
-// `by: 'subconscious'` and its why as `reason`; returnChoice hands both to the router on RouteRequest.previous (`by`,
-// `why`), which names it "my subconscious: <why>" on the run's route (by stays 'request'). v1 routes every turn with content
-// (a person's or a colleague's lines, else its task), and a next step – its or my own model.set – is relative to the model I am
-// on (reviews 14.11.: skipping routed runs returned past nearly every recent turn, off a warm cache, and an effort-only model.set
-// landed elsewhere than its preview showed). A turn without a request – a wake without anyone's words and without a task, a call
-// that was cut or failed – skips them as B-083 did and continues where the router chose last, and a task's request alone returns
-// to that task's runs (a model set for a colleague's receipt never carries over to the work of the next wake).
-// Never: bypasses the router – a request reaches it as the explicit previous choice and the
-// router keeps policy, budget and availability bounds (routing/previous.ts).
+// What I, my task's giver or my subconscious asked a coming turn to run on (model.set, tasks.create / tasks.give, the
+// call before a turn) and the choice a turn starts from.
+// 17.11.2026 (the model settles; measured 15.–17.11.: 36 switches were the return to a model several runs old, 38 a task's
+// model request from its giver, re-resolved on every turn of an agent that worked on two things): the model I am on is
+// where every turn starts – the model my session is on, else my newest done run's – and a request moves the effort on any
+// turn, the model only where my context starts anew (routing/router.ts decides with RouteRequest.boundary).
+// Owns: these rows of the kv table –
+//   - my next turn's step (ns next_route, one per agent – one context, wherever the turn is woken): an effort and a
+//     temperature for that one turn – mine (model.set) or my subconscious's (`by: 'subconscious'`, its why as `reason`).
+//     planTurn reads it with its `at`, agents/turn.ts takes that one just before the engine starts, so a turn that fails
+//     before its engine leaves it and one written while the turn was prepared holds for the next turn (B-080);
+//   - the model I asked for (ns next_model, one per agent): a model or a kind of model (B-048 E4.2 `need` + `from`,
+//     routing/need.ts) that waits for my next boundary, or runs my next turn at once with `now`; the turn that could
+//     apply it takes it (takeNextModel), and it stands past that stretch as my own start model, which model.set writes
+//     beside this row (tools/builtin/models.ts) and clearNextModel drops with it; another start model set after it (the
+//     person's, my lead's – startModelSet) ends it: the newest choice holds (FIXES-3b F3);
+//   - a task's request (ns next_route_task, per agent and task): an effort and a temperature for every turn of mine on
+//     that task, in any chat, until it is done or cancelled, then its row is dropped. A model on such a row – written
+//     before this version – is not read: a model is named where a context starts (a part, a new colleague, a colleague's
+//     settled model – agents.split, agents.create, agents.update).
+// `returnChoice`, a turn's RouteRequest.previous: the model I am on with my settled effort there – that of my newest done
+// run on it whose effort nobody asked for, with its category; a request in force on top, marked explicit – a named model carries `from`, the model I am on, where the turn stays
+// off a boundary and while the named one cannot run; an effort that is not my own carries whose it is (`by`: my
+// subconscious's, my task's) with its why, so the route's reason names its source.
+// `catalogModel`, the check of a model a request names (model.set, a split's part, agents.create): B-083 D5 the one lookup
+// (routing/pins.ts modelMatches), D4 no effort refused – the router clamps it; `modelWord`: cheap / strong as a need
+// relative to the model I run on.
+// B-078 (D14/D16): a request may carry a temperature (0..2), kept like the effort; B-080: planTurn puts it on
+// TurnPlan.temperature and the turn hands it to the engine; engines without one ignore it.
+// Never: bypasses the router – a request reaches it as the explicit previous choice and the router keeps policy, budget
+// and availability bounds (routing/previous.ts).
 
 import type { Db } from '../db/database.ts';
 import type { ModelCatalog, RouteRequest } from '../contracts.ts';
@@ -43,54 +37,26 @@ import { ROUTE_BY_REQUEST, type Run } from '../../shared/model/runs.ts';
 import { resolvePin } from '../routing/pins.ts';
 
 const NS = 'next_route';
+const MODEL_NS = 'next_model';
 const TASK_NS = 'next_route_task';
 
-/** RouteRequest.previous as returnChoice gives it: B-083 `by`/`why` = the request in force is my subconscious's, with its why (router.ts reads them). */
+/** RouteRequest.previous as returnChoice gives it. */
 export type Previous = NonNullable<RouteRequest['previous']>;
 type Need = NonNullable<Previous['need']>['kind'];
 
 /** `need` + `from` (E4.2): a kind of model relative to the one the agent ran on; `modelId` is then the model model.set named.
  *  `temperature` (B-078): the sampling temperature 0..2, kept like the effort; engines that take one send it.
- *  `by` (B-083): 'subconscious' – my subconscious set it before the turn (its why is `reason`); absent – my own model.set or a delegation. */
-export interface NextRoute { modelId?: string; effort?: Effort; reason?: string; at: number; need?: Need; from?: string; temperature?: number; by?: 'subconscious' }
-
-/** The route reason of a turn the removed B-044 chat default (an agent's plain conversation on Luna) chose. */
-export const OLD_CHAT_DEFAULT = 'small model for conversation';
-
-/** A done run of mine a turn can return to (B-057: never a split's – its model is its part's; never one the removed B-044 chat default chose). */
-const doneRun = (run: Run) => !run.splitId && Boolean(run.model) && run.status === 'done' && !run.route?.reason?.includes(OLD_CHAT_DEFAULT);
-
-/** What a turn's model is relative to: a next step's request, a task's request alone, or none. */
-export type ReturnKind = 'step' | 'task' | 'none';
-
-/**
- * The run a turn returns to (RT2, v1 14.11.2026). 'step' – a next step's request (my own model.set or my subconscious's) is relative to
- * the model I am on: my newest done run, whatever shaped it (model.set's preview shows that one). 'task' – a task's request alone is
- * relative to where that task ran last: its newest done run, else as 'none'. 'none' (B-083) – the router's last own choice: a run a
- * request shaped is skipped, so a model set for one message (a colleague's receipt on Luna) never carries over to other work.
- */
-export function returnRun(runs: readonly Run[], kind: ReturnKind, taskId?: string): Run | undefined {
-  if (kind === 'step') return runs.find(doneRun);
-  const own = kind === 'task' && taskId ? runs.find((run) => doneRun(run) && run.taskId === taskId) : undefined;
-  return own ?? runs.find((run) => doneRun(run) && run.route?.by !== ROUTE_BY_REQUEST);
-}
-
-/**
- * The kind of the request in force: a task's when the turn has its task and the request carries no next step (`stepAt`) of mine or my
- * subconscious's – or one whose model and effort are the task's (`ofTask`: the step names neither, a temperature alone); else a step's.
- */
-function kindOf(requested: PendingRoute | undefined, taskId: string | undefined): ReturnKind {
-  if (!requested) return 'none';
-  return taskId && (requested.ofTask || (requested.stepAt === undefined && !requested.by)) ? 'task' : 'step';
-}
+ *  `by` (B-083): 'subconscious' – my subconscious set this turn's effort (its why is `reason`); absent – my own model.set or my task's giver.
+ *  `now`: my own model.set with now – the model runs my next turn, inside my live session too. */
+export interface NextRoute { modelId?: string; effort?: Effort; reason?: string; at: number; need?: Need; from?: string; temperature?: number; by?: 'subconscious'; now?: true }
 
 function taskKey(agentId: string, taskId: string): string {
   return `${agentId}:${taskId}`;
 }
 
-function put(db: Db, ns: string, k: string, value: NextRoute): void {
+function put(db: Db, ns: string, k: string, value: object, at: number): void {
   db.run('INSERT INTO kv (ns, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(ns, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-    [ns, k, JSON.stringify(value), value.at]);
+    [ns, k, JSON.stringify(value), at]);
 }
 
 function read(db: Db, ns: string, k: string): NextRoute | undefined {
@@ -99,56 +65,107 @@ function read(db: Db, ns: string, k: string): NextRoute | undefined {
   try { return JSON.parse(row.value) as NextRoute; } catch { return undefined; }
 }
 
-/** The request for the agent's next turn, wherever it is woken (one step). */
-export function setNextRoute(db: Db, agentId: string, value: NextRoute): void {
-  put(db, NS, agentId, value);
+function drop(db: Db, ns: string, k: string): void {
+  db.run('DELETE FROM kv WHERE ns = ? AND key = ?', [ns, k]);
 }
 
-/** The request for every turn of the agent on `taskId`, in any chat, until the task is done (replaces an earlier one). */
+/** `value` without its undefined fields. */
+function set<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+
+/** The effort and temperature of a request – what one turn, or a task's turns, take from it. */
+const stepOf = (value: NextRoute) => set({ effort: value.effort, temperature: value.temperature, reason: value.reason, by: value.by, at: value.at });
+/** The model of a request – what waits for my next boundary. */
+const modelOf = (value: NextRoute) => set({ modelId: value.modelId, need: value.need, from: value.from, reason: value.reason, now: value.now, at: value.at });
+
+/**
+ * My request for what comes next, wherever I am woken: its effort and temperature are my next turn's step (replacing the
+ * one stored), its model or kind of model is the model I asked for (replacing an earlier one).
+ */
+export function setNextRoute(db: Db, agentId: string, value: NextRoute): void {
+  if (value.effort !== undefined || value.temperature !== undefined) put(db, NS, agentId, stepOf(value), value.at);
+  if (value.modelId !== undefined || value.need !== undefined) put(db, MODEL_NS, agentId, modelOf(value), value.at);
+}
+
+/** The effort and temperature of every turn of the agent on `taskId`, in any chat, until the task is done (replaces an earlier one). */
 export function setTaskRoute(db: Db, agentId: string, taskId: string, value: NextRoute): void {
-  put(db, TASK_NS, taskKey(agentId, taskId), value);
+  if (value.effort !== undefined || value.temperature !== undefined) put(db, TASK_NS, taskKey(agentId, taskId), stepOf(value), value.at);
 }
 
 /**
- * Deletes the pending next-step request and returns it (it applies to one turn only: agents/turn.ts takes it as the engine
- * starts). B-080: with `at` – the request that turn read (PendingRoute.stepAt) – only while it is still the stored one: a
- * request written since stays for the next turn; without `at`, whatever is stored.
+ * Deletes my next turn's step and returns it (it is that one turn's: agents/turn.ts takes it as the engine starts). B-080:
+ * with `at` – the step that turn read (PendingRoute.stepAt) – only while it is still the stored one: one written since
+ * stays for the next turn. Without `at` – my running turn took the request inside it (tookInTurn) – whatever is
+ * stored, the model I asked for with it.
  */
 export function takeNextRoute(db: Db, agentId: string, at?: number): NextRoute | undefined {
-  const k = agentId;
-  const value = read(db, NS, k);
-  if (!value || (at !== undefined && value.at !== at)) return undefined;
-  db.run('DELETE FROM kv WHERE ns = ? AND key = ?', [NS, k]);
-  return value;
+  const step = read(db, NS, agentId);
+  const taken = step && (at === undefined || step.at === at) ? step : undefined;
+  if (taken) drop(db, NS, agentId);
+  if (at !== undefined) return taken;
+  const model = read(db, MODEL_NS, agentId);
+  if (model) drop(db, MODEL_NS, agentId);
+  return taken || model ? { ...model, ...taken, at: (taken ?? model)!.at } : undefined;
 }
 
 /**
- * The request in force for a turn; `stepAt` (B-080): the `at` of the next-step request in it, the one takeNextRoute ends; `ofTask`
- * (14.11.2026): its model and effort are the task's request – the next step on top names neither – so the turn returns to the task's runs.
+ * My running turn runs on the model I asked for with now (the engine ran a request on it – agents/turn-attempt.ts, FIXES-3
+ * C1): my request ends, except its temperature, which my next turn takes (a running turn keeps the one it started with).
+ * A turn that ends before a request ran on it leaves the request for my next turn.
  */
-export type PendingRoute = NextRoute & { stepAt?: number; ofTask?: true };
+export function tookInTurn(db: Db, agentId: string, at: number): void {
+  const taken = takeNextRoute(db, agentId);
+  if (taken?.temperature !== undefined) setNextRoute(db, agentId, { temperature: taken.temperature, ...(taken.by ? { by: taken.by } : {}), ...(taken.reason ? { reason: taken.reason } : {}), at });
+}
+
+/** The model I asked for has had its turn – the one that read it at `at` (PendingRoute.modelAt) started at a boundary, or ran it at once: it is used up while it is still the stored one. */
+export function takeNextModel(db: Db, agentId: string, at: number): void {
+  if (read(db, MODEL_NS, agentId)?.at === at) drop(db, MODEL_NS, agentId);
+}
+
+/** I leave the model to my kind of work again (model.set with auto): the model I asked for is gone. */
+export function clearNextModel(db: Db, agentId: string): void {
+  drop(db, MODEL_NS, agentId);
+}
 
 /**
- * The request in force for a turn: the next step's (read, left in place – takeNextRoute ends it) over the task's, field
- * by field; the agent's task requests of finished tasks (`finished`) are dropped first.
+ * FIXES-3b F3: my start model changed (org/service.ts, every edit of my model policy). The newest choice holds: a start
+ * model other than the one I asked for – the person's, my lead's – ends my older request; model.set writes the model it
+ * asks for as my start model too, so my own request stays.
+ */
+export function startModelSet(db: Db, agentId: string, pin: string | undefined): void {
+  const asked = read(db, MODEL_NS, agentId);
+  if (asked && asked.modelId !== pin) drop(db, MODEL_NS, agentId);
+}
+
+/**
+ * The request in force for a turn; `stepAt` (B-080): the `at` of the step in it, the one takeNextRoute ends; `modelAt`: the
+ * `at` of the model I asked for in it, the one takeNextModel ends; `by`: whose its effort is when it is not my own.
+ */
+export type PendingRoute = Omit<NextRoute, 'by'> & { stepAt?: number; modelAt?: number; by?: 'subconscious' | 'task' };
+
+/**
+ * The request in force for a turn (read, left in place): the model I asked for, the effort and temperature of my step
+ * over my task's, field by field; the agent's task requests of finished tasks (`finished`) are dropped first.
  */
 export function pendingRoute(db: Db, agentId: string, taskId: string | undefined, finished: (taskId: string) => boolean): PendingRoute | undefined {
   const prefix = `${agentId}:`;
   const rows = db.all<{ key: string }>('SELECT key FROM kv WHERE ns = ? AND substr(key, 1, ?) = ?', [TASK_NS, prefix.length, prefix]);
-  for (const row of rows) if (finished(row.key.slice(prefix.length))) db.run('DELETE FROM kv WHERE ns = ? AND key = ?', [TASK_NS, row.key]);
+  for (const row of rows) if (finished(row.key.slice(prefix.length))) drop(db, TASK_NS, row.key);
   const step = read(db, NS, agentId);
+  const model = read(db, MODEL_NS, agentId);
   const scoped = taskId ? read(db, TASK_NS, taskKey(agentId, taskId)) : undefined;
-  if (!step) return scoped;
-  if (!scoped) return { ...step, stepAt: step.at };
-  // A next-step request that names a model or a need replaces the task's model choice as a whole (E4.2).
-  const shapes = Boolean(step.modelId || step.need);
-  const model = shapes ? { modelId: step.modelId, need: step.need, from: step.from } : { modelId: scoped.modelId, need: scoped.need, from: scoped.from };
-  // B-083: my subconscious's step keeps its own why (never the task request's reason under its name).
-  const reason = step.by ? step.reason : step.reason ?? scoped.reason;
-  const ofTask = !shapes && step.effort === undefined ? { ofTask: true as const } : {};
-  const merged: PendingRoute = { ...model, effort: step.effort ?? scoped.effort, reason, temperature: step.temperature ?? scoped.temperature, by: step.by, at: step.at, stepAt: step.at, ...ofTask };
-  for (const field of ['modelId', 'need', 'from', 'effort', 'reason', 'temperature', 'by'] as const) if (merged[field] === undefined) delete merged[field];
-  return merged;
+  const mine = step?.effort !== undefined;
+  const effort = mine ? step!.effort : scoped?.effort;
+  const temperature = step?.temperature ?? scoped?.temperature;
+  if (!step && !model && effort === undefined && temperature === undefined) return undefined; // a task row from before this version that names only a model
+  const by = effort === undefined ? undefined : mine ? step!.by : 'task' as const;
+  return set({
+    modelId: model?.modelId, need: model?.need, from: model?.from, now: model?.now, effort, temperature, by,
+    reason: by === 'task' ? scoped!.reason : by === 'subconscious' ? step!.reason : undefined,
+    at: (step ?? model ?? scoped)!.at, stepAt: step?.at, modelAt: model?.at,
+  });
 }
 
 /** The catalog entry a name points to (D5, the one lookup – also for splits/validate.ts), or undefined. */
@@ -157,9 +174,9 @@ export function findModel(catalog: Pick<ModelCatalog, 'get' | 'list'>, name: str
 }
 
 /**
- * A model a request names (model.set, tasks.create / tasks.give, a split's part, my subconscious's turn): its catalog entry through
- * the one lookup (D5, routing/pins.ts modelMatches: id, older id, provider model id or name in plain form) – else what I
- * read instead (first person, the fact and what helps). The effort is the router's to clamp (D4, routing/router.ts).
+ * A model a request names (model.set, a split's part, agents.create): its catalog entry through the one lookup (D5,
+ * routing/pins.ts modelMatches: id, older id, provider model id or name in plain form) – else what I read instead (first
+ * person, the fact and what helps). The effort is the router's to clamp (D4, routing/router.ts).
  */
 export function catalogModel(catalog: Pick<ModelCatalog, 'get' | 'list'>, model: string): ModelInfo | string {
   const info = findModel(catalog, model);
@@ -168,46 +185,48 @@ export function catalogModel(catalog: Pick<ModelCatalog, 'get' | 'list'>, model:
   return info;
 }
 
-/** D5: cheap / strong where I name a model (model.set, tasks.create, tasks.give) – a need relative to the model I run on (routing/need.ts). */
+/** D5: cheap / strong where I name a model (model.set) – a need relative to the model I run on (routing/need.ts). */
 export function modelWord(named: string): 'cheaper' | 'stronger' | undefined {
   const word = named.trim().toLowerCase();
   return word === 'cheap' ? 'cheaper' : word === 'strong' ? 'stronger' : undefined;
 }
 
-/** D1: the model I am on – my newest done run (a split's aside), whatever shaped its route. */
+/** A done run of my own lane (B-057: never a split's – its model is its part's). */
+const doneRun = (run: Run) => !run.splitId && Boolean(run.model) && run.status === 'done';
+
+/** The model I am on, from my runs alone – my newest done run's (a split's aside), whatever shaped its route. */
 export function onModel(runs: readonly Run[]): string | undefined {
-  return runs.find((run) => !run.splitId && Boolean(run.model) && run.status === 'done')?.model;
+  return runs.find(doneRun)?.model;
 }
+
+/** A run whose effort nobody asked for (B-089 route.effortBy; an older run: its route was not a request's). */
+const ownEffort = (run: Run) => (run.route?.effortBy ? run.route.effortBy !== 'request' : run.route?.by !== ROUTE_BY_REQUEST);
+
+/** A run on a model that stands in for one that could not run (routing/router.ts standIn). */
+const standsIn = (run: Run) => run.route?.standIn === true;
 
 /**
- * RouteRequest.previous of a turn. `runs` = the agent's runs, newest first; `taskId` = the turn's task (a task's request alone returns
- * to that task's runs, returnRun). A request without a model and without a run to return to keeps modelId '' (its effort still
- * applies). B-083: a request of my subconscious carries `by` and its why along (a temperature-only one on the run returned to).
+ * RouteRequest.previous of a turn. `runs` = the agent's runs, newest first; `place.on` = the model my session is on
+ * (agents/boundary.ts), else my newest done run's. Its effort is my settled one there – the effort of my newest done run on
+ * that model that nobody asked for (an effort set for one message – a colleague's receipt at low – never carries over to the
+ * next wake), with that run's category; none such: no effort, the router's default applies. A request without a model and
+ * without a model to be on keeps modelId '' (its effort still applies).
  */
-export function returnChoice(runs: readonly Run[], requested: PendingRoute | undefined, place: { taskId?: string } = {}): Previous | undefined {
-  const choice = choiceOf(runs, requested, place.taskId);
-  return choice && requested?.by ? { ...choice, by: requested.by, ...(requested.reason ? { why: requested.reason } : {}) } : choice;
-}
-
-function choiceOf(runs: readonly Run[], requested: PendingRoute | undefined, taskId: string | undefined): Previous | undefined {
-  const kind = kindOf(requested, taskId);
-  const last = returnRun(runs, kind, taskId);
-  const category = last?.route?.category ? { category: last.route.category } : {};
-  const base: Previous | undefined = last?.model ? { modelId: last.model, effort: last.effort ?? 'medium', ...category } : undefined;
-  if (requested?.need) {
-    // E4.2: the router resolves the need relative to `from`; modelId = the model model.set named (else `from`).
-    const need = { kind: requested.need, ...(requested.from ? { from: requested.from } : {}) };
-    const modelId = requested.modelId ?? requested.from ?? base?.modelId ?? '';
-    return requested.effort
-      ? { modelId, effort: requested.effort, explicit: true, need }
-      : { modelId, effort: base?.effort ?? 'medium', explicit: true, asked: 'model', need, ...category };
+export function returnChoice(runs: readonly Run[], requested: PendingRoute | undefined, place: { on?: string } = {}): Previous | undefined {
+  const on = place.on ?? onModel(runs);
+  const last = on ? runs.find((run) => doneRun(run) && run.model === on && ownEffort(run)) : undefined;
+  const settled: Pick<Previous, 'effort' | 'category'> = last?.effort ? { effort: last.effort, ...(last.route?.category ? { category: last.route.category } : {}) } : {};
+  // The model I am on stands in for one that could not run: my newest turn there says so, and my kind decides again at my
+  // next boundary (routing/router.ts).
+  const there = on ? runs.find((run) => doneRun(run) && run.model === on) : undefined;
+  const standIn: Pick<Previous, 'standIn'> = there && standsIn(there) ? { standIn: true } : {};
+  const whose = requested?.by && requested.effort ? { by: requested.by, ...(requested.reason ? { why: requested.reason } : {}) } : {};
+  if (requested?.modelId || requested?.need) {
+    // E4.2: the router resolves a need relative to `need.from`; modelId = the model model.set named (else the one I am on).
+    const need = requested.need ? { need: { kind: requested.need, ...(requested.from ? { from: requested.from } : {}) } } : {};
+    const model = { modelId: requested.modelId ?? on ?? '', explicit: true as const, ...need, ...(on ? { from: on } : {}), ...(requested.now ? { now: true as const } : {}), ...standIn };
+    return requested.effort ? { ...model, effort: requested.effort, ...whose } : { ...model, asked: 'model', ...settled };
   }
-  // D1: the model the work is on – where the turn stays while the one named cannot run (routing/router.ts): for a task's request alone
-  // that task's own base run, never a model set for other work (re-review 14.11.), else the model I am on.
-  const on = requested?.modelId ? (kind === 'task' ? last?.model : onModel(runs)) : undefined;
-  const from = on && on !== requested?.modelId ? { from: on } : {};
-  if (requested?.modelId && requested.effort) return { modelId: requested.modelId, effort: requested.effort, explicit: true, ...from };
-  if (requested?.modelId) return { modelId: requested.modelId, effort: base?.effort ?? 'medium', explicit: true, asked: 'model', ...category, ...from };
-  if (requested?.effort) return { modelId: base?.modelId ?? '', effort: requested.effort, explicit: true, asked: 'effort', ...category };
-  return base;
+  if (requested?.effort) return { modelId: on ?? '', effort: requested.effort, explicit: true, asked: 'effort', ...(settled.category ? { category: settled.category } : {}), ...whose, ...standIn };
+  return on ? { modelId: on, ...settled, ...standIn } : undefined;
 }

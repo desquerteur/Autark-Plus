@@ -40,7 +40,7 @@ ${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</
       <div class="release__body">
         <h2 class="h4">${esc(titleOf(r))}</h2>
         <div class="prose" style="font-size:15.5px">${summary(r.notes || '')}</div>
-        <div class="release__files">${r.assets.filter((a) => !/blockmap/.test(a.name)).map((a) => `<a href="${esc(a.url)}" rel="nofollow">${esc(a.name)}${/\.txt$/.test(a.name) ? '' : ` · ${mb(a.size)}`}</a>`).join('')}<a href="${esc(r.url)}" rel="noopener">Full notes →</a></div>
+        <div class="release__files">${r.assets.filter((a) => !/blockmap/.test(a.name)).map((a) => `<a href="${esc(r.url)}" rel="noopener">${esc(a.name)}${/\.txt$/.test(a.name) ? '' : ` · ${mb(a.size)}`}</a>`).join('')}<a href="${esc(r.url)}" rel="noopener">Full notes →</a></div>
       </div>
     </article>`).join('') : `<p class="lead">The release list could not be loaded while this page was built. <a href="${release.releasesUrl}" rel="noopener">See every release on GitHub</a>.</p>`}
   </div>

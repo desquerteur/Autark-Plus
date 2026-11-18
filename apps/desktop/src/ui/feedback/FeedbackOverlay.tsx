@@ -8,7 +8,9 @@
 // overlay draws its slot at the cell's spot (lib/dialog.tsx DialogSlot) – or the shortcut freezes the overlay itself:
 // a new snapshot with the old one and the dock in it, the words stay. The arrow or Escape closes it and keeps the draft.
 // On the phone the same, full screen, with the Android app's own shot; where nothing captures the window (the iPhone web
-// app, a browser) the dock lies over the live screen and "Add photo" picks a screenshot or photo to paint on.
+// app, a browser) the dock lies over the live screen and "Add photo" picks a screenshot or photo to paint on. The phone
+// paints with the pen only – no Pen/Box choice, Undo stays (feedback 16.11.2026 C2CC3D50: "nur Pen und ein Zurück").
+// While a send is on its way the overlay shows the draft as sent, its tools disabled (draft.ts sentDraft).
 // Owns: the overlay dialog, the frozen stage, the paint tools and the screenshot box. Never: the form's words, sending or
 // taking the snapshot (popover-state.ts).
 
@@ -20,7 +22,8 @@ import { errorText } from '../lib/rpc.ts';
 import { AnnotationCanvas } from './AnnotationCanvas.tsx';
 import { canCaptureWindow, pickedImage } from './bridge.ts';
 import { PHOTO_ADD, PHOTO_HINT, SHOT_HINT, SHOT_LABEL, SHOT_MISSING } from './delivery.ts';
-import { feedbackDraft, updateDraft } from './draft.ts';
+import { feedbackDraft, sentDraft, shownDraft, updateDraft } from './draft.ts';
+import { isMobile } from '../lib/store.ts';
 import type { FeedbackDraft } from './draft.ts';
 import { FeedbackForm } from './FeedbackPanel.tsx';
 import type { PaintMark, PaintTool } from './paint.ts';
@@ -54,8 +57,9 @@ export function FeedbackOverlay(props: { onInbox: () => void }) {
 }
 
 function Frozen(props: { onInbox: () => void }) {
-  const draft = feedbackDraft.value;
-  const [tool, setTool] = useState<PaintTool>('pen');
+  const draft = shownDraft();
+  const [chosen, setTool] = useState<PaintTool>('pen');
+  const tool: PaintTool = isMobile.value ? 'pen' : chosen; // the phone has the pen only
   // A mark belongs to the shot it was drawn on (a new snapshot meanwhile: it is dropped with that shot).
   const paint = (mark: PaintMark, on: string) => {
     const current = feedbackDraft.peek();
@@ -98,7 +102,8 @@ function ShotTools(props: { draft: FeedbackDraft; tool: PaintTool; setTool: (too
   const { draft, tool } = props;
   const capture = canCaptureWindow();
   const picker = useRef<HTMLInputElement>(null);
-  const painting = draft.shot !== null && draft.withShot;
+  const going = sentDraft.value !== null; // a send on its way: shown as sent, nothing to change
+  const painting = draft.shot !== null && draft.withShot && !going;
   const pick = () => picker.current?.click();
   const picked = async (input: HTMLInputElement) => {
     const file = input.files?.[0];
@@ -119,14 +124,14 @@ function ShotTools(props: { draft: FeedbackDraft; tool: PaintTool; setTool: (too
         </button>
       )}
       <label class="feedback-check feedback-chip" title={draft.shot ? SHOT_HINT : capture ? SHOT_MISSING : PHOTO_HINT}>
-        <input type="checkbox" checked={draft.withShot && draft.shot !== null} disabled={draft.shot === null}
+        <input type="checkbox" checked={draft.withShot && draft.shot !== null} disabled={draft.shot === null || going}
           onChange={(event) => updateDraft({ withShot: (event.currentTarget as HTMLInputElement).checked })} />
         {SHOT_LABEL}
       </label>
-      <div class="segmented feedback-paint" role="group" aria-label="Paint">
+      {!isMobile.value && <div class="segmented feedback-paint" role="group" aria-label="Paint">
         <button type="button" class={tool === 'pen' ? 'selected' : ''} aria-pressed={tool === 'pen'} disabled={!painting} onClick={() => props.setTool('pen')}>Pen</button>
         <button type="button" class={tool === 'box' ? 'selected' : ''} aria-pressed={tool === 'box'} disabled={!painting} onClick={() => props.setTool('box')}>Box</button>
-      </div>
+      </div>}
       <button type="button" class="icon-button small" aria-label="Undo" title="Undo" disabled={!painting || !draft.marks.length}
         onClick={() => updateDraft({ marks: draft.marks.slice(0, -1), painted: null })}>
         <Icon name="arrow-counter-clockwise" size={16} />

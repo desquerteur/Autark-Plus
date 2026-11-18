@@ -66,7 +66,7 @@ test('the outbox posts a block once, as soon as its closing tag arrives, with it
   assert.ok(h.runs.some((item) => (item.data as { chatOut?: string }).chatOut === notMemberNote(h.foreign.id)), 'the run log names it');
 });
 
-test('a quiet line: no unread, no notification – but an @mention of the person reaches them as a push', async () => {
+test('a quiet line: no unread, no notification – but an @mention of the person reaches them (a reply: only push rings)', async () => {
   const h = room();
   const out = new ChatOutbox(h.services, { agentId: 'ag_tom', runId: 'run_1' });
   out.segment(`<chat to="${h.mine.id}" quiet>Noted for the record.</chat>`, true);
@@ -75,7 +75,8 @@ test('a quiet line: no unread, no notification – but an @mention of the person
   assert.equal(h.notified.length, 0);
   out.segment(`<chat to="${h.mine.id}" quiet>@CEO the upload needs your code.</chat>`, true);
   await out.done();
-  assert.deepEqual(h.notified.map((note) => note.kind), ['important']);
+  assert.equal(h.tom(h.mine.id)[1].silent, false, 'a quiet line that names the person is a normal line');
+  assert.deepEqual(h.notified.map((note) => note.kind), ['reply'], 'KI-Runde 17.11.2026: the @mention by an agent addresses the person and does not ring them');
 });
 
 test('a push line in a group reaches every other agent there at once', async () => {
@@ -90,9 +91,11 @@ test('"## My chats": a stable line per chat; unseen lines of others get one news
   const h = room();
   const before = chatOverview(h.services, 'ag_tom');
   assert.ok(before.startsWith('## My chats\n') && before.includes(`\n${h.mine.id} · Rechnungen`), before);
+  const line = before.split('\n').find((entry) => entry.startsWith(h.mine.id))!;
+  assert.match(line, / · .+ reads here$/, 'KI-Runde 17.11.2026: a chat the person is in says so');
   h.chats.send({ conversationId: h.mine.id, authorId: HUMAN_ID, body: `Bitte prüfen: ${'x'.repeat(200)}` });
   const summary = h.chats.list({ forMember: 'ag_tom', includeHidden: true }).find((chat) => chat.id === h.mine.id)!;
-  assert.equal(overviewLine(h.services, summary, 'ag_tom'), `${h.mine.id} · Rechnungen`, 'the line itself never changes with a post');
+  assert.equal(overviewLine(h.services, summary, 'ag_tom'), line, 'the line itself never changes with a post');
   const marked = chatOverview(h.services, 'ag_tom').split('\n').find((line) => line.startsWith(h.mine.id))!;
   assert.match(marked, / · 1 new · newest \S+ \w{3} \d+ \w{3} \d\d:\d\d: "Bitte prüfen: x+…"$/, marked);
   assert.equal(chatOverview(h.services, 'ag_tom', h.mine.id), before, 'the chat whose lines come in this input: no mark');

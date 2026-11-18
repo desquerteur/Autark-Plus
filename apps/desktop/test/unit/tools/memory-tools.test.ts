@@ -1,6 +1,6 @@
 // memory.browse / read / write / forget: one handler for every caller, the caller's own folder by default, findable by writing;
-// a file's description where the agent asked (its folder line, its read, a knowledge.find hit); on demand (not in the core set), and
-// no memory search tool of its own.
+// a file's description where the agent asked (its folder line, its read, a knowledge.find hit); memory.write in every
+// core set and the rest on demand, and no memory search tool of its own.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -72,10 +72,10 @@ test('a description shows where it was asked for: the folder line, the read and 
   assert.match(found, /^- \[note:company:kunden:mueller\.md\] memory note "Müller" \(When an invoice to Müller is due\.\) – /m);
 });
 
-test('the memory tools are on demand and there is no memory search tool', () => {
-  for (const name of ['memory.browse', 'memory.read', 'memory.write', 'memory.forget']) {
-    assert.ok(byName(name), name);
-    assert.equal(name in BASE_CORE, false, `${name} is not in the core set`);
-  }
+test('memory.write is in every core set, the rest on demand; there is no memory search tool', () => {
+  for (const name of ['memory.browse', 'memory.read', 'memory.write', 'memory.forget']) assert.ok(byName(name), name);
+  // KI-Runde 17.11.2026 (tools-friction 1.4: 69 calls and 14 lookups by name in 2.5 days): what I learned stays, directly.
+  assert.equal('memory.write' in BASE_CORE, true);
+  for (const name of ['memory.browse', 'memory.read', 'memory.forget']) assert.equal(name in BASE_CORE, false, `${name} is on demand`);
   assert.equal(memoryTools.some((t) => t.name === 'memory.search'), false);
 });

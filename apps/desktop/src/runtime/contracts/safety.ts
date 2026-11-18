@@ -83,8 +83,9 @@ export interface ToolRegistry {
 }
 
 export interface McpHub {
-  /** URL + bearer token for an agent run (lease); the token encodes the run context. */
-  lease(ctx: Omit<ToolContext, 'services' | 'signal' | 'status'>): { url: string; token: string; release(): void };
+  /** URL + bearer token for an agent run (lease); the token encodes the run context. `tools` (S2): the names the hub serves
+   *  this run – a resumed session's own offer; without them the agent's current offer. */
+  lease(ctx: Omit<ToolContext, 'services' | 'signal' | 'status'>, tools?: readonly string[]): { url: string; token: string; release(): void };
   url(): string;
   // --- additions (R3-D); optional so simple fakes stay valid
   /** One HTTP POST to `/mcp/<token>` or `/mcp` (Bearer header); the HTTP server sends the reply. */

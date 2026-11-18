@@ -1,6 +1,6 @@
 // media.listen (MM10, B-058 G9): an agent hears a stored recording or video – music, sounds, voices –
 // through a model that listens, and gets its answer to the agent's question. One one-shot turn of
-// decision/engine-runner.ts createListener (a model that hears audio; the compatible chat adapter
+// decision/listener.ts createListener (a model that hears audio; the compatible chat adapter
 // sends it as input_audio): a stored WAV/MP3 ≤ 10 MB as it is, anything else media/hear-any.ts hears
 // (every common audio and video format) as the decoded 16 kHz WAV of one span ≤ 5 minutes
 // (media-listen-plan.ts; the agent asks for a span with start/end or a media: reference – one the host decodes
@@ -21,7 +21,7 @@ import path from 'node:path';
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { MediaInfo } from '../../../shared/model/media.ts';
 import { encodeWav } from '../../../shared/voice/wav.ts';
-import { createListener, listenOptions, type Heard, type ListenOptions } from '../../decision/engine-runner.ts';
+import { createListener, listenOptions, type Heard, type ListenOptions } from '../../decision/listener.ts';
 import { pcmOf } from '../../media/hear-any.ts';
 import { soundsText, soundTagger, timeText, type SoundReport } from '../../media/sounds.ts';
 import { formatMoney } from '../../spend/ledger.ts';

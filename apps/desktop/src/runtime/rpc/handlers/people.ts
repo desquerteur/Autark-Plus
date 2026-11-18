@@ -21,6 +21,7 @@ import { registerPersonBase } from '../../people/rpc-base.ts';
 import { registerPersonChats } from '../../people/rpc-chats.ts';
 import { registerPersonTasks } from '../../people/rpc-tasks.ts';
 import { registerPersonWork } from '../../people/rpc-work.ts'; // their files and "Make it mine"
+import { registerPersonPane } from '../../people/rpc-pane.ts'; // the tabs shared with them in their chats' areas
 import { registerPersonCeo, saveInput } from '../../people/rpc-ceo.ts';
 import type { PeopleService } from '../../people/service.ts';
 import { currentCaller } from '../caller.ts';
@@ -94,5 +95,6 @@ export function register(table: HandlerTable): void {
   registerPersonChats(table);
   registerPersonTasks(table);
   registerPersonWork(table);
+  registerPersonPane(table);
   registerPersonCeo(table, chatsOf); // F13: what a CEO person calls beyond a member
 }

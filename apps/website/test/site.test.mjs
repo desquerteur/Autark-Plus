@@ -59,7 +59,7 @@ test('one page per platform with a canonical address, one h1, a big button and v
     const p = platforms.find((x) => `download/${x.id}` === slug);
     assert.ok(html.includes(`<link rel="canonical" href="${site.url}/${slug}/">`), slug);
     assert.equal((html.match(/<h1[\s>]/g) || []).length, 1, slug);
-    if (p.file) assert.ok(html.includes(`href="${release.asset(p.file)}"`), `${slug} button`);
+    if (p.file) assert.ok(html.includes(`href="${release.latestUrl}" data-dl="${p.id}"`), `${slug} button leads to the release page on GitHub, not to the file`);
     else assert.ok(!html.includes('.apk"') && html.includes('href="#steps"'), 'iPhone has no file, only the way to set it up');
     const graph = ldOf(html).flatMap((g) => g['@graph']);
     assert.ok(graph.some((n) => n['@type'] === 'HowTo' && n.step.length >= 2), `${slug} HowTo`);
@@ -191,4 +191,18 @@ test('download overview lists every platform page', () => {
   const html = download(rel);
   for (const p of platforms) assert.ok(html.includes(`download/${p.id}/`), p.id);
   assert.ok(!html.includes('pill--available'));
+});
+
+// 18.11.2026 (a mail gateway marked mails with a link to the site as suspicious – a direct link to an installer): no address
+// of the site answers with an installer, and no page links to one. The buttons lead to a platform page here or to the release
+// page on GitHub; /get/<id> leads to the platform page; only the text file of checksums is still sent as itself.
+const FILE_LINK = /(?:https?:)?\/\/[^"'\s<>)]*\.(?:exe|apk|dmg|AppImage|zip|msi)|releases\/(?:latest\/)?download\/(?!SHA256SUMS\.txt)[^"'\s<>)]*/i;
+test('no page links to an installer file; the buttons lead to a page here or to the release page', async () => {
+  const pages = [home(rel), await download(rel), ...platformPages(rel).map((p) => p.html)];
+  for (const [i, html] of pages.entries()) assert.doesNotMatch(html, FILE_LINK, `page ${i}`);
+  assert.ok(home(rel).includes(`href="/download/windows/" data-dl="windows"`) || home(rel).includes('/download/windows/" data-dl="windows"'), 'the home button opens the Windows page');
+  for (const d of downloads) {
+    const target = d.id === 'checksums' ? release.asset(d.file) : `${site.url}/download/${d.id === 'mac-zip' ? 'mac' : d.id}/`;
+    assert.doesNotMatch(target, /\.(?:exe|apk|dmg|AppImage|zip|msi)$/i, d.id);
+  }
 });

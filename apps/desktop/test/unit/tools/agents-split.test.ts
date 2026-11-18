@@ -87,7 +87,7 @@ test('the schema: goal and 1–12 parts with the exact enums; nothing reaches th
     { goal: 'x', parts: [{ title: 'a', brief: 'b', effort: 'minimal' }] }, { goal: 'x', parts: [{ title: 'a', brief: 'b', after: [0] }] },
     { goal: 'x', parts: [{ title: 'a', brief: 'b', worktree: 'yes' }] }, { goal: 'x', parts: [{ title: 'a', brief: 'b', mode: 'web' }] },
     { goal: 'x'.repeat(401), parts: TWO }, { goal: 'x', parts: [{ title: 't'.repeat(81), brief: 'b' }] },
-    { goal: 'x', parts: [{ title: 'a', brief: 'b'.repeat(4001) }] }, { goal: 'x', parts: TWO, extra: 1 },
+    { goal: 'x', parts: [{ title: 'a', brief: 'b'.repeat(12_001) }] }, { goal: 'x', parts: TWO, extra: 1 },
   ];
   for (const args of bad) {
     const out = await r.call('agents.split', args);
@@ -111,9 +111,9 @@ test('create gets the calling turn\'s facts; the result lists the parts and tell
   assert.deepEqual(out.data, {
     ok: true, groupId: 'sgr_1',
     parts: [{ idx: 1, title: 'Search the docs', id: 'spl_sgr_1_1' }, { idx: 2, title: 'Check #1', id: 'spl_sgr_1_2' }],
-    next: 'My 2 parts start as soon as this turn ends, so I end it now (a short line to the person fits). Their notes wake me; each part comes back to me on its own as soon as it ends – its last words and what it did.',
+    next: 'My 2 parts start as soon as this turn ends, so I end it now (a short line to the person fits). Each part comes back to me on its own as soon as it ends – its last words and what it did; a note from a part wakes me for a whole turn in between.',
   });
-  assert.equal(nextText(1), 'My part starts as soon as this turn ends, so I end it now (a short line to the person fits). Their notes wake me; each part comes back to me on its own as soon as it ends – its last words and what it did.');
+  assert.equal(nextText(1), 'My part starts as soon as this turn ends, so I end it now (a short line to the person fits). Each part comes back to me on its own as soon as it ends – its last words and what it did; a note from a part wakes me for a whole turn in between.');
   assert.equal(nextText(2, true), 'My 2 new parts start now beside me in my group; like mine, their notes and last words go to my origin.');
 
   // B-083: a part's own call goes to the service with its split (the service adds the parts to its group); the answer lists the new ones.
@@ -141,9 +141,9 @@ test('agents.split_results reads the thread\'s results – a split reads its par
   const r = rig();
   const out = await r.call('agents.split_results', { groupId: 'sgr_1', idx: 2 });
   assert.equal(out.text, 'Split results: #1 done.');
-  assert.deepEqual(r.asked[0], { agentId: 'ag_tom', q: { groupId: 'sgr_1', idx: 2, thread: 'main' } });
+  assert.deepEqual(r.asked[0], { agentId: 'ag_tom', q: { groupId: 'sgr_1', idx: 2, thread: 'main', runId: 'run_1' } }, 'FIXES-3 A3: my turn read it, so it is gathered with it');
   await r.call('agents.split_results', {}, { conversationId: undefined, split: SPLIT });
-  assert.deepEqual(r.asked[1].q, { thread: 'conv_parent' });
+  assert.deepEqual(r.asked[1].q, { thread: 'conv_parent' }, 'a part reading gathers nothing');
   assert.ok((await r.call('agents.split_results', { idx: 13 })).failed, 'idx ≤ 12');
 });
 

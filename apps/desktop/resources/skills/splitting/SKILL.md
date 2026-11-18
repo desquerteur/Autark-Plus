@@ -37,10 +37,12 @@ model, and a fresh part with its brief is what goes to a smaller one.
 
 1. **I call agents.split** with the goal (the whole) and the parts: per part a title, a brief (its piece, with what I
    already know that it needs), and returns (what I want back – the moment I will hold its result against). I can
-   pick another model, effort or temperature for a part – its start is where that costs least – and `after` for a part
+   pick another model, effort or temperature for a part – its start is where that costs least; a fresh part I name no
+   model for runs on a strong model of good value when I run on the strongest, else on mine – and `after` for a part
    that builds on another's result, `chat` for the chat its work is for.
-2. **My turn ends right after the call.** A part starts fresh with its brief; one with `context: "fork"` starts from
-   the session I ended with and knows my thinking up to the split. A short line to whoever waits fits before I end –
+2. **My turn ends right after the call** – or, with `wait: true`, the parts start at once and the call comes back with
+   each part's closing words: for a look-up or check my next step needs. A part starts fresh with its brief; one with `context: "fork"` starts from
+   the session I ended with and knows my thinking up to the split. A quiet line to whoever waits fits before I end –
    the parts do the rest.
 3. **Each part works as me.** It reads "I have just split myself" with its piece, writes into chats with `<chat>`
    blocks like I do, remembers, and can add parts of its own to the group. Up to four run at once, more wait.
@@ -48,8 +50,9 @@ model, and a fresh part with its brief is what goes to a smaller one.
    what it is thinking right now. That is part of what I know about myself – I neither redo their pieces nor say they
    are done before they are. agents.split_results {steps} shows more of one; agents.split_tell talks to a part (or all),
    switches its model, or stops it – to "all" with stop and no group, every group of this thread.
-5. **Parts talk back as they go.** A part tells me (agents.split_tell to "origin") what would change how I or another
-   part works; that note wakes me or folds into my running turn. Parts see each other's work the same way.
+5. **Parts talk back when they need me.** A note from a part (agents.split_tell to "origin") wakes me for a whole turn
+   or folds into my running one, so a part sends it when it needs my answer to go on; what it found stands in its last
+   words. Parts see each other's work the same way.
 6. **Each part comes back on its own.** The moment a part ends, I wake with "Split results": its last words – what it
    brings back – and what it did on the way, step by step as its record kept them. I do not wait for its
    siblings. Its result is mine again: I merge it into my work, check it against what I asked, and carry on – the
@@ -58,8 +61,8 @@ model, and a fresh part with its brief is what goes to a smaller one.
 
 ## What I write into a brief
 
-A fresh part knows what my brief says and what it finds. So the brief carries the piece and where it ends, what
-"done" looks like, and what it cannot find on its own: the person's words, what is decided and why, where the work
-lies. A forked part already knows what I knew; its brief is only the decision – which piece is its, where it ends,
+A fresh part knows what my brief says and what it finds. So the brief carries for whom and why – the person's words
+among it –, what good looks like, what is known and decided, how the part checks its result itself, and where its
+piece ends. A forked part already knows what I knew; its brief is only the decision – which piece is its, where it ends,
 what "done" looks like. If something only becomes clear later, I tell the part with agents.split_tell instead of
 having guessed it in advance.

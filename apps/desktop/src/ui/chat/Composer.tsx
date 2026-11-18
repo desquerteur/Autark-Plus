@@ -256,7 +256,7 @@ export function Composer(props: { chat: ConversationSummary }) {
         {record.bar}
         {replyTo && <ReplyQuote conversationId={chat.id} messageId={replyTo} onCancel={() => { setReply(chat.id, null); fieldRef.current?.focus(); }} />}
         <SecretAttachments ids={secrets} onRemove={id => updateDraft(chat.id, { secrets: secrets.filter(entry => entry !== id) })} />
-        <ComposerAttachments attachments={attachments} uploading={uploading}
+        <ComposerAttachments attachments={attachments} uploading={uploading} conversationId={chat.id}
           onRetry={(attachment) => retryTake(chat.id, attachment, targetOf(fieldRef.current))}
           onRemove={(fileId) => updateDraft(chat.id, { attachments: draft.value.attachments.filter((entry) => entry.fileId !== fileId) })} />
         <div class="composer-field">

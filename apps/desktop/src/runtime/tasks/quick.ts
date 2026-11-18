@@ -9,6 +9,7 @@
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
+import { isPersonId } from '../../shared/model/people.ts';
 import type { Attachment } from '../../shared/model/chat.ts';
 import { ORIGINS } from '../../shared/model/origin.ts';
 import type { CreateTaskInput, TaskView } from '../../shared/model/tasks.ts';
@@ -59,7 +60,8 @@ export async function quickCreate(s: Deps, input: QuickInput, createdBy: string)
   }
   const own = { ...fields, origin: ORIGINS.intake, ...(input.spaceId ? { spaceId: input.spaceId } : {}), ...(attachments.length ? { files: attachments } : {}) };
   if (target?.kind === 'me') {
-    return { task: tasks.create({ ...own, assigneeKind: 'human', widget: quickDraft(s, text || title).widget }, options) };
+    const mine = isPersonId(createdBy) ? { assigneeId: createdBy } : {}; // a colleague's own to-do is theirs
+    return { task: tasks.create({ ...own, assigneeKind: 'human', ...mine, widget: quickDraft(s, text || title).widget }, options) };
   }
   if (target?.kind === 'agent' || target?.kind === 'branch') {
     const agent = s.org.get(target.id);

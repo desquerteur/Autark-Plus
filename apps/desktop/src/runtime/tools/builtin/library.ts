@@ -2,7 +2,6 @@
 // library.find by words (without words: the best rated, and my skills whose library entry changed since I took it),
 // library.open one entry (written by strangers: data I weigh), library.publish one of my skills or notes (the checks of
 // library/publish.ts; CC0 for everyone), library.rate what I used. Keeping an entry as my own is skills.save with from.
-// library.* is anyMode.
 // Owns: these tools and their wording. Never: writes to an agent's own memory or skills (keeping one is skills.save).
 
 import { readFileSync } from 'node:fs';
@@ -151,5 +150,4 @@ const rate = defineTool<{ id: string; stars: number; note?: string }>({
   },
 });
 
-/** Reachable in every mode through tools.call; no direct offer. */
-export const libraryTools: ToolDef[] = [find, open, publish, rate].map((tool) => ({ ...tool, anyMode: true as const }));
+export const libraryTools: ToolDef[] = [find, open, publish, rate];

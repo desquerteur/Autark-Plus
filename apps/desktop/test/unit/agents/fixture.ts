@@ -20,7 +20,7 @@ export function setup(caps: Partial<EngineCaps> = {}) {
   const chat = h.chats.create({ agentIds: [tom.id], createdBy: 'human' });
   const acc = account('acc_claude', 'claude');
   const runs: Array<Partial<Run>> = [];
-  const items: Array<{ kind: string; data?: unknown }> = [];
+  const items: Array<{ kind: string; name?: string; data?: unknown; runId?: string }> = [];
   const contextCalls: string[] = [];
   const state: { script: Script } = { script: async () => ({ text: 'Hi', stop: 'done' }) };
 
@@ -42,7 +42,8 @@ export function setup(caps: Partial<EngineCaps> = {}) {
     modes: { get: (key: string) => { if (key === 'general') return GENERAL_MODE; throw new Error(`unknown mode ${key}`); } },
     runs: {
       list: (agentId: string) => runs.filter((run) => run.agentId === agentId),
-      start: () => {}, finish: () => {}, item: (_runId: string, item: { kind: string; data?: unknown }) => { items.push(item); },
+      start: () => {}, finish: () => {}, item: (runId: string, item: { kind: string; data?: unknown }) => { items.push({ ...item, runId }); },
+      items: (runId: string) => items.filter((item) => item.runId === runId).map((item, index) => ({ id: `ri_${index + 1}`, seq: index + 1, createdAt: 0, ...item, data: (item.data ?? {}) as Record<string, unknown> })),
     },
     catalog: { get: () => undefined },
     spend: { record: () => {} },

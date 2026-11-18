@@ -10,6 +10,7 @@
 
 import type { Host, HostCapture } from './host.ts';
 import { AUDIO_DECODE_LIMITS, IMAGE_LIMITS, KEYFRAME_LIMITS, RTC_LIMITS } from '../shared/api/host-bridge.ts';
+import { PREVIEW_LIMITS } from '../shared/model/video-preview.ts';
 import type { AppInfo, HostOp, HostOps, HostResponse, PowerEvent } from '../shared/api/host-bridge.ts';
 import { WorkforceError } from '../shared/errors.ts';
 import { SIDE_WAIT_MAX_MS } from '../shared/model/side-browser.ts'; // B-055
@@ -30,6 +31,7 @@ const TIMEOUTS: Partial<Record<HostOp, number>> = {
   screenshot: 20_000, notify: 10 * 60_000,
   openPath: 10 * 60_000, // B-080: Windows answers an open once its app chooser or the app's first start is done (an editor took 29 s)
   'media.analyze': ANALYZER_MS, 'media.audio': ANALYZER_MS, 'media.image': ANALYZER_MS,
+  'media.preview': (PREVIEW_LIMITS.waiting + 1) * PREVIEW_LIMITS.jobMs + 15_000, // 17.11.2026: its own queue, every job at its own time
   sideBrowser: SIDE_WAIT_MAX_MS + 15_000, // B-055: a browser.wait or a 20-step batch in the side browser
   // Owner 07.11.2026: the offer waits for the analyzer's decode, then for the page; the answer for the whole take in real time.
   'voice.rtcOffer': ANALYZER_MS + RTC_LIMITS.offerMs,
@@ -114,6 +116,7 @@ export function createElectronHost(bridge: HostBridgeClient, app: AppInfo): Host
       keyframes: (input) => bridge.call('media.analyze', input),
       audio: (input) => bridge.call('media.audio', input), // B-058 G6: any recording/video → 16 kHz mono PCM16
       image: (input) => bridge.call('media.image', input), // B-058 G10: any stored image → JPEG/PNG ≤ maxPx
+      preview: (input) => bridge.call('media.preview', input), // 17.11.2026: a video → a light H.264/MP4 copy in a temp file
     },
     sideBrowser: (call) => bridge.call('sideBrowser', call), // B-055: main/side-driver (the person's side browser)
     sideView: { // B-076: main/side-driver/caster.ts (a side tab watched from another PC or a phone)

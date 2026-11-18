@@ -9,6 +9,10 @@
 // When phone use is off it answers 'off' and shows the enable notification; a build without phone use offers its
 // phone-use build instead (PhoneUseUpgrade).
 // The PC's 'notify' events on the same subscription become the app's own notifications (AppNotices, B-084).
+// It also carries the to-do button's own calls (TodoButton: files.upload, tasks.quickCreate, chats.direct) – call()
+// sends one request and hands its {id, result} / {id, error:{message}} to the caller's Answer; a socket that ends fails
+// every call still waiting. The link that runs is linked() (one per paired company; the to-do button shows while one does).
+// A notice of the app sends its answer over the same link without waiting for one (the static call: CallNotice's calls.decline).
 // Reconnects with backoff (2 s … 60 s) after the socket ended or never came up; the backoff starts again at 2 s only
 // after a connection brought an attach answer.
 // Never: acts on a request for another device, or keeps a step beyond its answer.
@@ -26,11 +30,23 @@ import com.teydralab.autark.android.relay.WebSocketClient;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class UseLink implements WebSocketClient.Listener {
     /** The PCs of the company arrived (phoneUse.attach). */
     public interface Pcs { void changed(List<PhoneConnection.Pc> pcs); }
+
+    /** The answer to one call(): exactly one of the two, on the socket's reader thread (or the caller's when nothing went out). */
+    public interface Answer {
+        void result(Object result);
+        void error(String message);
+    }
+
+    /** What a call hears when this phone has no socket to the PC right now, or the socket ended before the answer. */
+    static final String UNLINKED = "Not connected to your PC right now.";
+    private static volatile UseLink linked;
+    private static volatile Runnable linkChanged;
 
     private static final long[] BACKOFF_MS = { 2_000, 5_000, 15_000, 30_000, 60_000 };
     private final Context context;
@@ -52,6 +68,19 @@ public final class UseLink implements WebSocketClient.Listener {
     /** The current socket's attach answer arrived. */
     private volatile boolean answered;
     private Thread worker;
+    /** call()'s requests still waiting for their answer, by frame id. */
+    private final Map<Integer, Answer> calls = new ConcurrentHashMap<>();
+
+    /** The running link of the paired company, or null (not paired, or between two companies). */
+    public static UseLink linked() { return linked; }
+
+    /** `listener` hears (any thread) when linked() changes – the to-do button shows or goes. */
+    public static void onLinked(Runnable listener) { linkChanged = listener; }
+
+    private static void tellLinked() {
+        Runnable listener = linkChanged;
+        if (listener != null) listener.run();
+    }
 
     public UseLink(Context context, String origin, String gate, String token, String deviceId, Pcs pcs) {
         this.context = context.getApplicationContext();
@@ -63,6 +92,8 @@ public final class UseLink implements WebSocketClient.Listener {
         worker = new Thread(this::run, "autark-phone-use");
         worker.setDaemon(true);
         worker.start();
+        linked = this;
+        tellLinked();
     }
 
     /** Any thread (a company switch stops the old link on a thread of its own, CompanyLink.stop). */
@@ -73,6 +104,27 @@ public final class UseLink implements WebSocketClient.Listener {
         if (ws != null) ws.close();
         synchronized (lock) { lock.notifyAll(); }
         steps.stop();
+        failCalls();
+        if (linked == this) { linked = null; tellLinked(); }
+    }
+
+    /** One request to the PC with this phone's rights (a thread of the caller's own, never the main one: it writes the
+     *  socket); `answer` hears its result or error once. */
+    public void call(String method, Map<String, Object> params, Answer answer) {
+        WebSocketClient ws = socket;
+        if (ws == null || stopped) { answer.error(UNLINKED); return; }
+        int id = ids.getAndIncrement();
+        calls.put(id, answer);
+        send(ws, Json.map("id", id, "method", method, "params", params));
+        // The socket ended meanwhile (its close may have failed the waiting calls before this one was in the map).
+        if (socket != ws) { Answer left = calls.remove(id); if (left != null) left.error(UNLINKED); }
+    }
+
+    private void failCalls() {
+        for (Integer id : new java.util.ArrayList<>(calls.keySet())) {
+            Answer left = calls.remove(id);
+            if (left != null) left.error(UNLINKED);
+        }
     }
 
     private void run() {
@@ -133,6 +185,14 @@ public final class UseLink implements WebSocketClient.Listener {
             AppNotices.event(context, note);
             return;
         }
+        Answer waiting = frame.get("id") instanceof Number ? calls.remove(((Number) frame.get("id")).intValue()) : null;
+        if (waiting != null) {
+            Object error = frame.get("error");
+            if (error == null) { waiting.result(frame.get("result")); return; }
+            @SuppressWarnings("unchecked") String message = error instanceof Map ? Json.str((Map<String, Object>) error, "message") : null;
+            waiting.error(message == null || message.isEmpty() ? "The PC refused it." : message);
+            return;
+        }
         if (Json.num(frame, "id", -1) == attachId && frame.get("result") instanceof Map) {
             @SuppressWarnings("unchecked") Map<String, Object> result = (Map<String, Object>) frame.get("result");
             answered = true;
@@ -169,6 +229,12 @@ public final class UseLink implements WebSocketClient.Listener {
         return "This app build (from Google Play) carries no phone use and cannot add it by itself.";
     }
 
+    /** One RPC call over the running link (any thread: it goes out on the step thread); false without a link. The answer is not awaited. */
+    public static boolean call(String method, Map<String, Object> params) {
+        UseLink link = linked;
+        return link != null && link.steps.post(() -> link.send(Json.map("id", link.ids.getAndIncrement(), "method", method, "params", params)));
+    }
+
     private void send(Map<String, Object> frame) {
         WebSocketClient ws = socket;
         if (ws != null) send(ws, frame);
@@ -187,6 +253,7 @@ public final class UseLink implements WebSocketClient.Listener {
 
     @Override public void closed(String reason) {
         synchronized (lock) { closes++; socket = null; lock.notifyAll(); }
+        failCalls();
     }
 
     private void pause(long ms) {

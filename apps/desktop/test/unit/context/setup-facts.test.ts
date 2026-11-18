@@ -1,8 +1,7 @@
 // Live setup facts (O2): no turn carries them (E1: they read like a setup checklist) – the app.status tool (G1: was
 // setup.status) returns the whole '## App status (live)' text: agents, accounts, strong models, the models for
 // decisions and search by name, the app's switches; no account secrets (email, home, base URL, secret id, limits),
-// failing sources skipped; offered by the registry in the '*' modes (manager, general, secretary), hidden by specialist
-// modes (not a core tool).
+// failing sources skipped; offered by the registry in every mode through tools.call (KI-Runde 17.11.2026), never a core tool.
 // B-080: an account names what holds it – its return time or cooling (09.11.2026: each one its own; every plan takes turns).
 
 import { test } from 'node:test';
@@ -173,16 +172,17 @@ test('app.status is a read tool without role gate and returns every fact', async
   assert.deepEqual(result.structured, collectSetupFacts(f.services));
 });
 
-test('the registry offers app.status in the manager, general and secretary modes only (not a core tool)', () => {
+test('the registry offers app.status in every mode, through tools.call (not a core tool)', () => {
   const f = setup();
   const registry = new Registry({ services: () => f.services });
   const dir = path.join(RESOURCES, 'modes');
   const modes = readdirSync(dir).filter((name) => name.endsWith('.md') && !name.startsWith('_'))
     .map((name) => parseMode(name.replace(/\.md$/, ''), readFileSync(path.join(dir, name), 'utf8')));
-  const offered = modes.filter((mode) => registry.allowed(appStatusTools[0], f.vid, mode)).map((mode) => mode.key).sort();
+  const hidden = modes.filter((mode) => !registry.allowed(appStatusTools[0], f.vid, mode)).map((mode) => mode.key);
   assert.ok(!('app.status' in BASE_CORE), 'if app.status becomes a core tool, update the app-status.ts header and this test');
-  assert.deepEqual(offered, ['general', 'manager', 'secretary'], 'the modes with every tool');
-  assert.equal(registry.allowed(appStatusTools[0], f.boss, modes.find((mode) => mode.key === 'research')!), false, 'specialist modes hide it, even for a manager');
+  // KI-Runde 17.11.2026: the mode chooses the core set, not what a tool may be called at all.
+  assert.deepEqual(hidden, [], `every mode reaches it; ${modes.length} modes read`);
+  assert.equal(registry.allowed(appStatusTools[0], f.boss, modes.find((mode) => mode.key === 'research')!), true, 'a specialist mode reaches it too');
 });
 
 test('B-080: the account line names what holds each account – its return time or cooling', () => {

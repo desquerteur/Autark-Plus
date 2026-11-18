@@ -105,6 +105,13 @@ async function removePerson(person: Person): Promise<void> {
   }
 }
 
+/** 17.11.2026: the invite is a card on the person's page (PersonInvite.tsx) – that page opens with it, no modal. */
+function inviteDevice(person: Person): void {
+  const current = route.value;
+  if (!(current.view === 'team' && current.personId === person.id)) navigate({ view: 'team', personId: person.id });
+  personDialog.value = { kind: 'invite', id: person.id };
+}
+
 export function personMenu(person: Person): MenuSection[] {
   const admin = can('people.save');
   const others = admin && !person.owner;
@@ -113,7 +120,7 @@ export function personMenu(person: Person): MenuSection[] {
     { items: person.id !== 'human' && person.status === 'active' && directReachable(person.id) ? [{ label: 'Message', onSelect: () => void openDirect(person.id) }] : [] },
     { items: [
       ...(admin ? [{ label: 'Edit', onSelect: () => { personDialog.value = { kind: 'edit', id: person.id }; } }] : []),
-      ...(others ? [{ label: person.status === 'revoked' ? 'Invite again' : 'Invite a device', onSelect: () => { personDialog.value = { kind: 'invite', id: person.id }; } }] : []),
+      ...(others ? [{ label: person.status === 'revoked' ? 'Invite again' : 'Invite a device', onSelect: () => inviteDevice(person) }] : []),
       ...(others ? [{ label: 'Devices and chats', onSelect: () => { personDialog.value = { kind: 'details', id: person.id }; } }] : []),
     ] },
     { items: !others ? []

@@ -238,8 +238,20 @@ dialog.dialog.voice-words-dialog { height: min(560px, calc(100vh - 2 * var(--dia
 .secret-kv-rows { display: grid; gap: 6px; }
 .secret-kv-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 28px; align-items: center; gap: 8px; }
 .secret-kv-row > .input { height: 34px; padding: 6px 10px; font: inherit; font-size: 13px; line-height: 20px; }
-.secret-kv-value { overflow: hidden; resize: none; -webkit-text-security: disc; }
+.secret-kv-value { overflow: hidden; resize: none; white-space: pre; overflow-wrap: normal; -webkit-text-security: disc; } /* one line: a long value never shows the top of a second */
 .secret-kv-gap { width: 28px; height: 28px; }
+/* a phone (feedback 16.11.2026 00403337, "Voll schwierig die Secrets hinzutragen … schönere Felder, mehr Platz"): each
+   row stacks – the name over the whole width with its ×, the value under it, both a finger's height */
+@media (max-width: 719px) {
+  .secret-kv-rows { gap: 12px; }
+  .secret-band-body { overflow-x: hidden; }
+  /* name and value equally wide, the × beside the pair (Mika 17.11.); 44 px is a finger's height */
+  .secret-kv-row { grid-template-columns: minmax(0, 1fr) 44px; row-gap: 6px; column-gap: 4px; }
+  .secret-kv-row > .input { box-sizing: border-box; width: 100%; min-width: 0; height: 44px; padding: 10px 12px; line-height: 22px; }
+  .secret-kv-row > .input:first-child { grid-column: 1; grid-row: 1; }
+  .secret-kv-row > .secret-kv-value { grid-column: 1; grid-row: 2; }
+  .secret-kv-row > :last-child:not(.input) { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: center; }
+}
 .secret-band-foot { display: grid; gap: 6px; flex: none; margin-top: 10px; }
 .secret-band-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .secret-band-actions > .button { flex: none; }
@@ -270,3 +282,18 @@ dialog.dialog.voice-words-dialog { height: min(560px, calc(100vh - 2 * var(--dia
 .secret-band-body.apps-rows { height: 116px; } /* the own-server form's Name | Value rows: one height, a new row scrolls inside */
 .apps-paste { height: 240px; resize: none; } /* the pasted mcpServers block: one height, the check line below never moves */
 .feedback-review-text { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; user-select: text; }
+/* Settings › Security › Changes (SecurityPage.tsx): who is a link for an agent; a text change opens to both full texts */
+.sec-change-who { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.sec-change-line { all: unset; cursor: pointer; }
+.sec-change-line:hover { color: var(--text); }
+.sec-change-line:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.sec-change-cap { display: block; margin-top: 6px; font-size: 11px; font-weight: 600; }
+.sec-change-text { display: block; color: var(--text); white-space: pre-wrap; user-select: text; }
+
+/* Settings › Devices › Connection › Your own meeting server (own-server.tsx, 18.11.2026) */
+.own-server p { margin: 0 0 10px; line-height: 1.5; }
+.own-server h4 { margin: 14px 0 6px; font-size: 13px; }
+.own-server code { font-family: var(--mono); font-size: 12px; }
+.own-server-command { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--hover); }
+.own-server-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; }
+.own-server-file { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }

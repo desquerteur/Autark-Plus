@@ -61,10 +61,18 @@ export interface DiscoveryDeps {
 
 const LOOPBACK = /^127(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 
-/** The test-only loopback targets (see the header), or undefined for normal LAN discovery. */
+/**
+ * 18.11.2026 (Windows Firewall asked on the shared screen while window tests ran): a test profile (WORKFORCE_TEST_DATA, set by every window test)
+ * never opens a socket beyond this PC – no LAN listener, no broadcast – unless the test says WORKFORCE_TEST_LAN=1 for a real network check.
+ */
+export function loopbackOnly(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.WORKFORCE_TEST_DATA) && env.WORKFORCE_TEST_LAN !== '1';
+}
+
+/** The loopback targets (see the header, or a test profile's own 127.0.0.1), or undefined for normal LAN discovery. */
 export function loopbackTargets(env: Record<string, string | undefined> = process.env): string[] | undefined {
   const raw = env.WORKFORCE_DISCOVERY_TARGETS;
-  if (raw === undefined || raw.trim() === '') return undefined;
+  if (raw === undefined || raw.trim() === '') return loopbackOnly(env) ? ['127.0.0.1'] : undefined;
   return raw.split(',').map((entry) => entry.trim()).filter((entry) => LOOPBACK.test(entry)).slice(0, 8);
 }
 
@@ -187,7 +195,8 @@ export function discover(deps: DiscoveryDeps & { self?: string; timeoutMs?: numb
       const key = candidate && `${candidate.deviceId}:${candidate.fingerprint}`;
       if (candidate && key && candidate.deviceId !== deps.self && !found.has(key) && found.size < MAX_HELLO_ANSWERS) found.set(key, candidate);
     });
-    socket.bind(0, undefined, () => {
+    const own = loopbackOnly(deps.env) ? '127.0.0.1' : undefined; // the asking socket of a test profile stays on this PC, too
+    socket.bind(0, own, () => {
       try { socket.setBroadcast(true); } catch { /* sending to unicast targets still works */ }
       const probe = Buffer.from(JSON.stringify({ q: 'wf-hello', v: 1, n: nonce }));
       const targets = deps.targets?.() ?? loopbackTargets(deps.env) ?? broadcastAddresses();

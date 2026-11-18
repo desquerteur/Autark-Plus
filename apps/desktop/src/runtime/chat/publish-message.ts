@@ -3,7 +3,8 @@
 // the chat's live bar, chat/live.ts). `state` 'failed' or 'stopped' marks a run that ended so (its error in meta.error).
 // A quiet answer stays quiet unless it @mentions the person (the owner or a person of the organisation, a bridged
 // contact) – a colleague it mentions is still reached (chat/delivery.ts). B-050 K4: an answer the agent marked
-// [[important]] (agents/publishing.ts) carries priority 'important' – delivery's brake still applies to it.
+// [[important]] (agents/publishing.ts) carries priority 'important' – delivery's brake still applies to it. A quiet answer
+// leaves the chat's place in the list alone (nextSeq quiet, as ChatService.send).
 // Owns: that write and its announcement. Never: decides the answer's visibility or level (agents/turn-finish.ts does) or
 // who is woken or notified (chat/delivery.ts).
 
@@ -34,7 +35,7 @@ export function postAgentMessage(core: ChatCore, conversationId: string, agentId
     attachments: [], mentions, priority: final.priority ?? 'normal', runId, state, silent: quietUnlessPerson(final.silent, mentions), meta: final.meta ?? {}, createdAt: now,
   };
   core.s.db.tx(() => {
-    message.seq = core.convs.nextSeq(conversationId, now);
+    message.seq = core.convs.nextSeq(conversationId, now, { quiet: message.silent }); // a line that draws no one moves no row
     core.msgs.insert(message);
     core.convs.advanceReadIfCaughtUp(conversationId, agentId, message.seq);
   });

@@ -92,7 +92,7 @@ test('drivers: a step without a serial goes to the app phone while ADB has none 
     tap: async (serial: string | undefined) => { adbCalls.push(`tap ${serial}`); },
     swipe: async () => undefined, type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
     say: async () => { adbCalls.push('say'); return { serial: '' }; },
-    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
+    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [], attached: () => [], installed: () => false,
   };
   const merged = mergedPhones(adb, phones);
   assert.deepEqual((await merged.devices()).map((device) => device.serial), ['dev_phone0000001']);
@@ -112,7 +112,7 @@ test('drivers: without a serial a step goes to the attached app phone even while
     tap: async (serial: string | undefined) => { adbCalls.push(`tap ${serial}`); },
     swipe: async () => undefined, type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
     say: async () => ({ serial: '' }),
-    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
+    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [], attached: () => [], installed: () => false,
   };
   const merged = mergedPhones(adb, phones);
   const tap = merged.tap(undefined, 5, 6);
@@ -126,6 +126,17 @@ test('drivers: without a serial a step goes to the attached app phone even while
   bus.emit('phoneUse.attached', { deviceId: 'dev_phone0000001', on: false });
   await merged.tap(undefined, 2, 2);
   assert.deepEqual(adbCalls, ['tap 192.168.1.20:5555', 'tap undefined'], 'without an app phone the step goes to ADB');
+});
+
+test('KI-Runde 17.11.2026: here() names the phones on this PC – app phones by device id, ADB phones as the driver last saw them', () => {
+  const { bus, phones } = rig();
+  let seen: string[] = [];
+  const adb = { attached: () => seen } as unknown as Parameters<typeof mergedPhones>[0];
+  const merged = mergedPhones(adb, phones);
+  assert.deepEqual(merged.here(), { app: ['dev_phone0000001'], adb: [] });
+  seen = ['R5CT1234'];
+  bus.emit('phoneUse.attached', { deviceId: 'dev_phone0000001', on: false });
+  assert.deepEqual(merged.here(), { app: [], adb: ['R5CT1234'] });
 });
 
 test('type: the app\'s answer brings back what the field reads (cut to FIELD_MAX); an older app answers nothing', async () => {
@@ -259,7 +270,7 @@ test('drivers: say goes to the app phone even while ADB has a ready phone; an AD
     screenshot: async () => ({}) as never, uiTree: async () => ({}) as never, tap: async () => undefined, swipe: async () => undefined,
     type: async () => undefined, key: async () => 'KEYCODE_BACK', open: async () => '',
     say: async (serial: string | undefined) => { adbCalls.push(`say ${serial}`); return { serial: serial ?? '' }; },
-    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [],
+    pair: async () => ({ address: '' }), connect: async () => ({ address: '', already: false }), disconnect: async () => ({ serial: '', was: false }), discover: async () => [], attached: () => [], installed: () => false,
   };
   const merged = mergedPhones(adb, phones);
   const said = merged.say(undefined, 'Hello', false);

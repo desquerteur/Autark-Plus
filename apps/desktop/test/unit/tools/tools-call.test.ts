@@ -1,7 +1,8 @@
 // B-049 F4 (TOOLS-CORE) – tools.call and tools.find through the real registry pipeline (validation, run journal):
 // - tools.call runs its target under the target's name and the call's id: the same validation message, journal items
 //   and result as a direct call; a resend of that id gets the same result without a second run;
-// - it runs only what the agent may use in this mode, never itself; B-080: every engine reaches the same tools – Codex
+// - it runs every tool that can work here, in every mode (KI-Runde 17.11.2026), never itself; phone.* without a linked
+//   phone is refused with the reason and the refusal is journaled; B-080: every engine reaches the same tools – Codex
 //   runs files.write and, in browser mode, shell.exec with a handle in its env (the value masked in what comes back);
 // - a non-core target is noted for this agent and chat and joins the offer only at promotion (never mid-session);
 // - tools.find ranks by name, keywords and description, shows a full schema for an exact name, marks direct tools
@@ -52,6 +53,7 @@ function rig(engine?: { ownTools: boolean; dynamicTools: boolean }) {
   // 'think' like the real chat.read (tools/builtin/chat.ts).
   registry.register(tool('chat.read', 'think', { description: 'Post a message into a chat you are a member of.' }));
   registry.register(tool('computer.click', 'device', { description: 'Click at a point on the screen.', requires: 'device' }));
+  registry.register(tool('phone.say', 'device', { description: 'Asks the person for a moment of their phone.', requires: 'device' }));
   registry.register(tool('files.write', 'write_local', { description: 'Create or overwrite a text file.' }));
   runs.start({ id: 'run_1', agentId: 'ag_tom', conversationId: h.chat.id, trigger: 'message' });
   const base: Omit<ToolContext, 'services'> = { agent: h.org.require('ag_tom'), runId: 'run_1', conversationId: h.chat.id, mode: 'general', signal: new AbortController().signal, status: () => {} };
@@ -77,9 +79,13 @@ test('tools.call runs its target as a direct call would: real name, same validat
   assert.equal(jots(), 2, 'and runs nothing twice');
 });
 
-test('tools.call runs only what this agent may use here, never itself; every engine reaches the same tools', BOUNDED, async () => {
-  const { registry, base } = rig();
-  assert.match(textOf(await registry.call('tools.call', { name: 'computer.click', args: {} }, base, 'r1')), /not available to me in mode "general".*tools\.find/);
+test('tools.call runs every tool that can work here, in every mode, never itself; a refusal is journaled; every engine reaches the same tools', BOUNDED, async () => {
+  const { registry, base, items } = rig();
+  assert.ok(!(await registry.call('tools.call', { name: 'computer.click', args: {} }, base, 'r1')).isError, 'a device tool in general mode');
+  const phone = await registry.call('tools.call', { name: 'phone.say', args: {} }, base, 'r0');
+  assert.ok(phone.isError);
+  assert.match(textOf(phone), /^phone\.say needs a linked phone/);
+  assert.deepEqual(items().filter((item) => item[2] === 'r0'), [['tool_call', 'phone.say', 'r0'], ['tool_result', 'phone.say', 'r0']], 'the refused call is journaled under its name');
   assert.match(textOf(await registry.call('tools.call', { name: 'no.such', args: {} }, base, 'r2')), /^Unknown tool "no\.such"/);
   assert.match(textOf(await registry.call('tools.call', { name: 'tools.call', args: { name: 'notes.jot' } }, base, 'r3')), /not itself/);
   assert.match(textOf(await registry.call('tools.call', { args: {} }, base, 'r4')), /needs the tool's name/);
@@ -110,7 +116,7 @@ test('Codex in browser mode finds shell.exec by name and by "secret env", and ru
 
   assert.match(textOf(await registry.call('tools.find', { query: 'shell.exec' }, browser, 's1')), /^shell\.exec – Runs a shell command on this PC or a linked PC, with stored secrets/);
   const asked = textOf(await registry.call('tools.find', { query: 'run command with secret env', limit: 1 }, browser, 's2')).split('\n');
-  assert.match(asked[1], /^- shell\.exec: /, asked.join('\n'));
+  assert.match(asked[1], /^- shell\.exec \(in my list\): /, asked.join('\n'));
   assert.match(asked[2], /^ {2}Arguments: \{"type":"object"/, 'the best hit carries its whole schema');
   assert.equal(asked.length, 3, 'limit 1: shell.exec alone');
 
@@ -145,11 +151,11 @@ test('learned from use: a non-core target that succeeded waits for the next prom
   assert.equal(kept.at(-1), `x.tool${MAX_LEARNED + 2}`, 'the newest kept');
 });
 
-test('tools.find: best fit first, direct tools marked, full schema for a name, families when nothing fits; only usable tools', BOUNDED, async () => {
+test('tools.find: best fit first, direct tools marked, full schema for a name, families when nothing fits; every tool that can work here', BOUNDED, async () => {
   const { registry, base } = rig();
   const remind = textOf(await registry.call('tools.find', { query: 'remind me tomorrow to call the bank' }, base, 'f1'));
   const lines = remind.split('\n');
-  assert.equal(lines[1], '- schedules.remind: Private reminder: at that time you get a turn with your own note (no chat post).');
+  assert.equal(lines[1], '- schedules.remind (in my list): Private reminder: at that time you get a turn with your own note (no chat post).');
   assert.match(lines[2], /^ {2}Arguments: \{"type":"object","properties":\{"at":/, 'one find is enough: the best hit with its whole schema');
   assert.ok(lines.slice(3).every((line) => line.includes(' Arguments: ')), 'every other hit with its arguments');
   assert.ok(!remind.includes('computer.click'));
@@ -157,15 +163,17 @@ test('tools.find: best fit first, direct tools marked, full schema for a name, f
   const post = textOf(await registry.call('tools.find', { query: 'post a message' }, base, 'f2'));
   assert.match(post, /- chat.read \(in my list\): Post a message/);
 
-  const exact = textOf(await registry.call('tools.find', { query: 'schedules__remind' }, base, 'f3'));
-  assert.match(exact, /^schedules\.remind – Private reminder/);
+  const exact = textOf(await registry.call('tools.find', { query: 'notes__jot' }, base, 'f3'));
+  assert.match(exact, /^notes\.jot – Write a short jot/);
   assert.match(exact, /\nArguments: \{"type":"object"/);
   assert.equal(exact.split('"required"').length, 2, 'the arguments once');
-  assert.match(exact, /tools\.call \{"name": "schedules\.remind"/);
+  assert.match(exact, /tools\.call \{"name": "notes\.jot"/);
 
   const none = textOf(await registry.call('tools.find', { query: 'zzz qqq' }, base, 'f4'));
   assert.match(none, /^Nothing fits "zzz qqq"\. I can use these here: .*notes\.jot/);
-  assert.ok(!none.includes('computer'), 'never a tool the mode does not offer');
+  assert.ok(none.includes('computer.click'), 'every mode reaches the device tools');
+  assert.ok(!none.includes('phone.say'), 'never a tool that cannot work here');
+  assert.match(textOf(await registry.call('tools.find', { query: 'phone.say' }, base, 'f5')), /^phone\.say needs a linked phone/, 'its name says why');
 
   // B-049 F8: the one-line purpose is the first sentence – an "e.g." / "i.e." inside it does not cut it short.
   assert.equal(purpose('Hand the task on (e.g. to a writer) or switch modes. Then wait.'), 'Hand the task on (e.g. to a writer) or switch modes.');

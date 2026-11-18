@@ -1,6 +1,6 @@
 // The device mesh that keeps linked PCs connected (devices/mesh.ts): a PC the connect flow proved is
 // stored with `add` and dialed; every PC is home of its own data, linked PCs are peers; an employee's
-// PC reaches only the open methods; current addresses travel over the link. The rig is mesh-nodes.ts (in-process
+// PC reaches only the open methods; current addresses and caps travel over the link. The rig is mesh-nodes.ts (in-process
 // socket pairs, manual backoff timers). B-080: 'peer link closed' carries the close code (4008: cut for silence); removing a PC or
 // quitting aborts the handlers running here for it (RpcPeer.stop), a dropped link does not; a call can bound its answer's wait.
 // B-087: a trigger (resume, unlock, online) leaves a live link to the keepalive; the other B-087 cases are in mesh-b087.test.ts.
@@ -292,6 +292,18 @@ test('addresses travel over the link: a new own address reaches the online PC', 
   a.mesh.updateSelf({ addresses: ['http://192.168.7.7:47811'] });
   await settle();
   assert.equal(b.mesh.list().find((device) => device.id === idOf(a))?.addresses[0], 'http://192.168.7.7:47811');
+});
+
+test('KI-Runde 17.11.2026: new caps travel the same way – a phone that attaches to one PC shows on the other', async () => {
+  const { a, b } = await linkedPair();
+  const seen = () => b.mesh.list().find((device) => device.id === idOf(a))?.caps;
+  a.mesh.updateSelf({ caps: { appPhones: ['dev_phone'], os: 'win32' } });
+  await settle();
+  assert.deepEqual(seen()?.appPhones, ['dev_phone'], 'without a new address, the caps alone go out');
+  a.mesh.updateSelf({ caps: { appPhones: [] } });
+  await settle();
+  assert.deepEqual(seen()?.appPhones, [], 'the phone left that PC: the empty list replaces it');
+  assert.equal(seen()?.os, 'win32', 'the rest of its caps stand');
 });
 
 test('one key, one device: a new id with the key of a linked PC, or of this PC itself, is refused', async () => {

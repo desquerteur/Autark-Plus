@@ -6,7 +6,8 @@ import { enableStaticUninstaller } from './nsis-build.mjs';
 
 if (process.platform === 'win32') enableStaticUninstaller(createRequire(import.meta.url));
 if (process.env.AUTARK_WINDOWS_SIGNING) {
-  if (process.env.AUTARK_WINDOWS_SIGNING !== 'azure' || process.platform !== 'win32') throw new Error('Expected an Azure Windows signing runner.');
+  // 'azure': Artifact Signing on the CI runner. 'certum' (16.11.2026): a certificate in this PC's store (windows-signing-config.cjs).
+  if (!['azure', 'certum'].includes(process.env.AUTARK_WINDOWS_SIGNING) || process.platform !== 'win32') throw new Error('Expected a Windows signing runner: AUTARK_WINDOWS_SIGNING is azure or certum.');
   if (process.argv.some(arg => arg === '-c' || arg.startsWith('--config') || arg.startsWith('-c.'))) throw new Error('Signed builds use the reviewed Windows signing configuration.');
   process.argv.push('--config', fileURLToPath(new URL('./windows-signing-config.cjs', import.meta.url)));
   const require = createRequire(import.meta.url);

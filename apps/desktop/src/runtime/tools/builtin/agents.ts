@@ -83,7 +83,7 @@ const updateAgent = defineTool<UpdateArgs>({
       mode: { type: 'string', description: 'Default mode.' }, skills: { type: 'array', items: { type: 'string' }, maxItems: 50, description: "Skills beyond its mode's." },
       team: { type: 'string' },
       effort: { type: 'string', enum: ['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'], description: "For all its turns; auto: each turn's work sets it. One hard step or task I raise with model.set." },
-      model: { type: 'string', description: "A model id for all its turns; '' = automatic." },
+      model: { type: 'string', description: "The model it settles on – the smallest that does the hardest step of its work as well as the strongest would; it runs there from its next context (another model rereads the whole context) and stays on it until it, its lead or the person names another. '' = automatic: its kind settles it, leading on the frontier tier, executing on the strong one." },
       device: { type: 'string', minLength: 1, maxLength: 120, description: "The PC it works on: on one of the person's own PCs its turns run there too; elsewhere its computer, browser and phone tools use it. An idle PC takes load off a busy one." },
       managerId: { type: 'string', description: "'' = the person; this way I hand my team over." }, spaceId: { type: 'string' },
       avatar: {

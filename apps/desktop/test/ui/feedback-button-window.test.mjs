@@ -69,6 +69,9 @@ test('the feedback cell: one place in every view, the frozen window, the shot be
   await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, WORKFORCE_TEST_DATA: profile, WORKFORCE_FAKE_ENGINE: '1', ELECTRON_ENABLE_LOGGING: '0' };
   delete env.WORKFORCE_FEEDBACK_ORIGIN; // nothing is sent: Save keeps the report on this PC
+  // the build ships the team's receiver (resources/feedback/receiver.json) since 16.11.2026: point at none, so this run
+  // stays "not set up" and never drops a letter into the real mailbox
+  env.WORKFORCE_FEEDBACK_RECEIVER = path.join(profile, 'no-receiver.json');
   const app = await electron.launch({ executablePath: electronPath, args: [root], cwd: root, timeout: 60_000, env });
   let rpc;
   t.after(async () => {
@@ -324,6 +327,13 @@ test('the feedback cell: one place in every view, the frozen window, the shot be
     await expectStable(page, ['.mobile-top [data-cell="feedback"]', '.mobile-top [data-cell="profile"]', '.mobile-top .frame-header-title'], async () => { await open(() => phoneButton.click()); });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'no horizontal page scroll');
     assert.equal(await dock.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, 'nothing overflows the dock');
+    // feedback 16.11.2026 C2CC3D50: the phone paints with the pen only (Undo stays), the field starts two lines tall,
+    // the note is one line, the attachments row needs no sideways scroll
+    assert.equal(await dock.getByRole('group', { name: 'Paint' }).count(), 0, 'no Pen/Box choice on a phone');
+    assert.equal(await dock.getByRole('button', { name: 'Undo' }).count(), 1, 'Undo stays');
+    assert.ok((await dock.locator('.feedback-input textarea').boundingBox()).height >= 60, 'the field starts two lines tall');
+    assert.ok((await dock.locator('.feedback-privacy-note').boundingBox()).height <= 18, 'the note is one line');
+    assert.equal(await dock.locator('.feedback-dock-row').evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, 'the attachments row fits');
     const foot = await dock.boundingBox();
     assert.ok(height - (foot.y + foot.height) <= 16, `the dock sits at the foot (${JSON.stringify(foot)})`);
     await shot(name);

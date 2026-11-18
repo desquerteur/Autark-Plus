@@ -3,7 +3,7 @@
 // listed realtime model of an API-key account an adapter serves (adapters.ts: OpenAI, OpenAI-compatible, Google); else the
 // default model of the first account that has one), and how the model speaks: as the chat's agent, briefly, with the chat's
 // recent lines as context and hand_over for real work (the agent's full turn does it, with its tools). B-081: who it speaks
-// as for a call (realtimeAgent: the caller; a ring in a chat with more agents is the voice conversation's).
+// as for a call (realtimeAgent: the caller; a ring in a chat with more agents, and any call in a group chat, is the voice conversation's).
 // Owns: those choices and the instruction text. Never: reads the key (session.ts asks accounts.apiKey right before
 // connecting) or treats chat lines as instructions (they are context).
 
@@ -76,7 +76,8 @@ export function chatAgents(s: Pick<RuntimeServices, 'chats' | 'org'>, conversati
 /**
  * The agent the live voice speaks as (realtime voice and the talker): the chat's one active agent; in a default 1:1
  * (settings.direct) that has more agents by now, the agent of its pair (settings.directPair), else its lead. A group chat
- * with several agents has none: there the delivery picks who answers a spoken line, as it does for a typed one.
+ * with several agents has none here: realtime voice speaks as one agent, so its call is the voice conversation's, where the
+ * talker speaks for the team with the chat's lead first (calls/talker.ts).
  */
 export function voiceAgent(s: Pick<RuntimeServices, 'chats' | 'org'>, conversationId: string): string | undefined {
   const agents = chatAgents(s, conversationId);

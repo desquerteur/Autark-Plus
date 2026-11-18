@@ -62,6 +62,21 @@ test('a new release of a family follows the adopted entries, not the old ones (t
   assert.equal(priors.forNewer('claude-opus-5-6')?.smarts, 97);
 });
 
+test('package C: a price the copy does not carry stays, a price it carries wins, and a model it drops is gone', () => {
+  const priors = Priors.load(SHIPPED);
+  const opus = () => priors.forModel('claude-opus-5-5')!;
+  assert.deepEqual([opus().priceCachedInputPerM, opus().priceCacheWritePerM], [0.2, 8]);
+  // The generator's copy lists input and output from Artificial Analysis; it does not carry the CLI's read and write prices yet.
+  assert.equal(adoptCopy(priors, feedCopy(copy('2026-11-20'))), true);
+  assert.deepEqual([opus().priceInputPerM, opus().priceOutputPerM], [4, 20]);
+  assert.deepEqual([opus().priceCachedInputPerM, opus().priceCacheWritePerM], [0.2, 8], 'the shipped read and write prices survive the refresh');
+  assert.equal(adoptCopy(priors, feedCopy(copy('2026-11-20'))), false, 'the same copy again changes nothing');
+  const listed = { ...copy('2026-11-21'), models: [{ match: 'claude-opus-5-5*', strengths: {}, priceInputPerM: 5, priceOutputPerM: 25, priceCachedInputPerM: 0.5, priceCacheWritePerM: 10 }] };
+  assert.equal(adoptCopy(priors, feedCopy(listed)), true);
+  assert.deepEqual([opus().priceCachedInputPerM, opus().priceCacheWritePerM], [0.5, 10], 'what the copy lists is the price');
+  assert.equal(priors.forModel('claude-sonnet-5-5'), undefined, 'the copy is the list of models');
+});
+
 test('refreshPriorsFeed: once a day, stored and taken; a newer shipped file wins over an older copy', async () => {
   const db = memoryDb();
   const time = clock();

@@ -1,6 +1,7 @@
 // "## My chats" of the live part (owner 13.11.2026: "wo sie einfach die ganzen Chats sieht"): every chat the agent is in,
-// one stable line each – `ch_… · <title as I see it>` (archived ones marked), in a fixed order (newest chat first), so
-// the section changes only on a join, a leave or a rename. A chat with lines I have not seen yet (after my cursor in it,
+// one stable line each – `ch_… · <title as I see it>` (archived ones marked; KI-Runde 17.11.2026: a chat a person is in
+// marked ` · <their name> reads here`, so the list says at a glance where my lines reach someone), in a fixed order
+// (newest chat first), so the section changes only on a join, a leave or a rename. A chat with lines I have not seen yet (after my cursor in it,
 // never a line of mine, no status line) gets ` · N new · newest <author> <time>: "<preview>"`; the chat whose new lines
 // come in this very input gets no mark. At most MAX_CHATS lines – chats with news always among them.
 // Every line the agent receives carries the same chat id (context/render.ts lineLabel); a <chat to="…"> block names it.
@@ -38,10 +39,16 @@ export function newsMark(services: Services, chat: ConversationSummary, agentId:
   return ` · ${count} new · newest ${author} ${dueText(newest.createdAt, zone, now)}: "${oneLine(newest.body) || '(no text)'}"`;
 }
 
+/** " · Gerd reads here" for the people in the chat – the owner, a person of the organisation ('' for a room of agents). */
+export function readerMark(services: Services, chat: Pick<ConversationSummary, 'members'>): string {
+  const names = chat.members.filter((member) => member.kind === 'human' && !member.leftAt).map((member) => memberName(services, member.memberId) ?? 'a person');
+  return names.length ? ` · ${names.join(', ')} ${names.length === 1 ? 'reads' : 'read'} here` : '';
+}
+
 /** The stable line of one chat for `agentId`. */
 export function overviewLine(services: Services, chat: ConversationSummary, agentId: string): string {
   const title = oneLine(chatTitleFor(services, chat.id, agentId) || 'Untitled chat', 80);
-  return `${chat.id} · ${title}${chat.archivedAt !== undefined ? ' · archived' : ''}`;
+  return `${chat.id} · ${title}${readerMark(services, chat)}${chat.archivedAt !== undefined ? ' · archived' : ''}`;
 }
 
 /** The section, '' when the agent is in no chat. `current`: the chat whose new lines this input carries (no mark). */

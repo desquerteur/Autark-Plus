@@ -23,6 +23,8 @@ const STEP_ACTIONS: ReadonlySet<string> = new Set<SideStepAction>([
   'click', 'double_click', 'right_click', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'scroll', 'scroll_into_view', 'back', 'forward', 'reload',
 ]);
 const PAGE_ACTIONS: ReadonlySet<string> = new Set(['press', 'scroll', 'back', 'forward', 'reload']);
+/** Steps that may go to a point (x, y): in an element, or in the visible page without one (side-driver/validate.ts POINT). */
+const POINT_ACTIONS: ReadonlySet<string> = new Set(['click', 'double_click', 'right_click', 'hover']);
 /** The most matching lines a conflict lists. */
 const LISTED = 8;
 
@@ -30,6 +32,8 @@ const LISTED = 8;
 export interface StepArgs {
   action: string; ref?: string; role?: string; name?: string; label?: string; placeholder?: string; text?: string; css?: string;
   exact?: boolean; nth?: number; value?: string; values?: string[]; key?: string; files?: string[]; amount?: number;
+  /** CSS px: inside the element from its top-left, or – without one – in the visible page (17.11.2026). */
+  x?: number; y?: number;
 }
 
 /** The tab and space of a side call (place.ts sideOn). */
@@ -40,7 +44,8 @@ export async function sideStep(ctx: ToolContext, on: SideOn, args: StepArgs): Pr
   if (!STEP_ACTIONS.has(args.action)) throw new WorkforceError('bad_request', `${args.action} works in my own browser, not in the person's.`);
   const words = Boolean(args.role || args.label || args.placeholder || args.text);
   if (!args.ref && args.css && !words) throw new WorkforceError('bad_request', SIDE_CSS);
-  if (!args.ref && !words && !PAGE_ACTIONS.has(args.action)) {
+  const point = args.x !== undefined && args.y !== undefined;
+  if (!args.ref && !words && !PAGE_ACTIONS.has(args.action) && !(point && POINT_ACTIONS.has(args.action))) {
     throw new WorkforceError('bad_request', "This step needs an element: in the person's browser I name it by ref (browser.snapshot or browser.find there) or by its words.");
   }
   const ref = args.ref ?? (words ? await refByWords(ctx, on, args) : undefined);
@@ -49,6 +54,7 @@ export async function sideStep(ctx: ToolContext, on: SideOn, args: StepArgs): Pr
   return {
     action: args.action as SideStepAction, ...(ref ? { ref } : {}), ...(value !== undefined ? { value } : {}),
     ...(args.values ? { values: args.values } : {}), ...(args.key ? { key: args.key } : {}), ...(args.amount !== undefined ? { dy: args.amount } : {}),
+    ...(point && POINT_ACTIONS.has(args.action) ? { x: args.x, y: args.y } : {}),
   };
 }
 

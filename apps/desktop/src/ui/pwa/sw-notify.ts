@@ -13,6 +13,7 @@
 // Owns: these handlers. Never: caches, fetches, or opens the origin root unless `home` is it.
 
 import { noticeCount, syncAppBadge } from './badge.ts';
+import { DUE_SHOW_MS, DUE_TAG, dueItems, groupDue, isDuePush, type DueData } from './due-notice.ts';
 
 export interface NotifyEvent extends Event { waitUntil(promise: Promise<unknown>): void }
 export interface PushEvent extends NotifyEvent { data: { json(): unknown; text(): string } | null }
@@ -43,6 +44,8 @@ export interface NotifyOptions {
   badge?: string;
   /** Every push shows a notice (iOS): duplicates replace quietly; a clear shows its notice quietly on Apple's push service. */
   alwaysShow: boolean;
+  /** How long a Due notice stays (due-notice.ts DUE_SHOW_MS); tests shorten it. */
+  dueMs?: number;
 }
 
 /** `clear`: the chat or to-do with this tag was read on some device (runtime/pwa/read-clear.ts); `ring`: an agent calls (B-081). */
@@ -70,7 +73,7 @@ export function wireNotifications(sw: NotifyScope, options: NotifyOptions): void
    * A newer notice for the same to-do or chat (same tag) replaces the older one and still alerts (renotify in Chromium;
    * closing the old one first covers browsers that ignore it). renotify without a tag would throw.
    */
-  async function showPush(payload: PushPayload, quiet = false): Promise<void> {
+  async function showPush(payload: PushPayload, quiet = false, due?: DueData): Promise<void> {
     const tag = payload.tag || undefined;
     const open = tag ? await notices(tag) : [];
     const ids = new Set(open.flatMap((old) => {
@@ -102,7 +105,7 @@ export function wireNotifications(sw: NotifyScope, options: NotifyOptions): void
       renotify: Boolean(tag) && !quiet && !duplicate,
       silent,
       data: {
-        url: payload.url ?? '/', ...(payload.id ? { id: payload.id } : {}), ...(count !== 1 ? { count } : {}),
+        url: payload.url ?? '/', ...(payload.id ? { id: payload.id } : {}), ...(count !== 1 ? { count } : {}), ...(due ? due : {}),
         ...(tag?.startsWith('chat:') && ids.size > 1 ? { ids: [...ids] } : {}),
       },
       ...(ring ? { requireInteraction: true, vibrate: RING_VIBRATE } : {}),
@@ -131,6 +134,20 @@ export function wireNotifications(sw: NotifyScope, options: NotifyOptions): void
         await badge();
       });
       event.waitUntil(Promise.all([shown, wake()]));
+      return;
+    }
+    if (isDuePush(payload)) { // one notice for what is due, replaced not stacked, closed after a few seconds (due-notice.ts)
+      const stamp = Date.now();
+      const shown = enqueue(async () => {
+        const grouped = groupDue({ ...payload, url: payload.url ?? '/#/day' }, (await notices(DUE_TAG)).flatMap((old) => dueItems(old.data)), stamp);
+        await showPush(grouped.payload, false, grouped.data);
+        await badge();
+      });
+      const closed = shown.then(() => new Promise<void>((resolve) => setTimeout(resolve, options.dueMs ?? DUE_SHOW_MS))).then(() => enqueue(async () => {
+        for (const old of await notices(DUE_TAG)) if ((old.data as { stamp?: unknown } | undefined)?.stamp === stamp) old.close(); // a newer Due notice has its own timer
+        await badge();
+      }));
+      event.waitUntil(Promise.all([closed, wake()]));
       return;
     }
     event.waitUntil(Promise.all([enqueue(async () => { await showPush(payload); await badge(); }), wake()]));

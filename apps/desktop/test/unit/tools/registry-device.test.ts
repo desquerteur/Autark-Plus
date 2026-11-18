@@ -129,7 +129,7 @@ test('MCP tools/list: remote tools get the optional device argument, other tools
   const windows = listed.find((tool) => tool.title === 'computer.windows')!;
   assert.equal(windows.inputSchema.additionalProperties, false, 'the schema stays strict');
   assert.equal(props(defs.find((tool) => tool.name === 'computer.windows')!.inputSchema).device, undefined, 'the definition itself is not changed');
-  assert.match(registry.get('devices.list')!.description, /Tools with a device argument run on any of them/);
+  assert.match(registry.get('devices.list')!.description, /Tools with a device argument run on any of the PCs/);
   assert.throws(() => registry.register({ ...recorder([]), name: 'screen.own', inputSchema: { type: 'object', properties: { device: { type: 'string' } } } }), /must not define its own "device"/);
 });
 
@@ -177,7 +177,7 @@ test('unknown, revoked, ambiguous and non-PC devices are clear errors and nothin
   await fails({ device: 'Twin' }, /^Several linked PCs are called "Twin"\. Pass the device id/);
   await fails({ device: '' }, /device: too short/);
   await fails({ device: 'Tower' }, /^devices\.list always runs on this PC, so it takes no "device"\.$/, base(), 'devices.list');
-  assert.deepEqual([forwarded.length, summaries().length, runs.length], [0, 0, 0], 'nothing journaled, forwarded or run');
+  assert.deepEqual([forwarded.length, summaries().length, runs.length], [0, 7, 0], 'nothing forwarded or run; each refusal journaled as a failed call (KI-Runde 17.11.2026)');
   const twin = await registry.call('computer.windows', { device: 'dev_twin2' }, base(), 'call_twin');
   assert.equal(textOf(twin), 'ran on dev_twin2', 'the id picks one of two PCs with the same name');
 });

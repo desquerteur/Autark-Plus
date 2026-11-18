@@ -34,7 +34,8 @@ export interface PersonScopes {
   assignAgents: boolean;
 }
 
-/** A new person works with no space's agents until the owner picks spaces (never the private space by default). */
+/** Stored scopes without a known value read as these; a new person gets every space, the private one too (people/service.ts, 18.11.2026; the person dialog's
+ *  "Also your private agents" keeps them to the shared ones). */
 export const DEFAULT_PERSON_SCOPES: PersonScopes = { spaces: [], startChats: true, assignAgents: true };
 
 /** F13: a member of the organisation, or a CEO beside the owner (the owner's own row is 'ceo'). */

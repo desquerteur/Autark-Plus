@@ -72,7 +72,7 @@ test('a first start writes the whole file: every section and key with a comment 
   assert.equal(above(body, 'theme'), '// Colour scheme of the window. Options: system | light | dark. Default: system');
   assert.equal(above(body, 'sidebarWidth'), '// Width of the sidebar in pixels. From 200 to 420. Default: 288');
   assert.equal(above(body, 'closeToTray'), '// Closing the window keeps the app and the agents running. Options: true | false. Default: true');
-  assert.match(above(body, 'language'), /Default: en \(this PC\)$/);
+  assert.match(above(body, 'language'), /Default: en$/, 'owner 18.11.2026: English on every PC, no longer from this PC');
   assert.equal(data.preferences.theme, 'system');
   assert.equal(data.notifications.quietHours, null, 'a key not set reads null');
   assert.equal(data.notifications.sound, true, 'notifications sound by default');

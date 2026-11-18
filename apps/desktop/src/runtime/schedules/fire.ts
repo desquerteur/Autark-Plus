@@ -5,7 +5,7 @@
 //               member there, else the one it was set in;
 //  * routine  → creates a tracked task from payload.taskTemplate (title, notes and – T11 – its steps as the plan;
 //               payload.priority 'important' → High); an agent owner is woken once (under the task's key, with the
-//               schedule's note); the person's "Post as task" routines go to the one owner Autark picks (tasks/give.ts);
+//               schedule's note, else "I took on …"); the person's "Post as task" routines go to the one owner Autark picks (tasks/give.ts);
 //               the stored template is bounded first (post.ts boundedTemplate: no malformed or
 //               oversized steps/title from an agent's raw `task` can break or flood a run);
 //  * timer    → notifies the human (kind 'todo'); a linked to-do waiting for this ring is open again (it rings now) –
@@ -115,8 +115,10 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
         return;
       }
       const task = s.tasks.create({ ...fields, assigneeKind: 'agent', assigneeId: schedule.ownerId });
-      // one wake: the schedule's note joins the task's own (same key, tasks/give.ts tellGiven)
-      s.wakes.wake({ agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: task.id, note: schedule.payload.note, coalesceKey: `task:${task.id}`, origin });
+      // one wake (same key as tasks/give.ts tellGiven's, which is bare for work whose maker is its owner): the schedule's
+      // note, else the work it made – the routine made it, not a turn of mine (wave-3b review R5)
+      const note = schedule.payload.note?.trim() || `I took on "${template.title}".`;
+      s.wakes.wake({ agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: task.id, note, coalesceKey: `task:${task.id}`, origin });
       return;
     }
     case 'timer': {

@@ -2,6 +2,9 @@
 // another person or an agent – one org chart) and what they may do (whether they work with the agents,
 // start chats, give tasks to agents) → people.save. Spaces stay system data (B-044 §1.12): "Works with
 // your agents" sets every space or none; a list of single spaces set elsewhere stays until it is changed.
+// Owner 18.11.2026: a person works with every space by default, the private one too; "Also your private agents" is
+// the one option to keep them to the shared spaces (what a private agent knows can reach them) – a row in plain sight
+// every time the person is edited, not a rule.
 // F13: a new person is added on the Add person page (PersonNew.tsx), not here. A person whose access was removed keeps
 // name, title and manager editable; what they may do comes back with "Invite again" (the runtime refuses
 // scopes for them, so the dialog neither shows nor sends them).
@@ -20,6 +23,7 @@ import { people, upsertPerson } from '../lib/people.ts';
 import { toastError } from '../lib/toasts.ts';
 import { withSelf } from '../lib/self-identity.ts';
 import { managerOptions, ROLE_OPTIONS, roleHint } from './people-model.ts';
+import { ensureSpaces, spaces } from './org-state.ts';
 
 export function PersonDialog(props: { open: boolean; person?: Person; onClose: () => void }) {
   const current = props.person;
@@ -46,6 +50,10 @@ export function PersonDialog(props: { open: boolean; person?: Person; onClose: (
   const shown = ceo ? CEO_SCOPES : scopes;
   const canSave = !busy && (owner || name.trim().length > 0);
   const withAgents = shown.spaces === 'all' || shown.spaces.length > 0;
+  useEffect(() => { if (props.open) ensureSpaces(); }, [props.open]);
+  const privateIds = spaces.value.filter((space) => space.kind === 'private').map((space) => space.id);
+  const sharedIds = spaces.value.filter((space) => space.kind !== 'private' && space.archivedAt === undefined).map((space) => space.id);
+  const withPrivate = shown.spaces === 'all' || privateIds.some((id) => shown.spaces.includes(id));
   const pickRole = (next: PersonRole) => {
     if (next === 'ceo' && role !== 'ceo') setManager(''); // a CEO sits at the top
     setRole(next);
@@ -99,6 +107,11 @@ export function PersonDialog(props: { open: boolean; person?: Person; onClose: (
             <label class="check-row">
               <input type="checkbox" checked={withAgents} disabled={ceo} onChange={(event) => setScopes({ ...scopes, spaces: (event.currentTarget as HTMLInputElement).checked ? 'all' : [] })} />
               <span>Works with your agents</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" checked={withAgents && withPrivate} disabled={ceo || !withAgents || privateIds.length === 0}
+                onChange={(event) => setScopes({ ...scopes, spaces: (event.currentTarget as HTMLInputElement).checked ? 'all' : sharedIds })} />
+              <span>Also your private agents</span>
             </label>
             <label class="check-row">
               <input type="checkbox" checked={shown.startChats} disabled={ceo} onChange={(event) => setScopes({ ...scopes, startChats: (event.currentTarget as HTMLInputElement).checked })} />

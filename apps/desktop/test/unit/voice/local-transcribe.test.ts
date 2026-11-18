@@ -16,7 +16,7 @@ import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import { Transcriber, type FetchFn } from '../../../src/runtime/voice/transcribe.ts';
 import { LocalSpeech, modelLanguage, readsTake, serviceLanguage, speechLanguage } from '../../../src/runtime/voice/local/service.ts';
 import { LocalSpeechEngine } from '../../../src/runtime/voice/local/engine.ts';
-import type { ListenInput, Listener } from '../../../src/runtime/decision/engine-runner.ts';
+import type { ListenInput, Listener } from '../../../src/runtime/decision/listener.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { defaultSettings } from '../../../src/runtime/settings/defaults.ts';
 import { settingsFrom } from '../../../src/runtime/settings/read.ts';

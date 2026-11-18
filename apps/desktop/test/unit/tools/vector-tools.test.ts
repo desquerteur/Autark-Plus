@@ -33,7 +33,7 @@ test('both tools are on demand, in every mode, with a short spec, and need a cho
   for (const name of ['vector.embed', 'vector.search']) {
     const tool = find(name);
     assert.ok(!(name in BASE_CORE));
-    assert.equal(tool.anyMode, true);
+    assert.equal(tool.modes, undefined);
     assert.equal(tool.requires, 'embeddings');
     const size = tool.description.length + JSON.stringify(tool.inputSchema).length;
     assert.ok(size < 700, `${name} spec is ${size} characters`);
@@ -60,6 +60,8 @@ test('without a chosen embedding model neither is offered, listed under More too
   assert.match(more(), /knowledge\.find|memory\.browse/, 'the rest of the list stays');
   const refused = await registry.call('vector.search', { query: 'invoice', in: ['memory'] }, base, 'c1');
   assert.equal(refused.isError, true);
+  // KI-Runde 17.11.2026: the refusal says why, so a model that knows nothing else can act on it.
+  assert.match(textOf(refused), /^vector\.search needs an embedding model, and none that can serve is chosen in Settings\./);
   assert.equal(searched, 0, 'a call by an old name runs nothing');
 
   chosen = true;

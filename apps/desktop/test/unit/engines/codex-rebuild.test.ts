@@ -100,9 +100,9 @@ test('codex rebuild (B-049 neutral mapping): Claude Read → files.read, a Codex
     { type: 'function_call', name: 'exec_command', arguments: '{"cmd":"Get-ChildItem"}', call_id: 'exec-1' },
     { type: 'function_call_output', call_id: 'exec-1', output: 'a.ts' },
   ]);
-  assert.deepEqual(out[4], { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '[ran Edit: a.ts]\n-const a = 1;\n+const a = 2;' }] });
-  assert.deepEqual(out[5], { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[output of Edit]\nThe file a.ts has been updated.' }] });
-  assert.equal(out.length, 6);
+  // BEFUND §3 (17.11.2026): one user-side record with its diff and output, never assistant text
+  assert.deepEqual(out[4], { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[record of an earlier call, not replayable here – Edit: a.ts]\n-const a = 1;\n+const a = 2;\n[its output]\nThe file a.ts has been updated.' }] });
+  assert.equal(out.length, 5);
 });
 
 test('codex rebuild: chunks keep the item and character bounds and the order', () => {

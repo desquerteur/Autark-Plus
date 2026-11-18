@@ -37,6 +37,39 @@ function fakeAdb(answers: Array<(args: string[]) => Partial<ExecResult> | undefi
   return { phone, calls };
 }
 
+test('KI-Runde 17.11.2026: the serials attached here are known without asking adb again (phone/linked.ts counts them as linked)', async () => {
+  const { phone } = fakeAdb([
+    (args) => (args[0] === 'connect' ? { stdout: Buffer.from(`connected to ${args[1]}\n`) } : undefined),
+    (args) => (args[0] === 'disconnect' ? { stdout: Buffer.from(`disconnected ${args[1]}\n`) } : undefined),
+  ]);
+  assert.deepEqual(phone.attached(), [], 'nothing before the first answer');
+  await phone.devices();
+  assert.deepEqual(phone.attached(), ['192.168.1.20:37099'], 'only a phone in state "device"');
+  await phone.connect('192.168.1.33:5555');
+  assert.deepEqual(phone.attached().sort(), ['192.168.1.20:37099', '192.168.1.33:5555']);
+  await phone.disconnect('192.168.1.33:5555');
+  assert.deepEqual(phone.attached(), ['192.168.1.20:37099']);
+});
+
+test('E.3: whether adb is installed here is known without running it, and a change of the attached phones is told once', async () => {
+  let changes = 0;
+  const answers = [DEVICES, DEVICES, 'List of devices attached\n\n'];
+  const exec = async (_command: string, args: string[]) => ({ code: 0, stdout: Buffer.from(args[0] === 'devices' ? answers.shift() ?? '' : ''), stderr: '' });
+  const phone = new AdbPhone({ log: new MemoryLogger(), exec, changed: () => { changes += 1; }, finder: { find: async () => ({ command: 'C:\\sdk\\adb.exe', prefixArgs: [], path: 'C:\\sdk\\adb.exe' }) } });
+  assert.equal(phone.installed(), false, 'not looked yet');
+  assert.equal(await phone.available(), true);
+  assert.equal(phone.installed(), true, 'found on disk, no adb run');
+  await phone.devices();
+  assert.equal(changes, 1, 'a phone came');
+  await phone.devices();
+  assert.equal(changes, 1, 'the same phones: nothing told');
+  await phone.devices();
+  assert.deepEqual([changes, phone.attached()], [2, []], 'the phone left the cable');
+  const none = new AdbPhone({ log: new MemoryLogger(), finder: { find: async () => null }, exists: () => false });
+  assert.equal(await none.available(), false);
+  assert.equal(none.installed(), false);
+});
+
 test('uiautomator dumps become a compact outline; passwords are masked; bounds give tap points', () => {
   const nodes = parseDump(DUMP);
   assert.equal(nodes.length, 5);

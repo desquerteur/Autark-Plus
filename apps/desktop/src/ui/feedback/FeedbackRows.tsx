@@ -53,7 +53,7 @@ export function RecordingRow(props: { draft: FeedbackDraft; disabled: boolean })
   const ms = takes.reduce((sum, take) => sum + take.ms, 0);
   return (
     <div class={`feedback-shot feedback-recording${draft.withAudio && takes.length ? '' : ' off'}`}>
-      <button type="button" class="feedback-thumb" disabled={!takes.length || props.disabled} onClick={play}
+      <button type="button" class={`feedback-thumb${takes.length ? '' : ' empty'}`} disabled={!takes.length || props.disabled} onClick={play}
         aria-label={playing ? 'Stop playing' : 'Play the recording'} title={playing ? 'Stop' : 'Play'}>
         <Icon name={playing ? 'stop' : takes.length ? 'play' : 'waveform'} size={18} />
       </button>
@@ -62,7 +62,7 @@ export function RecordingRow(props: { draft: FeedbackDraft; disabled: boolean })
           <input type="checkbox" checked={draft.withAudio} disabled={props.disabled} onChange={(event) => updateDraft({ withAudio: checked(event) })} />
           {RECORDING_LABEL}
         </label>
-        <p class="feedback-shot-hint">{recordingText(takes.length, recordingLength(ms), draft.withAudio)}</p>
+        <p class={`feedback-shot-hint${takes.length ? '' : ' empty'}`} title={recordingText(takes.length, recordingLength(ms), draft.withAudio)}>{recordingText(takes.length, recordingLength(ms), draft.withAudio)}</p>
       </div>
     </div>
   );

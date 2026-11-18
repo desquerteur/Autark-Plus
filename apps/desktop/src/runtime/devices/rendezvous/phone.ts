@@ -13,6 +13,9 @@
 // is refused in the handshake (4003), before any stream exists. A removed phone's channels end after the drain (prune);
 // the key is checked again when the auth arrives, so a phone removed between its hello and its auth gets no channel.
 // The bytes per phone and path are counted (phone-traffic.ts) for Settings › Devices and the daily log line.
+// F25 stage 2 (16.11.2026): on a phone's tunnel channel, once the handshake is done, the phone may ask for a WebRTC way
+// (rendezvous/rtc.ts, signalling inside this channel); the data channel that comes up runs the handshake again with
+// exactly that phone's key (acceptRtc), then the same streams ('rtc' in the counts) – the tunnel stays the way back.
 // Owns: the channel on a phone tunnel or direct socket and its streams. Never: gives a phone the owner token, a PC's
 // sync, or a stream to anything but this PC's own runtime port.
 
@@ -23,6 +26,8 @@ import type { Signer } from '../handshake.ts';
 import { fingerprintOf, fromB64url } from '../keys.ts';
 import type { DeviceRecord } from '../repo.ts';
 import { PhoneTraffic, type PhoneCount, type PhonePath } from './phone-traffic.ts';
+import { PhoneRtc, type PhoneRtcDeps } from './rtc.ts';
+import type { RtcSocket } from './rtc-socket.ts';
 
 export const STREAM_WINDOW = 256 * 1024;
 const CHUNK = 32 * 1024;
@@ -35,6 +40,8 @@ export interface PhoneBridgeDeps {
   port(): number;
   /** The device record behind a key's fingerprint: a direct socket names its phone only in the handshake. */
   phone?(fingerprint: string): DeviceRecord | undefined;
+  /** F25: the WebRTC way (rtc.ts) – its STUN list, or off; absent, a phone's rtc hello goes unanswered, as at an older PC. */
+  rtc?: Omit<PhoneRtcDeps, 'log'>;
   now?: () => number;
 }
 
@@ -64,10 +71,12 @@ export class PhoneBridge {
   private readonly channels = new Set<SecureChannel>();
   private readonly changes = new Set<() => void>();
   private readonly traffic: PhoneTraffic;
+  private readonly rtc?: PhoneRtc;
 
   constructor(deps: PhoneBridgeDeps) {
     this.deps = deps;
     this.traffic = new PhoneTraffic(deps.log, deps.now);
+    if (deps.rtc) this.rtc = new PhoneRtc({ ...deps.rtc, log: deps.log });
   }
 
   /** A tunnel a pinned phone opened: the handshake with exactly its key, then its streams. */
@@ -77,11 +86,16 @@ export class PhoneBridge {
   }
 
   /** F29: a phone's own socket to the peer listener – a channel only for the key of an accepted phone; its device id. */
-  acceptDirect(socket: SocketLike): Promise<string> {
-    return this.serve(socket, 'direct', (pub) => {
-      const record = this.deps.phone?.(fingerprintOf(pub));
-      return relayPhone(record) && Buffer.compare(fromB64url(record.publicKey!), pub) === 0 ? record.id : undefined;
-    });
+  async acceptDirect(socket: SocketLike): Promise<string> {
+    return (await this.serve(socket, 'direct', (pub) => this.accepted(pub))).peerId;
+  }
+
+  /** F25: the data channel the phone with key `pub` signalled for on its tunnel – the handshake again, with exactly that
+   * key while the phone is still accepted (any other key: 4003), then its streams. */
+  async acceptRtc(socket: RtcSocket, pub: Buffer): Promise<SecureChannel> {
+    const channel = await this.serve(socket, 'rtc', (key) => (key.equals(pub) ? this.accepted(key) : undefined));
+    socket.trusted();
+    return channel;
   }
 
   /** Bytes per phone and path today, and the way each phone's channel runs now. */
@@ -106,7 +120,13 @@ export class PhoneBridge {
     this.traffic.flush();
   }
 
-  private async serve(socket: SocketLike, path: PhonePath, trust: (pub: Buffer) => string | undefined): Promise<string> {
+  /** The device id of an accepted phone with this key. */
+  private accepted(pub: Buffer): string | undefined {
+    const record = this.deps.phone?.(fingerprintOf(pub));
+    return relayPhone(record) && Buffer.compare(fromB64url(record.publicKey!), pub) === 0 ? record.id : undefined;
+  }
+
+  private async serve(socket: SocketLike, path: PhonePath, trust: (pub: Buffer) => string | undefined): Promise<SecureChannel> {
     const meter = { id: '', early: 0 };
     const measured = counted(socket, (bytes) => { if (meter.id) this.traffic.add(meter.id, path, bytes); else meter.early += bytes; });
     const channel = await acceptSecure(measured, this.deps.identity, trust);
@@ -122,9 +142,13 @@ export class PhoneBridge {
     this.channels.add(channel);
     channel.onClose(end);
     if (channel.closed) end(); // it ended before it was here: its close listeners never run
-    else serveStreams(channel, () => this.deps.port(), this.deps.log);
+    else {
+      serveStreams(channel, () => this.deps.port(), this.deps.log);
+      // F25: only a tunnel's channel signals a WebRTC way – never a direct socket or a data channel itself
+      if (path === 'relay') this.rtc?.attach(channel, channel.peerId, (dataChannel) => this.acceptRtc(dataChannel, channel.peerPub));
+    }
     this.changed();
-    return channel.peerId;
+    return channel;
   }
 
   private changed(): void {

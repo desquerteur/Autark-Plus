@@ -5,7 +5,7 @@
 // Never: knows thread/turn semantics (server.ts / engine.ts do) or logs message bodies.
 
 import type { ChildLike } from '../../system/supervisor.ts';
-import { readJsonLines, isRecord } from '../shared.ts';
+import { CODEX_LINE_MAX, readJsonLines, isRecord } from '../shared.ts';
 
 export interface RpcNotification { method: string; params: Record<string, unknown> }
 export type ServerRequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -34,7 +34,7 @@ export class RpcClient {
     this.child = child;
     const fail = (reason: string) => this.close(new Error(`codex connection closed (${reason})`));
     if (!child.stdout || !child.stdin) throw new Error('codex child needs piped stdio');
-    readJsonLines(child.stdout, (message) => this.receive(message), fail);
+    readJsonLines(child.stdout, (message) => this.receive(message), fail, CODEX_LINE_MAX);
     child.stdin.on('error', () => fail('stdin'));
     child.once('exit', () => fail('exit'));
     child.once('error', () => fail('spawn'));

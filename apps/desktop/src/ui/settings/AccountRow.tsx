@@ -6,6 +6,10 @@
 // empty) and a right-click menu: Rename (B-078), Show models, Sign in / Sign out, Move up / down
 // among accounts of one provider, Add another account (a plan with its own sign-in profile), Enable / Disable, Claude
 // Code's Delete histories, Remove.
+// 17.11.2026 (Konrad task_bgykyzcx): the row carries its On/Off switch (the right-click menu's Disable / Enable stays) and a
+// visible "Remove from this company", and a plan login the switch "When the plan runs out: continue with paid extra usage" (Account.extraUsage;
+// settings/extra-usage.ts says the cost; where a plan has none there is no switch, only a quiet line saying so), and a plan login the
+// switch "On all PCs of this company" (Account.thisPcOnly: off = the account and its sign-in stay on this PC).
 // B-072: no plan roles or rotation switch here – every signed-in plan takes turns, the one whose week resets first runs
 // first (09.11.2026, accounts/candidates.ts); the order decides the rest.
 // Owns: the row. Never: shows tokens or invents limits (unknown = '–').
@@ -24,9 +28,10 @@ import { shortModelName } from '../chat/live-text.ts';
 import { serviceOfAccount } from '../../shared/model/providers-connect.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
+import { extraUsageView } from './extra-usage.ts';
 import { act, ActionButton, Row, Toggle, useBusy } from './controls.tsx';
 import { inTerminal, recheckOnFocus, removeText, repairText, signInStarted, startLogin } from './account-actions.ts';
-import { needsSignIn, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './providers.ts';
+import { needsSignIn, planLabel, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './providers.ts';
 
 /** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Gemini CLI and Copilot CLI have one per PC. */
 const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli']);
@@ -39,9 +44,13 @@ function LimitBars(props: { account: Account }) {
   const now = Date.now();
   const limits = props.account.limits;
   const title = [limits?.stale ? 'Last reading may be outdated' : undefined, ...otherWindows(limits, now)].filter(Boolean).join('\n') || undefined;
+  const slots = limitSlots(limits, now);
+  // 17.11.2026 (Mika): before a first reading an empty bar would read as used up – no bars, one quiet line
+  if (slots.every((slot) => slot.left === undefined)) return <div class="account-limits" title={title}><div class="account-limit-pending">Limits show once they have been read.</div></div>;
   return (
     <div class="account-limits" title={title}>
-      {limitSlots(limits, now).map((slot) => (
+      {/* 18.11.2026 (Mika, window check): a window with no reading while another has one (a plan without a 5-hour limit) shows nothing – '–' with an empty bar read as 0 % left */}
+      {slots.filter((slot) => slot.left !== undefined).map((slot) => (
         <div key={slot.name} class="account-limit" data-window={slot.name}>
           <span class="account-limit-line tabular">{slot.line}</span>
           <span class="usage-bar"><span style={{ width: `${slot.left ?? 0}%` }} /></span>
@@ -89,7 +98,7 @@ function hintOf(account: Account, repair: string | undefined, count: number): st
   const barsSayWhen = plan && account.limits?.windows.some((window) => PLAN_SLOTS.includes(window.name) && window.usedPercent >= 100 && (window.resetsAt ?? 0) > now);
   return [
     account.label.toLocaleLowerCase().includes(providerName.toLocaleLowerCase()) ? undefined : providerName,
-    repair, account.plan, account.email, account.baseUrl && !cli ? account.baseUrl : undefined,
+    repair, planLabel(account.plan), account.email, account.baseUrl && !cli ? account.baseUrl : undefined,
     account.auth === 'env' && !repair ? `Key from ${account.envVar}` : undefined, account.detected ? 'found on this PC' : undefined,
     account.state === 'cooling' && account.coolingUntil && !barsSayWhen ? `Available again ${resetClock(account.coolingUntil, now)}` : undefined,
     count ? `${count} model${count === 1 ? '' : 's'}` : undefined,
@@ -102,7 +111,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const [busy, run] = useBusy();
   const [showModels, setShowModels] = useState(false);
   const listed = modelsOf(account, models.value);
-  const update = (patch: { enabled?: boolean; credits?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
+  const update = (patch: { enabled?: boolean; credits?: boolean; extraUsage?: boolean; thisPcOnly?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
   const index = siblings.indexOf(account);
   // swap priorities with the neighbour so the order is explicit and stable
   const move = (dir: -1 | 1) => {
@@ -112,6 +121,11 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
       await rpc.call('accounts.update', { id: account.id, priority: other.priority === account.priority ? other.priority + dir : other.priority });
       await rpc.call('accounts.update', { id: other.id, priority: account.priority });
     });
+  };
+  // 17.11.2026 (Konrad #109): a plan login on all PCs of the company, or only on this PC (the other PCs then drop it – asked first)
+  const share = async (all: boolean) => {
+    if (!all && !(await confirm({ title: `Keep ${account.label} on this PC only?`, body: 'The company\'s other PCs drop this account and its sign\u2011in. Work there continues on their other accounts, if they have any.', confirmLabel: 'Only on this PC' }))) return;
+    update({ thisPcOnly: !all });
   };
   const remove = async () => {
     if (await confirm({ title: `Remove ${account.label}?`, body: removeText(account), confirmLabel: 'Remove', danger: true })) await run(() => rpc.call('accounts.remove', { id: account.id }));
@@ -149,6 +163,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const plan = cli && isPlanProvider(account.provider);
   const repair = account.state === 'needs_login' && !signIn ? repairText(account) : undefined;
   const hint = hintOf(account, repair, listed.length);
+  const extra = extraUsageView(account); // a plan login: the switch for the provider's extra usage, or why it has none
   const credits = creditsPossible(account); // an Anthropic/OpenAI key: no sign-in, no reset in its slot
   const menu = (): MenuSection[] => {
     const order: MenuItem[] = [];
@@ -175,6 +190,29 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
         {credits && <div class="account-credits-hint">{CREDITS_HINT}</div>}
         {plan && <LimitBars account={account} />}
         {showModels && listed.length > 0 && <div class="account-models">{listed.map((model) => shortModelName(model.name) || model.model).join(' · ')}</div>}
+        {extra && (
+          <div class="account-extra" data-possible={extra.possible}>
+            {extra.possible && (
+              <label class="account-extra-switch">
+                <Toggle label={extra.label} checked={account.extraUsage === true} disabled={busy} onChange={(extraUsage) => update({ extraUsage })} />
+                <span>{extra.label}</span>
+              </label>
+            )}
+            <div class="account-extra-hint">{extra.hint}</div>
+          </div>
+        )}
+        {cli && (
+          <div class="account-share">
+            <label class="account-share-switch">
+              <Toggle label={`${account.label} on all PCs of this company`} checked={account.thisPcOnly !== true} disabled={busy} onChange={(all) => void share(all)} />
+              <span>On all PCs of this company</span>
+            </label>
+            <div class="account-share-hint">{account.thisPcOnly === true ? 'Only this PC uses it' : 'The account and its sign-in go to every PC of this company'}</div>
+          </div>
+        )}
+        <div class="account-foot">
+          <Button variant="ghost" class="small account-remove" onClick={() => void remove()}>Remove from this company</Button>
+        </div>
       </>}
     >
       <span class="account-slot">
@@ -188,6 +226,10 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
             </label>
           ) : null}
       </span>
+      <label class="account-power" title={account.enabled ? 'Switched on: this account is used' : 'Switched off: this account is not used until you switch it on'}>
+        <span>{account.enabled ? 'On' : 'Off'}</span>
+        <Toggle label={`Use ${account.label}`} checked={account.enabled} disabled={busy} onChange={(enabled) => update({ enabled })} />
+      </label>
     </Row>
   );
 }

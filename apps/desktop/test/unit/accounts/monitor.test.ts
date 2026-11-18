@@ -97,9 +97,12 @@ function harness() {
   return { db, bus, clock, service, repo, checks, answers, holds, flight, login, usage, upserts, run, startServer, servers, settle, signingIn, loginEnded };
 }
 
-test('adoption: a login found on this PC gets exactly one check; a sign-out outside Workforce becomes needs_login, old limits kept', async () => {
+test('adoption: a login found on this PC gets exactly one check once the person says "Use"; a sign-out outside Workforce becomes needs_login, old limits kept', async () => {
   const h = harness();
   await h.service.detect();
+  await h.settle();
+  assert.deepEqual([h.service.list().length, h.checks.length], [0, 0], 'offered, not used: no account, no check');
+  await h.service.useFound('claude:default');
   await h.settle();
   const [adopted, ...rest] = h.service.list();
   assert.equal(rest.length, 0);

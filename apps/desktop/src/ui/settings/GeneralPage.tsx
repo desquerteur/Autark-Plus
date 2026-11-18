@@ -84,6 +84,9 @@ export function GeneralPage() {
         <Row label="Sound" hint="To-dos for you, blockers and important messages always arrive">
           <Toggle label="Sound" checked={notes.sound} onChange={(sound) => void setNotes({ sound })} />
         </Row>
+        <Row label="While an agent uses this PC" hint="A line at the bottom says who and what, with Watch to open the screen">
+          <Toggle label="Show a line while an agent uses this PC" checked={notes.computerUse} onChange={(computerUse) => void setNotes({ computerUse })} />
+        </Row>
       </Group>
 
       <Group title="Behavior">

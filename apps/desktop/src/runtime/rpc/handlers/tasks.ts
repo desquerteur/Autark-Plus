@@ -155,6 +155,11 @@ export function register(table: HandlerTable): void {
     const task = taskOrThrow(ctx.services, id(o));
     return ctx.services.tasks.give(task.id, text(o, 'to', { max: 120 }), HUMAN_ID, { note: optText(o, 'note', { max: 4000, multiline: true }) });
   }, TASKS);
+  table.add('tasks.undo', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['id', 'changeId']);
+    return ctx.services.tasks.undo(taskOrThrow(ctx.services, id(o)).id, HUMAN_ID, optText(o, 'changeId', { max: 40 }));
+  }, TODO);
   table.add('tasks.finish', (params, ctx) => finish(params, ctx), TODO);
   table.add('tasks.reorder', (params, ctx) => reorder(params, ctx), TASKS);
   table.add('tasks.delete', (params, ctx) => {

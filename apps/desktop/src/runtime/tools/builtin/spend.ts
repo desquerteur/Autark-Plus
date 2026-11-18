@@ -25,7 +25,6 @@ const note = defineTool<{ amount: number; currency: string; what: string; kind?:
     required: ['amount', 'currency', 'what'], additionalProperties: false,
   },
   category: 'think',
-  anyMode: true,
   describe: (args) => internal(`Book ${args.amount} ${args.currency}: ${clip(args.what, 60)}`),
   async run(args, ctx) {
     const booked = { amount: args.amount, currency: args.currency, kind: args.kind ?? 'purchase', ref: spendRef(args) };

@@ -15,11 +15,24 @@ if (-not $bc) { throw 'bcprov-jdk18on-1.79.jar is neither in the Gradle cache no
 $zx = Get-ChildItem -Path (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/com.google.zxing/core/3.5.3') -Recurse -Filter 'core-3.5.3.jar' -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $zx) { $zx = Get-Item (Join-Path $root 'build/test-libs/core-3.5.3.jar') -ErrorAction SilentlyContinue }
 if (-not $zx) { throw 'core-3.5.3.jar (ZXing) is neither in the Gradle cache nor in apps/android/build/test-libs; run the Gradle build once.' }
-$libs = "$($bc.FullName);$($zx.FullName)"
 $out = Join-Path $root 'app/build/host-tests'
 New-Item -ItemType Directory -Force $out | Out-Null
-# relay/ is pure Java except NetworkWake (Android's network callback), which a phone exercises.
-$sources = @(Get-ChildItem (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/relay') -Filter '*.java' | Where-Object Name -ne 'NetworkWake.java' | ForEach-Object FullName) +
+# F25: libwebrtc's Java classes (relay/WebRtcConfig: the RTCConfiguration and the silent logger run on a host JVM, the
+# native library never does) from the AAR of app/build.gradle in Gradle's cache, else build/test-libs (fetched once from
+# https://repo1.maven.org/maven2/ch/threema/webrtc-android/149.0.0/webrtc-android-149.0.0.aar, sha1 e344229582383d9745b88a67df03faf749b70136).
+$rtcJar = Join-Path $out '../host-test-libs/libwebrtc-149.0.0.jar'
+if (-not (Test-Path -LiteralPath $rtcJar -PathType Leaf)) {
+    $aar = Get-ChildItem -Path (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/ch.threema/webrtc-android/149.0.0') -Recurse -Filter 'webrtc-android-149.0.0.aar' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $aar) { $aar = Get-Item (Join-Path $root 'build/test-libs/webrtc-android-149.0.0.aar') -ErrorAction SilentlyContinue }
+    if (-not $aar) { throw 'webrtc-android-149.0.0.aar is neither in the Gradle cache nor in apps/android/build/test-libs; run the Gradle build once.' }
+    New-Item -ItemType Directory -Force (Split-Path $rtcJar) | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($aar.FullName)
+    try { [IO.Compression.ZipFileExtensions]::ExtractToFile(($zip.Entries | Where-Object FullName -eq 'libs/libwebrtc.jar'), $rtcJar, $true) } finally { $zip.Dispose() }
+}
+$libs = "$($bc.FullName);$($zx.FullName);$((Resolve-Path $rtcJar).Path)"
+# relay/ is pure Java except NetworkWake (Android's network callback) and WebRtc (libwebrtc's native side), which a phone exercises.
+$sources = @(Get-ChildItem (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/relay') -Filter '*.java' | Where-Object Name -notin 'NetworkWake.java', 'WebRtc.java' | ForEach-Object FullName) +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/ConnectionAddress.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/Companies.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/CssColor.java') +
@@ -32,6 +45,8 @@ $sources = @(Get-ChildItem (Join-Path $root 'app/src/main/java/com/teydralab/aut
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/phoneuse/TypedText.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/phoneuse/UseState.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/phoneuse/TypeTarget.java') +
+    (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/phoneuse/TodoPlace.java') +
+    (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/phoneuse/TodoPost.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/InstallSource.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/UpdateRelease.java') +
     (Join-Path $root 'app/src/main/java/com/teydralab/autark/android/pair/QrDecode.java') +
@@ -44,7 +59,7 @@ $sources = @(Get-ChildItem (Join-Path $root 'app/src/main/java/com/teydralab/aut
 if ($LASTEXITCODE -ne 0) { throw 'Host test compilation failed.' }
 $classpath = "$out;$libs"
 # B-078: the SAS interop vectors (desktop remote/sas.ts) and phone use's screen tree and gestures run here too.
-foreach ($test in 'ConnectionAddressTest', 'RelayCryptoTest', 'relay.RemotePairTest', 'phoneuse.ScreenTreeTest', 'phoneuse.DisclosureTest', 'phoneuse.UseLinkThreadTest', 'phoneuse.TypedTextTest', 'phoneuse.UseStateTest', 'phoneuse.TypeTargetTest', 'UpdateReleaseTest', 'pair.QrDecodeTest', 'CompaniesTest', 'CssColorTest', 'relay.ReconnectTest', 'relay.CodeChainTest', 'relay.LinksTest', 'relay.DirectRouteTest', 'PhoneRoutesTest', 'ShellWiringTest', 'VolumePairTest') {
+foreach ($test in 'ConnectionAddressTest', 'RelayCryptoTest', 'relay.RemotePairTest', 'phoneuse.ScreenTreeTest', 'phoneuse.DisclosureTest', 'phoneuse.UseLinkThreadTest', 'phoneuse.TypedTextTest', 'phoneuse.UseStateTest', 'phoneuse.TypeTargetTest', 'phoneuse.TodoTest', 'UpdateReleaseTest', 'pair.QrDecodeTest', 'CompaniesTest', 'CssColorTest', 'relay.ReconnectTest', 'relay.CodeChainTest', 'relay.LinksTest', 'relay.DirectRouteTest', 'relay.RtcSignalTest', 'relay.RtcWayTest', 'PhoneRoutesTest', 'ShellWiringTest', 'VolumePairTest') {
     # autark.android: UpdateReleaseTest reads UpdateCheck/SelfUpdate's wiring from the sources.
     & $runtime "-Dautark.android=$root" -cp $classpath "com.teydralab.autark.android.$test"
     if ($LASTEXITCODE -ne 0) { throw "Host test $test failed." }

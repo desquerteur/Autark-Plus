@@ -3,8 +3,9 @@
 // POST chatgpt.com/backend-api/transcribe with the take as the file (and a language when one is known) answers {text}.
 // Measured 10.11.2026 on the plan login of this PC (probe, d0511.wav): 42 s of speech in 1.8 s, 125 s in 4.3 s, the
 // language detected without a hint, and the call went through while Codex's weekly limit stood at 100 % (it is no
-// Codex turn). No Codex model hears audio in a turn (model/list: text and image only), so there is no faster way
-// through the CLI, and nothing of the CLI's own context goes along: the file and the language are the whole request.
+// Codex turn). A Codex turn hears audio only on a model the catalog lists as hearing (decision/listener.ts
+// hearsAudio; on 17.11.2026 the plan's frontier model, never its small one); a dictation goes here, one request without
+// a model turn, and nothing of the CLI's own context goes along: the file and the language are the whole request.
 // The take goes up as it is stored: a WAV, or once the plan heard the page's last piece, Ogg Opus (ui/lib/ogg-opus.ts).
 // The endpoint is not documented by OpenAI; every failure (no plan login, a rejected login, a limit, the network, an
 // answer without text) throws a user-safe WorkforceError and transcribe.ts goes on with this PC's model as before.
@@ -25,7 +26,6 @@ import type { Account } from '../../shared/model/providers.ts';
 import type { FileRef } from '../../shared/model/system.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { defaultHome } from '../accounts/cli-homes.ts';
-import { codexImageAccount } from '../media/codex-image.ts';
 import { chargeOf } from '../models/pricing.ts';
 import { endpointHeard, uploadOf, uploadWay, type FetchFn, type Heard } from './transcribe-endpoint.ts';
 
@@ -39,20 +39,26 @@ const AUTH_FILE_MAX_BYTES = 256 * 1024;
 /** The plan's transcription of one take (this module's default; tests replace it). */
 export type PlanTranscription = (s: RuntimeServices, ref: FileRef, language: string | undefined, fetch?: FetchFn) => Promise<Heard>;
 
-/** Account states in which the plan's dictation is still worth one request (16.11.2026, owner: "der transkriptions-Service
- * ist schlecht"): the dictation endpoint is no Codex turn, so a Codex limit ('cooling') does not stop it (measured
- * 10.11.2026 at 100 % weekly), and a model list that timed out ('error') or a state not probed yet after start or
- * sleep ('unknown') says nothing about the login. Only a login that is gone ('needs_login') or switched off is skipped.
- * Before, only 'ok' counted: a laptop waking up dictated with this PC's small model although the plan was there. */
-const PLAN_TRIES: ReadonlySet<Account['state']> = new Set(['cooling', 'error', 'unknown']);
-
-/** The plan login a dictation uses: a ready one first, else one only in a passing state; undefined when none is signed in. */
-export function planAccount(s: Pick<RuntimeServices, 'accounts'>): Account | undefined {
-  const ready = codexImageAccount(s);
-  if (ready) return ready;
+/**
+ * The plan logins a dictation may use (16.11.2026, owner: "der transkriptions-Service ist schlecht"; KI-Runde 17.11.2026:
+ * from the day the Codex week ran out every line was heard by this PC's small model): read from every account, not
+ * the router's candidates – those leave out an account whose window is used up or that cools, and the dictation endpoint
+ * is no Codex turn, so a Codex limit does not stop it (measured 10.11.2026 at 100 % weekly). A model list that timed out
+ * ('error') or a state not probed yet ('unknown') says nothing about the login either. Only a login that is gone
+ * ('needs_login') or an account that is switched off is skipped.
+ */
+function planLogins(s: Pick<RuntimeServices, 'accounts'>): Account[] {
   let accounts: Account[];
-  try { accounts = s.accounts.candidates('codex'); } catch { return undefined; }
-  return accounts.find((account) => account.provider === 'codex' && account.enabled && PLAN_TRIES.has(account.state) && chargeOf(account) === 'plan');
+  try { accounts = s.accounts.list(); } catch { return []; }
+  return accounts.filter((account) => account.provider === 'codex' && chargeOf(account) === 'plan').sort((a, b) => a.priority - b.priority);
+}
+
+const usable = (account: Account) => account.enabled && account.state !== 'needs_login' && account.state !== 'disabled';
+
+/** The plan login a dictation uses: a ready one first, else one in any other signed-in state; undefined when none is signed in. */
+export function planAccount(s: Pick<RuntimeServices, 'accounts'>): Account | undefined {
+  const logins = planLogins(s).filter(usable);
+  return logins.find((account) => account.state === 'ok') ?? logins[0];
 }
 
 /** A signed-in ChatGPT plan login (Codex) is here: the one thing the default way needs (cheap: no file read, no network). */
@@ -62,10 +68,9 @@ export function planReady(s: Pick<RuntimeServices, 'accounts'>): boolean {
 
 /** Why a dictation went without the plan, for the log line (no names, no ids). */
 export function planMissing(s: Pick<RuntimeServices, 'accounts'>): 'no_plan_login' | 'needs_login' | 'disabled' {
-  let accounts: Account[];
-  try { accounts = s.accounts.candidates('codex').filter((account) => account.provider === 'codex' && chargeOf(account) === 'plan'); } catch { return 'no_plan_login'; }
-  if (accounts.some((account) => account.enabled && account.state === 'needs_login')) return 'needs_login';
-  if (accounts.length) return 'disabled';
+  const logins = planLogins(s);
+  if (logins.some((account) => account.enabled && account.state === 'needs_login')) return 'needs_login';
+  if (logins.length) return 'disabled';
   return 'no_plan_login';
 }
 

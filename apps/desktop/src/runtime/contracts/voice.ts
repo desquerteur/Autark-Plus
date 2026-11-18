@@ -25,8 +25,8 @@ export interface SpeechToText {
   transcript(fileId: string, dictation?: { chatId?: string }): Promise<string>;
   /** B-047 D14 (voice/local/service.ts): this PC's local speech models and whether the engine runs here. */
   localModels(): LocalSpeechModels;
-  /** B-047 D14: downloads a local speech model and chooses it (progress: bus 'voice.pull'). */
-  pullLocal(id: string): Promise<{ ok: true }>;
+  /** B-047 D14: downloads a local speech model and chooses it unless `choose` says no (progress: bus 'voice.pull'). */
+  pullLocal(id: string, options?: { choose?: () => boolean }): Promise<{ ok: true }>;
   /** B-047 D14: one line spoken by the chosen local voice. B-058: `signal` – the caller gave up (stop, deadline); no further sentence is spoken. */
   speak(input: { text: string; voice?: string; language?: string; signal?: AbortSignal }): Promise<SpokenAudio>;
 }

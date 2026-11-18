@@ -124,7 +124,7 @@ test('B-047 D4: postAgentMessage posts an answer at the end; a quiet one stays q
   assert.equal(h.chats.summary(chat.id).unread, 0);
   const loud = h.chats.postAgentMessage(chat.id, 'ag_tom', 'run_2', { body: '@CEO please sign this', silent: true });
   assert.equal(loud.silent, false, 'a mention of the person is loud');
-  assert.equal(h.notified.at(-1)?.kind, 'important');
+  assert.equal(h.notified.at(-1)?.kind, 'reply', 'KI-Runde 17.11.2026: an @mention by an agent addresses, only push rings');
   assert.throws(() => h.chats.postAgentMessage(chat.id, 'ag_mara', 'run_3', { body: 'Not a member' }), /Only members/);
   assert.equal(h.chats.send({ conversationId: chat.id, authorId: 'ag_tom', body: 'Update', runId: 'run_4' }).runId, 'run_4');
   assert.deepEqual([...h.chats.mentionsOf(chat.id, 'ag_tom', 'Ask @Lea Sophie and @CEO')].sort(), ['ag_lea', 'human'], 'nothing is posted');

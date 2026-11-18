@@ -40,6 +40,7 @@ export const REASON_RANK: Record<WakeReason, number> = {
   schedule: 4,
   retry: 5, review: 5, report: 5, // T08: a manager's bundled report of finished work is background like a review
   split: 6, // B-057: a split's run (its own lane) – never a queued wake, so it ranks last
+  fold: 6, // KI-Runde 17.11.2026: a context fold's run (the dispatcher starts it itself) – never a queued wake
 };
 
 export interface WakeGroup {

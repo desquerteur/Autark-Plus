@@ -1,7 +1,8 @@
 // Split tools (Ultra is one being): an agent starts parts of ITSELF that work in parallel and come back into it
 // (shared/model/splits.ts) and decides itself whether, when and how – agents.split (every mode, through tools.call; a
 // learned tool joins the direct offer), agents.split_results (the full results of any of its groups, from any thread;
-// with `steps` what its working parts do, their last commands) and agents.split_tell (agents-split-tell.ts: notes both
+// with `steps` what its working parts do, their last commands; FIXES-3 A3: the ended parts my own turn read there come
+// back with it, splits/service.ts) and agents.split_tell (agents-split-tell.ts: notes both
 // ways, model, effort, temperature, stop – one part, a group, or every group of this thread).
 // agents.split stores the group through services.splits (runtime/splits/service.ts – validation, limits) with the
 // calling turn's facts – its run, chat, task, origin, thread (threadKey of the call = the turn plan's thread), mode and
@@ -11,6 +12,12 @@
 // a part starts fresh from its brief unless it asks for 'fork' (splits/validate.ts).
 // B-083: a part's own agents.split adds parts to its group (depth 1, the group holds at most partsPerCall) – they start
 // at once, its group already runs.
+// KI-Runde 17.11.2026 (managers' briefs lacked their parts, parts ran on the origin's model): the brief's description names
+// what a brief carries and the model's names the piece; a note from a part wakes the origin for a whole turn (nextText).
+// Decision 10 (a lead needs a look-up inside its own turn): with `wait` the parts start at the call and it answers with
+// what each of them brought back – one tool call of the origin, the same brief, model, journal and cost as every part
+// (splits/wait.ts, splits/service.ts waitFor); a line for that turn ends the wait early, and the parts are gathered when
+// the turn ends 'done'.
 // Owns: the tools' wording, schemas and results. Never: creates, starts or stops a split itself (the split service
 // does), or passes agent-written text anywhere but the split service.
 
@@ -33,17 +40,17 @@ const UNAVAILABLE = 'Splitting is not available here. I do the parts myself, one
 export function nextText(parts: number, fromPart = false): string {
   if (fromPart) return `My ${parts === 1 ? 'new part starts' : `${parts} new parts start`} now beside me in my group; like mine, ${parts === 1 ? 'its notes and last words go' : 'their notes and last words go'} to my origin.`;
   const start = parts === 1 ? 'My part starts' : `My ${parts} parts start`;
-  return `${start} as soon as this turn ends, so I end it now (a short line to the person fits). Their notes wake me; each part comes back to me on its own as soon as it ends – its last words and what it did.`;
+  return `${start} as soon as this turn ends, so I end it now (a short line to the person fits). Each part comes back to me on its own as soon as it ends – its last words and what it did; a note from a part wakes me for a whole turn in between.`;
 }
 
 const PART_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string', minLength: 1, maxLength: SPLIT_LIMITS.titleChars },
-    brief: { type: 'string', minLength: 1, maxLength: SPLIT_LIMITS.briefChars, description: 'Its piece.' },
+    brief: { type: 'string', minLength: 1, maxLength: SPLIT_LIMITS.briefChars, description: 'All the part knows, in plain sentences: for whom and why, what good looks like, what is known and decided, how it checks its result itself.' },
     returns: { type: 'string', minLength: 1, maxLength: SPLIT_LIMITS.returnsChars, description: 'What I want back.' },
     context: { type: 'string', enum: ['brief', 'fork'], description: 'brief (default): starts fresh from its brief, like a new session – a smaller model often fits; fork: starts as me up to now, for a piece that needs what I just learned.' },
-    model: { type: 'string', minLength: 1, maxLength: 200, description: 'Default mine, as effort and temperature.' },
+    model: { type: 'string', minLength: 1, maxLength: 200, description: 'The model the hardest step of this piece needs; unset, it runs on my model, a fresh part on the strong tier\'s best value when mine is above it.' },
     effort: { type: 'string', enum: [...EFFORT_ORDER] },
     temperature: { type: 'number', minimum: 0, maximum: TEMPERATURE_MAX },
     after: { type: 'array', items: { type: 'integer', minimum: 1, maximum: SPLIT_LIMITS.partsPerCall - 1 }, maxItems: SPLIT_LIMITS.partsPerCall - 1, description: 'Parts it waits for.' },
@@ -54,7 +61,8 @@ const PART_SCHEMA = {
 };
 
 const DESCRIPTION = 'Splits my work into parts of me that run in parallel and come back into me. '
-  + 'They start when my turn ends, so I end it; their notes and last words wake me, and agents.split_tell talks with them while they work. '
+  + 'They start when my turn ends, so I end it; each comes back with its last words, a note from one wakes me for a whole turn, and agents.split_tell talks with them while they work. '
+  + 'With wait they start at once and this one call brings their last words back inside my turn – how I get a look-up or a check done on the model that piece needs while my own context stays small; a new line for me ends the wait early. From a part it answers at once. '
   + '4 run at once, more wait.';
 
 /** The turn's working folder (agents/turn-attempt.ts: turnCwd of its task and agent). */
@@ -79,7 +87,7 @@ export function createContext(ctx: ToolContext): SplitCreateContext {
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-const split = defineTool<{ goal: string; parts: SplitPartInput[] }>({
+const split = defineTool<{ goal: string; parts: SplitPartInput[]; wait?: boolean }>({
   name: SPLIT_TOOL,
   description: DESCRIPTION,
   inputSchema: {
@@ -87,6 +95,7 @@ const split = defineTool<{ goal: string; parts: SplitPartInput[] }>({
     properties: {
       goal: { type: 'string', minLength: 1, maxLength: SPLIT_LIMITS.goalChars, description: 'The whole job.' },
       parts: { type: 'array', items: PART_SCHEMA, minItems: 1, maxItems: SPLIT_LIMITS.partsPerCall },
+      wait: { type: 'boolean', description: 'true: they start now and this call answers with what each of them brought back.' },
     },
     required: ['goal', 'parts'], additionalProperties: false,
   },
@@ -98,15 +107,24 @@ const split = defineTool<{ goal: string; parts: SplitPartInput[] }>({
   async run(args, ctx) {
     const splits = ctx.services.splits;
     if (!splits) return failure(UNAVAILABLE);
+    // A part's new parts join its group and report to its origin like it does (nextText), so only my main turn waits –
+    // a part holding its lane for parts that need a lane of the same four would wait for nothing.
+    const waits = args.wait === true && !ctx.split && splits.waitFor !== undefined;
     let group: SplitGroupView;
     try {
-      group = splits.create(createContext(ctx), { goal: args.goal, parts: args.parts });
+      group = splits.create(createContext(ctx), { goal: args.goal, parts: args.parts, ...(waits ? { wait: true } : {}) });
     } catch (error) {
       if (error instanceof WorkforceError) return failure(`${error.message} Nothing was split.`);
       throw error;
     }
     const added = ctx.split ? group.splits.slice(-args.parts.length) : group.splits;
     const parts = added.map((part) => ({ idx: part.idx, title: part.title, id: part.id }));
+    // Decision 10: this call holds while they work and answers with what they brought back (splits/wait.ts).
+    if (waits) {
+      ctx.status(`Waiting for ${plural(parts.length, 'part')} of me`);
+      const waited = await splits.waitFor!({ agentId: ctx.agent.id, runId: ctx.runId, splitIds: parts.map((part) => part.id), signal: ctx.signal });
+      return text(waited.text);
+    }
     return json({ ok: true, groupId: group.id, parts, next: nextText(parts.length, Boolean(ctx.split)) });
   },
 });
@@ -133,7 +151,8 @@ const results = defineTool<{ groupId?: string; idx?: number; steps?: number }>({
       if (!group) return failure(args.groupId ? `I have no split group ${clip(args.groupId, 80)}.` : 'I have no split group yet.');
       return text(stepsText(ctx.services.runs, group, args.steps, args.idx));
     }
-    return text(splits.results(ctx.agent.id, { ...(args.groupId ? { groupId: args.groupId } : {}), ...(args.idx ? { idx: args.idx } : {}), thread: ownThread(ctx) }));
+    // FIXES-3 A3: what my own turn reads here is gathered when it ends 'done' (a part's run gathers nothing).
+    return text(splits.results(ctx.agent.id, { ...(args.groupId ? { groupId: args.groupId } : {}), ...(args.idx ? { idx: args.idx } : {}), thread: ownThread(ctx), ...(ctx.split ? {} : { runId: ctx.runId }) }));
   },
 });
 

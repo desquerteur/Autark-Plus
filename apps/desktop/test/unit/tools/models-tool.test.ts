@@ -17,7 +17,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { T0, account, agent, mode, setup, standardSetup } from '../models/harness.ts';
 import { modelTools } from '../../../src/runtime/tools/builtin/models.ts';
 import { agentTools } from '../../../src/runtime/tools/builtin/agents.ts';
-import { EVERY_MODE, Registry } from '../../../src/runtime/tools/registry.ts';
+import { agentOrgTools } from '../../../src/runtime/tools/builtin/agents-org.ts';
+import { MODEL_PROPERTY } from '../../../src/runtime/tools/types.ts';
+import { Registry } from '../../../src/runtime/tools/registry.ts';
 import { MAX_CHARS, MAX_MODELS, modelList } from '../../../src/runtime/routing/model-list.ts';
 import { effortRange, signed, sourceOf, specialistKinds } from '../../../src/runtime/routing/model-facts.ts';
 import { parseMode } from '../../../src/runtime/modes/service.ts';
@@ -88,11 +90,11 @@ test('a ceiling-strong agent sees no frontier models', async () => {
   assert.ok(free.includes(OPUS) && free.includes(SOL));
 });
 
-test('B-083 footer: my start model is where I start; model.set changes it', async () => {
+test('B-083 footer: my start model is where a fresh context of mine runs; model.set names another from the next one on', async () => {
   const h = await standardSetup();
   const pinned = agent('ag_pin', { modelPolicy: { pin: SOL } });
   const own = modelList({ services: h.services, agent: pinned, mode: MODES.general, category: 'chat' });
-  assert.match(own, /\nMy start model is GPT-6\.1 Sol; I start on it and change it when my work needs another\.\nI ask for one with model\.set \(.*\)\.$/);
+  assert.match(own, /\nMy start model is GPT-6\.1 Sol; I run on it from my next context\.\nI ask for one with model\.set \(.*\): it runs from my next context, or at once with now: true, and stays my start model until I, my lead or the person names another.$/);
   assert.doesNotMatch(own, /cannot change it/);
 });
 
@@ -278,7 +280,7 @@ test('B-083 agents.update: a changed pin names who set it (self on my own), an u
   assert.deepEqual(policy().pinBy, person, 'no pin argument keeps it');
   await update({ model: OPUS }, h.agents.get('ag_rep')!);
   assert.deepEqual(policy().pinBy, { name: 'Lena', at: T0, self: true }, 'my own pin');
-  assert.match(modelList({ services: h.services, agent: h.agents.get('ag_rep')!, mode: MODES.general, category: 'chat' }), /\nMy start model is Claude Opus 5\.5 \(I set it myself\); I start on it/);
+  assert.match(modelList({ services: h.services, agent: h.agents.get('ag_rep')!, mode: MODES.general, category: 'chat' }), /\nMy start model is Claude Opus 5\.5 \(I set it myself\); I run on it from my next context./);
   await update({ agentId: 'ag_rep', model: SOL });
   assert.deepEqual(policy().pinBy, { name: 'Konrad', at: T0 }, 'a manager\'s pin names the manager');
   await update({ agentId: 'ag_rep', model: 'auto' });
@@ -287,7 +289,6 @@ test('B-083 agents.update: a changed pin names who set it (self on my own), an u
 });
 
 test('models.list is a core read tool, offered in the video mode; small text helpers', () => {
-  assert.ok(EVERY_MODE.has('models.list') && EVERY_MODE.has('model.set'));
   assert.equal(listTool.category, 'read');
   const registry = new Registry({ services: () => ({}) as RuntimeServices });
   const dir = path.join(RESOURCES, 'modes');
@@ -320,7 +321,21 @@ test('B-047 D6 / B-048 E8: How I work names another model as another way in ever
   // 14.11.: How I work stands in each agent's SYSTEM.md, starting from the standard – the same text for every mode.
   const standard = readFileSync(path.join(RESOURCES, 'prompts', 'standard-agent.md'), 'utf8');
   assert.ok(standard.includes('I take another – tool, source, mode, colleague or model – and fix the broken path'), 'a model is another way; how to pick one is the Routing CORE');
-  // Owner 15.11.2026: model and effort are the subconscious's call (subconscious/route-turn.ts); How I work keeps one line.
-  assert.ok(standard.includes("\n- Model and effort are my subconscious's call"), 'the model line points to the subconscious');
+  // 17.11.2026 (contract 3): the model settles where a context starts, the subconscious sets only the effort; How I work keeps one line.
+  assert.ok(standard.includes('\n- My model is settled for my kind of work'), 'the model line says the model is settled');
   assert.doesNotMatch(offered, /## Models\n/);
+});
+
+test('17.11.2026 review: the four texts that name a model say one thing – a model is named where a context starts, settles, stands until someone names another, and without one the kind settles it', () => {
+  const set = modelTools.find((tool) => tool.name === 'model.set')!;
+  const update = agentTools.find((tool) => tool.name === 'agents.update')!;
+  const create = agentOrgTools.find((tool) => tool.name === 'agents.create')!;
+  const prop = (tool: typeof set, name: string) => String((tool.inputSchema.properties as Record<string, { description?: string }>)[name]?.description ?? '');
+  assert.match(set.description, /the model I settle on\. Another model rereads my whole context, so it runs from my next context/);
+  assert.match(set.description, /it stays my model until I, my lead or the person names another, and auto gives it back to my kind of work\.$/);
+  assert.doesNotMatch(set.description, /effort moves freely/, 'on our API engines another effort writes the cache again: the cost is the subconscious\'s line');
+  assert.match(prop(update, 'model'), /^The model it settles on – the smallest that does the hardest step of its work as well as the strongest would; it runs there from its next context .* and stays on it until it, its lead or the person names another\./);
+  assert.match(create.description, /without a model its kind settles one: an agent that leads runs on the frontier tier, one that executes on the strong tier/);
+  assert.equal(MODEL_PROPERTY.description, 'An id from models.list: the smallest model that does the hardest step of this work as well as the strongest would.');
+  assert.equal(prop(create, 'model'), MODEL_PROPERTY.description);
 });

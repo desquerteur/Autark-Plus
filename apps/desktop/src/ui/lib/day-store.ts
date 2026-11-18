@@ -9,8 +9,8 @@
 // the window comes to the front (focus, or the page turns visible) the connected calendars are synced
 // (calendar.sync; the runtime skips a source synced in the last 30 s) and the day is loaded again.
 // Every call is gated with can(): a connection that may not call a method gets an empty value, never
-// a refused call. The day clock is one timeout to the next block start or end or the next local
-// midnight in the day's zone, re-armed when the window changes – never an interval.
+// a refused call. The day clock is one timeout to the next block start or end, the moment a to-do's planned
+// time counts as passed, or the next local midnight in the day's zone, re-armed when the window changes – never an interval.
 // Owns: these signals, their loader, the event apply, the clock and the sync on coming to the front.
 // Never: renders, decides My day's groups (ui/day/day-groups.ts), writes (day.* and calendar.*
 // changes come from the views), imports the store (store.ts imports this) or polls.
@@ -21,6 +21,7 @@ import type { TaskView } from '../../shared/model/tasks.ts';
 import type { EventMap, EventName } from '../../shared/api/events.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { atWallTime, nextDate, wallClock } from '../chat/composer/schedule-clock.ts';
+import { STALE_MS } from '../day/day-next.ts';
 import { ownerOf } from '../tasks/work-model.ts';
 import type { LoadCall } from './load.ts';
 import { rpc } from './rpc.ts';
@@ -91,12 +92,15 @@ export function slotMap(events: readonly CalendarEvent[]): Map<string, CalendarE
   return map;
 }
 
-/** The next moment a block starts or ends after `now`, or the next local midnight, whichever is first. */
+/** The next moment a block starts or ends after `now`, a to-do's planned time counts as passed (ui/day/day-next.ts
+ *  STALE_MS after its start: its row then asks for a new time), or the next local midnight, whichever is first. */
 export function nextDayChange(events: readonly CalendarEvent[], now: number, tz: string): number {
   let next = nextMidnight(now, tz);
   for (const event of events) {
     if (event.startAt > now && event.startAt < next) next = event.startAt;
     else if (event.endAt > now && event.endAt < next) next = event.endAt;
+    const passed = event.startAt + STALE_MS;
+    if (event.kind === 'todo' && event.state === 'planned' && passed > now && passed < next) next = passed;
   }
   return next;
 }

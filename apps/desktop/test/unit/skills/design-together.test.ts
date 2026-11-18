@@ -73,9 +73,10 @@ test('every mode the skill is tagged for offers each tool it names (device tools
     const mode = parseMode(key, readFileSync(path.join(RESOURCES, 'modes', `${key}.md`), 'utf8'));
     assert.deepEqual(used.filter((name) => !registry.allowed(defs.get(name)!, agent, mode)), [], `${key} offers every tool the skill names`);
   }
-  // general and manager offer no device tools (no browser workspace), so the skill is not in their index
+  // KI-Runde 17.11.2026: every mode reaches the browser tools through tools.call; the skill's index is the mode's own tags.
   const general = parseMode('general', readFileSync(path.join(RESOURCES, 'modes', 'general.md'), 'utf8'));
-  assert.equal(registry.allowed(defs.get('browser.eval')!, agent, general), false);
+  assert.equal(registry.allowed(defs.get('browser.eval')!, agent, general), true);
+  assert.ok(!tagged.includes('general'), 'the skill still rides only in the modes it is tagged for');
 });
 
 /** A phrase of the skill, whatever its line breaks (the file wraps at 120 columns). */

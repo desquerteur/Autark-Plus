@@ -80,10 +80,26 @@ test('live bar: who works for the chat, above the composer; nothing in the histo
     assert.equal((await line.locator('.live-bar-name').textContent())?.trim(), agent.name);
     assert.ok(((await line.locator('.live-bar-text').textContent()) ?? '').trim().length > 0, `${agent.name}: what it does`);
     assert.match((await line.locator('.live-bar-time').textContent()) ?? '', /min/);
+    // The line's summary arrives through the throttled activity stream (GAP_MS), so right after both runs are routed
+    // the title may still read "Quill · Working". Wait for it instead of reading once (Noah 17.11.2026, task_3f52djfp).
+    const effortText = `· ${EFFORT[run.effort]}`;
+    await line.evaluate((el, expected) => new Promise((resolve) => {
+      const done = () => (el.getAttribute('title') ?? '').includes(expected);
+      if (done()) return resolve(true);
+      const observer = new MutationObserver(() => { if (done()) { observer.disconnect(); resolve(true); } });
+      observer.observe(el, { attributes: true, attributeFilter: ['title'] });
+      setTimeout(() => { observer.disconnect(); resolve(false); }, 5_000);
+    }), effortText);
     const title = (await line.getAttribute('title')) ?? '';
-    assert.ok(title.includes(`· ${EFFORT[run.effort]}`), `${agent.name}: model · effort on hover (${title})`);
+    assert.ok(title.includes(effortText), `${agent.name}: model · effort on hover (${title})`);
   }
   assert.equal(await page.locator('.working-message, .run-disclosure').count(), 0, 'no run is a row in the history');
+  // Mika's pass 17.11.2026: a long text never squeezes the name down to its first letter ("T." for "Theo").
+  await page.evaluate(() => { for (const el of document.querySelectorAll('.live-bar-text')) el.textContent = 'Running cd "./projects/company/workspace/a/very/long/path/that/keeps/going/and/going/and/going/on"'; });
+  for (const agent of [manager, quill]) {
+    const shown = await bar.locator('.live-bar-name', { hasText: agent.name }).evaluate((el) => ({ full: el.scrollWidth, shown: el.clientWidth }));
+    assert.ok(shown.shown >= shown.full - 1, `${agent.name}: the name keeps its full width beside a long text (${JSON.stringify(shown)})`);
+  }
 
   // The bar sits right above the composer, inside the chat column, without horizontal overflow.
   const boxes = await page.evaluate(() => {
@@ -145,9 +161,9 @@ test('live bar: who works for the chat, above the composer; nothing in the histo
   await size(1280, 820);
   await page.waitForTimeout(800);
 
-  // A line opens the agent's page with its activity log.
+  // A line opens the agent's Work page with its activity log (the log lives there since F11, 16.11.2026).
   await bar.locator('.live-bar-line', { has: page.locator('.live-bar-name', { hasText: 'Quill' }) }).click();
-  await page.waitForFunction((id) => location.hash === `#/team/${encodeURIComponent(id)}`, quill.id, { timeout: 10_000 });
+  await page.waitForFunction((id) => location.hash === `#/team/${encodeURIComponent(id)}/work`, quill.id, { timeout: 10_000 });
   await page.locator('.agent-log').waitFor({ timeout: 10_000 });
   await shot('live-bar-08-agent-log');
 

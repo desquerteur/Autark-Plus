@@ -174,7 +174,7 @@ test('phone traffic: one line per day (at the first count of the next day and at
   traffic.add('dev_a', 'direct', 1_000);
   traffic.add('dev_a', 'relay', 10);
   const close = traffic.opened('dev_a', 'direct');
-  assert.deepEqual(traffic.list(), [{ deviceId: 'dev_a', via: 'direct', direct: 1_000, relay: 10, since: now }]);
+  assert.deepEqual(traffic.list(), [{ deviceId: 'dev_a', via: 'direct', direct: 1_000, rtc: 0, relay: 10, since: now }]);
   close();
   close();
   assert.equal(traffic.list()[0].via, undefined, 'a close counts once');
@@ -182,9 +182,9 @@ test('phone traffic: one line per day (at the first count of the next day and at
   traffic.add('dev_a', 'relay', 5);
   assert.equal(lines.length, 1, 'the day before gets its one line at the first count of the new day');
   assert.equal(lines[0].message, 'phone traffic');
-  assert.deepEqual(lines[0].data?.phones, [{ deviceId: 'dev_a', direct: 1_000, relay: 10 }]);
+  assert.deepEqual(lines[0].data?.phones, [{ deviceId: 'dev_a', direct: 1_000, rtc: 0, relay: 10 }]);
   assert.equal(lines[0].data?.day, '2026-11-16');
-  assert.deepEqual(traffic.list(), [{ deviceId: 'dev_a', direct: 0, relay: 5, since: new Date(2026, 10, 17).getTime() }]);
+  assert.deepEqual(traffic.list(), [{ deviceId: 'dev_a', direct: 0, rtc: 0, relay: 5, since: new Date(2026, 10, 17).getTime() }]);
   traffic.flush();
   assert.equal(lines.length, 2, 'shutdown writes the running day');
   assert.equal(lines[1].data?.day, '2026-11-17');
@@ -203,7 +203,7 @@ test('meeting state names each phone\'s way and bytes; the drain after Remove pr
   const timers: Array<() => void> = [];
   const phones = {
     accept: async () => undefined, closeAll: () => undefined,
-    counts: () => [{ deviceId: 'dev_pixel0000001', via: 'direct' as const, direct: 4_096, relay: 12, since: 1 }, { deviceId: 'dev_unknown00001', direct: 1, relay: 1, since: 1 }],
+    counts: () => [{ deviceId: 'dev_pixel0000001', via: 'direct' as const, direct: 4_096, rtc: 0, relay: 12, since: 1 }, { deviceId: 'dev_unknown00001', direct: 1, rtc: 0, relay: 1, since: 1 }],
     onChange: (listener: () => void) => { listeners.push(listener); return () => undefined; },
     prune: () => { pruned++; },
   };
@@ -216,9 +216,9 @@ test('meeting state names each phone\'s way and bytes; the drain after Remove pr
   });
   meeting.start();
   try {
-    assert.deepEqual(meeting.state().phones, [{ deviceId: 'dev_pixel0000001', name: 'Pixel 8', via: 'direct', direct: 4_096, relay: 12, since: 1 }], 'only accepted phones, by name');
+    assert.deepEqual(meeting.state().phones, [{ deviceId: 'dev_pixel0000001', name: 'Pixel 8', via: 'direct', direct: 4_096, rtc: 0, relay: 12, since: 1 }], 'only accepted phones, by name');
     const before = events.filter((event) => event.event === 'relay.updated').length;
-    phones.counts = () => [{ deviceId: 'dev_pixel0000001', via: 'relay', direct: 4_096, relay: 99, since: 1 }] as never;
+    phones.counts = () => [{ deviceId: 'dev_pixel0000001', via: 'relay', direct: 4_096, rtc: 0, relay: 99, since: 1 }] as never;
     for (const listener of listeners) listener();
     const updates = events.filter((event) => event.event === 'relay.updated');
     assert.equal(updates.length, before + 1, 'a phone channel change sends relay.updated');
@@ -247,8 +247,8 @@ test('my PCs for the phone carry their peer addresses (http(s) only, at most 8);
 
   const now = new Date(2026, 10, 16, 15, 0).getTime();
   const clock = () => '14:02';
-  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'Pixel', via: 'direct', direct: 12.4 * 1024 * 1024, relay: 300 * 1024, since: new Date(2026, 10, 16).getTime() }, now, clock), 'Direct · 12.4 MB direct, 300 KB via the meeting server today');
-  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'Pixel', via: 'relay', direct: 0, relay: 2048, since: new Date(2026, 10, 16, 14, 2).getTime() }, now, clock), 'Via the meeting server · 0 B direct, 2 KB via the meeting server since 14:02');
-  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'iPhone', direct: 0, relay: 0, since: 0 }, now, clock), 'Not connected · 0 B direct, 0 B via the meeting server today');
+  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'Pixel', via: 'direct', direct: 12.4 * 1024 * 1024, rtc: 0, relay: 300 * 1024, since: new Date(2026, 10, 16).getTime() }, now, clock), 'Direct · 12.4 MB direct, 300 KB via the meeting server today');
+  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'Pixel', via: 'relay', direct: 0, rtc: 0, relay: 2048, since: new Date(2026, 10, 16, 14, 2).getTime() }, now, clock), 'Via the meeting server · 0 B direct, 2 KB via the meeting server since 14:02');
+  assert.equal(phoneLinkHint({ deviceId: 'd', name: 'iPhone', direct: 0, rtc: 0, relay: 0, since: 0 }, now, clock), 'Not connected · 0 B direct, 0 B via the meeting server today');
   assert.match(IPHONE_LINK, /meeting server/);
 });

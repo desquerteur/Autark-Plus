@@ -34,7 +34,7 @@ test('a script call is a t item from its first line, estimated from source and p
     const items = h.ledger.items(h.tom.id, 'main');
     assert.deepEqual(items.map((item) => [item.itemId, item.kind, item.nested === true]), [['f1', 'file', true], ['f2', 'file', true], ['t3', 'tool', false]]);
     assert.equal(items[2].title, 'exec: const r = await tools.files__read({path:"notes/build.log"});', 'the pragma line is skipped');
-    assert.equal(items[2].tokens, Math.ceil(JSON.stringify({ source: SOURCE }).length / 3) + Math.ceil(PRINTED.length / 3)); // B-080 wave 3: chars/3
+    assert.equal(items[2].tokens, Math.ceil(JSON.stringify({ source: SOURCE }).length / 2) + Math.ceil(PRINTED.length / 2)); // 17.11.2026: two characters per token
     assert.ok(items[0].tokens > 8_000, 'a nested item keeps its own size (what a restore costs)');
     assert.deepEqual(items.map(liveTokens), [0, 0, items[2].tokens], 'the live context holds only the script and what it printed');
     assert.equal(h.ledger.original(h.tom.id, 'main', 'f1')!.text.length, big.length, 'context.restore still returns a nested call\'s whole output');
@@ -60,7 +60,7 @@ test('a long script whose journaled preview is cut: estimated at its full length
     await h.journal.settled();
     const [item] = h.ledger.items(h.tom.id, 'main');
     assert.equal(item.title, 'exec: const rows = await tools.files__read({path:"data.csv"});');
-    assert.equal(item.tokens, Math.ceil(full.length / 3) + Math.ceil(PRINTED.length / 3), 'the whole script is in the model\'s context');
+    assert.equal(item.tokens, Math.ceil(full.length / 2) + Math.ceil(PRINTED.length / 2), 'the whole script is in the model\'s context');
   } finally { h.cleanup(); }
 });
 

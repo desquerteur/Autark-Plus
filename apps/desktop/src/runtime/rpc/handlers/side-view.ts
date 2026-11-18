@@ -8,7 +8,9 @@
 // 16.11.2026 (the owner's phone reaches every setting): side.open opens a page in a new tab of this PC's pane (global),
 // shown at once (host op sideBrowser 'open', main/side-driver) – a sign-in that returns to this PC's own address (Google
 // Calendar, an app's OAuth) runs there and the phone watches and touches it in its pane; 'manage' on a secure transport,
-// like the pane's tabs and files. The tab names the person as its opener (HUMAN_ID).
+// like the pane's tabs and files. The tab names the person as its opener (HUMAN_ID). 18.11.2026 (owner: "from one device
+// you decide that it opens on another device"): side.open's `device` opens it in that PC's pane (mesh side.open).
+// The handlers are exported (sideHandlers) for the person variants (people/rpc-pane.ts), which check the tab first.
 // Owns: param checks and the choice of PC. Never: casts, maps input or decides who may watch on the other PC.
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
@@ -30,8 +32,8 @@ const PANE = { capability: 'manage', secure: true } as const;
 export const PANE_MISSING = "The PC's browser pane is not available – it lives in Autark's window on the PC.";
 
 /** Opens `url` in a new tab of this PC's global pane, shown at once; its tab id. */
-async function openInPane(ctx: HandlerContext, url: string): Promise<string | undefined> {
-  const host = ctx.services.host;
+export async function openInPane(services: Pick<HandlerContext['services'], 'host'>, url: string): Promise<string | undefined> {
+  const host = services.host;
   if (!host.sideBrowser) throw new WorkforceError('unavailable', PANE_MISSING);
   let result: SideBrowserResult;
   try {
@@ -44,8 +46,16 @@ async function openInPane(ctx: HandlerContext, url: string): Promise<string | un
   return result.tab;
 }
 
-/** The caller here: the owner, or the device's own id. */
-const callerOf = (ctx: HandlerContext): string => (ctx.scope.kind === 'device' ? ctx.scope.deviceId : OWNER_CALLER);
+/** The caller here: the owner, or the device's own id (an owner's phone or a person's device). */
+const callerOf = (ctx: HandlerContext): string => (ctx.scope.kind === 'device' || ctx.scope.kind === 'person' ? ctx.scope.deviceId : OWNER_CALLER);
+
+/** side.open's `url`: an http(s) address without credentials, normalised. */
+export function openUrlOf(o: Obj): string {
+  try { return new URL(browserUrl(text(o, 'url', { max: 4000 }))).href; } catch (error) {
+    if (error instanceof WorkforceError) throw error;
+    return bad('url', 'an http(s) address without credentials');
+  }
+}
 
 /** The linked PC a call goes to; undefined = this PC (no device, or this PC's own id). */
 export function remoteOf(o: Obj, ctx: Pick<HandlerContext, 'services'>): string | undefined {
@@ -65,25 +75,26 @@ function pullReply(value: unknown): SidePull {
   return reply as SidePull;
 }
 
-export function register(table: HandlerTable): void {
-  table.add('side.pull', async (params, ctx) => {
+type SideHandler = (params: unknown, ctx: HandlerContext) => Promise<unknown>;
+
+/** side.pull, side.pullPart, side.input and side.nav – this PC's tab, or (device) a linked PC's. */
+export const sideHandlers: Record<'side.pull' | 'side.pullPart' | 'side.input' | 'side.nav', SideHandler> = {
+  'side.pull': async (params, ctx) => {
     const { o, request } = sidePullOf(params, ['device']);
     const device = remoteOf(o, ctx);
     if (!device) return sideViewOf(ctx.services).pull(sideCaller(callerOf(ctx)), request, ctx.signal);
     const maxBytes = Math.min(request.maxBytes ?? SIDE_PART_BYTES, SIDE_PART_BYTES);
     return pullReply(await ctx.services.devices.call(device, 'side.pull', { ...request, maxBytes, via: callerOf(ctx) }, ctx.signal));
-  }, DEVICE);
-
-  table.add('side.pullPart', async (params, ctx) => {
+  },
+  'side.pullPart': async (params, ctx) => {
     const { o, tab, at, index } = sidePartOf(params, ['device']);
     const device = remoteOf(o, ctx);
     if (!device) return sideViewOf(ctx.services).part(sideCaller(callerOf(ctx)).caller, tab, at, index);
     const reply = await ctx.services.devices.call(device, 'side.pullPart', { tab, at, index, via: callerOf(ctx) }, ctx.signal) as { data?: unknown } | null;
     if (typeof reply?.data !== 'string') throw new WorkforceError('not_found', 'That picture is gone. Look again.');
     return { data: reply.data };
-  }, DEVICE);
-
-  table.add('side.input', async (params, ctx) => {
+  },
+  'side.input': async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['device', 'tab', 'input']);
     const tab = sideTab(o);
@@ -92,9 +103,8 @@ export function register(table: HandlerTable): void {
     if (device) await ctx.services.devices.call(device, 'side.input', { tab, input: event }, ctx.signal);
     else await sideViewOf(ctx.services).input(tab, event);
     return { ok: true as const };
-  }, DEVICE);
-
-  table.add('side.nav', async (params, ctx) => {
+  },
+  'side.nav': async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['device', 'tab', 'url', 'action', 'dialog']);
     const tab = sideTab(o);
@@ -103,17 +113,22 @@ export function register(table: HandlerTable): void {
     if (device) await ctx.services.devices.call(device, 'side.nav', { tab, ...nav }, ctx.signal);
     else await sideViewOf(ctx.services).nav(tab, nav);
     return { ok: true as const };
-  }, DEVICE);
+  },
+};
+
+export function register(table: HandlerTable): void {
+  for (const [method, handler] of Object.entries(sideHandlers)) table.add(method as keyof typeof sideHandlers, handler as never, DEVICE);
 
   table.add('side.open', async (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['url']);
-    let url: string;
-    try { url = new URL(browserUrl(text(o, 'url', { max: 4000 }))).href; } catch (error) {
-      if (error instanceof WorkforceError) throw error;
-      bad('url', 'an http(s) address without credentials');
+    onlyKeys(o, ['url', 'device']);
+    const url = openUrlOf(o);
+    const device = remoteOf(o, ctx);
+    if (device) {
+      const reply = await ctx.services.devices.call(device, 'side.open', { url }, ctx.signal) as { tab?: unknown } | null;
+      return { ok: true as const, ...(typeof reply?.tab === 'string' ? { tab: reply.tab } : {}) };
     }
-    const tab = await openInPane(ctx, url);
+    const tab = await openInPane(ctx.services, url);
     return { ok: true as const, ...(tab ? { tab } : {}) };
   }, PANE);
 }

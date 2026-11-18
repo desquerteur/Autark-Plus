@@ -8,9 +8,15 @@
 // 16.11.2026: set once for every agent in Settings › Security, so it has the last word); the person and the agent change
 // both, no update does. The mode is always the agent's own (agents/turn-prepare.ts).
 // Nothing here moves by itself: it changes only with the agent's or the person's own act (SYSTEM.md, settings, org,
-// mode, skills index empty ↔ not, a learned tool at a fresh session) or with this PC or app version.
-// Owns: the placeholder values and section order. Deterministic: the same agent, mode, engine, model tier and settings
-// give byte-identical text.
+// mode, skills index empty ↔ not, a learned tool at a fresh session) or with this PC or app version. What follows the
+// tools that can work here (`offered`, the More-tools list – tools/registry.ts) moves also when a phone is paired or
+// unpaired, adb is installed on this PC, or an embedding model becomes able to serve or stops – never with a cable.
+// The text knows no model tier: the rich-answer line is 'lite' only for a local model (the one tier that runs elsewhere),
+// so a turn that moves between small, strong and frontier models keeps the same text (S2 17.11.2026).
+// Each section has a fixed name (stableSections): a resumed session keeps the text it started with, and only a section that
+// changed reaches it, as changed lines in its live block (agents/volatile-delta.ts stableDelta).
+// Owns: the placeholder values, section names and order. Deterministic: the same agent, mode, engine, local-or-not model and
+// settings give byte-identical text.
 // Never: timestamps, task state, memory or anything else that changes per turn (the live part, prompt-volatile.ts).
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -72,18 +78,14 @@ export function identityValues(services: RuntimeServices, agent: Agent): Record<
 }
 
 /**
- * Block-prompt options: tier for the routed model ('lite' for local/small, mini-apps only for
- * strong/frontier) and the ui.help tool under the name engines see – only when this agent's mode
- * really offers it (the same rule as the turn's tool offer), so the prompt never names a missing tool.
+ * Block-prompt options: 'lite' only for a local model, 'full' (mini-apps included) for every other, and the ui.help tool
+ * under the name engines see – only when this agent's mode really offers it (the same rule as the turn's tool offer), so
+ * the prompt never names a missing tool.
  */
 export function blockOptions(services: RuntimeServices, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): PromptOptions {
   const tier = safe(() => services.catalog.get(input.route.modelId)?.tier, undefined);
   const offered = safe(() => services.tools.specsFor(input.agent, input.mode).some((spec) => spec.name === UI_HELP_TOOL), false);
-  return {
-    tier: tier === 'local' || tier === 'small' ? 'lite' : 'full',
-    app: tier === 'strong' || tier === 'frontier',
-    ...(offered ? { helpTool: toWireName(UI_HELP_TOOL) } : {}),
-  };
+  return { tier: tier === 'local' ? 'lite' : 'full', ...(offered ? { helpTool: toWireName(UI_HELP_TOOL) } : {}) };
 }
 
 /** Mode instructions without a leading "# <Mode> mode" heading (the section has its own). */
@@ -91,13 +93,11 @@ function modeBody(mode: ModeInfo): string {
   return mode.instructions.replace(/\r\n?/g, '\n').replace(/^\s*#\s[^\n]*\n+/, '').trim();
 }
 
-/** B-049 F5: the mode's one-line description only when it has no instructions (they say the same at length). */
+/** B-049 F5: the mode's one-line description only when it has no instructions (they say the same at length); '' for a mode
+ *  whose file holds only its heading and no description – then the prompt has no mode part at all. */
 export function modeSection(mode: ModeInfo): string {
-  const lines = [`## Mode: ${mode.name}`];
-  const body = modeBody(mode);
-  if (body) lines.push(body);
-  else if (mode.description.trim()) lines.push(mode.description.trim());
-  return lines.join('\n');
+  const body = modeBody(mode) || mode.description.trim();
+  return body ? [`## Mode: ${mode.name}`, body].join('\n') : '';
 }
 
 /**
@@ -114,12 +114,15 @@ export function skillsSection(services: RuntimeServices, templates: PromptTempla
   return [fact || '## Skills', main].join('\n');
 }
 
-/** "## More tools": what the mode offers beyond this engine's direct tools – the turn's own offer (agents/session-key.ts). */
-export function moreToolsFor(services: RuntimeServices, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): string {
+/**
+ * "## More tools": what the mode offers beyond the direct tools – the turn's own offer (agents/session-key.ts), or `direct`,
+ * the names a resumed session holds from its start.
+ */
+export function moreToolsFor(services: RuntimeServices, input: { agent: Agent; mode: ModeInfo; route: RouteDecision; direct?: readonly string[] }): string {
   const usable = safe(() => services.tools.specsFor(input.agent, input.mode), []);
   const caps = safe<Pick<EngineCaps, 'dynamicTools' | 'mcp' | 'ownTools'>>(() => services.engines.get(input.route.engine).caps, { dynamicTools: false, mcp: true, ownTools: true }); // unknown: a CLI engine over the hub
-  const direct = safe(() => new Set(engineTools(services, input, caps).names), new Set<string>());
-  return moreToolsSection(usable, direct);
+  const direct = input.direct ? new Set(input.direct) : safe(() => new Set(engineTools(services, input, caps).names), new Set<string>());
+  return moreToolsSection(usable, direct, input.route.engine); // the engine's own names for our tools
 }
 
 /**
@@ -133,19 +136,25 @@ export function humanSection(services: RuntimeServices, agent: Agent, name: stri
   return [part(`## From ${name}`, own), part(`## From ${name} – for every agent`, every)].filter(Boolean).join('\n\n');
 }
 
-export function buildStable(services: RuntimeServices, templates: PromptTemplates, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }): string {
+/** One section of the stable prompt under its fixed name (identity, system-md, environment, skills, more-tools, rich-answers, mode, human). */
+export interface StableSection { name: string; text: string }
+
+/** The stable prompt's non-empty sections in reading order; joined by a blank line they are the system prompt (context/service.ts). */
+export function stableSections(services: RuntimeServices, templates: PromptTemplates, input: { agent: Agent; mode: ModeInfo; route: RouteDecision; direct?: readonly string[] }): StableSection[] {
   const { agent, mode, route } = input;
   const offered = offeredTools(services, agent, mode); // one offer for the skills line and the environment (the turn's own rule)
   const values = identityValues(services, agent);
   const file = coreInstructions(services, agent);
-  return [
-    templates.render('identity', values),
-    systemMdSection(services, agent, file ? safe(() => services.secrets.redact(file), file) : ''),
-    environmentSection(services, { agent, mode, route }, offered), // this PC, workspace, web, screen
-    skillsSection(services, templates, agent, mode, offered),
-    moreToolsFor(services, { agent, mode, route }),
-    blockLine(blockOptions(services, { agent, mode, route })), // one line; the quick reference is ui.help "blocks"
-    modeSection(mode),
-    humanSection(services, agent, values.user_name), // owner 15.11.2026: the person's own lines stand last
-  ].filter((section) => section.trim()).join('\n\n');
+  const sections: StableSection[] = [
+    { name: 'identity', text: templates.render('identity', values) },
+    { name: 'system-md', text: systemMdSection(services, agent, file ? safe(() => services.secrets.redact(file), file) : '') },
+    { name: 'environment', text: environmentSection(services, { agent, mode, route }, offered) }, // this PC, workspace, web, screen
+    { name: 'skills', text: skillsSection(services, templates, agent, mode, offered) },
+    { name: 'more-tools', text: moreToolsFor(services, input) },
+    { name: 'rich-answers', text: blockLine(blockOptions(services, { agent, mode, route })) }, // one line; the quick reference is ui.help "blocks"
+    { name: 'mode', text: modeSection(mode) },
+    { name: 'human', text: humanSection(services, agent, values.user_name) }, // owner 15.11.2026: the person's own lines stand last
+  ];
+  return sections.filter((section) => section.text.trim());
 }
+

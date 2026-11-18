@@ -307,13 +307,13 @@ function offered(modes: ModeLibrary, org: Agent[], who: Agent, mode: ModeInfo): 
   return registry.specsFor(who, mode).map((spec) => spec.name);
 }
 
-test('the registry offers modes.save wherever the mode\'s tools match modes.* – the harness agent in harness mode too', () => {
+test('the registry offers modes.save in every mode (KI-Runde 17.11.2026: every tool in every mode) – the harness agent in harness mode too', () => {
   const f = rig();
   try {
     const builder = agent('ag_builder', { mode: 'harness' });
     const harness = f.modes.get('harness');
     assert.deepEqual(offered(f.modes, [builder], builder, { ...harness, tools: [...harness.tools, 'modes.*'] }), ['modes.list', 'modes.save']);
-    assert.deepEqual(offered(f.modes, [builder], builder, harness), [], 'without modes.* the harness mode offers neither');
+    assert.deepEqual(offered(f.modes, [builder], builder, harness), ['modes.list', 'modes.save'], 'without modes.* the harness mode offers both too');
   } finally { f.cleanup(); }
 });
 

@@ -1,4 +1,4 @@
-// What the subconscious reads and does before a turn besides the model and effort (Unterbewusstsein v2, owner 15.11.2026: "dass es sich
+// What the subconscious reads and does before a turn besides the effort (Unterbewusstsein v2, owner 15.11.2026: "dass es sich
 // die Suchergebnisse bekommt … Dann kann es dieses Suchergebnisse auswählen, die es glaubt, was wichtig ist. Es kann kompakten der
 // Kontext und Teile davon"; 13:27: the rule of three hits goes, the model condenses with a good explanation, leanText stays the net).
 // Hits: the word search the main AI's own knowledge.find runs (find/service.ts – notes, skills, references, documents, with the
@@ -10,11 +10,13 @@
 // An entry shown to an agent in this runtime is not offered again in the same version: it stands in its context already.
 // Context: the biggest items still whole in the agent's record (the context ledger) – tool, file and skill items of every run but the
 // newest finished one, at least ITEM_TOKENS each –, read with how they start by the call beside the turn (route-turn.ts
-// condenseTurn, which nobody waits for). What it condenses keeps its note of what still
-// matters, then window.ts leanText of the original (every id, path, file name and link: the net under the note) and the restore
-// stamp. The call does not hide: on the 12 hard E2 cases under these conditions all its lost values and critical cuts came from
-// hiding (net 0.77 with, 0.88 without; code alone 0.89; v2/RESULTS-V2.md). Marks reach the session at the next rebuild that pays
-// (agents/rebuild.ts); what the call leaves, the lean history condenses there once its run is finished.
+// condenseTurn, which nobody waits for). The call says for every item whether its job is done (17.11.2026: one yes or no per
+// item – with a single list to condense, items it only wanted to say "keep" about were condensed); a done one keeps its note of
+// what still matters – checked against the item and the text the call was shown –, then window.ts leanText of the original
+// (every id, path, file name and link: the net under the note) and the restore stamp. The call does not hide: on the 12 hard E2
+// cases under these conditions all its lost values and critical cuts came from hiding (net 0.77 with, 0.88 without; code alone
+// 0.89; v2/RESULTS-V2.md). Marks reach the session at the next rebuild that happens anyway (agents/rebuild.ts); what the call
+// leaves, the lean history condenses there once its run is finished.
 // Owns: which hits and items the call reads, how they read, opening the chosen hits and writing the chosen marks. Never: chooses
 // itself, shows an entry the agent cannot open, hides anything, marks a message, a pinned or nested item, or the newest finished run's work.
 
@@ -166,13 +168,16 @@ export function itemLines(items: readonly ContextItem[], now: number): string {
 }
 
 /**
- * The call's marks: each condensed item keeps its note (unless it names a value the original lacks, context-tools.ts inventedValues),
- * then leanText of the original. Only items it was shown. Returns how many.
+ * The call's marks. `answers` holds one entry per item it was shown ({id, done, note}); an item whose job it calls done is
+ * condensed – its note, then leanText of the original –, every other one stays whole. The note stays unless it names a value
+ * that stands neither in the original nor in `shown`, the text the call read (context-tools.ts inventedValues; measured
+ * 15.–17.11.2026: 418 of 2,472 notes were dropped for a value the call had taken from the chat it was shown). Only items it
+ * was shown. Returns how many.
  */
-export function markItems(services: RuntimeServices, agentId: string, thread: string, items: readonly ContextItem[], chosen: unknown): number {
+export function markItems(services: RuntimeServices, agentId: string, thread: string, items: readonly ContextItem[], answers: unknown, shown = ''): number {
   const ledger = services.ledger;
   const listed = new Map(items.map((entry) => [entry.item.itemId, entry.item]));
-  const condense = Array.isArray(chosen) ? chosen : [];
+  const condense = Array.isArray(answers) ? answers.filter((entry) => (entry as { done?: unknown } | null)?.done === true) : [];
   if (!ledger || !condense.length) return 0;
   const marks: LedgerMark[] = [];
   const done = new Set<string>();
@@ -183,7 +188,7 @@ export function markItems(services: RuntimeServices, agentId: string, thread: st
     if (!original || original.pruned) continue;
     const source = original.args ? `${original.args}\n${original.text}` : original.text;
     const said = flat(String((entry as { note?: unknown }).note ?? ''), NOTE_CHARS);
-    const note = said && !inventedValues(source, said).length ? said : '';
+    const note = said && !inventedValues(`${source}\n${shown}`, said).length ? said : '';
     marks.push({ itemId: id, state: 'condensed', condensed: redact(services, [note, leanText(source)].filter(Boolean).join('\n')), by: 'subconscious', reason: LOOK_REASON });
     done.add(id);
   }

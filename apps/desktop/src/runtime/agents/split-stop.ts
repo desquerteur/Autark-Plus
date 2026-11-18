@@ -5,13 +5,15 @@
 // not only when the run ends, so a restart before that end never starts them (reconcile finds them stopped); the run's
 // own end (split-turn.ts splitTurnEnded, or a release – dispatch-settle.ts abandonRun) finds none pending any more. A
 // split's own turn created no group (depth 1); a turn a shutdown cut first stays a cut (abortTurn: the first kind decides).
-// Owns: that call, best effort. Never: aborts a turn, stops a running group or a split lane (messages.stop and
-// splits.stop do), or decides a split's lifecycle (runtime/splits/service.ts does).
+// Decision 10: the same call stops, as the person, the groups that turn's agents.split call waits for – on every engine,
+// whatever the call's own signal says – so they wake nobody.
+// Owns: that call, best effort. Never: aborts a turn or a split lane itself (the split service and messages.stop do), or
+// decides a split's lifecycle (runtime/splits/service.ts does).
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { RunEntry } from './dispatch-runs.ts';
 
-/** After the person's Stop of `entry`: the groups its turn split and that wait for its end never start. */
+/** After the person's Stop of `entry`: the groups its turn split never start, and the ones its call waits for stop. */
 export function stopPendingSplits(services: Pick<RuntimeServices, 'splits' | 'log'>, entry: Pick<RunEntry, 'runId' | 'split' | 'control'>): void {
   if (entry.split || entry.control.stopKind !== 'human' || !services.splits) return;
   try { services.splits.afterParentTurn(entry.runId, 'stopped'); } catch (error) {

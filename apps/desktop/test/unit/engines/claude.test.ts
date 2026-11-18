@@ -142,7 +142,7 @@ test('claude stream: visible work updates, final answer, subagent isolation, too
     { type: 'tool_end', callId: 'tu_1', ok: true, summary: 'All tests passed', output: 'All tests passed' },
     { type: 'tool_end', callId: 'tu_2', ok: false, summary: 'Refused by policy', output: 'Refused by policy' },
   ]);
-  assert.deepEqual(of('usage'), [{ type: 'usage', inputTokens: 1000, outputTokens: 40, cacheReadTokens: 900, contextTokens: 1000, costUsd: 0.12 }]);
+  assert.deepEqual(of('usage'), [{ type: 'usage', inputTokens: 1000, outputTokens: 40, cacheReadTokens: 900, contextTokens: 1000, costUsd: 0.12, modelCalls: 1 }], 'package C: one main-thread message_start, one model call');
 });
 
 test('claude stream: without partial deltas the assistant text is emitted once per block', async () => {

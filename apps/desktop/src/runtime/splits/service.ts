@@ -10,6 +10,13 @@
 // it was split in ('conversation.removed'; settled groups there, or of an archived agent, end too – nobody gathers them) –
 // watch(), which also starts parts that wait for an account when one becomes usable (holds.ts).
 // Boot recovery: reconcile.ts. Views: views.ts.
+// KI-Runde 17.11.2026 (decision 10): `agents.split {wait: true}` starts its parts at the call and waitFor holds that call
+// until they ended, until the wait's bound, until a line for that turn ends it (endWait – the dispatcher) or until the
+// call is cut (wait.ts); its result is what those parts brought back (gather.ts waitedResults), they wake nobody, a note
+// of theirs to the origin rides in it (tellWaiting), and they are gathered when that turn ends 'done' (afterParentTurn).
+// FIXES-3 A3: parts a turn read with agents.split_results (results with its runId) are gathered the same way.
+// The person's Stop of that turn (afterParentTurn 'stopped', which every stop path reaches – agents/split-stop.ts) stops
+// the groups it waits for as the person: they wake nobody. An answer that reaches nobody wakes the origin (wakeUnread).
 // B-083 (owner 08.11.2026: Ultra is one being): a part's own agents.split adds parts to its group (validate.ts) – they
 // start at once, the group already runs and its recorded parent session is their fork source; agents.split_tell changes a
 // part's model, effort and temperature (tune: its row, so its next start and "My parts" carry it – a running part also
@@ -25,14 +32,17 @@ import type { SplitCreateContext, SplitProgress, SplitRunEnd, SplitService } fro
 import { BUSY_GROUPS, LIVE_SPLITS, OPEN_GROUPS, SplitCore, isTerminal, type SplitServiceDeps } from './core.ts';
 import { checkCreate, checkTune, type CheckedPart } from './validate.ts';
 import { SplitRunner } from './runner.ts';
-import { coalesceKey, markGathered, pendingResults, results } from './gather.ts';
+import { coalesceKey, markGathered, pendingResults, results, wakeUnread, waitedResults } from './gather.ts';
 import { workerNotes } from './results.ts';
 import { RESTART_NOTE, reconcileSplits, type SplitRecovery } from './reconcile.ts';
 import { groupView, groupViews } from './views.ts';
+import type { SplitWaited } from './wait.ts';
 
 export type { SplitServiceDeps } from './core.ts';
 
 export const PARENT_STOPPED = 'Not started: the person stopped the turn that split.';
+/** Decision 10: a part whose waiting turn the person stopped. */
+export const WAIT_STOPPED = 'Stopped: the person stopped the turn that waited for it.';
 export const WORK_STOPPED = 'Stopped: the person stopped all agent work.';
 export const CHAT_REMOVED = 'Stopped: the chat it was split in was deleted.';
 const LIST_LIMIT = 200;
@@ -45,6 +55,12 @@ declare module '../contracts/splits.ts' {
     noteFor?(splitId: string, text: string): boolean;
     /** B-083: a live part's model, effort, temperature from now on (agents.split_tell; checked like agents.split's). Throws WorkforceError. Optional for fakes. */
     tune?(splitId: string, change: { model?: string; effort?: string; temperature?: number }): Split | undefined;
+    /** Decision 10: holds the calling turn until those parts ended, `limit` passed or `signal` aborts; its result is what they brought back. Optional for fakes. */
+    waitFor?(input: { agentId: string; runId: string; splitIds: string[]; signal: AbortSignal; limit?: number }): Promise<SplitWaited>;
+    /** Decision 10: a part's note for the origin that waits for it – it rides in that call's result; false when nobody waits. Optional for fakes. */
+    tellWaiting?(splitId: string, text: string): boolean;
+    /** Decision 10: a line for run `runId` arrived – its waiting call answers now with what is there, its parts go on. Optional for fakes. */
+    endWait?(runId: string): void;
   }
 }
 
@@ -53,13 +69,15 @@ export class SplitServiceImpl implements SplitService {
   private readonly runner: SplitRunner;
   /** B-083: notes for parts that have not started yet (noteFor), read at their start (inputFor). */
   private readonly notes = new Map<string, Array<{ text: string; at: number }>>();
+  /** Decision 10: per run, the ended parts its waiting calls brought back – FIXES-3 A3: and those agents.split_results showed it – gathered when that turn ends 'done'. */
+  private readonly read = new Map<string, string[]>();
 
   constructor(deps: SplitServiceDeps) {
     this.core = new SplitCore(deps);
     this.runner = new SplitRunner(this.core);
   }
 
-  create(ctx: SplitCreateContext, input: { goal: string; parts: SplitPartInput[] }): SplitGroupView {
+  create(ctx: SplitCreateContext, input: { goal: string; parts: SplitPartInput[]; wait?: boolean }): SplitGroupView {
     const { goal, parts, group: joined, offset } = checkCreate(this.core, ctx, input);
     if (joined) return this.join(joined, parts, offset, ctx.runId);
     const { repo, deps } = this.core;
@@ -80,9 +98,36 @@ export class SplitServiceImpl implements SplitService {
       for (const split of splits) repo.saveSplit(split);
     });
     deps.log.info('split group created', { agentId: ctx.agentId, groupId: group.id, parts: parts.length, runId: ctx.runId });
+    if (input.wait) this.runner.startGroup(group.id); // decision 10: the call that split waits for them, so they start now
     const view = groupView(deps, repo.getGroup(group.id) ?? group);
     deps.bus.emit('split.upserted', view);
+    if (input.wait) this.runner.pump();
     return view;
+  }
+
+  /**
+   * Decision 10: the calling turn waits here while those parts work. It ends when they have all ended, at the wait's
+   * bound or on a line for the turn (with what is there – the rest comes back on its own), or when the call is cut.
+   * What the parts brought back is the block the origin's next turn would have got, so it reaches it in this one; they
+   * are gathered when this turn ends 'done'. A cut call's answer reaches nobody: its ended parts wake the origin.
+   */
+  async waitFor(input: { agentId: string; runId: string; splitIds: string[]; signal: AbortSignal; limit?: number }): Promise<SplitWaited> {
+    const { ended, notes } = await this.core.waits.hold(input.runId, input.splitIds, input.signal, input.limit);
+    const shown = input.splitIds.flatMap((id) => { const split = this.core.repo.getSplit(id); return split ? [split] : []; }).sort((a, b) => a.idx - b.idx);
+    const group = shown.length ? this.core.repo.getGroup(shown[0].groupId) : undefined;
+    if (!group) return { ended, text: 'The parts I waited for are gone.' };
+    const text = waitedResults(this.core, group, this.core.repo.listSplits({ groupId: group.id }), shown, notes);
+    if (ended === 'stopped') wakeUnread(this.core, group, notes);
+    else this.read.set(input.runId, [...(this.read.get(input.runId) ?? []), ...shown.filter((split) => isTerminal(split.status)).map((split) => split.id)]);
+    return { ended, text };
+  }
+
+  endWait(runId: string): void {
+    this.core.waits.end(runId, 'early');
+  }
+
+  tellWaiting(splitId: string, text: string): boolean {
+    return this.core.waits.note(splitId, text);
   }
 
   /** B-083: a part's agents.split – its new parts join its running group after its last part and start at once. */
@@ -111,6 +156,20 @@ export class SplitServiceImpl implements SplitService {
   }
 
   afterParentTurn(runId: string, status: 'done' | 'failed' | 'stopped'): void {
+    // Decision 10: a call of this turn that still waits can bring nothing back any more; what its calls brought back is
+    // gathered when it ended 'done'; the person's Stop stops the groups it waited for as the person (they wake nobody); a
+    // failed turn's ended parts that reached nobody wake the origin.
+    const held = this.core.waits.end(runId, 'stopped');
+    const read = this.read.get(runId) ?? [];
+    this.read.delete(runId);
+    if (status === 'stopped') {
+      const groupIds = new Set(held.flatMap((id) => this.core.repo.getSplit(id)?.groupId ?? []));
+      for (const groupId of groupIds) this.runner.stop({ groupId }, HUMAN_ID, WAIT_STOPPED);
+    } else if (status === 'done') {
+      if (read.length) this.markGathered(runId, read);
+    } else {
+      for (const group of this.core.repo.listGroups({ parentRunId: runId, statuses: ['running', 'settled'] })) wakeUnread(this.core, group);
+    }
     const groups = this.core.repo.listGroups({ parentRunId: runId, statuses: ['pending'] });
     if (!groups.length) return;
     for (const group of groups) {
@@ -142,7 +201,7 @@ export class SplitServiceImpl implements SplitService {
       ...(split.chat ? { chat: split.chat } : {}), // 13.11.2026: the chat its run is for
       ...(group.parentSession ? { parentSession: group.parentSession } : {}), // B-080: what a 'fork' part forks (fork.ts)
       // S4: every run of a part may seed its session from the parent – the pipeline does so only when this attempt has no
-      // session of its own for the engine and account it routes to (turn-prepare.ts chooseSession), so a retry resumes
+      // session of its own for the engine and account it routes to (session-choice.ts chooseSession), so a retry resumes
       // the session an earlier attempt left there, and one routed to another engine or account starts as the parent
       // again instead of blind; a renewal inside a run never re-seeds (turn.ts sets firstTurn false).
       firstTurn: true,
@@ -184,8 +243,10 @@ export class SplitServiceImpl implements SplitService {
     this.core.emit(markGathered(this.core, runId, splitIds));
   }
 
-  results(agentId: string, q: { groupId?: string; idx?: number; thread?: string }): string {
-    return results(this.core, agentId, q);
+  results(agentId: string, q: { groupId?: string; idx?: number; thread?: string; runId?: string }): string {
+    const { text, ended } = results(this.core, agentId, q);
+    if (q.runId && ended.length) this.read.set(q.runId, [...(this.read.get(q.runId) ?? []), ...ended]); // FIXES-3 A3: read is read
+    return text;
   }
 
   stop(q: { splitId?: string; groupId?: string; agentId?: string; conversationId?: string; taskId?: string }, by: string): number {

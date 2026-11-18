@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { SecretVault } from '../../../src/runtime/secrets/service.ts';
 import { register as security } from '../../../src/runtime/rpc/handlers/security.ts';
 import { HandlerTable } from '../../../src/runtime/rpc/table.ts';
-import { redactText } from '../../../src/runtime/feedback/redact.ts';
+import { redactText } from '../../../src/shared/secrets/redact-text.ts';
 import { secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
 import { findKeys, handleCount, maskKey } from '../../../src/shared/secrets/token-patterns.ts';
 import type { ClientScope } from '../../../src/shared/api/protocol.ts';

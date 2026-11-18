@@ -65,6 +65,8 @@ export interface TalkingChat {
   holder?: string;
   /** The agent whose line was read last (its name goes in front when another one speaks). */
   speaker?: string;
+  /** KI-Runde 17.11.2026: the call voice's row still being written and what of it was already read aloud. */
+  said?: { id: string; text: string };
   release?: () => void;
   cancelTimer?: () => void;
 }
@@ -90,13 +92,44 @@ export function spokenMeta(live: boolean): SpeechMeta {
   return live ? { source: 'endpoint', live: true } : { source: 'endpoint' };
 }
 
-/** Turns a Markdown answer into speakable text: no code/ui/app fences, no markup, bounded. */
+/** A sentence ends at one of these, followed by space or the end of the text; a line of its own ends one too. */
+const SENTENCE_END = /[.!?…](?:["'”’)\]]*)(?=\s|$)|\n/g;
+/** A finished piece is at least this long, so a short opening like "Ok." waits for what follows. */
+const PIECE_MIN = 15;
+/**
+ * A word whose dot is no sentence end: one letter or digit ("S.", "1."), one with a dot inside ("z.B.", "d.h.") or a common
+ * short abbreviation ("ca.", "Dr.") – while the answer streams, the word after it is not there yet to tell.
+ */
+const ABBREVIATION = /(?:^|\s)(?:[\p{L}\d]|[\p{L}\d]+\.[\p{L}\d.]*|ca|bzw|usw|etc|vgl|ggf|evtl|inkl|zzgl|bspw|Nr|Dr|Prof|Hr|Fr|St|Str|Tel|Mio|Mrd|Mr|Mrs|Ms|Jr|vs|approx)\.$/iu;
+/** A dot that a lowercase word follows ends no sentence either. */
+const GOES_ON = /^["'”’)\]]*\s+\p{Ll}/u;
+
+/**
+ * KI-Runde 17.11.2026: the leading part of a text whose last sentence is finished ('' while none is) – what the call voice
+ * can already say while it still writes the rest (conversation.ts, runtime/calls/voice-text.ts).
+ */
+export function sentencesDone(text: string): string {
+  let at = 0;
+  for (const match of text.matchAll(SENTENCE_END)) {
+    const end = match.index + match[0].length;
+    if (match[0] === '.' && (ABBREVIATION.test(text.slice(Math.max(0, match.index - 40), end)) || GOES_ON.test(text.slice(end)))) continue;
+    if (end - at >= PIECE_MIN) at = end;
+  }
+  return at > 0 ? text.slice(0, at).trim() : '';
+}
+
+/**
+ * Turns a Markdown answer into speakable text: no code/ui/app fences, no markup or list bullets, a link as its words, and a
+ * line that ends without a stop (a heading, a list item) ends as a sentence; bounded.
+ */
 export function speakable(markdown: string, max = 4000): string {
   return markdown
     .replace(/```[\s\S]*?(```|$)/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]*[-+•][ \t]+/gm, '')
     .replace(/[`*_#>|~]+/g, ' ')
+    .replace(/([^\s.!?:;,])[ \t]*\n\s*(?=\S)/g, '$1. ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);

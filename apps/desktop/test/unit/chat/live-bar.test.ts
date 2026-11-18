@@ -1,5 +1,6 @@
 // The chat's live bar (runtime/chat/live.ts, ConversationSummary.live): a running run or split part shows in a chat when
-// it came from that chat or posted into it during this run – nothing else; its step comes from the run journal, its
+// it came from that chat or posted into it during this run – nothing else; its step comes from the run journal (the
+// agent's own sentence, once it said one, until its next), its
 // model from the activity; it ends with its run; every change reaches the list as conversation.upserted. F10: another
 // PC's runs merge in (deviceId) and leave with that PC's next state or its link.
 // Owns: these assertions only. Never: engines, timers or sleeps (liveGapMs 0).
@@ -87,4 +88,24 @@ test('F10: another PC\'s runs merge into the bar in start order, marked with tha
   assert.deepEqual(allActivity(h.bus, [tom]).map((entry) => entry.runId), ['run_tom']);
   h.bus.emit('run.item', call('run_tom', 'Read', { file_path: 'C:/x.md' }));
   assert.deepEqual(changes, [1], 'a step of this PC\'s own run is a change');
+});
+
+test('the bar says the agent\'s own sentence: the first one of its newest working note, kept until its next one', () => {
+  const { h, home, active, tom } = setup();
+  active([tom]);
+  const said = (text: string): RunItem => ({ id: `ri_${text.length}`, runId: 'run_tom', seq: 2, kind: 'note', name: 'Update', data: { text, commentary: true }, createdAt: 2 });
+  h.bus.emit('run.item', call('run_tom', 'Bash', { command: 'cd "/c/Users/x/project" && npm test' }));
+  assert.match(h.chats.summary(home.id).live![0].step ?? '', /^Running/, 'before any sentence the running call shows');
+  h.bus.emit('run.item', said('Das UI-Typecheck ist sauber. Ich sehe nach den Gates im Snapshot.'));
+  assert.equal(h.chats.summary(home.id).live![0].step, 'Das UI-Typecheck ist sauber');
+  h.bus.emit('run.item', call('run_tom', 'Read', { file_path: 'C:/data/snapshot.json' }));
+  assert.equal(h.chats.summary(home.id).live![0].step, 'Das UI-Typecheck ist sauber', 'a tool label does not replace the sentence');
+  h.bus.emit('run.item', said(`Ich schreibe jetzt den Fenstertest für das Voiceover ${'und prüfe jeden Schritt '.repeat(10)}`));
+  const step = h.chats.summary(home.id).live![0].step ?? '';
+  assert.match(step, /^Ich schreibe jetzt den Fenstertest/, 'the next sentence replaces it');
+  assert.ok(step.length <= 120 && step.endsWith('…'), 'one short line');
+  h.bus.emit('run.item', said('<chat to="ch_other" level="quiet">Hallo Lena, ich übernehme das.</chat>'));
+  assert.match(h.chats.summary(home.id).live![0].step ?? '', /^Ich schreibe jetzt den Fenstertest/, 'a note that is only a chat block leaves the sentence as it is');
+  h.bus.emit('run.item', said('<chat to="ch_other">Fertig.</chat> Jetzt baue ich den Rest.'));
+  assert.equal(h.chats.summary(home.id).live![0].step, 'Jetzt baue ich den Rest', 'the bar says its own words, not its markup');
 });

@@ -77,12 +77,18 @@ import { sql as runUsage } from './migrations/100-run-usage.ts'; // B-089 (11.11
 import { sql as splitChat } from './migrations/101-split-chat.ts';
 import { sql as taskNext } from './migrations/102-task-next.ts';
 import { sql as secretUses } from './migrations/103-secret-uses.ts';
+import { sql as accountExtraUsage } from './migrations/104-account-extra-usage.ts';
+import { sql as accountThisPcOnly } from './migrations/105-account-this-pc-only.ts';
+import { sql as mediaPreview } from './migrations/106-media-preview.ts';
+import { sql as runCacheWrites } from './migrations/107-run-cache-writes.ts';
+import { sql as sessionCostTotal } from './migrations/108-session-cost-total.ts';
+import { sql as sessionFold } from './migrations/109-session-fold.ts';
 
 /**
  * Versions are applied in list order: keep the list in ascending version order and never edit a
  * shipped entry. Only the highest applied version is recorded (`meta.schema`), and a listed version
  * at or below a profile's recorded one is never applied there – so a new migration always takes a
- * number above the highest one used so far (103 now), never a number in a gap. The gaps in the
+ * number above the highest one used so far (109 now), never a number in a gap. The gaps in the
  * numbering (e.g. 51–54, 56, 57, 62–64, 66, 70) were reserved by parallel packages and never used; they
  * stay unused. 83 was reserved by a parallel package (B-057 took 84 meanwhile): a later 83 would be skipped
  * on every profile already at 84, so that step takes a number above 84 instead.
@@ -170,6 +176,12 @@ const MIGRATIONS: Migration[] = [
   { version: 101, name: 'split-chat', sql: splitChat }, // 13.11.2026: the chat a split part's work is for (Split.chat)
   { version: 102, name: 'task-next', sql: taskNext }, // 13.11.2026: a task's one planned look (tasks.next_at)
   { version: 103, name: 'secret-uses', sql: secretUses }, // 16.11.2026 F19: how often a secret and a login were used (this PC's count)
+  { version: 104, name: 'account-extra-usage', sql: accountExtraUsage }, // 17.11.2026: a plan may continue on the provider's extra usage (off until switched on)
+  { version: 105, name: 'account-this-pc-only', sql: accountThisPcOnly }, // 17.11.2026: a plan login that stays on this PC (not synced)
+  { version: 106, name: 'media-preview', sql: mediaPreview }, // 17.11.2026: a heavy video's light preview copy (media.preview_file_id / preview_state)
+  { version: 107, name: 'run-cache-writes', sql: runCacheWrites }, // KI-Runde 17.11.2026: runs.cache_write_tokens (a part of input_tokens)
+  { version: 108, name: 'session-cost-total', sql: sessionCostTotal }, // KI-Runde 17.11.2026: engine_sessions.cost_total (the engine's running total)
+  { version: 109, name: 'session-fold', sql: sessionFold }, // KI-Runde 17.11.2026 (package S1): engine_sessions.folded_at / compacted_at, the ledger's sizes at two characters per token
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

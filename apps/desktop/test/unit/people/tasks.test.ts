@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { peopleRig, settle } from './rig.ts';
+import { registerPersonVoice } from '../../../src/runtime/people/rpc-voice.ts';
 import type { TaskView } from '../../../src/shared/model/tasks.ts';
 import { authorName } from '../../../src/runtime/context/render.ts';
 import { realId, viewId, viewTask } from '../../../src/runtime/people/perspective.ts';
@@ -90,4 +91,26 @@ test('a person finishes work an agent gave them: the agent hears how it ended', 
   assert.equal(done.status, 'done');
   await settle();
   assert.ok(r.wakeRows().some((row) => row.agent_id === 'ag_research' && /"Pick the colours", which I gave Anna Berg, is done/.test(row.note ?? '')), 'the giver hears it');
+});
+
+test('the to-do button on a colleague\'s phone: a screenshot, a quick task to an agent they work with, their own to-do', async (t) => {
+  const r = peopleRig({ modules: [registerPersonVoice] });
+  t.after(() => r.cleanup());
+  const anna = await r.join('Anna Berg', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
+  const ben = await r.join('Ben Vogt', { scopes: { spaces: ['sp_company'], startChats: false, assignAgents: false } });
+  const shot = await anna.client.call<{ id: string }>('files.upload', { name: 'screen-1.jpg', mime: 'image/jpeg', dataBase64: Buffer.from('jpeg bytes').toString('base64') });
+  const { task } = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'The header looks broken', attachments: [{ fileId: shot.id, name: 'screen-1.jpg' }], clientId: 'c1' });
+  assert.equal(task.assigneeKind, 'agent');
+  assert.notEqual(task.assigneeId, 'ag_secret', 'never an agent of another space');
+  assert.equal(r.tasks.get(task.id)!.createdBy, anna.person.id);
+  assert.deepEqual(r.tasks.get(task.id)!.files?.map((file) => file.name), ['screen-1.jpg']);
+  const again = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'The header looks broken', attachments: [{ fileId: shot.id }], clientId: 'c1' });
+  assert.equal(again.task.id, task.id, 'a retry is the same task');
+  const mine = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'Call the printer', target: { kind: 'me' } });
+  assert.equal(r.tasks.get(mine.task.id)!.assigneeId, anna.person.id);
+  await assert.rejects(anna.client.call('tasks.quickCreate', { text: 'x', target: { kind: 'agent', id: 'ag_secret' } }), /do not give tasks to this agent/);
+  await assert.rejects(ben.client.call('tasks.quickCreate', { text: 'x', attachments: [{ fileId: shot.id }] }), /files you uploaded/);
+  const kept = await ben.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'Order paper' });
+  assert.equal(r.tasks.get(kept.task.id)!.assigneeId, ben.person.id, 'without agents of theirs a colleague keeps it');
+  await assert.rejects(anna.client.call('files.upload', { name: 'x.exe', mime: 'application/octet-stream', dataBase64: 'AA==' }), /speech and screenshots/);
 });

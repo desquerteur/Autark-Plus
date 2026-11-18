@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { fixture, route, RESOURCES, VIDEO_MODE } from './fixture.ts';
+import { fixture, model, route, RESOURCES, VIDEO_MODE } from './fixture.ts';
 import { blockLine, blockPrompt } from '../../../src/shared/blocks/prompt.ts';
 import { cleanTemplate, loadTemplates, renderTemplate } from '../../../src/runtime/context/templates.ts';
 import { PINNED_CAP } from '../../../src/runtime/context/prompt-volatile.ts';
@@ -80,7 +80,7 @@ test('stable prompt is deterministic; the live part carries the per-turn state',
   assert.match(second.volatile, /## Pinned\n- Brand color: Use #ff5500 \(saved Sat 17 Oct\)/, 'a pinned note says the day it was saved, no age');
 });
 
-test('rich-answer fragment: lite for local/small models, full with mini-apps for strong/frontier', () => {
+test('rich-answer fragment: lite only for a local model, the full line with mini-apps for every other tier', () => {
   const f = setup();
   const base = { agent: f.vid, mode: VIDEO_MODE };
   const lite = f.context.prompt({ ...base, route: route('ollama:gemma') }).stable;
@@ -91,9 +91,24 @@ test('rich-answer fragment: lite for local/small models, full with mini-apps for
   assert.ok(!lite.includes('```app'));
   assert.ok(frontier.includes(blockLine({ tier: 'full', app: true })));
   assert.ok(strong.includes(blockLine({ tier: 'full', app: true })));
-  assert.ok(unknown.includes(blockLine({ tier: 'full', app: false })));
+  assert.ok(unknown.includes(blockLine({ tier: 'full', app: true })));
   assert.ok(!frontier.includes(blockPrompt({ tier: 'full', app: true })), 'not the whole guide');
   assert.doesNotMatch(blockLine({ tier: 'full', app: true }), /max ~3|the human/, 'the principle, no count; the person');
+});
+
+test('S2: a small-tier and a strong-tier route give the same agent the same stable prompt, section by section', () => {
+  const f = setup();
+  const catalog = f.services.catalog as unknown as { get: (id: string) => ReturnType<typeof model> | undefined };
+  const known = catalog.get.bind(catalog);
+  catalog.get = (id: string) => (id === 'claude:haiku' ? model('claude:haiku', 'small', 'Haiku') : known(id));
+  const base = { agent: f.vid, mode: VIDEO_MODE };
+  const small = f.context.prompt({ ...base, route: route('claude:haiku') });
+  const strong = f.context.prompt({ ...base, route: route('codex:luna') });
+  const frontier = f.context.prompt({ ...base, route: route('codex:gpt-6.1-sol') });
+  assert.equal(small.stable, strong.stable);
+  assert.equal(frontier.stable, strong.stable);
+  assert.deepEqual(small.stableSections?.map((section) => section.name), ['identity', 'system-md', 'environment', 'skills', 'rich-answers', 'mode']);
+  assert.equal(small.stableSections?.map((section) => section.text).join('\n\n'), small.stable, 'the sections joined are the system prompt');
 });
 
 test('live part: time with zone, my chats as stable lines, absolute times, schedules without tool hints', () => {
@@ -132,13 +147,14 @@ test('templates: the shipped files load; a missing folder renders empty sections
   assert.deepEqual(loadTemplates(path.join(RESOURCES, 'missing-prompts')), { identity: '', skills: '' });
 });
 
-test('How I work: {{user_name}} only, about 10,000 characters, the same in every mode; the manager standard adds only "## Leading"', () => {
+test('How I work: {{user_name}} only, about 10,000 characters, the same in every mode; the manager standard is a frame of its own that leads', () => {
   const keys = new Set([...ownHowIWork(STANDARD).how.matchAll(/\{\{[#^/]?([a-z_]+)\}\}/g)].map((match) => match[1]));
   assert.deepEqual([...keys], ['user_name'], 'no tool flags: it names abilities, not tools');
-  assert.ok(HOW.length <= 10_800, `How I work: ${HOW.length} characters`); // 15.11.: + tidy workplace, outreach with clarity; 16.11.: + talking with the person, statements outside, quality, Autark's browser, an idle linked PC
-  const manager = standard('manager');
-  const leading = manager.slice(manager.indexOf('## Leading'), manager.indexOf('## My role'));
-  assert.ok(leading.length > 500 && manager.replace(leading, '') === STANDARD, 'standard-manager = standard-agent + "## Leading"');
+  assert.ok(HOW.length <= 11_000, `How I work: ${HOW.length} characters`); // 18.11.: + a line exists only as a block (Noah, merged with the closing-words rule); 15.11.: + tidy workplace, outreach with clarity; 16.11.: + talking with the person, statements outside, quality, Autark's browser, an idle linked PC
+  // KI-Runde 17.11.2026 (managers-konrad P1, prompt-assembly P12): a lead's text is its own frame, Leading first
+  const lead = ownHowIWork(renderTemplate(standard('manager'), { user_name: 'Alexandra', owner: 'Alexandra' })).how;
+  assert.deepEqual([...lead.matchAll(/^## (.+)$/gm)].map((match) => match[1]), ['Leading', 'Judgment', 'Chats', 'Trust and memory'], 'standard-manager: Leading first, no "Carrying work"');
+  assert.equal(lead.split('\n')[1].split('. ')[0], HOW.split('\n')[1].split('. ')[0], 'both open with the same first sentence');
   assert.ok(HOW.startsWith('# How I work\nThis company is my own work – Alexandra, my colleagues, this PC, the Autark system I live in – and I want something good to come out of it.'));
 });
 
@@ -165,8 +181,8 @@ test('How I work keeps each stance once: carrying work in one turn and why, what
   const chats = HOW.slice(HOW.indexOf('## Chats'), HOW.indexOf('## Trust and memory'));
   const trust = HOW.slice(HOW.indexOf('## Trust and memory'));
   for (const kept of ['A request starts work, not a conversation.', 'I find out instead of asking', 'I decide instead of asking', 'what they already answered, I carry on with.',
-    'Depth follows the goal, not the wording', 'Ideas from Alexandra are direction, not a checklist', '"I cannot" means technically impossible',
-    'Work that needs hands or presence is still mine', 'Their own to-dos stay theirs', "Model and effort are my subconscious's call"]) {
+    'Depth follows the goal, not the wording', 'Their words are theirs, my reading is mine', '"I cannot" means technically impossible',
+    'Their attention is the scarcest thing here', 'Their own to-dos stay theirs', 'My model is settled for my kind of work']) { // KI-Runde 17.11.2026
     assert.ok(judgment.includes(kept), `judgment: ${kept}`);
   }
   for (const kept of ['One turn carries the work as far as it goes – each new turn reads my whole context again; it ends when the work is done or only waits.',

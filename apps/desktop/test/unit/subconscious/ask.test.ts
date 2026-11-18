@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { RESOURCES, fixture, model } from '../context/fixture.ts';
-import { ROUTE_SYSTEM } from '../../../src/runtime/subconscious/route-turn.ts';
+import { routeSystem } from '../../../src/runtime/subconscious/route-turn.ts';
 import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
 import { SubconsciousImpl } from '../../../src/runtime/subconscious/service.ts';
 import { subconsciousTools, SUBCONSCIOUS_TOOL } from '../../../src/runtime/tools/builtin/subconscious.ts';
@@ -83,7 +83,7 @@ test('the turn\'s mode reaches the run\'s card: the tool\'s (a split turn\'s); n
   routable(asked.f.services, [model('codex:luna', 'small', 'Luna')]); // one connected work model the router runs
   await impl.beforeTurn({ agent: asked.f.vid, thread: 'main', conversationId: asked.chat.id, mode: 'video', said: 'Mein Steuerberater heißt Jonas Weber.' });
   assert.equal(asked.calls.length, 1, 'one routing call');
-  assert.equal(asked.calls[0].system, ROUTE_SYSTEM);
+  assert.equal(asked.calls[0].system, routeSystem(asked.f.services)); // FIXES-3 D1: with the person's language
   assert.ok(asked.calls[0].prompt.includes("The person's new message:\nMein Steuerberater heißt Jonas Weber."), asked.calls[0].prompt);
   assert.deepEqual(asked.modes, [], 'no loop: no skill list is built');
 });
@@ -91,7 +91,7 @@ test('the turn\'s mode reaches the run\'s card: the tool\'s (a split turn\'s); n
 test('it is a core tool in every mode with a short spec', () => {
   assert.equal(tool.name, SUBCONSCIOUS_TOOL);
   assert.ok(Object.hasOwn(BASE_CORE, SUBCONSCIOUS_TOOL));
-  assert.equal(tool.anyMode, true);
+  assert.equal(tool.modes, undefined);
   const { name, description, inputSchema } = tool;
   const chars = JSON.stringify({ name, description, inputSchema }).length;
   assert.ok(chars / 4 <= 110, `spec: ${chars} characters, about ${Math.round(chars / 4)} tokens`);

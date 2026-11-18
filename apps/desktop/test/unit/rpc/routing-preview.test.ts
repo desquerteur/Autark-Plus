@@ -1,7 +1,8 @@
-// RT5: routing.preview answers what Auto would pick for the chat's next turn – with the chat's last
-// done run as RouteRequest.previous like a turn (agents/next-route.ts returnChoice), so the return
-// rule and the previous effort hold; a chat's model choice never routes (13.11.2026); `ignorePin` leaves the agent's own
-// pin out without a chat; without a chat it is a fresh recommendation.
+// RT5: routing.preview answers what the chat's next turn runs on – like a turn it starts from the model the agent is on
+// (agents/next-route.ts returnChoice) and asks whether its context starts anew anyway (agents/boundary.ts): in a live
+// session the model and its settled effort continue, where the context starts anew Auto's choice for the agent's kind shows
+// (17.11.2026); a chat's model choice never routes (13.11.2026); `ignorePin` leaves the agent's own pin out without a chat;
+// without a chat it is a fresh recommendation.
 // Real router and catalog (models harness), fake run journal and modes.
 
 import { test } from 'node:test';
@@ -10,6 +11,8 @@ import { HandlerTable, allowedScope, secureScope } from '../../../src/runtime/rp
 import type { HandlerContext } from '../../../src/runtime/rpc/table.ts';
 import { register as registerProviders } from '../../../src/runtime/rpc/handlers/providers.ts';
 import { returnChoice } from '../../../src/runtime/agents/next-route.ts';
+import { boundaryOf } from '../../../src/runtime/agents/boundary.ts';
+import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
 import type { RpcExtras } from '../../../src/runtime/rpc/extras.ts';
 import type { Run } from '../../../src/shared/model/runs.ts';
 import type { RouteDecision } from '../../../src/shared/model/providers.ts';
@@ -38,13 +41,19 @@ async function previewSetup(runs: Run[]) {
     const ctx = { scope: { kind: 'owner' }, services: h.services, extras: {} as RpcExtras, topics: new Set<string>(), signal: new AbortController().signal, secure: secureScope({ kind: 'owner' }) } as unknown as HandlerContext;
     return entry.handler({ agentId: VERA, ...params } as never, ctx) as Promise<RouteDecision>;
   };
-  /** What the chat's next turn routes on (agents/turn-prepare.ts: the chat, and the return choice of its runs). */
-  const turn = (conversationId: string) => h.router.route({ agent: vera, conversationId, mode: mode('chat'), previous: returnChoice(runs, undefined) });
-  return { ...h, vera, preview, turn };
+  /** What the chat's next turn routes on (agents/turn-prepare.ts: the chat, the model I am on and whether my context starts anew). */
+  const turn = (conversationId: string) => {
+    const boundary = boundaryOf(h.services, VERA, 'main');
+    return h.router.route({ agent: vera, conversationId, mode: mode('chat'), previous: returnChoice(runs, undefined, { on: boundary.on?.modelId }), boundary: boundary.at });
+  };
+  /** Vera's live session on `model` (what turn-finish leaves). */
+  const session = (model: string) => new SessionStore(h.db).save({ agentId: VERA, conversationId: 'main', engine: 'codex', ref: 'ses_1', generation: 1, cursorSeq: 0, model, updatedAt: h.clock.now() });
+  return { ...h, vera, preview, turn, session };
 }
 
-test('my last run continues in the preview like in the turn, in any chat (return rule and its effort; one context)', async () => {
+test('the model I am on continues in the preview like in the turn, in any chat (its settled effort; one context); where my context starts anew the preview shows Auto\'s choice', async () => {
   const h = await previewSetup([run('run_2', 'ch_main', LUNA, 'high'), run('run_1', 'ch_other', OPUS, 'max')]);
+  h.session(LUNA);
   h.addChat('ch_main', [VERA]);
   h.addChat('ch_fresh', [VERA]);
   const fresh = await h.preview({});
@@ -58,10 +67,18 @@ test('my last run continues in the preview like in the turn, in any chat (return
   assert.equal(main.effort, 'high', 'the previous effort holds in the same category');
   const next = await h.turn('ch_main');
   assert.deepEqual([main.modelId, main.effort, main.by], [next.modelId, next.effort, next.by], 'the caption names what the turn runs on');
+
+  h.clock.advance(61 * 60_000); // an hour of rest: the session's cache is cold, the next turn stands at a boundary
+  const rested = await h.preview({ conversationId: 'ch_main' });
+  assert.deepEqual([rested.modelId, rested.by], [SOL, 'rules'], 'Luna is not what executing runs on: Auto settles it here');
+  assert.match(rested.reason, /^executing runs on the /);
+  const then = await h.turn('ch_main');
+  assert.deepEqual([rested.modelId, rested.effort, rested.by], [then.modelId, then.effort, then.by]);
 });
 
 test('a chat with a suggestion: the preview is what runs – the chat\'s choice never routes (13.11.2026), its last run continues', async () => {
   const h = await previewSetup([run('run_1', 'ch_chip', LUNA, 'low', 'pin')]);
+  h.session(LUNA);
   h.addChat('ch_chip', [VERA], { modelHints: { [VERA]: OPUS }, efforts: { [VERA]: 'max' } });
   const plain = await h.preview({ conversationId: 'ch_chip' });
   const auto = await h.preview({ conversationId: 'ch_chip', ignorePin: true });

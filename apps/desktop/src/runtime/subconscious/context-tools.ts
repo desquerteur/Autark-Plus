@@ -258,7 +258,7 @@ export const contextTools: FlowTool[] = [
   {
     name: 'context.list',
     args: '{after?: id, minTokens?}',
-    line: `The older items of the main AI's transcript, oldest first, ${PAGE_ITEMS} per page: id, kind, tokens, condensed or hidden when marked, first words (m message, t tool call with output, s skill, r reasoning, a its own text, f file). minTokens: only items that take at least that many tokens now. after: the last id of the page before.`,
+    line: `The older items of the main AI's transcript, oldest first, ${PAGE_ITEMS} per page: id, kind, tokens, condensed or hidden when marked, first words (m message, t tool call with output, s skill, r reasoning, a its own text, f file, c the hand-over it wrote to itself). minTokens: only items that take at least that many tokens now. after: the last id of the page before.`,
     run(args, run) {
       const scope = scopeOf(run);
       if (typeof scope === 'string') return scope;

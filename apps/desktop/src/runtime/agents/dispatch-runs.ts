@@ -19,6 +19,10 @@
 // wakes, sets no agent status of its own while the main lane runs, and the agent shows idle only when its last lane ends.
 // A split turn that planned no run or crashed tells the split service (split-turn.ts turnEndedEarly), a crashed main run too –
 // a run a mail started as well (16.11.2026: it works with every tool and can split).
+// KI-Runde 17.11.2026 (the context fold, agents/context-fold.ts): a turn whose outcome calls for a fold keeps the cause on its
+// entry (RunEntry.fold) and hands the entry to the dispatcher with the freed lane; fold() starts the fold's turn on the agent's
+// main lane – a run of its own (reason 'fold') with no wakes, shown in the chat the ended turn came from and stopped by that
+// chat's Stop; a failed one is not retried (the next turn's end asks again) and a crashed one leaves no bubble.
 // B-059 (dispatch-settle.ts): #17 a crashed turn's streaming bubble fails and its task gets its after-turn handling;
 // #18 a main-lane turn still running RELEASE_MS after its abort is released – run closed, cut calls unknown, its wakes
 // settled as its abort said, the slot handed on; the late end of the hung work changes no bookkeeping here. B-057: a split
@@ -46,7 +50,8 @@ import { ToolBoundary } from './dispatch-boundary.ts';
 import type { LiveStatus } from './dispatch-live.ts';
 import { turnEndedEarly } from './split-turn.ts'; // B-057
 import { abandonRun, armRelease, CRASH_NOTE, RELEASE_MS, settleCrash } from './dispatch-settle.ts'; // B-059 #17/#18
-import { setNextRoute, takeNextRoute } from './next-route.ts';
+import type { FoldWhy } from './compaction-policy.ts';
+import './context-fold.ts'; // TurnRequest.fold, TurnOutcome.fold
 
 const MINUTE_MS = 60_000;
 
@@ -97,15 +102,17 @@ export interface RunEntry {
   finished: Promise<void>;
   /** B-048 E4.5: what the turn runs on now (turn.ts bindTurn → request.onRoute; B-080: with its account; B-083: its temperature); absent while it routes. */
   route?: LiveRoute;
+  /** KI-Runde 17.11.2026: the turn ended done and its session calls for a context fold (TurnOutcome.fold) – why. */
+  fold?: FoldWhy;
 }
 
 export class RunningTurns {
   private readonly deps: TurnDeps;
   private readonly live: LiveStatus;
-  private readonly onEnded: (agentId: string, split?: boolean) => void;
+  private readonly onEnded: (agentId: string, split: boolean, ended: RunEntry) => void;
   private readonly running = new Map<string, RunEntry>(); // by lane (B-057): the agent id = its main lane
 
-  constructor(deps: TurnDeps, live: LiveStatus, onEnded: (agentId: string, split?: boolean) => void) {
+  constructor(deps: TurnDeps, live: LiveStatus, onEnded: (agentId: string, split: boolean, ended: RunEntry) => void) {
     this.deps = deps;
     this.live = live;
     this.onEnded = onEnded;
@@ -174,6 +181,19 @@ export class RunningTurns {
     });
   }
 
+  /**
+   * KI-Runde 17.11.2026: the context fold's turn after `ended` (agents/context-fold.ts) – on the agent's main lane, a run of its
+   * own with no wakes, in the chat `ended` came from (its live bar, its Stop). The dispatcher checked that nothing else is due.
+   */
+  fold(services: RuntimeServices, ended: RunEntry, why: FoldWhy): void {
+    const now = services.clock.now();
+    const entry = runEntry({
+      runId: newId('run', now), agentId: ended.agentId, lane: ended.agentId, reason: 'fold', wakeIds: [], attempts: 0, startedAt: now,
+      ...(ended.conversationId ? { conversationId: ended.conversationId } : {}),
+    });
+    this.launch(services, entry, { runId: entry.runId, agentId: entry.agentId, reason: 'fold', fold: why, notes: [] });
+  }
+
   /** Runs `entry`'s turn on its lane (B-057: dispatch-lanes.ts starts split lanes here); the request gets the live hooks. */
   launch(services: RuntimeServices, entry: RunEntry, base: Omit<TurnRequest, 'signal' | 'control' | 'onStatus' | 'onTool' | 'onRoute'>): void {
     this.running.set(entry.lane, entry);
@@ -204,6 +224,7 @@ export class RunningTurns {
       const outcome = await this.deps.executor.execute(request);
       // Finished work is never re-run, even when a shutdown/urgent abort arrived too late.
       if (outcome.status === 'done' || outcome.status === 'skipped') entry.settle = 'done';
+      if (outcome.fold) entry.fold = outcome.fold; // its session calls for a context fold: the dispatcher starts it when nothing else is due
       if (outcome.status === 'skipped' && entry.split) turnEndedEarly(services, entry.runId, entry.split, 'skipped'); // B-057: no run, no finish
       if (outcome.status === 'failed') {
         services.log.info('turn failed', { agentId: entry.agentId, runId: entry.runId, error: outcome.error });
@@ -251,7 +272,7 @@ export class RunningTurns {
     if (!left.length) this.live.status(entry.agentId, 'idle');
     else if (!this.has(entry.agentId) && !entry.split) this.live.status(entry.agentId, 'working');
     else this.live.emit();
-    this.onEnded(entry.agentId, entry.split !== undefined);
+    this.onEnded(entry.agentId, entry.split !== undefined, entry);
     // After the hand-over, so a freed slot that is taken again does not flap the host lease.
     this.live.awake(this.running.size > 0);
   }
@@ -262,7 +283,7 @@ export class RunningTurns {
   }
 
   private markRetry(services: RuntimeServices, entry: RunEntry): void {
-    if (entry.split || entry.settle === 'release' || entry.control.stopKind) return; // B-057: the split service retries a split
+    if (entry.split || entry.reason === 'fold' || entry.settle === 'release' || entry.control.stopKind) return; // B-057: the split service retries a split; a fold is asked for again at the next turn's end
     const at = retryAt(mailMarker(entry.origin) ? { attempts: entry.attempts } : entry, services.clock.now());
     if (at === undefined) return;
     entry.retryAt = at;
@@ -318,9 +339,8 @@ export function abortTurn(entry: RunEntry, reason: string, kind: StopKind, settl
 /**
  * B-080 (model.set now): the running turn takes `target` inside itself when that model runs on the turn's engine and on
  * the turn's own account (TurnRoute.accountId) and the engine switches it (Engine.setModel) – a run note
- * {modelSet: 'in-turn'}; the engine's 'model' event moves the turn's books and the activity row (turn-attempt.ts). The
- * next-step request model.set wrote for this chat ends then too: 'now' is this turn's – B-083: except its temperature, which
- * stays for my next turn (a running turn keeps the temperature it started with). False: another engine or account,
+ * {modelSet: 'in-turn'}; the engine's 'model' event, once a request runs on it, moves the turn's books and the activity row
+ * and ends the request model.set wrote (turn-attempt.ts, FIXES-3 C1 – until then it stays for my next turn). False: another engine or account,
  * an engine without setModel, a refusal (B-083: a refusal or a switch the engine does not apply is logged once) – the
  * caller continues in a new turn (which uses that request).
  */
@@ -340,14 +360,6 @@ export async function setModelInTurn(services: RuntimeServices, entry: RunEntry,
   }
   // `from` (B-080 splits fix #4): the model the turn ran on before – a part's head names its start model from it (splits/results.ts)
   try { services.runs.item(entry.runId, { kind: 'note', data: { modelSet: 'in-turn', model: to.id, effort, from: route.model }, effectStatus: 'none' }); } catch { /* journal is best effort */ }
-  try {
-    const taken = entry.split ? undefined : takeNextRoute(services.db, entry.agentId); // B-083: a part's lane holds no next-step request – (agent, no chat) is the agent's own
-    if (taken?.temperature !== undefined) {
-      setNextRoute(services.db, entry.agentId, {
-        temperature: taken.temperature, ...(taken.by ? { by: taken.by } : {}), ...(taken.reason ? { reason: taken.reason } : {}), at: services.clock.now(),
-      });
-    }
-  } catch (error) { services.log.warn('next-step model request not ended', { runId: entry.runId, error: String(error) }); }
   return true;
 }
 

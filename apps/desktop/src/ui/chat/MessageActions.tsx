@@ -18,7 +18,7 @@ import type { Message } from '../../shared/model/chat.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { personalText } from '../../shared/model/message-changes.ts';
 import { confirm, IconButton, type MenuItem, type MenuSection } from '../lib/ui.tsx';
-import type { MenuOpen } from '../lib/context-menu.tsx';
+import { openContextMenu, type MenuOpen } from '../lib/context-menu.tsx';
 import { modKey } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
@@ -88,13 +88,19 @@ export function messageMenu(message: Message, open: MenuOpen, actions: { edit: (
  * (Copy where it has words, Reply where this connection may send), always rendered, so nothing moves: seen on hover or
  * focus with a mouse, always on touch (chat.css .message-tool). Status lines, task cards and streaming rows have none.
  */
-export function MessageTools(props: { message: Message }) {
+export function MessageTools(props: { message: Message; menu?: (open: MenuOpen) => MenuSection[] }) {
   const { message } = props;
   if (message.kind !== 'text' || message.state !== 'final') return null;
   return (
     <>
       {copyable(message) && <IconButton icon="copy" label="Copy" size="small" iconSize={14} class="message-tool" onClick={() => void copy(message.body)} />}
       {canReply(message) && <IconButton icon="arrow-bend-up-left" label="Reply" size="small" iconSize={14} class="message-tool" onClick={() => { reply(message); }} />}
+      {props.menu && (
+        <IconButton icon="dots-three" label="More" size="small" iconSize={14} class="message-tool" aria-haspopup="menu" onClick={(event) => {
+          const box = (event.currentTarget as HTMLElement).getBoundingClientRect(); // the phone's menu: the button's, not a long press's
+          openContextMenu(box.left, box.bottom, props.menu!({ touch: false, at: (event.currentTarget as HTMLElement).closest<HTMLElement>('.message') }));
+        }} />
+      )}
     </>
   );
 }

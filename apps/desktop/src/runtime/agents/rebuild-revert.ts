@@ -1,4 +1,5 @@
-// The cache-friendly rebuild (B-049 F7), used by agents/rebuild.ts for marks on an engine that can revert
+// The cache-friendly rebuild (B-049 F7), used by agents/rebuild.ts where a session only sheds work (past the fit, after a
+// rest past the cache – never after a fold, whose session starts with the turn's own prompt) on an engine that can revert
 // (caps.revert – Codex): instead of a new session holding the whole ledger view (a new Codex thread has a new prompt
 // cache key: nothing of it is cached, not even our prompt and tools), the bound session is cut before the native
 // turn of the run that captured the first changed ledger item and only the tail from that run on is added again –
@@ -24,7 +25,7 @@ export interface RevertPlan {
 }
 
 /**
- * The revert for a marks rebuild: `since` is the ledger's first changed order, `ref` the bound session, `view` the
+ * The revert for such a rebuild: `since` is the ledger's first changed order, `ref` the bound session, `view` the
  * ledger view and `items` the history rebuild.ts made of it (lines the turn's delta carries already left out).
  * The run that captured the item at `since` must have a recorded turn on `ref`; the tail is every history item
  * from the first ledger order of that run or any later one recorded on `ref`. None otherwise.

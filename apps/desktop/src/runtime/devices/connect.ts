@@ -6,14 +6,16 @@
 // B-080: the agent's own browser also reads one page for web.fetch when a site turns the direct fetch away as a bot
 // (services.browserRead, browser/read-page.ts).
 // B-078: the owner's phone pairs like a PC (rendezvous/phone-pair.ts: Remote ID, the same code, Accept); phone.* tools
-// drive ADB phones and the Android app's phone use (phone/drivers.ts, phone/app-driver.ts) alike.
+// drive ADB phones and the Android app's phone use (phone/drivers.ts, phone/app-driver.ts) alike; services.phones tells the
+// rest of the runtime whether an app phone is attached and its phone use on (contracts/phones.ts).
 // B-084: host 'online' nudges the meeting server too; a connect request's notice opens Settings › Devices (connect-signals.ts).
 // F09/F13/F17 (16.11.2026): the LAN hello names this company (companyName); Accept may make the person (people.save) and an
 // employee's PC that links marks its person joined; the mesh carries the requests of my other PCs (remote/mirror.ts).
 // F29 stage 1: the phone bridge also takes the phone app's direct socket on the peer listener (/peer/phone), which stays
 // open while a phone app is linked.
+// F25 stage 2: a phone may also ask on its tunnel for a WebRTC way (rendezvous/rtc.ts) – devices.rtc, devices.stun.
 // Settings read here (all in settings.json, changed by the AI – skill app-settings): devices.peer,
-// devices.peerPort, devices.findable, devices.relay (the meeting server), pwa.bind.
+// devices.peerPort, devices.findable, devices.relay (the meeting server), devices.rtc and devices.stun, pwa.bind.
 // Owns: this wiring. Never: business logic.
 
 import path from 'node:path';
@@ -37,14 +39,16 @@ import type { ComputerService } from '../computer/service.ts';
 import type { BrowserService } from '../browser/service.ts';
 import { browserReader } from '../browser/read-page.ts';
 import { AdbPhone, adbOverride, type AdbDeps } from '../phone/adb.ts';
+import '../contracts/phones.ts';
 import { AppPhones } from '../phone/app-driver.ts';
 import { mergedPhones } from '../phone/drivers.ts';
-import { DiscoveryResponder, discover } from './discovery.ts';
+import { DiscoveryResponder, discover, loopbackOnly } from './discovery.ts';
 import type { DeviceIdentity } from './identity.ts';
 import type { DeviceMesh } from './mesh.ts';
 import { fail } from './pair-proof.ts';
 import { Meeting, RELAY_PREFIX } from './rendezvous/service.ts';
 import { PhoneBridge, hasRelayPhone } from './rendezvous/phone.ts';
+import { rtcStun } from './rendezvous/rtc.ts';
 import { DevicesRepo } from './repo.ts';
 import { RemoteWithPhones } from './rendezvous/phone-pair.ts';
 import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
@@ -165,7 +169,10 @@ export function createDevices(input: DevicesInput): Devices {
     },
   };
   const devicesRepo = new DevicesRepo(s.db);
-  const bridge = new PhoneBridge({ identity, log: s.log, port: input.port, phone: (fingerprint) => devicesRepo.byFingerprint(fingerprint) });
+  const bridge = new PhoneBridge({
+    identity, log: s.log, port: input.port, phone: (fingerprint) => devicesRepo.byFingerprint(fingerprint),
+    rtc: { stun: () => rtcStun(s.settings.get().devices) }, // F25: the WebRTC way to a phone app
+  });
   const listener = new PeerServer({
     pairing: http, mesh, phones: bridge, log: () => s.log, bus: s.bus, remember: rememberedPeerPort(() => s),
     wanted: findable, // other PCs must reach this PC while it accepts requests
@@ -173,6 +180,7 @@ export function createDevices(input: DevicesInput): Devices {
     linked: () => hasLinkedPc(mesh.list()) || hasRelayPhone(devicesRepo.list({ kinds: ['phone'] })), // F29: my phone's direct socket
     // B-078: the home router maps the peer port while it listens (a test profile never touches the router)
     ...(process.env.WORKFORCE_TEST_DATA || process.env.WORKFORCE_FAKE_ENGINE === '1' ? {} : { portmap: new PortMap({ log: () => s.log }) }),
+    ...(loopbackOnly() ? { hosts: () => ['127.0.0.1'] } : {}), // a window test's listener stays on this PC (no Windows Firewall question on a shared screen)
   });
   peer = listener;
   const meet = new Meeting({
@@ -182,6 +190,7 @@ export function createDevices(input: DevicesInput): Devices {
     findable,
     port: () => listener.port(),
     phones: bridge,
+    stun: () => rtcStun(s.settings.get().devices), // 18.11.2026: PC ↔ PC over WebRTC too (rendezvous/pc-rtc.ts)
   });
   meeting = meet;
   listener.onChange((state) => { mesh.updateSelf({ addresses: state.addresses }); remote.refresh(); meet.portChanged(); });
@@ -192,14 +201,24 @@ export function createDevices(input: DevicesInput): Devices {
 
   // Hands, eyes and the phone for agents (executed here or on a linked PC).
   const appPhones = new AppPhones({ bus: s.bus, devices: () => s.devices.list() });
-  const phone = mergedPhones(new AdbPhone({ ...input.adb, log: s.log, ...adbOverride() }), appPhones);
+  // The ADB phones attached here changed (seen whenever adb runs – no tracking of its own): my other PCs hear it.
+  const adbChanged = () => { void announceCaps().catch(() => undefined); };
+  const phone = mergedPhones(new AdbPhone({ ...input.adb, log: s.log, ...adbOverride(), changed: adbChanged }), appPhones);
+  s.phones = { useOf: (deviceId) => appPhones.useOf(deviceId), here: () => phone.here(), adbInstalled: () => phone.adbInstalled() }; // phone use, the phones on this PC and adb here (contracts/phones.ts)
   for (const tool of deviceTools({ computer: input.computer, browser: input.browser, phone, link: { remote, meeting: meet } })) s.tools.register(tool);
   registerDeviceHandlers(mesh, { services: () => s, computer: input.computer });
   s.browserRead = browserReader(input.browser); // B-080: web.fetch's way past a bot check, in every mode
 
+  const announceCaps = () => localCaps({ computer: input.computer, browser: input.browser, phone, version: s.host.app?.version }).then((caps) => { mesh.updateSelf({ caps }); }); // F25: with this PC's app version
+  // A phone's app attaches here or leaves: my other PCs hear which PC holds it (their prompt names it, phone/linked.ts).
+  const offPhones = s.bus.on('phoneUse.attached', () => { void announceCaps().catch(() => undefined); });
+  // One look at start (adb only where it is installed): whether adb is here (phone.* can work then), and a phone on the
+  // cable since before the start is named in the prompt.
+  void phone.devices().then(() => announceCaps()).catch(() => undefined);
+
   return {
     pwa, push, remote, meeting: meet, peer: listener, http,
-    announceCaps: () => localCaps({ computer: input.computer, browser: input.browser, phone, version: s.host.app?.version }).then((caps) => { mesh.updateSelf({ caps }); }), // F25: with this PC's app version
-    stop: () => { offSettings(); offPower(); offPeoplePush(); offReadClear(); appPhones.stop(); bridge.closeAll(); meet.stop(); remote.stop(); responder.close(); },
+    announceCaps,
+    stop: () => { offSettings(); offPower(); offPeoplePush(); offReadClear(); offPhones(); appPhones.stop(); bridge.closeAll(); meet.stop(); remote.stop(); responder.close(); },
   };
 }

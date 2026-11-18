@@ -94,25 +94,23 @@ test('B-079/B-083: the start model is where I begin – the agent\'s own request
   assert.match(unmet.reason, /^no faster model fits · my start model/);
 });
 
-test('return rule: the previous model continues (with its effort) while it is still a candidate', async () => {
+test('the model I am on: in a live session it continues (with its effort) while it can run; the rest is settled-model.test.ts', async () => {
   const h = await standardSetup();
-  const kept = await h.router.route(request({ previous: { modelId: 'codex:gpt-6-luna', effort: 'high' } }));
+  const kept = await h.router.route(request({ previous: { modelId: 'codex:gpt-6-luna', effort: 'high' }, boundary: false }));
   assert.equal(kept.modelId, 'codex:gpt-6-luna');
   assert.equal(kept.by, 'previous');
-  assert.equal(kept.effort, 'high'); // e.g. a set_model request by the agent itself
-  // No longer a candidate (excluded after a failure) → normal rules.
-  const moved = await h.router.route(request({ previous: { modelId: 'codex:gpt-6-luna', effort: 'high' }, exclude: ['codex:gpt-6-luna'] }));
+  assert.equal(kept.effort, 'high');
+  // It cannot run (excluded after a failure) → my kind's default, and the reason leads with why.
+  const moved = await h.router.route(request({ previous: { modelId: 'codex:gpt-6-luna', effort: 'high' }, boundary: false, exclude: ['codex:gpt-6-luna'] }));
   assert.equal(moved.by, 'rules');
   assert.notEqual(moved.modelId, 'codex:gpt-6-luna');
+  assert.match(moved.reason, /^GPT-6 Luna cannot run now – it just failed in this turn/);
 });
 
-test('weak prior: a previous model that is clearly bad at the category is switched away from', async () => {
+test('weak prior: a previous model clearly bad at the category stays while it fits the kind\'s tier – the tier decides, not the turn\'s words', async () => {
   const h = await standardSetup();
   const route = await h.router.route(request({ mode: video, previous: { modelId: 'codex:gpt-6.1-sol', effort: 'medium' } }));
-  assert.equal(route.modelId, 'claude:claude-opus-5-5');
-  assert.equal(route.by, 'rules');
-  assert.match(route.reason, /GPT-6.1 Sol is weak at video animation/);
-  assert.equal(route.effort, 'high');
+  assert.deepEqual([route.modelId, route.by, route.reason], ['codex:gpt-6.1-sol', 'previous', 'continues on my model · video animation']);
 });
 
 test('explicit agent requests beat weak priors and default pins, never the policy band', async () => {

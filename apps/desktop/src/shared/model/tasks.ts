@@ -36,6 +36,19 @@ export interface TaskResult {
   quiet?: true;
 }
 
+/** One logged change of a task (runtime/tasks/changes.ts): who changed which of the logged fields, with the values before and after (null = none). */
+export interface TaskChange {
+  id: string;
+  at: number;
+  by: string; // the actor's id: 'human', a per_… id, 'system' or an agent id
+  kind: 'update' | 'finish' | 'give';
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  /** Set when it was undone (tasks.undo), and by whom. */
+  undone?: number;
+  undoneBy?: string;
+}
+
 /** What a task keeps across turns and owners (the ledger column: one JSON container, read as it is by older PCs too). */
 export interface TaskLedger {
   plan?: string[]; // the steps, "✓ " before a done one (tasks.update plan)
@@ -44,6 +57,7 @@ export interface TaskLedger {
   movedAt?: number; // its last real move: a status change, a new plan or fact, a give, a finished piece, a turn that moved it
   doneCount?: number; // how often the person ticked off a repeating to-do (its author hears only the first)
   givenIn?: string; // the chat of the agent turn that gave it, when that is not its own chat: where the giver hears how it ended
+  changes?: TaskChange[]; // the last logged changes within 24 hours (the undo's source; runtime/tasks/changes.ts)
 }
 
 /** What a waiting task waits on: a person or agent (`who`), tasks (`ids`), or something outside; `until`: when it is looked at again. */

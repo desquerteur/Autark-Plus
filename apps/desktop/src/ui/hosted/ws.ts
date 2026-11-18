@@ -68,7 +68,7 @@ export class StreamSocket implements HostedSocket {
   private async start(muxOf: (waitMs: number) => Promise<StreamMux | undefined>, path: string, waitMs: number): Promise<void> {
     const mux = await muxOf(waitMs).catch(() => undefined);
     if (!mux || mux.closed || this.readyState !== 0) { this.fireClose(1006, 'Your PC is not reachable right now.'); return; }
-    const stream = mux.openStream();
+    const stream = mux.openStream(true);
     this.stream = stream;
     const key = b64std(random(16));
     const expected = await acceptOf(key);
