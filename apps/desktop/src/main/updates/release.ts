@@ -1,12 +1,12 @@
 // Release locations (GitHub releases repo used by electron-updater and the manual download). From 0.3.3 (B-078) the
-// public home is teydra/OpenAutark; this build (AF-019) is desquerteur/Autark-Plus (until 0.3.6 the GitHub fork desquerteur/OpenAutark), which builds its own
+// public home is teydra/OpenAutark; this build (AF-019) is desquerteur/Autark-Plus (until 0.3.7 the GitHub fork desquerteur/OpenAutark), which builds its own
 // releases (.github/workflows/build-desktop.yml) – package.json build.publish names the same repo for the packaged feed.
 // The person can switch the source in Settings › Updates (source.ts); every address here takes that repository.
 // Owns: stable asset names per platform. Never: network access.
 
 /** This build's default update source (package.json build.publish says the same). */
 export const RELEASE_REPOSITORY = 'desquerteur/Autark-Plus';
-/** Where this build's releases came from before (0.3.7 moved them out of the GitHub fork); a stored source naming one of
+/** Where this build's releases came from before (0.3.8 moved them out of the GitHub fork); a stored source naming one of
  *  these reads as RELEASE_REPOSITORY, so an install that was switched to the old place follows the move. */
 export const FORMER_REPOSITORIES: readonly string[] = ['desquerteur/OpenAutark'];
 /** The upstream project's releases (selectable in Settings › Updates). */

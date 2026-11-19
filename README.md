@@ -205,7 +205,7 @@ to report a vulnerability privately.
 ## Origin and taking changes from here
 
 This repository ([desquerteur/Autark-Plus](https://github.com/desquerteur/Autark-Plus)) is based on
-[teydra/OpenAutark](https://github.com/teydra/OpenAutark) (Apache-2.0; until 0.3.6 it was the GitHub fork
+[teydra/OpenAutark](https://github.com/teydra/OpenAutark) (Apache-2.0; until 0.3.7 it was the GitHub fork
 desquerteur/OpenAutark, with its full history kept here) and has its own features (for example AF-017 agent directory,
 AF-018 projects, AF-019 updates from the fork, AF-020 project lead and project chat). If you bring code, features or
 ideas from this repository into the original repository or any other copy of it, please say so where it lands – in the commit

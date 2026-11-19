@@ -225,7 +225,7 @@ test('the stored source: defaults without a file, a round trip, a broken file me
   }
 });
 
-test('0.3.7 move: a stored source naming the old fork follows the releases to their new home', () => {
+test('0.3.8 move: a stored source naming the old fork follows the releases to their new home', () => {
   assert.equal(normalizeSource({ repository: 'desquerteur/OpenAutark' }).repository, RELEASE_REPOSITORY);
   assert.equal(normalizeSource({ repository: 'https://github.com/Desquerteur/openautark' }).repository, RELEASE_REPOSITORY);
   assert.equal(normalizeSource({ repository: 'teydra/OpenAutark' }).repository, 'teydra/OpenAutark');

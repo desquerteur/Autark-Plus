@@ -44,7 +44,7 @@ A single file: `node --test test/unit/<area>/<file>.test.ts`. Some window and en
 
 ## Release and updates
 
-Public binaries: https://github.com/desquerteur/Autark-Plus (from 0.3.7; 0.3.3–0.3.6 were in the fork desquerteur/OpenAutark, which carries the bridge release 0.3.7 for those installs; up to 0.3.2 they were in `teydra/proactive-agent-workforce-releases`, which carries the bridge release 0.3.3 for older installs). Stable links use GitHub's `releases/latest/download` redirect:
+Public binaries: https://github.com/desquerteur/Autark-Plus (from 0.3.8; 0.3.3–0.3.7 were in the fork desquerteur/OpenAutark, which carries the bridge release 0.3.8 for those installs; up to 0.3.2 they were in `teydra/proactive-agent-workforce-releases`, which carries the bridge release 0.3.3 for older installs). Stable links use GitHub's `releases/latest/download` redirect:
 
 - Windows: `.../releases/latest/download/autark-windows-x64.exe`
 - Linux: `.../releases/latest/download/autark-linux-x64.AppImage`

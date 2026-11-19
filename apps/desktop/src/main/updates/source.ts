@@ -1,5 +1,5 @@
 // AF-019: where updates come from – the GitHub repository (owner/name), the channel (stable or prereleases) and
-// whether the app checks by itself. This build's default is its own repository desquerteur/Autark-Plus (until 0.3.6 the fork desquerteur/OpenAutark) (release.ts,
+// whether the app checks by itself. This build's default is its own repository desquerteur/Autark-Plus (until 0.3.7 the fork desquerteur/OpenAutark) (release.ts,
 // package.json build.publish); teydra/OpenAutark is the upstream one can switch to. Also the version comparison
 // (semver with prereleases), the "nothing published there yet" error codes of electron-updater's GitHub provider
 // and the release notes as plain text.

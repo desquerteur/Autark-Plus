@@ -1,6 +1,6 @@
 # Updates aus dem eigenen Repo veröffentlichen
 
-Diese Version von Autark holt ihre Updates aus **`desquerteur/Autark-Plus`** (deinem eigenen Repo; bis 0.3.6 war es der Fork `desquerteur/OpenAutark`), nicht mehr aus
+Diese Version von Autark holt ihre Updates aus **`desquerteur/Autark-Plus`** (deinem eigenen Repo; bis 0.3.7 war es der Fork `desquerteur/OpenAutark`), nicht mehr aus
 `teydra/OpenAutark`. So überschreibt ein offizielles Update deine eigenen Änderungen nicht.
 
 ## In der App
