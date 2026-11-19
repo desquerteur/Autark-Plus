@@ -35,10 +35,10 @@ test('platforms: PC first (Windows, macOS, Linux), then phone (Android, iPhone)'
 });
 
 test('file links live on OpenAutark under /get/, the old checksums link keeps answering', () => {
-  assert.equal(release.repo, 'teydra/OpenAutark');
+  assert.equal(release.repo, 'desquerteur/Autark-Plus');
   const byId = Object.fromEntries(downloads.map((d) => [d.id, d]));
   for (const id of ['windows', 'mac', 'mac-zip', 'linux', 'android', 'checksums']) assert.equal(byId[id].path, `get/${id}`);
-  assert.equal(release.asset(byId.android.file), 'https://github.com/teydra/OpenAutark/releases/latest/download/autark-android.apk');
+  assert.equal(release.asset(byId.android.file), 'https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-android.apk');
   assert.deepEqual(legacyFileLinks, [{ path: 'download/checksums', id: 'checksums' }]);
   assert.ok(release.historyApis.some((u) => u.includes('proactive-agent-workforce-releases')), 'old releases stay in the changelog');
 });
