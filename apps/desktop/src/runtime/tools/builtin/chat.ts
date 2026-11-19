@@ -41,6 +41,7 @@ import { findDirect, findOrCreateDirect } from '../../chat/direct.ts';
 import { namedMembers, scopeRefusal } from './chat-joins.ts';
 import { canReadTask, onlyMe } from '../../tasks/access.ts';
 import { ON_YOUR_OWN } from '../../agents/publishing.ts';
+import { postRefusal } from '../../projects/isolation.ts'; // AF-026
 
 /** chat.send status (B-047 D4): one line of at most this many characters, at most one per gap and so many per run. */
 export const STATUS_CHARS = 200;
@@ -124,6 +125,8 @@ const sendMessage = defineTool<SendArgs>({
     const target = args.to ? directTo(ctx, args.to) : resolveChat(ctx, args.chatId);
     if (typeof target !== 'string') return target;
     const conversationId = target;
+    const outside = postRefusal(ctx.services, ctx.agent.id, conversationId); // AF-026: outsiders only as an answer
+    if (outside) return failure(`Nothing was sent. ${outside}`);
     const runId = ctx.runId || undefined;
     const refusal = args.taskId ? taskLinkRefusal(ctx, args.taskId, conversationId) : undefined;
     if (refusal) return failure(`Nothing was sent. ${refusal}`);

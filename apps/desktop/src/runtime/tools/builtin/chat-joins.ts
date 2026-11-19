@@ -16,6 +16,7 @@ import { isPersonId, type Person } from '../../../shared/model/people.ts';
 import { mayUseAgent } from '../../people/access.ts';
 import { PeopleRepo } from '../../people/repo.ts';
 import { authorName, memberRefusal } from './util.ts';
+import { firstReachRefusal } from '../../projects/isolation.ts'; // AF-026
 
 /** An id as the runtime makes them (ag_…, per_…) – taken as it is, never looked up as a name. */
 const ID_LIKE = /^[a-z]{2,4}_\S+$/;
@@ -62,6 +63,8 @@ const isAgentId = (id: string): boolean => id !== HUMAN_ID && id !== SYSTEM_ID &
  * would not. `present`: the room's active members before it; `added`: who joins (the calling agent too when it opens the room).
  */
 export function scopeRefusal(ctx: ToolContext, present: readonly string[], added: readonly string[]): string | undefined {
+  const outside = firstReachRefusal(ctx.services, ctx.agent.id, added); // AF-026: an agent in a project brings no agent from outside in
+  if (outside) return outside;
   const all = [...new Set([...present, ...added])];
   const agents = all.filter(isAgentId);
   if (!agents.length) return undefined;
