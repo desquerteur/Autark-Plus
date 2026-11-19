@@ -31,7 +31,8 @@ test('kimi: the table row – `kimi acp` (a subcommand), `kimi login` in a termi
   assert.deepEqual(acpArgs(KIMI, ''), ['acp'], 'no help output: the documented subcommand');
   assert.deepEqual(acpHomeEnv({ provider: 'kimi-cli', home: '/data/accounts/kimi-cli/acc_1' }), { KIMI_CODE_HOME: '/data/accounts/kimi-cli/acc_1' });
   assert.deepEqual(acpHomeEnv({ provider: 'kimi-cli' }), {}, 'a login found in the default home (~/.kimi-code)');
-  assert.deepEqual(acpHomeEnv({ provider: 'gemini-cli', home: '/somewhere' }), {}, 'Gemini CLI has no home variable');
+  assert.deepEqual(acpHomeEnv({ provider: 'gemini-cli', home: '/somewhere' }), { GEMINI_CLI_HOME: '/somewhere' }, 'Gemini CLI: GEMINI_CLI_HOME holds .gemini');
+  assert.deepEqual(acpHomeEnv({ provider: 'copilot', home: '/somewhere' }), {}, 'Copilot CLI has no home variable');
 });
 
 test('kimi: the launch with the account home; Settings lists the plan', async () => {

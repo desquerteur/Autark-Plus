@@ -180,3 +180,20 @@ test('RPC: accounts.add {envVar} answers with the name only; list and detect nev
   await assert.rejects(call('accounts.add', { provider: 'openai', envVar: 'OPENAI_API_KEY', value: ENV_KEY }), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
 
 });
+
+test('a second plan added by hand backs up the first one: rotation is on by default (stuck-account bug), the first stays primary', async () => {
+  // Reproduces the report: two Claude accounts, the first used up, the second half full – work stopped
+  // because the second account (rotation off, no switch in Settings) was never a candidate.
+  const h = harness();
+  const first = await h.service.add({ provider: 'claude', label: 'One' });
+  const second = await h.service.add({ provider: 'claude', label: 'Two' });
+  assert.deepEqual([first.rotation, second.rotation], [false, true]);
+  const now = Date.now();
+  const limit = (used: number, windowMinutes: number, name: string) => ({ name, windowMinutes, usedPercent: used, resetsAt: now + 3_600_000 });
+  h.repo.save({ ...h.service.get(first.id)!, state: 'ok', limits: { windows: [limit(100, 300, '5h'), limit(100, 10080, 'weekly')], readAt: now } });
+  h.repo.save({ ...h.service.get(second.id)!, state: 'ok', limits: { windows: [limit(50, 300, '5h'), limit(50, 10080, 'weekly')], readAt: now } });
+  assert.deepEqual(h.service.candidates('claude', 'claude-opus-5-5').map((a) => a.id), [second.id]);
+  // A person who turns the backup off gets the old strict primary rule back.
+  h.service.update(second.id, { rotation: false });
+  assert.deepEqual(h.service.candidates('claude', 'claude-opus-5-5').map((a) => a.id), []);
+});

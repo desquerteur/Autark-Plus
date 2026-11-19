@@ -16,12 +16,12 @@ test('the login files per CLI, none where the login is no known file', () => {
   for (const provider of ['copilot', 'kimi-cli', 'openai'] as const) assert.deepEqual(loginFiles(provider, 'win32'), [], provider);
 });
 
-test('default homes follow the CLIs\' own variables; own homes for Codex, Claude Code and Kimi Code only', () => {
+test('default homes follow the CLIs\' own variables; own homes for Codex, Claude Code, Kimi Code and Gemini CLI', () => {
   const home = path.join('C:', 'Users', 'lena');
   assert.equal(defaultHome('codex', {}, home), path.join(home, '.codex'));
   assert.equal(defaultHome('codex', { CODEX_HOME: 'D:\\codex' }, home), 'D:\\codex');
   assert.equal(defaultHome('claude', { CLAUDE_CONFIG_DIR: 'D:\\claude' }, home), 'D:\\claude');
   assert.equal(defaultHome('gemini-cli', {}, home), path.join(home, '.gemini'));
   assert.equal(defaultHome('copilot', {}, home), undefined);
-  assert.deepEqual(['codex', 'claude', 'kimi-cli', 'gemini-cli', 'copilot'].map((provider) => ownHomes(provider as never)), [true, true, true, false, false]);
+  assert.deepEqual(['codex', 'claude', 'kimi-cli', 'gemini-cli', 'copilot'].map((provider) => ownHomes(provider as never)), [true, true, true, true, false]);
 });

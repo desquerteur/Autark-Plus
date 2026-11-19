@@ -164,7 +164,8 @@ export class AccountServiceImpl implements AccountServiceContract {
     if (AcpPlans.handles(provider) && !acpProvider(provider)?.home && input.envVar === undefined) return this.acp.add(provider, label);
     if (CLI_PROVIDERS.has(provider) && input.envVar === undefined) {
       if (provider === 'codex' || provider === 'claude') await this.ensureCli(provider); // B-051 L3: install first, else nothing is created
-      return this.homes.add(provider, input.label?.trim() ? label : undefined, label, input.rotation ?? false);
+      // A further plan the person adds by hand is meant to be used: it backs up the first one when that is limited (rotation on).
+      return this.homes.add(provider, input.label?.trim() ? label : undefined, label, input.rotation ?? same.length > 0);
     }
     const connected = await connection({ ...input, label }, { env: this.env(), secrets: this.deps.secrets });
     const found = connected.auth === 'env' ? same.find((a) => a.auth === 'env' && a.envVar === connected.envVar) : undefined;

@@ -28,8 +28,8 @@ import { needsSignIn, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './pr
 import { AccountAvatar } from '../lib/account-avatar.tsx';
 import { kindText } from '../lib/account-face.ts';
 
-/** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Gemini CLI and Copilot CLI have one per PC. */
-const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli']);
+/** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Copilot CLI has one per PC. */
+const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli']);
 
 /** The two fixed bars of a plan (5-hour limit, Weekly); other windows in the tooltip. */
 function LimitBars(props: { account: Account }) {
@@ -99,7 +99,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const [busy, run] = useBusy();
   const [showModels, setShowModels] = useState(false);
   const listed = modelsOf(account, models.value);
-  const update = (patch: { enabled?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
+  const update = (patch: { enabled?: boolean; rotation?: boolean }) => void run(() => rpc.call('accounts.update', { id: account.id, ...patch }));
   const index = siblings.indexOf(account);
   // swap priorities with the neighbour so the order is explicit and stable
   const move = (dir: -1 | 1) => {
@@ -156,6 +156,8 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
     if (cli && OWN_HOMES.has(account.provider)) actions.push({ label: 'Add another account', onSelect: addAnother });
     if (signIn) actions.push({ label: 'Sign in', onSelect: () => void startLogin(account.id) });
     if (cli && SIGN_OUT.has(account.provider)) actions.push({ label: 'Sign out', disabled: account.state === 'needs_login', onSelect: signOut });
+    // Without this a second plan of one provider is never used while the first is limited (plan primary rule, candidates.ts).
+    if (cli && siblings.length > 1 && (plan || account.home)) actions.push({ label: account.rotation ? 'Stop using as backup' : 'Use when another is limited', onSelect: () => update({ rotation: !account.rotation }) });
     actions.push({ label: account.enabled ? 'Disable' : 'Enable', onSelect: () => update({ enabled: !account.enabled }) });
     const danger: MenuItem[] = [];
     if (account.provider === 'claude' && account.home) danger.push({ label: 'Delete histories', danger: true, onSelect: () => void purge() });

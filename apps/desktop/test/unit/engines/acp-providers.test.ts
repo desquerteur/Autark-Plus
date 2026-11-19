@@ -147,7 +147,7 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
   const auth = h.scripted.gemini.state.requests.filter((r: any) => r.method === 'authenticate');
   assert.deepEqual(auth.map((r: any) => r.params.methodId), ['oauth-personal']);
   assert.equal(h.accounts.get(gemini.id)?.state, 'ok', 'checked again when the sign-in ended');
-  assert.equal((await h.accounts.add({ provider: 'gemini-cli' })).id, gemini.id, 'one Gemini CLI account per PC');
+  assert.ok(gemini.home, 'an added Gemini CLI account gets a home of its own (GEMINI_CLI_HOME)');
 
   const copilot = await h.accounts.add({ provider: 'copilot' });
   assert.equal(copilot.state, 'needs_login');
@@ -157,7 +157,7 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
   assert.deepEqual([window.options.env?.WORKFORCE_TERMINAL_EXE, window.options.env?.WORKFORCE_TERMINAL_ARGS], ['/bin/copilot', '[]']);
   // Copilot CLI is itself an agent (commands, files, folder trust): its window gets a new empty folder below temp, never the engine folder.
   assert.equal(path.dirname(window.options.cwd!), path.join(PATHS.temp, 'agent-sign-in'));
-  assert.deepEqual(h.folders, [window.options.cwd]);
+  assert.deepEqual(h.folders.slice(1), [window.options.cwd], 'after the Gemini CLI account home');
   window.child.exit(0); // closed without signing in
   await h.settle();
   assert.equal(h.accounts.get(copilot.id)?.state, 'needs_login');
@@ -171,7 +171,7 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
 
   await assert.rejects(h.accounts.logout(copilot.id), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
   await h.accounts.remove(gemini.id); // its default home is never deleted (rmdir throws)
-  assert.equal((await h.accounts.detect(true)).clis.find((cli) => cli.provider === 'gemini-cli')?.dismissed, true, 'detection does not add it back');
+  assert.equal(h.accounts.get(gemini.id), undefined, 'an own-home account is simply gone');
   await h.accounts.dispose();
   await h.registry.dispose();
 });

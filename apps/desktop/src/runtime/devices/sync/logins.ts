@@ -112,7 +112,8 @@ export class LoginSync {
   }
 
   private homeOf(account: Account): string | undefined {
-    return account.home ?? defaultHome(account.provider, this.deps.env ?? process.env, this.deps.homeDir ?? os.homedir());
+    if (account.home) return account.provider === 'gemini-cli' ? path.join(account.home, '.gemini') : account.home; // GEMINI_CLI_HOME holds .gemini
+    return defaultHome(account.provider, this.deps.env ?? process.env, this.deps.homeDir ?? os.homedir());
   }
 
   private ceoPeers(except?: string): string[] {
@@ -242,7 +243,7 @@ export class LoginSync {
   private targetOf(login: Login): Account | undefined {
     const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && account.provider === login.provider);
     return plans.find((account) => account.id === login.account)
-      ?? plans.find((account) => !ownHomes(account.provider) || (Boolean(login.email) && account.email === login.email));
+      ?? plans.find((account) => !ownHomes(account.provider) || (account.home === undefined && account.provider === 'gemini-cli') || (Boolean(login.email) && account.email === login.email));
   }
 
   private async apply(login: Login): Promise<boolean> {
