@@ -57,7 +57,8 @@ export type FireDeps = Pick<RuntimeServices, 'chats' | 'tasks' | 'wakes'> & Part
 /** Thrown when a schedule can never fire again (its chat or owner is gone). */
 export class ScheduleGone extends Error {}
 
-export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps): void {
+/** Fires one occurrence; returns 'skipped' when a routine's previous task is still open (#20: the history says so). */
+export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps): 'skipped' | undefined {
   const ownerKind = schedule.ownerId === HUMAN_ID ? 'human' : 'agent';
   switch (schedule.kind) {
     case 'message': {
@@ -73,7 +74,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
         taskId: schedule.taskId,
         meta: { via: 'schedule', scheduleId: schedule.id, plannedAt: occurrence, ...(schedule.payload.ultra === true && ownerKind === 'human' ? { ultra: true as const } : {}) }, // B-057: a person's suggestion only
       });
-      return;
+      return undefined;
     }
     case 'reminder': {
       if (ownerKind !== 'agent') throw new ScheduleGone('reminders belong to agents');
@@ -81,7 +82,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
         agentId: schedule.ownerId, reason: 'schedule', conversationId: schedule.conversationId, taskId: schedule.taskId,
         note: schedule.payload.note ?? schedule.title, coalesceKey: `sch:${schedule.id}`, origin: scheduleOrigin(schedule),
       });
-      return;
+      return undefined;
     }
     case 'routine': {
       // B-054: a routine needs no chat; one whose chat was set and is gone ends.
@@ -89,7 +90,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
       const template = boundedTemplate(schedule.payload.taskTemplate, schedule.title);
       const origin = scheduleOrigin(schedule);
       const open = ownerKind === 'agent' ? openOccurrence(schedule, s) : undefined;
-      if (open) { noteSkip(open, schedule, occurrence, s); return; } // B-059: the last run is still open – no second copy
+      if (open) { noteSkip(open, schedule, occurrence, s); return 'skipped'; } // B-059: the last run is still open – no second copy
       const task = s.tasks.create({
         ...(schedule.conversationId ? { conversationId: schedule.conversationId } : {}), origin,
         title: template.title, notes: template.notes, mode: template.mode, steps: template.steps,
@@ -104,7 +105,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
           note: schedule.payload.note, coalesceKey: `sch:${schedule.id}`, origin,
         });
       }
-      return;
+      return undefined;
     }
     case 'timer': {
       const linked = schedule.taskId ? s.tasks.get(schedule.taskId) : undefined;
@@ -117,7 +118,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
         const task = s.tasks.get(schedule.taskId);
         if (task && (task.status === 'open' || task.status === 'waiting')) s.tasks.setStatus(task.id, 'needs_you', SYSTEM_ID, 'Timer');
       }
-      return;
+      return undefined;
     }
   }
 }

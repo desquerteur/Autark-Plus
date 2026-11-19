@@ -20,7 +20,8 @@ import { answerWithSecrets } from '../../secrets/capture.ts';
 import { makeMine } from '../../tasks/human.ts';
 import { MAX_DECLINE_REASON, declineAnswer, removeTodo } from '../../tasks/decline.ts';
 import { snoozeChanged } from '../../tasks/timers.ts';
-import { POST_PRIORITIES, rewordPost } from '../../schedules/post.ts';
+import { POST_PRIORITIES, rewordPost, scheduledPost } from '../../schedules/post.ts';
+import { excerpt } from '../../../shared/text/chat-names.ts';
 import { registerTaskLinks } from './task-links.ts';
 import { PREVIEW_MAX, previewTimes } from '../../schedules/preview.ts';
 import {
@@ -209,6 +210,39 @@ export function register(table: HandlerTable): void {
     const o = input(params);
     return ctx.services.scheduler.list({ conversationId: optId(o, 'conversationId'), ownerId: optId(o, 'ownerId') });
   }, TASKS);
+  /**
+   * #20: the Schedules page creates all three kinds. message – the person's own post into a chat (conversationId);
+   * routine – a job: each run creates a tracked task for the agent (agentId; none = a team task) and, with a
+   * conversationId (the contact's chat), the agent works and answers there, e.g. "every day 06:00 research the news and
+   * send it to X"; reminder – an agent's private wake-up note. The scheduler validates spec and limits.
+   */
+  table.add('schedules.create', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['kind', 'title', 'body', 'spec', 'conversationId', 'agentId', 'mentions', 'priority']);
+    const kind = optOneOf(o, 'kind', ['message', 'routine', 'reminder'] as const) ?? bad('kind', 'message, routine or reminder');
+    const body = text(o, 'body', { max: 100_000, multiline: true });
+    const spec = (optObj(o, 'spec') ?? bad('spec', 'a schedule spec ({at} | {cron} | {everyMs} | {times})')) as ScheduleSpec;
+    const conversationId = optId(o, 'conversationId');
+    if (conversationId && !ctx.services.chats.get(conversationId)) notFound('Chat', { conversationId });
+    const agentId = optId(o, 'agentId');
+    if (agentId && !ctx.services.org.get(agentId)) notFound('Agent', { agentId });
+    const priority = optOneOf(o, 'priority', POST_PRIORITIES);
+    const title = optText(o, 'title', { max: 120 });
+    if (kind === 'message') {
+      if (!conversationId) bad('conversationId', 'the chat the message is posted in');
+      const post = scheduledPost(body, { mentions: optIds(o, 'mentions', 50), priority });
+      return ctx.services.scheduler.create({ ownerId: HUMAN_ID, conversationId, spec, ...post, ...(title ? { title } : {}) });
+    }
+    if (kind === 'reminder') {
+      if (!agentId) bad('agentId', 'the agent that gets the reminder');
+      return ctx.services.scheduler.create({ ownerId: agentId, ...(conversationId ? { conversationId } : {}), kind, title: title ?? excerpt(body, 60), spec, payload: { note: body } });
+    }
+    const jobTitle = title ?? excerpt(body.split(/\r?\n/).find((line) => line.trim()) ?? body, 60);
+    return ctx.services.scheduler.create({
+      ownerId: agentId ?? HUMAN_ID, ...(conversationId ? { conversationId } : {}), kind, title: jobTitle, spec,
+      payload: { taskTemplate: { title: jobTitle, notes: body }, ...(priority === 'important' ? { priority: 'important' as const } : {}) },
+    });
+  }, MANAGE);
   table.add('schedules.update', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id', 'active', 'spec', 'title', 'body', 'priority', 'mentions']);
