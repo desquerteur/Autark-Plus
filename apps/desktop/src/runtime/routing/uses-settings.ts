@@ -8,6 +8,7 @@
 
 import type { RoutingSettings } from '../../shared/model/system.ts';
 import { MODEL_USES, OFFABLE_USES, USE_AUTO, USE_OFF, migrateRouting } from '../../shared/model/models-uses.ts';
+import { fallbackProblem } from '../../shared/model/account-fallback.ts'; // AF-023
 
 type Bad = (path: string, expected: string) => never;
 type Plain = Record<string, unknown>;
@@ -22,6 +23,8 @@ export function validateRouting(routing: RoutingSettings, bad: Bad): void {
   if (!COST_MODES.includes(routing.costMode)) bad('routing.costMode', COST_MODES.join(' | '));
   if (typeof routing.allowPaidFallback !== 'boolean') bad('routing.allowPaidFallback', 'true or false');
   if (routing.accountFallback !== undefined && routing.accountFallback !== 'ask' && routing.accountFallback !== 'switch') bad('routing.accountFallback', 'ask | switch'); // AF-021
+  const fallbacks = fallbackProblem(routing.fallbacks); // AF-023
+  if (fallbacks) bad(fallbacks.path, fallbacks.expected);
   for (const use of MODEL_USES) {
     const value: unknown = routing[use];
     const expected = `"${USE_AUTO}"${OFFABLE_USES.has(use) ? `, "${USE_OFF}"` : ''} or a model "<connection>:<model>"`;
@@ -35,6 +38,7 @@ export function validateRouting(routing: RoutingSettings, bad: Bad): void {
  * same object when there was nothing to move. Read once per file read – the next write holds only the uses.
  */
 export function migrateModelSettings(data: Plain): Plain {
+  data = migrateFallback(data); // AF-023
   const voice = isPlain(data.voice) ? data.voice : undefined;
   const realtime = voice?.realtimeModel;
   if (realtime === undefined && !isPlain(data.routing)) return data;
@@ -47,4 +51,17 @@ export function migrateModelSettings(data: Plain): Plain {
     out.voice = rest;
   }
   return out;
+}
+
+/**
+ * AF-023: a file from before the fallback order (no routing.fallbacks) wrote AF-021's default accountFallback "ask"
+ * into every settings.json – nobody chose it. Such a file reads with the new default (switch); from the next write on
+ * the file holds routing.fallbacks, so an "ask" picked later stays. The same object when there is nothing to move.
+ */
+export function migrateFallback(data: Plain): Plain {
+  const routing = isPlain(data.routing) ? data.routing : undefined;
+  if (!routing || 'fallbacks' in routing || routing.accountFallback !== 'ask') return data;
+  const rest = { ...routing };
+  delete rest.accountFallback;
+  return { ...data, routing: rest };
 }

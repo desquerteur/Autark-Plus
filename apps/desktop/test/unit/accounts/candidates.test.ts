@@ -97,15 +97,21 @@ test('a primary that needs sign-in lets the second plan run without rotation', (
   assert.deepEqual(ids(selectCandidates([{ ...first, state: 'ok' }, second], 'claude', T0)), ['acc_1']);
 });
 
-test('rotation off with the primary cooling yields no plan of that provider; rotation on uses the backup', () => {
+test('AF-023: the primary cooling or used up lets the backup stand in – with rotation off too', () => {
   const primary = plan('acc_1', 'claude', { state: 'cooling', coolingUntil: T0 + HOUR, priority: 0 });
   const second = plan('acc_2', 'claude', { priority: 1, createdAt: T0 + 1 });
-  assert.deepEqual(ids(selectCandidates([primary, second], 'claude', T0)), []);
+  assert.deepEqual(ids(selectCandidates([primary, second], 'claude', T0)), ['acc_2'], 'before AF-023 nothing ran here');
   assert.deepEqual(ids(selectCandidates([primary, { ...second, rotation: true }], 'claude', T0)), ['acc_2']);
   // A used-up window cools the primary the same way (no state change needed).
   const usedUp = plan('acc_1', 'claude', { priority: 0, limits: limits(win('5h', 100, T0 + HOUR)) });
-  assert.deepEqual(ids(selectCandidates([usedUp, second], 'claude', T0)), []);
+  assert.deepEqual(ids(selectCandidates([usedUp, second], 'claude', T0)), ['acc_2']);
   assert.deepEqual(ids(selectCandidates([usedUp, { ...second, rotation: true }], 'claude', T0)), ['acc_2']);
+  // A primary that just failed this turn (excluded) lets the backup run; an excluded backup never runs.
+  const ok = plan('acc_1', 'claude', { priority: 0 });
+  assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0, undefined, ['acc_1'])), ['acc_2']);
+  assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0, undefined, ['acc_1', 'acc_2'])), []);
+  // While the primary can run, a backup outside rotation stays behind (no spread over plans).
+  assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0)), ['acc_1']);
   // After the reset the primary is used first again, the backup stays behind it.
   assert.deepEqual(ids(selectCandidates([primary, { ...second, rotation: true }], 'claude', T0 + HOUR)), ['acc_1', 'acc_2']);
   // Keyed providers have no rotation rule.

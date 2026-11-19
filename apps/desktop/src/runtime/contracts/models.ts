@@ -110,7 +110,7 @@ export interface AccountService {
   remove(id: string): Promise<void>;
   install(provider: 'claude' | 'codex'): Promise<void>;
   /** Healthy accounts able to run `engine`, best first (priority, headroom, rotation rules). */
-  candidates(engine: EngineId, model?: string): Account[];
+  candidates(engine: EngineId, model?: string, exclude?: readonly string[]): Account[]; // AF-023: exclude = accounts that just failed
   markLimited(id: string, until: number, limits?: AccountLimits): void;
   updateLimits(id: string, limits: AccountLimits): void;
   /** A turn found the account signed out ('needs_login') or its CLI missing ('error'); true when its state changed. */

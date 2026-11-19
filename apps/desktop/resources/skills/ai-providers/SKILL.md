@@ -49,8 +49,9 @@ need. Reading it again afterwards shows the same entry, or the reason above it w
 Plans come through their own sign-in and stay detected, they are not in the file: `wf call accounts.detect` finds what is on
 this PC, `wf call accounts.add '{"provider":"codex"}'` starts the sign-in. `wf call accounts.add` with a key or address also works
 for an API connection and writes the same entry. With two plans of one provider the upper one in Settings › Models runs
-first; `wf call accounts.update '{"id":"<account>","rotation":true}'` lets another one take over when it runs out (off by
-default, as providers' terms differ on rotating logins), and `priority` sets the order.
+first; when it runs out (or fails) the next one takes over by itself and the chat says so (AF-023);
+`wf call accounts.update '{"id":"<account>","rotation":true}'` also lets it share the work while the first can still run
+(off by default, as providers' terms differ on rotating logins), and `priority` sets the order.
 
 ## Which protocol
 
@@ -115,6 +116,10 @@ routing.image  routing.video  routing.music  routing.sound  routing.embeddings
 - A call without a real-time model keeps talking through the Decisions model while the agent works (`voice.talker`, on by default).
 - `routing.allowPaidFallback` `true` lets API keys compete with plans on every turn; `false` (the default) uses a key only
   when no plan or local model can.
+- `routing.fallbacks` (Settings › Models, "If used up" under Work and Decisions): per use an ordered list of
+  `{"account":"<account id>","model":"<connection>:<model>"}` (model optional = the same model) that runs when the account
+  is used up; `{}` / an empty list = automatic (the same model on the next account, else the most similar model elsewhere).
+  `routing.accountFallback` `"switch"` (default) switches with a line in the chat, `"ask"` stops a turn on a chosen account.
 
 How I think about the pick:
 

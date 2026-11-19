@@ -5,8 +5,10 @@
 //   'auto' stored for the chat is "Automatic" picked there on purpose – it beats the agent's default.
 // A choice only steers models of its own provider (a Claude account never turns a GPT turn into a Claude one).
 // When the chosen account cannot run (used up, signed out, off, or it just failed), settings.json
-// routing.accountFallback decides: 'ask' (default) – the turn stops with a clear line in the chat and the choices
-// "another account" / "automatic"; 'switch' – the turn runs on another account and the chat says so. Never silent.
+// routing.accountFallback decides: 'switch' (default since AF-023) – the turn runs on the next account of the use's
+// fallback order (Settings › Models; shared/model/account-fallback.ts), else automatically on another one, and the chat
+// says so; 'ask' – the turn stops with a clear line in the chat and the choices "another account" / "automatic".
+// Never silent.
 // Owns: the precedence rule, the problem words and the shape of the stop. Never: checks an account's health
 // (runtime/routing/account-choice.ts does) or stores anything.
 
@@ -15,7 +17,7 @@ import type { AccountSwitch } from './providers.ts';
 /** 'auto' (or nothing) = no choice: the router picks. */
 export const ACCOUNT_AUTO = 'auto';
 
-export type AccountChoiceSource = AccountSwitch['source'];
+export type AccountChoiceSource = Exclude<AccountSwitch['source'], 'auto'>;
 
 export interface AccountChoice {
   accountId: string;
@@ -25,7 +27,8 @@ export interface AccountChoice {
 /** What to do when the chosen account cannot run: stop and ask, or switch with a notice. */
 export type AccountFallback = 'ask' | 'switch';
 export const ACCOUNT_FALLBACKS: readonly AccountFallback[] = ['ask', 'switch'];
-export const DEFAULT_ACCOUNT_FALLBACK: AccountFallback = 'ask';
+/** AF-023: switching is the default – a used-up account never stops the work while another one can run it. */
+export const DEFAULT_ACCOUNT_FALLBACK: AccountFallback = 'switch';
 
 /** Why a chosen account cannot run this turn. */
 export type AccountProblem = AccountSwitch['problem'];
@@ -55,7 +58,7 @@ export function accountChoiceOf(chatChoice: unknown, agentDefault: unknown): Acc
 
 /** The fallback setting, read defensively (an older settings.json has none). */
 export function accountFallbackOf(value: unknown): AccountFallback {
-  return value === 'switch' ? 'switch' : DEFAULT_ACCOUNT_FALLBACK;
+  return value === 'ask' || value === 'switch' ? value : DEFAULT_ACCOUNT_FALLBACK;
 }
 
 const PROBLEM_TEXT: Record<AccountProblem, string> = {

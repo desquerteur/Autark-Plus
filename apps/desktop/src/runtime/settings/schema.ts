@@ -17,6 +17,7 @@ import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
 import { MAX_WORDS } from '../../shared/voice/vocabulary.ts';
 import { APPEARANCE_SECTION } from './appearance-schema.ts';
 import { PERSONALITY_SECTION } from '../personality/settings-section.ts'; // AF-006
+import { FALLBACK_USES, MAX_FALLBACK_STEPS } from '../../shared/model/account-fallback.ts'; // AF-023
 
 type Plain = Record<string, unknown>;
 type Literal = string | number | boolean;
@@ -99,6 +100,15 @@ const useKey = (use: ModelUse): KeyDef => {
     { maxLength: 200, default: USE_AUTO });
 };
 
+/** AF-023: routing.fallbacks – per use, what runs when its account is used up (shared/model/account-fallback.ts). */
+const FALLBACK_STEP_SCHEMA = { type: 'object', properties: { account: { type: 'string', minLength: 1, maxLength: 200 }, model: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['account'], additionalProperties: false };
+const FALLBACKS_KEY: KeyDef = {
+  key: 'fallbacks', type: 'object', default: {},
+  about: 'If an account is used up, take … – per use (work, decision) an ordered list of an account and optionally a model; an empty list = automatic (the same model on the provider\'s next account, else the most similar model elsewhere)',
+  allowed: `{ "work": [{ "account": "<account id>", "model": "<connection>:<model>" (optional: else the same or the nearest model) }], "decision": [ … ] }, up to ${MAX_FALLBACK_STEPS} steps each`,
+  schema: { properties: Object.fromEntries(FALLBACK_USES.map((use) => [use, { type: 'array', maxItems: MAX_FALLBACK_STEPS, items: FALLBACK_STEP_SCHEMA }])), additionalProperties: false },
+};
+
 /** Every setting, in the order settings.json shows them. */
 export const SECTIONS: readonly SectionDef[] = [
   { key: 'profile', title: 'Profile – you and your company', keys: [
@@ -144,7 +154,8 @@ export const SECTIONS: readonly SectionDef[] = [
     ...MODEL_USES.map((use) => useKey(use)),
     choice('costMode', 'How models are chosen: economy saves, best takes the strongest', ['economy', 'balanced', 'best'], 'balanced'),
     flag('allowPaidFallback', 'Pay-per-use API keys: true = they compete with plans on every turn, false = an API key runs only when no plan or local model can', false),
-    choice('accountFallback', 'The account chosen for a chat or an agent cannot run (used up, signed out): ask = the turn stops and the chat offers another account or Automatic, switch = another account runs and the chat says so', ['ask', 'switch'], 'ask'), // AF-021
+    choice('accountFallback', 'An account cannot run (used up, signed out): switch = the next one of the fallback order (else automatically another one) runs and the chat says so, ask = a turn on the account chosen for a chat or an agent stops and the chat offers another account or Automatic', ['switch', 'ask'], 'switch'), // AF-021, AF-023: switch by default
+    FALLBACKS_KEY, // AF-023
   ] },
   { key: 'providers', title: 'Providers – the API connections', optional: true, free: true, keys: [], notes: providerNotes() },
   { key: 'day', title: 'My day', keys: [

@@ -47,7 +47,7 @@ export function buildPool(input: PoolInput): Pool {
   const accountsFor = (model: ModelInfo): Account[] => {
     let list = memo.get(model.id);
     if (!list) {
-      list = s.accounts.candidates(model.engine, model.model).filter((account) => account.provider === model.provider
+      list = s.accounts.candidates(model.engine, model.model, [...exclude]).filter((account) => account.provider === model.provider
         && (!model.accounts.length || model.accounts.includes(account.id)) && !exclude.has(account.id));
       memo.set(model.id, list);
     }

@@ -2,7 +2,7 @@
 // Owns: engine → provider mapping; the health filter – state, cooling and used-up limit windows
 // (a window at 100 % with a future reset counts as cooling until then; model windows such as
 // weekly-opus only for matching models); the plan primary with opt-in rotation (shared rule in
-// shared/model/plan-roles.ts); ordering (priority first, then B-048 E4.1 "use it or lose it" – the
+// shared/model/plan-roles.ts) – AF-023: while neither can run, the provider's other healthy plans stand in –; ordering (priority first, then B-048 E4.1 "use it or lose it" – the
 // plan quota that resets soonest while some is left goes first, `expiring` –, then the smallest
 // remaining share of the windows that apply). Spill-over to other providers is the router's job
 // (across plans the router compares scores). The ACP engine runs the plan CLIs Gemini CLI, Copilot CLI (PR8) and
@@ -141,11 +141,13 @@ export function expiringRank(account: Account, now: number, model?: string): num
   return value >= EXPIRING_MIN ? Math.floor(value / EXPIRING_TIE + 1e-9) : 0;
 }
 
-export function selectCandidates(accounts: Account[], engine: EngineId, now: number, model?: string): Account[] {
+/** AF-023: `exclude` – accounts that just failed this turn: never a candidate, and a failed primary lets the next plan stand in. */
+export function selectCandidates(accounts: Account[], engine: EngineId, now: number, model?: string, exclude: readonly string[] = []): Account[] {
   const providers = [...(ENGINE_PROVIDERS[engine] ?? []), ...(engine === MEDIA_ENGINE ? MEDIA_ONLY_PROVIDERS : [])];
   const out: Account[] = [];
   for (const provider of providers) {
     const all = accounts.filter((a) => a.provider === provider && a.enabled).sort(byPriority);
+    const runs = (a: Account) => !exclude.includes(a.id) && isHealthy(a, now, model);
     if (!all.length) continue;
     // Plan-based providers: the first signed-in account is the user's primary (one that needs
     // sign-in never shuts out the next); others join only when the user opted them into rotation
@@ -153,7 +155,11 @@ export function selectCandidates(accounts: Account[], engine: EngineId, now: num
     const plan = isPlanProvider(provider) || isAcpPlan(provider);
     const primary = plan ? planPrimary(all) : undefined;
     const allowed = plan ? all.filter((a) => a === primary || a.rotation) : all;
-    out.push(...allowed.filter((a) => isHealthy(a, now, model)));
+    const healthy = allowed.filter(runs);
+    // AF-023: a used-up (cooling, limited) primary lets the next plan stand in – rotation off only means "not while the
+    // primary can run". Before, a second plan outside rotation (every plan since B-072 removed the switch) never ran, so
+    // a used-up first plan stopped all work with "every account is limited" while the second still had quota.
+    out.push(...(plan && !healthy.length ? all.filter(runs) : healthy));
   }
   return out.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;

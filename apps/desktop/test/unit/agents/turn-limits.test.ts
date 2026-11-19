@@ -107,16 +107,17 @@ test('a limit before any tool call cools the account with the provider hint and 
   assert.equal(zero.service.get('acc_1')!.coolingUntil, zero.now + MINUTE);
 });
 
-test('rotation off: with the primary cooling no plan of that provider runs', async () => {
+test('AF-023 bug: rotation off – the primary used up, the turn goes on on the second plan, and the next turn starts there', async () => {
+  // Before AF-023 the second plan (rotation off, as every plan since B-072) never ran: "limited right now" – the bug.
   const h = limitSetup({ rotation: false });
   h.scripts.acc_1 = async () => LIMIT;
-  await h.run();
-  assert.deepEqual(h.calls, ['acc_1'], 'the second plan is not used automatically');
+  const first = await h.run();
+  assert.equal(first.status, 'done', 'the work goes on');
+  assert.deepEqual(h.calls, ['acc_1', 'acc_2'], 'the same turn retries on the second plan');
   assert.equal(h.service.get('acc_1')!.state, 'cooling');
   const next = await h.run();
-  assert.equal(next.status, 'failed');
-  assert.match(next.error ?? '', /limited right now/);
-  assert.deepEqual(h.calls, ['acc_1']);
+  assert.equal(next.status, 'done');
+  assert.deepEqual(h.calls, ['acc_1', 'acc_2', 'acc_2'], 'while the first is used up, turns start on the second');
 });
 
 test('a limit on the model window (weekly-opus) keeps the account for other models', async () => {
@@ -244,4 +245,30 @@ test('accountFailure classifies the engines’ own messages', () => {
     [{ text: 'Hi', stop: 'done' }, undefined],
   ];
   for (const [result, expected] of cases) assert.equal(accountFailure(result), expected, result.error?.message ?? result.stop);
+});
+
+test('AF-023: a failure chain moves on account by account – each at most once, no endless loop', async () => {
+  const h = limitSetup({ rotation: false });
+  new AccountRepo(h.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: h.now + 2 }));
+  h.scripts.acc_1 = async () => LIMIT;
+  h.scripts.acc_2 = async () => unavailable('The provider is overloaded. Retry later.');
+  const outcome = await h.run();
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(h.calls, ['acc_1', 'acc_2', 'acc_3'], 'two switches in one turn');
+  assert.deepEqual(h.failovers().map((item) => [item.fromAccount, item.toAccount]), [['acc_1', 'acc_2'], ['acc_2', 'acc_3']]);
+  const lines = h.chats.messages(h.chat.id).filter((message) => message.meta.status?.type === 'model_switched').map((message) => message.body);
+  assert.match(lines[0], /^Switched to Claude Code 2 – Claude Code is used up until /, 'the chat says which plan ran out and until when');
+  assert.equal(lines[1], 'Switched to Claude Code 3 – Claude Code 2 just failed.');
+
+  // Every account fails: each is tried once, then the turn ends (no loop).
+  const all = limitSetup({ rotation: false });
+  new AccountRepo(all.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: all.now + 2 }));
+  for (const id of ['acc_1', 'acc_2', 'acc_3']) all.scripts[id] = async () => LIMIT;
+  const failed = await all.run();
+  assert.notEqual(failed.status, 'done');
+  assert.deepEqual(all.calls, ['acc_1', 'acc_2', 'acc_3']);
+  // Used-up accounts are skipped until their reset: the next turn does not try them again.
+  const later = await all.run();
+  assert.equal(later.status, 'failed');
+  assert.deepEqual(all.calls, ['acc_1', 'acc_2', 'acc_3'], 'nothing is retried before a reset');
 });

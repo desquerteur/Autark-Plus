@@ -1,6 +1,6 @@
 // RT5: a model switch says why – "Switched to <model> · <effort> — <first reason>" (at most 120
 // characters) after a routing switch (the real router's reason) and after a failover (limit or
-// outage of the model before; the same model on another account names no account); the agent reads
+// outage of the model before; AF-023: the account switch names both accounts, never an e-mail domain); the agent reads
 // the same line in its delta. RT2: the agent's own model.set request and the return to the choice
 // before it are switches too (judged against the chat's last turn), a first turn in a chat is none.
 
@@ -28,7 +28,7 @@ async function switchSetup(route: (request: RouteRequest) => RouteDecision) {
   Object.assign(h.services, {
     router: { route: async (request: RouteRequest) => route(request) },
     catalog: { get: (id: string) => known.get(id) },
-    accounts: { get: (id: string) => accounts.get(id), updateLimits: () => {}, markLimited: () => true, markUnavailable: () => false },
+    accounts: { get: (id: string) => accounts.get(id), list: () => [...accounts.values()], updateLimits: () => {}, markLimited: () => true, markUnavailable: () => false },
   });
   const lines = () => h.chats.messages(h.chat.id).filter((message) => message.meta.status?.type === 'model_switched');
   const agentSees = () => renderMessages({ services: h.services, agentId: h.tom.id, humanName: 'Sam', zone: 'UTC', now: Date.now() }, h.chats.messages(h.chat.id), { images: false }).lines;
@@ -59,29 +59,28 @@ test('a video turn after a Sol run says the previous model is weak at video anim
   assert.equal(s.lines().length, 1);
 });
 
-test('failover: the line names the model that hit its limit or is unavailable, never an account label', async () => {
+test('failover (AF-023): the line names the account that ran out, why, and the model when it changed – never an e-mail domain', async () => {
   const sol: RouteDecision = { modelId: 'codex:gpt-6.1-sol', engine: 'codex', accountId: 'acc_codex', effort: 'medium', category: 'coding', reason: 'coding · strongest fit', by: 'rules', alternatives: [] };
   const opus: RouteDecision = { ...sol, modelId: 'claude:claude-opus-5-5', engine: 'claude', accountId: 'acc_claude', effort: 'high' };
-  for (const [result, why] of [[LIMIT, 'GPT-6.1 Sol hit its usage limit'], [OUTAGE, 'GPT-6.1 Sol is unavailable right now']] as const) {
+  for (const [result, why] of [[LIMIT, 'acc_codex is used up'], [OUTAGE, 'acc_codex just failed']] as const) {
     const s = await switchSetup((request) => (request.exclude?.includes('acc_codex') ? opus : sol));
     s.h.state.script = async (input) => (input.account.id === 'acc_codex' ? result : { text: 'Done.', stop: 'done' });
     const outcome = await s.run();
     assert.equal(outcome.status, 'done', why);
     const lines = s.lines();
     assert.equal(lines.length, 1, why);
-    assert.equal(lines[0].body, `Switched to Claude Opus 5.5 · high — ${why}`);
+    assert.equal(lines[0].body, `Switched to Claude Opus 5.5 on acc_claude – ${why}.`);
     assert.equal((lines[0].meta.status?.details as { reason: string }).reason, result === LIMIT ? 'limit' : 'unavailable');
-    assert.match(lines[0].body, /limit|unavailable/);
   }
 
-  // The same model on a second plan: "another account", no label (it may hold an e-mail address).
+  // The same model on a second plan: both plans by name – a label that is an e-mail address without its domain.
   const first: RouteDecision = { ...opus, accountId: 'acc_claude', effort: 'medium' };
   const s = await switchSetup((request) => (request.exclude?.includes('acc_claude') ? { ...first, accountId: 'acc_claude_2' } : first));
   s.h.state.script = async (input) => (input.account.id === 'acc_claude' ? LIMIT : { text: 'Done.', stop: 'done' });
   await s.run();
   const [line] = s.lines();
-  assert.equal(line.body, 'Switched to another account · Claude Opus 5.5 · medium — the first one hit its usage limit');
-  assert.ok(!line.body.includes('hello@example.com'));
+  assert.equal(line.body, 'Switched to hello – acc_claude is used up.');
+  assert.ok(!line.body.includes('example.com'));
 });
 
 test('first reason: the switch note or pin wins; a bare category joins what follows; empty adds nothing', () => {

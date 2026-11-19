@@ -84,7 +84,7 @@ export class FakeAccounts {
   constructor(clock: ManualClock, bus: Bus) { this.clock = clock; this.bus = bus; }
   list() { return this.accounts.map((a) => ({ ...a })); }
   get(id: string) { return this.accounts.find((a) => a.id === id); }
-  candidates(engine: EngineId) { return selectCandidates(this.accounts, engine, this.clock.now()); }
+  candidates(engine: EngineId, model?: string, exclude?: readonly string[]) { return selectCandidates(this.accounts, engine, this.clock.now(), model, exclude); }
   upsert(next: Account, emit = true) {
     this.accounts = [...this.accounts.filter((a) => a.id !== next.id), next];
     if (emit) this.bus.emit('account.upserted', next);

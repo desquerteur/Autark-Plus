@@ -248,8 +248,8 @@ export class AccountServiceImpl implements AccountServiceContract {
     return testEndpoint(input, { engine: (id) => this.deps.engines().get(id), keys: this.testKeys, secrets: this.deps.secrets, now: () => this.now(), demo: this.deps.demo });
   }
 
-  candidates(engine: EngineId, model?: string): Account[] {
-    return selectCandidates(this.repo.list(), engine, this.now(), model);
+  candidates(engine: EngineId, model?: string, exclude?: readonly string[]): Account[] {
+    return selectCandidates(this.repo.list(), engine, this.now(), model, exclude);
   }
 
   markLimited(id: string, until: number, limits?: AccountLimits): void {

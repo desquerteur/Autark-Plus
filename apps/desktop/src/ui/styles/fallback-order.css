@@ -1,0 +1,19 @@
+/* AF-023: Settings › Models – "If used up", the fallback order under Work and Decisions (ui/settings/FallbackOrder.tsx):
+   the numbered steps with Up / Down / Remove and the Add line under them.
+   Owns: these rules. Never: the row frame or the selects' look (settings.css, controls.tsx). */
+.fallback-row { padding-top: 0; }
+.fallback-row .fallback-title { padding-left: 16px; color: var(--muted); font-weight: 500; }
+.fallback-row .set-row-hint { padding-left: 16px; }
+.fallback-order { display: flex; flex-direction: column; gap: 6px; padding-left: 16px; min-width: 0; }
+.fallback-steps { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.fallback-step { display: flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 4px 0 8px; border-radius: var(--r-md); background: var(--hover); }
+.fallback-step.missing .fallback-step-label { opacity: .55; text-decoration: line-through; }
+.fallback-step-rank { flex: none; width: 18px; color: var(--muted); opacity: .7; font-variant-numeric: tabular-nums; }
+.fallback-step-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fallback-step .icon-button.small { width: 28px; height: 28px; }
+.fallback-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fallback-add > .set-select { flex: 0 1 170px; min-width: 120px; }
+@media (max-width: 640px) {
+  .fallback-order, .fallback-row .fallback-title, .fallback-row .set-row-hint { padding-left: 0; }
+  .fallback-add > .set-select { flex: 1 1 140px; }
+}

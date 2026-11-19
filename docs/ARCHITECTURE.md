@@ -939,7 +939,11 @@ are fine; Team › Add › "Group agents by folder" groups the list by `folderAg
   connected API key whose service embeds; `local` names the PC's own model; a chosen model that is unreachable says so
   instead of falling to another (vectors of two models do not compare, `models/embeddings.ts`). They live in `settings.json` section `routing` (shown as "Models", one comment line
   per use) next to `costMode` and `allowPaidFallback` (no row in Settings; true lets API keys compete with plans on
-  every turn, false – the default – uses a key only when no plan or local model can; the AI sets it). **A stored `auto`
+  every turn, false – the default – uses a key only when no plan or local model can; the AI sets it). AF-023: `fallbacks`
+  holds per use (Work, Decisions) the order "if the account is used up, take …" (account + optional model; empty =
+  automatic: the same model on the provider's next account, else the most similar model elsewhere) – Settings › Models
+  "If used up"; `routing/account-fallback.ts` applies it after every route and on every failover (each account once per
+  failure chain), and the chat says "Switched to fritz2 – fritz1 is used up until 14:00.". **A stored `auto`
   is never shown as "auto"**: `runtime/models/uses.ts` (`models.uses`) names what runs per use – Work on a plan
   "<model> · each turn", search by meaning on this PC "MiniLM-L12 multilingual" (`vectors/local-model.ts`), Voice on
   this PC its hearing + speaking models, the ChatGPT plan's images "GPT Image"; `routing/helper-default.ts` `helperModel`

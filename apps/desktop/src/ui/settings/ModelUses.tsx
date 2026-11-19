@@ -1,13 +1,15 @@
 // Settings › Models, under the providers: one fixed row per use – state dot, label, hint, provider select, model select
 // and the action slot (Download or Use for a local model, "Set up with AI" where nothing or only a stand-in serves it) –
 // plus the model choice row (Best / Balanced / Cheaper). B-072: no fallback switch – when plans run out the app takes what
-// is left by itself, and routing.allowPaidFallback stays in settings.json for the AI. The selects show the model the use
+// is left by itself, and routing.allowPaidFallback stays in settings.json for the AI. AF-023: under Work and Decisions the
+// use's fallback order ("If used up", FallbackOrder.tsx). The selects show the model the use
 // runs on right now (models.uses, read again when accounts, models, settings or a local model change); a
 // pick writes settings.json (uses-view.ts). "Other…" (or a connection with no listed model for the use) swaps the model
 // select for a text field in the same box: Enter or leaving it writes the name, Esc goes back. The AI changes the same keys
 // (skill ai-providers). A right click copies the row's key or opens settings.json in the pane's file tab.
 // Owns: these rows. Never: resolves a use (the runtime does), or words a row (uses-view.ts).
 
+import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { MODEL_USES, USE_LABELS, type ModelUse, type UseNow } from '../../shared/model/models-uses.ts';
 import type { RoutingSettings } from '../../shared/model/system.ts';
@@ -21,6 +23,10 @@ import { openInTab } from './open-file.ts';
 import { localModels, pullModel, readLocalModels, speechChanges, speechPulls, useModel, watchSpeechPulls } from './speech-models.ts';
 import { running } from './speech-models-text.ts';
 import { namedValue, OTHER, setUpRequest, useRowView, writeModel, writeProvider, type UseWrite } from './uses-view.ts';
+import { FallbackOrder } from './FallbackOrder.tsx'; // AF-023
+import { FALLBACK_USES, type FallbackUse } from '../../shared/model/account-fallback.ts'; // AF-023
+
+const isFallbackUse = (use: ModelUse): use is FallbackUse => (FALLBACK_USES as readonly ModelUse[]).includes(use);
 
 const COST_MODES: Array<Option<RoutingSettings['costMode']>> = [{ value: 'best', label: 'Best' }, { value: 'balanced', label: 'Balanced' }, { value: 'economy', label: 'Cheaper' }];
 const STATE_WORD: Readonly<Record<string, string>> = { ready: 'Ready', setup: 'Needs one step', off: 'Off', pending: '' };
@@ -124,7 +130,12 @@ export function ModelUses() {
   const setRouting = (patch: Partial<RoutingSettings>) => void act(() => updateSettings({ routing: patch }), 'Could not save');
   return (
     <Group title="Uses" id="settings-uses" hint={list.error && !list.data ? list.error : undefined}>
-      {MODEL_USES.map((use) => <UseRow key={use} use={use} now={byUse.get(use)} />)}
+      {MODEL_USES.map((use) => (
+        <Fragment key={use}>
+          <UseRow use={use} now={byUse.get(use)} />
+          {isFallbackUse(use) && <FallbackOrder use={use} />}
+        </Fragment>
+      ))}
       <Row label="Model choice" hint="What counts when the app picks among several models" reserve>
         <Segmented label="Model choice" value={current?.routing.costMode ?? 'balanced'} options={COST_MODES} onChange={(costMode) => setRouting({ costMode })} />
       </Row>
