@@ -417,11 +417,10 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     if (quitting) return;
     quitting = true;
     runMarks.quit(desktopUpdates.draining ? 'update' : 'person'); // tray Quit, menu, window close and the update install alike
-    workStop.dispose();
-    screenCursor.dispose(); // B-081
-    floatBar?.close();
-    hidden.dispose();
-    workspaceBrowser?.dispose();
+    // 18.11.2026: one step that throws (a window already gone) left `quitting` set and the app unable to quit or update
+    for (const step of [() => workStop.dispose(), () => screenCursor.dispose(), () => floatBar?.close(), () => hidden.dispose(), () => workspaceBrowser?.dispose()]) {
+      try { step(); } catch (error) { log.line(`quit step failed: ${(error as Error).message}`); }
+    }
     log.line('quitting');
     const keepRunning = settings.preferences().openAtLogin;
     void runShutdown(shutdownSteps(), { log: line => log.line(line) })

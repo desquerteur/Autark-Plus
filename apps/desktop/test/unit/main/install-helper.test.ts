@@ -10,7 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import os from 'node:os';
 import path from 'node:path';
 import {
-  LINUX_HELPER_SCRIPT, LOCK_NAME, LOCK_STALE_MS, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, takeInstallLock, windowsHelper,
+  LINUX_HELPER_SCRIPT, LOCK_NAME, LOCK_STALE_MS, QUIT_MS, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, takeInstallLock, windowsHelper,
   type HelperLaunch, type InstallHelperDeps,
 } from '../../../src/main/updates/install-helper.ts';
 import { INSTALL_WATCHDOG_MS } from '../../../src/main/updates/update-service.ts';
@@ -125,6 +125,23 @@ test('quitAndInstall: the started helper quits the app; the library\'s own insta
   updater.quitAndInstall(true, true);
   assert.equal(record.launches.length, 2, 'after the helper ended, the next click starts a new one');
   assert.equal(record.quits, 3);
+});
+
+test('19.11.2026: a quit for the install that does not end the app ends it hard before the watchdog resumes work', async () => {
+  assert.ok(QUIT_MS < INSTALL_WATCHDOG_MS, 'the app ends before update-service.ts would resume it');
+  assert.ok(QUIT_MS < WAIT_SECONDS * 1000, 'and before the helper gives up');
+  const updater = fakeUpdater(INSTALLER);
+  let exits = 0;
+  const { value, record } = deps({ exit: () => { exits += 1; } });
+  const timers: Array<() => void> = [];
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void) => { timers.push(fn); return { unref() {} }; }) as unknown as typeof setTimeout;
+  try { installWithHelper(updater, value); updater.quitAndInstall(true, true); } finally { globalThis.setTimeout = real; }
+  assert.equal(record.quits, 1);
+  assert.equal(exits, 0, 'first the ordinary quit');
+  timers.forEach((fn) => fn());
+  assert.equal(exits, 1, 'then a hard end – the process is gone in a quit that ran, so this only fires when it hangs');
+  assert.ok(record.lines.includes('the quit did not end the app; ending it for the install'));
 });
 
 test('a helper never installs over a resumed app: it waits longer than the install watchdog, then gives up', () => {

@@ -11,7 +11,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DesktopUpdates } from '../../../src/main/updates-wiring.ts';
+import { DesktopUpdates, INSTALL_FILE_WATCHDOG_MS } from '../../../src/main/updates-wiring.ts';
 import type { HelperLaunch } from '../../../src/main/updates/install-helper.ts';
 import { HostServices, type HostServicesDeps } from '../../../src/main/host-services.ts';
 import { setupBroker, type BrokerSetupDeps } from '../../../src/main/broker-setup.ts';
@@ -42,6 +42,45 @@ test('installFile: the drain in order, then the relaunch helper with this instal
   assert.equal(h.launches[0].env.AUTARK_UPDATE_EXE, EXE);
   assert.equal(h.updates.draining, true, 'the quit after it does not drain again');
   h.updates.dispose();
+});
+
+// 18.11.2026 (Konrad #180): app.install drained the runtime at 13:06, the quit then threw (isDestroyed), the helper gave up after
+// 45 s ("update left for the next try") and nothing resumed: no agent ran until 22:35. The app now takes its work back by itself.
+test('installFile: an app that does not end after the quit request takes its work back within 60 s, says so, and only once', async () => {
+  const h = installing(); // quit() only records: the app lives on, as it did when the quit threw
+  const logs: string[] = [];
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  h.deps.log = (line) => logs.push(line);
+  h.deps.setTimer = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+  await h.updates.installFile(INSTALLER);
+  const dog = timers.find((timer) => timer.ms === INSTALL_FILE_WATCHDOG_MS);
+  assert.ok(dog, 'a watchdog is armed with the quit request');
+  assert.ok(INSTALL_FILE_WATCHDOG_MS > 45_000 && INSTALL_FILE_WATCHDOG_MS < 60_000, "after the helper's 45 s wait, under the 60 s asked for");
+  assert.equal(h.updates.draining, true, 'until then the runtime stays stopped');
+  dog.fn();
+  assert.deepEqual(h.order, ['drafts', 'pause', 'stop', 'spawn', 'quit', 'start'], 'the runtime starts again');
+  assert.equal(h.updates.draining, false);
+  assert.ok(logs.some((line) => /INSTALL FAILED: the app did not end within 50 s/.test(line)), 'said loudly in main.log');
+  assert.ok(logs.includes('update install cancelled; resumed'));
+  dog.fn();
+  assert.equal(h.order.filter((entry) => entry === 'start').length, 1, 'a second firing changes nothing');
+  h.updates.dispose();
+});
+
+test('installFile: a helper that cannot start arms no watchdog, and a cancel by another path leaves the timer nothing to do', async () => {
+  const failing = installing('win32', 'fails');
+  const timers: number[] = [];
+  failing.deps.setTimer = (_fn, ms) => { timers.push(ms); return timers.length; };
+  await failing.updates.installFile(INSTALLER);
+  assert.ok(!timers.includes(INSTALL_FILE_WATCHDOG_MS), 'the helper never started: nothing to watch');
+  const later = installing();
+  const fns: Array<() => void> = [];
+  later.deps.setTimer = (fn, ms) => { if (ms === INSTALL_FILE_WATCHDOG_MS) fns.push(fn); return 0; };
+  await later.updates.installFile(INSTALLER);
+  (later.updates as unknown as { cancelInstall(): void }).cancelInstall(); // the update service's own watchdog got there first
+  fns[0]();
+  assert.equal(later.order.filter((entry) => entry === 'start').length, 1, 'the runtime started once, not twice');
+  for (const h of [failing, later]) h.updates.dispose();
 });
 
 test('installFile: a missing file or macOS refuses before any drain; a helper that cannot start resumes the app', async () => {

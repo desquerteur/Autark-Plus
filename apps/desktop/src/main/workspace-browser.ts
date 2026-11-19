@@ -20,6 +20,7 @@ import { GLOBAL_SPACE, WORKSPACE_BROWSER, browserUrl, type BrowserBounds, type P
 import { trusted } from './ipc.ts';
 import { captureTab } from './workspace-capture.ts';
 import { PageHost } from './workspace-host.ts';
+import { livePage } from './workspace-live.ts';
 import { MAX_TABS, PersonalTabs, watchTabsFile } from './workspace-tabs.ts';
 import { WorkspaceSession } from './workspace-session.ts';
 import { CHROME_ACTIONS, TabChrome, colorScheme, type ChromeCommand } from './workspace-chrome.ts';
@@ -31,7 +32,7 @@ import { ClosedTabs } from './workspace-tab-memory.ts';
 import { ShownTabs, fit } from './workspace-shown.ts';
 import { TabMarks } from './workspace-marks.ts';
 
-interface Tab { view: WebContentsView; error?: string; favicon?: string; iconAsk: number }
+interface Tab { view: WebContentsView; error?: string; favicon?: string; iconAsk: number; closing?: boolean }
 
 /** Loaded pages across all spaces; the least recently used goes first (it loads again when shown or used). */
 export const MAX_LIVE = 5;
@@ -104,7 +105,7 @@ export class WorkspaceBrowser {
       try { return { ok: true, value: await run(...args) }; }
       catch (error) { return { ok: false, error: { code: 'bad_request', message: error instanceof Error ? error.message : 'Could not update the browser.' } }; }
     });
-    nativeTheme.on('updated', () => { for (const tab of this.tabs.values()) this.scheme(tab.view.webContents); });
+    nativeTheme.on('updated', () => { for (const tab of this.tabs.values()) { const page = livePage(tab); if (page) this.scheme(page); } });
     handle(WORKSPACE_BROWSER.command, (value) => this.command(browserCommand(value)));
     handle(WORKSPACE_BROWSER.capture, (id) => captureTab(tabId(id), this.tabs.get(tabId(id))));
     handle(WORKSPACE_BROWSER.layout, () => this.saved.layout());
@@ -113,16 +114,16 @@ export class WorkspaceBrowser {
 
   /** Tabs the memory saver leaves loaded: shown (or last, workspace-shown.ts), playing sound, muted (a new page would forget it), DevTools open, downloading, or watched (B-076). */
   private keepLoaded(id: string): boolean {
-    const contents = this.tabs.get(id)?.view.webContents;
-    if (!contents || contents.isDestroyed()) return false;
+    const contents = livePage(this.tabs.get(id));
+    if (!contents) return false;
     return this.slots.kept(id) || contents.isCurrentlyAudible() || contents.isAudioMuted() || contents.isDevToolsOpened() || this.rules.busy(id) || Boolean(this.watched?.(id));
   }
 
   /** The memory saver: the page goes, its address and title stay; it loads when shown. */
   private discard(id: string): void {
     const tab = this.tabs.get(id);
-    if (!tab || tab.view.webContents.isDestroyed() || !/^https?:\/\//i.test(tab.view.webContents.getURL())) return;
-    const contents = tab.view.webContents;
+    const contents = livePage(tab);
+    if (!tab || !contents || !/^https?:\/\//i.test(contents.getURL())) return;
     this.parked.set(id, contents.getTitle());
     this.saved.discard(id, contents.getURL());
     this.chrome.closed(id);
@@ -132,9 +133,8 @@ export class WorkspaceBrowser {
 
   /** A tab's view leaves its window and its page closes. */
   private drop(id: string, tab: Tab): void {
-    if (!this.host.has(id)) this.owner?.contentView.removeChildView(tab.view);
-    this.host.forget(id, tab.view);
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    try { if (!this.host.has(id)) this.owner?.contentView.removeChildView(tab.view); this.host.forget(id, tab.view); } catch { /* the view left with its page */ }
+    tab.closing = true; livePage(tab)?.close(); // closing: the 'destroyed' event (create) must neither close the tab again nor forget the memory saver's address
     this.tabs.delete(id); this.recent.delete(id);
   }
 
@@ -181,8 +181,7 @@ export class WorkspaceBrowser {
         if (url) pages.push({ id, space, url, title: this.parked.get(id) ?? '', loading: false, back: false, forward: false, restored: true, ...this.marks.page(id), ...(opener ? { opener } : {}) });
         continue;
       }
-      if (tab.view.webContents.isDestroyed()) continue;
-      const contents = tab.view.webContents;
+      const contents = livePage(tab); if (!contents) continue; // a page that closed itself leaves no entry
       pages.push({
         id, space, url: contents.getURL(), title: contents.getTitle(), loading: contents.isLoading(), back: contents.navigationHistory.canGoBack(), forward: contents.navigationHistory.canGoForward(),
         ...(tab.error ? { error: tab.error } : {}), ...(tab.favicon ? { favicon: tab.favicon } : {}), ...this.rules.extras(id), ...this.chrome.extras(id, contents),
@@ -203,7 +202,7 @@ export class WorkspaceBrowser {
   /** Live tabs' current addresses (for saving). */
   private addresses(): Map<string, string> {
     const out = new Map<string, string>();
-    for (const [id, tab] of this.tabs) if (!tab.view.webContents.isDestroyed()) out.set(id, tab.view.webContents.getURL());
+    for (const [id, tab] of this.tabs) { const page = livePage(tab); if (page) out.set(id, page.getURL()); }
     return out;
   }
 
@@ -218,7 +217,7 @@ export class WorkspaceBrowser {
     if (!window) throw new Error('The window is closed.');
     if (this.owner !== window) {
       this.owner = window;
-      for (const [id, tab] of this.tabs) if (!this.host.has(id) && !tab.view.webContents.isDestroyed()) { window.contentView.addChildView(tab.view); tab.view.setVisible(false); } // pages that waited without a window
+      for (const [id, tab] of this.tabs) if (!this.host.has(id) && livePage(tab)) { window.contentView.addChildView(tab.view); tab.view.setVisible(false); } // pages that waited without a window
       window.once('closed', () => this.windowGone());
       window.on('restore', () => this.backFromHost()); window.on('show', () => this.backFromHost()); // B-076: on screen again
       // Hide before resize/reload so native content never covers newly positioned UI.
@@ -232,7 +231,7 @@ export class WorkspaceBrowser {
   private async icon(tab: Tab, urls: string[]): Promise<void> {
     const ask = ++tab.iconAsk;
     const data = await faviconData(this.browserSession, urls);
-    if (ask === tab.iconAsk && !tab.view.webContents.isDestroyed() && data !== tab.favicon) { tab.favicon = data; this.publish(); }
+    if (ask === tab.iconAsk && livePage(tab) && data !== tab.favicon) { tab.favicon = data; this.publish(); }
   }
 
   private create(id: string, space: string = this.saved.spaceOf(id), by?: string): Tab {
@@ -251,7 +250,7 @@ export class WorkspaceBrowser {
     const contents = view.webContents;
     this.scheme(contents);
     this.chrome.attach(id, contents); // before the listeners below, so their publish carries its state
-    this.onTab?.(id, contents); contents.once('destroyed', () => this.onTab?.(id, null));
+    this.onTab?.(id, contents); contents.once('destroyed', () => { this.onTab?.(id, null); if (!tab.closing && this.tabs.get(id) === tab) this.command({ action: 'close', id }); }); // a page that closes itself (window.close(), a confirmation link) ends its tab like the person's Close; else its dead entry broke every list, save and the quit (18.11.2026)
     this.parked.delete(id);
     const allow = (url: string) => { try { return /^https?:\/\//i.test(url) && Boolean(new URL(browserUrl(url)).host); } catch { return false; } };
     contents.on('will-navigate', (event, url) => { if (!allow(url)) event.preventDefault(); });
@@ -289,8 +288,8 @@ export class WorkspaceBrowser {
   private hide(id?: string): void {
     for (const off of this.slots.hide(id)) {
       const tab = this.tabs.get(off);
-      if (!tab || this.host.has(off) || tab.view.webContents.isDestroyed()) continue;
-      if (tab.view.webContents.isFocused()) this.focusNext = this.saved.spaceOf(off); // the tab shown next there gets the keyboard
+      const page = livePage(tab); if (!tab || !page || this.host.has(off)) continue;
+      if (page.isFocused()) this.focusNext = this.saved.spaceOf(off); // the tab shown next there gets the keyboard
       tab.view.setVisible(false);
     }
   }
@@ -299,17 +298,17 @@ export class WorkspaceBrowser {
   private place(id: string, bounds: BrowserBounds): void {
     const space = this.saved.spaceOf(id);
     const before = this.tabs.get(this.slots.shownIn(space) ?? '');
-    const typing = this.focusNext === space || Boolean(before && before !== this.tabs.get(id) && !before.view.webContents.isDestroyed() && before.view.webContents.isFocused());
+    const typing = this.focusNext === space || Boolean(before && before !== this.tabs.get(id) && livePage(before)?.isFocused());
     const [width, height] = this.attachWindow().getContentSize();
     this.slots.show(space, id, fit(bounds, width, height));
     if (this.focusNext === space) this.focusNext = null;
     this.used(id);
     this.fromHost(id); // shown: back in the window
     if (this.marks.shown(id)) this.publish(); // shown: no background tab any more
-    const live = [...this.tabs].filter(([key, tab]) => !tab.view.webContents.isDestroyed() && !this.host.has(key));
+    const live = [...this.tabs].filter(([key, tab]) => livePage(tab) && !this.host.has(key));
     this.slots.arrange(live, (key, shown) => { if (shown) this.discards.shown(key); else this.discards.hidden(key); });
     const shown = this.tabs.get(id);
-    if (typing && shown && !shown.error && !shown.view.webContents.isDestroyed()) shown.view.webContents.focus(); // keyboard tab switches keep typing in pages
+    if (typing && shown && !shown.error) livePage(shown)?.focus(); // keyboard tab switches keep typing in pages
   }
 
   /** A shown tab back on its slot (its page started loading again, or was reloaded after a failure). */
@@ -362,8 +361,8 @@ export class WorkspaceBrowser {
       return this.list();
     }
     const tab = this.wake(command.id);
-    if (!tab) return this.list();
-    const contents = tab.view.webContents;
+    const contents = livePage(tab);
+    if (!tab || !contents) return this.list();
     if (command.action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
     else if (command.action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     else if (command.action === 'reload') {
@@ -384,11 +383,11 @@ export class WorkspaceBrowser {
   sideContents(id: string, watcher = false): WebContents | undefined {
     if (this.ended) return undefined;
     const tab = this.wake(id);
-    if (!tab || tab.view.webContents.isDestroyed()) return undefined;
+    const page = livePage(tab); if (!tab || !page) return undefined;
     if (!this.slots.painted(id, this.owner)) { this.discards.shown(id); this.discards.hidden(id); this.host.take(id, tab.view); } // place() brings it back
     if (!watcher) this.host.touch(id); // an agent's use; a watcher's page goes back when the watch ends (sideRelease)
     this.used(id);
-    return tab.view.webContents;
+    return page;
   }
   /** B-076: nobody watches `id` from another PC or a phone any more: off the host, unless an agent used it lately. */
   sideRelease(id: string): void { if (this.host.has(id) && !this.host.usedLately(id)) this.fromHost(id); }
@@ -402,7 +401,7 @@ export class WorkspaceBrowser {
   }
   sideKeep(id: string): void { if (this.marks.keep(id)) this.publish(); }
   sideClose(id: string): void { this.command({ action: 'close', id }); }
-  sidePicked(id: string, pick: Parameters<TabChrome['picked']>[2]): void { this.chrome.picked(id, this.tabs.get(id)?.view.webContents, pick); } // B-081: a pin, or the picker ended
+  sidePicked(id: string, pick: Parameters<TabChrome['picked']>[2]): void { this.chrome.picked(id, livePage(this.tabs.get(id)), pick); } // B-081: a pin, or the picker ended
 
   /** A new tab of `space` at `url`, its id: in the background unless `show` (the tabs shown stay shown), with the agent that opened it. */
   private openTab(url: string, space: string, show: boolean, opener?: PageOpener, preview = false): string {
@@ -437,7 +436,7 @@ export class WorkspaceBrowser {
     this.saved.park(this.addresses(), working);
     this.owner = null; this.slots.clear();
     for (const [id, tab] of [...this.tabs]) {
-      if (working.has(id) && !tab.view.webContents.isDestroyed()) {
+      if (working.has(id) && livePage(tab)) {
         this.host.take(id, tab.view); // the tab the person looked at, too, when an agent was using it
         this.discards.hidden(id); // out of sight now: the memory saver's time runs
         continue;

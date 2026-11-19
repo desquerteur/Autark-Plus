@@ -226,8 +226,15 @@ export interface InstallHelperDeps {
   /** Writes the script, starts the helper detached; calls exactly one of started/failed, and ended when a started helper exits. */
   spawn(launch: HelperLaunch, events: HelperEvents): void;
   quit(): void;
+  /** 19.11.2026: ends this process at once (app.exit) when the quit above did not end it within QUIT_MS. */
+  exit?(): void;
   log?(line: string): void;
 }
+
+/** 19.11.2026: a quit for the install that has not ended the app by then (a quit step threw and the app kept waiting on
+ * itself – the owner's PC could not update for hours, and no customer can run commands) ends it hard; the runtime is
+ * drained already, and this is shorter than update-service.ts INSTALL_WATCHDOG_MS, which would resume work instead. */
+export const QUIT_MS = 12_000;
 
 /** The downloaded file electron-updater 6.8.9 verified (BaseUpdater.installerPath, downloadedUpdateHelper.packageFile). */
 function downloaded(updater: Updater): { file: string | null; packageFile: string | null; admin: boolean } {
@@ -268,6 +275,7 @@ export function installWithHelper(updater: Updater, deps: InstallHelperDeps): vo
           settled = true;
           deps.log?.('update helper started; quitting for the install');
           deps.quit();
+          if (deps.exit) setTimeout(() => { deps.log?.('the quit did not end the app; ending it for the install'); deps.exit?.(); }, QUIT_MS).unref?.();
         },
         failed: error => {
           if (settled) return;

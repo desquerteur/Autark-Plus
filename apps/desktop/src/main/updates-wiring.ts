@@ -60,6 +60,8 @@ export interface DesktopUpdatesDeps {
 }
 
 export const DRAFT_FLUSH_TIMEOUT_MS = 8000;
+/** installFile: how long after its quit request a still-running app waits before it takes its work back: after the install helper's own wait (install-helper.ts WAIT_SECONDS, 45 s), under the 60 s asked for on 18.11.2026. */
+export const INSTALL_FILE_WATCHDOG_MS = 50_000;
 
 /**
  * electron-updater's autoUpdater (loaded only for packaged builds). Its export is a getter that
@@ -88,13 +90,14 @@ async function relaunchingHelper(updater: Updater, log: ((line: string) => void)
     logFile: path.join(logs, HELPER_LOG),
     spawn: (launch, events) => spawnHelper(launch, logs, events),
     quit: () => app.quit(),
+    exit: () => app.exit(0),
     log,
   });
 }
 
 /** What this needs of electron's main module (its exports sit on the namespace or the default export, as for shell below). */
 interface ElectronMain {
-  app: { getName(): string; getVersion(): string; getPath(name: 'userData'): string; quit(): void };
+  app: { getName(): string; getVersion(): string; getPath(name: 'userData'): string; quit(): void; exit(code?: number): void };
   net: { fetch(url: string): Promise<Response> };
   shell: { trashItem(target: string): Promise<void> };
 }
@@ -325,7 +328,7 @@ export class DesktopUpdates {
       await this.prepareInstall();
       this.deps.log?.('installing a build from a file');
       (own.spawn ?? spawnHelper)(launch, own.logs, {
-        started: () => own.quit(),
+        started: () => { own.quit(); this.watchInstall(); },
         failed: () => { this.deps.log?.('install helper did not start; resuming'); this.cancelInstall(); },
         ended: () => {},
       });
@@ -335,6 +338,21 @@ export class DesktopUpdates {
       if (!held) void this.deps.runtime.prepareRestart(true).catch(() => {}); // B-080: it answers the install record it kept
       throw error;
     }
+  }
+
+  /**
+   * An app that was asked to quit for an install and is still running when the helper has given up did not quit (18.11.2026:
+   * an exception in the quit left it up with the runtime stopped from 13:06 to 22:35 – nobody worked and nobody noticed). It takes
+   * its work back after INSTALL_FILE_WATCHDOG_MS and says so; a quit that works ends this process before the timer fires.
+   */
+  private watchInstall(): void {
+    const fire = (): void => {
+      if (!this.drained && !this.paused) return;
+      this.deps.log?.(`INSTALL FAILED: the app did not end within ${INSTALL_FILE_WATCHDOG_MS / 1000} s; the runtime resumes`);
+      this.cancelInstall();
+    };
+    if (this.deps.setTimer) this.deps.setTimer(fire, INSTALL_FILE_WATCHDOG_MS);
+    else setTimeout(fire, INSTALL_FILE_WATCHDOG_MS).unref?.();
   }
 
   private async prepareInstall(to?: string): Promise<void> {

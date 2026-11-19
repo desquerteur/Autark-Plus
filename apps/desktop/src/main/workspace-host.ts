@@ -92,7 +92,7 @@ export class PageHost {
   release(id: string, view: WebContentsView, into: BaseWindow | null): void {
     if (!this.pages.delete(id)) return;
     this.views.delete(id);
-    if (!view.webContents.isDestroyed()) view.webContents.setBackgroundThrottling(true);
+    if (view.webContents && !view.webContents.isDestroyed()) view.webContents.setBackgroundThrottling(true);
     if (into) into.contentView.addChildView(view); else this.window?.contentView.removeChildView(view);
     view.setVisible(false);
     this.end();
