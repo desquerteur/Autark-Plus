@@ -5,8 +5,8 @@ chats and tasks, "My Day" with your calendar, a browser beside the chat, your ph
 work through the AI plans you already have (Claude Code, Codex and others), API keys or local model servers. Everything
 runs on your own PC. Three services of ours take part: the meeting server that connects your devices, the public
 library, and the sealed feedback mailbox. The update check goes to GitHub. [Network connections](#network-connections)
-lists every connection the app makes, and [What the agents can do on your PC](#what-the-agents-can-do-on-your-pc) says
-plainly how free the agents are.
+lists every connection the app makes, and [Security: two modes](#security-two-modes) says plainly how far the agents
+go and what you can close.
 
 This repository is Autark's public home: the source code of the desktop app, the Android app, the website and the
 meeting server, the downloads and their checksums, the release workflows, and the public skill library that Autark's
@@ -135,18 +135,41 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 | `docs/` | [ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the code is built) and [EXTERNAL_PROTOCOL.md](docs/EXTERNAL_PROTOCOL.md) (the `wf` CLI and the interface for scripts and bridges) |
 | `.github/workflows/` | The release workflows and the automatic merge of `library/` pull requests |
 
-## What the agents can do on your PC
+## Security: two modes
 
-Autark's agents act for you; that is what the app is for. Know what that means before you install it:
+Autark's agents act for you; that is what the app is for. You choose how far they go, in Settings › Security. **Trust AI
+mode** gives your team the run of your PC, and it can even unlock Windows for you. **Secure mode** lets you close what you
+want (files, commands, web, apps, messages, accounts, money), and the app enforces it, not a prompt.
 
-- **Full access (the default).** The agents run shell commands, read and change files anywhere your Windows, macOS or
-  Linux user can, and act in the accounts and apps you connected. They do this **without asking first**.
-- **Careful.** You can choose this on the first run or later in Settings › Security. The agents then work freely in
-  their own folders and check with you before they change anything elsewhere. This is an instruction the agents follow,
-  **not a sandbox**: nothing in the app enforces it technically.
-- **Hard separation.** If you want a boundary the agents cannot cross, run Autark under a separate operating-system
-  user or in a virtual machine, and connect only the accounts you want it to use.
-- There is no approval step per action, and we are not building one now.
+> **Status.** Both modes are in the newest source code and arrive with the next update. The release you can install
+> today (0.3.14) is the open system: agents work with your rights and text steers them.
+
+**Trust AI mode** is the open system.
+
+- The team works everywhere on your PC with the rights of your user account and acts in the accounts and apps you connected.
+- You describe per topic, in your own words, when the team should check with you.
+- Three switches can be set to *ask*: spending money, publishing, and messages to other people.
+- With the installed desktop service (`AutarkDesktopBroker`, part of Autark since early November, built on the same principle
+  remote-desktop tools such as AnyDesk use) the team can also work on the locked Windows screen and unlock it with your
+  stored password. No model sees the password. Confirming Windows prompts (UAC) in Trust AI mode is coming.
+
+**Secure mode** has one switch per capability, and the runtime itself holds shut what a switch closes.
+
+- Reading files outside the company's own folders: all, or only folders you choose.
+- Changing and deleting files outside them: the same.
+- Shell commands, web, your phone, messages to other people, public posts.
+- Computer control: all apps, chosen apps, or ask every time.
+- Accounts and stored passwords, Autark's own setup, hiring and changing agents, money.
+- When an agent needs something that is closed, the app asks you: once, always for this setting, or always for this place.
+- Spending money is closed for good and stored cards are locked. Agents never operate Autark's own window or change the
+  security settings. The lock screen and Windows prompts stay closed.
+
+**Layers you have today:** secrets only as `secret://…` handles, with values masked and kept out of model text; a brake on
+**Ctrl+Alt+Shift+X** that stops every agent on the PC; backups of the data folder and of the database before each update;
+and, if you want, a separate Windows user or a virtual machine for Autark.
+
+There is no sandbox. Secure mode closes capabilities in the runtime; if you want a boundary around the whole PC, run Autark
+under a separate operating-system user or in a virtual machine, and connect only the accounts you want it to use.
 
 ## Network connections
 
@@ -190,7 +213,7 @@ below live in `settings.json` in Autark's data folder and in the Settings pages.
 | Phone notifications (push services of Google, Apple, Mozilla) | Short encrypted notifications to a phone or browser you linked |
 | Tailscale | Your own tailnet, when you choose it for linked PCs |
 
-Agents with full access can also reach any address themselves, from a shell or the browser. Code signing timestamp
+Agents that have the shell or the web open can also reach any address themselves. Code signing timestamp
 servers are contacted only when we build a release, never by the app.
 
 ## The public library
