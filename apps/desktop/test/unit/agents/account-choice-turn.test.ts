@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Journal } from '../../../src/runtime/runs/journal.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
-import { applyAccountChoice, chosenAccount } from '../../../src/runtime/routing/account-choice.ts';
+import { chosenAccount } from '../../../src/runtime/routing/account-choice.ts';
+import { settleAccount } from '../../../src/runtime/routing/account-fallback.ts';
 import { account, T0 } from '../models/harness.ts';
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 import { setup } from './fixture.ts';
@@ -21,9 +22,9 @@ function withTwoPlans(fallback: 'ask' | 'switch' = 'ask', fritz2: Partial<Accoun
   h.services.runs = new Journal({ db: h.db, bus: h.bus, clock: h.clock });
   h.services.accounts = { ...h.services.accounts, get: (id: string) => all.find((entry) => entry.id === id), list: () => all } as typeof h.services.accounts;
   // the router's last step as RouterImpl.route runs it: the automatic pick is fritz1 (h.route)
-  h.services.router = { route: async (request) => applyAccountChoice({
-    decision: h.route, choice: chosenAccount(h.services, request.agent, request.conversationId), model: OPUS,
-    accounts: all, now: h.clock.now(), exclude: new Set(request.exclude ?? []), fallback,
+  h.services.router = { route: async (request) => settleAccount({
+    decision: h.route, choice: chosenAccount(h.services, request.agent, request.conversationId), models: [OPUS],
+    accounts: all, now: h.clock.now(), exclude: new Set(request.exclude ?? []), fallback, order: [], runnable: () => true,
   }) } as typeof h.services.router;
   const used: string[] = [];
   h.state.script = async (input) => { used.push(input.account.id); return { text: 'Hi', stop: 'done' }; };
@@ -73,5 +74,5 @@ test("'switch': the turn runs on A and the chat says why", async () => {
   await new TurnExecutor(() => h.services).execute(h.request());
   assert.deepEqual(used, ['acc_claude']);
   const line = h.chats.messages(h.chat.id, { limit: 20 }).find((message) => message.meta.status?.text?.includes('fritz2'));
-  assert.equal(line?.meta.status?.text, 'fritz2 is signed out – this turn runs on fritz1.');
+  assert.equal(line?.meta.status?.text, 'Switched to fritz1 – fritz2 is signed out.');
 });

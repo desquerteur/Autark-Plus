@@ -5,7 +5,7 @@
 //   run journal + streaming message → engine attempt → session renewal once when the native
 //   session cannot continue (context full, thread gone; another folder, details.folder: quietly)
 //   → the account learns what the attempt says about it (always, also after tool calls) →
-//   failover once on limit/unavailable (renewal only when no tool ran; failover also after tool calls whose effects are all known – PR3: the
+//   failover on limit/unavailable – AF-023: a chain, each account at most once (failover-line.ts) – (renewal only when no tool ran; failover also after tool calls whose effects are all known – PR3: the
 //   continuation gets them as "Previous attempt"; finish then judges and books both attempts:
 //   tools, plan, tokens and cost – mergeAttempts) → finish (message, blocks, cursor, ownership …)
 //   → the engine-reported context window is kept with the session. A turn that cannot start
@@ -45,10 +45,9 @@ import { accountFailure, recordAccountFailure } from '../accounts/failure.ts';
 import { isOutage } from './outages.ts';
 import { outageLine } from './outage-line.ts';
 import { noteChatOutage } from './redelivery.ts';
-import { failoverText } from './switch-line.ts';
 import { routeLines } from './route-line.ts';
 import { splitTurnFailed } from './split-turn.ts'; // B-057
-import { switchLine } from '../routing/account-choice.ts'; // AF-021
+import { failoverLine, MAX_FAILOVERS, routeSwitchLine } from './failover-line.ts'; // AF-021/AF-023
 import { readStop } from '../../shared/model/account-choice.ts'; // AF-021
 import { addCache } from '../engines/shared.ts';
 import type { AttemptResult, RoutedTurn, TurnOutcome, TurnPlan, TurnRequest } from './turn-types.ts';
@@ -152,7 +151,8 @@ export class TurnExecutor {
     }
     bindTurn(request, turn);
     this.announceSwitch(services, plan, request.runId, turn.route, turn.modelName);
-    const accountLine = turn.route.accountSwitch ? switchLine(services.accounts.list(), turn.route) : undefined; // AF-021: the chosen account could not run – never silent
+    // AF-021/AF-023: the route moved off a used-up (or chosen, unusable) account – never silent, said once (failover-line.ts)
+    const accountLine = routeSwitchLine(services, { agentId: plan.agent.id, conversationId: plan.conversationId, route: turn.route, modelName: turn.modelName });
     if (accountLine) this.statusLine(services, plan, request.runId, 'note', accountLine, { accountSwitch: turn.route.accountSwitch, to: turn.route.accountId });
 
     let messageId = this.beginMessage(services, plan, request, turn, started?.startedAt ?? services.clock.now());
@@ -177,25 +177,31 @@ export class TurnExecutor {
     }
 
     this.accountFailed(services, turn, attempt);
-    const afterTools = attempt.toolCalls;
-    if (canFailover(attempt, request.signal, afterTools > 0 && effectsKnown(services, request.runId, afterTools))) {
+    // AF-023: a failure chain – the turn goes on on the next account that can run (the use's fallback order, else the
+    // same model on the provider's next account, else the nearest model elsewhere); every account at most once.
+    const tried = new Set<string>([turn.account.id]);
+    for (let hop = 0; hop < MAX_FAILOVERS; hop++) {
+      const afterTools = attempt.toolCalls;
+      if (!canFailover(attempt, request.signal, afterTools > 0 && effectsKnown(services, request.runId, afterTools))) break;
       const failed = turn;
       const first = attempt;
       const limited = accountFailure(attempt.result) === 'limit';
       const retry = { ...request, interruption: { at: services.clock.now(), reason: attempt.result.error?.message ?? (limited ? 'Usage limit reached.' : 'The model was unavailable.') } };
       try {
-        const alternative = await services.router.route(routeRequest(plan, [failed.account.id]));
-        if (alternative.accountId !== failed.account.id) {
-          turn = await buildTurn(services, plan, retry, alternative, repairNotes);
-          bindTurn(request, turn);
-          services.runs.item(request.runId, { kind: 'note', data: { failover: { from: failed.route.modelId, fromAccount: failed.account.id, to: alternative.modelId, toAccount: alternative.accountId, reason: limited ? 'limit' : 'unavailable', ...(afterTools ? { afterTools } : {}) } }, effectStatus: 'none' });
-          const text = failoverText({ modelName: turn.modelName, effort: alternative.effort, failedName: failed.modelName, sameModel: failed.route.modelId === alternative.modelId, limited });
-          this.statusLine(services, plan, request.runId, 'model_switched', text, { from: failed.route.modelId, to: alternative.modelId, effort: alternative.effort, reason: limited ? 'limit' : 'unavailable' });
-          attempt = mergeAttempts(first, await runAttempt(services, plan, turn, request, messageId));
-          this.accountFailed(services, turn, attempt);
-        }
+        const alternative = await services.router.route(routeRequest(plan, [...tried]));
+        if (tried.has(alternative.accountId)) break;
+        tried.add(alternative.accountId);
+        turn = await buildTurn(services, plan, retry, alternative, repairNotes);
+        bindTurn(request, turn);
+        services.runs.item(request.runId, { kind: 'note', data: { failover: { from: failed.route.modelId, fromAccount: failed.account.id, to: alternative.modelId, toAccount: alternative.accountId, reason: limited ? 'limit' : 'unavailable', ...(afterTools ? { afterTools } : {}) } }, effectStatus: 'none' });
+        const modelChanged = failed.route.modelId !== alternative.modelId;
+        const text = failoverLine(services, { failed: failed.account, failedModel: failed.model, result: first.result, next: alternative, nextModelName: turn.modelName, modelChanged });
+        this.statusLine(services, plan, request.runId, 'model_switched', text, { from: failed.route.modelId, to: alternative.modelId, fromAccount: failed.account.id, toAccount: alternative.accountId, effort: alternative.effort, reason: limited ? 'limit' : 'unavailable' });
+        attempt = mergeAttempts(first, await runAttempt(services, plan, turn, request, messageId));
+        this.accountFailed(services, turn, attempt);
       } catch (error) {
         services.log.info('no failover route', { agentId: plan.agent.id, error: toErrorData(error).message });
+        break;
       }
     }
     // Still unusable (tools ran, stopped, or the retry ended the same way): the next turn starts fresh.

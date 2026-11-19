@@ -2,11 +2,13 @@
 // its picture (AF-009: logo, else avatar, else initials), name, share left and reset (account-menu.ts). Shown only
 // where the provider has more than one account (or one is chosen). A pick is this chat's choice for the agent
 // (chats.update settings.accounts); the agent's default is marked "Agent default". Under the list, for the owner,
-// whether a used-up chosen account stops the turn and asks (default) or another one runs and the chat says so
-// (settings.json routing.accountFallback).
+// whether a used-up chosen account lets the next one run and the chat says so (default since AF-023: the Work use's
+// fallback order of Settings › Models, else automatic – the same rule as everywhere, runtime/routing/account-fallback.ts)
+// or stops the turn and asks (settings.json routing.accountFallback).
 // Owns: the section. Never: routes or hides that a choice could not run.
 
-import { ACCOUNT_AUTO } from '../../../shared/model/account-choice.ts';
+import { ACCOUNT_AUTO, accountFallbackOf } from '../../../shared/model/account-choice.ts';
+import { fallbackOrder } from '../../../shared/model/account-fallback.ts'; // AF-023
 import { AccountAvatar } from '../../lib/account-avatar.tsx';
 import { Icon } from '../../lib/ui.tsx';
 import { settings, updateSettings } from '../../lib/store.ts';
@@ -23,7 +25,8 @@ export function AccountSection(props: {
   const { options, selected } = props;
   const now = Date.now();
   if (options.length < 2 && selected.value === ACCOUNT_AUTO) return null;
-  const fallback = settings.value?.routing.accountFallback ?? 'ask';
+  const fallback = accountFallbackOf(settings.value?.routing.accountFallback); // AF-023: switch by default
+  const ordered = fallbackOrder(settings.value?.routing.fallbacks, 'work').length > 0;
   return (
     <div class="menu-section account-section" role="group" aria-label="Account">
       <div class="account-section-title">Account</div>
@@ -56,7 +59,9 @@ export function AccountSection(props: {
         <button type="button" class="menu-item account-fallback" role="menuitemcheckbox" aria-checked={fallback === 'switch'}
           onClick={() => void updateSettings({ routing: { accountFallback: fallback === 'switch' ? 'ask' : 'switch' } }).catch((error) => toastError(error, 'Could not save'))}>
           <span class="menu-label"><span>Used up: switch by itself</span></span>
-          {fallback === 'switch' ? <Icon name="check" size={16} class="menu-check" /> : <span class="menu-hint">Off · asks first</span>}
+          {fallback === 'switch'
+            ? <><span class="menu-hint">{ordered ? 'Order in Settings › Models' : 'Automatic'}</span><Icon name="check" size={16} class="menu-check" /></>
+            : <span class="menu-hint">Off · asks first</span>}
         </button>
       )}
     </div>

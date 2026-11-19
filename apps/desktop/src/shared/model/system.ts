@@ -5,6 +5,7 @@
 import type { ProviderEntry } from './provider-entries.ts';
 import type { AppearanceSettings } from './appearance.ts';
 import type { Personality } from './personality.ts';
+import type { FallbackOrders } from './account-fallback.ts'; // AF-023
 
 export interface Profile {
   name: string; // the person (CEO)
@@ -77,6 +78,8 @@ export interface RoutingSettings {
   allowPaidFallback: boolean; // may spill over to pay-per-use API keys
   /** AF-021: a chosen account cannot run – 'ask' stops the turn with a line in the chat, 'switch' takes another and says so. */
   accountFallback?: 'ask' | 'switch';
+  /** AF-023: per use, what runs when its account is used up – an ordered list of account (+ model); none = automatic. */
+  fallbacks?: FallbackOrders;
 }
 
 /**

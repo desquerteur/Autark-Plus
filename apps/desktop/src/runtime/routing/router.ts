@@ -13,7 +13,9 @@
 //   → the deterministic score (score.ts: curated prior + tier fit + plan headroom − cost, work plan bonus for agents)
 //   → effort (previous.ts startEffort), clamped to the model's efforts; account: the healthy accounts of that model.
 //   → AF-021: a chosen account (chat choice → agent default) of the picked model's provider replaces that account,
-//     or stops / switches with a notice when it cannot run (account-choice.ts).
+//     or stops / switches with a notice when it cannot run; AF-023: the same for the account a route was meant for –
+//     the use's fallback order in Settings, else the automatic pick, marked so the chat says so (account-fallback.ts).
+//     A pin whose accounts all cannot run falls back to the nearest model (closestModel), so does a failover.
 // A split's turn (RouteRequest.split) has no agent pin and keeps an effort it names (split-route.ts).
 // Owns: that order and the user-facing reason. Never: changes state, asks a model, or exceeds the policy band
 // silently (it fails with a clear message instead).
@@ -35,12 +37,16 @@ import { marginalCost, scoreModel, strengthOf, tierRank, type CostMode } from '.
 import { NEED_TEXT, NO_FIT_TEXT, needChoice, raisedText, stepUpEffort } from './need.ts';
 import { splitPolicy } from './split-route.ts';
 import { PERSON_TEXT, personAsks, personEffort, strongestPick, topTier } from './person-turn.ts';
-import { applyAccountChoice, chosenAccount } from './account-choice.ts'; // AF-021
+import { chosenAccount } from './account-choice.ts'; // AF-021
+import { closestModel, settleAccount } from './account-fallback.ts'; // AF-023
+import { fallbackOrder, fallbackUseOf } from '../../shared/model/account-fallback.ts'; // AF-023
 
 export { NO_MODEL_MESSAGE };
 const ALTERNATIVES = 3;
 
 interface Ranked { model: ModelInfo; accounts: Account[]; score: number }
+/** AF-023: what pick saw that the account step needs: a pin whose accounts all cannot run, and the turn's model filter. */
+interface PickNote { blocked?: ModelInfo; runnable?: (model: ModelInfo) => boolean }
 
 export class RouterImpl implements Router {
   private readonly deps: { services: () => RuntimeServices };
@@ -50,16 +56,20 @@ export class RouterImpl implements Router {
   }
 
   async route(request: RouteRequest): Promise<RouteDecision> {
-    const decision = await this.pick(request);
-    // AF-021: the chosen account (chat choice → agent default) runs the picked model when it can (account-choice.ts).
+    const seen: PickNote = {};
+    const decision = await this.pick(request, seen);
+    // AF-021/AF-023: the chosen account (chat choice → agent default), else the account the route was meant for, runs
+    // when it can; else the use's fallback order or the automatic pick, marked for the chat (account-fallback.ts).
     const s = this.deps.services();
-    return applyAccountChoice({
-      decision, choice: chosenAccount(s, request.agent, request.conversationId), model: s.catalog.get(decision.modelId),
-      accounts: s.accounts.list(), now: s.clock.now(), exclude: new Set(request.exclude ?? []), fallback: s.settings.get().routing.accountFallback,
+    const routing = s.settings.get().routing;
+    return settleAccount({
+      decision, choice: chosenAccount(s, request.agent, request.conversationId), wanted: seen.blocked, models: s.catalog.list(),
+      accounts: s.accounts.list(), now: s.clock.now(), exclude: new Set(request.exclude ?? []), fallback: routing.accountFallback,
+      order: fallbackOrder(routing.fallbacks, fallbackUseOf(request.agent.id === SYSTEM_ID)), runnable: seen.runnable ?? (() => true),
     });
   }
 
-  private async pick(request: RouteRequest): Promise<RouteDecision> {
+  private async pick(request: RouteRequest, seen: PickNote = {}): Promise<RouteDecision> {
     const s = this.deps.services();
     let models = s.catalog.list();
     if (!models.some((model) => model.available)) {
@@ -80,6 +90,7 @@ export class RouterImpl implements Router {
 
     const candidates = buildPool({ s, models, category, policy, needs: request.needs, minTier, exclude: new Set(request.exclude ?? []) });
     const { accountsFor, unusable, inBand } = candidates;
+    seen.runnable = (model) => !unusable(model); // AF-023: a fallback step must serve this turn too (needs, availability)
     const pool = candidates.entries;
     const prefer = new Set(policy.prefer);
     const rank = (entries: readonly PoolEntry[], mode: CostMode): Ranked[] => entries
@@ -108,6 +119,7 @@ export class RouterImpl implements Router {
       let why = pinned ? unusable(pinned) : 'unavailable';
       if (!why && banded && pinned && !inBand(pinned)) why = 'policy';
       const accounts = pinned && !why ? accountsFor(pinned).filter((account) => !only || only.has(account.id)) : [];
+      if (pinned && !why && !accounts.length && !only) seen.blocked ??= pinned; // AF-023: every account of the pin is used up
       if (pinned && accounts.length) {
         const reason = [fallbackReason, `${PIN_TEXT[pin.source]} · ${categoryLabel(category)}`].filter(Boolean).join(' · ');
         return decide({ model: pinned, accounts }, fallbackReason ? 'fallback' : 'pin', reason, request.previous?.modelId === pinned.id);
@@ -175,10 +187,14 @@ export class RouterImpl implements Router {
       if (!switchNote) return decide(previous, fallbackReason ? 'fallback' : 'previous', [fallbackReason, `continues on the previous model · ${categoryLabel(category)}`].filter(Boolean).join(' · '), true);
     }
 
-    // 6. The best score.
-    const chosen = ranked[0];
+    // 6. The best score – AF-023: after a pin whose accounts all cannot run, or a failover off a model no account can run
+    //    now, the nearest model to it (the same model elsewhere, else the same tier; the score breaks ties).
+    const failedModel = request.exclude?.length && request.previous && !previous ? models.find((model) => model.id === request.previous!.modelId) : undefined;
+    const target = seen.blocked ?? failedModel;
+    const chosen = (target ? closestModel(target, ranked, (entry) => entry.model) : undefined) ?? ranked[0];
     if (chosen.model.id === previous?.model.id) switchNote = undefined; // weak, but nothing better is allowed
-    const reason = [fallbackReason, switchNote, `${categoryLabel(category)} · ${ruleReason(chosen, category, costMode)}`].filter(Boolean).join(' · ');
+    const nearest = target && chosen !== ranked[0] ? `nearest to ${target.name}` : undefined;
+    const reason = [fallbackReason, switchNote, `${categoryLabel(category)} · ${nearest ?? ruleReason(chosen, category, costMode)}`].filter(Boolean).join(' · ');
     return decide(chosen, fallbackReason ? 'fallback' : 'rules', reason, request.previous?.modelId === chosen.model.id);
   }
 }

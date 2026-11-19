@@ -20,9 +20,9 @@ test('precedence: the chat choice, else the agent default, else automatic', () =
   assert.equal(accountChoiceOf(undefined, undefined), undefined);
   assert.equal(accountChoiceOf('', 'auto'), undefined);
   assert.equal(accountChoiceOf(42, null), undefined, 'junk is no choice');
-  assert.equal(accountFallbackOf(undefined), 'ask');
-  assert.equal(accountFallbackOf('switch'), 'switch');
-  assert.equal(accountFallbackOf('nonsense'), 'ask');
+  assert.equal(accountFallbackOf(undefined), 'switch', 'AF-023: switching is the default');
+  assert.equal(accountFallbackOf('ask'), 'ask');
+  assert.equal(accountFallbackOf('nonsense'), 'switch');
 });
 
 test('a stop reads back from message meta; junk does not', () => {
@@ -77,6 +77,7 @@ test("another provider's account never changes the route", async () => {
 
 test("a used-up chosen account: 'ask' stops with the reason and the choices", async () => {
   const { h, route } = await twoClaude({ accounts: { [TOM]: 'acc_fritz2' } });
+  h.settings.update({ routing: { accountFallback: 'ask' } } as never);
   const reset = T0 + 3 * 3_600_000;
   h.accounts.upsert({ ...h.accounts.get('acc_fritz2')!, limits: { windows: [{ name: '5h', usedPercent: 100, windowMinutes: 300, resetsAt: reset }] } as never }, false);
   await assert.rejects(route(), (error: unknown) => {
@@ -95,12 +96,13 @@ test("a used-up chosen account: 'switch' runs on another account and marks it, s
   h.accounts.upsert({ ...h.accounts.get('acc_fritz2')!, state: 'cooling', coolingUntil: T0 + 60_000 }, false);
   const decision = await route();
   assert.equal(decision.accountId, 'acc_claude');
-  assert.deepEqual(decision.accountSwitch, { from: 'acc_fritz2', problem: 'limit', source: 'chat' });
-  assert.equal(switchLine(h.accounts.list(), decision), 'fritz2 has used up its limit – this turn runs on fritz1.');
+  assert.deepEqual(decision.accountSwitch, { from: 'acc_fritz2', problem: 'limit', source: 'chat', until: T0 + 60_000 });
+  assert.equal(switchLine(h.accounts.list(), decision, 'UTC', T0), 'Switched to fritz1 – fritz2 is used up until 09:01.');
 });
 
 test('a signed-out or just-failed chosen account is named as such', async () => {
   const { h, route } = await twoClaude({}, 'acc_fritz2');
+  h.settings.update({ routing: { accountFallback: 'ask' } } as never);
   h.accounts.upsert({ ...h.accounts.get('acc_fritz2')!, state: 'needs_login' }, false);
   await assert.rejects(route(), (error: unknown) => (error as WorkforceError).details?.accountChoice !== undefined
     && (error as WorkforceError & { details: { accountChoice: { problem: string; source: string } } }).details.accountChoice.problem === 'signed_out'

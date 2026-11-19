@@ -181,7 +181,12 @@ export interface RouteDecision {
 export interface AccountSwitch {
   from: string;
   problem: 'limit' | 'signed_out' | 'off' | 'model' | 'failed';
-  source: 'chat' | 'agent';
+  /** AF-023: 'auto' – no choice named `from`; it was the account the route would have taken (shared/model/account-fallback.ts). */
+  source: 'chat' | 'agent' | 'auto';
+  /** AF-023: when `from` can run again (epoch ms), when known. */
+  until?: number;
+  /** AF-023: the use's fallback order in Settings picked the account that runs. */
+  byOrder?: boolean;
 }
 
 export interface UsageSummary {
