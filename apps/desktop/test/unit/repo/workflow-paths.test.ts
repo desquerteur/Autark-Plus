@@ -169,7 +169,7 @@ test('the YAML reader understands the workflow shapes used here', () => {
 });
 
 test('every workflow file exists and is read; one builds from the sources', { skip: files.length === 0 && 'no .github/workflows next to the app' }, () => {
-  assert.ok(fromSource().some((file) => /(^|\/)(desktop|build)\.yml$/.test(file.name)), 'a workflow builds and checks the app from its sources');
+  assert.ok(fromSource().some((file) => /(^|\/)(desktop|build|build-desktop)\.yml$/.test(file.name)), 'a workflow builds and checks the app from its sources');
   for (const file of files) assert.ok(runSteps(workflowOf(file)).length > 0, `${file.name} has steps`);
 });
 

@@ -137,7 +137,7 @@ test('buildTurn adds the recap on another engine or a new session, not to the se
   assert.ok((await inputOf()).includes(RECAP_TITLE), 'a new session does not know it either');
 });
 
-test('a limit after tool calls fails over once when every effect is known – the continuation gets the recap', async () => {
+test('a limit after tool calls fails over along the chain (AF-023, each account once) when every effect is known – the continuation gets the recap', async () => {
   const h = journalSetup();
   const inputs: Record<string, string[]> = {};
   const effect: { status: RunItem['effectStatus'] } = { status: 'confirmed' };
@@ -148,7 +148,7 @@ test('a limit after tool calls fails over once when every effect is known – th
       h.call(input.runId, 'tasks.create', 'Create task "Draft the post"', effect.status); // what the registry journals
       return LIMIT;
     }
-    return LIMIT; // the second account is used up too: no second failover
+    return LIMIT; // the second account is used up too: AF-023 moves on to the third, each account runs at most once
   };
   Object.assign(h.services, {
     accounts: { get: (id: string) => ({ ...h.account, id }), updateLimits: () => {}, markLimited: () => {}, candidates: () => [] },
@@ -157,9 +157,9 @@ test('a limit after tool calls fails over once when every effect is known – th
   const failovers = (runId: string) => h.runs.items(runId).filter((item) => item.kind === 'note' && item.data.failover).map((item) => item.data.failover);
 
   await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_known' }));
-  assert.deepEqual(Object.keys(inputs), ['acc_1', 'acc_2'], 'one failover, not two');
+  assert.deepEqual(Object.keys(inputs), ['acc_1', 'acc_2', 'acc_3'], 'a chain of failovers, every account once (AF-023)');
   assert.match(inputs.acc_2[0], /Previous attempt \(not visible in the chat\):\n- \d\d:\d\d tasks\.create: Create task "Draft the post" → done/);
-  assert.deepEqual(failovers('run_known'), [{ from: h.route.modelId, fromAccount: 'acc_1', to: h.route.modelId, toAccount: 'acc_2', reason: 'limit', afterTools: 1 }]);
+  assert.deepEqual(failovers('run_known')[0], { from: h.route.modelId, fromAccount: 'acc_1', to: h.route.modelId, toAccount: 'acc_2', reason: 'limit', afterTools: 1 });
 
   effect.status = 'unknown';
   for (const key of Object.keys(inputs)) delete inputs[key];

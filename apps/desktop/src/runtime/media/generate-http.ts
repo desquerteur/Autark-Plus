@@ -82,7 +82,8 @@ export function httpFailure(status: number, what: string): WorkforceError {
 
 /** Header and body timeouts of the media agent: longer than every call deadline (video 6 min + grace); the call's own timer ends it. */
 export const MEDIA_SOCKET_MS = 10 * 60_000;
-const NODE_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+// Node 26+ keeps the real agent under the .2 key and a Dispatcher1Wrapper under .1; older Node has the agent under .1 only.
+const NODE_DISPATCHERS = [Symbol.for('undici.globalDispatcher.2'), Symbol.for('undici.globalDispatcher.1')];
 let mediaAgent: object | null | undefined;
 
 /**
@@ -95,8 +96,9 @@ export function mediaDispatcher(): object | undefined {
     mediaAgent = null;
     try {
       void globalThis.Response; // loads Node's fetch module, which installs its global dispatcher
-      const Agent = ((globalThis as Record<symbol, unknown>)[NODE_DISPATCHER] as { constructor?: unknown } | undefined)?.constructor;
-      if (typeof Agent === 'function' && /^(?:Agent|EnvHttpProxyAgent)$/.test(Agent.name)) {
+      const Agent = NODE_DISPATCHERS.map((key) => ((globalThis as Record<symbol, unknown>)[key] as { constructor?: unknown } | undefined)?.constructor)
+        .find((candidate) => typeof candidate === 'function' && /^(?:Agent|EnvHttpProxyAgent)$/.test(candidate.name));
+      if (typeof Agent === 'function') {
         const agent = new (Agent as new (options: object) => object)({ headersTimeout: MEDIA_SOCKET_MS, bodyTimeout: MEDIA_SOCKET_MS });
         if (typeof (agent as { dispatch?: unknown }).dispatch === 'function') mediaAgent = agent;
       }

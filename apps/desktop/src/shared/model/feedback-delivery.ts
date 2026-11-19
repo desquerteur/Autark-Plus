@@ -5,6 +5,8 @@ import type { FeedbackKind } from './system.ts';
 
 /** The largest sealed envelope sent to the mailbox (its Firestore rule allows < 1,000,000 bytes). */
 export const FEEDBACK_SEALED_LIMIT = 950_000;
+/** The largest screenshot (raw bytes) the feedback service (services/feedback) accepts; its base64 stays inside the service's 1.5 MB request limit. */
+export const FEEDBACK_IMAGE_LIMIT = 1_000_000;
 /** A report's `deliveryWarning` when the sealed report with its screenshot was too large. */
 export const SCREENSHOT_DROPPED = 'The screenshot was too large and was not sent.';
 /** Screenshot types a report may carry (never SVG or anything a browser would run). */

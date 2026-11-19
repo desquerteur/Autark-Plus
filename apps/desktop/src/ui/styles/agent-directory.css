@@ -1,6 +1,6 @@
 /* AF-017: the agent directory (#/team's main page, agents/AgentDirectory.tsx), the "New agent" card in the chat
    (chat/AgentHiredCard.tsx), the agent page's whereabouts line, Team's "All agents" row and agent names as links.
-   Tokens only (style.md). Owns: these rules. */
+   Tokens only (style.md). Owns: these rules. Never: literal colors (tokens.css), other areas' selectors. */
 
 /* --- directory ------------------------------------------------------------------------------------------------ */
 .agent-directory { max-width: 980px; margin: 0 auto; padding: 24px clamp(16px, 4vw, 40px) 40px; }
