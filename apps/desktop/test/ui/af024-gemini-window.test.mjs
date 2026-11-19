@@ -75,7 +75,7 @@ test('Settings › Models: Google Gemini – Google sign-in or API key', { timeo
   await panel.getByLabel('Name').fill('Gemini Arbeit');
   await panel.getByRole('button', { name: 'Sign in with Google', exact: true }).click();
   const status = group.locator('.model-setup-status');
-  await page.waitForFunction(() => /demo|install|Gemini/i.test(document.querySelector('#settings-models .model-setup-status')?.textContent ?? ''), null, { timeout: 20_000 });
+  await page.waitForFunction(() => /demo|install|Gemini|signing in/i.test(document.querySelector('#settings-models .model-setup-status')?.textContent ?? ''), null, { timeout: 20_000 });
   const line = (await status.textContent()) ?? '';
   t.diagnostic(`status line: ${line}`);
   await shot('gemini-04-sign-in-line');

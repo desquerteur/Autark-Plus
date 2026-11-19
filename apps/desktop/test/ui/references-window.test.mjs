@@ -73,7 +73,7 @@ test('references: Remember why… on an own message keeps the example and the re
   // The person's own message: Reply, Copy, Edit, Remember why…, Delete.
   await item(own.id).locator('.message-content').click({ button: 'right' });
   await menu.waitFor({ timeout: 5_000 });
-  assert.deepEqual(await menuItems(), ['Reply', 'Copy', 'Edit', 'Remember why…', 'Delete']);
+  assert.deepEqual(await menuItems(), ['Reply', 'Start thread', 'Copy', 'Edit', 'Remember why…', 'Delete']);
   await shot('references-01-menu-light');
   await menu.getByRole('menuitem', { name: 'Remember why…' }).click();
   const dialog = page.locator('dialog.remember-why[open]');

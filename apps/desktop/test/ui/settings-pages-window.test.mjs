@@ -32,7 +32,7 @@ import { MODEL_USES, USE_LABELS } from '../../src/shared/model/models-uses.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
-const PAGES = ['General', 'Models', 'Calendar', 'Secrets', 'Connectors', 'Skills & memory', 'Devices', 'Feedback', 'About']; // AF-005: Apps is Connectors
+const PAGES = ['General', 'Appearance', 'Personality', 'Models', 'Calendar', 'Secrets', 'Connectors', 'Skills & memory', 'Devices', 'Feedback', 'Updates', 'About']; // AF-005: Apps is Connectors
 
 test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-settings-pages-'));
@@ -82,7 +82,7 @@ test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, as
 
   // Models: one row per use, no word of the old lists.
   await page.evaluate(() => { location.hash = '#/settings/models'; });
-  const rows = page.locator('#settings-uses .use-row');
+  const rows = page.locator('#settings-uses .use-row:not(.fallback-row)');
   await rows.first().waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => document.querySelectorAll('#settings-uses .use-dot').length > 0 && document.querySelectorAll('#settings-uses .use-dot.pending').length === 0, undefined, { timeout: 60_000 });
   assert.equal(await rows.count(), MODEL_USES.length);

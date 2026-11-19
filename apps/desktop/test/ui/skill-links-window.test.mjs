@@ -73,7 +73,7 @@ test('Settings › Skills: Add from link – link, preview with two skills, scri
   await page.waitForSelector('.shell', { timeout: 60_000 });
   await page.evaluate(() => { location.hash = '#/settings/skills'; });
 
-  const group = page.locator('[data-tour="skills"]');
+  const group = page.locator('section[data-tour="skills"]');
   await group.waitFor({ timeout: 15_000 });
   assert.equal(await group.getAttribute('id'), 'settings-skills', 'the Skills overview carries the tour mark');
   const add = group.getByRole('button', { name: 'Add from link' });
