@@ -193,6 +193,17 @@ export interface ScheduleSpec {
   catchUp?: 'once' | 'all' | 'skip'; // what to do with fires missed while the PC was off
 }
 
+/** One entry of a schedule's history (newest last, the last 30 kept): what happened to an occurrence. */
+export interface ScheduleRun {
+  at: number; // the planned occurrence (epoch ms)
+  firedAt: number; // when it was handled
+  outcome: 'ok' | 'skipped' | 'failed' | 'ended'; // skipped: missed while the PC was off, or the last routine task was still open; ended: the schedule stopped (its chat or owner is gone)
+  manual?: true; // started with "Run now"
+  note?: string; // one short line (why skipped or failed)
+}
+
+export const SCHEDULE_HISTORY_MAX = 30;
+
 export interface Schedule {
   id: string;
   ownerId: string; // 'human' or agent id
@@ -206,6 +217,7 @@ export interface Schedule {
   lastAt?: number;
   runs: number;
   active: boolean;
+  history?: ScheduleRun[]; // #20: the last runs, kept in the payload column's JSON like pausedBy (no migration)
   pausedBy?: string; // B-044: who paused it ('human' or an agent id); only the person resumes what the person paused
   createdAt: number;
 }
