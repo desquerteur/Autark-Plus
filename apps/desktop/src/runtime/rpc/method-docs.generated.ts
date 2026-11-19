@@ -207,7 +207,7 @@ export const METHOD_DOCS: Record<string, { params: string; note?: string }> = {
   "projects.update": {"params":"{ id: string; name?: string; pinned?: boolean; leadId?: string }","note":"Owner: renames ('' = the folder's name again), pins a project or sets its lead (AF-020: an agent of the project; '' = none)."},
   "pwa.enable": {"params":"{ enabled: boolean; bind?: Settings['pwa']['bind'] }"},
   "pwa.exchange": {"params":"{ secret: string; name?: string }","note":"Pairing exchange for a new phone/browser: trades the one-time secret from a `pwa.link` URL (`#pair=<secret>`) or that link's 6-digit code for a device token. Callable WITHOUT a token: the PWA sends it as one RpcRequest frame via HTTP `POST…"},
-  "pwa.link": {"params":"{ name?: string; route?: string }","note":"The phone QR code: a one-time link (10 minutes) the phone camera opens, and its 6-digit `code` for an installed app – one pairing with either, until `expiresAt`; `route` (#/…) opens after pairing."},
+  "pwa.link": {"params":"{ name?: string; route?: string; loopback?: boolean }","note":"The phone QR code: a one-time link (10 minutes) the phone camera opens, and its 6-digit `code` for an installed app – one pairing with either, until `expiresAt`; `route` (#/…) opens after pairing; `loopback` (AF-025): a localhost link whil…"},
   "pwa.pushConfig": {"params":"{ endpoint?: string } | void","note":"Any paired device: can the PC push, its VAPID key, and is this browser's subscription (`endpoint`) stored?"},
   "pwa.pushSubscribe": {"params":"{ subscription: unknown }"},
   "pwa.pushUnsubscribe": {"params":"{ endpoint?: string } | void","note":"Any paired device: removes only the caller's own subscription(s) (the owner's only by endpoint)."},

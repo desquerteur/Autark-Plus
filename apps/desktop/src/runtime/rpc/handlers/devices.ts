@@ -59,10 +59,11 @@ export function register(table: HandlerTable): void {
   });
   table.add('pwa.link', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['name', 'route']);
+    onlyKeys(o, ['name', 'route', 'loopback']);
     const route = optText(o, 'route', { max: 210 });
     if (route !== undefined && !isPhoneRoute(route)) bad('route', 'an app route such as #/home or #/chat/<id>');
-    return ctx.extras.pwa.link({ name: optText(o, 'name', { max: 60 }), ...(route ? { route } : {}) });
+    const loopback = optBool(o, 'loopback'); // AF-025: headless `pair` – a localhost link while nothing else reaches the PC
+    return ctx.extras.pwa.link({ name: optText(o, 'name', { max: 60 }), ...(route ? { route } : {}), ...(loopback ? { loopback } : {}) });
   });
   table.add('pwa.revoke', async (params, ctx) => {
     await ctx.extras.pwa.revoke(id(input(params), 'deviceId'));

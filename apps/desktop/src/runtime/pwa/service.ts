@@ -150,10 +150,12 @@ export class PwaService {
   /**
    * One-time link + QR the phone opens, and its 6-digit code for an installed app (both 10 minutes, one use); the PWA
    * exchanges either via `exchange` (POST /rpc, method pwa.exchange) and then opens `route` (`&to=`). The address is the
-   * best one a phone can reach; with only this PC's loopback there is none (UNREACHABLE).
+   * best one a phone can reach; with only this PC's loopback there is none (UNREACHABLE) – unless `loopback` asks for it.
    */
-  async link(input: { name?: string; route?: string } = {}): Promise<{ url: string; qrDataUrl: string; expiresAt: number; code: string }> {
-    const base = phoneUrl(await this.freshUrls());
+  async link(input: { name?: string; route?: string; loopback?: boolean } = {}): Promise<{ url: string; qrDataUrl: string; expiresAt: number; code: string }> {
+    const urls = await this.freshUrls();
+    // AF-025: a headless runtime bound to this PC only pairs a browser on the same machine (`loopback`): its localhost address.
+    const base = phoneUrl(urls) ?? (input.loopback ? urls.find((url) => url.startsWith('http://localhost:')) : undefined);
     if (!base) throw new WorkforceError('conflict', UNREACHABLE);
     const { secret, expiresAt } = this.tokens.createLink({ name: input.name });
     const code = this.codes.issue(hashToken(secret), expiresAt);
