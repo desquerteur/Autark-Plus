@@ -50,7 +50,8 @@ test('a frame never jumps the tour: long gaps step at most MAX_FRAME_MS, never p
 });
 
 test('the tour imports nothing of the live app: only its own files, shared models and preact', () => {
-  const files = readdirSync(TOUR).filter((name) => /\.tsx?$/.test(name));
+  // AF-002's spotlight tour (spotlight*.ts, Spotlight.tsx) lives beside the player but walks the live app by design.
+  const files = readdirSync(TOUR).filter((name) => /\.tsx?$/.test(name) && !/^spotlight/i.test(name));
   assert.ok(files.includes('Scene.tsx') && files.includes('timeline.ts') && files.includes('TourPlayer.tsx'));
   for (const file of files) {
     const source = readFileSync(path.join(TOUR, file), 'utf8');

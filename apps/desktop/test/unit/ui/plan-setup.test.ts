@@ -224,7 +224,7 @@ test('the model setup retains the plan buttons and the reserved sign-in link cel
   const link = read('onboarding/sign-in-link.tsx');
   assert.ok(link.includes('class={`first-run-link inert${extra}`} aria-hidden="true">{OPEN_SIGN_IN}'), 'the placeholder holds the same text');
   const card = read('onboarding/AiCard.tsx');
-  assert.ok(card.includes('disabled={silent}') && !card.includes('Skip'), 'Continue waits for a usable model');
+  assert.ok(card.includes('disabled={silent || '), 'Continue waits for a usable model'); // AF-002: "Skip for now" is the one deliberate way past it
   assert.ok(card.includes('<ModelSetup />'), 'first run and Settings share the setup');
   assert.doesNotMatch(setup, /uses=|\bdecision\b|\bembeddings\b/i);
   assert.ok(setup.includes('<ConnectionForm '));

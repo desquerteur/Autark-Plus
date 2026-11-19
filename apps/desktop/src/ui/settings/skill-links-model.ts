@@ -43,7 +43,7 @@ export function changeText(change: SkillFileChange): string {
 
 /** The update's summary: "2 files change, 1 is new, 1 goes · 4 stay". */
 export function updateSummary(changes: readonly SkillFileChange[], unchanged: number): string {
-  if (!changes.length) return 'Up to date – nothing changes.';
+  if (!changes.length) return 'Up to date – nothing changes';
   const count = (kind: SkillFileChange['change']) => changes.filter((change) => change.change === kind).length;
   const parts = [
     count('changed') && `${plural(count('changed'), 'file')} ${count('changed') === 1 ? 'changes' : 'change'}`,
