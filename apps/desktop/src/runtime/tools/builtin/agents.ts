@@ -65,6 +65,7 @@ import { HOME_ARG, HOME_HELP, applyHome, homeAction } from './agent-home.ts';
 import { pinFor } from './agent-pin.ts';
 import { clip, defineTool, internal } from './util.ts';
 import { MODE_MOVES, checkModeSwitch } from '../../modes/strategy.ts';
+import { reachRefusal, visibleAgents } from '../../projects/isolation.ts'; // AF-026
 
 const listAgents = defineTool<{ team?: string; includeArchived?: boolean }>({
   name: 'agents.list',
@@ -73,7 +74,8 @@ const listAgents = defineTool<{ team?: string; includeArchived?: boolean }>({
   category: 'read',
   describe: () => internal('List agents'),
   async run(args, ctx) {
-    const agents = ctx.services.org.list({ includeArchived: args.includeArchived }).filter((agent) => !args.team || agent.team === args.team);
+    const all = ctx.services.org.list({ includeArchived: args.includeArchived }).filter((agent) => !args.team || agent.team === args.team);
+    const agents = visibleAgents(ctx.services, ctx.agent.id, all); // AF-026: an agent in a project sees its project's agents
     const spaceNames = new Map(ctx.services.org.spaces().map((space) => [space.id, space.name]));
     const local = agents.map((agent) => ({
       id: agent.id, name: agent.name, role: agent.role, team: agent.team, managerId: agent.managerId,
@@ -141,6 +143,8 @@ const updateAgent = defineTool<UpdateArgs>({
     const targetId = args.agentId ?? ctx.agent.id;
     const target = ctx.services.org.get(targetId);
     if (!target) return failure('Agent not found.');
+    const outside = reachRefusal(ctx.services, ctx.agent.id, targetId); // AF-026
+    if (outside) return failure(`Nothing was changed. ${outside}`);
     const patch: Partial<Agent> = {};
     if (args.device !== undefined) {
       const pc = resolveDevice(ctx.services, args.device);

@@ -37,6 +37,7 @@ import { KvRepo } from '../store/kv.ts';
 import { canReadTask } from '../tasks/access.ts';
 import { workRoomFor } from '../chat/direct.ts';
 import { moveTaskChat } from '../tasks/owners.ts';
+import { reachRefusal } from '../projects/isolation.ts'; // AF-026
 
 export const MAX_DELEGATION_DEPTH = 3;
 /** D7, in the receiver's voice: a task handed out of a 1:1 it is not in now lives in the giver's 1:1 with it. */
@@ -220,6 +221,7 @@ export function delegate(ctx: ToolContext, input: DelegateInput): { taskId: stri
   const assignee = target ?? ctx.agent;
   const mode = modeOnly ? input.to : input.mode;
   if (target && target.archivedAt) throw new WorkforceError('conflict', `${target.name} is archived.`);
+  if (target) { const outside = reachRefusal(services, ctx.agent.id, target.id); if (outside) throw new WorkforceError('forbidden', outside); } // AF-026: no work to an agent outside my project
 
   // Agent-to-agent work stays in the given chat (out of a 1:1: our own 1:1, D7); mode work of oneself gets its own
   // work chat – both only when there is a source chat (B-054: else the child is chat-free).
@@ -260,6 +262,7 @@ export function handoff(ctx: ToolContext, input: { to: string; next?: string; no
   const target = agentNamed(services, input.to);
   const modeOnly = !target && isModeKey(services, input.to);
   if (!target && !modeOnly) throw new WorkforceError('not_found', unknownTarget(input.to));
+  if (target) { const outside = reachRefusal(services, ctx.agent.id, target.id); if (outside) throw new WorkforceError('forbidden', outside); } // AF-026
   const state = checkpoint(ctx, { goal: task.title, next: input.next });
   const receiver = target ?? ctx.agent;
   const chatId = task.conversationId;

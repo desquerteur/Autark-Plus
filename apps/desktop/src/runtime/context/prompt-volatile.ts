@@ -26,6 +26,7 @@ import { ALWAYS_CHARS, alwaysLines, alwaysSet } from '../knowledge/always.ts';
 import { hasHavePart } from '../org/system-parts.ts'; // B-077: the pinned heading names where agreements live
 import { homeSection } from '../agent-core/prompt.ts'; // B-044: the home project and its skills (names + descriptions)
 import { projectLeadSection } from '../projects/lead-prompt.ts'; // AF-020: the projects it leads
+import { projectBoundarySection } from '../projects/boundary-prompt.ts'; // AF-026: whom an agent in a project reaches
 import { environmentNow } from './environment.ts'; // B-047 D6: the PC, readable data folder, accounts needing sign-in, what it knows
 import { workNearbySection } from '../work-presence/context-line.ts'; // B-055 G (Q11): who else is changing files near this agent's work
 import { personalitySection } from '../personality/prompt.ts'; // AF-006: "## My personality", read fresh each turn
@@ -148,6 +149,7 @@ export function volatileSections(services: RuntimeServices, input: VolatileInput
     ['splits', () => (split ? '' : activeSplitsLine(services, agent.id, input.thread))], // B-057 R1-4: its split groups still at work on this thread
     ['home', () => homeSection(services, agent, turnMode(services, agent, reach, modeTask))], // B-044: the home project turns start in and the skills found there
     ['project-lead', () => (split ? '' : projectLeadSection(services, agent))], // AF-020: it leads a project – the overview and its agents
+    ['project', () => projectBoundarySection(services, agent)], // AF-026: in a project it reaches only that project's agents
     ['setup', () => setupSection(services, agent, conversationId, taskId)],
     ['pinned', () => pinnedSection(services, agent, zone, reach, turnModeInfo(services, agent, reach, modeTask))],
     ['task', () => (taskId ? currentTaskSection(services, taskId, zone) : '')],

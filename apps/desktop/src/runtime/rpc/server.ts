@@ -32,6 +32,7 @@ import { parseFrame } from './connection.ts';
 import type { RpcConnection } from './connection.ts';
 import type { RpcExtras } from './extras.ts';
 import { createHandlerTable } from './handlers/index.ts';
+import { gateParams, gateResult, gatedAgent } from './project-gate.ts'; // AF-026
 import { mayReceive, visibleData } from './scopes.ts';
 import { scopeDenial, secureScope } from './table.ts';
 import { serveTokenless, type HttpCallMeta } from './tokenless.ts';
@@ -180,7 +181,10 @@ export class RpcServer {
     const denial = scopeDenial(entry.scope, ctx.scope);
     if (denial === 'insecure') throw new WorkforceError('forbidden', 'Open the HTTPS address to do this.', { details: { method, needsSecure: true } });
     if (denial) throw new WorkforceError('forbidden', 'This device is not allowed to do that.', { details: { method } });
-    return await withCaller({ scope: ctx.scope }, () => entry.handler(params as never, ctx));
+    const agentId = gatedAgent(ctx.scope); // AF-026: an agent's own wf reaches and sees only what its project allows
+    if (agentId) gateParams(ctx.services, agentId, method, params);
+    const result = await withCaller({ scope: ctx.scope }, () => entry.handler(params as never, ctx));
+    return agentId ? gateResult(ctx.services, agentId, method, result) : result;
   }
 
   private context(scope: ClientScope, topics: Set<Topic>, signal: AbortSignal): HandlerContext {

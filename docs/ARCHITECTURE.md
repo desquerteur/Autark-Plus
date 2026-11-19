@@ -176,6 +176,15 @@ access and marks the scope with the agent (`ClientScope` owner `agentId`), and `
 `chat.send` (`rpc/handlers/agent-send.ts`): its name, only its chats, no wake for itself, the running run's id. A token of
 another process or of an archived agent closes the socket (4406, wf exit 3) – never a line in the person's name. An
 inherited token is never passed on (`withShim`). ACP agents share one process per account and get none (still the owner).
+**Project isolation** (AF-026, `projects/isolation.ts` – the one rule; gates ask it): an agent in a project (its home
+project as the Projects tab shows it; the lead included; a project removed from the list counts as none) reaches only that
+project's agents and the person – a one-way street. Agents outside every project reach project agents as before; project
+A never reaches project B; the person and colleagues are never limited. An answer is a post into a chat the outsider (or
+the person) started, or a thread on one of its messages; a chat started inside the project never counts, and no new chat,
+member, delegation, hand-off or task goes outwards. Gates: `chat-joins.ts` scopeRefusal (every new member pair),
+`chat.send` / `schedules.message` (every post), `agents/handoff.ts`, `tasks.create` / `tasks.assign`, `agents.list` /
+`update` / `archive`, and for an agent's wf `rpc/project-gate.ts` in `RpcServer.dispatch` (params naming agents refused,
+`agents.list` / `agents.org` / `agents.activity` filtered). The prompt's "My project" section (`projects/boundary-prompt.ts`) says so.
 
 **SQLite** (`runtime/db`): one database with WAL and a prepared-statement cache. Main tables: conversations,
 members, messages (+FTS), tasks (+FTS; steps and human to-dos are tasks), runs and run_items (the journal), wakes,

@@ -21,6 +21,7 @@ import { HUMAN_ID } from '../../../shared/ids.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { MessageLevel } from '../../../shared/model/chat.ts';
 import { chatIfAny, clip, defineTool, internal, readChat, resolveChat } from './util.ts';
+import { postRefusal } from '../../projects/isolation.ts'; // AF-026
 import { previewTimes } from '../../schedules/preview.ts';
 import { WHEN_SCHEMA, isoIn, ruleWords, specFromWhen, type WhenArgs } from '../../schedules/when.ts';
 
@@ -77,6 +78,8 @@ const scheduleMessage = defineTool<When & { chatId?: string; text: string; menti
   describe: (args, ctx) => internal(`Schedule a message: ${clip(args.text, 60)}`, args.chatId ?? ctx.conversationId),
   async run(args, ctx) {
     const conversationId = resolveChat(ctx, args.chatId);
+    const outside = postRefusal(ctx.services, ctx.agent.id, conversationId); // AF-026
+    if (outside) return failure(`Nothing was scheduled. ${outside}`);
     const spec = specOf(args, ctx);
     if (typeof spec === 'string') return failure(spec);
     const schedule = ctx.services.scheduler.create({ ownerId: ctx.agent.id, conversationId, taskId: ctx.taskId, kind: 'message', title: args.title ?? clip(args.text, 60), spec, payload: { body: args.text, mentions: args.mentions, ...loudness(args.level, args.urgent) } });

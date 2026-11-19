@@ -30,6 +30,7 @@ import '../../contracts/agent-core.ts';
 import { resolveDevice } from '../registry.ts';
 import { announceHire } from './hire-notice.ts'; // AF-017
 import { clip, defineTool } from './util.ts';
+import { firstReachRefusal } from '../../projects/isolation.ts'; // AF-026
 
 export const MAX_HIRES = 6;
 
@@ -224,6 +225,8 @@ const archiveAgent = defineTool<{ agentId?: string; successorId?: string; reason
     const targetId = args.agentId ?? ctx.agent.id;
     const target = org.get(targetId);
     if (!target || target.archivedAt) return failure('Agent not found.');
+    const outside = firstReachRefusal(ctx.services, ctx.agent.id, [targetId, ...(args.successorId ? [args.successorId] : [])]); // AF-026
+    if (outside) return failure(`Nothing was changed. ${outside}`);
     const active = org.list();
     if (active.length <= 1) return failure('The last agent stays.');
     const successor = args.successorId ? org.get(args.successorId) : undefined;

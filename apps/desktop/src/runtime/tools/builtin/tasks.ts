@@ -15,6 +15,7 @@ import { WorkforceError } from '../../../shared/errors.ts';
 import { chatIfAny, clip, defineTool, internal, isMember, parseWhen, readChat, resolveChat } from './util.ts';
 import { canReadTask } from '../../tasks/access.ts';
 import { isPersonId } from '../../../shared/model/people.ts';
+import { reachRefusal } from '../../projects/isolation.ts'; // AF-026
 
 const STATUSES: TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked', 'done', 'cancelled'];
 
@@ -60,6 +61,8 @@ const createTask = defineTool<{ title: string; notes?: string; steps?: string[];
     const assigneeKind = assignee === 'team' ? 'team' : person ? 'human' : 'agent';
     const assigneeId = assignee === 'self' ? ctx.agent.id : assignee === 'team' ? undefined : assignee;
     if (assigneeId && !person && !ctx.services.org.get(assigneeId)) return failure(`Unknown agent ${assigneeId}.`);
+    const outside = assigneeId && !person ? reachRefusal(ctx.services, ctx.agent.id, assigneeId) : undefined; // AF-026
+    if (outside) return failure(`Nothing was created. ${outside}`);
     // B-078: my own step under my own task is a line of its plan – one list I work through in that task's turns.
     if (parent && ownPlanStep(parent, ctx.agent.id, assigneeId, args)) {
       const plan = [...(parent.ledger.plan ?? []).filter((line) => line !== args.title.trim()), args.title.trim()].slice(-20);
@@ -147,6 +150,8 @@ const assignTask = defineTool<{ taskId: string; assignee: string; note?: string 
     const id = args.assignee === 'self' ? ctx.agent.id : args.assignee;
     const person = isPersonId(id); // F-52: a colleague
     if (id !== 'team' && !person && !ctx.services.org.get(id)) return failure(`Unknown agent ${id}.`);
+    const outside = id !== 'team' && !person ? reachRefusal(ctx.services, ctx.agent.id, id) : undefined; // AF-026
+    if (outside) return failure(`Nothing was changed. ${outside}`);
     // Open unowned work for oneself is the atomic claim (it fails when someone else just took it).
     if (id === ctx.agent.id && task.assigneeKind === 'team' && task.status === 'open') {
       return ctx.services.tasks.claim(task.id, id) ? json({ ok: true, taskId: task.id, assignee: id }) : failure('Someone else already owns this task.');
