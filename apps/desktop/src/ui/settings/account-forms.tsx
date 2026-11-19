@@ -38,10 +38,14 @@ function KeyPageLink(props: { page: string | undefined }) {
     : <span class="first-run-link add-key-link inert" aria-hidden="true">Get a key</span>;
 }
 
-/** `found`: a server the PC scan saw (its provider and address fill the local form). */
-export function ConnectionForm(props: { kind: FormKind; onDone: () => void; found?: { provider: ProviderId; baseUrl: string } }) {
+/**
+ * `found`: a server the PC scan saw (its provider and address fill the local form). AF-024: `service` – the Provider it starts
+ * with (the Google Gemini panel: Google AI Studio), `label` – the name the connection gets instead of the service's.
+ */
+export function ConnectionForm(props: { kind: FormKind; onDone: () => void; found?: { provider: ProviderId; baseUrl: string }; service?: string; label?: string }) {
   const services = servicesOf(props.kind);
-  const first = props.found ? services.find((service) => service.provider === props.found!.provider) ?? services[0] : services[0];
+  const first = props.found ? services.find((service) => service.provider === props.found!.provider) ?? services[0]
+    : services.find((service) => service.id === props.service) ?? services[0];
   const [service, setService] = useState(first.id);
   const [url, setUrl] = useState(props.found?.baseUrl ?? startUrl(first.id, ''));
   const [key, setKey] = useState('');
@@ -55,14 +59,15 @@ export function ConnectionForm(props: { kind: FormKind; onDone: () => void; foun
     if (!keyStays(service, next)) setKey(''); // a key is never saved for, or sent to, another vendor
     setService(next); setUrl(startUrl(next, url)); setStatus(EMPTY);
   };
+  const name = props.label?.trim() || target?.label || '';
   const fields = () => ({ provider: target!.provider, ...(target!.baseUrl ? { baseUrl: target!.baseUrl } : {}), ...(target!.apiKey ? { apiKey: target!.apiKey } : {}) });
   const runTest = () => void test(async () => { setStatus(EMPTY); setStatus(await testText(fields())); });
   const submit = () => void run(async () => {
     try {
-      await rpc.call('accounts.add', { ...fields(), label: target!.label.slice(0, 80) });
+      await rpc.call('accounts.add', { ...fields(), label: name.slice(0, 80) });
     } catch (failure) { setStatus({ text: errorText(failure), tone: 'error' }); return; }
     setKey('');
-    pushToast({ title: `${target!.label} added` });
+    pushToast({ title: `${name} added` });
     props.onDone();
   });
   const id = `add-${props.kind}`;

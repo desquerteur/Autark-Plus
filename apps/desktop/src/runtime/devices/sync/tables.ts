@@ -29,8 +29,7 @@ import { TaskRepo, toTask } from '../../tasks/repo.ts';
 import { SpaceRepo } from '../../store/spaces.ts';
 import { ScheduleRepo } from '../../schedules/repo.ts';
 import { deleteRows, getRow, toItem } from '../../knowledge/rows.ts';
-import { ownHomes } from '../../accounts/cli-homes.ts';
-import type { ProviderId } from '../../../shared/model/providers.ts';
+import { onePerPc } from '../../accounts/cli-homes.ts';
 import { KvRepo } from '../../store/kv.ts';
 import { firesHere } from './home.ts';
 import '../../contracts/people.ts';
@@ -256,10 +255,11 @@ const schedules: Table = {
   emit: (id, { s }) => { const schedule = new ScheduleRepo(s.db).get(id); if (schedule) s.bus.emit('schedule.upserted', schedule); s.scheduler.arm(); },
 };
 
-/** A CLI plan here that is the login `row` names: same provider and e-mail – any, for a CLI with one sign-in per PC. */
-const sameLogin = (db: Db, row: Wire): boolean => db.all<{ email: string | null }>(
-  "SELECT email FROM accounts WHERE provider = ? AND auth = 'cli' AND id <> ?", [sqlValue(row.provider), sqlValue(row.id)],
-).some((other) => !ownHomes(row.provider as ProviderId) || (Boolean(row.email) && other.email === row.email));
+/** A CLI plan here that is the login `row` names: same provider and e-mail – any, for a CLI with one sign-in per PC (AF-024: Gemini CLI's default home). */
+const sameLogin = (db: Db, row: Wire): boolean => db.all<{ email: string | null; home: string | null }>(
+  "SELECT email, home FROM accounts WHERE provider = ? AND auth = 'cli' AND id <> ?", [sqlValue(row.provider), sqlValue(row.id)],
+).some((other) => (onePerPc({ provider: String(row.provider), home: typeof row.home === 'string' ? row.home : null }) && onePerPc({ provider: String(row.provider), home: other.home }))
+  || (Boolean(row.email) && other.email === row.email));
 
 const accounts: Table = {
   name: 'accounts', skip: ['state', 'limits', 'cooling_until', 'checked_at', 'device_id'], soft: ['home'],
@@ -271,7 +271,7 @@ const accounts: Table = {
     const { home, ...rest } = row;
     if (existed) { upsert(s.db, 'accounts', rest); return; }
     if (row.auth === 'cli' && sameLogin(s.db, row)) return;
-    const own = row.auth === 'cli' ? ownHomes(row.provider as ProviderId) : Boolean(home);
+    const own = row.auth === 'cli' ? !onePerPc({ provider: String(row.provider), home: typeof home === 'string' ? home : null }) : Boolean(home); // AF-024: Gemini CLI's default home stays one per PC
     upsert(s.db, 'accounts', { ...rest, home: own ? path.join(s.paths.accounts, String(row.provider), String(row.id)) : null });
   },
   drop: (id, { s }) => { void s.accounts.remove(id).catch((error: unknown) => s.log.warn('synced account not removed', { id, error: String(error) })); },

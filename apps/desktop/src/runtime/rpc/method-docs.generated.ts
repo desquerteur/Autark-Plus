@@ -12,7 +12,7 @@ export const METHOD_DOCS: Record<string, { params: string; note?: string }> = {
   "access.setRunMode": {"params":"{ runId: string; mode: AccessMode | null }","note":"Owner: the mode of one running run (null: back to the chat's or the agent's). Kept while this runtime runs."},
   "accounts.add": {"params":"{ provider: ProviderId; label?: string; apiKey?: string; baseUrl?: string; rotation?: boolean; envVar?: string; detected?: boolean }","note":"apiKey: typed, or a handle secret://<id> of the catalog (the account then only names that entry); PR5: envVar = key variable name, detected = \"Add again\"; B-051: signInUrl = the page the CLI's sign-in printed (when it did within a few seco…"},
   "accounts.detect": {"params":"{ force?: boolean } | void"},
-  "accounts.install": {"params":"{ provider: 'claude' | 'codex' }"},
+  "accounts.install": {"params":"{ provider: 'claude' | 'codex' | 'gemini-cli' }"},
   "accounts.list": {"params":"void"},
   "accounts.login": {"params":"{ id: string }"},
   "accounts.logout": {"params":"{ id: string }"},

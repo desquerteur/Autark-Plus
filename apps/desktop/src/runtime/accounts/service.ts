@@ -4,8 +4,9 @@
 // adoption (adoption.ts; removed detected logins stay dismissed until "Add again", dismissed.ts),
 // official-CLI login/logout (sign-in.ts – Copilot CLI and Kimi Code in a terminal window), limits, candidates per
 // engine and model, usage, turn-reported states, and a restored account's home (rehome; reanchor.ts).
-// PR8: Gemini CLI and Copilot CLI are ACP plans, one per PC in the CLI's default home (acp-plans.ts);
-// Kimi Code (B-044) is an ACP plan with its own homes like Codex (cli-homes.ts, KIMI_CODE_HOME);
+// PR8: Copilot CLI is an ACP plan, one per PC in the CLI's default home (acp-plans.ts); Kimi Code (B-044)
+// and – AF-024 – Gemini CLI are ACP plans with their own homes like Codex (cli-homes.ts, KIMI_CODE_HOME, GEMINI_CLI_HOME;
+// a Gemini CLI login found in ~/.gemini stays the one account without a home);
 // acpLaunch is the ACP engine's resolver, sharing the launches (`--help` read once) with detection.
 // B-044: Codex banked resets (resets.ts, accounts.useReset) and the API key form's Test before
 // saving (endpoint-test.ts, accounts.test – the typed key only in memory for that call).
@@ -26,7 +27,7 @@
 
 import os from 'node:os';
 import type { AccountService as AccountServiceContract } from '../contracts.ts';
-import { DECISION_PROVIDER, MEDIA_ONLY_PROVIDERS, type Account, type AccountLimits, type DetectionReport, type EngineId, type ProviderId, type UsageSummary } from '../../shared/model/providers.ts';
+import { DECISION_PROVIDER, MEDIA_ONLY_PROVIDERS, type InstallableCli, type Account, type AccountLimits, type DetectionReport, type EngineId, type ProviderId, type UsageSummary } from '../../shared/model/providers.ts';
 import { AccountRepo } from './repo.ts';
 import { migrateOldAccounts } from './legacy.ts';
 import { detect as scan } from './detect.ts';
@@ -160,10 +161,10 @@ export class AccountServiceImpl implements AccountServiceContract {
     if (input.detected) return this.adoption.addAgain(provider, PROVIDER_LABELS[provider]!);
     const same = this.repo.list().filter((a) => a.provider === provider);
     const label = input.label?.trim().slice(0, 80) || (same.length ? `${PROVIDER_LABELS[provider]} ${same.length + 1}` : PROVIDER_LABELS[provider]!);
-    // Kimi Code has a home variable: each added account gets its own home like Codex (cli-homes.ts).
+    // Kimi Code and Gemini CLI (AF-024) have a home variable: each added account gets its own home like Codex (cli-homes.ts).
     if (AcpPlans.handles(provider) && !acpProvider(provider)?.home && input.envVar === undefined) return this.acp.add(provider, label);
     if (CLI_PROVIDERS.has(provider) && input.envVar === undefined) {
-      if (provider === 'codex' || provider === 'claude') await this.ensureCli(provider); // B-051 L3: install first, else nothing is created
+      if (provider === 'codex' || provider === 'claude' || provider === 'gemini-cli') await this.ensureCli(provider); // B-051 L3 (AF-024: Gemini CLI too): install first, else nothing is created
       return this.homes.add(provider, input.label?.trim() ? label : undefined, label, input.rotation ?? false);
     }
     const connected = await connection({ ...input, label }, { env: this.env(), secrets: this.deps.secrets });
@@ -231,13 +232,13 @@ export class AccountServiceImpl implements AccountServiceContract {
     this.deps.bus.emit('account.removed', { id: account.id });
   }
 
-  async install(provider: 'claude' | 'codex'): Promise<void> {
+  async install(provider: InstallableCli): Promise<void> {
     await installCli(provider, { supervisor: this.deps.supervisor, finder: this.deps.finder, env: this.deps.env, demo: this.deps.demo });
     await this.detect(true);
   }
 
   /** B-051 L3: the plan's CLI before its account – throws the install error (nothing created); a fresh install rescans in the background. */
-  private async ensureCli(provider: 'claude' | 'codex'): Promise<void> {
+  private async ensureCli(provider: InstallableCli): Promise<void> {
     const installed = await installCli(provider, { supervisor: this.deps.supervisor, finder: this.deps.finder, env: this.deps.env, demo: this.deps.demo });
     if (installed) void this.detect(true).catch(() => undefined);
   }

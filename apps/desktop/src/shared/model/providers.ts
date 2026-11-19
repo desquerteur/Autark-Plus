@@ -258,6 +258,10 @@ export function functionCandidates(fn: ModelFunction, setting: string | undefine
 
 // ------------------------------------------------------------------ plan CLIs on the ACP engine (PR8)
 
+/** The plan CLIs Autark installs itself (accounts.install; AF-024: Gemini CLI through npm). */
+export type InstallableCli = 'claude' | 'codex' | 'gemini-cli';
+export const INSTALLABLE_CLIS: readonly InstallableCli[] = ['claude', 'codex', 'gemini-cli'];
+
 /** Gemini CLI, GitHub Copilot CLI and Kimi Code: plan accounts that run on the generic ACP engine (runtime/engines/acp/providers.ts). */
 export const ACP_PLAN_PROVIDERS: readonly ProviderId[] = ['gemini-cli', 'copilot', 'kimi-cli'];
 

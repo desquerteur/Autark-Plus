@@ -13,7 +13,7 @@ import { loginKey, serverKey, type DismissedLogins } from './dismissed.ts';
 import { envKey } from './env-keys.ts';
 import { loginUnknown } from './detect.ts';
 
-/** Providers whose logins live in a CLI home (default or <accounts>/<provider>/<id>; Gemini CLI and Copilot CLI only the default, PR8). */
+/** Providers whose logins live in a CLI home (default or <accounts>/<provider>/<id>; Copilot CLI only the default, PR8 – AF-024: Gemini CLI both). */
 export const CLI_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli', 'copilot', 'kimi-cli']);
 
 export interface AdoptionDeps {

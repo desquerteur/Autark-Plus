@@ -3,7 +3,9 @@
 // a failed helper call recorded nothing, so a signed-out, used-up or missing account stayed 'ok' for the
 // router and every later helper call first spent a failing attempt on it).
 //   limit → cooling with the provider's retry hint or LIMIT_COOLDOWN_MS (a model's own used-up window,
-//     e.g. weekly-opus, only keeps that model away until its reset – the account stays);
+//     e.g. weekly-opus, only keeps that model away until its reset – the account stays); AF-024: a daily quota the
+//     error names (engines/quota-wait.ts – Gemini) is stored as a used-up "1d" window until its reset, the model's own
+//     ("1d-<model>") when the quota is per model – then only that model waits;
 //   a Codex/Claude Code plan signed out → needs_login, and once per sign-out (B-047 D10) the sign-in work
 //     (accounts/relogin.ts: a task for an agent, or the person's to-do) – without that service one notification
 //     when the caller can send one. The service comes from the deps or, for callers whose deps do not carry it
@@ -19,12 +21,13 @@
 // Owns: this classification and these consequences. Never: failover or routing (the callers decide),
 // a second notification for the same sign-out (markUnavailable says whether the state changed).
 
-import { MEDIA_ONLY_PROVIDERS, type Account } from '../../shared/model/providers.ts';
+import { MEDIA_ONLY_PROVIDERS, type Account, type AccountLimits } from '../../shared/model/providers.ts';
 import { isPlanProvider } from '../../shared/model/plan-roles.ts';
 import type { AccountService, Clock, NotificationService } from '../contracts.ts';
 import type { ReloginService } from '../contracts/relogin.ts';
 import type { EngineTurnResult } from '../engines/types.ts';
 import { engineFor, isHealthy, modelOnlyLimit } from './candidates.ts';
+import { quotaOf } from '../engines/quota-wait.ts';
 
 export const LIMIT_COOLDOWN_MS = 15 * 60_000;
 export const OVERLOAD_COOLDOWN_MS = 5 * 60_000;
@@ -52,7 +55,8 @@ export function accountFailure(result: EngineTurnResult): AccountFailure | undef
 }
 
 export interface FailureDeps {
-  accounts: Pick<AccountService, 'get' | 'markLimited' | 'markUnavailable'>;
+  /** AF-024: `updateLimits` (optional for simple fakes) stores a model's own used-up daily quota without cooling the account. */
+  accounts: Pick<AccountService, 'get' | 'markLimited' | 'markUnavailable'> & Partial<Pick<AccountService, 'updateLimits'>>;
   clock: Clock;
   /** The "Sign in to …" to-do; without it the account's state alone shows the sign-in (Settings). */
   notifications?: Pick<NotificationService, 'notify'>;
@@ -83,13 +87,29 @@ export function recordAccountFailure(deps: FailureDeps, account: Account, model:
     return failure;
   }
   const now = deps.clock.now();
+  const daily = failure === 'limit' ? dailyWindow(result, model, now) : undefined; // AF-024
+  if (daily && daily.windows[0].name !== '1d' && deps.accounts.updateLimits) {
+    deps.accounts.updateLimits(account.id, daily); // the model's own quota: only that model waits
+    return failure;
+  }
   if (failure === 'limit') {
     const fresh = deps.accounts.get(account.id);
     if (fresh && modelOnlyLimit(fresh, now, model)) return failure;
   }
   const wait = result.error?.retryAfterMs ?? (failure === 'limit' ? LIMIT_COOLDOWN_MS : OVERLOAD_COOLDOWN_MS);
-  deps.accounts.markLimited(account.id, now + Math.max(MIN_COOLDOWN_MS, wait));
+  deps.accounts.markLimited(account.id, now + Math.max(MIN_COOLDOWN_MS, wait), daily);
   return failure;
+}
+
+/**
+ * AF-024: a used-up daily quota the limit error names, as a reading – "1d" for the account, "1d-<model>" for the model's own
+ * quota (windowApplies matches it to that model id); undefined without one or without its reset.
+ */
+export function dailyWindow(result: EngineTurnResult, model: string, now: number): AccountLimits | undefined {
+  const quota = quotaOf(result.error?.details);
+  if (!quota?.daily || quota.resetsAt === undefined || quota.resetsAt <= now) return undefined;
+  const scope = quota.perModel ? model.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) : '';
+  return { windows: [{ name: scope ? `1d-${scope}` : '1d', windowMinutes: 1440, usedPercent: 100, resetsAt: quota.resetsAt }], readAt: now };
 }
 
 /** B-059: the enabled accounts that can run an agent turn (an engine, never a media-only one). */

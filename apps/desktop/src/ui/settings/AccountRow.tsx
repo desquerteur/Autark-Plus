@@ -1,6 +1,6 @@
 // One connection (plan, API key, local server): its name and state chip, one hint line (provider, plan, e-mail,
 // address, key source, when a paused plan is back, how many models it lists), the two limit bars of a Codex or Claude
-// Code plan, its models when shown, one fixed action slot (Sign in while it needs it, else Codex "Use reset (N)", else
+// Code plan (AF-024: other accounts' readings as lines, e.g. Gemini's used-up daily quota), its models when shown, one fixed action slot (Sign in while it needs it, else Codex "Use reset (N)", else
 // empty) and a right-click menu: Rename (B-078), Show models, Sign in / Sign out, Move up / down among accounts of one provider, Add
 // another account (a plan with its own sign-in profile), Enable / Disable, Claude Code's Delete histories, Remove.
 // B-072: no plan roles or rotation switch here – the order decides, and rotation stays an account field the AI sets on
@@ -17,19 +17,19 @@ import { askText, confirm } from '../lib/dialog.tsx';
 import { limitSlots, nextCredit, otherWindows, PLAN_SLOTS, resetButtonLabel, resetClock, resetConfirmText, resetCount, resetExpiryText, resetOutcomeText } from '../lib/limits.ts';
 import type { MenuItem, MenuSection } from '../lib/popover.tsx';
 import { rpc } from '../lib/rpc.ts';
-import { models } from '../lib/store.ts';
+import { accounts, models } from '../lib/store.ts';
 import { shortModelName } from '../chat/live-text.ts';
 import { serviceOfAccount } from '../../shared/model/providers-connect.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { Button } from '../lib/ui.tsx';
 import { act, ActionButton, Row, useBusy } from './controls.tsx';
 import { inTerminal, recheckOnFocus, removeText, repairText, signInStarted, startLogin } from './account-actions.ts';
-import { needsSignIn, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './providers.ts';
+import { needsSignIn, nextGeminiName, PROVIDER_NAMES, SIGN_IN, SIGN_OUT, stateLabel } from './providers.ts';
 import { AccountAvatar } from '../lib/account-avatar.tsx';
 import { kindText } from '../lib/account-face.ts';
 
-/** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Gemini CLI and Copilot CLI have one per PC. */
-const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli']);
+/** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Copilot CLI has one per PC. */
+const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli']); // AF-024: Gemini CLI too
 
 /** The two fixed bars of a plan (5-hour limit, Weekly); other windows in the tooltip. */
 function LimitBars(props: { account: Account }) {
@@ -46,6 +46,12 @@ function LimitBars(props: { account: Account }) {
       ))}
     </div>
   );
+}
+
+/** AF-024: the readings of an account without plan bars (Gemini's used-up daily quotas: "Daily · gemini-2-5-pro · 0% left · resets …"). */
+function QuotaLines(props: { account: Account }) {
+  const lines = otherWindows(props.account.limits, Date.now()).filter((line) => !line.endsWith('· –'));
+  return lines.length ? <div class="account-hint account-quota">{lines.map((line) => <div key={line} title={line}>{line}</div>)}</div> : null;
 }
 
 /** Codex: "Use reset (N)" while a reset is banked; the person confirms, the provider answers. */
@@ -128,7 +134,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   });
   // one more plan of this provider, with its own sign-in profile; Move up / down sets which runs first
   const addAnother = () => void run(async () => {
-    const added = await rpc.call('accounts.add', { provider: account.provider });
+    const added = await rpc.call('accounts.add', { provider: account.provider, ...(account.provider === 'gemini-cli' ? { label: nextGeminiName(accounts.value) } : {}) }); // AF-024
     if (needsSignIn(added)) signInStarted(added.id, added.provider);
   });
   const purge = async () => {
@@ -169,6 +175,7 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
       hint={<>
         <div class="account-hint" title={hint}>{hint}</div>
         {plan && <LimitBars account={account} />}
+        {!plan && <QuotaLines account={account} />}
         {showModels && listed.length > 0 && <div class="account-models">{listed.map((model) => shortModelName(model.name) || model.model).join(' · ')}</div>}
       </>}
     >

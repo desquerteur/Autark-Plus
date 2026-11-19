@@ -4,19 +4,27 @@
 // Windows → %LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe, install.sh elsewhere → ~/.local/bin;
 // CODEX_NON_INTERACTIVE=1 and redirected stdio answer every prompt "no"); `npm i -g @openai/codex` only
 // when that route failed and npm exists. A route counts once the finder sees the CLI (fresh PATH).
+// AF-024: Gemini CLI has no standalone installer – Google's documented way is `npm install -g @google/gemini-cli`
+// (Node.js 20 or newer); without npm the error says so.
 // B-051 integration: demo mode (WORKFORCE_FAKE_ENGINE, e2e and window tests) never runs a real installer.
 // Owns: the fixed install commands, their order and their 5-minute timeout (per route).
 // Never: builds commands from user input (all arguments are constants), runs as admin, or installs in demo mode.
 
 import type { Supervisor } from '../system/supervisor.ts';
-import type { Executable, ExecutableFinder } from './executables.ts';
+import type { CliId, Executable, ExecutableFinder } from './executables.ts';
+import type { InstallableCli } from '../../shared/model/providers.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 
-const NPM_PACKAGES = { codex: '@openai/codex' } as const;
-export const INSTALL_FAILED = {
+const NPM_PACKAGES = { codex: '@openai/codex', 'gemini-cli': '@google/gemini-cli' } as const;
+export const INSTALL_FAILED: Readonly<Record<InstallableCli, string>> = {
   claude: 'Could not install Claude Code. Check your connection and try again.',
   codex: 'Could not install Codex. Check your connection and try again.',
-} as const;
+  'gemini-cli': 'Could not install Gemini CLI. Check your connection and try again.',
+};
+/** AF-024: Gemini CLI comes only through npm. */
+export const GEMINI_NEEDS_NODE = 'Gemini CLI needs Node.js 20 or newer. Install it from nodejs.org, then try again.';
+/** The executable each installable CLI is found as. */
+const EXECUTABLE: Readonly<Record<InstallableCli, CliId>> = { claude: 'claude', codex: 'codex', 'gemini-cli': 'gemini' };
 /** Demo mode: the fake engine needs no CLI, and a real installer must never run there. */
 export const INSTALL_OFF_IN_DEMO = 'The demo does not install programs.';
 const INSTALL_MS = 5 * 60_000;
@@ -41,20 +49,24 @@ export function codexInstaller(platform: NodeJS.Platform, env?: NodeJS.ProcessEn
     : { command: '/bin/bash', env: quiet, args: ['-c', 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | sh'] };
 }
 
-/** `npm install -g <package>` (Codex's fallback); npm.cmd cannot be spawned without a shell – all arguments are constants, so cmd /c is safe. */
-export function npmInstaller(npm: Executable, platform: NodeJS.Platform, env?: NodeJS.ProcessEnv): InstallRoute {
+/** `npm install -g <package>` (Codex's fallback, Gemini CLI's only route); npm.cmd cannot be spawned without a shell – all arguments are constants, so cmd /c is safe. */
+export function npmInstaller(npm: Executable, platform: NodeJS.Platform, env?: NodeJS.ProcessEnv, pkg: string = NPM_PACKAGES.codex): InstallRoute {
   if (platform === 'win32' && npm.path.toLowerCase().endsWith('.cmd') && npm.command === npm.path) {
-    return { command: 'cmd.exe', env, args: ['/d', '/s', '/c', 'npm', 'install', '-g', NPM_PACKAGES.codex] };
+    return { command: 'cmd.exe', env, args: ['/d', '/s', '/c', 'npm', 'install', '-g', pkg] };
   }
-  return { command: npm.command, env, args: [...npm.prefixArgs, 'install', '-g', NPM_PACKAGES.codex] };
+  return { command: npm.command, env, args: [...npm.prefixArgs, 'install', '-g', pkg] };
 }
 
 /** Installs the CLI unless the finder already sees it; true when it was installed now. Throws INSTALL_FAILED when every route failed. */
-export async function installCli(provider: 'claude' | 'codex', deps: InstallDeps): Promise<boolean> {
+export async function installCli(provider: InstallableCli, deps: InstallDeps): Promise<boolean> {
   const platform = deps.platform ?? process.platform;
-  if (await deps.finder.find(provider, { force: true })) return false; // already installed
+  if (await deps.finder.find(EXECUTABLE[provider], { force: true })) return false; // already installed
   if (deps.demo) throw new WorkforceError('unavailable', INSTALL_OFF_IN_DEMO);
-  if (provider === 'claude') {
+  if (provider === 'gemini-cli') { // AF-024: npm only
+    const npm = await deps.finder.find('npm', { force: true });
+    if (!npm) throw new WorkforceError('unavailable', GEMINI_NEEDS_NODE);
+    if (await runRoute(npmInstaller(npm, platform, deps.env, NPM_PACKAGES['gemini-cli']), provider, deps)) return true;
+  } else if (provider === 'claude') {
     if (await runRoute(claudeInstaller(platform, deps.env), provider, deps)) return true;
   } else {
     if (await runRoute(codexInstaller(platform, deps.env), provider, deps)) return true;
@@ -65,7 +77,7 @@ export async function installCli(provider: 'claude' | 'codex', deps: InstallDeps
 }
 
 /** Runs one route to its end (or the timeout); true when it exited 0 and the CLI is found now. */
-async function runRoute(route: InstallRoute, provider: 'claude' | 'codex', deps: InstallDeps): Promise<boolean> {
+async function runRoute(route: InstallRoute, provider: InstallableCli, deps: InstallDeps): Promise<boolean> {
   let code: number | null;
   try {
     const lease = deps.supervisor.spawn({ command: route.command, args: route.args, owner: `install:${provider}`, kind: 'light', env: route.env, stdio: ['ignore', 'ignore', 'ignore'] });
@@ -77,5 +89,5 @@ async function runRoute(route: InstallRoute, provider: 'claude' | 'codex', deps:
     code = null; // could not start (no PowerShell or bash)
   }
   deps.finder.clear();
-  return code === 0 && Boolean(await deps.finder.find(provider, { force: true }));
+  return code === 0 && Boolean(await deps.finder.find(EXECUTABLE[provider], { force: true }));
 }

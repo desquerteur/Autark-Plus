@@ -16,6 +16,7 @@ import { AcpRpcError, isAuthError, isLimitError } from './protocol.ts';
 import { nextConfigRequest } from './config.ts';
 import { applyUpdate, hubToolName, hubToolOf, isHubPermission, newTurnState, permissionOutcome, promptUsage, stopFor } from './updates.ts';
 import { acpActions } from '../../access/classify.ts'; // AF-013
+import { limitFromText } from '../quota-wait.ts'; // AF-024: Gemini CLI's "daily quota … retry in …"
 import { ERR, isRecord, str } from '../shared.ts';
 import { acpDown, providerDownMessage } from '../provider-outage.ts'; // B-059 #184
 
@@ -28,7 +29,7 @@ type Block = Record<string, unknown>;
 /** A failed request as the turn's end: sign-in → unavailable, limit, a lost session → rebase, gone. */
 export function failure(error: unknown, name: string, resumed = false): Pick<EngineTurnResult, 'stop' | 'error'> {
   if (isAuthError(error)) return { stop: 'error', error: ERR.unavailable(`${name} is not signed in for this account.`) };
-  if (isLimitError(error)) return { stop: 'limit', error: ERR.limit() };
+  if (isLimitError(error)) return { stop: 'limit', error: limitFromText((error as AcpRpcError).message) }; // AF-024: its wait, a daily quota
   if (error instanceof AcpRpcError && error.kind === 'closed') return { stop: 'error', error: ERR.unavailable(`${name} stopped unexpectedly.`) };
   if (error instanceof AcpRpcError && error.kind === 'timeout') return { stop: 'error', error: ERR.timeout() };
   if (resumed && error instanceof AcpRpcError && SESSION_GONE.test(error.message)) {

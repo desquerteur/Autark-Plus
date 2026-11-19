@@ -121,6 +121,48 @@
       "strengths": { "cheap-chat": 0.6, "decision": 0.3, "chat": 0.2, "video-animation": -0.6 }
     },
     {
+      "match": "gemini-2*-flash-lite*", "tier": "small", "relCost": 0.01, "smarts": 60,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true },
+      "strengths": { "cheap-chat": 0.5, "decision": 0.2, "chat": 0.1, "coding": -0.4, "video-animation": -0.6 },
+      "note": "AF-024: older Gemini Flash-Lite ids the Gemini CLI and the Gemini API list (gemini-2.5-flash-lite …)."
+    },
+    {
+      "match": "gemini-2*-flash*", "tier": "small", "relCost": 0.03, "smarts": 70,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true },
+      "strengths": { "cheap-chat": 0.4, "chat": 0.3, "research": 0.2, "coding": 0.1 },
+      "note": "AF-024: older Gemini Flash ids (gemini-2.5-flash …)."
+    },
+    {
+      "match": "gemini-2*-pro*", "tier": "strong", "relCost": 0.25, "smarts": 80,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
+      "strengths": { "research": 0.5, "coding": 0.4, "writing": 0.3, "chat": 0.3, "cheap-chat": -0.3 },
+      "note": "AF-024: older Gemini Pro ids (gemini-2.5-pro …)."
+    },
+    {
+      "match": "gemini-*-flash-lite*", "tier": "small", "relCost": 0.02, "smarts": 66,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true },
+      "strengths": { "cheap-chat": 0.6, "decision": 0.3, "chat": 0.2, "video-animation": -0.6 },
+      "note": "AF-024: any other Gemini Flash-Lite (gemini-3-flash-lite-preview …): the family's tier, so a switch finds its nearest model."
+    },
+    {
+      "match": "gemini-*-flash*", "tier": "strong", "relCost": 0.08, "smarts": 80,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true },
+      "strengths": { "cheap-chat": 0.5, "coding": 0.4, "research": 0.4, "chat": 0.4 },
+      "note": "AF-024: any other Gemini Flash (gemini-3-flash-preview …)."
+    },
+    {
+      "match": "gemini-*-pro*", "tier": "frontier", "relCost": 0.3, "smarts": 88,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
+      "strengths": { "research": 0.6, "coding": 0.5, "writing": 0.4, "video-animation": 0.2, "cheap-chat": -0.4 },
+      "note": "AF-024: any other Gemini Pro (gemini-3-pro-preview …)."
+    },
+    {
+      "match": "auto-gemini*", "tier": "strong", "relCost": 0.15, "smarts": 82,
+      "caps": { "vision": true, "tools": true },
+      "strengths": { "research": 0.5, "coding": 0.4, "writing": 0.3, "chat": 0.4, "cheap-chat": 0.1 },
+      "note": "AF-024: Gemini CLI's automatic choice (auto-gemini-3 …) – Pro or Flash per request."
+    },
+    {
       "match": "grok-4.7*", "name": "Grok 4.7", "tier": "strong", "relCost": 0.3, "smarts": 85,
       "caps": { "tools": true, "structuredOutput": true },
       "strengths": { "research": 0.3, "social-media": 0.3, "chat": 0.3 }

@@ -1,7 +1,8 @@
 // PR8 acceptance: Gemini CLI and Copilot CLI as plan accounts on the ACP engine – the launch table
 // (ACP flag from the CLI's own --help, the sign-in method), adoption of a CLI signed in on this PC
 // (every CLI process in the empty engine folder, provider keys stripped, Gemini CLI left only its
-// Google sign-in), the sign-ins (Gemini CLI through ACP authenticate, Copilot CLI's /login in a
+// Google sign-in), the sign-ins (Gemini CLI through ACP authenticate – AF-024: each account in a folder of its own
+// (GEMINI_CLI_HOME), so a second Google account sits beside the first –, Copilot CLI's /login in a
 // terminal window that starts in a new folder of its own), the Settings "On this PC" row, and
 // routing: without a launch confirmed to ignore workspace settings the account gets no turns; with
 // one, routing picks it and the turn runs through a scripted ACP agent (fakes.ts).
@@ -141,13 +142,21 @@ test('acp providers: a Gemini CLI signed in on this PC is adopted; every CLI sta
 test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI with /login in a terminal window; no sign-out', async () => {
   const signedIn = { gemini: false, copilot: false };
   const h = service(signedIn);
-  const gemini = await h.accounts.add({ provider: 'gemini-cli' });
-  assert.equal(gemini.state, 'needs_login', 'checked first; its sign-in started');
+  const gemini = await h.accounts.add({ provider: 'gemini-cli', label: 'Gemini 1' });
+  assert.equal(gemini.state, 'needs_login', 'its sign-in started');
+  assert.equal(gemini.home, path.join(PATHS.accounts, 'gemini-cli', gemini.id), 'AF-024: a sign-in folder of its own');
   await h.settle();
   const auth = h.scripted.gemini.state.requests.filter((r: any) => r.method === 'authenticate');
   assert.deepEqual(auth.map((r: any) => r.params.methodId), ['oauth-personal']);
   assert.equal(h.accounts.get(gemini.id)?.state, 'ok', 'checked again when the sign-in ended');
-  assert.equal((await h.accounts.add({ provider: 'gemini-cli' })).id, gemini.id, 'one Gemini CLI account per PC');
+  assert.ok(h.scripted.gemini.calls.length > 0 && h.scripted.gemini.calls.every((call) => call.options.env?.GEMINI_CLI_HOME === gemini.home), 'the agent runs in that folder');
+  const second = await h.accounts.add({ provider: 'gemini-cli', label: 'Gemini 2' });
+  assert.notEqual(second.id, gemini.id, 'AF-024: a second Google account beside the first');
+  assert.equal(second.label, 'Gemini 2');
+  assert.equal(second.home, path.join(PATHS.accounts, 'gemini-cli', second.id));
+  await h.settle();
+  assert.ok(h.scripted.gemini.calls.some((call) => call.options.env?.GEMINI_CLI_HOME === second.home), 'its own agent in its own folder');
+  assert.deepEqual(h.folders.splice(0), [gemini.home, second.home], 'both folders made, nothing else');
 
   const copilot = await h.accounts.add({ provider: 'copilot' });
   assert.equal(copilot.state, 'needs_login');
@@ -170,8 +179,8 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
   assert.equal(h.accounts.get(copilot.id)?.state, 'ok');
 
   await assert.rejects(h.accounts.logout(copilot.id), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
-  await h.accounts.remove(gemini.id); // its default home is never deleted (rmdir throws)
-  assert.equal((await h.accounts.detect(true)).clis.find((cli) => cli.provider === 'gemini-cli')?.dismissed, true, 'detection does not add it back');
+  await h.accounts.remove(second.id); // its own folder only (the harness' rmdir refuses every delete: removal goes on)
+  assert.equal(h.accounts.get(second.id), undefined);
   await h.accounts.dispose();
   await h.registry.dispose();
 });
@@ -206,7 +215,8 @@ test('acp providers: the "On this PC" row and the plan group in Settings', () =>
   // A plan with its own homes adds through Add account, never 'add'; its status command did not answer (runtime gaps 23.10.): it says so and offers a new scan.
   assert.deepEqual(cliRowView({ provider: 'codex', path: '/bin/codex' }, []), { name: 'Codex', hint: 'Installed · sign-in unknown', action: 'check', account: undefined });
   assert.equal(cliRowView({ provider: 'claude', path: '/bin/claude', version: '2.1.303', loggedIn: true }, [])?.action, undefined, 'a known login: nothing to check');
-  assert.deepEqual(cliRowView({ provider: 'gemini-cli' }, []), { name: 'Gemini CLI', hint: 'Not installed', action: undefined, account: undefined }, 'not installed: its fixed row, no Install (Workforce cannot install it)');
+  assert.deepEqual(cliRowView({ provider: 'gemini-cli' }, []), { name: 'Gemini CLI', hint: 'Not installed', action: 'install', account: undefined }, 'AF-024: not installed – Autark installs it through npm');
+  assert.deepEqual(cliRowView({ provider: 'copilot' }, []), { name: 'Copilot CLI', hint: 'Not installed', action: undefined, account: undefined }, 'not installed: its fixed row, no Install (Workforce cannot install it)');
   assert.deepEqual(cliRowView({ provider: 'codex' }, []), { name: 'Codex', hint: 'Not installed', action: 'install', account: undefined });
   assert.deepEqual([providerGroup('gemini-cli'), providerGroup('copilot'), PROVIDER_NAMES.copilot], ['plans', 'plans', 'Copilot CLI']);
   assert.deepEqual([SIGN_OUT.has('gemini-cli'), SIGN_OUT.has('copilot'), SIGN_OUT.has('codex')], [false, false, true]);

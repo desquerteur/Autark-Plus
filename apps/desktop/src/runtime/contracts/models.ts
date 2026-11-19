@@ -15,7 +15,7 @@ import type {
 } from '../../shared/model/tasks.ts';
 import type { Handoff, KnowledgeHit, KnowledgeItem, KnowledgeListFilter, KnowledgeQuery, ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
 import type {
-  Account, AccountLimits, DetectionReport, Effort, EngineId, ModelInfo, ProviderId, RouteDecision, UsageSummary,
+  Account, AccountLimits, DetectionReport, Effort, EngineId, InstallableCli, ModelInfo, ProviderId, RouteDecision, UsageSummary,
 } from '../../shared/model/providers.ts';
 import type { Device } from '../../shared/model/devices.ts';
 import type { AgentActivity, Run, RunItem, WakeReason } from '../../shared/model/runs.ts';
@@ -108,7 +108,7 @@ export interface AccountService {
   login(id: string): Promise<{ started: boolean; url?: string }>;
   logout(id: string): Promise<void>;
   remove(id: string): Promise<void>;
-  install(provider: 'claude' | 'codex'): Promise<void>;
+  install(provider: InstallableCli): Promise<void>; // AF-024: Gemini CLI too
   /** Healthy accounts able to run `engine`, best first (priority, headroom, rotation rules). */
   candidates(engine: EngineId, model?: string, exclude?: readonly string[]): Account[]; // AF-023: exclude = accounts that just failed
   markLimited(id: string, until: number, limits?: AccountLimits): void;

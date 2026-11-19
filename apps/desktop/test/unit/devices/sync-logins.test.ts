@@ -164,6 +164,25 @@ test('a PC with the same login itself takes it into its own account (provider an
   assert.equal(await read(path.join(b.home, '.gemini', 'google_accounts.json')), JSON.stringify({ active: 'lena@example.com', old: [] }), 'both of its files');
 });
 
+test('AF-024: a Gemini account with a folder of its own travels into <its home>/.gemini there; never over the other PC\'s ~/.gemini', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b');
+  t.after(async () => { for (const pc of [a, b]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  a.accounts.push(plan('acc_g2', 'gemini-cli', { home: a.own('acc_g2', 'gemini-cli') }), plan('acc_g3', 'gemini-cli', { home: a.own('acc_g3', 'gemini-cli') }));
+  b.accounts.push(plan('acc_g2', 'gemini-cli', { home: b.own('acc_g2', 'gemini-cli'), state: 'needs_login' }), plan('acc_gb', 'gemini-cli', { detected: true }));
+  const creds = (token: string) => JSON.stringify({ access_token: token, refresh_token: `${token}r`, expiry_date: 1_793_800_000_000 });
+  await put(path.join(a.own('acc_g2', 'gemini-cli'), '.gemini', 'oauth_creds.json'), creds('g2'));
+  await put(path.join(a.own('acc_g3', 'gemini-cli'), '.gemini', 'oauth_creds.json'), creds('g3')); // its row has not reached B yet
+  await put(path.join(b.home, '.gemini', 'oauth_creds.json'), creds('gb'));
+
+  await a.logins.catchUp('dev_b');
+  assert.equal(await read(path.join(b.own('acc_g2', 'gemini-cli'), '.gemini', 'oauth_creds.json')), creds('g2'), 'where GEMINI_CLI_HOME makes the CLI look');
+  assert.ok(b.checked.includes('acc_g2'));
+  assert.equal(await read(path.join(b.home, '.gemini', 'oauth_creds.json')), creds('gb'), 'an own-folder login never lands in the default home');
+});
+
 test('never to or from an employee\'s PC, never an emptied login, and Claude Code on a Mac has none to send or take', async (t) => {
   const pcs = new Map<string, Pc>();
   const a = await makePc(pcs, 'dev_a');
