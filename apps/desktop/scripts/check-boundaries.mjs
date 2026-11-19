@@ -154,8 +154,9 @@ export function layerProblems(files) {
     const layer = file.split('/')[1];
     if (!file.startsWith('src/') || !layers.includes(layer) || !/\.(?:ts|tsx|mjs)$/.test(file)) continue;
     const lines = text.split('\n').length;
-    if (lines > 450) problems.push(`${file}: ${lines} lines (hard limit 450 – split it)`);
-    else if (lines > 300) warnings.push(`${file}: ${lines} lines (soft limit 300)`);
+    // Generated files (scripts/rpc-docs.mjs) grow with the contract and are not split by hand: no size limit for them.
+    if (lines > 450 && !file.endsWith('.generated.ts')) problems.push(`${file}: ${lines} lines (hard limit 450 – split it)`);
+    else if (lines > 300 && !file.endsWith('.generated.ts')) warnings.push(`${file}: ${lines} lines (soft limit 300)`);
     const inCli = file.startsWith(cliDir);
     for (const spec of importSpecs(file, text)) {
       if (!spec.startsWith('.')) {
