@@ -117,9 +117,21 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
-      "artifactName": "autark-linux-x64.${ext}",
+      "artifactName": "autark-linux-${arch}.${ext}",
       "category": "Office",
       "icon": "assets/icon.png"
     }

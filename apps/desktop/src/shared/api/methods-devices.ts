@@ -21,8 +21,8 @@ declare module '../api/methods.ts' {
     'devices.revoke': { params: { id: string }; result: { ok: true } };
     'pwa.state': { params: void; result: PwaState };
     'pwa.enable': { params: { enabled: boolean; bind?: Settings['pwa']['bind'] }; result: PwaState };
-    /** The phone QR code: a one-time link (10 minutes) the phone camera opens, and its 6-digit `code` for an installed app – one pairing with either, until `expiresAt`; `route` (#/…) opens after pairing. */
-    'pwa.link': { params: { name?: string; route?: string }; result: { url: string; qrDataUrl: string; expiresAt: number; code: string } };
+    /** The phone QR code: a one-time link (10 minutes) the phone camera opens, and its 6-digit `code` for an installed app – one pairing with either, until `expiresAt`; `route` (#/…) opens after pairing; `loopback` (AF-025): a localhost link while no phone can reach the PC. */
+    'pwa.link': { params: { name?: string; route?: string; loopback?: boolean }; result: { url: string; qrDataUrl: string; expiresAt: number; code: string } };
     'pwa.revoke': { params: { deviceId: string }; result: { ok: true } };
     'pwa.pushSubscribe': { params: { subscription: unknown }; result: { ok: true } };
     /** Any paired device: can the PC push, its VAPID key, and is this browser's subscription (`endpoint`) stored? */

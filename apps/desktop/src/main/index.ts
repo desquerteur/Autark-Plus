@@ -20,7 +20,10 @@ import type { Desktop } from './desktop.ts';
 import { applyIdentity } from './identity-move.ts';
 import { BACKGROUND_FLAG, NOTICES, RESTARTED_FLAG, beginLaunch, launchSource, readRunState, type LaunchNotice } from './launcher.ts';
 import { PRIVILEGED_SCHEMES } from './protocols/handlers.ts';
+import { isHeadlessStart, runHeadless } from './headless.ts';
 
+const headless = isHeadlessStart(process.argv); // AF-025: the runtime as plain Node, no window and no lock (headless.ts)
+if (headless) runHeadless(app, process.argv);
 const testData = process.env.WORKFORCE_TEST_DATA ? path.resolve(process.env.WORKFORCE_TEST_DATA) : null;
 if (testData) app.setPath('userData', testData); // isolated profile; also disables the network updater
 const company = testData ? null : companyFlag(process.argv); // B-072: another company's folder, before the rename check and the lock
@@ -56,11 +59,13 @@ function handOff(kind: LaunchNotice | undefined): void {
 
 // B-072: the update install ended every company; its relaunch is the first one (read before beginLaunch writes the state)
 const updated = companies !== null && !company && readRunState(app.getPath('userData'))?.by === 'update';
-const launch = app.requestSingleInstanceLock()
+const launch = !headless && app.requestSingleInstanceLock()
   ? beginLaunch({ dataDir: app.getPath('userData'), source: launchSource(process.platform, flags.launcher), now: Date.now(), bootAt: Date.now() - os.uptime() * 1000, pid: process.pid })
   : null;
 
-if (!launch) {
+if (headless) {
+  // AF-025: the headless child owns this start; this process only waits for it (headless.ts)
+} else if (!launch) {
   app.quit(); // the app is running: a second launch shows it (unless --background), see 'second-instance'
 } else if (launch.handoff) {
   handOff(launch.notice);

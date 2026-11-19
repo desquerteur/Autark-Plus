@@ -4,7 +4,10 @@
 
 import { createRequire } from 'node:module';
 
-type QrModule = { toDataURL(text: string, options: Record<string, unknown>): Promise<string> };
+type QrModule = {
+  toDataURL(text: string, options: Record<string, unknown>): Promise<string>;
+  toString(text: string, options: Record<string, unknown>): Promise<string>;
+};
 
 let cached: QrModule | undefined;
 
@@ -12,4 +15,10 @@ export async function qrDataUrl(text: string): Promise<string> {
   // `qrcode` is CommonJS without bundled types; require keeps the import untyped but contained.
   cached ??= createRequire(import.meta.url)('qrcode') as QrModule;
   return cached.toDataURL(text, { width: 320, margin: 4, errorCorrectionLevel: 'M' });
+}
+
+/** AF-025: the same code as text for a terminal (half blocks), for the headless start's pairing banner. */
+export async function qrTerminal(text: string): Promise<string> {
+  cached ??= createRequire(import.meta.url)('qrcode') as QrModule;
+  return cached.toString(text, { type: 'terminal', small: true, errorCorrectionLevel: 'L' });
 }
