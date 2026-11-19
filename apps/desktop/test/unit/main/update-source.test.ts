@@ -19,16 +19,16 @@ import type { UpdateState } from '../../../src/shared/model/system.ts';
 import { fakeClock, fakeUpdater, settle } from './update-fakes.ts';
 
 test('the source: the fork by default, teydra/OpenAutark selectable, the settings page names the same two', () => {
-  assert.deepEqual(DEFAULT_SOURCE, { repository: 'desquerteur/OpenAutark', channel: 'stable', autoCheck: true });
-  assert.deepEqual(KNOWN_REPOSITORIES, ['desquerteur/OpenAutark', 'teydra/OpenAutark']);
+  assert.deepEqual(DEFAULT_SOURCE, { repository: 'desquerteur/Autark-Plus', channel: 'stable', autoCheck: true });
+  assert.deepEqual(KNOWN_REPOSITORIES, ['desquerteur/Autark-Plus', 'teydra/OpenAutark']);
   assert.equal(FORK_REPOSITORY, RELEASE_REPOSITORY);
   assert.equal(UI_UPSTREAM, UPSTREAM_REPOSITORY);
-  assert.deepEqual(feedOptions(DEFAULT_SOURCE), { provider: 'github', owner: 'desquerteur', repo: 'OpenAutark' });
+  assert.deepEqual(feedOptions(DEFAULT_SOURCE), { provider: 'github', owner: 'desquerteur', repo: 'Autark-Plus' });
   assert.deepEqual(feedOptions({ repository: 'teydra/OpenAutark' }), { provider: 'github', owner: 'teydra', repo: 'OpenAutark' });
 });
 
 test('parseRepository accepts owner/name (also as a github.com link) and nothing else', () => {
-  assert.deepEqual(parseRepository('desquerteur/OpenAutark'), { owner: 'desquerteur', repo: 'OpenAutark' });
+  assert.deepEqual(parseRepository('desquerteur/Autark-Plus'), { owner: 'desquerteur', repo: 'Autark-Plus' });
   assert.deepEqual(parseRepository('  https://github.com/teydra/OpenAutark/ '), { owner: 'teydra', repo: 'OpenAutark' });
   assert.deepEqual(parseRepository('a-b/c.d_e-f.git'), { owner: 'a-b', repo: 'c.d_e-f' });
   for (const bad of ['', 'OpenAutark', 'a/b/c', '-a/b', 'a-/b', 'a/..', 'a b/c', 'a/b?x=1', 'https://evil.example/a/b', 42, null, `${'x'.repeat(40)}/y`]) {
@@ -102,12 +102,12 @@ const noRelease = () => Object.assign(new Error('No published versions on GitHub
 
 test('the service points the updater at the fork by default and reports the source in its state', () => {
   const h = service();
-  assert.deepEqual(h.feeds, [{ provider: 'github', owner: 'desquerteur', repo: 'OpenAutark' }]);
+  assert.deepEqual(h.feeds, [{ provider: 'github', owner: 'desquerteur', repo: 'Autark-Plus' }]);
   assert.equal(h.updater.allowPrerelease, false);
-  assert.equal(h.s.state.source, 'desquerteur/OpenAutark');
+  assert.equal(h.s.state.source, 'desquerteur/Autark-Plus');
   assert.equal(h.s.state.channel, 'stable');
   assert.equal(h.s.state.autoCheck, true);
-  assert.equal(h.s.state.downloadURL, 'https://github.com/desquerteur/OpenAutark/releases/latest/download/autark-windows-x64.exe');
+  assert.equal(h.s.state.downloadURL, 'https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-windows-x64.exe');
 });
 
 test('no release in the source yet: a clear "current" message, no error, and the retries stay quiet', async () => {
@@ -115,8 +115,8 @@ test('no release in the source yet: a clear "current" message, no error, and the
   h.updater.checkForUpdates = async () => { h.emit('checking-for-update'); const error = noRelease(); h.emit('error', error); throw error; };
   const state = await h.s.check();
   assert.equal(state.status, 'current');
-  assert.equal(state.message, noReleaseText('desquerteur/OpenAutark'));
-  assert.match(state.message!, /No update has been published in desquerteur\/OpenAutark yet/);
+  assert.equal(state.message, noReleaseText('desquerteur/Autark-Plus'));
+  assert.match(state.message!, /No update has been published in desquerteur\/Autark-Plus yet/);
   assert.equal(state.failure, undefined);
   assert.ok(!h.states.some((entry) => entry.status === 'error'));
   assert.equal(updateStatusText(state), state.message, 'the settings page shows that message');
@@ -150,7 +150,7 @@ test('the prerelease channel sets the updater flag; an invalid repository keeps 
   h.s.setSource({ channel: 'prerelease' });
   assert.equal(h.updater.allowPrerelease, true);
   h.s.setSource({ repository: 'not a repo' });
-  assert.equal(h.s.state.source, 'desquerteur/OpenAutark');
+  assert.equal(h.s.state.source, 'desquerteur/Autark-Plus');
   h.s.setSource({ channel: 'stable' });
   assert.equal(h.updater.allowPrerelease, false);
 });
@@ -192,7 +192,7 @@ test('the release notes and title of an offered update reach the state (for the 
 });
 
 test('the settings page: source choice and when "Check now" works', () => {
-  assert.equal(sourceChoice('desquerteur/OpenAutark'), 'fork');
+  assert.equal(sourceChoice('desquerteur/Autark-Plus'), 'fork');
   assert.equal(sourceChoice('Teydra/OpenAutark'), 'upstream');
   assert.equal(sourceChoice('someone/else'), 'custom');
   const base: UpdateState = { status: 'current', version: '0.3.4', percent: 0, automaticInstall: true };
@@ -223,4 +223,10 @@ test('the stored source: defaults without a file, a round trip, a broken file me
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('0.3.7 move: a stored source naming the old fork follows the releases to their new home', () => {
+  assert.equal(normalizeSource({ repository: 'desquerteur/OpenAutark' }).repository, RELEASE_REPOSITORY);
+  assert.equal(normalizeSource({ repository: 'https://github.com/Desquerteur/openautark' }).repository, RELEASE_REPOSITORY);
+  assert.equal(normalizeSource({ repository: 'teydra/OpenAutark' }).repository, 'teydra/OpenAutark');
 });

@@ -1,6 +1,6 @@
-# Updates aus dem eigenen Fork veröffentlichen
+# Updates aus dem eigenen Repo veröffentlichen
 
-Diese Version von Autark holt ihre Updates aus **`desquerteur/OpenAutark`** (deinem Fork), nicht mehr aus
+Diese Version von Autark holt ihre Updates aus **`desquerteur/Autark-Plus`** (deinem eigenen Repo; bis 0.3.6 war es der Fork `desquerteur/OpenAutark`), nicht mehr aus
 `teydra/OpenAutark`. So überschreibt ein offizielles Update deine eigenen Änderungen nicht.
 
 ## In der App
@@ -10,7 +10,7 @@ Diese Version von Autark holt ihre Updates aus **`desquerteur/OpenAutark`** (dei
 - **Version** – welche Version installiert ist und was gerade los ist (z. B. „Up to date“).
 - **Check for updates now** – fragt sofort bei der gewählten Quelle nach.
 - **Source** – woher die Updates kommen:
-  - `desquerteur/OpenAutark` (Standard, dein Fork)
+  - `desquerteur/Autark-Plus` (Standard, dein Repo)
   - `teydra/OpenAutark` (das Original – Achtung: dessen Updates ersetzen deine Änderungen)
   - eine andere GitHub-Adresse im Format `besitzer/name`
 - **Check automatically** – ein: prüft beim Start und regelmäßig; aus: nur noch per Knopf.

@@ -2,16 +2,16 @@
 # Autark headless on Linux (AF-025): installs, updates or removes Autark as a background service without a window.
 #
 #   Server (system service, own user "autark", data in /var/lib/autark):
-#     curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | sudo bash
+#     curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash
 #   Desktop (user service of the signed-in person, data in ~/.local/share/autark):
-#     curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | bash
 #   Options go after "bash -s --", e.g.  … | sudo bash -s -- --update
 #
 #   --server | --desktop      mode (default: --server when run as root, --desktop otherwise)
 #   --update                  install the newest release (or --version), restart, keep all data
 #   --uninstall [--purge]     remove service, command and app; --purge also deletes the data (and the server user)
 #   --version vX.Y.Z          a certain release instead of the newest
-#   --repo owner/name         where the releases come from (default desquerteur/OpenAutark)
+#   --repo owner/name         where the releases come from (default desquerteur/Autark-Plus)
 #   --file PATH               install this downloaded autark-linux-<arch>.tar.gz or .AppImage (no download)
 #   --bind localhost|lan|tailscale   who reaches the web access (server: lan, desktop: localhost)
 #   --port N                  web port (default 47811)
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-REPO_DEFAULT='desquerteur/OpenAutark'
+REPO_DEFAULT='desquerteur/Autark-Plus'
 SERVICE='autark'
 SERVICE_USER='autark'
 
@@ -41,8 +41,8 @@ sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 usage() {
   cat <<'EOF'
 Autark headless installer for Linux.
-  curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | sudo bash   (server)
-  curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | bash        (desktop)
+  curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash   (server)
+  curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | bash        (desktop)
   Options after "bash -s --":
   --server | --desktop   --update   --uninstall [--purge]   --version vX.Y.Z   --repo owner/name   --file PATH
   --bind localhost|lan|tailscale   --port N   --no-deps   --no-start   --linger

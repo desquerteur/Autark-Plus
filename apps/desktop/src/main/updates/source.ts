@@ -1,11 +1,11 @@
 // AF-019: where updates come from – the GitHub repository (owner/name), the channel (stable or prereleases) and
-// whether the app checks by itself. This build's default is the fork desquerteur/OpenAutark (release.ts,
+// whether the app checks by itself. This build's default is its own repository desquerteur/Autark-Plus (until 0.3.6 the fork desquerteur/OpenAutark) (release.ts,
 // package.json build.publish); teydra/OpenAutark is the upstream one can switch to. Also the version comparison
 // (semver with prereleases), the "nothing published there yet" error codes of electron-updater's GitHub provider
 // and the release notes as plain text.
 // Owns: these rules. Never: network access, files, electron.
 
-import { RELEASE_REPOSITORY, UPSTREAM_REPOSITORY } from './release.ts';
+import { FORMER_REPOSITORIES, RELEASE_REPOSITORY, UPSTREAM_REPOSITORY } from './release.ts';
 
 export type UpdateChannel = 'stable' | 'prerelease';
 
@@ -36,12 +36,17 @@ export function parseRepository(value: unknown): { owner: string; repo: string }
   return { owner, repo };
 }
 
+/** A former home of this build's releases → where they are now; anything else as it is. */
+function moved(repository: string): string {
+  return FORMER_REPOSITORIES.some((former) => former.toLowerCase() === repository.toLowerCase()) ? RELEASE_REPOSITORY : repository;
+}
+
 /** A stored or sent source, field by field; an invalid field keeps the default (or `base`). */
 export function normalizeSource(raw: unknown, base: Readonly<UpdateSource> = DEFAULT_SOURCE): UpdateSource {
   const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const parsed = parseRepository(value.repository);
   return {
-    repository: parsed ? `${parsed.owner}/${parsed.repo}` : base.repository,
+    repository: parsed ? moved(`${parsed.owner}/${parsed.repo}`) : base.repository,
     channel: value.channel === 'stable' || value.channel === 'prerelease' ? value.channel : base.channel,
     autoCheck: typeof value.autoCheck === 'boolean' ? value.autoCheck : base.autoCheck,
   };

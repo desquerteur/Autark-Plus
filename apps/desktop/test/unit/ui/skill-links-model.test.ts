@@ -25,7 +25,7 @@ test('files, scripts and changes in one line each', () => {
   assert.equal(changeText({ path: 'forms.md', change: 'changed', size: 9, lines: { added: 2, removed: 1 }, local: true }), 'Changed · forms.md · +2 −1 lines · your edit is replaced');
   assert.equal(changeText({ path: 'run.sh', change: 'added', size: 2048, script: true }), 'Added · run.sh · 2 KB · script');
   assert.equal(changeText({ path: 'old.md', change: 'removed', size: 3, local: true }), 'Removed · old.md · 3 B · your edit is removed');
-  assert.equal(updateSummary([], 4), 'Up to date – nothing changes.');
+  assert.equal(updateSummary([], 4), 'Up to date – nothing changes');
   assert.equal(updateSummary([{ path: 'a', change: 'changed', size: 1 }, { path: 'b', change: 'added', size: 1 }, { path: 'c', change: 'removed', size: 1 }], 3), '1 file changes, 1 new, 1 removed · 3 unchanged');
 });
 

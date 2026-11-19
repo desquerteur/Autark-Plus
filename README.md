@@ -66,16 +66,16 @@ The links below always lead to the newest version.
 
 | Device | File | Download |
 |---|---|---|
-| Windows 10/11 (x64) | `autark-windows-x64.exe` | [Download for Windows](https://github.com/desquerteur/OpenAutark/releases/latest/download/autark-windows-x64.exe) |
-| Mac (Apple silicon and Intel) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/OpenAutark/releases/latest/download/autark-mac-universal.dmg) |
-| Linux (x64) | `autark-linux-x64.AppImage` | [Download for Linux](https://github.com/desquerteur/OpenAutark/releases/latest/download/autark-linux-x64.AppImage) |
-| Android phone | `autark-android.apk` | [Download for Android](https://github.com/desquerteur/OpenAutark/releases/latest/download/autark-android.apk) |
+| Windows 10/11 (x64) | `autark-windows-x64.exe` | [Download for Windows](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-windows-x64.exe) |
+| Mac (Apple silicon and Intel) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-universal.dmg) |
+| Linux (x64) | `autark-linux-x64.AppImage` | [Download for Linux](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.AppImage) |
+| Android phone | `autark-android.apk` | [Download for Android](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-android.apk) |
 | iPhone | – | A web app from your own PC (see below) |
 
-- [Checksums (SHA-256)](https://github.com/desquerteur/OpenAutark/releases/latest/download/SHA256SUMS.txt) for every file of
-  the release, and [release.json](https://github.com/desquerteur/OpenAutark/releases/latest/download/release.json) with what
+- [Checksums (SHA-256)](https://github.com/desquerteur/Autark-Plus/releases/latest/download/SHA256SUMS.txt) for every file of
+  the release, and [release.json](https://github.com/desquerteur/Autark-Plus/releases/latest/download/release.json) with what
   was checked for it and what was not.
-- [All releases and their notes](https://github.com/desquerteur/OpenAutark/releases).
+- [All releases and their notes](https://github.com/desquerteur/Autark-Plus/releases).
 
 Check a download on Windows with `Get-FileHash .\autark-windows-x64.exe` (PowerShell), on Mac and Linux with
 `shasum -a 256 <file>`, and compare it with the line in `SHA256SUMS.txt`.
@@ -117,7 +117,7 @@ idle, or when you click **Restart**, Autark saves your drafts and its agents' wo
 small helper runs the installer silently and starts the new version (the window is gone for about a minute); on Linux
 the AppImage is replaced in place; on a Mac Autark replaces its own app bundle where macOS allows it, otherwise the
 button opens the download. The Android app compares its version with
-[latest-android.json](https://github.com/desquerteur/OpenAutark/releases/latest/download/latest-android.json) and offers the
+[latest-android.json](https://github.com/desquerteur/Autark-Plus/releases/latest/download/latest-android.json) and offers the
 new APK. Each step of a Windows or Linux update writes one line to `update-helper.log` in Autark's log folder
 (`%APPDATA%\Autark\logs`, `~/.config/Autark/logs`).
 
@@ -202,15 +202,16 @@ automatically after a secret scan.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send changes, and [SECURITY.md](SECURITY.md) for how
 to report a vulnerability privately.
 
-## Taking changes from this fork
+## Origin and taking changes from here
 
-This repository ([desquerteur/OpenAutark](https://github.com/desquerteur/OpenAutark)) is a fork of
-[teydra/OpenAutark](https://github.com/teydra/OpenAutark) with its own features (for example AF-017 agent directory,
+This repository ([desquerteur/Autark-Plus](https://github.com/desquerteur/Autark-Plus)) is based on
+[teydra/OpenAutark](https://github.com/teydra/OpenAutark) (Apache-2.0; until 0.3.6 it was the GitHub fork
+desquerteur/OpenAutark, with its full history kept here) and has its own features (for example AF-017 agent directory,
 AF-018 projects, AF-019 updates from the fork, AF-020 project lead and project chat). If you bring code, features or
-ideas from this fork into the original repository or any other copy of it, please say so where it lands – in the commit
+ideas from this repository into the original repository or any other copy of it, please say so where it lands – in the commit
 message or pull request and in the release notes, for example:
 
-> Taken from (or: inspired by) desquerteur/OpenAutark – https://github.com/desquerteur/OpenAutark
+> Taken from (or: inspired by) desquerteur/Autark-Plus – https://github.com/desquerteur/Autark-Plus
 
 The Apache License 2.0 also asks that changed files say they were changed and that existing notices are kept.
 

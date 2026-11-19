@@ -43,7 +43,7 @@ test('install-headless.sh parses and refuses wrong options', { skip }, () => {
     assert.match(result.stderr, /Error:/, args);
   }
   const ok = run('parse_args --server --version 0.3.6 --bind tailscale --port 47900; echo "$MODE $VERSION $BIND $PORT $REPO"');
-  assert.equal(ok.stdout.trim(), 'server v0.3.6 tailscale 47900 desquerteur/OpenAutark');
+  assert.equal(ok.stdout.trim(), 'server v0.3.6 tailscale 47900 desquerteur/Autark-Plus');
 });
 
 test('server files: the command, a hardened system unit for the autark user, and autark.env', { skip }, () => {

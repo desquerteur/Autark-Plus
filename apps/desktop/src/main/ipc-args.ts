@@ -69,7 +69,7 @@ export function updateSourcePatch(value: unknown): UpdateSourcePatch {
   const patch: UpdateSourcePatch = {};
   if (raw.repository !== undefined) {
     const repository = typeof raw.repository === 'string' && raw.repository.length <= 200 ? parseRepository(raw.repository) : null;
-    if (!repository) throw new WorkforceError('bad_request', 'Enter the repository as owner/name, for example desquerteur/OpenAutark.');
+    if (!repository) throw new WorkforceError('bad_request', 'Enter the repository as owner/name, for example desquerteur/Autark-Plus.');
     patch.repository = `${repository.owner}/${repository.repo}`;
   }
   if (raw.channel !== undefined) {

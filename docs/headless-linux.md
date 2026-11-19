@@ -20,12 +20,12 @@ Du brauchst: Linux mit **x86_64 (x64)** oder **aarch64 (arm64)**, `curl`, `tar` 
 ### Server (Systemdienst)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash
 ```
 
 Das Skript
 
-1. lädt die neueste Linux-Version aus den Releases von `desquerteur/OpenAutark`
+1. lädt die neueste Linux-Version aus den Releases von `desquerteur/Autark-Plus`
    (`autark-linux-x64.tar.gz`, sonst `autark-linux-x64.AppImage`; auf arm64 `autark-linux-arm64.tar.gz`) und prüft
    die Prüfsumme, wenn das Release eine `SHA256SUMS.txt` hat,
 2. installiert fehlende System-Bibliotheken (apt, dnf, zypper oder pacman),
@@ -47,7 +47,7 @@ Standard beim Server: Autark ist im **lokalen Netz** erreichbar (`--bind lan`) a
 ### Desktop (Dienst deines Benutzers)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | bash
+curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | bash
 ```
 
 Ohne `sudo`. Alles landet in deinem Benutzerordner:
@@ -79,7 +79,7 @@ Optionen kommen hinter `bash -s --`, z. B. `… | sudo bash -s -- --bind tailsca
 | `--bind localhost\|lan\|tailscale` | wer an Autark herankommt: nur dieser Computer / das lokale Netz / dein Tailscale-Netz |
 | `--port N` | Port der Weboberfläche (Standard 47811) |
 | `--version v0.3.6` | eine bestimmte Version statt der neuesten |
-| `--repo besitzer/name` | andere Release-Quelle (Standard `desquerteur/OpenAutark`) |
+| `--repo besitzer/name` | andere Release-Quelle (Standard `desquerteur/Autark-Plus`) |
 | `--file PFAD` | eine schon heruntergeladene `.tar.gz` oder `.AppImage` installieren (ohne Download) |
 | `--no-deps` | keine System-Bibliotheken installieren |
 | `--no-start` | einrichten, aber nicht starten |
@@ -151,7 +151,7 @@ Nach einer Änderung: `autark-headless restart`.
 ## 4. Aktualisieren
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/desquerteur/OpenAutark/main/scripts/install-headless.sh | sudo bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash -s -- --update
 ```
 
 (Desktop: ohne `sudo`.) Das Skript lädt die neueste Version, schaltet `current` um und startet den Dienst neu. Deine

@@ -1,5 +1,5 @@
 // AF-019: Settings › Updates – the version with its update state and action, "Check for updates now", where updates come
-// from (this build's fork desquerteur/OpenAutark, the upstream teydra/OpenAutark or another repository), automatic
+// from (this build's fork desquerteur/Autark-Plus, the upstream teydra/OpenAutark or another repository), automatic
 // checks on/off, the channel (stable or prereleases) and the automatic download. Changes go to main
 // (bridge.updates.setSource → <data>/update-source.json); the state comes back as UpdateState.
 // Without the desktop bridge (phone, browser) the page only says where updates are managed.
@@ -50,7 +50,7 @@ export function UpdatesPage() {
         <Select label="Update source" value={choice} options={SOURCE_OPTIONS} onChange={pick} />
       </Row>
       {choice === 'custom' && (
-        <Row label="Repository" hint="GitHub owner/name, for example desquerteur/OpenAutark">
+        <Row label="Repository" hint="GitHub owner/name, for example desquerteur/Autark-Plus">
           <TextField label="Repository" placeholder="owner/name" value={sourceChoice(repository) === 'custom' ? repository : ''} maxLength={200}
             onCommit={(value) => { if (value.trim()) setSource({ repository: value.trim() }); }} />
         </Row>

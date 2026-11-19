@@ -6,7 +6,7 @@
 import type { UpdateState } from '../../shared/model/system.ts';
 import { installingText } from '../shell/update-control.ts';
 
-export const FORK_REPOSITORY = 'desquerteur/OpenAutark';
+export const FORK_REPOSITORY = 'desquerteur/Autark-Plus';
 export const UPSTREAM_REPOSITORY = 'teydra/OpenAutark';
 
 export type SourceChoice = 'fork' | 'upstream' | 'custom';
