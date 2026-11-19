@@ -180,6 +180,19 @@ function insertTake(conversationId: string, piece: MarkedText): void {
 /** Chats whose stopped dictation is still being uploaded or transcribed (seconds on a phone). */
 export const transcribing = signal<ReadonlySet<string>>(new Set());
 
+/** Feedback 08604667 (18.11.2026, "kein abbrechen button beim transkribiren"): the stopped take each chat waits for. */
+const awaited = new Map<string, symbol>();
+
+/**
+ * Stops waiting for a chat's take that is still being transcribed: the spinner goes at once, the draft stays as it is,
+ * and the text that comes later is dropped (the next take of the chat may start right away).
+ */
+export function cancelTranscribing(conversationId: string): void {
+  if (!awaited.delete(conversationId)) return;
+  targets.delete(conversationId);
+  setTranscribing(conversationId, false);
+}
+
 function setTranscribing(conversationId: string, on: boolean): void {
   const next = new Set(transcribing.value);
   if (on) next.add(conversationId); else next.delete(conversationId);
@@ -206,18 +219,23 @@ export async function stopDictation(options: StopDictationOptions = {}): Promise
   const kind = take === 'recording' && !dictationNote() ? 'take' : take;
   dictating.value = null;
   take = null;
+  const ticket = Symbol(conversationId);
+  awaited.set(conversationId, ticket);
   setTranscribing(conversationId, true);
+  const cancelled = () => awaited.get(conversationId) !== ticket; // cancelTranscribing: failed, so Send leaves the draft alone
   try {
     if (kind === 'recording') return attach ? await recordingOnly() : dropRecording();
     const heard = await dictation.finish(settings.value?.profile.language, { chatId: conversationId }); // the language: a hint
+    if (cancelled()) return { failed: true };
     return keptOutcome(heard.text ? { text: heard.text, ...(heard.marks ? { marks: heard.marks } : {}) } : {}, heard.kept ?? [], attach);
   } catch (error) {
+    if (cancelled()) return { failed: true };
     // Pieces worth keeping come back as recordings when their transcription failed.
     if (error instanceof TakeNotTranscribed && error.kept.length) return keptOutcome({}, error.kept, attach);
     toastError(error, 'Dictation failed');
     return { failed: true };
   } finally {
-    setTranscribing(conversationId, false);
+    if (!cancelled()) { awaited.delete(conversationId); setTranscribing(conversationId, false); }
   }
 }
 

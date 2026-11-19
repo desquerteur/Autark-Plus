@@ -58,6 +58,7 @@ export interface Methods {
    * start whether it landed. 'unavailable' headless and on macOS. Owner scope (also `npm run wf -- call system.install`).
    */
   'system.install': { params: { installer: string }; result: { ok: true; from: string; to?: string } };
+  'system.update': { params: { device?: string }; result: { ok: true } }; // 19.11.2026: this PC's Update button, or (device) a linked own PC's. Owner scope.
   /** Added by R4 contracts: consistent copy of the database + blobs into `dir` (default chosen by the runtime). Owner scope. */
   'system.backup': { params: { dir?: string } | void; result: { path: string; bytes: number } };
   /** Added by R4 contracts: stages a backup; it replaces the data on the next start (applyPendingRestore). Owner scope. */

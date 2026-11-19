@@ -280,6 +280,8 @@ export class DesktopUpdates {
 
   state(): UpdateState { return this.service.state; }
   apply(): Promise<UpdateState> { return this.service.apply(); }
+  /** 19.11.2026 (host op app.update): the Update button pressed from another own PC – check the feed now, then apply. */
+  async updateNow(): Promise<UpdateState> { await this.service.check(); return this.service.apply(); }
   defer(): UpdateState { return this.service.defer(); }
   start(): void { this.service.start(); }
   dispose(): void { this.service.dispose(); }
@@ -328,7 +330,8 @@ export class DesktopUpdates {
       await this.prepareInstall();
       this.deps.log?.('installing a build from a file');
       (own.spawn ?? spawnHelper)(launch, own.logs, {
-        started: () => { own.quit(); this.watchInstall(); },
+        // Arm before quit: a synchronous exception in quit must not leave a drained runtime without a watchdog.
+        started: () => { this.watchInstall(); own.quit(); },
         failed: () => { this.deps.log?.('install helper did not start; resuming'); this.cancelInstall(); },
         ended: () => {},
       });
@@ -385,5 +388,16 @@ export class DesktopUpdates {
     }
     this.paused = false;
     this.deps.log?.('update install cancelled; resumed');
+  }
+}
+
+/** 19.11.2026 (host op app.update – system.update {device}): this PC's Update button, pressed from another of the owner's PCs. */
+export async function updateFromElsewhere(updates: DesktopUpdates | null | undefined, log: (line: string) => void): Promise<void> {
+  try {
+    if (!updates) throw new Error('the updater wiring is not ready');
+    const state = await updates.updateNow();
+    log(`update from another PC: ${state.status}${state.availableVersion ? ` ${state.availableVersion}` : ''}`);
+  } catch (error) {
+    log(`update from another PC failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

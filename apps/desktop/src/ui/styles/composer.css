@@ -35,6 +35,10 @@
 .dictation-wave.starting { animation: wf-wave-pulse 1.2s ease-in-out infinite; }
 @keyframes wf-wave-pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dictation-wave.starting { animation: none; } }
+/* the mic while its take is transcribed: the spinner with a small × in its middle – a click cancels (MicButton.tsx) */
+.dictation-transcribing { display: grid; place-items: center; }
+.dictation-transcribing > * { grid-area: 1 / 1; }
+.dictation-transcribing:hover .spinner { opacity: .5; }
 .composer-input:focus-visible { outline: none; } /* focus shows on the composer border */
 .composer-input::placeholder { color: var(--muted); }
 

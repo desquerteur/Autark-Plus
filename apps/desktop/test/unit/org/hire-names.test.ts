@@ -1,9 +1,9 @@
-// B-047 (contract D9) hiring as colleagues: agents.create refuses a role, template or numbered label as a
-// name (per hire, so the rest of a team still happens), a hire without a name gets a free human first name,
+// B-047 (contract D9) hiring as colleagues: a hire without a name gets a free human first name, a name given stands
+// as given (feedback 1b136d01, 19.11.2026: "Firmenberater" too),
 // and every result returns the new agent's SYSTEM.md (path when the agent core is wired, the text) and – B-078 – one
 // line that the file is the new agent's own and how I start them (a first line or task). agents.update writes my own
 // SYSTEM.md whole.
-// first-names.ts: the person-name check and the free-name pick.
+// first-names.ts: the free-name pick.
 // Owns: these assertions only.
 
 import { test } from 'node:test';
@@ -12,7 +12,7 @@ import path from 'node:path';
 import { Org } from '../../../src/runtime/org/service.ts';
 import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
 import { systemMdValues } from '../../../src/runtime/org/hire.ts';
-import { FIRST_NAMES, freeFirstName, personNameProblem } from '../../../src/runtime/org/first-names.ts';
+import { FIRST_NAMES, freeFirstName } from '../../../src/runtime/org/first-names.ts';
 import { agentOrgTools } from '../../../src/runtime/tools/builtin/agents-org.ts';
 import { agentTools } from '../../../src/runtime/tools/builtin/agents.ts';
 import { defaultSettings } from '../../../src/runtime/settings/defaults.ts';
@@ -66,14 +66,6 @@ test('agents.update (B-078): another agent\'s SYSTEM.md is theirs – instructio
   assert.equal(org.require(mara.id).instructions, mara.instructions);
 });
 
-test('a person\'s first name passes; roles, templates, modes and numbered labels do not', () => {
-  const roles = ['researcher', 'Researcher', 'Researcher', 'video-editor', 'Video editor', 'research', 'Research'];
-  for (const name of ['Mara', 'Anna-Lena', 'Jean Luc', 'Zoë', "O'Neill"]) assert.equal(personNameProblem(name, roles), undefined, name);
-  for (const name of ['Researcher', 'research', 'Video Editor', 'Specialist 1', 'Helper', 'AI Agent', 'x', 'mara', 'Bot']) {
-    assert.ok(personNameProblem(name, roles), `refused: ${name}`);
-  }
-});
-
 test('the free first name is stable per seed and skips taken names', () => {
   assert.equal(freeFirstName('ag_1', () => false), freeFirstName('ag_1', () => false));
   const taken = new Set(FIRST_NAMES.slice(0, -1));
@@ -81,14 +73,13 @@ test('the free first name is stable per seed and skips taken names', () => {
   assert.equal(freeFirstName('ag_1', () => true), undefined);
 });
 
-test('agents.create: a role as name is refused per hire, a missing name becomes a first name, the result carries the SYSTEM.md to adapt', async () => {
+test('agents.create: a name given stands as given, a missing name becomes a first name, the result carries the SYSTEM.md to adapt', async () => {
   const { org, manager, create } = setup();
-  const refused = await create({ template: 'researcher', name: 'Researcher' });
-  assert.equal(refused.isError, true);
-  assert.match(String(refused.content.map((part) => ('text' in part ? part.text : '')).join('')), /not a person's first name/);
+  const named = data(await create({ template: 'researcher', name: 'Firmenberater' }));
+  assert.equal(named.name, 'Firmenberater', 'a role as the name, when that is the name wanted');
 
   const team = data(await create({ agents: [{ template: 'researcher', name: 'Mara' }, { template: 'writer', name: 'Writer 2' }, { template: 'designer' }] }));
-  assert.deepEqual(team.results.map((result: { ok: boolean }) => result.ok), [true, false, true], 'the refused hire does not stop the others');
+  assert.deepEqual(team.results.map((result: { ok: boolean }) => result.ok), [true, true, true], 'every hire of the team happens');
   const mara = team.results[0];
   assert.equal(mara.name, 'Mara');
   assert.equal(mara.role, 'Researcher');

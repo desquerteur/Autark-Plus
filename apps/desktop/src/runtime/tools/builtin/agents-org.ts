@@ -6,8 +6,9 @@
 // reports to the human – the secretary – stays outside every branch).
 // The summary names every hire with its role, a changed mode and "own instructions"; B-059: a hire without a name
 // reads "a new <template> (…, gets a first name)" – the name is picked only when the hire runs.
-// B-047 (D9): a hire's name is a person's first name (a role, template or numbered label is refused per hire;
-// without a name OrgService picks a free first name), the job goes in role. Every hire starts from the team's standard
+// B-047 (D9): without a name OrgService picks a free human first name; the job goes in role. Feedback 1b136d01 (owner
+// 19.11.2026: "nenn die nicht nur nach menschlichen Namen … oder einfach nur Firmenberater, Verkaufsagent"): a name given
+// is the name – a first name is the default, never a rule, so "Firmenberater" or "Mara · Firmenberaterin" stand as given. Every hire starts from the team's standard
 // SYSTEM.md of its kind (org/hire.ts, org/standard.ts) and makes it its own in its first turn (skill system-prompt).
 // B-078 (D15): the creator's `instructions` are the new agent's "who you are"; the result returns the SYSTEM.md path and
 // its own part (from "## My role" on) with one line: how I start them and help them write the file. A hire from the `head` template stands beside me – it reports to
@@ -27,7 +28,6 @@ import { EFFORT_PROPERTY, MODEL_PROPERTY, failure, json } from '../types.ts';
 import type { Effort } from '../../../shared/model/providers.ts';
 import { pinFor } from './agent-pin.ts';
 import { areaKind } from '../../org/spaces.ts';
-import { personNameProblem } from '../../org/first-names.ts';
 import { SYSTEM_FILE } from '../../../shared/model/agent-core.ts';
 import type { Agent } from '../../../shared/model/org.ts';
 import type { ModeInfo } from '../../../shared/model/knowledge.ts';
@@ -55,7 +55,7 @@ export function startLine(name: string): string {
 }
 
 const HIRE_PROPS = {
-  name: { type: 'string', maxLength: 60, description: "A person's first name." },
+  name: { type: 'string', maxLength: 60, description: 'The name the hire goes by, as the person wants it: a first name ("Mara"), a role ("Firmenberater") or both. Without it the hire gets a free first name.' },
   template: { type: 'string' }, role: { type: 'string', maxLength: 120, description: 'The job.' },
   instructions: { type: 'string', maxLength: 8000, description: 'Who the colleague is and for whom they work, a few lines under "## My role"; from there they grow it. Their first piece of work is a task of its own (tasks.create).' },
   mode: { type: 'string' }, managerId: { type: 'string', description: "'' = the person." },
@@ -119,13 +119,6 @@ function hireLabel(hire: Hire, ctx: ToolContext): string {
   return `${who}${extras.length ? ` (${extras.join(', ')})` : ''}${into ? ` into ${into}` : ''}`;
 }
 
-/** Words that make a name a role: every template's key, name and role, every mode's key and name. */
-function roleWords(ctx: ToolContext): string[] {
-  const words = ctx.services.org.templates().flatMap((template) => [template.key, template.name, template.role ?? '']);
-  try { words.push(...ctx.services.modes.list().flatMap((mode) => [mode.key, mode.name])); } catch { /* no modes service: templates only */ }
-  return words;
-}
-
 /** B-047: the new agent's SYSTEM.md (path when the agent core is wired) and how I start them (B-078). */
 function systemFile(agent: Agent, ctx: ToolContext): SystemFile {
   let folder: string | undefined;
@@ -156,8 +149,6 @@ async function startsOn(ctx: ToolContext, agent: Agent): Promise<string | undefi
 async function hire(args: Hire, ctx: ToolContext): Promise<HireResult> {
   const org = ctx.services.org;
   const label = args.name ?? args.template ?? args.role ?? 'agent';
-  const problem = args.name === undefined ? undefined : personNameProblem(args.name, roleWords(ctx));
-  if (problem) return { ok: false, hire: label, error: `"${clip(args.name ?? '', 60)}" is not a person's first name: ${problem}. Give the hire a first name such as "Mara".` };
   const template = args.template ? org.templates().find((entry) => entry.key === args.template) : undefined;
   if (template?.reportsTo === 'human') {
     // Agents never hire a second secretary: the one there is works for the person.

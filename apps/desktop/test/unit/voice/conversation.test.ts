@@ -19,7 +19,7 @@ import type { Message } from '../../../src/shared/model/chat.ts';
 
 const tick = async () => { for (let i = 0; i < 6; i++) await new Promise<void>((resolve) => setImmediate(resolve)); };
 
-function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?: string } = {}) {
+function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?: string; shown?: (conversationId: string) => Promise<Array<{ fileId: string; name: string; mime: string; size: number }>> } = {}) {
   const listeners = new Map<string, Array<(message: Message) => void>>();
   const sent: Array<{ conversationId: string; body: string; live?: boolean; call?: string; attachments?: string[] }> = [];
   const transcribed: Array<Record<string, unknown>> = [];
@@ -69,6 +69,7 @@ function setup(heard: string[] = [], options: { noCalls?: boolean; runtimeCall?:
     after: (_ms, fn) => { timers.push(fn); return () => { const at = timers.indexOf(fn); if (at >= 0) timers.splice(at, 1); }; },
     language: () => 'de',
     nameOf: (agentId) => ({ ag_ava: 'Ava', ag_ben: 'Ben' } as Record<string, string>)[agentId],
+    ...(options.shown ? { shown: options.shown } : {}),
   });
   const emit = (event: 'message.created' | 'message.updated', message: Message) => { for (const listener of listeners.get(event) ?? []) listener(message); };
   const reply = (conversationId: string, body: string, state: Message['state'] = 'final', authorId?: string) => {
@@ -424,4 +425,22 @@ test('the live voice\'s row: every finished sentence is read as it completes, th
   await tick();
   once.emit('message.created', voiced(90, 'Alles ruhig hier, nichts Neues.', 'final'));
   assert.deepEqual(once.spoken, ['Alles ruhig hier, nichts Neues.'], 'a row that was final at once is read whole');
+});
+
+// Owner 19.11.2026: what this device shows on the call (camera, screen, a cut-out) goes with the line; a picture that cannot be
+// made stays behind and the line still goes.
+test('a picture shown on the call goes with the spoken line; a failing one stays behind', async () => {
+  let fail = false;
+  const t = setup(['Was ist das hier?', 'Und das?'], { shown: async (conversationId) => {
+    if (fail) throw new Error('no frame');
+    return conversationId === 'ch_a' ? [{ fileId: 'f_screen', name: 'Screen.jpg', mime: 'image/jpeg', size: 10 }] : [];
+  } });
+  const view = await t.voice.start('ch_a');
+  await t.voice.utterance(view.id, 'f1');
+  assert.deepEqual(t.sent[0], { conversationId: 'ch_a', body: 'Was ist das hier?', live: true, call: 'call_ch_a', attachments: ['f_screen'] });
+  fail = true;
+  await t.voice.utterance(view.id, 'f2');
+  await tick();
+  assert.equal(t.sent[1]?.body, 'Und das?');
+  assert.equal(t.sent[1]?.attachments, undefined);
 });

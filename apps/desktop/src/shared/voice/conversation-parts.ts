@@ -6,7 +6,7 @@
 import type { EventMap } from '../api/events.ts';
 import type { MethodName, ParamsOf, ResultOf } from '../api/methods.ts';
 import type { Topic } from '../api/protocol.ts';
-import type { SpeechMeta } from '../model/chat.ts';
+import type { Attachment, SpeechMeta } from '../model/chat.ts';
 
 /** What the microphone does: the listening chat and its state ('speaking' while any reply is read). */
 export interface VoiceSessionView {
@@ -47,6 +47,8 @@ export interface VoiceSessionsDeps {
   /** B-081: an agent's name, said in front of its line when the speaker changes (one reading voice for every agent). */
   nameOf?(agentId: string): string | undefined;
   replyTimeoutMs?: number;
+  /** Owner 19.11.2026: what this device shows on the chat's call (its camera, its screen, a cut-out) – it goes with the line. */
+  shown?(conversationId: string): Promise<Attachment[]>;
 }
 
 /** One talking chat inside the loop (conversation.ts VoiceSessions). */

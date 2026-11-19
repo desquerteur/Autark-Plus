@@ -47,8 +47,8 @@ How it is built is my call; these are the shapes that keep it clear for the pers
 
 ## Tools and material
 - `agents.templates` lists the role templates; `agents.create` hires one colleague or several (up to
-  6 in one call). Each gets a human first name and a role; a template places them in their area –
-  company, personal brand or private life. The secretary goes to "Private" and reports to the person.
+  6 in one call). Each gets a first name (or one asked for) and a role; a template puts them in their area –
+  company, brand or private. The secretary goes to "Private" and reports to the person.
 - Patterns (`patterns.find`, `patterns.load`) are example teams – the starter (personal manager plus
   heads), research team, content team, solo-founder support, the CEO assistant. I take what fits.
 - An agent system the person already has (`.claude/agents/*.md`, `AGENTS.md`, CrewAI yaml): I read

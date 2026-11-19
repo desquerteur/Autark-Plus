@@ -79,6 +79,8 @@ export interface HostServicesDeps {
   removeCompany?(args: HostOps['company.remove']['args']): Promise<HostOps['company.remove']['result']>;
   /** B-080: installs a build from a file the way an update does (updates-wiring.ts installFile); called after the answer went out. */
   install?(installer: string): Promise<void>;
+  /** 19.11.2026: this PC's Update button pressed from another of the owner's PCs (updates-wiring.ts updateNow); after the answer. */
+  update?(): Promise<void>;
   setTimer?(fn: () => void, ms: number): unknown;
   clearTimer?(handle: unknown): void;
 }
@@ -165,6 +167,12 @@ export class HostServices {
         if (!this.deps.removeCompany) throw new WorkforceError('unavailable', 'Companies are removed only in the desktop app.');
         return this.deps.removeCompany(args as Args<'company.remove'>);
       case 'app.install': return this.install(args as Args<'app.install'>); // B-080
+      case 'app.update': { // 19.11.2026: answered first, the update (a drain and a quit when one is there) on the next tick
+        const update = this.deps.update;
+        if (!update) throw new WorkforceError('unavailable', 'This app cannot update itself here.');
+        this.setTimer(() => { void update().catch(() => undefined); }, 0); // desktop.ts logs a failure
+        return { ok: true };
+      }
       // MM7: the runtime's own lifecycle is RuntimeHost's – it answers these before `handle` is asked.
       case 'runtime.restart':
       case 'runtime.booting': throw new WorkforceError('unavailable', 'The runtime host answers this request.');

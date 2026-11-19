@@ -25,6 +25,7 @@ import { json } from '../../db/database.ts';
 import { attachedSecrets } from '../../secrets/chat-capture.ts';
 import { restartRuntime, restoreStatus } from '../../portability/service.ts';
 import { installBuild } from '../../tasks/recover-notes.ts'; // B-080
+import { updateOn } from '../../devices/sync/update.ts'; // 19.11.2026
 import { bad, id, input, isIdLike, optBool, optText, text } from '../params.ts';
 import { onDevice, PATH_RULE } from './files-path.ts'; // B-081: system.root of a linked CEO PC
 import { fromMain } from './security.ts'; // 16.11.2026: system.prepareRestart answers main's own link only
@@ -167,6 +168,13 @@ export function register(table: HandlerTable): void {
     const record = await installBuild(ctx.services, text(input(params), 'installer', { max: 1024 }));
     return { ok: true, from: record.from, ...(record.to ? { to: record.to } : {}) };
   });
+
+  // Feedback 1b136d01 (19.11.2026): this PC's Update button, or with `device` a linked own PC's – the official update only.
+  table.add('system.update', (params, ctx) => {
+    const o = input(params);
+    const device = o.device === undefined ? undefined : id(o, 'device');
+    return updateOn(ctx.services, device);
+  }, SECURE_SETTINGS);
 
   table.add('events.subscribe', (params, ctx) => subscribe(params, ctx), TODO);
   table.add('events.unsubscribe', (params, ctx) => {

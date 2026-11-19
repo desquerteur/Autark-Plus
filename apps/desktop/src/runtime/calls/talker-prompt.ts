@@ -152,7 +152,11 @@ function recentLines(s: RuntimeServices, agentId: string, conversationId: string
 export function voiceLine(s: RuntimeServices, lines: Message[]): string {
   const person = quiet(() => s.settings.get().profile?.name?.trim(), undefined) || 'The person';
   const said = lines.map((line) => flat(quiet(() => s.secrets.redact(line.body), line.body), LINE_CHARS * 2)).filter(Boolean);
-  return `${person} said: ${said.map((text) => `"${text.replace(/"/g, "'")}"`).join(' ')}`;
+  // Owner 19.11.2026: a picture shown on the call (camera, screen, a cut-out – ui/chat/call/call-view.ts) comes with the line; the
+  // voice reads no images, my work does – so the line says so, and what is asked about it is my work's to look at.
+  const shown = lines.flatMap((line) => (line.attachments ?? []).filter((file) => file.mime.startsWith('image/')).map((file) => file.name));
+  const picture = shown.length ? ` – and shows ${shown.length > 1 ? `${shown.length} pictures` : 'a picture'} with it (${shown.join(', ')}); I do not see it, my work does` : '';
+  return `${person} said: ${said.map((text) => `"${text.replace(/"/g, "'")}"`).join(' ')}${picture}`;
 }
 
 /** A run of mine that ended while the call runs (decision 7.2): one short input. */

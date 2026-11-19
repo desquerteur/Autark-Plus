@@ -37,7 +37,7 @@ import { IOS_PHONE_USE } from '../pwa/hosted.ts';
 import { deviceHint, FORGET_HINT, groupDigits, phoneDot, phoneQrHint, pushHint } from './connect-text.ts';
 import { ConnectRow, IncomingRow, NearbyRows, PersonSelect, RemoteIdRow, useConnectState, usePeople } from './connect-rows.tsx';
 import { ConnectionGroup } from './devices-connection.tsx';
-import { versionHint } from './device-version.ts';
+import { updateOffered, versionHint } from './device-version.ts';
 
 function useDevices() {
   const list = useAsync(() => (can('devices.list') ? rpc.call('devices.list') : Promise.resolve<Device[]>([])), []);
@@ -123,6 +123,12 @@ function DeviceRow(props: { device: Device; people: Person[]; devices: Device[] 
   const dot = device.kind === 'pc' ? device.status : phoneDot(device);
   const personName = (id: string) => props.people.find((person) => person.id === id)?.name;
   const removable = !device.self && can('devices.revoke');
+  // Feedback 1b136d01 (19.11.2026): a PC behind the others updates from here with one click – its own Update button, pressed remotely
+  const updatable = updateOffered(device, props.devices) && can('system.update');
+  const update = () => act(async () => {
+    await rpc.call('system.update', device.self ? {} : { device: device.id });
+    pushToast({ title: `${device.name} is updating`, body: 'It closes, installs the new version and starts again by itself.' });
+  }, 'Could not update');
   const label = renaming
     ? <input ref={field} class="set-input" aria-label="Device name" maxLength={60} defaultValue={device.name}
       onBlur={(event) => finish(event.currentTarget.value)}
@@ -135,6 +141,7 @@ function DeviceRow(props: { device: Device; people: Person[]; devices: Device[] 
         ...(can('devices.rename') ? [{ label: 'Rename', onSelect: () => setRenaming(true) }] : []),
         ...(removable ? [{ label: 'Remove', danger: true, onSelect: () => void remove() }] : []),
       ] }]}>
+      {updatable && <button type="button" class="button small" title={`Update ${device.name} to the newest version`} onClick={() => void update()}>Update</button>}
       {isMobile.value && removable ? <button type="button" class="button ghost small danger" onClick={() => void remove()}>Remove</button> : undefined}
     </Row>
   );

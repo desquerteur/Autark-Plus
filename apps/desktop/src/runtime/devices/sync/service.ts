@@ -38,6 +38,7 @@ import { announcePane, TabSync } from './tabs.ts';
 import { CANCEL_METHOD, LIVE_METHOD, LiveSync, bindLiveSync } from './live.ts';
 import { chatLiveOf } from '../../chat/live.ts';
 import { cancelRunHere } from '../../rpc/handlers/org.ts';
+import { UPDATE_METHOD, serveUpdate } from './update.ts'; // 19.11.2026
 
 export interface SyncInput {
   s: RuntimeServices;
@@ -129,6 +130,7 @@ export function startSync(input: SyncInput): Sync {
   mesh.register('sync.login', (params, from) => logins.receive(params, from));
   mesh.register('sync.tabs', (params, from) => tabs.receive(params, from));
   mesh.register('files.path', (params, from) => paths.serve(params, from));
+  mesh.register(UPDATE_METHOD, (_params, from) => serveUpdate(s, from), ['ceo']); // 19.11.2026: Update pressed on another own PC
   mesh.register('tabs.position', (params, from) => tabPositions(s).receive(params, from));
   const chatLive = chatLiveOf(s.bus);
   const live = chatLive ? new LiveSync(s, chatLive, (runId) => cancelRunHere(s, runId)) : undefined;

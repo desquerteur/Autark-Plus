@@ -8,7 +8,9 @@
 // Content: the agent's face with the speaking ring (realtime voice: the live levels of levels.ts, written on the DOM on
 // a short interval – no re-render; the voice conversation: its phase), the name, status + clock ("Listening · 1:23",
 // call-card-model.ts), the call's newest line as the caption, Mute (mute.ts: realtime voice sends silence, the voice
-// conversation's capture – composer/conversation-audio.ts – drops muted blocks) and the red Hang up (the call cell's End).
+// conversation's capture – composer/conversation-audio.ts – drops muted blocks), Camera and Screen (owner 19.11.2026: what
+// this device shows goes with its lines – call-view.ts; the preview with its cut-out is CallShare.tsx under the card) and the
+// red Hang up (the call cell's End).
 // Owns: the card's markup, its clock and its level loop. Never: starts or ends audio itself, or decides a call's state.
 
 import { createPortal } from 'preact/compat';
@@ -23,6 +25,8 @@ import { callSince, captionOf, phaseOf, runningCall, statusLine } from './call-c
 import { micMeter, playMeter, ringScale, speakerOf } from './levels.ts';
 import { callMuted, setCallMuted } from './mute.ts';
 import { realtimeChat, realtimePhase } from './realtime-call.ts';
+import { CallShare } from './CallShare.tsx';
+import { callShare, canShare, stopShare, toggleShare, type ShareKind } from './call-view.ts';
 
 const LEVEL_MS = 90;
 const FACE = 36;
@@ -69,6 +73,7 @@ export function CallCard(props: { chat: ConversationSummary; anchor: RefObject<E
     return () => clearInterval(timer);
   }, []);
   useLevels(card, realtime, setPlaying);
+  useEffect(() => () => stopShare(chat.id), [chat.id]); // what this device shows ends with its call here
   const sessions = voiceSessions.value;
   const voice = sessions.find((session) => session.conversationId === chat.id);
   const phase = phaseOf(realtime ? realtimePhase.value : undefined, voice && voicePhase(voice, sessions.length > 1), playing);
@@ -86,6 +91,13 @@ export function CallCard(props: { chat: ConversationSummary; anchor: RefObject<E
   const name = (agentId && knownAgentMap.value.get(agentId)?.name) || chatTitle(chat);
   const caption = captionOf(call?.lines[call.lines.length - 1]);
   const muted = callMuted.value; // B-082 gates the voice conversation's capture too (composer/conversation-audio.ts)
+  const shows = callShare.value?.conversationId === chat.id ? callShare.value.kind : undefined;
+  // realtime voice sends audio only: a picture reaches the agent with the voice conversation's lines
+  const share = (kind: ShareKind, icon: 'camera' | 'monitor', label: string) => !realtime && canShare(kind) && (
+    <button type="button" class="call-control share" aria-pressed={shows === kind} aria-label={shows === kind ? `Stop ${label.toLowerCase()}` : label} title={shows === kind ? `Stop ${label.toLowerCase()}` : label} onClick={() => void toggleShare(chat.id, kind)}>
+      <Icon name={icon} size={18} />
+    </button>
+  );
 
   return createPortal(
     <section ref={card} class={`call-card phase-${phase}${realtime ? ' metered' : ''}`} aria-label={`Call with ${name}`}>
@@ -98,11 +110,14 @@ export function CallCard(props: { chat: ConversationSummary; anchor: RefObject<E
         <button type="button" class="call-control" aria-pressed={muted} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'} onClick={() => setCallMuted(!muted)}>
           <Icon name="microphone" size={18} />
         </button>
+        {share('camera', 'camera', 'Show camera')}
+        {share('screen', 'monitor', 'Share screen')}
         <button type="button" class="call-control hang-up" aria-label="Hang up" title="Hang up" onClick={props.onHangUp}>
           <Icon name="phone-disconnect" size={18} />
         </button>
       </span>
       <p class="call-caption" data-side={caption?.side}>{caption && <><strong>{caption.name}</strong> {caption.text}</>}</p>
+      <CallShare conversationId={chat.id} />
     </section>,
     host,
   );

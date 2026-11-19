@@ -52,7 +52,7 @@ import { guardAllContents, installSessionGuards } from './session-guards.ts';
 import { SettingsView, changedPreferences } from './settings-view.ts';
 import { quitSteps, runShutdown } from './shutdown.ts';
 import { AppTray } from './tray.ts';
-import { DesktopUpdates, inactiveUpdater, loadUpdater, settleAfterStart, siblingUpdates } from './updates-wiring.ts';
+import { DesktopUpdates, inactiveUpdater, loadUpdater, settleAfterStart, siblingUpdates, updateFromElsewhere } from './updates-wiring.ts';
 import { MainWindow } from './window.ts';
 import { WorkspaceBrowser } from './workspace-browser.ts';
 import { setFillRpc } from './workspace-fill.ts';
@@ -226,6 +226,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
       companies, current: company, now: Date.now, visible: () => appWindow?.browserWindow?.isVisible() ?? false, spawn: spawnApp, quit: () => app.quit(),
       call: (dir, id) => callCompany(dir, 'companies.remove', { id }), sweep: () => { void sweepCompanies(); },
     }) : undefined,
+    update: () => updateFromElsewhere(updates, line => log.line(line)), // 19.11.2026: app.update / system.update {device}
     // B-080: app.install / system.install – a build installed the way an update installs (updates-wiring.ts installFile)
     install: async installer => {
       try {

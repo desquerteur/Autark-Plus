@@ -280,6 +280,7 @@ export const METHOD_DOCS: Record<string, { params: string; note?: string }> = {
   "system.restore": {"params":"{ path: string }","note":"stages a backup; it replaces the data on the next start (applyPendingRestore). Owner scope."},
   "system.restoreStatus": {"params":"void","note":"staged/last restore, canRestart. Owner scope."},
   "system.root": {"params":"{ device?: string } | void","note":"where `<data>` and its map are (Settings › About \"Autark folder\"); B-081 `device`: that linked CEO PC's."},
+  "system.update": {"params":"{ device?: string }","note":"this PC's Update button, or (device) a linked own PC's. Owner scope."},
   "tabs.get": {"params":"void"},
   "tabs.position": {"params":"TabPosition"},
   "tabs.positions": {"params":"void"},

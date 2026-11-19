@@ -12,7 +12,7 @@
 .call-card {
   position: absolute; z-index: 7; top: calc(anchor(--status-top top, 0px) + 8px); left: 12px;
   display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; grid-template-rows: 44px 36px; column-gap: 12px; row-gap: 8px;
-  box-sizing: border-box; width: min(320px, calc(100% - 24px)); height: 110px; padding: 12px 12px 10px;
+  box-sizing: border-box; width: min(372px, calc(100% - 24px)); height: 110px; padding: 12px 12px 10px;
   border-radius: 18px; background: var(--call-bg); color: var(--call-fg); box-shadow: inset 0 0 0 1px var(--call-edge), var(--call-shadow);
   animation: call-in .18s ease-out;
 }
@@ -21,6 +21,7 @@
    columns – it lies at the foot of the messages, right above the ask strip / composer, away from them */
 @container chat-column (max-width: 640px) {
   .call-card { top: auto; bottom: calc(anchor(--status-top bottom, 120px) + 12px); }
+  .call-share { top: auto; bottom: calc(100% + 8px); }
 }
 /* when the chat's area takes the column (full view; on the phone whenever it is open) the messages are hidden: the
    card lies over the foot of the area's page, never over its tabs */
@@ -57,6 +58,7 @@
   box-shadow: 0 0 0 1.5px var(--call-fg); opacity: 0;
 }
 .call-control[aria-pressed=true]::after { opacity: 1; }
+.call-control.share::after { content: none; } /* Camera / Share screen: pressed is white, never slashed */
 .call-control.hang-up { background: var(--call-danger); color: var(--call-fg); }
 .call-control.hang-up:hover { background: var(--call-danger-hover); }
 .call-caption { /* the newest line of the call; two lines reserved, the card never grows */
@@ -94,3 +96,16 @@
 .call-row-end.live { color: var(--success); }
 .call-row-card > .call-transcript-toggle { margin: 4px 0 0 44px; }
 .call-transcript > .call-transcript-body { margin-top: 8px; }
+
+/* Owner 19.11.2026: the live preview of what this device shows on the call (CallShare.tsx) – it floats under the card (over
+   it where the card lies at the foot), the card's width; a drag marks the cut-out that goes with the next line. */
+.call-share {
+  position: absolute; left: 0; top: calc(100% + 8px); width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: 12px; background: var(--call-bg); box-shadow: inset 0 0 0 1px var(--call-edge), var(--call-shadow); cursor: crosshair; touch-action: none;
+}
+.call-share video { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.call-cut { position: absolute; box-sizing: border-box; border: 2px solid var(--call-person); border-radius: 4px; box-shadow: 0 0 0 9999px color-mix(in srgb, var(--call-bg) 45%, transparent); }
+.call-cut-drop {
+  position: absolute; top: -10px; right: -10px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
+  border-radius: 50%; background: var(--call-fg); color: var(--call-bg); font-size: 14px; line-height: 1; cursor: pointer;
+}

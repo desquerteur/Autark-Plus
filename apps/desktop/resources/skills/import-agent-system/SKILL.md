@@ -36,7 +36,7 @@ keeping when I would use it again here; what only fits their tooling stays behin
 ## How
 1. I read every file (files tools, or the attachment) and list the agents I found: name, role, who they
    report to, and one line of what they do. Entries that are not agents (install notes, READMEs) I skip.
-2. I map each one: `name` = a first name (theirs if it is one, else one I pick), `role` = the job in a
+2. I map each one: `name` = their name as it is (else a first name I pick), `role` = the job in a
    few words, `instructions` = goal + backstory or the prompt body, rewritten for this team (without
    framework details such as `llm`, `tools`, `allow_delegation`, output files). `managerId`: the agent
    they report to once it exists, else myself. `mode`: a matching mode (`modes.list`), else I leave it out.

@@ -92,6 +92,12 @@ export interface HostOps {
    * reaches the runtime before its shutdown; macOS and a build without the updater wiring refuse in main's log only.
    */
   'app.install': { args: { installer: string }; result: { ok: true } };
+  /**
+   * Feedback 1b136d01 (owner 19.11.2026: "wenn ein PC noch nicht geupdatet ist … per PC einfach updaten mit einem Klick"):
+   * this PC's Update button, pressed from elsewhere – a fresh check of the official feed, then the same download and
+   * install (main/updates-wiring.ts updateNow). Main answers first and acts on the next tick.
+   */
+  'app.update': { args: Record<string, never>; result: { ok: true } };
 }
 
 /**
@@ -149,6 +155,7 @@ export const HOST_OPS: readonly HostOp[] = [
   'sideCast', 'sideInput', 'sideNav', // B-076
   'voice.rtcOffer', 'voice.rtcAnswer', 'voice.rtcClose', // owner 07.11.2026: dictation heard by the Codex plan
   'app.install', // B-080
+  'app.update', // 19.11.2026
 ];
 
 export interface AppInfo {

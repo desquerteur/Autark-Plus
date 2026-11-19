@@ -22,6 +22,8 @@ import { activeConversationId, agentMap, settings } from '../../lib/store.ts';
 import { TurnMeter } from '../call/turn-meter.ts';
 import { browserCapture, browserSpeech, ConversationCapture } from './conversation-audio.ts';
 import type { CaptureDeps, SpeechOutput } from './conversation-audio.ts';
+import { shownWith } from '../call/call-view.ts';
+import type { Attachment } from '../../../shared/model/chat.ts';
 
 /** What the page conversation needs (browser defaults: createBrowserConversation). */
 export interface PageConversationDeps {
@@ -40,6 +42,8 @@ export interface PageConversationDeps {
   language?(): string | undefined;
   /** An agent's name for the reading voice (B-081: said when the speaker changes). */
   nameOf?(agentId: string): string | undefined;
+  /** Owner 19.11.2026: the picture this device shows on the chat's call (call/call-view.ts shownWith). */
+  shown?(conversationId: string): Promise<Attachment[]>;
   publish(mic: VoiceSessionView | null, error: string | undefined, chats: VoiceSessionEntry[]): void;
   after(ms: number, fn: () => void): () => void;
   newId(): string;
@@ -83,6 +87,7 @@ export class PageConversation {
       after: deps.after,
       language: () => deps.language?.(),
       nameOf: (agentId) => deps.nameOf?.(agentId),
+      shown: (conversationId) => deps.shown?.(conversationId) ?? Promise.resolve([]),
     });
   }
 
@@ -219,6 +224,7 @@ export function createBrowserConversation(publish: PageConversationDeps['publish
     microphoneProblem: () => recordingProblem() ?? (typeof MediaRecorder === 'undefined' ? 'This browser cannot record audio.' : undefined),
     language: () => settings.value?.profile.language,
     nameOf: (agentId) => agentMap.peek().get(agentId)?.name,
+    shown: shownWith,
     publish,
     after: (ms, fn) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
     newId: () => newId('req'),

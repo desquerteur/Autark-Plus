@@ -96,6 +96,8 @@ export interface Host {
    * Missing on hosts without the app (headless: the person or the service manager installs there).
    */
   install?(installer: string): Promise<void>;
+  /** 19.11.2026 (system.update): this PC's Update button – check the official feed, download and install. Missing headless. */
+  update?(): Promise<void>;
   /** B-072: opens a company on this PC (main/companies.ts): its window opens, this one goes to the tray. Missing headless. */
   openCompany?(input: { id?: string | null; create?: boolean; start?: CompanyStart }): Promise<{ ok: true; id: string | null }>;
   /** 16.11.2026: takes a company off this PC (main/company-remove.ts): it stops and its folder goes to the recycle bin. Missing headless. */

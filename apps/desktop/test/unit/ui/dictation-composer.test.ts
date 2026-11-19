@@ -64,3 +64,12 @@ test('B-082 review: a held piece uploaded while its take still runs lands once, 
   assert.equal((chips.match(/<span class="icon-button small"><Spinner size=\{14\} label="Transcribing" \/><\/span>/g) ?? []).length, 2, 'the spinner takes the button\'s size: nothing moves on click');
   assert.match(chips, /useEffect\(\(\) => \(\) => \{ if \(playing\.peek\(\) === attachment\.fileId\) togglePlay/, 'a chip that goes stops its recording');
 });
+
+test('feedback 08604667: a take being transcribed can be cancelled in the mic\'s slot; its late text is dropped', () => {
+  const mic = read('src/ui/chat/composer/MicButton.tsx');
+  assert.match(mic, /aria-label="Cancel transcription"[^]*onClick=\{\(\) => cancelTranscribing\(key\)\}/);
+  assert.doesNotMatch(mic, /title="Transcribing dictation" disabled/, 'no dead spinner while it transcribes');
+  const voice = read('src/ui/chat/composer/voice.ts');
+  assert.match(voice, /export function cancelTranscribing\(conversationId: string\): void \{/);
+  assert.match(voice, /if \(cancelled\(\)\) return \{ failed: true \};/, 'the text that comes after a cancel goes nowhere; Send leaves the draft');
+});

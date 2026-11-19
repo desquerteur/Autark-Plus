@@ -67,6 +67,24 @@ test('installFile: an app that does not end after the quit request takes its wor
   h.updates.dispose();
 });
 
+test('installFile: watchdog is armed before an asynchronous helper callback whose quit throws', async () => {
+  const h = installing();
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  let started: (() => void) | undefined;
+  h.deps.setTimer = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+  h.deps.install!.spawn = (_launch, _logs, events) => { started = events.started; };
+  h.deps.install!.quit = () => { throw new Error('window destroyed'); };
+  await h.updates.installFile(INSTALLER);
+  assert.ok(started);
+  assert.throws(() => started!(), /window destroyed/);
+  const dog = timers.find((timer) => timer.ms === INSTALL_FILE_WATCHDOG_MS);
+  assert.ok(dog, 'timer survives the asynchronous quit exception');
+  dog.fn();
+  assert.equal(h.updates.draining, false);
+  assert.equal(h.order.filter((entry) => entry === 'start').length, 1);
+  h.updates.dispose();
+});
+
 test('installFile: a helper that cannot start arms no watchdog, and a cancel by another path leaves the timer nothing to do', async () => {
   const failing = installing('win32', 'fails');
   const timers: number[] = [];
@@ -132,6 +150,20 @@ test('host op app.install: answered first, the install runs on the next tick; a 
   await assert.rejects(host.handle({ id: 2, type: 'host', op: 'app.install', args: { installer: 'dist\\setup.exe' } }), (error: { code?: string }) => error.code === 'bad_request');
   const bare = new HostServices({ ...deps, install: undefined } as unknown as HostServicesDeps);
   await assert.rejects(bare.handle({ id: 3, type: 'host', op: 'app.install', args: { installer: INSTALLER } }), (error: { code?: string }) => error.code === 'unavailable');
+});
+
+test('host op app.update (19.11.2026): answered first, the update runs on the next tick; no wiring refuses', async () => {
+  const timers: Array<() => void> = [];
+  let updates = 0;
+  const deps = { update: async () => { updates += 1; }, setTimer: (fn: () => void) => { timers.push(fn); return timers.length; }, clearTimer: () => {} } as unknown as HostServicesDeps;
+  const host = new HostServices(deps);
+  assert.deepEqual(await host.handle({ id: 1, type: 'host', op: 'app.update', args: {} }), { ok: true });
+  assert.equal(updates, 0, 'not before the answer went out');
+  timers.shift()!();
+  await settle();
+  assert.equal(updates, 1);
+  const bare = new HostServices({ ...deps, update: undefined } as unknown as HostServicesDeps);
+  await assert.rejects(bare.handle({ id: 2, type: 'host', op: 'app.update', args: {} }), (error: { code?: string }) => error.code === 'unavailable');
 });
 
 test("an open of a file waits past the bridge's 15 s for main's answer", async () => {

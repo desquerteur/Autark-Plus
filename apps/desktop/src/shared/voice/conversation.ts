@@ -26,7 +26,7 @@
 // third). Never: touches a microphone, timer or platform global (all injected), or changes what was said.
 
 import { callHolder, callRecord } from '../model/call.ts';
-import type { Message } from '../model/chat.ts';
+import type { Attachment, Message } from '../model/chat.ts';
 import { MAX_VOICE_SESSIONS, REPLY_TIMEOUT_MS, REPEAT_HINT, SESSIONS_FULL, TRANSCRIBE_TIMEOUT_MS, languageHint, sentencesDone, speakable, spokenMeta } from './conversation-parts.ts';
 import type { TalkingChat as Chat, Reading, VoiceSessionEntry, VoiceSessionView, VoiceSessionsDeps } from './conversation-parts.ts';
 
@@ -161,7 +161,7 @@ export class VoiceSessions {
     this.publish();
     try {
       const speech = { ...spokenMeta(true), ...(chat.callId ? { call: chat.callId } : {}) };
-      const attachments = [{ fileId, name: 'Utterance.wav', mime: 'audio/wav', size: 0 }]; // the runtime takes mime and size from the stored file
+      const attachments = [{ fileId, name: 'Utterance.wav', mime: 'audio/wav', size: 0 }, ...(this.deps.shown ? await this.shown(chat) : [])]; // the runtime takes mime and size from the stored file
       const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body: '', attachments, clientId: this.deps.newId(), speech });
       if (!this.chats.includes(chat)) return;
       if (message.meta?.call?.id) chat.callId = message.meta.call.id;
@@ -204,6 +204,11 @@ export class VoiceSessions {
 
   // ------------------------------------------------------------------ internals
 
+  /** Owner 19.11.2026: the picture this device shows on the chat's call goes with the line; one that fails stays behind, the line goes. */
+  private async shown(chat: Chat): Promise<Attachment[]> {
+    try { return (await this.deps.shown?.(chat.conversationId)) ?? []; } catch { return []; }
+  }
+
   private submit(chat: Chat, text: string): void {
     chat.pending = [chat.pending, text].filter(Boolean).join('\n');
     if (chat.pending.length > MAX_TEXT) { this.end(chat, 'The spoken message is too long. Start another conversation.'); return; }
@@ -222,7 +227,8 @@ export class VoiceSessions {
     this.publish();
     try {
       const speech = { ...spokenMeta(true), ...(chat.callId ? { call: chat.callId } : {}) };
-      const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body, clientId: this.deps.newId(), speech });
+      const attachments = this.deps.shown ? await this.shown(chat) : []; // no extra wait where nothing can be shown
+      const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body, clientId: this.deps.newId(), speech, ...(attachments.length ? { attachments } : {}) });
       if (!this.chats.includes(chat)) return;
       const call = message.meta?.call?.id;
       if (call) chat.callId = call; // the runtime's call for this line – a new one when the device's connection had closed meanwhile or calls.start failed – so the end reaches it

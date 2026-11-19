@@ -139,6 +139,7 @@ export function createElectronHost(bridge: HostBridgeClient, app: AppInfo): Host
     openCompany: (input) => bridge.call('company.open', input), // B-072: main/companies.ts
     removeCompany: (input) => bridge.call('company.remove', input), // 16.11.2026: main/company-remove.ts
     install: async (installer) => { await bridge.call('app.install', { installer }); }, // B-080: main answers, then drains and installs
+    update: async () => { await bridge.call('app.update', {}); }, // 19.11.2026: main answers, then checks, downloads and installs
     app: {
       version: app.version, packaged: app.packaged, resourcesDir: app.resourcesDir, dataDir: app.dataDir, executable: app.executable,
       ...(app.companies ? { companies: app.companies } : {}), // B-072: where the companies on this PC live
