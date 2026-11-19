@@ -1,5 +1,5 @@
-// CLI accounts with their own home (Codex, Claude Code, Kimi Code; split from service.ts): adding one
-// creates <accounts>/<provider>/<id> (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME) and
+// CLI accounts with their own home (Codex, Claude Code, Kimi Code, Gemini CLI – AF-024; split from service.ts): adding one
+// creates <accounts>/<provider>/<id> (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME, GEMINI_CLI_HOME) and
 // starts its sign-in; a sign-in that could not start keeps the account and the error, and the next
 // add of that provider retries that account. Removing deletes a home only when it is exactly
 // <accounts>/<its provider>/<its id> – never the default CLI home, the accounts folder, a provider
@@ -33,9 +33,19 @@ export const signedOut = {
   clear: (db: Db, id: string): void => { new KvRepo(db).delete(SIGNED_OUT, id); },
 };
 
-/** Whether accounts of `provider` get homes of their own (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME); else one sign-in per PC in the default home. */
+/** Whether accounts of `provider` get homes of their own (CODEX_HOME, CLAUDE_CONFIG_DIR, KIMI_CODE_HOME, GEMINI_CLI_HOME); else one sign-in per PC in the default home. */
 export function ownHomes(provider: ProviderId): boolean {
   return provider === 'codex' || provider === 'claude' || Boolean(acpProvider(provider)?.home);
+}
+
+/**
+ * A login of which each PC has one, so two PCs' are the same account without an e-mail to compare: a CLI without homes of
+ * its own, and – AF-024 – Gemini CLI's login in its default home (~/.gemini; Gemini CLI reports no e-mail). A Gemini account
+ * with a home of its own is told apart like Codex (the same account id, or provider and e-mail). `own`: whether the account
+ * has a home of its own (undefined: look at `home`).
+ */
+export function onePerPc(account: { provider: string; home?: string | null }, own = Boolean(account.home)): boolean {
+  return !ownHomes(account.provider as ProviderId) || (account.provider === 'gemini-cli' && !own);
 }
 
 /** A CLI's default home, where a login this PC found lives (an account without `home`); undefined: none known. */
@@ -43,6 +53,16 @@ export function defaultHome(provider: ProviderId, env: NodeJS.ProcessEnv = proce
   if (provider === 'codex') return env.CODEX_HOME || path.join(home, '.codex');
   if (provider === 'claude') return env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
   return provider === 'gemini-cli' ? path.join(home, '.gemini') : undefined;
+}
+
+/**
+ * AF-024: the folder that holds the account's login files (loginFiles). An account with a home of its own keeps them
+ * there – except Gemini CLI, whose GEMINI_CLI_HOME is the root it creates its `.gemini` folder in; one without a home:
+ * the CLI's default home (defaultHome, for Gemini CLI already the `.gemini` folder).
+ */
+export function loginDir(account: Pick<Account, 'provider' | 'home'>, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string | undefined {
+  if (!account.home) return defaultHome(account.provider, env, home);
+  return account.provider === 'gemini-cli' ? path.join(account.home, '.gemini') : account.home;
 }
 
 /**

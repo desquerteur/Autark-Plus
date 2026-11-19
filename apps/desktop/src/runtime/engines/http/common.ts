@@ -7,6 +7,7 @@
 import type { WorkforceErrorData } from '../../../shared/errors.ts';
 import type { Account } from '../../../shared/model/providers.ts';
 import { ERR } from '../shared.ts';
+import { limitFromText } from '../quota-wait.ts'; // AF-024: a 429 body's own wait (Gemini API RetryInfo, daily quotas)
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -91,12 +92,34 @@ export async function postJson(fetchFn: FetchFn, url: string, headers: Record<st
     throw new HttpEngineError({ code: 'unavailable', message: 'Could not reach the model. Check the connection before retrying.' });
   }
   if (!response.ok) {
+    const limitText = response.status === 429 ? await errorBodyText(response) : ''; // AF-024
     await response.body?.cancel().catch(() => {});
     const data = statusError(response.status);
-    if (response.status === 429) data.retryAfterMs = retryAfter(response);
+    if (response.status === 429) {
+      const hinted = limitFromText(limitText);
+      data.retryAfterMs = retryAfter(response) ?? hinted.retryAfterMs;
+      if (hinted.details) data.details = hinted.details;
+    }
     throw new HttpEngineError(data);
   }
   return response;
+}
+
+/** AF-024: the first 8 KB of an error body as text (a 429's quota and retry hint); '' when it cannot be read. */
+async function errorBodyText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < 8192) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } catch { /* what arrived is enough */ } finally { await reader.cancel().catch(() => {}); }
+  return Buffer.concat(chunks).subarray(0, 8192).toString('utf8');
 }
 
 /** Reads a JSON body with a byte cap. */

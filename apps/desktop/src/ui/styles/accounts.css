@@ -40,6 +40,10 @@
 .add-account .field-label:first-child { margin-top: 0; }
 /* the API key's label line ends in "Get a key" (or its inert copy of the same size – the field never moves) */
 .add-key-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+/* AF-024: the Google Gemini panel's ways and hint; a Gemini account's daily quota lines */
+.gemini-add-ways { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.gemini-add-hint { margin: 10px 0 0; color: var(--secondary); font-size: 12px; line-height: 1.45; }
+.account-quota > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-account.inline-form > .dialog-footer { margin: 14px 0 0; padding: 0; animation: none; } /* a form's footer outside a dialog */
 
 /* ---------------------------------------------------------------- the use rows: [label + hint] [provider] [model] [action], one width each */

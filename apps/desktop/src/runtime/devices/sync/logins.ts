@@ -25,14 +25,15 @@ import path from 'node:path';
 import type { RuntimeServices } from '../../contracts.ts';
 import type { Account } from '../../../shared/model/providers.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
-import { defaultHome, loginFiles, ownHomes, signedOut } from '../../accounts/cli-homes.ts';
+import { loginDir, loginFiles, onePerPc, signedOut } from '../../accounts/cli-homes.ts';
 import { DevicesRepo } from '../repo.ts';
 import { replaceWith } from './file-io.ts';
 import { linkOf, links } from './home.ts';
 
 interface LoginFile { name: string; data: string }
 /** One account's login as it travels (`data`: the file's bytes, base64). */
-export interface Login { account: string; provider: string; email?: string; at: number; files: LoginFile[] }
+/** AF-024: `own` – the sender's account has a home of its own (absent from older PCs, which had none for Gemini CLI). */
+export interface Login { account: string; provider: string; email?: string; at: number; files: LoginFile[]; own?: boolean }
 
 export interface LoginDeps {
   platform?: NodeJS.Platform;
@@ -112,7 +113,7 @@ export class LoginSync {
   }
 
   private homeOf(account: Account): string | undefined {
-    return account.home ?? defaultHome(account.provider, this.deps.env ?? process.env, this.deps.homeDir ?? os.homedir());
+    return loginDir(account, this.deps.env ?? process.env, this.deps.homeDir ?? os.homedir()); // AF-024: Gemini CLI's own homes keep it in .gemini
   }
 
   private ceoPeers(except?: string): string[] {
@@ -190,7 +191,8 @@ export class LoginSync {
       if (index === 0) at = loginTime(account.provider, json, info.mtimeMs);
       files.push({ name, data: bytes.toString('base64') });
     }
-    return { login: { account: account.id, provider: account.provider, ...(account.email ? { email: account.email } : {}), at, files }, digest: digestOf(files) };
+    const own = account.home ? { own: true } : {}; // AF-024
+    return { login: { account: account.id, provider: account.provider, ...(account.email ? { email: account.email } : {}), at, files, ...own }, digest: digestOf(files) };
   }
 
   /** The login here as it would travel; one that is here ends a sign-out mark (the person signed in here again). */
@@ -242,7 +244,7 @@ export class LoginSync {
   private targetOf(login: Login): Account | undefined {
     const plans = this.s.accounts.list().filter((account) => account.auth === 'cli' && account.provider === login.provider);
     return plans.find((account) => account.id === login.account)
-      ?? plans.find((account) => !ownHomes(account.provider) || (Boolean(login.email) && account.email === login.email));
+      ?? plans.find((account) => (onePerPc(account) && onePerPc(login, login.own === true)) || (Boolean(login.email) && account.email === login.email));
   }
 
   private async apply(login: Login): Promise<boolean> {

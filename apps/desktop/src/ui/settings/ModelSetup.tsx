@@ -1,10 +1,10 @@
 // The model setup – the first run's AI card and Settings › Models show the same: the plans on this PC (Claude Code
 // and Codex always, Kimi Code / Gemini CLI / Copilot CLI when found) with their state – a connected one as its account
 // row (AccountRow.tsx, with its models) –, `children` (Settings: the other connections), the provider key variables set on
-// this PC not in use yet (Use), one fixed row of four buttons –
-// Claude plan, Codex plan (plan-actions.tsx: add an account and sign in, install if needed), API key and Local server (both open
-// the one connection form inline under it, account-forms.tsx) – with the sign-in link cell and one status line for the
-// plan flow. Settings shows the use rows under it (ModelUses.tsx).
+// this PC not in use yet (Use), one fixed row of five buttons –
+// Claude plan, Codex plan (plan-actions.tsx: add an account and sign in, install if needed), AF-024 Google Gemini (gemini-add.tsx:
+// Google sign-in or API key, several accounts), API key and Local server (both open the one connection form inline under it,
+// account-forms.tsx) – with the sign-in link cell and one status line for the plan flow. Settings shows the use rows under it (ModelUses.tsx).
 // Owns: this layout and its PC scan (accounts.detect, again after a plan flow). Never: a flow's steps (plan-setup.ts).
 
 import type { ComponentChildren } from 'preact';
@@ -19,6 +19,7 @@ import { PLAN_PROVIDERS } from '../onboarding/plan-setup.ts';
 import { SignInLink } from '../onboarding/sign-in-link.tsx';
 import { signInStarted } from './account-actions.ts';
 import { ConnectionForm } from './account-forms.tsx';
+import { GeminiAdd } from './gemini-add.tsx'; // AF-024
 import { AccountRow } from './AccountRow.tsx';
 import { ActionButton, Row, useBusy } from './controls.tsx';
 import { cliRowView, groupAccounts, needsSignIn, PC_CLIS, PROVIDER_NAMES, stateLabel } from './providers.ts';
@@ -72,7 +73,7 @@ function EnvKeyRow(props: { name: string }) {
 export function ModelSetup(props: { children?: ComponentChildren }) {
   const [report, setReport] = useState<DetectionReport | null>(null);
   const [scanned, setScanned] = useState(false);
-  const [form, setForm] = useState<'api' | 'local' | null>(null);
+  const [form, setForm] = useState<'api' | 'local' | 'gemini' | null>(null);
   const scan = async (force = false) => {
     try {
       setReport(await rpc.call('accounts.detect', force ? { force: true } : undefined));
@@ -82,7 +83,7 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
   };
   useEffect(() => { void scan(); }, []);
   usePlanRescan(() => void scan(true));
-  const toggle = (next: 'api' | 'local') => setForm(form === next ? null : next);
+  const toggle = (next: 'api' | 'local' | 'gemini') => setForm(form === next ? null : next);
   const view = planFlow.value.view;
   const server = report?.localServers.find((found) => !accounts.value.some((account) => account.baseUrl === found.baseUrl));
   return (
@@ -97,12 +98,14 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
       {report?.envKeys.map((name) => <EnvKeyRow key={name} name={name} />)}
       <div class="model-setup-buttons">
         <PlanButtons report={() => report} />
+        <Button variant="secondary" class="small model-setup-gemini" aria-pressed={form === 'gemini'} onClick={() => toggle('gemini')}>Google Gemini</Button>
         <Button variant="secondary" class="small" aria-pressed={form === 'api'} onClick={() => toggle('api')}>API key</Button>
         <Button variant="secondary" class="small" aria-pressed={form === 'local'} onClick={() => toggle('local')}>Local server</Button>
         <SignInLink url={view?.url} />
       </div>
       <p class={`model-setup-status${view?.tone ? ` ${view.tone}` : ''}`} role="status" title={view?.text}>{view?.text ?? ''}</p>
-      {form && <ConnectionForm key={form} kind={form} onDone={() => setForm(null)} {...(form === 'local' && server ? { found: server } : {})} />}
+      {form === 'gemini' && <GeminiAdd report={() => report} onDone={() => setForm(null)} />}
+      {form && form !== 'gemini' && <ConnectionForm key={form} kind={form} onDone={() => setForm(null)} {...(form === 'local' && server ? { found: server } : {})} />}
     </>
   );
 }

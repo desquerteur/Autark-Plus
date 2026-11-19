@@ -15,7 +15,7 @@ import { PLAN_LABELS, PLAN_PROVIDERS, startPlanSetup, type PlanEnv, type PlanFlo
 
 const PLAN_RPC: PlanEnv['rpc'] = {
   install: (provider) => rpc.call('accounts.install', { provider }),
-  add: (provider) => rpc.call('accounts.add', { provider }),
+  add: (provider, label) => rpc.call('accounts.add', { provider, ...(label ? { label } : {}) }),
   recheck: () => rpc.call('accounts.detect'),
 };
 const timer: PlanEnv['timer'] = (ms, fire) => { const id = setTimeout(fire, ms); return () => clearTimeout(id); };
@@ -31,11 +31,11 @@ let flow: PlanFlow | null = null;
 /** The mounted setup's forced scan, called when a flow finished. */
 let rescan: (() => void) | null = null;
 
-/** Starts the flow for `provider` (a running one is replaced). */
-function startPlan(provider: PlanProvider, report: () => DetectionReport | null): void {
+/** Starts the flow for `provider` (a running one is replaced); AF-024: also the Google Gemini panel's "Sign in with Google", with its name. */
+export function startPlan(provider: PlanProvider, report: () => DetectionReport | null, label?: string): void {
   flow?.cancel();
   planFlow.value = { view: planFlow.value.view, running: provider };
-  const handle = startPlanSetup(provider, { rpc: PLAN_RPC, accounts, report, timer, focus, show: (view) => { planFlow.value = { ...planFlow.value, view }; } });
+  const handle = startPlanSetup(provider, { rpc: PLAN_RPC, accounts, report, timer, focus, show: (view) => { planFlow.value = { ...planFlow.value, view }; } }, label);
   flow = handle;
   void handle.done.then((result) => {
     if (flow !== handle) return; // replaced by a newer flow

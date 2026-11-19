@@ -13,13 +13,14 @@ import { locale, relative, relativeDay, resetTime, time } from './format.ts';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const WINDOW_LABELS: Record<string, string> = { '5h': '5-hour limit', weekly: 'Weekly' };
+const WINDOW_LABELS: Record<string, string> = { '5h': '5-hour limit', weekly: 'Weekly', '1d': 'Daily' };
 const dayTimeFmt = new Intl.DateTimeFormat(locale, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
-/** "5-hour limit", "Weekly", "Weekly · Opus"; any other window keeps its runtime name. */
+/** "5-hour limit", "Weekly", "Weekly · Opus", AF-024 "Daily", "Daily · gemini-2-5-pro"; any other window keeps its runtime name. */
 export function windowLabel(name: string): string {
   if (WINDOW_LABELS[name]) return WINDOW_LABELS[name];
   if (name.startsWith('weekly-')) return `Weekly · ${name.slice(7).replace(/^./, (c) => c.toUpperCase())}`;
+  if (name.startsWith('1d-')) return `Daily · ${name.slice(3)}`;
   return name;
 }
 

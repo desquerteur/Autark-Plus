@@ -15,7 +15,7 @@ export const AUTH_REQUIRED = -32000;
 export const METHOD_NOT_FOUND = -32601;
 
 const AUTH_TEXT = /auth(entication|orization)? required|not (signed|logged) in|please (log|sign) ?in|unauthori[sz]ed|invalid credentials|login required/i;
-const LIMIT_TEXT = /rate.?limit|quota|usage limit|too many requests|\b429\b|resource.?exhausted/i;
+const LIMIT_TEXT = /rate.?limit|quota|usage limit|too many requests|\b429\b|resource.?exhausted|exhausted your/i; // AF-024: Gemini CLI "You have exhausted your capacity …"
 
 export class AcpRpcError extends Error {
   readonly rpcCode: number;

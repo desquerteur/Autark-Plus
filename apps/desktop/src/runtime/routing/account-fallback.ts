@@ -22,9 +22,12 @@ import { accountName, accountProblem } from './account-choice.ts';
 import { resolvePin } from './pins.ts';
 import { tierRank } from './score.ts';
 
+/** AF-024: a model id without its path – the Gemini API lists "models/gemini-2.5-pro", Gemini CLI "gemini-2.5-pro". */
+const bareId = (id: string) => id.slice(id.lastIndexOf('/') + 1).toLowerCase();
+
 /** How far `model` is from `target`: the same model elsewhere 0, else the tier distance + 1. */
 function distance(target: ModelInfo, model: ModelInfo): number {
-  if (model.model === target.model) return 0;
+  if (model.model === target.model || bareId(model.model) === bareId(target.model)) return 0;
   return 1 + Math.abs(tierRank(model.tier) - tierRank(target.tier));
 }
 

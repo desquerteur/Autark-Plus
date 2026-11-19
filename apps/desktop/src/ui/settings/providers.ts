@@ -69,11 +69,23 @@ export const SIGN_IN: Partial<Record<ProviderId, SignInKind>> = {
   codex: 'browser', claude: 'browser', 'gemini-cli': 'browser', copilot: 'terminal', 'kimi-cli': 'terminal',
 };
 
+/** AF-024: what the Google Gemini panel (gemini-add.tsx) says about its two ways. */
+export const GEMINI_HINT = 'Sign in with Google uses your Gemini plan through Gemini CLI (installed if missing – it needs Node.js); '
+  + 'each account keeps its own sign-in, so you can add several. An API key from Google AI Studio is billed per use.';
+
+/** AF-024: the name a new Google Gemini account gets – "Gemini", then "Gemini 2", "Gemini 3" … (a name in use is skipped). */
+export function nextGeminiName(list: readonly Pick<Account, 'provider' | 'label'>[]): string {
+  const gemini = list.filter((account) => account.provider === 'gemini-cli' || account.provider === 'google');
+  const taken = new Set(gemini.map((account) => account.label.trim().toLowerCase()));
+  if (!gemini.length && !taken.has('gemini')) return 'Gemini';
+  for (let n = gemini.length + 1; ; n += 1) if (!taken.has(`gemini ${n}`)) return `Gemini ${n}`;
+}
+
 /** Providers whose sign-out Workforce starts (accounts.logout); the ACP plan CLIs have none. */
 export const SIGN_OUT: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude']);
 
-/** CLIs Workforce can install (accounts.install). */
-export const INSTALLABLE: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude']);
+/** CLIs Workforce can install (accounts.install; AF-024: Gemini CLI through npm). */
+export const INSTALLABLE: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli']);
 
 /**
  * Whether the account's official sign-in is what fixes its state: 'Sign-in needed', and for an ACP

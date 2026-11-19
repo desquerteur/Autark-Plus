@@ -7,13 +7,16 @@
 
 import type { Account, DetectionReport } from '../../shared/model/providers.ts';
 
-export type PlanProvider = 'codex' | 'claude';
+/** AF-024: 'gemini-cli' – a Google account through Gemini CLI, started from the Google Gemini panel (settings/gemini-add.tsx). */
+export type PlanProvider = 'codex' | 'claude' | 'gemini-cli';
 
 /** The two buttons, in this order. */
 export const PLAN_PROVIDERS: readonly PlanProvider[] = ['claude', 'codex'];
-export const PLAN_LABELS: Record<PlanProvider, string> = { claude: 'Claude plan', codex: 'Codex plan' };
+export const PLAN_LABELS: Record<PlanProvider, string> = { claude: 'Claude plan', codex: 'Codex plan', 'gemini-cli': 'Sign in with Google' };
 /** The program that is installed. */
-const CLI: Record<PlanProvider, string> = { codex: 'Codex', claude: 'Claude Code' };
+const CLI: Record<PlanProvider, string> = { codex: 'Codex', claude: 'Claude Code', 'gemini-cli': 'Gemini CLI' };
+/** What signed in. */
+const SIGNED_IN: Record<PlanProvider, string> = { codex: 'Codex account signed in', claude: 'Claude account signed in', 'gemini-cli': 'Google account signed in' };
 
 /** How long step 3 waits for the browser sign-in. */
 export const SIGN_IN_WAIT_MS = 5 * 60_000;
@@ -32,7 +35,7 @@ export type PlanResult =
 /** The runtime calls the flow makes (plan-actions.tsx wires them to rpc.call). */
 export interface PlanRpc {
   install(provider: PlanProvider): Promise<unknown>;
-  add(provider: PlanProvider): Promise<Account & { signInUrl?: string }>;
+  add(provider: PlanProvider, label?: string): Promise<Account & { signInUrl?: string }>;
   /** accounts.detect: the runtime checks the open sign-ins again (events bring the change). */
   recheck(): Promise<unknown>;
 }
@@ -67,8 +70,8 @@ export function cliMissing(report: DetectionReport | null, provider: PlanProvide
 
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
-/** Starts the flow for `provider`; `cancel()` stops it at its next step (the card starts another or closes). */
-export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
+/** Starts the flow for `provider`; `cancel()` stops it at its next step (the card starts another or closes). `label`: the new account's name (AF-024). */
+export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: string): PlanFlow {
   let cancelled = false;
   let abortWait: (() => void) | undefined;
   const show = (view: Omit<PlanView, 'provider'>) => { if (!cancelled) env.show({ provider, ...view }); };
@@ -107,7 +110,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
     let url: string | undefined;
     show({ step: 'sign-in', text: SIGN_IN_TEXT });
     try {
-      const { signInUrl, ...rest } = await env.rpc.add(provider);
+      const { signInUrl, ...rest } = await env.rpc.add(provider, label);
       account = rest;
       url = signInUrl;
     } catch (error) { return cancelled ? CANCELLED : fail('sign-in', 'sign-in', messageOf(error, 'Could not start the sign-in – try again.')); }
@@ -136,7 +139,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv): PlanFlow {
     const account = await signIn();
     if (cancelled) return CANCELLED;
     if (isEnd(account)) return account;
-    show({ step: 'done', text: `${provider === 'codex' ? 'Codex' : 'Claude'} account signed in`, tone: 'ok' });
+    show({ step: 'done', text: SIGNED_IN[provider], tone: 'ok' });
     return { ok: true, accountId: account.id };
   };
 

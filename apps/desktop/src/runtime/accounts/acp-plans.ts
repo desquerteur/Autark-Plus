@@ -1,6 +1,7 @@
-// Plan CLIs on the ACP engine (PR8: Gemini CLI, Copilot CLI) as accounts. Each keeps one sign-in
-// per PC in its default home (engines/acp/providers.ts), so a provider has one account here: added
-// by hand or adopted by detection (adoption.ts). Adding checks it and starts the sign-in only when
+// Plan CLIs on the ACP engine (PR8: Gemini CLI, Copilot CLI) as accounts. Copilot CLI keeps one sign-in
+// per PC in its default home (engines/acp/providers.ts), so it has one account here: added
+// by hand or adopted by detection (adoption.ts). AF-024: Gemini CLI accounts added by hand get homes of their own
+// (cli-homes.ts, GEMINI_CLI_HOME); their sign-in still runs here (login), the one in ~/.gemini stays the detected one. Adding checks it and starts the sign-in only when
 // the check asks for one (Copilot CLI's window also when the check failed otherwise: it may answer a
 // missing sign-in with another error). Gemini CLI signs in through ACP authenticate (its Google method opens the
 // browser) and is checked again when that ends; Copilot CLI runs its own /login in a visible

@@ -36,7 +36,7 @@ declare module '../api/methods.ts' {
     'accounts.login': { params: { id: string }; result: { started: boolean; url?: string } };
     'accounts.logout': { params: { id: string }; result: { ok: true } };
     'accounts.remove': { params: { id: string }; result: { ok: true } };
-    'accounts.install': { params: { provider: 'claude' | 'codex' }; result: { ok: true } };
+    'accounts.install': { params: { provider: 'claude' | 'codex' | 'gemini-cli' }; result: { ok: true } };
     /** B-051, owner: one tiny real tool-less turn on this account (first run's "Works – answered in 2 s"). */
     'accounts.try': { params: { id: string }; result: AccountTry };
     /** B-044 (MODELS-ACCOUNTS), owner: lists an API endpoint's model ids before it is saved; the key (typed, or a handle secret://<id>) is used for this call only. */

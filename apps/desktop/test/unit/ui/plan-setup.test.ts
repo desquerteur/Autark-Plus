@@ -215,7 +215,7 @@ test('only an explicitly missing CLI triggers installation', () => {
 test('the model setup retains the plan buttons and the reserved sign-in link cell', () => {
   const ui = path.resolve(import.meta.dirname, '..', '..', '..', 'src', 'ui');
   const read = (file: string) => readFileSync(path.join(ui, file), 'utf8');
-  assert.deepEqual(PLAN_LABELS, { claude: 'Claude plan', codex: 'Codex plan' });
+  assert.deepEqual(PLAN_LABELS, { claude: 'Claude plan', codex: 'Codex plan', 'gemini-cli': 'Sign in with Google' }); // AF-024: the Google Gemini panel's way
   const actions = read('onboarding/plan-actions.tsx');
   assert.ok(actions.includes('busy={running === provider}'), 'busy on the pressed button only');
   const setup = read('settings/ModelSetup.tsx');

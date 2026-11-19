@@ -5,10 +5,11 @@
 // authenticate with its Google method (the CLI opens the browser), Copilot CLI with its own /login
 // and Kimi Code with `kimi login` (OAuth device code) in a visible terminal (accounts/sign-in.ts);
 // and the status probe (ACP initialize + session/new in the neutral folder: the engine's account
-// check, and probeSignedIn for detection in a short-lived process). Gemini CLI and Copilot CLI have
-// no home variable Workforce could verify, so each keeps one sign-in per PC in its default home;
-// Kimi Code's documented KIMI_CODE_HOME (default ~/.kimi-code) gives each added account its own
-// home like CODEX_HOME (`home`; a login found in the default home is adopted as for Codex).
+// check, and probeSignedIn for detection in a short-lived process). Copilot CLI has no home variable
+// Workforce could verify, so it keeps one sign-in per PC in its default home; Kimi Code's documented
+// KIMI_CODE_HOME (default ~/.kimi-code) and – AF-024 – Gemini CLI's documented GEMINI_CLI_HOME (the root
+// its `.gemini` folder is created in, default the user's home; geminicli.com docs, configuration) give
+// each added account its own home like CODEX_HOME (`home`; a login found in the default home is adopted as for Codex).
 // A CLI may read its own project settings in the turn's folder (.gemini/settings.json, Kimi Code's .kimi-code/…) –
 // the agent's folder, like every engine's own configuration there. Gemini CLI's launches set its API-key
 // and Vertex AI variables empty (GOOGLE_SIGN_IN_ONLY), so a plan account is meant to use only its
@@ -103,7 +104,7 @@ export const GOOGLE_SIGN_IN_ONLY: Readonly<Record<string, string>> = {
 export const ACP_PROVIDERS: Readonly<Record<AcpPlanProvider, AcpProviderSpec>> = {
   'gemini-cli': {
     provider: 'gemini-cli', cli: 'gemini', name: 'Gemini CLI', flags: ['--acp', '--experimental-acp'], fallback: '--experimental-acp',
-    signIn: 'acp', method: /oauth|google/i, env: GOOGLE_SIGN_IN_ONLY,
+    signIn: 'acp', method: /oauth|google/i, env: GOOGLE_SIGN_IN_ONLY, home: 'GEMINI_CLI_HOME', // AF-024: several Google sign-ins side by side
     // B-049 F3: only our hub among MCP servers (no user or extension server); GEMINI_SYSTEM_MD: "a full replacement, not a merge".
     lean: [{ flag: '--allowed-mcp-server-names', args: ['--allowed-mcp-server-names', HUB] }], systemPromptEnv: 'GEMINI_SYSTEM_MD',
   },
