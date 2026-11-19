@@ -134,6 +134,9 @@
       "artifactName": "autark-linux-${arch}.${ext}",
       "category": "Office",
       "icon": "assets/icon.png"
+    },
+    "appImage": {
+      "artifactName": "autark-linux-x64.${ext}"
     }
   }
 }

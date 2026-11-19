@@ -217,11 +217,16 @@ npx electron-builder --linux --publish never
 Die Dateien landen in `apps/desktop/dist/`. Lade sie zusammen mit einer `SHA256SUMS.txt`
 (`sha256sum autark-linux-* > SHA256SUMS.txt`) ins Release hoch.
 
-**Auf Windows bauen:** Das `tar.gz` lässt sich auch auf Windows bauen
-(`npx electron-builder --linux tar.gz --x64 --publish never`). Dann fehlt aber das Linux-Sprachmodul
-(`sherpa-onnx-linux-*`), weil npm auf Windows nur die Windows-Variante installiert – die lokale Spracherkennung geht in
-so einem Paket nicht. Für ein vollständiges Release besser auf Linux bauen (oder auf einem Linux-Rechner `npm ci` laufen
-lassen).
+**Auf Windows bauen:** Das `tar.gz` lässt sich auf Windows bauen
+(`npx electron-builder --linux tar.gz --x64 --publish never`, dauert gut 10 Minuten). Zwei Haken:
+
+- Im Paket fehlen die Unix-Ausführungsrechte (`autark` ist nicht als ausführbar markiert). Das Installationsskript
+  setzt sie selbst; wer von Hand entpackt, macht `chmod +x autark`.
+- Statt des Linux-Sprachmoduls (`sherpa-onnx-linux-x64`) liegt das Windows-Modul darin, weil npm auf Windows nur die
+  Windows-Variante installiert. Die lokale Spracherkennung geht in so einem Paket nicht.
+
+Das **AppImage** lässt sich auf Windows **nicht** bauen (electron-builder braucht dafür symbolische Links, Fehler
+`EPERM … symlink`). Für ein vollständiges Release also auf Linux bauen.
 
 ## Was nur auf echtem Linux geprüft werden kann
 
