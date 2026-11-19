@@ -141,7 +141,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   // Claude Code learns new models with new versions: it updates itself shortly after start and every 6 h, then the catalog lists again.
   const offClaudeUpdate = keepClaudeCodeCurrent({
-    supervisor: core.supervisor, finder: core.finder, log, demo: options.fakeEngine, cwd: paths.temp,
+    supervisor: core.supervisor, finder: core.finder, log, demo: options.fakeEngine, cwd: paths.temp, accounts: () => s.accounts.list(),
     onUpdated: () => void core.catalog.refresh({ force: true }).catch(() => undefined),
   });
 

@@ -1,6 +1,8 @@
 // Who a chat tool names and who may join a chat by an agent (B-050 K3/K10). Members are named by id – an agent id,
 // "human" (the owner), a colleague (per_…) – or by name: the owner's, a colleague's or an agent's, case ignored, or a
 // first name only one of them has (an agent may know just the name, and people.list is not offered in every mode).
+// The owner is named as my context shows them (chat/mentions.ts humanAliases: the profile name, "CEO", "Human", "You") –
+// 19.11.2026, real runs on a profile without a name: chat.direct {with: "CEO"} was refused and the result never reached them.
 // B-080 (live: "ag_nora" / "ag_lena" guessed as ids, answered "Unknown agent"): only "human", a per_… id or a known
 // agent id is taken as it is; another id-like value is looked up among the agents by the name after its prefix
 // ("ag_nora" → Nora), and a name that fits nobody is refused with the names (and ids) that exist.
@@ -16,6 +18,7 @@ import type { ToolContext } from '../types.ts';
 import { HUMAN_ID, SYSTEM_ID } from '../../../shared/ids.ts';
 import type { Conversation } from '../../../shared/model/chat.ts';
 import { isPersonId, type Person } from '../../../shared/model/people.ts';
+import { humanAliases } from '../../chat/mentions.ts';
 import { mayUseAgent } from '../../people/access.ts';
 import { PeopleRepo } from '../../people/repo.ts';
 import { authorName, memberRefusal } from './util.ts';
@@ -25,11 +28,10 @@ const ID_LIKE = /^[a-z]{2,4}_\S+$/;
 
 /** Everyone a name may stand for: the owner, colleagues who are not revoked, the org's agents. */
 function directory(ctx: ToolContext): Array<{ id: string; name: string }> {
-  let owner = '';
-  try { owner = ctx.services.settings.get().profile.name?.trim() ?? ''; } catch { /* no profile */ }
+  const owner = humanAliases(ctx.services.settings).map((name) => ({ id: HUMAN_ID, name })); // the profile name first
   let people: Array<{ id: string; name: string }> = [];
   try { people = ctx.services.db.all<{ id: string; name: string }>(`SELECT id, name FROM people WHERE status <> 'revoked' AND id <> ?`, [HUMAN_ID]); } catch { /* no people table */ }
-  return [...(owner ? [{ id: HUMAN_ID, name: owner }] : []), ...people, ...ctx.services.org.list().map((agent) => ({ id: agent.id, name: agent.name }))];
+  return [...owner, ...people, ...ctx.services.org.list().map((agent) => ({ id: agent.id, name: agent.name }))];
 }
 
 /** Who a name may stand for whose name is `wanted` (lowercase): the full name, else the first name. */

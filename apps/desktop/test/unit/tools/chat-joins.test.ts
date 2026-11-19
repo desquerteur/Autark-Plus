@@ -107,6 +107,16 @@ test('members by name: the full name or a first name only one has, case ignored;
   assert.match((await h.run('chat.direct', { with: 'ag_nobody' })).text, /Nobody is called "ag_nobody"\. Who I can name: Ava \(ag_ava\)/, 'B-080: an unknown id-like value names the ones who exist');
 });
 
+test('the person under the label my context shows for them – "CEO", also where the profile has no name (19.11.2026, real runs: chat.direct {with: "CEO"} was refused and the result stayed in the run log)', async () => {
+  const h = setup();
+  assert.deepEqual(h.active((await h.run('chat.direct', { with: 'CEO' })).chatId), ['ag_ava', HUMAN_ID].sort(), 'with a profile name the person is still "Sam (CEO)" in my context');
+  Object.assign(h.services, { settings: { get: () => ({ profile: { name: '', timezone: 'UTC' } }) } });
+  const ceo = await h.run('chat.direct', { with: 'ceo' });
+  assert.equal(ceo.failed, false, ceo.text);
+  assert.deepEqual(h.active(ceo.chatId), ['ag_ava', HUMAN_ID].sort(), 'no profile name: the label names the person');
+  assert.match((await h.run('chat.direct', { with: 'Zed' })).text, /CEO \(human\)\.$/, 'the refusal names the person as I see them');
+});
+
 test('B-080: an id-like value that is no id is an agent\'s name after its prefix – agents only', async () => {
   const h = setup();
   h.org.add(agent('ag_1x', 'Nora', { spaceId: 'spc_design' }));
