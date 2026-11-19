@@ -215,6 +215,7 @@ export class TurnExecutor {
       const failed = turn;
       const first = attempt;
       failedAccounts.push(failed.account.id);
+      if (attempt.result.error?.details?.declined === true) failedAccounts.push(failed.route.modelId); // 19.11.2026: a model that declined the conversation stays out of this turn on every account
       const limited = accountFailure(attempt.result) === 'limit';
       const retry = { ...request, interruption: { at: services.clock.now(), reason: attempt.result.error?.message ?? (limited ? 'Usage limit reached.' : 'The model was unavailable.') } };
       try {

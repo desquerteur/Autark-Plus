@@ -249,6 +249,9 @@ export class ClaudeEngine implements Engine {
         this.folders.delete(resume);
         return { ...result, session: undefined, stop: 'error', error: { code: 'conflict', message: 'Claude Code could not resume this session.', details: { rebase: true, ...(rebuilt ? { rebuild: 'failed' } : {}) } } };
       }
+      // 19.11.2026 (Vera, company-2: Sonnet declined her history six turns in a row, each renewal on the same model): the model's
+      // safeguards declined – a model outage, never the account's (details.local: no cooling); turn.ts leaves this model out of the turn.
+      if (parser.declined()) return { ...result, session: undefined, stop: 'error', error: { ...ERR.unavailable('This model declined the conversation (its safeguards); another model takes it.'), details: { local: true, declined: true } } };
       // B-059 #184: the API overloaded or unreachable is an outage of the account (provider-outage.ts).
       if (claudeDown(s.assistantError, s.errorText)) return { ...result, stop: 'error', error: ERR.unavailable(providerDownMessage('Anthropic')) };
       const failed: EngineTurnResult = { ...result, stop: 'error', error: ERR.failed() };

@@ -291,6 +291,12 @@ export class ClaudeStreamParser {
     return s.rejected || s.assistantError === 'rate_limit' || (s.isError && /usage limit|rate limit|limit reached|out of extra usage/i.test(s.errorText ?? ''));
   }
 
+  /** 19.11.2026: did the model's safeguards decline the conversation ("… safeguards flagged this message")? Another model may take it. */
+  declined(): boolean {
+    const s = this.state;
+    return s.isError && /safeguards flagged|can't respond to this message with/i.test(`${s.errorText ?? ''}\n${s.text}`);
+  }
+
   /** Did the turn fail because this account is not signed in (or its login was rejected)? */
   signedOut(): boolean {
     const s = this.state;
