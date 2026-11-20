@@ -22,7 +22,7 @@ function worker() {
     pushManager: { getSubscription: async () => null },
   };
   const scope = { registration, navigator: {}, location: new URL('https://phone.example/sw.js'), clients: { matchAll: async () => [], openWindow: async () => undefined }, addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => { handlers.set(type, fn); } };
-  vm.runInNewContext(code, { self: scope, URL, Promise, Date, console, setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; } });
+  vm.runInNewContext(code, { self: scope, URL, Promise, Date: { now: () => 1_700_000_000_000 }, console, setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; } });
   const send = async (payload: unknown) => {
     const pending: Promise<unknown>[] = [];
     handlers.get('push')!({ data: { json: () => payload }, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
@@ -48,7 +48,7 @@ test('what is a Due push, and how the notice reads: one title as it is, more say
   assert.deepEqual(groupDue(due('f'), many, 2).data.items, ['b', 'c', 'd', 'e', 'f']);
 });
 
-test('three to-dos fall due: one notice stays in the tray, saying 3 to-dos due; it closes by itself after DUE_SHOW_MS', async () => {
+test('three to-dos fall due in the same millisecond: one notice stays in the tray, saying 3 to-dos due; it closes by itself after DUE_SHOW_MS', async () => {
   const sw = worker();
   for (const title of ['2 minutes at the PC', 'Recording', 'At the server']) await Promise.all(await sw.send(due(title)).then((pending) => pending.slice(0, 0)));
   await sw.flush();
