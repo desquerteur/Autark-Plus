@@ -239,7 +239,7 @@ export const METHOD_DOCS: Record<string, { params: string; note?: string }> = {
   "rpc.methods": {"params":"{ match?: string } | void","note":"Every method with its params. `match`: only names or notes holding this text, with the types they use spelled out."},
   "runs.cancel": {"params":"{ runId: string }"},
   "runs.items": {"params":"{ runId: string }"},
-  "schedules.create": {"params":"{ kind: 'message' | 'routine' | 'reminder'; body: string; spec: ScheduleSpec; title?: string; conversationId?: string; agentId?: string; mentions?: string[]; priority?: 'normal' | 'important' | 'silent' }","note":"`body`/`priority`/`mentions` reword the person's own message or task post (not an agent's)."},
+  "schedules.create": {"params":"{ kind: 'message' | 'routine' | 'reminder' | 'timer'; body: string; spec: ScheduleSpec; title?: string; conversationId?: string; agentId?: string; mentions?: string[]; priority?: 'normal' | 'important' | 'silent' }","note":"`body`/`priority`/`mentions` reword the person's own message or task post (not an agent's)."},
   "schedules.delete": {"params":"{ id: string }"},
   "schedules.list": {"params":"{ conversationId?: string; ownerId?: string } | void"},
   "schedules.preview": {"params":"{ spec: ScheduleSpec; count?: number; runs?: number }","note":"the next fire times of a spec (default 3, at most 10; `runs` already made count against maxRuns). Read-only."},

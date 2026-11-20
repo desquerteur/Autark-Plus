@@ -211,15 +211,15 @@ export function register(table: HandlerTable): void {
     return ctx.services.scheduler.list({ conversationId: optId(o, 'conversationId'), ownerId: optId(o, 'ownerId') });
   }, TASKS);
   /**
-   * #20: the Schedules page creates all three kinds. message – the person's own post into a chat (conversationId);
+   * #20: the Schedules page creates four kinds. message – the person's own post into a chat (conversationId);
    * routine – a job: each run creates a tracked task for the agent (agentId; none = a team task) and, with a
    * conversationId (the contact's chat), the agent works and answers there, e.g. "every day 06:00 research the news and
-   * send it to X"; reminder – an agent's private wake-up note. The scheduler validates spec and limits.
+   * send it to X"; reminder – an agent's private wake-up note; timer – the person's own reminder (a notification when due). The scheduler validates spec and limits.
    */
   table.add('schedules.create', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['kind', 'title', 'body', 'spec', 'conversationId', 'agentId', 'mentions', 'priority']);
-    const kind = optOneOf(o, 'kind', ['message', 'routine', 'reminder'] as const) ?? bad('kind', 'message, routine or reminder');
+    const kind = optOneOf(o, 'kind', ['message', 'routine', 'reminder', 'timer'] as const) ?? bad('kind', 'message, routine, reminder or timer');
     const body = text(o, 'body', { max: 100_000, multiline: true });
     const spec = (optObj(o, 'spec') ?? bad('spec', 'a schedule spec ({at} | {cron} | {everyMs} | {times})')) as ScheduleSpec;
     const conversationId = optId(o, 'conversationId');
@@ -232,6 +232,10 @@ export function register(table: HandlerTable): void {
       if (!conversationId) bad('conversationId', 'the chat the message is posted in');
       const post = scheduledPost(body, { mentions: optIds(o, 'mentions', 50), priority });
       return ctx.services.scheduler.create({ ownerId: HUMAN_ID, conversationId, spec, ...post, ...(title ? { title } : {}) });
+    }
+    if (kind === 'timer') { // the person's own reminder: a notification when it is due (fire.ts), no agent, no post
+      if (agentId) bad('agentId', 'nothing – a timer is the person’s own reminder');
+      return ctx.services.scheduler.create({ ownerId: HUMAN_ID, ...(conversationId ? { conversationId } : {}), kind, title: title ?? excerpt(body, 60), spec, payload: { note: body } });
     }
     if (kind === 'reminder') {
       if (!agentId) bad('agentId', 'the agent that gets the reminder');
@@ -265,6 +269,8 @@ export function register(table: HandlerTable): void {
       } else if (reword.body !== undefined) {
         patch.payload = { note: reword.body };
       }
+    } else if (current.kind === 'timer' && !current.taskId) {
+      if (reword.body !== undefined) patch.payload = { note: reword.body }; // #20: the person's own reminder made on the Schedules page (a to-do's timer follows its to-do)
     } else if (reword.body !== undefined || reword.priority !== undefined || reword.mentions !== undefined) Object.assign(patch, rewordPost(current, reword));
     if (title !== undefined) patch.title = title;
     const updated = ctx.services.scheduler.update(scheduleId, patch, HUMAN_ID); // B-044: the person's pause only the person lifts

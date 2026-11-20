@@ -9,8 +9,8 @@ import type { Schedule, ScheduleRun } from '../../shared/model/tasks.ts';
 import { scheduleSpec } from '../chat/composer/schedule-form.ts';
 import type { ScheduleForm } from '../chat/composer/schedule-form.ts';
 
-/** What the person creates: a job for an agent (each run is a task it works on), a message, or a reminder for an agent. */
-export type DraftType = 'job' | 'message' | 'reminder';
+/** What the person creates: a job for an agent (each run is a task it works on), a message, a reminder for an agent, or one for themselves (timer). */
+export type DraftType = 'job' | 'message' | 'reminder' | 'timer';
 
 export interface Draft {
   type: DraftType;
@@ -23,11 +23,12 @@ export interface Draft {
   important: boolean;
 }
 
-export const TYPE_LABEL: Record<DraftType, string> = { job: 'Agent job', message: 'Message', reminder: 'Reminder' };
+export const TYPE_LABEL: Record<DraftType, string> = { job: 'Agent job', message: 'Message', reminder: 'Reminder', timer: 'For me' };
 export const TYPE_HINT: Record<DraftType, string> = {
   job: 'An agent works on it at the set time – e.g. researches the news – and can send the result to a contact.',
   message: 'Posts your text into a chat at the set time, as if you wrote it then.',
   reminder: 'Wakes an agent with a note to itself – nothing is posted in a chat.',
+  timer: 'Reminds you with a notification at the set time – no agent, nothing is posted.',
 };
 
 export const KIND_LABEL: Record<Schedule['kind'], string> = { routine: 'Agent job', message: 'Message', reminder: 'Reminder', timer: 'Timer' };
@@ -38,14 +39,14 @@ export function emptyDraft(type: DraftType = 'job', agentId = ''): Draft {
 
 /** A stored schedule as the form's draft (Edit). The contact's chat and the owner stay as they are (not changeable). */
 export function draftOf(schedule: Schedule): Draft {
-  const type: DraftType = schedule.kind === 'routine' ? 'job' : schedule.kind === 'reminder' ? 'reminder' : 'message';
-  const body = type === 'job' ? schedule.payload.taskTemplate?.notes ?? schedule.payload.body ?? '' : type === 'reminder' ? schedule.payload.note ?? '' : schedule.payload.body ?? '';
+  const type: DraftType = schedule.kind === 'routine' ? 'job' : schedule.kind === 'reminder' || schedule.kind === 'timer' ? schedule.kind : 'message';
+  const body = type === 'job' ? schedule.payload.taskTemplate?.notes ?? schedule.payload.body ?? '' : type === 'reminder' || type === 'timer' ? schedule.payload.note ?? '' : schedule.payload.body ?? '';
   return { type, title: schedule.title, body, agentId: schedule.ownerId === 'human' ? '' : schedule.ownerId, conversationId: schedule.conversationId ?? '', important: schedule.payload.priority === 'important' };
 }
 
-/** Whether the form can show and change this schedule (not the human timers – they belong to a to-do). */
+/** Whether the form can show and change this schedule (not a to-do's timer – it follows its to-do; the person's own reminders are). */
 export function editable(schedule: Schedule): boolean {
-  return schedule.kind !== 'timer';
+  return schedule.kind !== 'timer' || !schedule.taskId;
 }
 
 /** Active first, then by the next run (paused ones after, by creation). */
@@ -75,17 +76,18 @@ export type Built = { create: CreateParams; update: Omit<Methods['schedules.upda
 export function build(draft: Draft, form: ScheduleForm, now: number): Built {
   const body = draft.body.trim();
   if (draft.type === 'message' && !draft.conversationId) return { error: 'Pick the chat the message is posted in.' };
-  if (draft.type !== 'message' && !draft.agentId) return { error: 'Pick the agent.' };
-  if (!body) return { error: draft.type === 'job' ? 'Write what the agent should do.' : draft.type === 'message' ? 'Write the message.' : 'Write the note for the agent.' };
+  if ((draft.type === 'job' || draft.type === 'reminder') && !draft.agentId) return { error: 'Pick the agent.' };
+  if (!body) return { error: draft.type === 'job' ? 'Write what the agent should do.' : draft.type === 'message' ? 'Write the message.' : draft.type === 'timer' ? 'Write what to remind you of.' : 'Write the note for the agent.' };
   const rule = scheduleSpec(form, now);
   if ('error' in rule) return { error: rule.error };
   const title = draft.title.trim() || undefined;
-  const priority = draft.type !== 'reminder' && draft.important ? 'important' as const : 'normal' as const;
+  const leveled = draft.type === 'job' || draft.type === 'message'; // reminders and timers have no level
+  const priority = leveled && draft.important ? 'important' as const : 'normal' as const;
   return {
     create: {
-      kind: draft.type === 'job' ? 'routine' : draft.type, body, spec: rule.spec, ...(title ? { title } : {}), priority,
-      ...(draft.type !== 'message' ? { agentId: draft.agentId } : {}), ...(draft.conversationId ? { conversationId: draft.conversationId } : {}),
+      kind: draft.type === 'job' ? 'routine' : draft.type, body, spec: rule.spec, ...(title ? { title } : {}), ...(leveled ? { priority } : {}),
+      ...(draft.type === 'job' || draft.type === 'reminder' ? { agentId: draft.agentId } : {}), ...(draft.type !== 'timer' && draft.conversationId ? { conversationId: draft.conversationId } : {}),
     },
-    update: { body, spec: rule.spec, ...(title ? { title } : {}), ...(draft.type !== 'reminder' ? { priority } : {}) },
+    update: { body, spec: rule.spec, ...(title ? { title } : {}), ...(leveled ? { priority } : {}) },
   };
 }

@@ -17,6 +17,7 @@ import { fullDate } from '../lib/format.ts';
 import { toastError } from '../lib/toasts.ts';
 import { Button, Icon, Spinner } from '../lib/ui.tsx';
 import { whenText } from '../chat/details/Schedules.tsx';
+import { selectTask } from '../tasks/jump.ts';
 import { ensureSchedules, deleteSchedule, schedules, schedulesLoaded, setScheduleActive } from '../tasks/schedules.ts';
 import { ScheduleEditor } from './ScheduleEditor.tsx';
 import type { Preset } from './ScheduleEditor.tsx';
@@ -158,6 +159,7 @@ function Detail(props: { schedule: Schedule }) {
                   <li key={`${run.at}:${run.firedAt}`} class={`schedule-run ${run.outcome}`}>
                     <span class="tabular" title={`Planned ${fullDate(run.at)}`}>{fullDate(run.firedAt)}</span>
                     <span class="schedule-run-outcome">{outcomeText(run)}</span>
+                    {run.taskId && <button type="button" class="text-button schedule-run-task" onClick={() => selectTask(run.taskId!)}>{run.outcome === 'skipped' ? 'Open task' : 'Task'}</button>}
                   </li>
                 ))}
               </ul>

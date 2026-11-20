@@ -140,8 +140,13 @@ test("schedules.update rewords the person's own posts; an agent's schedule keeps
   const retimed = await f.owner.call<Schedule>('schedules.update', { id: agents.id, spec: { cron: '30 9 * * 1-5', tz: 'UTC' } });
   assert.equal(retimed.spec.cron, '30 9 * * 1-5', 'timing of an agent schedule may change');
   assert.deepEqual(retimed.payload, { body: 'Standup!' });
-  const timer = f.scheduler.create({ ownerId: 'human', conversationId: f.chat.id, kind: 'timer', title: 'Tea', spec: { at: f.now + H }, payload: {} });
+  // a to-do's timer follows its to-do and has no words of its own; the person's own reminder ("For me", #20) is reworded
+  const todo = await f.owner.call<{ id: string }>('tasks.create', { title: 'Buy tea' });
+  const timer = f.scheduler.create({ ownerId: 'human', conversationId: f.chat.id, kind: 'timer', title: 'Tea', spec: { at: f.now + H }, payload: {}, taskId: todo.id });
   assert.equal((await f.owner.request('schedules.update', { id: timer.id, body: 'Coffee' })).error?.code, 'bad_request');
+  const own = f.scheduler.create({ ownerId: 'human', kind: 'timer', title: 'Tea', spec: { at: f.now + H }, payload: { note: 'Tea' } });
+  await f.owner.call<Schedule>('schedules.update', { id: own.id, body: 'Coffee' });
+  assert.deepEqual(f.scheduler.get(own.id)!.payload, { note: 'Coffee' });
   assert.equal((await f.phone.request('schedules.update', { id: message.id, body: 'x' })).error?.code, 'forbidden', "rewording needs 'manage'");
   assert.equal((await f.owner.request('schedules.update', { id: message.id, colour: 'red' })).error?.code, 'bad_request');
 });
@@ -200,4 +205,15 @@ test('routines: stored task templates are bounded at every run; task posts keep 
   assert.equal((await f.owner.call<Schedule>('messages.schedule', { conversationId: f.chat.id, body: 'x'.repeat(301), spec: { at: f.now + 2 * H } })).kind, 'message', 'a plain message has no task limits');
   const post = await f.owner.call<Schedule>('messages.schedule', { conversationId: f.chat.id, body: 'Review drafts', spec: { at: f.now + 2 * H }, asTask: true });
   assert.equal((await f.owner.request('schedules.update', { id: post.id, body: 'x'.repeat(301) })).error?.code, 'bad_request', 'also when reworded');
+});
+
+test('schedules.create timer: the person\'s own reminder – owned by the person, its note the text; no agent', async (t) => {
+  const f = setup();
+  t.after(f.cleanup);
+  const timer = await f.owner.call<Schedule>('schedules.create', { kind: 'timer', body: 'Call the dentist', spec: { at: f.now + H } });
+  assert.equal(timer.kind, 'timer');
+  assert.equal(timer.ownerId, 'human');
+  assert.equal(timer.title, 'Call the dentist');
+  assert.deepEqual(timer.payload, { note: 'Call the dentist' });
+  assert.equal((await f.owner.request('schedules.create', { kind: 'timer', body: 'x', spec: { at: f.now + H }, agentId: 'ag_ava' })).error?.code, 'bad_request');
 });

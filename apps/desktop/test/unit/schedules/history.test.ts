@@ -85,3 +85,18 @@ test('"every day 06:00" in Berlin fires at 06:00 local on both DST changes (23 a
     for (let i = 1; i < fires.length; i++) assert.ok([23 * H, 24 * H, 25 * H].includes(fires[i] - fires[i - 1]));
   }
 });
+
+test('a routine\'s run names the task it made; a skipped one the task still open', () => {
+  const h = setup();
+  h.scheduler.start();
+  const job = h.scheduler.create({ ownerId: 'ag_tom', kind: 'routine', title: 'News', spec: { cron: '0 10 * * *', tz: 'UTC' }, payload: { taskTemplate: { title: 'News' } } });
+  h.scheduler.runNow(job.id);
+  const first = h.scheduler.get(job.id)!.history!.at(-1)!;
+  assert.equal(first.outcome, 'ok');
+  assert.ok(first.taskId && h.tasks.get(first.taskId), 'the run links the task it created');
+  h.scheduler.runNow(job.id);
+  const second = h.scheduler.get(job.id)!.history!.at(-1)!;
+  assert.equal(second.outcome, 'skipped');
+  assert.equal(second.taskId, first.taskId, 'skipped for the task that is still open');
+  h.scheduler.stop();
+});

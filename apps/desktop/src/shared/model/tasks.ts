@@ -199,6 +199,7 @@ export interface ScheduleRun {
   firedAt: number; // when it was handled
   outcome: 'ok' | 'skipped' | 'failed' | 'ended'; // skipped: missed while the PC was off, or the last routine task was still open; ended: the schedule stopped (its chat or owner is gone)
   manual?: true; // started with "Run now"
+  taskId?: string; // a routine's run: the task it created, or the still-open one it was skipped for
   note?: string; // one short line (why skipped or failed)
 }
 

@@ -2,7 +2,7 @@
 // history words and the route.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { build, draftOf, emptyDraft, outcomeText, sortSchedules } from '../../../src/ui/schedules/schedules-model.ts';
+import { build, draftOf, editable, emptyDraft, outcomeText, sortSchedules } from '../../../src/ui/schedules/schedules-model.ts';
 import { defaultForm } from '../../../src/ui/chat/composer/schedule-form.ts';
 import { formatRoute, parseRoute } from '../../../src/ui/lib/router.ts';
 import type { Schedule } from '../../../src/shared/model/tasks.ts';
@@ -53,4 +53,20 @@ test('the route #/schedules[/id] round-trips', () => {
   assert.deepEqual(parseRoute('#/schedules'), { view: 'schedules' });
   assert.deepEqual(parseRoute('#/schedules/sch_1'), { view: 'schedules', id: 'sch_1' });
   assert.equal(formatRoute({ view: 'schedules', id: 'new' }), '#/schedules/new');
+});
+
+test('"For me" is the person\'s own reminder (a timer): no agent, chat or level; a to-do\'s timer stays out of the form', () => {
+  assert.deepEqual(build(emptyDraft('timer'), daily, NOW), { error: 'Write what to remind you of.' });
+  const timer = build({ ...emptyDraft('timer'), body: 'Call the dentist', important: true, conversationId: 'ch_x' }, daily, NOW);
+  assert.ok('create' in timer);
+  assert.equal(timer.create.kind, 'timer');
+  assert.equal(timer.create.agentId, undefined);
+  assert.equal(timer.create.conversationId, undefined);
+  assert.equal(timer.create.priority, undefined);
+  assert.equal(timer.update.priority, undefined);
+  const own = { id: 'sc_1', ownerId: 'human', kind: 'timer', title: 'Dentist', spec: { at: NOW + 3_600_000 }, payload: { note: 'Call the dentist' }, active: true, runs: 0, createdAt: NOW } as unknown as Schedule;
+  assert.equal(draftOf(own).type, 'timer');
+  assert.equal(draftOf(own).body, 'Call the dentist');
+  assert.equal(editable(own), true);
+  assert.equal(editable({ ...own, taskId: 'tk_1' } as Schedule), false);
 });

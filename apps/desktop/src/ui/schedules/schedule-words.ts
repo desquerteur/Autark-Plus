@@ -157,6 +157,15 @@ export function readScheduleWords(text: string, base: ScheduleForm, now: number)
   const tz = base.tz;
   const today = wallClock(now, tz);
 
+  // ---- a day of the month: "every month on the 1st", "monthly on the 15th at 9", "monatlich am 1.", "jeden Monat am 15. um 8"
+  //      → a cron rule (the form's Advanced); without a day the 1st
+  const monthly = s.take(/\b(?:monthly|every month|each month|monatlich|jeden monat|jedes monats|im monat)\b/);
+  if (monthly) {
+    const day = s.take(/(?:\b(?:on\s+the|on|the|am|zum)\s+)?\b([1-9]|[12]\d|3[01])(?:st|nd|rd|th|\.)(?![\d.])/);
+    const [hour, minute] = hm(takeClock(s) ?? base.clock);
+    return { form: { kind: 'repeat', repeat: 'cron', cron: `${minute} ${hour} ${day ? Number(day[1]) : 1} * *` }, rest: s.rest() };
+  }
+
   // ---- intervals: "every 30 minutes", "alle 2 Stunden", "every other day", "hourly", "stündlich"
   const hourly = s.take(/\b(?:hourly|stündlich|every hour|jede stunde)\b/);
   const every = hourly ? undefined : s.take(new RegExp(`\\b(?:every|each|alle|jede[nrs]?)\\s+(?:(\\d+)\\s*|([a-zäöüß]+)\\s+)?${UNIT}\\b`),

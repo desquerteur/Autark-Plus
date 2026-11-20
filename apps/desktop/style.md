@@ -75,7 +75,8 @@ screen's look changes.
 - Sidebar row: 16 px kind icon, title (`.row-title`), rule in words and next run (`.row-preview`, muted); a paused row's title is `--muted`; the open row uses `--selected`, hover `--hover`.
 - Start page and cards: same tokens as the Projects cards (`--surface`, `--line`, `--r-lg`, hover `--hover` / `--elevated-line`).
 - Form: one column, 14 px gaps, labels 13 px `--secondary`, the rule fields reuse the composer's `.schedule-bar` rules (rows wrap here); the line above Save is `--muted`, errors `--danger`.
-- Page: title 24/32 semibold, facts as a two-column list (90 px label), history rows 13/20 with a 1 px `--line` rule; outcome `failed` is `--danger`, `skipped` and `ended` are `--warn`.
+- Page: title 24/32 semibold, facts as a two-column list (90 px label), history rows 13/20 with a 1 px `--line` rule; outcome `failed` is `--danger`, `skipped` and `ended` are `--warn`. A routine's run ends in a 12 px text button "Task" ("Open task" when skipped) at the row's right edge that opens the task in Work.
+- Kind "For me" (a timer – the person's own reminder): no agent, chat or Important; the text field reads "Remind me of".
 - Phone (≤ 640 px): 16 px side padding, facts stack.
 
 ## Report issue (Autark-Plus) – `src/ui/feedback/IssuePreview.tsx`, `src/ui/styles/feedback.css`

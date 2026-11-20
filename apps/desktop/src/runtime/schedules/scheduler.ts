@@ -263,8 +263,10 @@ export class SchedulerImpl implements Scheduler {
   private execute(schedule: Schedule, occurrence: number): { more: boolean; run: ScheduleRun } {
     const base = { at: occurrence, firedAt: this.s.clock.now() };
     try {
-      if (fireSchedule(schedule, occurrence, this.s) === 'skipped') return { more: true, run: { ...base, outcome: 'skipped', note: 'The previous task is still open' } };
-      return { more: true, run: { ...base, outcome: 'ok' } };
+      const fired = fireSchedule(schedule, occurrence, this.s);
+      const task = fired?.taskId ? { taskId: fired.taskId } : {};
+      if (fired?.skipped) return { more: true, run: { ...base, outcome: 'skipped', note: 'The previous task is still open', ...task } };
+      return { more: true, run: { ...base, outcome: 'ok', ...task } };
     } catch (error) {
       if (error instanceof ScheduleGone) {
         this.deactivate(schedule.id, false);

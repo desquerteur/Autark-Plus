@@ -57,8 +57,11 @@ export type FireDeps = Pick<RuntimeServices, 'chats' | 'tasks' | 'wakes'> & Part
 /** Thrown when a schedule can never fire again (its chat or owner is gone). */
 export class ScheduleGone extends Error {}
 
-/** Fires one occurrence; returns 'skipped' when a routine's previous task is still open (#20: the history says so). */
-export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps): 'skipped' | undefined {
+/** What one occurrence did, for the history (#20): 'skipped' when a routine's previous task is still open, else the routine's new task. */
+export type FireResult = { skipped?: true; taskId?: string } | undefined;
+
+/** Fires one occurrence; a routine says which task it made or which still-open one it skipped for (#20: the history links it). */
+export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps): FireResult {
   const ownerKind = schedule.ownerId === HUMAN_ID ? 'human' : 'agent';
   switch (schedule.kind) {
     case 'message': {
@@ -90,7 +93,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
       const template = boundedTemplate(schedule.payload.taskTemplate, schedule.title);
       const origin = scheduleOrigin(schedule);
       const open = ownerKind === 'agent' ? openOccurrence(schedule, s) : undefined;
-      if (open) { noteSkip(open, schedule, occurrence, s); return 'skipped'; } // B-059: the last run is still open – no second copy
+      if (open) { noteSkip(open, schedule, occurrence, s); return { skipped: true, taskId: open.id }; } // B-059: the last run is still open – no second copy
       const task = s.tasks.create({
         ...(schedule.conversationId ? { conversationId: schedule.conversationId } : {}), origin,
         title: template.title, notes: template.notes, mode: template.mode, steps: template.steps,
@@ -105,7 +108,7 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
           note: schedule.payload.note, coalesceKey: `sch:${schedule.id}`, origin,
         });
       }
-      return undefined;
+      return { taskId: task.id };
     }
     case 'timer': {
       const linked = schedule.taskId ? s.tasks.get(schedule.taskId) : undefined;

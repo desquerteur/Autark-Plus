@@ -68,3 +68,13 @@ test('what it reads makes a valid schedule', () => {
     assert.ok('spec' in built, `${text}: ${'error' in built ? built.error : ''}`);
   }
 });
+
+test('a day of the month becomes a cron rule: "every month on the 1st", "monatlich am 15. um 8"; without a day the 1st', () => {
+  assert.deepEqual(read('every month on the 1st pay rent'), { form: { kind: 'repeat', repeat: 'cron', cron: '0 9 1 * *' }, rest: 'pay rent' });
+  assert.deepEqual(read('monthly on the 15th at 9:30am invoices'), { form: { kind: 'repeat', repeat: 'cron', cron: '30 9 15 * *' }, rest: 'invoices' });
+  assert.deepEqual(read('jeden Monat am 15. um 8 Uhr Bericht'), { form: { kind: 'repeat', repeat: 'cron', cron: '0 8 15 * *' }, rest: 'Bericht' });
+  assert.deepEqual(read('monatlich Miete zahlen'), { form: { kind: 'repeat', repeat: 'cron', cron: '0 9 1 * *' }, rest: 'Miete zahlen' });
+  const words = read('every month on the 1st pay rent')!;
+  const spec = scheduleSpec({ ...base, ...words.form }, NOW);
+  assert.ok('spec' in spec, 'the cron rule is a valid schedule');
+});

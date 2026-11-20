@@ -97,7 +97,7 @@ export function ScheduleEditor(props: { schedule?: Schedule; preset?: Preset; on
 
   return (
     <form class="schedule-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      {!editing && <Segmented label="Kind" value={type} onChange={(value: DraftType) => patch({ type: value })} options={(['job', 'message', 'reminder'] as const).map((value) => ({ value, label: TYPE_LABEL[value] }))} />}
+      {!editing && <Segmented label="Kind" value={type} onChange={(value: DraftType) => patch({ type: value })} options={(['job', 'message', 'reminder', 'timer'] as const).map((value) => ({ value, label: TYPE_LABEL[value] }))} />}
       <p class="schedule-hint">{TYPE_HINT[type]}</p>
       {!editing && (
         <div class="schedule-words">
@@ -113,7 +113,7 @@ export function ScheduleEditor(props: { schedule?: Schedule; preset?: Preset; on
         </div>
       )}
 
-      {type !== 'message' && (
+      {(type === 'job' || type === 'reminder') && (
         <label class="schedule-field-block"><span class="schedule-label">Agent</span>
           <select class="select" aria-label="Agent" value={draft.agentId} disabled={editing} onChange={(event) => patch({ agentId: (event.currentTarget as HTMLSelectElement).value })}>
             {agentList.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
@@ -132,11 +132,11 @@ export function ScheduleEditor(props: { schedule?: Schedule; preset?: Preset; on
       <label class="schedule-field-block"><span class="schedule-label">Title <span class="schedule-optional">(optional)</span></span>
         <input type="text" class="input" maxLength={120} placeholder={type === 'job' ? 'Daily news' : undefined} value={draft.title} onInput={(event) => patch({ title: (event.currentTarget as HTMLInputElement).value })} />
       </label>
-      <label class="schedule-field-block"><span class="schedule-label">{type === 'job' ? 'What should the agent do?' : type === 'message' ? 'Message' : 'Note for the agent'}</span>
+      <label class="schedule-field-block"><span class="schedule-label">{type === 'job' ? 'What should the agent do?' : type === 'message' ? 'Message' : type === 'timer' ? 'Remind me of' : 'Note for the agent'}</span>
         <textarea class="input schedule-body" rows={5} maxLength={20000} placeholder={type === 'job' ? 'Think about today’s news in my field and write a short summary.' : undefined}
           value={draft.body} onInput={(event) => patch({ body: (event.currentTarget as HTMLTextAreaElement).value })} />
       </label>
-      {type !== 'reminder' && (
+      {(type === 'job' || type === 'message') && (
         <label class="schedule-check"><input type="checkbox" checked={draft.important} onChange={(event) => patch({ important: (event.currentTarget as HTMLInputElement).checked })} /> Important</label>
       )}
 

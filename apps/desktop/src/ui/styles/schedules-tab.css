@@ -62,6 +62,7 @@
 .schedule-runs { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 20px; }
 .schedule-runs li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .schedule-run-full, .schedule-run-outcome { color: var(--secondary); }
+.schedule-run-task { margin-left: auto; font-size: 12px; } /* a routine's run: the task it made (or the open one it waited for) */
 .schedule-run.failed .schedule-run-outcome { color: var(--danger); }
 .schedule-run.skipped .schedule-run-outcome, .schedule-run.ended .schedule-run-outcome { color: var(--warn); }
 .schedules-missing { padding: 24px; }
