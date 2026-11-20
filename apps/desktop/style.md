@@ -55,3 +55,9 @@ screen's look changes.
   kicker "New agent:" in `--update` 12 px 600, facts 12/18 `--secondary`, actions on the right (below on the phone).
 - **Agent names as links:** in messages underlined in `--update`, 600; in Team activity and the agent tree only a
   hover underline in `--update`.
+
+## Dictation countdown (AF-017, Autark-Plus#18)
+- **Chip:** over the composer's action-row spacer, 42 px from the left (after Plus), absolute so no cell moves; 26 px
+  high, radius 13 px, padding 0 10/0 8 px, 1 px `--line`, `--surface`, 12 px `--secondary` ("Sending · Cancel");
+  hover `--text` on `--hover`. A 2 px `--focus` bar along its bottom shrinks to zero in 2 s (none with reduced motion).
+- **Mic while a take runs (chat composer):** the 36 px cell shows `check` (Done) instead of `stop`; Send stays enabled.

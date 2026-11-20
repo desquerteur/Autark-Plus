@@ -38,7 +38,20 @@
 .composer-input:focus-visible { outline: none; } /* focus shows on the composer border */
 .composer-input::placeholder { color: var(--muted); }
 
-.composer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 8px; }
+.composer-actions { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 8px; }
+/* AF-017: the dictation countdown chip, laid over the spacer after Plus (absolute – no cell in the row moves) */
+.dictation-countdown {
+  position: absolute; top: 50%; left: 42px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; height: 26px;
+  padding: 0 10px 0 8px; transform: translateY(-50%); overflow: hidden; border: 1px solid var(--line); border-radius: 13px;
+  background: var(--surface); color: var(--secondary); font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.dictation-countdown:hover { color: var(--text); background: var(--hover); }
+.dictation-countdown-bar {
+  position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--focus);
+  transform-origin: left center; animation: wf-countdown 2s linear forwards;
+}
+@keyframes wf-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .dictation-countdown-bar { animation: none; } }
 .composer-actions > * { flex-shrink: 0; }
 .composer-spacer { position: relative; flex: 1 1 auto; align-self: stretch; min-width: 4px; overflow: hidden; } /* also the waveform's slot */
 .composer-actions .icon-button { width: 36px; height: 36px; border-radius: var(--r-md); }

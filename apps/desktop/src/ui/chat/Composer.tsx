@@ -6,6 +6,10 @@
 // AF-016: while an agent works (or messages wait), Enter does the person's default – send now or add to the chat's queue
 // (composer/queue.ts) – and Ctrl+Enter the other; the caret right of Send offers both (SendSplit.tsx); the queued
 // messages show right above the composer (QueueList.tsx).
+// AF-017 (desquerteur/Autark-Plus#18): while a take runs the mic is ✓ (the words go into the field, then
+// preferences.dictationSend: keep, send, or send after a 2 s countdown chip that Cancel, Esc or typing stops) and Send (➤)
+// sends the transcript; holding the mic or Ctrl+Shift+Space in the field is push-to-talk (release = send). Every send
+// goes through send() below, so while an agent works it follows the AF-016 choice (now or queue) – composer/dictation-send.ts.
 // Action row, fixed cells: [+] [Access mode] [spacer] [Ultra] [Model] [Mic] [Send] – nothing in it moves on a click (AF-013: the mode cell).
 // How a message goes out: /important, /silent, or the Plus menu's and the Send button's right-click menu's "Send as important",
 // "Send silently" (with nothing to send yet: the draft's level) and "Schedule…": that switches the composer into schedule
@@ -22,7 +26,7 @@ import { Icon } from '../lib/ui.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { chatPartner, chatTitle, memberName } from '../lib/chat-face.tsx';
 import { isMobile, preferences } from '../lib/store.ts';
-import { bridge } from '../lib/platform.ts';
+import { bridge, os } from '../lib/platform.ts';
 import { toAttachment, uploadFile } from '../lib/files.ts';
 import { COMPOSER_BUSY, composerFill, composerFillText } from '../lib/shell-state.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
@@ -43,7 +47,9 @@ import { scheduleSpec } from './composer/schedule-form.ts';
 import { useNextRun } from './composer/schedule-next.ts';
 import { UltraCell, ultraOffered } from './composer/UltraCell.tsx';
 import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, transcribing } from './composer/voice.ts';
-import { MicButton, useDictationField, waveState } from './composer/MicButton.tsx';
+import { MicButton, talkPress, useDictationField, waveState } from './composer/MicButton.tsx';
+import { afterTake, cancelCountdown, countdowns, isTalkKey, startCountdown, type TakeEnd } from './composer/dictation-send.ts'; // AF-017
+import type { PressTracker } from '../feedback/press.ts';
 import { DictationWave } from './composer/DictationWave.tsx';
 import { mentionsIn, targetAgent } from './composer/target.ts';
 import { composerControls } from './composer/controls.ts';
@@ -74,6 +80,9 @@ export function Composer(props: { chat: ConversationSummary }) {
   const isDictating = dictating.value === chat.id;
   const transcribingHere = transcribing.value.has(chat.id); // the stopped take's text is still on its way
   const hasContent = text.trim().length > 0 || attachments.length > 0 || secrets.length > 0;
+  const countdown = countdowns.value.get(chat.id); // AF-017: a dictated draft about to go out
+  const talk = useRef<PressTracker | null>(null);
+  const talkKeyDown = useRef(false);
   // AF-012: runs at work here that the person has not asked to stop (schedule mode keeps its Schedule button); Esc stops them.
   const working = useChatStop(chat, areaRef, !scheduling);
 
@@ -153,6 +162,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   /** `sentLevel`: the Plus menu's "Send as important" / "Send silently" (no slash command then); `how`: AF-016 now, queue or the other one than the default. */
   const send = async (sentLevel?: MessageLevel, how?: SendWhileWorking | 'other') => {
     if (sending || transcribing.peek().has(chat.id)) return; // never sends without the dictated words
+    cancelCountdown(chat.id); // AF-017: sent now, by hand or by the countdown itself
     setSending(true); // also while a dictation is transcribed first (a second tap sends nothing twice)
     try {
       // A take that came back as a recording or failed stays in the draft: the person sees it (and the toast) first.
@@ -180,6 +190,22 @@ export function Composer(props: { chat: ConversationSummary }) {
     }
   };
 
+  /** AF-017: a take ends with ✓ ('done': the preference decides), ➤ or the release of a hold (both send). */
+  const finishTake = async (end: TakeEnd) => {
+    if (end !== 'done') { await send(); return; }
+    if (!(await dictateIntoDraft()) || !draft.peek().text.trim()) return;
+    const next = afterTake(end, preferences.peek().dictationSend);
+    if (next === 'send') await sendRef.current();
+    else if (next === 'countdown') startCountdown(chat.id, () => void sendRef.current());
+  };
+  const sendRef = useRef(send);
+  sendRef.current = send; // the countdown ends two seconds later: it sends the way that holds then
+  const finishRef = useRef(finishTake);
+  finishRef.current = finishTake; // a press outlives a render (and a switch to another chat)
+  const chatRef = useRef(chat.id);
+  chatRef.current = chat.id;
+  talk.current ??= talkPress(() => chatRef.current, fieldRef, { stop: () => void finishRef.current('done'), send: () => void finishRef.current('release') });
+
   /** Schedule mode's Send: posts the draft at the settings' time(s) – also at another level (the right-click menu). */
   const scheduleNow = async (sentLevel?: MessageLevel) => {
     if (sending || transcribing.peek().has(chat.id)) return;
@@ -195,6 +221,12 @@ export function Composer(props: { chat: ConversationSummary }) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (!scheduling && talk.current && isTalkKey(event, os === 'mac')) { // AF-017: the dictation key – tap toggles, hold talks
+      event.preventDefault();
+      if (!event.repeat && !talkKeyDown.current) { talkKeyDown.current = true; talk.current.down(); }
+      return;
+    }
+    if (event.key === 'Escape' && cancelCountdown(chat.id)) { event.preventDefault(); return; } // AF-017: the words stay
     if (suggest.onKeyDown(event, visibleItems, accept)) { event.preventDefault(); return; }
     if (event.key === 'Escape' && scheduling) { event.preventDefault(); leaveScheduleMode(chat.id); return; }
     if (event.key === 'Escape' && draft.peek().replyTo) { event.preventDefault(); setReply(chat.id, null); return; }
@@ -205,6 +237,17 @@ export function Composer(props: { chat: ConversationSummary }) {
     if ((enterSends && !event.shiftKey && !mod) || (!enterSends && mod && !event.shiftKey)) { event.preventDefault(); void (scheduling ? scheduleNow() : send()); }
     else if (!scheduling && mod && (enterSends ? !event.shiftKey : event.shiftKey)) { event.preventDefault(); void send(undefined, 'other'); } // AF-016
   };
+
+  /** AF-017: the dictation key or one of its modifiers let go ends the press (a hold: the take is sent). */
+  const onKeyUp = (event: KeyboardEvent) => {
+    setCaret((event.target as HTMLTextAreaElement).selectionStart);
+    if (!talkKeyDown.current) return;
+    if (event.key === ' ' || event.code === 'Space' || event.key === 'Shift' || event.key === 'Control' || event.key === 'Meta') {
+      talkKeyDown.current = false;
+      talk.current?.up();
+    }
+  };
+  const onBlur = () => { if (talkKeyDown.current) { talkKeyDown.current = false; talk.current?.cancel(); } };
 
   const onPaste = (event: ClipboardEvent) => {
     const files = [...(event.clipboardData?.files ?? [])];
@@ -227,7 +270,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   const partner = chatPartner(chat);
   const placeholder = `${scheduling ? 'Scheduled message for' : 'Message'} ${(partner && memberName(partner.memberId)) || chatTitle(chat)}`;
 
-  const controls = composerControls({ hasContent, transcribing: transcribingHere, working });
+  const controls = composerControls({ hasContent, transcribing: transcribingHere, working, dictating: isDictating && !scheduling });
   // A scheduled message is text only: files and secrets in the draft would be left behind, so the mode says so (note)
   const heavy = [attachments.length ? 'files' : '', secrets.length ? 'secrets' : ''].filter(Boolean).join(' and ');
   const note = scheduling && heavy ? `A scheduled message is text only – remove the ${heavy} to schedule it.` : undefined;
@@ -271,9 +314,10 @@ export function Composer(props: { chat: ConversationSummary }) {
             value={text}
             placeholder={placeholder}
             aria-label={placeholder}
-            onInput={(event) => { const field = event.target as HTMLTextAreaElement; setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); }}
+            onInput={(event) => { const field = event.target as HTMLTextAreaElement; cancelCountdown(chat.id); setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); }}
             onKeyDown={onKeyDown}
-            onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
+            onKeyUp={onKeyUp}
+            onBlur={onBlur}
             onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
             onPaste={onPaste}
           />
@@ -289,9 +333,12 @@ export function Composer(props: { chat: ConversationSummary }) {
           }} />
           <AccessModeCell chat={chat} agentId={agentId} />{/* AF-013: the access mode (click / Shift+Tab) */}
           <div class="composer-spacer"><DictationWave state={waveState(chat.id)} /></div>
+          {countdown && <button type="button" class="dictation-countdown" title="The dictated message goes out – Cancel keeps it in the field (Esc)"
+            onClick={() => { cancelCountdown(chat.id); fieldRef.current?.focus({ preventScroll: true }); }}><span class="dictation-countdown-bar" />Sending · Cancel</button>}
           <UltraCell chat={chat} on={ultra} onToggle={(next) => updateDraft(chat.id, { ultra: next || undefined })} />
           <ModelChip chat={chat} agentId={agentId} openSignal={modelSignal} />
-          <MicButton draftKey={chat.id} field={fieldRef} onStop={() => void dictateIntoDraft()} />
+          <MicButton draftKey={chat.id} field={fieldRef} onStop={() => void (scheduling ? dictateIntoDraft() : finishTake('done'))}
+            onHoldSend={scheduling ? undefined : () => void finishTake('release')} tracker={talk.current} />
           {primary}
           <SendSplit actions={{ sendNow: hasContent ? () => void send(undefined, 'now') : undefined, queue: hasContent ? () => void send(undefined, 'queue') : undefined,
             preferred: preferredMode(), setPreferred: (next) => void setPreferredMode(next), enterSends: preferences.value.enterSends && !isMobile.value, scheduling }} />

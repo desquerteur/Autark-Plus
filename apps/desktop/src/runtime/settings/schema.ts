@@ -128,6 +128,7 @@ export const SECTIONS: readonly SectionDef[] = [
     int('workspaceWidth', 'Width of the side pane in pixels', 280, 1200, 420),
     flag('enterSends', 'Enter sends a message, Shift+Enter starts a new line (false: Ctrl+Enter sends)', true),
     choice('whileWorking', 'What sending does while an agent works in the chat: now = it reaches the agent at once, queue = it waits in the queue of the chat until the agent is done (Ctrl+Enter does the other)', ['now', 'queue'], 'now'), // AF-016
+    choice('dictationSend', 'After a dictation in a chat: off = the words stay in the field, on = they are sent at once, countdown = they are sent after 2 seconds unless cancelled (the send button during a take and releasing a held mic always send)', ['off', 'on', 'countdown'], 'off'), // AF-017
     flag('closeToTray', 'Closing the window keeps the app and the agents running', true),
     flag('openAtLogin', 'Whether the app starts with the PC', false),
     flag('autoDownloadUpdates', 'New versions download by themselves', false),

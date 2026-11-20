@@ -21,6 +21,13 @@ import { GettingStarted } from './GettingStarted.tsx';
 
 const START_HINT = 'Opens the app when the PC starts and keeps agents working in the background';
 const THEMES = [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }] as const;
+// AF-017 (#18): what follows a dictation in a chat (composer/dictation-send.ts); ➤ and a released hold always send
+const DICTATION_WAYS = [{ value: 'off', label: 'Keep' }, { value: 'on', label: 'Send' }, { value: 'countdown', label: 'Send in 2 s' }] as const;
+const DICTATION_HINTS = {
+  off: 'The words stay in the field – ➤ during the take or holding the mic sends them',
+  on: 'Finished dictations are sent at once',
+  countdown: 'Sent after 2 seconds – Esc, typing or Cancel keeps them in the field',
+} as const;
 
 export function GeneralPage() {
   const value = settings.value;
@@ -91,6 +98,9 @@ export function GeneralPage() {
         </Row>
         <Row label="Enter sends" hint={prefs.enterSends ? 'Shift+Enter for a new line' : 'Ctrl+Enter sends'}>
           <Toggle label="Enter sends" checked={prefs.enterSends} onChange={(enterSends) => void setPrefs({ enterSends })} />
+        </Row>
+        <Row label="After dictating" hint={DICTATION_HINTS[prefs.dictationSend ?? 'off']}>
+          <Segmented label="After dictating" value={prefs.dictationSend ?? 'off'} options={[...DICTATION_WAYS]} onChange={(dictationSend) => void setPrefs({ dictationSend })} />
         </Row>
       </Group>
       <GettingStarted /> {/* AF-002: show the tour again, run setup again */}
