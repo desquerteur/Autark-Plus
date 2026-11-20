@@ -93,10 +93,10 @@ if ($Publish) {
     $notes = Join-Path $root "docs/releases/$Tag.md"
     $exists = $false; gh release view $Tag --repo $Repo *> $null; if ($LASTEXITCODE -eq 0) { $exists = $true }
     if (-not $exists) {
-        $args = @('release', 'create', $Tag, '--repo', $Repo, '--title', "Autark $version", '--verify-tag')
-        if (Test-Path $notes) { $args += @('--notes-file', $notes) } else { $args += @('--notes', "Autark $version") }
-        if ($version -match '-') { $args += '--prerelease' } else { $args += '--latest' }
-        Run 'create release' { gh @args }
+        $ghArgs = @('release', 'create', $Tag, '--repo', $Repo, '--title', "Autark $version", '--verify-tag')
+        if (Test-Path $notes) { $ghArgs += @('--notes-file', $notes) } else { $ghArgs += @('--notes', "Autark $version") }
+        if ($version -match '-') { $ghArgs += '--prerelease' } else { $ghArgs += '--latest' }
+        Run 'create release' { gh @ghArgs }
     }
     Run 'upload assets' { gh release upload $Tag --repo $Repo --clobber @((Get-ChildItem $out -File).FullName) }
     Write-Output "Published: https://github.com/$Repo/releases/tag/$Tag"

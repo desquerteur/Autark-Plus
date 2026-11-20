@@ -15,13 +15,31 @@ reinen Node-Modus (`ELECTRON_RUN_AS_NODE=1`). Es braucht keinen Bildschirm, kein
 
 ## 1. Installieren
 
-Du brauchst: Linux mit **x86_64 (x64)** oder **aarch64 (arm64)**, `curl`, `tar` und **systemd**.
+Du brauchst: Linux mit **x86_64 (x64)** oder **aarch64 (arm64)**, `tar` und **systemd**. Getestet auf Debian 12,
+Ubuntu 22.04 und 24.04 (x64); arm64 (Raspberry Pi 4/5, Ampere, Graviton) startet aus demselben Paket.
 
 ### Server (Systemdienst)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash
 ```
+
+**Frisches Debian / Proxmox-LXC (als root, ohne curl und sudo):** ein minimales Debian hat weder `curl` noch `wget`
+noch `sudo`. Dann als root:
+
+```bash
+apt-get update && apt-get install -y curl
+curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | bash -s -- --server
+```
+
+Das Skript selbst braucht danach nichts weiter: fehlt beim Download `curl`, nimmt es `wget` oder installiert `curl`.
+In einem **Proxmox-LXC** ohne „Nesting“ verweigert systemd die Sandbox des Dienstes (Fehler `226/NAMESPACE`); das
+Skript erkennt das und startet den Dienst dann ohne `PrivateTmp`/`ProtectSystem`
+(`/etc/systemd/system/autark.service.d/container.conf`). Besser: im Container unter *Optionen → Features* **nesting**
+einschalten, dann läuft er mit voller Sandbox.
+
+**Eigener Spiegel / offline:** `AUTARK_DOWNLOAD_BASE=http://server/autark/0.3.9/ … | bash -s -- --version v0.3.9`
+nimmt die Release-Dateien (`autark-linux-<arch>.tar.gz`, `SHA256SUMS.txt`) aus diesem Ordner statt von GitHub.
 
 Das Skript
 
