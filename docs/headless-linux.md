@@ -38,7 +38,7 @@ Skript erkennt das und startet den Dienst dann ohne `PrivateTmp`/`ProtectSystem`
 (`/etc/systemd/system/autark.service.d/container.conf`). Besser: im Container unter *Optionen → Features* **nesting**
 einschalten, dann läuft er mit voller Sandbox.
 
-**Eigener Spiegel / offline:** `AUTARK_DOWNLOAD_BASE=http://server/autark/0.3.9/ … | bash -s -- --version v0.3.9`
+**Eigener Spiegel / offline:** `AUTARK_DOWNLOAD_BASE=http://server/autark/0.3.10/ … | bash -s -- --version v0.3.10`
 nimmt die Release-Dateien (`autark-linux-<arch>.tar.gz`, `SHA256SUMS.txt`) aus diesem Ordner statt von GitHub.
 
 Das Skript
