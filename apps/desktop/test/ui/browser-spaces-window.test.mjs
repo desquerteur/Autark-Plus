@@ -88,11 +88,18 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   const stripTitles = (where) => page.locator(`${where} .browser-strip-title`).allTextContents();
   const shownTitle = (where) => page.locator(`${where} .browser-strip-tab.selected .browser-strip-title`).textContent();
   const waitShown = (where, title) => page.waitForFunction(([scope, expected]) => document.querySelector(`${scope} .browser-strip-tab.selected .browser-strip-title`)?.textContent === expected, [where, title], { timeout: 30_000 });
-  const areaCell = () => page.locator('.chat-header [data-cell="browser"] button').first();
-  /** Opens the open chat's area unless it is open already (kept per chat on this device). */
+  const areaCell = () => page.locator('.frame-workspace-cell[data-cell="browser"] button').first();
+  /** Opens the open chat's area unless it is open already (kept per chat on this device). The one globe shows one browser
+   *  at a time – it closes the global pane – so a global pane that was open is opened again beside the area. */
   const openArea = async () => {
+    const globalOpen = (await page.locator(PANE).count()) > 0;
     if ((await areaCell().getAttribute('aria-pressed')) !== 'true') await areaCell().click();
     await page.locator(`${AREA} .browser-strip`).waitFor();
+    if (globalOpen) await showGlobal(true);
+  };
+  const showGlobal = async (open) => {
+    await rpc.call('settings.update', { preferences: { workspaceOpen: open } });
+    await page.locator(PANE).waitFor({ state: open ? 'visible' : 'detached' });
   };
   const goChat = async (id) => {
     await page.evaluate((value) => { location.hash = `#/chat/${value}`; }, id);
@@ -128,7 +135,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   assert.deepEqual((await file()).spaces.global.tabs.map((tab) => tab.id), ['web-old-global']);
   await assert.rejects(readFile(path.join(profile, 'workspace-tabs.json')), 'the old file is gone');
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await page.locator(`${PANE} .browser-strip`).waitFor();
   await page.locator(`${PANE} .browser-strip-tab`, { hasText: /Old global|127\.0\.0\.1/ }).first().locator('.browser-strip-choose').click();
   await waitShown(PANE, 'Old global');
@@ -154,8 +161,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   // ---- the person opens that chat's area and sees the tab live on its native page, the global page beside it
   await goChat(group.id);
   assert.deepEqual(await stripTitles(PANE), global.titles, 'the global pane shows only global tabs');
-  await expectStable(page, [`${PANE} .browser-strip [aria-label="New tab"]`, `${PANE} .browser-bar`, '.chat-header [data-cell="call"]', '.chat-header [data-cell="browser"]', '.composer'],
-    () => areaCell().click());
+  await expectStable(page, ['.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]'], () => openArea());
   await waitShown(AREA, 'Shared page');
   assert.deepEqual(await stripTitles(AREA), ['Shared page']);
   assert.equal(await shownTitle(PANE), global.shown, 'the global pane keeps its tab');
@@ -214,13 +220,13 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
 
   // ---- with the pane closed another chat opening lights nothing: its agents' old tabs are no new tabs
   const dot = page.locator('.frame-workspace-cell .frame-header-badge.dot');
-  const areaDot = page.locator('.chat-header [data-cell="browser"] .frame-header-badge.dot');
-  await cell.click();
+  const areaDot = page.locator('.frame-workspace-cell[data-cell="browser"] .frame-header-badge.dot');
+  await showGlobal(false); // in a chat the one globe is the chat's tabs
   await goChat(other.id);
   await page.waitForTimeout(300);
   assert.equal(await dot.count(), 0, 'no dot on a chat switch');
   assert.equal(await areaDot.count(), 0, 'nor on the chat\'s cell');
-  await cell.click();
+  await showGlobal(true);
   await waitShown(PANE, 'Old global');
 
   // ---- an agent's new tab in the open chat while its area is closed: the chat's cell gets the dot; opening the area puts it out

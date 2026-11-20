@@ -11,7 +11,7 @@
 import { HUMAN_ID, newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { RuntimeServices, Scheduler } from '../contracts.ts';
-import type { Schedule, ScheduleSpec } from '../../shared/model/tasks.ts';
+import { SCHEDULE_HISTORY_MAX, type Schedule, type ScheduleRun, type ScheduleSpec } from '../../shared/model/tasks.ts';
 import type { NextDueSink } from './next-due.ts';
 import { ScheduleRepo } from './repo.ts';
 import { firesBetween, isOneOff, nextFire, validateSpec } from './spec.ts';
@@ -193,10 +193,11 @@ export class SchedulerImpl implements Scheduler {
   runNow(id: string): void {
     const schedule = this.require(id);
     const now = this.s.clock.now();
-    this.execute(schedule, now);
+    const result = this.execute(schedule, now);
     schedule.runs += 1;
     schedule.lastAt = now;
-    this.repo.save(schedule);
+    if (!result.more) { schedule.active = false; delete schedule.nextAt; } // execute() switched it off in the table
+    this.repo.save(this.withHistory(schedule, [{ ...result.run, manual: true }]));
     this.s.bus.emit('schedule.upserted', schedule);
   }
 
@@ -245,27 +246,40 @@ export class SchedulerImpl implements Scheduler {
       addRuns: occurrences.length, active, lease: `${this.lease}:${now}`,
     });
     if (!taken) return; // another process (or a re-entrant tick) fired this occurrence
+    const history: ScheduleRun[] = occurrences.length ? [] : [{ at: occurrence, firedAt: now, outcome: 'skipped', note: 'Missed while the app was not running' }]; // catch-up "skip"
     for (const at of occurrences) {
-      if (!this.execute(schedule, at)) break;
+      const result = this.execute(schedule, at);
+      history.push(result.run);
+      if (!result.more) break;
     }
     const updated = this.repo.get(schedule.id);
-    if (updated) this.s.bus.emit('schedule.upserted', updated);
+    if (updated) {
+      this.repo.save(this.withHistory(updated, history));
+      this.s.bus.emit('schedule.upserted', updated);
+    }
   }
 
-  /** Runs the schedule's effect; returns false when the schedule was deactivated. */
-  private execute(schedule: Schedule, occurrence: number): boolean {
+  /** Runs the schedule's effect; `more` is false when the schedule was deactivated. `run` is its history line (#20). */
+  private execute(schedule: Schedule, occurrence: number): { more: boolean; run: ScheduleRun } {
+    const base = { at: occurrence, firedAt: this.s.clock.now() };
     try {
-      fireSchedule(schedule, occurrence, this.s);
-      return true;
+      if (fireSchedule(schedule, occurrence, this.s) === 'skipped') return { more: true, run: { ...base, outcome: 'skipped', note: 'The previous task is still open' } };
+      return { more: true, run: { ...base, outcome: 'ok' } };
     } catch (error) {
       if (error instanceof ScheduleGone) {
         this.deactivate(schedule.id, false);
         this.s.log?.info('schedule deactivated', { scheduleId: schedule.id, reason: error.message });
-        return false;
+        return { more: false, run: { ...base, outcome: 'ended', note: error.message } };
       }
       this.s.log?.error('schedule fire failed', { scheduleId: schedule.id, error: String(error) });
-      return true;
+      return { more: true, run: { ...base, outcome: 'failed', note: String(error instanceof Error ? error.message : error).slice(0, 160) } };
     }
+  }
+
+  /** #20: the schedule with `runs` appended to its history (the last SCHEDULE_HISTORY_MAX stay). */
+  private withHistory(schedule: Schedule, runs: ScheduleRun[]): Schedule {
+    if (runs.length) schedule.history = [...(schedule.history ?? []), ...runs].slice(-SCHEDULE_HISTORY_MAX);
+    return schedule;
   }
 
   /** Switches a schedule off (`emit`: tell the UI now; fire() emits after its own run). */

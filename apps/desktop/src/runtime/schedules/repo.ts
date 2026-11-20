@@ -11,16 +11,17 @@ import type { Schedule } from '../../shared/model/tasks.ts';
 type Row = Record<string, unknown>;
 
 /** The payload column: the payload plus who paused the schedule. */
-const payloadColumn = (s: Schedule) => toJson(s.pausedBy ? { ...s.payload, pausedBy: s.pausedBy } : s.payload);
+const payloadColumn = (s: Schedule) => toJson({ ...s.payload, ...(s.pausedBy ? { pausedBy: s.pausedBy } : {}), ...(s.history?.length ? { history: s.history } : {}) }); // #20: the run history too
 
 export function toSchedule(row: Row): Schedule {
-  const { pausedBy, ...payload } = json<Schedule['payload'] & { pausedBy?: unknown }>(row.payload, {}) ?? {};
+  const { pausedBy, history, ...payload } = json<Schedule['payload'] & { pausedBy?: unknown; history?: unknown }>(row.payload, {}) ?? {};
   const schedule: Schedule = {
     id: String(row.id), ownerId: String(row.owner_id), kind: String(row.kind) as Schedule['kind'], title: String(row.title),
     spec: json<Schedule['spec']>(row.spec, {}), payload,
     runs: Number(row.runs), active: bool(row.active), createdAt: Number(row.created_at),
   };
   if (typeof pausedBy === 'string' && pausedBy) schedule.pausedBy = pausedBy;
+  if (Array.isArray(history) && history.length) schedule.history = history as Schedule['history'];
   const conversationId = opt<string>(row.conversation_id);
   const taskId = opt<string>(row.task_id);
   const nextAt = optNumber(row.next_at);

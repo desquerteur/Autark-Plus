@@ -88,12 +88,12 @@ test('device scope rules follow the capability matrix', () => {
   for (const method of ['tasks.list', 'tasks.get', 'tasks.create', 'tasks.update', 'tasks.setStatus', 'tasks.reorder', 'tasks.delete', 'tasks.share', 'schedules.list']) {
     assert.ok(may(method, tasks), `${method} for 'tasks'`);
   }
-  for (const method of ['schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.items', 'runs.cancel', 'agents.update', 'spaces.save', 'system.resources']) {
+  for (const method of ['schedules.create', 'schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.items', 'runs.cancel', 'agents.update', 'spaces.save', 'system.resources']) {
     assert.ok(!may(method, tasks), `${method} not for 'tasks'`);
   }
   assert.ok(may('settings.update', device(['settings'])));
   const manage = device(['manage']);
-  for (const method of ['schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.cancel', 'agents.runs', 'agents.create', 'agents.update',
+  for (const method of ['schedules.create', 'schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.cancel', 'agents.runs', 'agents.create', 'agents.update',
     'agents.archive', 'spaces.save', 'spaces.archive', 'skills.save']) {
     assert.ok(may(method, manage), `${method} for 'manage'`);
   }

@@ -108,7 +108,7 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
     }
     assert.fail(`timed out: ${what} (${JSON.stringify(await lineTexts())})`);
   };
-  const headerCells = ['.chat-header [data-cell="call"]', '.chat-header .frame-header-title', '.chat-header [data-cell="browser"]', '.composer', '.message-scroller'];
+  const headerCells = ['.chat-header [data-cell="call"]', '.chat-header .frame-header-title', '.frame-workspace-cell[data-cell="browser"]', '.composer', '.message-scroller'];
   /** AF-015: the call view opened full size; it shrinks to its floating window. */
   const minimize = async () => {
     await page.locator('.call-view.full').waitFor({ timeout: 10_000 });
