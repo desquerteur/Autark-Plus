@@ -25,7 +25,8 @@ export type IconName =
   | 'microphone-slash' | 'subtitles' | 'subtitles-slash' | 'picture-in-picture' // AF-015: the call view's Mute, Live captions, Minimize
   | 'queue' | 'dots-six-vertical' | 'pause' // AF-016: the composer's prompt queue, a row's drag grip, Pause (AF-010: also the chat tabs' dock grip)
   | 'layout' | 'palette' | 'eye' // AF-008: the layout editor, Appearance, show a panel
-  | 'folders'; // AF-018: the Projects tab
+  | 'folders' // AF-018: the Projects tab
+  | 'alarm'; // #20: the Schedules tab
 
 export function Icon(props: { name: IconName; size?: number; class?: string; title?: string }) {
   const size = props.size ?? 18;
