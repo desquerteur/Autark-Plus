@@ -55,7 +55,7 @@ export function UpdatesPage() {
             onCommit={(value) => { if (value.trim()) setSource({ repository: value.trim() }); }} />
         </Row>
       )}
-      <Row label="Check automatically" hint="At start and every few minutes while Autark runs">
+      <Row label="Check automatically" hint="At start, every minute while the window is open, every 15 minutes from the tray">
         <Toggle label="Check for updates automatically" checked={state?.autoCheck !== false} onChange={(autoCheck) => setSource({ autoCheck })} />
       </Row>
       <Row label="Channel" hint={state?.channel === 'prerelease' ? 'Also offers test versions (prereleases)' : 'Only finished releases'}>

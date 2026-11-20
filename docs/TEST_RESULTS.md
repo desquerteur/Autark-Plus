@@ -89,5 +89,5 @@ Skills and memory (43 skills) and Updates (including "Check now") all worked. Fi
 | Warn | "feedback sending is not set up" at every start: expected, this fork has no feedback receiver |
 | Minor | A "Needs you" header was German in an otherwise English UI and its count did not match the list |
 | Minor | The "5-hour limit" bar is empty for all accounts (probably no data, but it looks broken) |
-| Minor | Update checks ran about once a minute, although the setting says "every few minutes" |
+| Minor (fixed in 0.3.10) | Update checks ran about once a minute, although the setting said "every few minutes" – the hint now names the real intervals |
 | Not tested | Files, About and Secrets pages in the UI; renderer console errors |

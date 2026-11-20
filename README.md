@@ -320,7 +320,7 @@ Honest list of what is not finished or not proven, as of 0.3.8:
 - **Installers are unsigned.** Windows SmartScreen and macOS Gatekeeper ask once (see [Installing](#installing)).
 - **Switching from the original app is rough.** The original's uninstaller can fail and its newer data schema cannot be opened here (see the box under [Installing](#installing)).
 - **Fusion connector noise:** the Fusion 360 connector logs a transport error at every start when Fusion is not running (harmless).
-- **Update checks** ran about once a minute in the smoke test although the setting says "every few minutes".
+- **Update checks** ran about once a minute in the smoke test although the setting said "every few minutes" (fixed in 0.3.10: the hint now names the real intervals).
 - **Not run:** live provider tests (cost money), the Android build, a real Linux install, lint.
 
 ## Building from source
