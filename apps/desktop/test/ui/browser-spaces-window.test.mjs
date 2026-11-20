@@ -88,7 +88,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   const stripTitles = (where) => page.locator(`${where} .browser-strip-title`).allTextContents();
   const shownTitle = (where) => page.locator(`${where} .browser-strip-tab.selected .browser-strip-title`).textContent();
   const waitShown = (where, title) => page.waitForFunction(([scope, expected]) => document.querySelector(`${scope} .browser-strip-tab.selected .browser-strip-title`)?.textContent === expected, [where, title], { timeout: 30_000 });
-  const areaCell = () => page.locator('.chat-header [data-cell="browser"] button').first();
+  const areaCell = () => page.locator('.frame-workspace-cell[data-cell="browser"] button').first();
   /** Opens the open chat's area unless it is open already (kept per chat on this device). */
   const openArea = async () => {
     if ((await areaCell().getAttribute('aria-pressed')) !== 'true') await areaCell().click();
@@ -128,7 +128,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   assert.deepEqual((await file()).spaces.global.tabs.map((tab) => tab.id), ['web-old-global']);
   await assert.rejects(readFile(path.join(profile, 'workspace-tabs.json')), 'the old file is gone');
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await page.locator(`${PANE} .browser-strip`).waitFor();
   await page.locator(`${PANE} .browser-strip-tab`, { hasText: /Old global|127\.0\.0\.1/ }).first().locator('.browser-strip-choose').click();
   await waitShown(PANE, 'Old global');
@@ -154,7 +154,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
   // ---- the person opens that chat's area and sees the tab live on its native page, the global page beside it
   await goChat(group.id);
   assert.deepEqual(await stripTitles(PANE), global.titles, 'the global pane shows only global tabs');
-  await expectStable(page, [`${PANE} .browser-strip [aria-label="New tab"]`, `${PANE} .browser-bar`, '.chat-header [data-cell="call"]', '.chat-header [data-cell="browser"]', '.composer'],
+  await expectStable(page, [`${PANE} .browser-strip [aria-label="New tab"]`, `${PANE} .browser-bar`, '.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]', '.composer'],
     () => areaCell().click());
   await waitShown(AREA, 'Shared page');
   assert.deepEqual(await stripTitles(AREA), ['Shared page']);
@@ -214,7 +214,7 @@ test('a browser per chat: shared tabs, global untouched, agents with the window 
 
   // ---- with the pane closed another chat opening lights nothing: its agents' old tabs are no new tabs
   const dot = page.locator('.frame-workspace-cell .frame-header-badge.dot');
-  const areaDot = page.locator('.chat-header [data-cell="browser"] .frame-header-badge.dot');
+  const areaDot = page.locator('.frame-workspace-cell[data-cell="browser"] .frame-header-badge.dot');
   await cell.click();
   await goChat(other.id);
   await page.waitForTimeout(300);

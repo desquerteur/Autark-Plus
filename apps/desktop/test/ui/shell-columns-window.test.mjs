@@ -97,7 +97,7 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   await size(1440, 900);
   await page.locator('.day-view').waitFor();
   const workspaceCell = page.locator('.frame-workspace-cell button');
-  if ((await workspaceCell.getAttribute('aria-expanded')) !== 'true') await workspaceCell.click();
+  if ((await workspaceCell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await page.locator('.global-pane .browser-bar').waitFor();
   await shot('01-columns-home-light');
 
@@ -283,7 +283,7 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   await page.locator('textarea.composer-input').waitFor(); await shot('11-chat-dark');
   await page.emulateMedia({ colorScheme: 'light' }); await shot('12-chat-light');
   await captionClear('chat');
-  await expectStable(page, ['.chat-header [data-cell="call"]', '.chat-header [data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell'], async () => {
+  await expectStable(page, ['.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell'], async () => {
     await page.locator('.chat-title-button').click();
     await page.locator('.chat-panel').waitFor();
   });
@@ -302,8 +302,8 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   // a double-click on its divider gives it back its default width, room for the column and the panel side by side.
   await workspace.dblclick();
   await wait(async () => Number(await workspace.getAttribute('aria-valuenow')) === 400, 'the pane back at its default width');
-  await expectStable(page, ['.chat-header [data-cell="call"]', '.chat-header [data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell', '.chat-panel', '.composer'], async () => {
-    await page.locator('.chat-header [data-cell="browser"] button').click();
+  await expectStable(page, ['.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell', '.chat-panel', '.composer'], async () => {
+    await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
     await page.locator('.chat-area .browser-strip').waitFor();
   });
   const area = await page.evaluate(() => {
@@ -317,7 +317,7 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   if (area.pane) assert.notEqual(area.pane, area.strip, 'the global pane looks like the frame, not like the chat');
   await captionClear('chat with its area');
   await shot('14-chat-area-light');
-  await page.locator('.chat-header [data-cell="browser"] button').click();
+  await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
   await page.locator('.chat-area').waitFor({ state: 'detached' });
   assert.deepEqual(errors, [], 'no renderer exceptions');
   t.diagnostic(`screenshots: ${out}`);

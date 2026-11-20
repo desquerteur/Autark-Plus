@@ -56,7 +56,7 @@ test('website tabs come back after a restart; an agent\'s browser.show opens a t
   rpc = undefined;
   // A fresh profile starts with the browser closed; the person opens it (the choice is kept).
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await page.locator('.global-pane .browser-bar').waitFor();
 
   /** The tab shown in a surface ('.global-pane' or '.chat-area'), and its list. */
@@ -128,7 +128,7 @@ test('website tabs come back after a restart; an agent\'s browser.show opens a t
   await page.locator('button.send-button').click();
   await shownIn('.chat-area', 'Third site', 30_000);
   assert.equal(await loaded3(), true, 'the page is shown');
-  assert.equal(await page.locator('.chat-header [data-cell="browser"] button').getAttribute('aria-pressed'), 'true', 'the chat\'s cell shows its area open');
+  assert.equal(await page.locator('.frame-workspace-cell[data-cell="browser"] button').getAttribute('aria-pressed'), 'true', 'the chat\'s cell shows its area open');
   const shown = await tabTitles('.chat-area');
   assert.deepEqual(shown.titles, ['Third site'], `the chat's own tab: ${shown.titles.join(', ')}`);
   assert.equal(shown.current, 'Third site');
