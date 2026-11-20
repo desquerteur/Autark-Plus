@@ -8,7 +8,8 @@
 //     clears both and the chip names the routed model again; a search that matches nothing says "No models";
 //   * at 375 px (phone layout) the menu stays on screen and the page has no horizontal scroll;
 //   * screenshots light, dark and 375 px; no renderer errors.
-// Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
+// Run: npm run test:ui (needs a fresh build). WORKFORCE_EXECUTABLE selects an unpacked CI package;
+// SCREENSHOTS=<dir> keeps the screenshots.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,15 +28,16 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-model-menu-'));
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
+  const packaged = process.env.WORKFORCE_EXECUTABLE;
   const app = await electron.launch({
-    executablePath: electronPath, args: [root], cwd: root, timeout: 60_000,
+    executablePath: packaged ? path.resolve(packaged) : electronPath, args: packaged ? [] : [root], cwd: root, timeout: 60_000,
     env: { ...process.env, WORKFORCE_TEST_DATA: profile, WORKFORCE_FAKE_ENGINE: '1', ELECTRON_ENABLE_LOGGING: '0' },
   });
   let rpc;
   t.after(async () => {
     rpc?.close?.();
     await app.close().catch(() => undefined);
-    if (!process.env.SCREENSHOTS) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => undefined);
+    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => undefined);
   });
 
   const page = await app.firstWindow();
@@ -65,10 +67,11 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   // Before the first turn: the model the app routes the agent to now, by name.
   const routed = await rpc.call('routing.preview', { agentId: manager.id, conversationId: chat.id, ignorePin: true });
   const routedNames = [routed.modelId, models.find((model) => model.id === routed.modelId)?.name ?? ''];
-  await page.waitForFunction(() => document.querySelector('.composer-actions .model-chip .chip-label')?.textContent?.trim(), undefined, { timeout: 10_000 });
+  await page.waitForFunction(() => document.querySelector('.composer-actions .model-chip .chip-label .sub')?.textContent?.trim(), undefined, { timeout: 10_000 });
   const routedLabel = (await chip.locator('.chip-label').textContent()).trim();
-  assert.doesNotMatch(routedLabel, /^Auto/);
-  assert.ok(routedNames.some((name) => name.endsWith(routedLabel)), `the chip names the routed model: "${routedLabel}" for ${routedNames.join(' / ')}`);
+  assert.match(routedLabel, /^Auto\s+\S/);
+  const routedName = routedLabel.replace(/^Auto\s+/, '');
+  assert.ok(routedNames.some((name) => name.endsWith(routedName)), `the chip names the routed model: "${routedLabel}" for ${routedNames.join(' / ')}`);
   const row = ['.composer', '.composer-actions', '.composer .composer-plus', '.composer .model-chip', '.composer .send-button'];
 
   // The menu: search, Auto (checked, the routed model beside it), the chat models, the temperature and effort rows.
@@ -79,7 +82,7 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   const auto = menu.locator('[role="menuitemradio"]').first();
   assert.equal(await auto.getAttribute('aria-checked'), 'true');
   assert.equal((await auto.locator('.menu-label > span').textContent()).trim(), 'Auto', 'the first item is Auto');
-  assert.equal((await auto.locator('.menu-hint').textContent()).trim(), `${routedLabel} now`, 'beside it the model routing takes now');
+  assert.equal((await auto.locator('.menu-hint').textContent()).trim(), `${routedName} now`, 'beside it the model routing takes now');
   const choices = (await menu.locator('[role="menuitemradio"] .menu-label > span').allTextContents()).map((text) => text.trim());
   assert.ok(choices.length >= 2, `Auto and at least one model: ${choices.join(', ')}`);
   const temperature = menu.getByRole('group', { name: 'Temperature' });
@@ -98,7 +101,13 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   await menu.getByRole('textbox', { name: 'Search models' }).fill('');
 
   // Pick the first model: stored as the agent's suggestion in this chat (no hard pin); the chip keeps its box.
-  const first = menu.locator('[role="menuitemradio"]').nth(1);
+  const first = menu.locator('.model-option:not(.unavailable)').first();
+  const firstId = await first.getAttribute('title');
+  const firstModel = models.find((model) => model.id === firstId);
+  assert.ok(firstModel, 'the first choice is an available catalog model in the fixture');
+  const details = first.locator('.model-option-details');
+  assert.equal(await details.isVisible(), true, 'full ID is visible without hovering');
+  assert.equal((await details.textContent()).trim(), [firstModel.source, firstId].filter(Boolean).join(' · '));
   const firstName = (await first.locator('.menu-label > span').textContent()).trim();
   await expectStable(page, row, async () => {
     await first.click();
@@ -139,6 +148,8 @@ test('model chip: the routed model, a chosen model and effort per chat, search, 
   assert.ok(box && box.x >= -1 && box.x + box.width <= width + 1, `the menu stays on screen: ${JSON.stringify(box)} in ${width}`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 1, `no horizontal page scroll at 375 px (${overflow}px)`);
+  assert.equal(await menu.locator('.model-option-details').first().evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true,
+    'the displayed ID does not overflow its column');
   await shot('model-menu-04-375');
   await page.keyboard.press('Escape');
   await size(1280, 820);

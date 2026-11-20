@@ -4,8 +4,7 @@
 // all in one fixed width (nothing beside it moves when the model changes). A pick stays standing after sending (the
 // runtime tells a fresh pick from a standing one). Menu: first "Auto" (nothing suggested,
 // the AI decides; hint "<routed model> now", only the name while a suggestion runs), one searchable list of the chat
-// models in catalog order – each row's muted hint its source (F05: "Codex", "Claude Code", a connection; the id's last
-// segment too when two rows read alike, lib/model-name.ts pickerHints), its title the full id – only the newest of
+// models in catalog order – each row's display name, source and full catalog ID (F05) – only the newest of
 // each family (owner 09.11.: "immer die aktuellen Modelle"); an older
 // version shows when the search names it, or while it is the chosen one, under "Older versions" – the temperature
 // row (0.0–1.0 or Auto: settings.temperatures; its title says where a temperature reaches, B-083 live 09.11.) and the effort row.
@@ -24,7 +23,7 @@ import { rpc } from '../../lib/rpc.ts';
 import { can } from '../../lib/session.ts';
 import { toastError } from '../../lib/toasts.ts';
 import { isChatModel } from '../../lib/model-fit.ts';
-import { modelShortName as shortName, pickerHints } from '../../lib/model-name.ts';
+import { modelShortName as shortName, pickerDetails } from '../../lib/model-name.ts';
 import { AUTO, useRoutePreview } from '../../lib/route-preview.ts';
 import { EFFORT_LABEL } from '../live-text.ts';
 
@@ -78,13 +77,16 @@ function lastUsed(chatId: string, agentId: string): string | undefined {
   return undefined;
 }
 
-function ModelRow(props: { model: ModelInfo; hint: string; selected: boolean; onPick: () => void }) {
-  const { model, hint } = props;
+function ModelRow(props: { model: ModelInfo; selected: boolean; onPick: () => void }) {
+  const { model } = props;
+  const details = pickerDetails(model);
   return (
-    <button type="button" class={`menu-item${model.available ? '' : ' unavailable'}`} role="menuitemradio" aria-checked={props.selected}
+    <button type="button" class={`menu-item model-option${model.available ? '' : ' unavailable'}`} role="menuitemradio" aria-checked={props.selected}
       title={model.id} onClick={props.onPick}>
-      <span class="menu-label"><span>{shortName(model.id) ?? model.name}</span></span>
-      {hint && <span class="menu-hint">{hint}</span>}
+      <span class="menu-label">
+        <span>{shortName(model.id) ?? model.name}</span>
+        <small class="model-option-details">{details}</small>
+      </span>
       {props.selected && <Icon name="check" size={16} class="menu-check" />}
     </button>
   );
@@ -162,9 +164,8 @@ export function ModelChip(props: { chat: ConversationSummary; agentId: string | 
   const q = query.trim().toLowerCase();
   // Specialists (embeddings, decision, media) are no chat models – a stored choice stays visible; older versions only by search.
   const list = models.value.filter((model) => (model.id === chosen || (isChatModel(model) && (q || !model.newer)))
-    && (!q || model.name.toLowerCase().includes(q) || model.id.toLowerCase().includes(q)));
-  const hints = pickerHints(list, (model) => shortName(model.id) ?? model.id);
-  const rows = list.map((model) => <ModelRow key={model.id} model={model} hint={hints.get(model.id) ?? ''} selected={chosen === model.id} onPick={() => pick(model.id)} />);
+    && (!q || model.name.toLowerCase().includes(q) || pickerDetails(model).toLowerCase().includes(q)));
+  const rows = list.map((model) => <ModelRow key={model.id} model={model} selected={chosen === model.id} onPick={() => pick(model.id)} />);
   // the catalog lists the newest of each family first, the older versions after them (runtime/models/order.ts)
   const older = list.findIndex((model) => model.newer);
   if (older >= 0) rows.splice(older, 0, <p key="older" class="menu-title" role="presentation">Older versions</p>);
