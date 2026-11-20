@@ -12,6 +12,7 @@ import type { ToolContext, ToolOutput } from '../types.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { agentEnv } from '../../engines/wf-shim.ts';
 import { agentTokenEnv } from '../../engines/agent-token.ts'; // AF-001
+import { AGENT_TOKEN_ENV } from '../../../shared/api/protocol.ts';
 import { ENV_NAME, MAX_ENV, handlesIn, judgeHandles, resolveMasked, withHandles } from '../../secrets/handles.ts';
 import type { ActionDescription } from '../types.ts';
 import type { ShellSpawn } from './files.ts';
@@ -76,7 +77,10 @@ export async function runCommand(shell: ShellSpawn, ctx: ToolContext, input: { c
       };
       const data = ctx.services.paths?.data;
       // AF-001: the agent's wf identity, so `wf send` in the command writes as this agent (engines/agent-token.ts)
-      const child = shell(input.command, { cwd: input.cwd, signal: controller.signal, env: { ...(data ? agentEnv(data) : process.env), ...agentTokenEnv(ctx.services, ctx.agent.id), ...extra } });
+      // A token this runtime inherited (it was started from an agent's shell) is never passed on: a stand-in gets none.
+      const base: NodeJS.ProcessEnv = data ? agentEnv(data) : { ...process.env };
+      delete base[AGENT_TOKEN_ENV];
+      const child = shell(input.command, { cwd: input.cwd, signal: controller.signal, env: { ...base, ...agentTokenEnv(ctx.services, ctx.agent.id), ...extra } });
       child.stdout?.on('data', collect);
       child.stderr?.on('data', collect);
       child.on('error', (error) => { if (controller.signal.aborted) finish(null); else { done = true; review?.abort(); reject(error); } });
