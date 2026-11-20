@@ -127,6 +127,7 @@ dialog textarea.input { resize: vertical; min-height: 72px; line-height: 1.5; }
   .composer-actions { gap: 2px; }
 }
 .model-menu .menu-item .menu-hint { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.model-menu .model-option-details { overflow-wrap: anywhere; }
 
 /* the secret chip; the secret mode (Plus › Secret, settings/SecretRows.tsx ChatSecretBar) sits above the text like the
    schedule block – the rows and foot of the Secrets page's band (settings.css), two rows high and one line of words */
