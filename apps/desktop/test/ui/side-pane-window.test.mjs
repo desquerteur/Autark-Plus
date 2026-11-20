@@ -297,7 +297,7 @@ test('the side pane: tab strip, address row, panels as tabs, full view', { timeo
   await area.locator('.pane-notes-field').waitFor();
   assert.equal(await area.locator('.browser-strip-tab.selected').getAttribute('data-tab'), `notes:${first.id}`);
   assert.deepEqual(await paneTabs(), globalTabs, 'the global pane keeps its tabs');
-  assert.equal(await area.isVisible(), true, "the chat's area is open (the one globe stands for the open global pane here)");
+  assert.equal(await areaCell.getAttribute('aria-pressed'), 'true', "the chat's cell shows its area open");
   await page.locator('.chat-title-button').click();
   await page.locator('.chat-panel').waitFor({ state: 'detached' });
   await shot('15b-chat-area-notes-light');

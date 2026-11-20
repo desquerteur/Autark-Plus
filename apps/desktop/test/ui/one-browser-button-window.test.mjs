@@ -3,6 +3,7 @@
 //     Chat tabs: it opens and closes the chat's area, pressed while open;
 //   * nowhere is the old "browsers" icon left in the title row;
 //   * outside a chat (the day page) the same cell, same place, shows and hides the global browser pane;
+//   * one browser at a time: back in the chat with the global pane open, the globe opens the chat's tabs and closes the pane;
 //   * no renderer errors.
 // Run: npm run test:ui   (needs a fresh build)   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -82,6 +83,19 @@ test('title row: one browser button – the globe in the right-hand cell, chat t
   await page.screenshot({ path: path.join(shots, 'one-browser-day-pane.png') });
   await cell.locator('button').click();
   await page.locator('.global-pane').waitFor({ state: 'detached', timeout: 10_000 });
+
+  // ---- one browser at a time: a global pane opened elsewhere gives way when the chat's tabs open
+  await cell.locator('button').click();
+  await page.locator('.global-pane').waitFor({ timeout: 10_000 });
+  await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, chat.id);
+  await page.waitForFunction(() => document.querySelector('.frame-workspace-cell')?.getAttribute('data-cell') === 'browser', undefined, { timeout: 10_000 });
+  await cell.locator('button').click();
+  await page.locator('.chat-area').waitFor({ timeout: 10_000 });
+  await page.locator('.global-pane').waitFor({ state: 'detached', timeout: 10_000 });
+  assert.equal(await cell.locator('button').getAttribute('aria-pressed'), 'true');
+  await page.screenshot({ path: path.join(shots, 'one-browser-switch.png') });
+  await cell.locator('button').click();
+  await page.locator('.chat-area').waitFor({ state: 'detached', timeout: 10_000 });
 
   assert.deepEqual(errors, [], 'no renderer errors');
 });
