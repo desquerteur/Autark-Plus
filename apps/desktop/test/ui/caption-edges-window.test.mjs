@@ -105,7 +105,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
   });
   const stripTop = () => page.evaluate(() => document.querySelector('.global-pane .browser-strip').getBoundingClientRect().top);
   await check('the default pane: its strip under the row; a wide pane: in the row', async () => {
-    await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+    await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
     await page.locator('.global-pane .browser-strip').waitFor();
     assert.equal(await page.locator('.app-frame.strip-in-row').count(), 0, 'no room for three titled tabs beside the native caption controls');
     assert.equal(Math.round(await stripTop()), 48, 'the strip is the pane\'s first line under the row');
@@ -119,7 +119,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
     for (let width = 312; width <= 632; width += 32) { await page.keyboard.press('Shift+ArrowLeft'); await saved(width); } // each step from the saved width
     await page.locator('.app-frame.strip-in-row').waitFor();
     assert.equal(Math.round(await stripTop()), 0, 'the strip is the row\'s part above the pane');
-    await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+    await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
     await page.locator('.global-pane').waitFor({ state: 'detached' });
   });
   for (const [name, left, right, host] of [
@@ -130,7 +130,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
       await geometry(left, right, host);
       await clear(name, left, right);
       await expectStable(page, ['.chat-header', '.chat-header .frame-header-title', '.chat-header .frame-header-near', '.rail-header', '.frame-workspace-cell'], async () => {
-        await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+        await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
         await page.locator('.global-pane').waitFor();
       });
       await clear(`${name} browser`, left, right);
@@ -150,7 +150,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
       assert.ok(strip.top >= 0 && strip.bottom <= 49, `${name}: they lie in the row: ${JSON.stringify(strip)}`);
       assert.ok(strip.right <= strip.cell + 0.5, `${name}: before the frame's cells: ${JSON.stringify(strip)}`);
       assert.ok(strip.near <= strip.pane + 0.5, `${name}: the chat's cells stay left of the pane: ${JSON.stringify(strip)}`);
-      await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+      await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
       await page.locator('.rail-header button').click();
       await page.locator('.app-frame.sidebar-closed').waitFor();
       await clear(`${name} sidebar closed`, left, right);
@@ -166,7 +166,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
     await size(1000, 700);
     await geometry(0, 138, 'windows');
     await expectStable(page, ['.frame-workspace-cell', '.rail-header'], async () => {
-      await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+      await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
       await page.locator('.global-pane .browser-strip-tab').first().waitFor();
     });
     assert.equal(await page.locator('.app-frame.strip-in-row').count(), 0, 'no strip in the row');
@@ -176,7 +176,7 @@ test('caption edges share the existing header row', { timeout: 180_000 }, async 
       return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.closest('button') === button;
     }));
     assert.ok(reached, 'nothing lies over the chat\'s cells');
-    await page.locator('.frame-workspace-cell button').evaluate((el) => el.click());
+    await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
     await size(1280, 800);
   });
   for (const [name, left, right] of [['left', 80, 0], ['right', 0, 138]]) {
