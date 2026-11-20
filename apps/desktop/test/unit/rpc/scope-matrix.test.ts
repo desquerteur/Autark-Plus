@@ -142,7 +142,7 @@ const CHAT = ['chats.update', 'chats.members', 'chats.archive', 'chats.direct' /
   'splits.list', 'splits.get' /* B-057: an agent's splits, with the runs.items rule through the group's parent run */,
   'access.get' /* AF-013: the composer's mode cell */];
 const MANAGE = ['agents.create', 'agents.update', 'agents.archive', 'agents.export', 'spaces.save', 'spaces.archive',
-  'schedules.update', 'schedules.delete', 'schedules.runNow', 'models.setPolicy', 'routing.preview', 'skills.save', 'agents.runs', 'runs.cancel',
+  'schedules.create', 'schedules.update', 'schedules.delete', 'schedules.runNow', 'models.setPolicy', 'routing.preview', 'skills.save', 'agents.runs', 'runs.cancel',
   'splits.stop' /* B-057: the rights of runs.cancel */,
   // B-076: the phone's side pane is its PC's – its tabs and their view positions.
   'tabs.get', 'tabs.set', 'tabs.position', 'tabs.positions'];

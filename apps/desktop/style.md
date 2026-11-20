@@ -61,3 +61,29 @@ screen's look changes.
   high, radius 13 px, padding 0 10/0 8 px, 1 px `--line`, `--surface`, 12 px `--secondary` ("Sending · Cancel");
   hover `--text` on `--hover`. A 2 px `--focus` bar along its bottom shrinks to zero in 2 s (none with reduced motion).
 - **Mic while a take runs (chat composer):** the 36 px cell shows `check` (Done) instead of `stop`; Send stays enabled.
+
+## Title row – one browser button – `src/ui/shell/WindowBar.tsx`, `src/ui/styles/shell.css`
+
+- The title row has **one** browser button: the `globe` icon (18 px) in the frame's 32 px cell at the right end, right before the feedback cell (`.frame-workspace-cell`, same place on every page; no other cell moves).
+- In a chat it is **Chat tabs** (`data-cell="browser"`): it opens and closes the chat's tabs, shows as pressed while they are open, and gets a dot when an agent's new tab is waiting. The chat header no longer has its own globe; only Call stays next to the title.
+- On other pages it shows and hides the global browser pane (`data-cell="workspace"`, "Show/Hide browser").
+- One browser at a time: in a chat, opening the chat's tabs closes a global pane that was opened elsewhere.
+- The `browsers` icon is gone from the title row.
+
+## Schedules (#20) – `src/ui/styles/schedules-tab.css`
+- Destination "Schedules" (icon `alarm`) sits between Projects and Team in the rail and as a phone tab; its pages follow the Projects tab's layout (sidebar list, start page with cards, page with a 680 px column).
+- Sidebar row: 16 px kind icon, title (`.row-title`), rule in words and next run (`.row-preview`, muted); a paused row's title is `--muted`; the open row uses `--selected`, hover `--hover`.
+- Start page and cards: same tokens as the Projects cards (`--surface`, `--line`, `--r-lg`, hover `--hover` / `--elevated-line`).
+- Form: one column, 14 px gaps, labels 13 px `--secondary`, the rule fields reuse the composer's `.schedule-bar` rules (rows wrap here); the line above Save is `--muted`, errors `--danger`.
+- Page: title 24/32 semibold, facts as a two-column list (90 px label), history rows 13/20 with a 1 px `--line` rule; outcome `failed` is `--danger`, `skipped` and `ended` are `--warn`.
+- Phone (≤ 640 px): 16 px side padding, facts stack.
+
+## Report issue (Autark-Plus) – `src/ui/feedback/IssuePreview.tsx`, `src/ui/styles/feedback.css`
+- Where: under the result line of the feedback form (a saved report that did not go to the team) and in Settings › Feedback › Review.
+- Box: 12px padding, 1px `--line` border, `--r-sm` radius, `--sidebar` background; children 8px apart.
+- Head: title 13px/600 `--text` (one line, ellipsis), repository 12px `--muted` beside it.
+- Labels: pills, 1px `--line`, 11px `--secondary`, 18px high.
+- Body preview ("What goes out"): monospace 12/16px `--secondary`, max 160px high with its own scroll, pre-wrap.
+- Ticks: the feedback checkboxes (`.feedback-check`) – "Page it happened on", "Log excerpt (warnings, redacted)"; both off by default.
+- Hint: 11/16px `--muted`; action: one primary button ("Create issue" with a GitHub app, else "Open on GitHub").
+- Filed: state pill (open: `--success` on 14% of it; closed: `--muted` on 16%), repository, ghost "Open".

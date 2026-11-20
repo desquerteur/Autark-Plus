@@ -11,7 +11,7 @@ import { newId } from '../../../src/shared/ids.ts';
 import { KnowledgeStore } from '../../../src/runtime/knowledge/service.ts';
 import { ChunkUploads } from '../../../src/runtime/rpc/uploads.ts';
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
-import type { TaskView } from '../../../src/shared/model/tasks.ts';
+import type { Schedule, TaskView } from '../../../src/shared/model/tasks.ts';
 import type { FileRef } from '../../../src/shared/model/system.ts';
 import type { KnowledgeItem } from '../../../src/shared/model/knowledge.ts';
 import { OWNER, PHONE, TODO_ONLY, TestClient, rpcFixture } from './s1-helpers.ts';
@@ -334,4 +334,33 @@ test('files.open falls back to its folder when an ordinary file has no associate
   };
   await f.owner.call('files.open', { id: ref.id });
   assert.equal(f.opened.at(-1)?.reveal, true);
+});
+
+test('schedules.create (#20): an agent job for a contact chat, a message and a reminder; edit and history through the RPC', async (t) => {
+  const f = setup();
+  t.after(f.cleanup);
+  const spec = { times: ['06:00'], tz: 'Europe/Berlin' };
+  const job = await f.owner.call<Schedule>('schedules.create', { kind: 'routine', title: 'Daily news', body: 'Research the news', spec, agentId: 'ag_ava', conversationId: f.chat.id });
+  assert.equal(job.kind, 'routine');
+  assert.equal(job.ownerId, 'ag_ava');
+  assert.equal(job.conversationId, f.chat.id);
+  assert.equal(job.payload.taskTemplate?.notes, 'Research the news');
+  assert.ok(job.nextAt && job.active);
+  const message = await f.owner.call<Schedule>('schedules.create', { kind: 'message', body: 'Good morning', spec: { at: f.clock.now() + 3_600_000 }, conversationId: f.chat.id });
+  assert.deepEqual([message.kind, message.ownerId], ['message', 'human']);
+  const reminder = await f.owner.call<Schedule>('schedules.create', { kind: 'reminder', body: 'Check the board', spec, agentId: 'ag_ava' });
+  assert.equal(reminder.payload.note, 'Check the board');
+  // refusals
+  assert.equal((await f.owner.request('schedules.create', { kind: 'message', body: 'x', spec })).error?.code, 'bad_request', 'a message needs its chat');
+  assert.equal((await f.owner.request('schedules.create', { kind: 'reminder', body: 'x', spec })).error?.code, 'bad_request', 'a reminder needs its agent');
+  assert.equal((await f.owner.request('schedules.create', { kind: 'routine', body: 'x', spec: { cron: 'nope' }, agentId: 'ag_ava' })).error?.code, 'bad_request');
+  // an agent's job is edited by the person: its words and level
+  const edited = await f.owner.call<Schedule>('schedules.update', { id: job.id, body: 'Research the news and the weather', priority: 'important', title: 'Morning news' });
+  assert.equal(edited.payload.taskTemplate?.notes, 'Research the news and the weather');
+  assert.equal(edited.payload.priority, 'important');
+  assert.equal(edited.title, 'Morning news');
+  // run now leaves a history line the page shows
+  await f.owner.call('schedules.runNow', { id: job.id });
+  const listed = (await f.owner.call<Schedule[]>('schedules.list')).find((entry) => entry.id === job.id)!;
+  assert.deepEqual(listed.history?.map((run) => [run.outcome, run.manual]), [['ok', true]]);
 });

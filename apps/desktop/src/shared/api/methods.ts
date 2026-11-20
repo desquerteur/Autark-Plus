@@ -136,6 +136,7 @@ export interface Methods {
   'todos.remove': { params: { id: string }; result: { ok: true } };
   'schedules.list': { params: { conversationId?: string; ownerId?: string } | void; result: Schedule[] };
   /** T11: `body`/`priority`/`mentions` reword the person's own message or task post (not an agent's). */
+  'schedules.create': { params: { kind: 'message' | 'routine' | 'reminder'; body: string; spec: ScheduleSpec; title?: string; conversationId?: string; agentId?: string; mentions?: string[]; priority?: 'normal' | 'important' | 'silent' }; result: Schedule }; // #20: the Schedules page
   'schedules.update': { params: { id: string; active?: boolean; spec?: ScheduleSpec; title?: string; body?: string; priority?: 'normal' | 'important' | 'silent'; mentions?: string[] }; result: Schedule };
   'schedules.delete': { params: { id: string }; result: { ok: true } };
   'schedules.runNow': { params: { id: string }; result: { ok: true } };

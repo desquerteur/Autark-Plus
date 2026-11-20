@@ -67,7 +67,7 @@ test('the file tab: folder list, editor, changes on disk, settings and skills op
   await size(1280, 800);
   await page.waitForSelector('.shell');
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await strip.waitFor();
 
   // ---- "+" › Files: the data folder as one list, a folder opens here, Up goes back, a file gets a tab of its own

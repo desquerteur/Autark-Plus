@@ -36,6 +36,7 @@
 @import "./team.css";
 @import "./people.css"; /* F-52: people of the organisation */
 @import "./projects.css"; /* AF-018: the Projects tab */
+@import "./schedules-tab.css"; /* #20: the Schedules tab */
 @import "./app.css";
 @import "./details.css";
 @import "./workspace.css";

@@ -37,6 +37,7 @@ export function nextBack(current: Route, open: Layers): 'overlay' | 'sheet' | 'p
     case 'settings': return current.section ? { view: 'settings' } : { view: 'home' };
     case 'chats': return { view: 'home' };
     case 'projects': return current.id ? { view: 'projects' } : { view: 'home' }; // AF-018: a project's page → the list
+    case 'schedules': return current.id ? { view: 'schedules' } : { view: 'home' }; // #20: a schedule's page → the list
     default: return false; // 'home' and 'day': My day
   }
 }

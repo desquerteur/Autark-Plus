@@ -250,7 +250,7 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   await size(1280, 820); await settle();
 
   // ---- the side browser's native view is in the shot (composited)
-  await page.locator('.frame-workspace-cell button').click();
+  await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
   const newTab = page.locator('.browser-strip').getByRole('button', { name: 'New tab', exact: true });
   if (await newTab.waitFor({ timeout: 8_000 }).then(() => true, () => false)) {
     // the pane's strip lies in the row only where three titled tabs fit (B-072 strip-in-row): there its "+" ends before the
@@ -279,7 +279,7 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   } else {
     t.diagnostic('side browser part skipped: no "New tab" button in this build');
   }
-  await page.locator('.frame-workspace-cell button').click();
+  await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
 
   // ---- dark, 640×480 and phone width (the cell before Profile, the menu as a sheet)
   await page.emulateMedia({ colorScheme: 'dark' });

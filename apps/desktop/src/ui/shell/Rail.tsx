@@ -29,11 +29,12 @@ const destinations: Destination[] = [
   { key: 'tasks', icon: 'list-checks', views: ['tasks'], open: () => navigate({ view: 'tasks' }) },
   { key: 'chats', icon: 'chat-circle', views: ['chats', 'chat'], open: openChats },
   { key: 'projects', icon: 'folders', views: ['projects'], open: () => navigate({ view: 'projects' }) }, // AF-018
+  { key: 'schedules', icon: 'alarm', views: ['schedules'], open: () => navigate({ view: 'schedules' }) }, // #20
   { key: 'team', icon: 'users-three', views: ['team'], open: () => navigate({ view: 'team' }) },
 ];
 
 /** AF-002: the spotlight tour's names of the rail buttons (tour/spotlight-steps.ts). */
-const RAIL_TOUR: Partial<Record<NavKey, string>> = { day: 'my-day', tasks: 'tasks', chats: 'chats', projects: 'projects', team: 'team' };
+const RAIL_TOUR: Partial<Record<NavKey, string>> = { day: 'my-day', tasks: 'tasks', chats: 'chats', projects: 'projects', schedules: 'schedules', team: 'team' };
 
 export function Rail() {
   const view = route.value.view;

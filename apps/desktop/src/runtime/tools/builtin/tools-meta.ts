@@ -64,6 +64,7 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'human.ask': 'ask person human question form confirm',
   'ui.help': 'rich answer block chart table mini-app widget',
   'feedback.report': 'bug idea problem report',
+  'feedback.issue': 'github issue bug report autark-plus file ticket',
 };
 
 const STOP: ReadonlySet<string> = new Set(['a', 'an', 'the', 'to', 'of', 'for', 'and', 'or', 'in', 'on', 'at', 'by', 'with', 'from', 'my', 'me', 'i', 'it', 'is', 'do', 'how', 'what', 'which', 'tool', 'tools', 'want', 'need', 'can', 'this', 'that', 'some', 'find', 'use', 'get', 'make']);

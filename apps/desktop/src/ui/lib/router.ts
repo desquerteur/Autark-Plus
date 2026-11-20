@@ -1,5 +1,6 @@
 // Hash router for the single shell. Views:
 //   #/home · #/day[/<YYYY-MM-DD>] · #/chats · #/chat/<id> · #/projects[/<projectId>] (AF-018)
+//   · #/schedules[/<scheduleId>|new] (#20)
 //   · #/tasks[/<filter>][?owner=<agentId|team>][&task=<taskId>]
 //   · #/team[/<agentId>] · #/team/<agentId>/split/<splitId> · #/team/person/<personId>
 //   · #/settings[/<page>]  (a split's page under its agent; a Settings page, or an older name mapped to the page that
@@ -20,6 +21,7 @@ export type Route =
   | { view: 'chats' }
   | { view: 'chat'; id: string }
   | { view: 'projects'; id?: string } // AF-018: the Projects tab, one project open when `id` is set
+  | { view: 'schedules'; id?: string } // #20: the Schedules tab, one schedule open when `id` is set ('new' = the new-schedule form)
   | { view: 'tasks'; filter?: string; owner?: string; task?: string }
   | { view: 'team'; agentId?: string; personId?: string; splitId?: string }
   | { view: 'settings'; section?: string };
@@ -66,6 +68,7 @@ export function parseRoute(hash: string): Route {
     case 'chat': return parts[1] ? { view: 'chat', id: parts[1] } : { view: 'chats' };
     case 'chats': return { view: 'chats' };
     case 'projects': return parts[1] ? { view: 'projects', id: parts[1] } : { view: 'projects' };
+    case 'schedules': return parts[1] ? { view: 'schedules', id: parts[1] } : { view: 'schedules' };
     case 'tasks': {
       if (parts[1] === 'for-you') return { view: 'day' }; // For you moved to My day (B-041)
       const search = new URLSearchParams(query);
@@ -90,6 +93,7 @@ export function formatRoute(route: Route): string {
     case 'day': return route.date ? `#/day/${enc(route.date)}` : '#/day';
     case 'chat': return `#/chat/${enc(route.id)}`;
     case 'projects': return route.id ? `#/projects/${enc(route.id)}` : '#/projects';
+    case 'schedules': return route.id ? `#/schedules/${enc(route.id)}` : '#/schedules';
     case 'tasks': {
       const query = [route.owner && `owner=${enc(route.owner)}`, route.task && `task=${enc(route.task)}`].filter(Boolean).join('&');
       return `#/tasks${route.filter ? `/${enc(route.filter)}` : ''}${query ? `?${query}` : ''}`;
@@ -153,6 +157,8 @@ export const go = {
   chat: (id: string) => navigate({ view: 'chat', id }),
   /** AF-018: the Projects tab, or one project's page. */
   project: (id?: string) => navigate(id ? { view: 'projects', id } : { view: 'projects' }),
+  /** #20: the Schedules tab, one schedule's page, or 'new' for the form. */
+  schedule: (id?: string) => navigate(id ? { view: 'schedules', id } : { view: 'schedules' }),
   /** AF-017: Team's main page, the agent directory. */
   team: () => navigate({ view: 'team' }),
   agent: (agentId: string) => navigate({ view: 'team', agentId }),

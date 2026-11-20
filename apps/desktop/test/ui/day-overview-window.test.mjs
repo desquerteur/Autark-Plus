@@ -240,7 +240,7 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
   // ---- deleting the open chat with its area open: the common way
   const open = await rpc.call('chats.create', { title: 'Open and deleted', agentIds: [manager.id] });
   await go(`#/chat/${open.id}`);
-  await page.locator('.chat-header [data-cell="browser"] button').click();
+  await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
   const area = page.locator('.chat-area');
   await area.locator('.browser-strip').waitFor();
   await area.locator('.browser-strip').getByRole('button', { name: 'New tab', exact: true }).click();

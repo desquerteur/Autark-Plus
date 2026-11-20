@@ -38,6 +38,8 @@ import { SettingsNav, settingsNavHeader } from '../settings/SettingsNav.tsx';
 import { TaskFiltersNav, taskFiltersHeader } from './TaskFiltersNav.tsx';
 import { ProjectsNav, projectsNavHeader } from '../projects/ProjectsNav.tsx'; // AF-018
 import { ProjectPage, ProjectsHome } from '../projects/ProjectPage.tsx';
+import { SchedulesNav, schedulesNavHeader } from '../schedules/SchedulesNav.tsx'; // #20
+import { SchedulesPage } from '../schedules/SchedulesPage.tsx';
 import { chatRouteAllowed } from './gates.ts';
 
 /** A zone's header row as data (lib/header.tsx props; the frame sets the zone). */
@@ -87,6 +89,7 @@ function sideView(current: Route): DesktopViews['side'] {
     case 'settings': return { key: 'settings', body: h(SettingsNav, null), header: settingsNavHeader };
     case 'tasks': return { key: 'tasks', body: h(TaskFiltersNav, null), header: taskFiltersHeader };
     case 'projects': return { key: 'projects', body: h(ProjectsNav, null), header: projectsNavHeader }; // AF-018
+    case 'schedules': return { key: 'schedules', body: h(SchedulesNav, null), header: schedulesNavHeader }; // #20
     case 'home': // the same My day as 'day': one side column
     case 'day': return { key: 'day', body: h(DayNav, null), header: dayNavHeader }; // B-041: mini month, connected calendars
     default: return { key: 'chats', body: h(ChatList, null), header: chatListHeader };
@@ -106,6 +109,11 @@ function projectsBody(current: Extract<Route, { view: 'projects' }>): { key: str
   return current.id ? { key: `project:${current.id}`, body: h(ProjectPage, { key: current.id, projectId: current.id }) } : { key: 'projects', body: h(ProjectsHome, null) };
 }
 
+/** #20: the schedules route's page – one schedule, the new-schedule form, or the start page. */
+function schedulesBody(current: Extract<Route, { view: 'schedules' }>): { key: string; body: ComponentChildren } {
+  return { key: `schedules:${current.id ?? ''}`, body: h(SchedulesPage, { key: current.id ?? '', id: current.id }) };
+}
+
 const EMPTY_CHATS: HeaderSource = () => ({ title: '' });
 
 function mainView(current: Route): ZoneView {
@@ -116,6 +124,7 @@ function mainView(current: Route): ZoneView {
     case 'tasks': return { key: 'tasks', body: h(TasksView, null) };
     case 'team': return teamBody(current);
     case 'projects': return projectsBody(current);
+    case 'schedules': return schedulesBody(current);
     case 'settings': return { key: 'settings', body: h(Settings, null) };
     default: return firstRunActive() ? { key: 'first-run', body: h(FirstRun, null) } : { key: 'day', body: h(DayView, null) };
   }
@@ -138,6 +147,7 @@ export function tabTitle(current: Route): string {
 export function isPushed(current: Route): boolean {
   if (current.view === 'chat') return chatRouteAllowed();
   if (current.view === 'projects') return !!current.id; // AF-018: a project's page lies over the list
+  if (current.view === 'schedules') return !!current.id; // #20: a schedule's page lies over the list
   return current.view === 'team' && !!(current.agentId || current.personId);
 }
 
@@ -163,6 +173,10 @@ export function phoneView(current: Route): PhoneView {
     case 'projects': {
       const page = current.id ? projectsBody(current) : { key: 'projects-list', body: h(ProjectsNav, null) }; // AF-018: the list is the tab's root
       return { ...page, pushed, title: pushed ? '' : tabTitle(current), back: null, ...(pushed ? {} : { header: projectsNavHeader }), ownHeader: ownsTopRow(current) };
+    }
+    case 'schedules': {
+      const page = current.id ? schedulesBody(current) : { key: 'schedules-list', body: h(SchedulesNav, null) }; // #20: the list is the tab's root
+      return { ...page, pushed, title: pushed ? '' : tabTitle(current), back: null, ...(pushed ? {} : { header: schedulesNavHeader }), ownHeader: ownsTopRow(current) };
     }
     case 'team': {
       const page = teamBody(current);

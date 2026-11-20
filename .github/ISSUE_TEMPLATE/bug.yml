@@ -1,0 +1,48 @@
+name: Bug
+description: Something in Autark-Plus does not work. "Report issue" inside the app fills these fields for you.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste passwords, API keys, tokens, e-mails or chat contents. Reports from inside the app are redacted before they leave the PC.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: ["Bug"]
+      default: 0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The first line is the title. Then what you expected and the steps to get there.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "0.3.9"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "win32 10.0.26200 x64"
+    validations:
+      required: true
+  - type: input
+    id: view
+    attributes:
+      label: View
+      description: The page it happened on (optional).
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: Warnings and errors from the app log (optional, redacted).
+      render: text

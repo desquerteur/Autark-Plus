@@ -111,7 +111,7 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
   await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, chat.id);
   await page.locator('.composer-input').waitFor();
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await strip().waitFor();
   step('pane open');
 
@@ -344,7 +344,7 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
   await page.waitForSelector('.shell', { timeout: 60_000 });
   await reconnect();
   const cellAgain = page.locator('.frame-workspace-cell button');
-  if ((await cellAgain.getAttribute('aria-expanded')) !== 'true') await cellAgain.click();
+  if ((await cellAgain.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await strip().waitFor();
   await page.locator('.browser-strip-tab', { hasText: /Beta page|127\.0\.0\.1/ }).first().locator('.browser-strip-choose').click();
   await until('Beta loaded again at its site\'s zoom', async () => {
