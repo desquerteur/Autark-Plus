@@ -3,12 +3,15 @@
 // B-078: no "Include recent warnings" switch – the redacted lines always go with Send. A report opens in full in Review, which also sends it;
 // "New report" opens the feedback menu under the header cell, "Watch how it works" the tour. The group hint is always there, so
 // the answer of feedback.status moves nothing.
+// Autark-Plus: Review also offers the report as a GitHub issue (IssuePreview); a filed report's line shows its issue
+// (#number · open/closed) and "Check GitHub" reads the issues' current state.
 // Owns: these lists and the review dialog. Never: sends without the person's click, or claims more than the mailbox confirmed.
 
 import { useEffect, useState } from 'preact/hooks';
 import { reportNumber, type FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 import type { FeedbackReport } from '../../shared/model/system.ts';
 import { FeedbackInbox } from '../feedback/FeedbackInbox.tsx';
+import { IssuePreview } from '../feedback/IssuePreview.tsx';
 import { openFeedback } from '../feedback/popover-state.ts';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { plainPreview } from '../lib/format.ts';
@@ -41,12 +44,13 @@ function ReviewDialog(props: { report: FeedbackReport | undefined; sending: bool
   const done = report?.status === 'sent';
   const canSend = report !== undefined && sendable(report, props.sending) && can('feedback.send');
   const number = done && report?.receiptId ? ` Report no. ${reportNumber(report.receiptId)}.` : ''; // AF-003
-  const message = done ? (report?.deliveryWarning ? `Sent to the team.${number} ${report.deliveryWarning}` : `Sent to the team.${number}`) : canSend ? `Encrypted on ${pc()} before it leaves. Only the Teydra team can read it.` : '';
+  const message = report?.issue ? 'Filed on GitHub.' : done ? (report?.deliveryWarning ? `Sent to the team.${number} ${report.deliveryWarning}` : `Sent to the team.${number}`) : canSend ? `Encrypted on ${pc()} before it leaves. Only the Teydra team can read it.` : '';
   return (
     <Dialog open={report !== undefined} onClose={props.onClose} title="Report" width={520} class="anchored">
       {report && (
         <>
           <p class="dialog-text feedback-review-text">{report.text}</p>
+          {(!done || report.issue) && can('feedback.fileIssue') && <IssuePreview report={report} />}
           <DialogActions message={message} tone={done ? 'ok' : 'muted'}>
             <Button variant="secondary" onClick={props.onClose}>Close</Button>
             <Button variant="primary" busy={busy} disabled={!canSend} onClick={() => void run(() => rpc.call('feedback.send', { id: report.id }))}>Send</Button>
@@ -74,6 +78,9 @@ export function FeedbackPage() {
       <Group title="Reports" id="settings-feedback" hint={reportsHint(sending, pc())} actions={(
         <>
           <button type="button" class="button ghost small" onClick={() => openTour()}>Watch how it works</button>
+          {can('feedback.issueRefresh') && mine.concat(fromAgents).some((report) => report.issue) && (
+            <button type="button" class="button ghost small" onClick={() => void act(async () => { await rpc.call('feedback.issueRefresh'); await list.reload(); }, 'Could not check GitHub')}>Check GitHub</button>
+          )}
           {can('feedback.create') && <button type="button" class="button ghost small" onClick={() => openFeedback()}>New report</button>}
         </>
       )}>

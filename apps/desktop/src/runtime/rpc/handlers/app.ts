@@ -4,6 +4,7 @@
 // open to every authenticated device and to employees' devices (they all look the same). Writing and listing feedback and dictation need
 // 'chat'; so do `feedback.send`, `feedback.dismiss` and `feedback.status` (whether this build can send at all):
 // Send seals the report for the team (B-055); the team inbox and setup are owner-only (handlers/feedback-inbox.ts).
+// Autark-Plus: feedback.issuePreview / fileIssue / issueRefresh ('chat') – the report as a GitHub issue (runtime/feedback/github.ts).
 // Onboarding and the legacy import stay owner-only. Local speech: voice.localModels and voice.speak need 'chat',
 // voice.pullLocal (a download) is owner-only.
 // Never: implements feedback/onboarding/voice behaviour (extras do), or uploads anything.
@@ -11,6 +12,8 @@
 import type { FeedbackKind } from '../../../shared/model/system.ts';
 import { AUDIO_TAGGER, localSpeechIds } from '../../../shared/model/local-speech-models.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
+import { WorkforceError } from '../../../shared/errors.ts';
+import type { FeedbackApi } from '../extras.ts';
 import { readTheme } from '../../root/theme.ts';
 import { bad, input, oneOf, onlyKeys, optId, optText, text, type Obj } from '../params.ts';
 import type { Handler, HandlerTable } from '../table.ts';
@@ -62,6 +65,25 @@ export function register(table: HandlerTable): void {
     onlyKeys(o, ['id']);
     return ctx.extras.feedback.dismiss(text(o, 'id', { max: 128 }));
   }, CHAT);
+
+  // Autark-Plus: the report as a GitHub issue. Preview shows exactly what goes out; only ticked extras (view, log) go along.
+  const issueParams = (params: unknown) => {
+    const o = input(params);
+    onlyKeys(o, ['id', 'include']);
+    const raw = o.include;
+    if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) bad('include', '{ view?: boolean, log?: boolean }');
+    const inc = (raw ?? {}) as Record<string, unknown>;
+    for (const key of Object.keys(inc)) if (key !== 'view' && key !== 'log') bad('include', '{ view?: boolean, log?: boolean }');
+    return { id: text(o, 'id', { max: 128 }), include: { view: inc.view === true, log: inc.log === true } };
+  };
+  const issueApi = (ctx: { extras: { feedback: FeedbackApi } }) => {
+    const api = ctx.extras.feedback;
+    if (!api.issuePreview || !api.fileIssue || !api.refreshIssues) throw new WorkforceError('unavailable', 'GitHub issues are not available in this build.');
+    return api as Required<Pick<FeedbackApi, 'issuePreview' | 'fileIssue' | 'refreshIssues'>>;
+  };
+  table.add('feedback.issuePreview', (params, ctx) => { const p = issueParams(params); return issueApi(ctx).issuePreview(p.id, p.include); }, CHAT);
+  table.add('feedback.fileIssue', (params, ctx) => { const p = issueParams(params); return issueApi(ctx).fileIssue(p.id, p.include); }, CHAT);
+  table.add('feedback.issueRefresh', (_params, ctx) => issueApi(ctx).refreshIssues(), CHAT);
 
   // ---------------------------------------------------------------- the app's look
   const theme: Handler<'theme.get'> = (_params, ctx) => ({ css: readTheme(ctx.services.paths.data, ctx.services.log) });

@@ -117,7 +117,8 @@ export interface Settings {
    * Where reports go is the team's receiver shipped with the build (resources/feedback/receiver.json, B-055), never a
    * setting: the old repo/privateRepo/endpoint values were removed (migration 55, 23.10.2026).
    */
-  feedback: { includeDiagnostics: boolean };
+  /** githubRepo (Autark-Plus): "owner/name" that Report issue files into; absent = desquerteur/Autark-Plus. */
+  feedback: { includeDiagnostics: boolean; githubRepo?: string };
   pwa: { enabled: boolean; bind: 'localhost' | 'lan' | 'tailscale' };
   devices: DeviceSettings;
   /** B-078: the public skill library; absent in settings read before it existed (then publish counts as on). */
@@ -193,6 +194,19 @@ export interface FeedbackReport {
   deliveryWarning?: string;
   /** Agent reports: how often the same text was reported within 24 h (absent = once). */
   count?: number;
+  /** Autark-Plus: the GitHub issue this report was filed as (or commented on, when an open one had the same title). */
+  issue?: FeedbackIssue;
+}
+
+/** A report's GitHub issue (runtime/feedback/github.ts); `state` as last checked. */
+export interface FeedbackIssue {
+  repo: string;
+  number: number;
+  url: string;
+  state: 'open' | 'closed';
+  /** An open issue with the same title existed: the report went in as a comment there. */
+  commented?: boolean;
+  checkedAt: number;
 }
 
 export interface UpdateState {

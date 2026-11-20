@@ -1,0 +1,34 @@
+name: Idea or change
+description: Something Autark-Plus should do or do differently. "Report issue" inside the app fills these fields for you.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: ["Idea", "Change request", "Praise"]
+      default: 0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you would like and why. The first line is the title.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+  - type: input
+    id: view
+    attributes:
+      label: View
+      description: The page it is about (optional).

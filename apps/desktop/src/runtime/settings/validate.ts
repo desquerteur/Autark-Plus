@@ -161,6 +161,7 @@ export function validateSettings(s: Settings): void {
   oneOf(s.onboarding.step, 'onboarding.step'); // B-044 first run
   validateTour(s.onboarding); // AF-002: the spotlight tour's state
   boolean(s.feedback.includeDiagnostics, 'feedback.includeDiagnostics');
+  optStr(s.feedback.githubRepo, 'feedback.githubRepo', 140);
   if (s.library !== undefined) { if (!isPlain(s.library)) bad('library', 'an object'); boolean(s.library.publish, 'library.publish'); } // B-078
   validatePersonality(s.personality, bad); // AF-006
   boolean(s.pwa.enabled, 'pwa.enabled');

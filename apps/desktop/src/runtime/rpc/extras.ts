@@ -14,7 +14,7 @@ import type { HeardSegment, HeardWord } from '../../shared/api/methods-app.ts';
 import type { CatalogStatus } from '../models/catalog.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
-import type { FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackIssueInclude, FeedbackIssuePreview, FeedbackIssueResult, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 
 export interface PwaApi {
   state(): Promise<PwaState>;
@@ -50,6 +50,10 @@ export interface FeedbackApi {
   send(id: string, options?: { reveal?: boolean; visibility?: FeedbackVisibility }): Promise<FeedbackReport>;
   /** Hides a report that was not sent (e.g. an agent report the person does not want to send). */
   dismiss(id: string): FeedbackReport;
+  /** Autark-Plus (runtime/feedback/github.ts): the GitHub issue preview, filing it and the issues' current state; optional for simple fakes. */
+  issuePreview?(id: string, include?: FeedbackIssueInclude): FeedbackIssuePreview;
+  fileIssue?(id: string, include?: FeedbackIssueInclude): Promise<FeedbackIssueResult>;
+  refreshIssues?(): Promise<FeedbackReport[]>;
   /** Whether this build can send at all (a receiver is shipped) and whether this PC holds the team key; optional for simple fakes. */
   status?(): FeedbackStatus;
   /** B-055: the team inbox on the PC holding the team key (owner only; runtime/feedback/inbox.ts); optional for simple fakes. */

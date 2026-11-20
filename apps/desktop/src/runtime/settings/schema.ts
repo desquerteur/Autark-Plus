@@ -190,6 +190,7 @@ export const SECTIONS: readonly SectionDef[] = [
   ] },
   { key: 'feedback', title: 'Feedback reports', keys: [
     flag('includeDiagnostics', 'Unused since B-078: every report carries the end of the app\'s log, redacted', true),
+    text('githubRepo', 'Autark-Plus: the GitHub repository Report issue files into (absent = desquerteur/Autark-Plus)', 'owner/name', { maxLength: 140 }),
   ] },
   { key: 'library', title: 'Public skill library (library/ in github.com/teydra/OpenAutark)', keys: [
     flag('publish', 'Skills worth sharing go to the public library as a pull request with your own GitHub sign-in, after the secret check finds nothing', true),

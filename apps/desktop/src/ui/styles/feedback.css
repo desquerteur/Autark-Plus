@@ -25,7 +25,7 @@
 .popover.feedback-menu { padding: 12px; overflow: visible auto; }
 /* the phone's sheet (mobile.css): the form keeps the sheet's usual 16 px sides */
 body:has(.mobile-shell) .popover.feedback-menu { padding: 6px 16px calc(16px + env(safe-area-inset-bottom)); }
-.feedback-panel { display: grid; gap: 12px; min-width: 0; }
+.feedback-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .feedback-input { position: relative; }
 .feedback-input .set-textarea { height: 104px; min-height: 104px; padding-right: 44px; resize: none; }
 .feedback-input .mic { position: absolute; right: 4px; bottom: 4px; }
@@ -103,3 +103,19 @@ dialog.paint-dialog .dialog-content { display: grid; gap: 12px; }
 .paint-tools { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .paint-tools .segmented { flex: none; }
 .paint-message { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--danger); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Autark-Plus: the report as a GitHub issue (ui/feedback/IssuePreview.tsx; style.md "Report issue"). */
+.feedback-issue { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--sidebar); }
+.feedback-issue-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.feedback-issue-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.feedback-issue-repo { flex: none; color: var(--muted); font-size: 12px; }
+.feedback-issue-labels { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
+.feedback-issue-label { padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--secondary); font-size: 11px; line-height: 18px; }
+.feedback-issue-body { max-height: 160px; margin: 0; padding: 8px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); background: transparent; color: var(--secondary); font: 12px/16px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-issue-body:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.feedback-issue-ticks { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.feedback-issue-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 16px; }
+.feedback-issue-filed { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--secondary); font-size: 13px; }
+.feedback-issue-state { padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 20px; }
+.feedback-issue-state.open { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+.feedback-issue-state.closed { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }

@@ -71,3 +71,13 @@ screen's look changes.
 - Form: one column, 14 px gaps, labels 13 px `--secondary`, the rule fields reuse the composer's `.schedule-bar` rules (rows wrap here); the line above Save is `--muted`, errors `--danger`.
 - Page: title 24/32 semibold, facts as a two-column list (90 px label), history rows 13/20 with a 1 px `--line` rule; outcome `failed` is `--danger`, `skipped` and `ended` are `--warn`.
 - Phone (≤ 640 px): 16 px side padding, facts stack.
+
+## Report issue (Autark-Plus) – `src/ui/feedback/IssuePreview.tsx`, `src/ui/styles/feedback.css`
+- Where: under the result line of the feedback form (a saved report that did not go to the team) and in Settings › Feedback › Review.
+- Box: 12px padding, 1px `--line` border, `--r-sm` radius, `--sidebar` background; children 8px apart.
+- Head: title 13px/600 `--text` (one line, ellipsis), repository 12px `--muted` beside it.
+- Labels: pills, 1px `--line`, 11px `--secondary`, 18px high.
+- Body preview ("What goes out"): monospace 12/16px `--secondary`, max 160px high with its own scroll, pre-wrap.
+- Ticks: the feedback checkboxes (`.feedback-check`) – "Page it happened on", "Log excerpt (warnings, redacted)"; both off by default.
+- Hint: 11/16px `--muted`; action: one primary button ("Create issue" with a GitHub app, else "Open on GitHub").
+- Filed: state pill (open: `--success` on 14% of it; closed: `--muted` on 16%), repository, ghost "Open".
