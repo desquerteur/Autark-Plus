@@ -55,3 +55,11 @@ screen's look changes.
   kicker "New agent:" in `--update` 12 px 600, facts 12/18 `--secondary`, actions on the right (below on the phone).
 - **Agent names as links:** in messages underlined in `--update`, 600; in Team activity and the agent tree only a
   hover underline in `--update`.
+
+## Schedules (#20) – `src/ui/styles/schedules-tab.css`
+- Destination "Schedules" (icon `alarm`) sits between Projects and Team in the rail and as a phone tab; its pages follow the Projects tab's layout (sidebar list, start page with cards, page with a 680 px column).
+- Sidebar row: 16 px kind icon, title (`.row-title`), rule in words and next run (`.row-preview`, muted); a paused row's title is `--muted`; the open row uses `--selected`, hover `--hover`.
+- Start page and cards: same tokens as the Projects cards (`--surface`, `--line`, `--r-lg`, hover `--hover` / `--elevated-line`).
+- Form: one column, 14 px gaps, labels 13 px `--secondary`, the rule fields reuse the composer's `.schedule-bar` rules (rows wrap here); the line above Save is `--muted`, errors `--danger`.
+- Page: title 24/32 semibold, facts as a two-column list (90 px label), history rows 13/20 with a 1 px `--line` rule; outcome `failed` is `--danger`, `skipped` and `ended` are `--warn`.
+- Phone (≤ 640 px): 16 px side padding, facts stack.

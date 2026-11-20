@@ -240,7 +240,7 @@ export function register(table: HandlerTable): void {
     const jobTitle = title ?? excerpt(body.split(/\r?\n/).find((line) => line.trim()) ?? body, 60);
     return ctx.services.scheduler.create({
       ownerId: agentId ?? HUMAN_ID, ...(conversationId ? { conversationId } : {}), kind, title: jobTitle, spec,
-      payload: { taskTemplate: { title: jobTitle, notes: body }, ...(priority === 'important' ? { priority: 'important' as const } : {}) },
+      payload: { taskTemplate: { title: jobTitle, notes: body }, ...(conversationId ? { note: 'The result goes to this chat: post it here when the work is done.' } : {}), ...(priority === 'important' ? { priority: 'important' as const } : {}) },
     });
   }, MANAGE);
   table.add('schedules.update', (params, ctx) => {
@@ -255,8 +255,17 @@ export function register(table: HandlerTable): void {
     if (spec) patch.spec = spec as ScheduleSpec; // validated by the scheduler
     // T11: rewording the person's own message or task post (schedules/post.ts refuses agents' ones).
     const reword = { body: optText(o, 'body', { max: 100_000, multiline: true }), priority: optOneOf(o, 'priority', POST_PRIORITIES), mentions: optIds(o, 'mentions', 50) };
-    if (reword.body !== undefined || reword.priority !== undefined || reword.mentions !== undefined) Object.assign(patch, rewordPost(current, reword));
     const title = optText(o, 'title', { max: 120 });
+    if (current.ownerId !== HUMAN_ID && (current.kind === 'routine' || current.kind === 'reminder') && (reword.body !== undefined || reword.priority !== undefined)) {
+      // #20: the Schedules page edits an agent's job or reminder text and level (the person sees and owns every schedule)
+      if (current.kind === 'routine') {
+        const template = { ...(current.payload.taskTemplate ?? { title: current.title }), ...(title !== undefined ? { title } : {}) };
+        if (reword.body !== undefined) template.notes = reword.body;
+        patch.payload = { taskTemplate: template, priority: reword.priority === 'important' ? 'important' : undefined };
+      } else if (reword.body !== undefined) {
+        patch.payload = { note: reword.body };
+      }
+    } else if (reword.body !== undefined || reword.priority !== undefined || reword.mentions !== undefined) Object.assign(patch, rewordPost(current, reword));
     if (title !== undefined) patch.title = title;
     const updated = ctx.services.scheduler.update(scheduleId, patch, HUMAN_ID); // B-044: the person's pause only the person lifts
     snoozeChanged(ctx.services, updated);
