@@ -112,7 +112,11 @@ test('generated descriptions: an own SKILL.md gets it in its front matter, a rea
     const asked: string[] = [];
     const runner: StructuredRunner = async (call) => { asked.push(call.prompt.split('\n')[0]); return { text: '', structured: { description: `I use this when ${call.prompt.includes('Captions') ? 'video captions' : 'a deploy'} are the work.` }, by: 'fake' }; };
     const entries = catalogEntries(t.services, viewer);
-    assert.equal(await describeSome(t.services, entries, runner), 2, 'deploy-steps and captions: invoices has a written one');
+    const readOnly = entries.find((entry) => entry.title === 'captions')!;
+    assert.equal(await describeSome(t.services, [readOnly], runner), 1);
+    // No file was written, so no mtime can incidentally refresh the catalog cache.
+    assert.equal(catalogEntries(t.services, viewer).find((entry) => entry.title === 'captions')?.description, 'I use this when video captions are the work.');
+    assert.equal(await describeSome(t.services, entries, runner), 1, 'only deploy-steps still needs a description');
     const own = readFileSync(path.join(t.workspace, 'skills', 'deploy-steps', 'SKILL.md'), 'utf8');
     assert.match(own, /^---\nname: deploy-steps\ndescription: "I use this when a deploy are the work\."\n---\n/);
     const captions = entries.find((entry) => entry.title === 'captions')!;
