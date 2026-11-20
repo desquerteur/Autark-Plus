@@ -1,5 +1,5 @@
 // Windows and Linux reopen after an update by their own small helper, the way a Mac does (mac-self-update.ts): the app
-// writes or names a detached script, starts it, and quits normally once it runs. The helper waits for this process to
+// writes or names a hidden script, starts it, and quits normally once it runs. The helper waits for this process to
 // end, installs, and starts the new version with --updated. Before B-078 NSIS relaunched through Explorer
 // (StdUtils.ExecShellAsUser) at the moment Explorer rebuilt its icons, and the Linux AppImage started its successor while
 // this process still held the single-instance lock; both could leave the app closed.
@@ -29,23 +29,44 @@ export const WINDOWS_SCRIPT_NAME = 'update-helper.cmd';
  * a resumed app: it gives up instead (install-helper.test.ts checks the order).
  */
 export const WAIT_SECONDS = 45;
+/** Windows: a helper has surely ended after three times its wait plus this (a try is ping's second plus tasklist's time). */
+export const HELPER_MARGIN_SECONDS = 15;
+/** The file the Windows wait loop writes tasklist's answer to, beside the script. */
+export const WINDOWS_PIDS_NAME = 'update-helper-pids.txt';
 
-/** The cmd helper (LF here; windowsHelper() hands it out with CRLF, which cmd's label search needs). */
+/**
+ * The cmd helper (LF here; windowsHelper() hands it out with CRLF, which cmd's label search needs). The wait loop writes
+ * tasklist's answer to a file and lets find read that file: no pipe, so no step waits for an end of input that never
+ * comes (issue #1: `tasklist | find` hung in find and the helper never ended). find's exit code: 0 the app still runs,
+ * 1 it ended, 2 the file could not be read (counted as a try, never as "ended"). The three programs run by their
+ * System32 path: a PATH with Git's usr/bin first finds GNU find, whose exit code 1 read as "the app ended" at once.
+ * The first run only starts the script again with start /b and ends: see spawnHelper for why. AUTARK_UPDATE_WAIT
+ * shortens the wait for the real-run test only.
+ */
 export const WINDOWS_HELPER_SCRIPT = `@echo off
 setlocal
+if defined AUTARK_UPDATE_INNER goto main
+set AUTARK_UPDATE_INNER=1
+start "" /b "%SystemRoot%\\System32\\cmd.exe" /d /s /c ""%~f0""
+exit /b 0
+:main
+if not defined AUTARK_UPDATE_WAIT set AUTARK_UPDATE_WAIT=${WAIT_SECONDS}
 call :note "helper started; waiting for the app (pid %AUTARK_UPDATE_PID%) to end"
 set /a tries=0
 :wait
-tasklist /FI "PID eq %AUTARK_UPDATE_PID%" /NH 2>nul | find " %AUTARK_UPDATE_PID% " >nul
-if errorlevel 1 goto gone
+"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq %AUTARK_UPDATE_PID%" /NH >"%AUTARK_UPDATE_PIDS%" 2>nul
+"%SystemRoot%\\System32\\find.exe" " %AUTARK_UPDATE_PID% " "%AUTARK_UPDATE_PIDS%" >nul 2>nul
+if %errorlevel% equ 1 goto gone
 set /a tries+=1
-if %tries% geq ${WAIT_SECONDS} goto late
-ping -n 2 127.0.0.1 >nul
+if %tries% geq %AUTARK_UPDATE_WAIT% goto late
+"%SystemRoot%\\System32\\PING.EXE" -n 2 127.0.0.1 >nul
 goto wait
 :late
-call :note "the app still runs after ${WAIT_SECONDS} s; update left for the next try"
+del /q "%AUTARK_UPDATE_PIDS%" >nul 2>nul
+call :note "the app still runs after %AUTARK_UPDATE_WAIT% s; update left for the next try"
 exit /b 3
 :gone
+del /q "%AUTARK_UPDATE_PIDS%" >nul 2>nul
 call :note "app ended; installer starts"
 if defined AUTARK_UPDATE_PACKAGE goto package
 start "" /wait "%AUTARK_UPDATE_INSTALLER%" --updated /S
@@ -114,6 +135,7 @@ export function windowsHelper(input: WindowsHelperInput): HelperLaunch {
     AUTARK_UPDATE_EXE: input.exe,
     AUTARK_UPDATE_DIR: path.win32.dirname(input.exe),
     AUTARK_UPDATE_LOG: input.logFile,
+    AUTARK_UPDATE_PIDS: path.win32.join(dir, WINDOWS_PIDS_NAME),
   };
   if (input.packageFile) env.AUTARK_UPDATE_PACKAGE = input.packageFile;
   return {
@@ -214,21 +236,35 @@ export function installWithHelper(updater: Updater, deps: InstallHelperDeps): vo
   };
 }
 
-/** Writes the script, then starts the helper detached and hidden; 'spawn' or 'error' tells which way it went, 'exit' its end. */
-export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEvents): void {
+/**
+ * Writes the script, then starts the helper hidden; 'spawn' or 'error' tells which way it went, 'exit' its end.
+ * Windows (issue #1): not detached. Node's detached is DETACHED_PROCESS, which leaves cmd without any console, so every
+ * console program it ran (tasklist, find, ping) opened a new, visible console window. Without it, windowsHide gives cmd
+ * CREATE_NO_WINDOW: a console that is never shown, which those programs share. A child that is not detached sits in
+ * libuv's job object, which ends it together with this process; the job allows silent breakaway, so the script starts
+ * itself once more with start /b (same hidden console, outside the job) and this first cmd ends at once. Its end says
+ * nothing about the helper's, so ended() comes once the helper has surely finished waiting (wait + a margin), or at
+ * once when the first cmd failed. Linux: detached (its own session), and ended() on its exit, as before.
+ */
+export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEvents, platform: string = process.platform): void {
   mkdirSync(logs, { recursive: true });
   if (launch.script) writeFileSync(launch.script.file, launch.script.text, 'utf8');
+  const windows = platform === 'win32';
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     env: { ...process.env, ...launch.env },
-    detached: true,
+    detached: !windows,
     stdio: 'ignore',
     windowsHide: true,
     windowsVerbatimArguments: launch.verbatim,
   });
   child.once('spawn', () => {
     child.unref(); // unref keeps no event loop alive; 'exit' still arrives while this process runs
-    child.once('exit', () => events.ended());
+    child.once('exit', code => {
+      if (!windows || code !== 0) { events.ended(); return; }
+      const wait = Number(launch.env.AUTARK_UPDATE_WAIT ?? WAIT_SECONDS);
+      setTimeout(() => events.ended(), (wait * 3 + HELPER_MARGIN_SECONDS) * 1000).unref();
+    });
     events.started();
   });
   child.once('error', error => events.failed(error));
