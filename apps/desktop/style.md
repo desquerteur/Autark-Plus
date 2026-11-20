@@ -56,6 +56,14 @@ screen's look changes.
 - **Agent names as links:** in messages underlined in `--update`, 600; in Team activity and the agent tree only a
   hover underline in `--update`.
 
+## Title row – one browser button – `src/ui/shell/WindowBar.tsx`, `src/ui/styles/shell.css`
+
+- The title row has **one** browser button: the `globe` icon (18 px) in the frame's 32 px cell at the right end, right before the feedback cell (`.frame-workspace-cell`, same place on every page; no other cell moves).
+- In a chat it is **Chat tabs** (`data-cell="browser"`): it opens and closes the chat's tabs, shows as pressed while they are open, and gets a dot when an agent's new tab is waiting. The chat header no longer has its own globe; only Call stays next to the title.
+- On other pages it shows and hides the global browser pane (`data-cell="workspace"`, "Show/Hide browser").
+- One browser at a time: in a chat, opening the chat's tabs closes a global pane that was opened elsewhere.
+- The `browsers` icon is gone from the title row.
+
 ## Schedules (#20) – `src/ui/styles/schedules-tab.css`
 - Destination "Schedules" (icon `alarm`) sits between Projects and Team in the rail and as a phone tab; its pages follow the Projects tab's layout (sidebar list, start page with cards, page with a 680 px column).
 - Sidebar row: 16 px kind icon, title (`.row-title`), rule in words and next run (`.row-preview`, muted); a paused row's title is `--muted`; the open row uses `--selected`, hover `--hover`.
