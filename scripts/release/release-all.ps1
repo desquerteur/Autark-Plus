@@ -23,7 +23,11 @@ $desktop = Join-Path $root 'apps/desktop'
 
 function Run([string]$what, [scriptblock]$block) {
     Write-Output "==> $what"
-    & $block
+    # Windows PowerShell 5.1 turns any stderr line of a native tool (npm warnings) into a terminating error under
+    # ErrorActionPreference=Stop; the exit code is the only truth for native steps.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $block 2>&1 | ForEach-Object { "$_" } } finally { $ErrorActionPreference = $prev }
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
 }
 
@@ -91,7 +95,9 @@ if ($Publish) {
     $gh = (Get-Command gh -ErrorAction SilentlyContinue)
     if (-not $gh) { throw 'gh (GitHub CLI) is not installed: winget install GitHub.cli, then set GH_TOKEN or run gh auth login.' }
     $notes = Join-Path $root "docs/releases/$Tag.md"
-    $exists = $false; gh release view $Tag --repo $Repo *> $null; if ($LASTEXITCODE -eq 0) { $exists = $true }
+    $exists = $false
+    $ErrorActionPreference = 'Continue'; gh release view $Tag --repo $Repo *> $null; $ErrorActionPreference = 'Stop'
+    if ($LASTEXITCODE -eq 0) { $exists = $true }
     if (-not $exists) {
         $ghArgs = @('release', 'create', $Tag, '--repo', $Repo, '--title', "Autark $version", '--verify-tag')
         if (Test-Path $notes) { $ghArgs += @('--notes-file', $notes) } else { $ghArgs += @('--notes', "Autark $version") }
