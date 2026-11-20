@@ -43,6 +43,14 @@ $text = $text -replace "(?m)^(\s*versionCode = )\d+", "`${1}$code" -replace "(?m
 
 # ---- Windows
 if ('windows' -notin $Skip) {
+    # A worktree often links apps/desktop/node_modules to the main clone's (a junction); npm ci would empty the target
+    # and break every worktree that shares it. Replace the link with a folder of its own first.
+    $modules = Join-Path $desktop 'node_modules'
+    if ((Test-Path $modules) -and ((Get-Item $modules -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Write-Output "==> node_modules is a link to $((Get-Item $modules -Force).Target) - unlinking it (the target stays untouched)"
+        cmd /c rmdir "$modules"
+        if (Test-Path $modules) { throw "Could not unlink $modules" }
+    }
     Push-Location $desktop
     try {
         Run 'npm ci (Windows)' { npm ci --no-fund --no-audit }
