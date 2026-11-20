@@ -5,6 +5,7 @@
 
 import type { LocalSpeechModels, LocalSpeechPull, SpokenAudio } from '../model/local-speech-models.ts';
 import type { FeedbackKind, FeedbackReport, FeedbackVisibility } from '../model/system.ts';
+import type { FeedbackIssueInclude, FeedbackIssuePreview, FeedbackIssueResult } from '../model/feedback-delivery.ts';
 
 declare module '../api/methods.ts' {
   interface Methods {
@@ -13,6 +14,10 @@ declare module '../api/methods.ts' {
     'feedback.list': { params: void; result: FeedbackReport[] };
     'feedback.send': { params: { id: string; visibility?: FeedbackVisibility }; result: FeedbackReport };
     'feedback.dismiss': { params: { id: string }; result: FeedbackReport };
+    /** Autark-Plus: the report as a GitHub issue – preview, file (connected GitHub app, else the prefilled link) and the issues' state. */
+    'feedback.issuePreview': { params: { id: string; include?: FeedbackIssueInclude }; result: FeedbackIssuePreview };
+    'feedback.fileIssue': { params: { id: string; include?: FeedbackIssueInclude }; result: FeedbackIssueResult };
+    'feedback.issueRefresh': { params: void; result: FeedbackReport[] };
     /** The CSS of <data>/theme.css ('' = none); open to every device – phones look the same. */
     'theme.get': { params: void; result: ThemeCss };
 

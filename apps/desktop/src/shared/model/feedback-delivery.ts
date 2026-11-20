@@ -95,3 +95,30 @@ declare module '../api/methods.ts' {
     'feedback.setup': { params: { project: string; apiKey: string; serviceAccountPath: string; rotate?: boolean }; result: FeedbackSetupResult };
   }
 }
+
+/** Autark-Plus: what the person ticked in the issue preview; everything else stays on the PC. */
+export interface FeedbackIssueInclude {
+  /** The page the report was made on. */
+  view?: boolean;
+  /** The redacted tail of warnings and errors from the app's log. */
+  log?: boolean;
+}
+
+/** Autark-Plus: the GitHub issue exactly as it would go out (feedback.issuePreview). */
+export interface FeedbackIssuePreview {
+  repo: string;
+  title: string;
+  body: string;
+  labels: string[];
+  /** The prefilled github.com new-issue page. */
+  url: string;
+  /** A GitHub app is connected: Create issue files it directly; else the link opens in the browser. */
+  connected: boolean;
+}
+
+/** Autark-Plus: feedback.fileIssue – `filed` false: nothing left the PC, open `url` (the prefilled new-issue page). */
+export interface FeedbackIssueResult {
+  report: import('./system.ts').FeedbackReport;
+  url: string;
+  filed: boolean;
+}

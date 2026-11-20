@@ -1,16 +1,16 @@
 // Repository for `feedback` (reports to the developers).
 // Owns: SQL and row↔model mapping. A report's repeat `count` is kept in the `context` JSON column
-// (key "count", no schema change); the model has it top-level.
+// (key "count", no schema change); the model has it top-level. Autark-Plus: the report's GitHub issue lives there too (key "issue").
 // Never: sending reports, deduplicating or rate limiting (FeedbackService).
 
 import { json, toJson, type Db, type Row } from '../db/database.ts';
 import type { FeedbackReport } from '../../shared/model/system.ts';
 import { compact, nul, opt, optNumber } from './rows.ts';
 
-type StoredContext = FeedbackReport['context'] & { count?: number; receiptId?: string; visibility?: FeedbackReport['visibility']; deliveryWarning?: string };
+type StoredContext = FeedbackReport['context'] & { count?: number; receiptId?: string; visibility?: FeedbackReport['visibility']; deliveryWarning?: string; issue?: FeedbackReport['issue'] };
 
 function toFeedback(row: Row): FeedbackReport {
-  const { count, receiptId, visibility, deliveryWarning, ...context } = json<StoredContext>(row.context, { version: '', os: '' });
+  const { count, receiptId, visibility, deliveryWarning, issue, ...context } = json<StoredContext>(row.context, { version: '', os: '' });
   return compact({
     id: String(row.id),
     kind: row.kind as FeedbackReport['kind'],
@@ -23,6 +23,7 @@ function toFeedback(row: Row): FeedbackReport {
     receiptId,
     visibility,
     deliveryWarning,
+    issue: issue && typeof issue === 'object' && typeof issue.number === 'number' ? issue : undefined,
     status: row.status === 'sent' && !receiptId && String(row.url ?? '').includes('/issues/new?') ? 'queued' : row.status as FeedbackReport['status'],
     url: opt<string>(row.url),
     createdAt: Number(row.created_at),
@@ -31,7 +32,7 @@ function toFeedback(row: Row): FeedbackReport {
 }
 
 function storedContext(report: FeedbackReport): StoredContext {
-  return { ...report.context, ...(report.count && report.count > 1 ? { count: report.count } : {}), ...(report.receiptId ? { receiptId: report.receiptId, visibility: report.visibility, deliveryWarning: report.deliveryWarning } : {}) };
+  return { ...report.context, ...(report.count && report.count > 1 ? { count: report.count } : {}), ...(report.receiptId ? { receiptId: report.receiptId, visibility: report.visibility, deliveryWarning: report.deliveryWarning } : {}), ...(report.issue ? { issue: report.issue } : {}) };
 }
 
 export class FeedbackRepo {

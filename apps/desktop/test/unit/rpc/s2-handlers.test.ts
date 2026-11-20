@@ -132,7 +132,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'devices.list', 'devices.rename', 'devices.revoke',
     'pwa.state', 'pwa.enable', 'pwa.link', 'pwa.revoke', 'pwa.pushSubscribe', 'pwa.pushConfig', 'pwa.pushUnsubscribe', 'pwa.exchange', 'computer.preview',
     'computer.activity', 'computer.stop', 'computer.resume',
-    'feedback.create', 'feedback.list', 'feedback.send', 'feedback.dismiss', 'feedback.status',
+    'feedback.create', 'feedback.list', 'feedback.send', 'feedback.dismiss', 'feedback.status', 'feedback.issuePreview', 'feedback.fileIssue', 'feedback.issueRefresh',
     'theme.get', 'import.legacy', 'voice.transcribe',
     'onboarding.reset', 'onboarding.start', // B-044 first run
     'voice.localModels', 'voice.pullLocal', 'voice.speak', // B-047 D14 local speech
@@ -156,7 +156,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'secrets.groups': PERMISSIONS, 'secrets.saveGroup': PERMISSIONS, // X05 (deleteGroup stays on the PC)
     'secrets.import': PERMISSIONS, // 29.10.2026: creates only, like a phone's saveGroup
     'computer.activity': { capability: 'todo' }, 'computer.stop': { capability: 'todo' }, 'computer.resume': { capability: 'todo' },
-    'feedback.create': CHAT, 'feedback.list': CHAT, 'feedback.send': CHAT, 'feedback.dismiss': CHAT, 'feedback.status': CHAT,
+    'feedback.create': CHAT, 'feedback.list': CHAT, 'feedback.send': CHAT, 'feedback.dismiss': CHAT, 'feedback.status': CHAT, 'feedback.issuePreview': CHAT, 'feedback.fileIssue': CHAT, 'feedback.issueRefresh': CHAT,
     'voice.transcribe': CHAT,
     'voice.localModels': CHAT, 'voice.speak': CHAT, // B-047 D14 (voice.pullLocal stays with the owner)
   };

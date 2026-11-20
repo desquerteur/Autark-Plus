@@ -9,6 +9,8 @@
 // the action is always reserved, so nothing moves when an error comes.
 // AF-003: a two-way choice "Bug | Idea" above the field (the report's kind); a send that was not confirmed reads
 // "Not sent." with the reason beside the action (announced); a delivered report shows "Report no. …" with Copy.
+// Autark-Plus: a saved report that did not go to the team offers the GitHub issue under the result line
+// (IssuePreview.tsx: preview, ticks, Create issue / Open on GitHub).
 // Owns: the form, uploading its image and submitting. Never: starts an app change, requests a login, opens a
 // browser or discards a failed submission.
 
@@ -17,6 +19,7 @@ import type { FeedbackReport } from '../../shared/model/system.ts';
 import { uploadFile } from '../lib/files.ts';
 import { Icon } from '../lib/icons.tsx';
 import { errorText, rpc } from '../lib/rpc.ts';
+import { can } from '../lib/session.ts';
 import { settings } from '../lib/store.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
 import { Spinner } from '../lib/ui.tsx';
@@ -26,6 +29,7 @@ import type { DraftKind, FeedbackDraft } from './draft.ts';
 import { canSendAgain, doneText, receiptText, sendAgainLabel, sendLabel, sendReport, SHOT_HINT, SHOT_LABEL, SHOT_MISSING, useFeedbackSending } from './delivery.ts';
 import { talkError, talkState } from './FeedbackButton.tsx';
 import { FeedbackPrivacyNote } from './FeedbackPrivacy.tsx';
+import { IssuePreview } from './IssuePreview.tsx';
 import { PAINT_UNREADY, REPORT_IMAGE_NAME, reportImage } from './paint.ts';
 import { flatten } from './paint-image.ts';
 import { here, openPaint } from './popover-state.ts';
@@ -161,13 +165,14 @@ export function FeedbackForm(props: { onClose: () => void }) {
     const outcome = report.status === 'sent' ? ' ok' : error ? ' failed' : '';
     return (
       <div class="feedback-panel done">
-        <p class={`feedback-done${outcome}`}>{doneText(report.status, sending !== false)}</p>
+        <p class={`feedback-done${outcome}`}>{report.issue ? 'Filed on GitHub.' : doneText(report.status, sending !== false)}</p>
         {receipt && (
           <p class="feedback-receipt">
             <span class="feedback-receipt-number" title={report.receiptId}>{receipt}</span>
             <button type="button" class="button ghost small" aria-label="Copy the report number" onClick={() => copyNumber(report.receiptId!)}>Copy</button>
           </p>
         )}
+        {report.status !== 'sent' || report.issue ? (can('feedback.fileIssue') && <IssuePreview report={report} onFiled={setDone} />) : null}
         <div class="feedback-actions">
           <p class="feedback-message" role="alert" title={error ?? undefined}>{error}</p>
           {retry

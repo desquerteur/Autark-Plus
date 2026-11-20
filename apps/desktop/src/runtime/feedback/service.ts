@@ -22,6 +22,7 @@ import { deliver } from './delivery.ts';
 import { FeedbackInbox } from './inbox.ts';
 import { readReceiver, receiverPath, type ReceiverConfig } from './receiver.ts';
 import { setupReceiver, type SetupInput } from './setup.ts';
+import { connectedIssueClient, fileIssue, issueDraft, issueRepo, newIssueUrl, type IssueClient, type IssueDraft, type IssueInclude } from './github.ts';
 
 const KINDS: readonly FeedbackKind[] = ['bug', 'idea', 'change', 'praise'];
 const MAX_TEXT = 20_000;
@@ -59,6 +60,8 @@ export interface FeedbackDeps {
   /** The receiver (tests); default resources/feedback/receiver.json. `null`: sending is not set up. */
   receiver?: ReceiverConfig | null;
   fetch?: typeof globalThis.fetch;
+  /** Autark-Plus: the GitHub client (tests); default the connected GitHub app, `null`: none (the new-issue link only). */
+  issues?: IssueClient | null;
   /** Google's endpoints for the team inbox (tests). */
   firestore?: string;
   tokenUrl?: string;
@@ -189,6 +192,66 @@ export class FeedbackService implements FeedbackApi {
     return active;
   }
 
+  // ------------------------------------------------------------------ Autark-Plus: GitHub issues
+
+  /** The issue as it would go out (the preview): redacted title, body and labels, the target repo and the new-issue link. */
+  issuePreview(id: string, include: IssueInclude = {}): IssueDraft & { connected: boolean } {
+    const s = this.deps.services();
+    const report = this.repo(s).get(id);
+    if (!report) throw new WorkforceError('not_found', 'This report no longer exists.');
+    return { ...this.draft(s, report, include), connected: Boolean(this.issueClient(s)) };
+  }
+
+  /**
+   * Explicit action: file the report as a GitHub issue through the connected GitHub app (an open issue with the same
+   * title gets a comment instead). Without a connected app nothing leaves the PC: the answer carries the prefilled
+   * new-issue link for the browser.
+   */
+  async fileIssue(id: string, include: IssueInclude = {}): Promise<{ report: FeedbackReport; url: string; filed: boolean }> {
+    const s = this.deps.services();
+    const repo = this.repo(s);
+    const report = repo.get(id);
+    if (!report) throw new WorkforceError('not_found', 'This report no longer exists.');
+    if (report.issue) return { report, url: report.issue.url, filed: true };
+    const draft = this.draft(s, report, include);
+    const client = this.issueClient(s);
+    if (!client) return { report, url: draft.url, filed: false };
+    let issue;
+    try {
+      issue = await fileIssue(client, draft, s.clock.now());
+    } catch (error) {
+      s.log.warn('feedback issue failed', sendFailure(id, error));
+      throw new WorkforceError('unavailable', 'GitHub did not take the issue. Open it in the browser instead.', { details: { url: draft.url } });
+    }
+    const filed: FeedbackReport = { ...report, issue, status: 'sent', sentAt: s.clock.now(), url: issue.url };
+    repo.save(filed);
+    s.bus.emit('feedback.upserted', filed);
+    s.log.info('feedback issue filed', { id, repo: issue.repo, number: issue.number, commented: Boolean(issue.commented) });
+    return { report: filed, url: issue.url, filed: true };
+  }
+
+  /** The current state (open/closed) of every report's issue; reports without an issue stay as they are. */
+  async refreshIssues(): Promise<FeedbackReport[]> {
+    const s = this.deps.services();
+    const repo = this.repo(s);
+    const client = this.issueClient(s);
+    const reports = repo.list(200);
+    if (!client) return reports;
+    const out: FeedbackReport[] = [];
+    for (const report of reports) {
+      if (!report.issue) { out.push(report); continue; }
+      try {
+        const ref = await client.get(report.issue.repo, report.issue.number);
+        const next: FeedbackReport = { ...report, issue: { ...report.issue, state: ref.state, checkedAt: s.clock.now() } };
+        if (next.issue!.state !== report.issue.state) { repo.save(next); s.bus.emit('feedback.upserted', next); } else repo.save(next);
+        out.push(next);
+      } catch {
+        out.push(report);
+      }
+    }
+    return out;
+  }
+
   dismiss(id: string): FeedbackReport {
     const s = this.deps.services();
     const repo = this.repo(s);
@@ -203,6 +266,20 @@ export class FeedbackService implements FeedbackApi {
   }
 
   // ------------------------------------------------------------------ internals
+
+  private draft(s: RuntimeServices, report: FeedbackReport, include: IssueInclude): IssueDraft {
+    const target = issueRepo(s.settings.get().feedback?.githubRepo);
+    const log = include.log ? this.diagnostics(s) : undefined;
+    const draft = issueDraft(report, target, include, log);
+    // The report text was redacted when it was saved; the whole body goes through redaction once more.
+    const body = this.redact(s, draft.body);
+    return body === draft.body ? draft : { ...draft, body, url: newIssueUrl(target, draft.title, body, draft.labels) };
+  }
+
+  private issueClient(s: RuntimeServices): IssueClient | undefined {
+    if (this.deps.issues !== undefined) return this.deps.issues ?? undefined;
+    return connectedIssueClient(s);
+  }
 
   /** The team's receiver this build sends to (undefined = sending is not set up). */
   private receiver(s: RuntimeServices): ReceiverConfig | undefined {
