@@ -105,14 +105,27 @@ test('Settings › Skills: Add from link – link, preview with two skills, scri
   await page.emulateMedia({ colorScheme: 'dark' });
   await shot('links-03-preview-dark');
   await page.emulateMedia({ colorScheme: 'light' });
+  // Below 720 px the shell swaps to the phone layout (lib/platform.ts) and remounts the page, so the dialog closes; the
+  // narrow checks open it again there and read the same preview.
+  const reopen = async () => {
+    if (await dialog.isVisible()) return;
+    await page.evaluate(() => { location.hash = '#/settings/skills'; });
+    await page.locator('section[data-tour="skills"]').getByRole('button', { name: 'Add from link' }).click();
+    await dialog.locator('#skill-link-url').fill('https://github.com/anthropics/skills');
+    await dialog.getByRole('button', { name: 'Show' }).click();
+    await dialog.locator('.skill-link-skill').nth(1).waitFor({ timeout: 10_000 });
+  };
   for (const [width, height, name] of [[640, 480, 'links-04-preview-640x480'], [420, 860, 'links-05-preview-phone']]) {
     await size(width, height);
     await page.waitForTimeout(600);
+    await reopen();
     await shot(name);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 1, `no horizontal page scroll at ${width} px (${overflow}px)`);
   }
   await size(1280, 820);
+  await page.waitForTimeout(600);
+  await reopen();
   await dialog.getByRole('button', { name: 'Back' }).click();
   await dialog.locator('#skill-link-url').waitFor({ timeout: 5_000 });
 

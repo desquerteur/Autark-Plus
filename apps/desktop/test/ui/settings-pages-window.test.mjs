@@ -90,8 +90,14 @@ test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, as
   assert.deepEqual(labels, MODEL_USES.map((use) => USE_LABELS[use]));
   const heights = await rows.evaluateAll((list) => list.map((row) => Math.round(row.getBoundingClientRect().height)));
   assert.equal(new Set(heights).size, 1, `every row has the same height (${heights.join(', ')})`);
-  const words = await page.locator('.settings-content').textContent();
-  for (const gone of ['Automatic', 'Use the PC', 'Abilities', 'Pay-per-use fallback']) assert.ok(!words.includes(gone), `"${gone}" is gone`); // B-072: no fallback row
+  // AF-023 added an "If used up" row per use whose empty order reads "Automatic: …" – that is the new fallback order,
+  // not B-072's old lists, so the check reads the page without those rows.
+  const words = await page.locator('.settings-content').evaluate((root) => {
+    const copy = root.cloneNode(true);
+    for (const row of copy.querySelectorAll('.fallback-row')) row.remove();
+    return copy.textContent;
+  });
+  for (const gone of ['Automatic', 'Use the PC', 'Abilities', 'Pay-per-use fallback']) assert.ok(!words.includes(gone), `"${gone}" is gone`); // B-072: no old fallback row
   await shot('settings-uses-light');
 
   // Speech to text: the downloaded model is offered (Use); choosing it makes the row ready; nothing above moves.
