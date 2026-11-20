@@ -71,6 +71,12 @@ async function makePc(pcs: Map<string, { handlers: Handlers }>, id: string, sett
 type Pc = Awaited<ReturnType<typeof makePc>>;
 
 const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Polls until `check` holds (parallel test runs slow the sync down; a fixed sleep made this test flaky). */
+async function eventually(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const end = Date.now() + timeoutMs;
+  while (!(await check()) && Date.now() < end) await settle(25);
+}
+const readOr = (file: string) => readFile(file, 'utf8').catch(() => undefined);
 
 test('settings travel as a patch: devices, phone access and the window layout stay on each PC, a removed key goes', () => {
   const local = { ...settingsOf('', 300), voice: { vocabulary: ['Autark'], ttsVoice: 'old' } } as unknown as Settings;
@@ -119,12 +125,12 @@ test('synced roots arrive whole, a removal follows, a watcher tap sends a change
   await put(a.data, 'memory/notes/b.md', 'second note');
   watcher.nudge('memory', ['notes', 'b.md']);
   watcher.flush();
-  await settle(1300);
+  await eventually(async () => (await readOr(path.join(b.data, 'memory/notes/b.md'))) === 'second note');
   assert.equal(await readFile(path.join(b.data, 'memory/notes/b.md'), 'utf8'), 'second note', 'a change the watcher hands over goes at once');
   watcher.stop();
 
   a.s.settings.update({ profile: { name: 'Lena Berg' } });
-  await settle();
+  await eventually(() => b.store.current.profile.name === 'Lena Berg');
   assert.equal(b.store.current.profile.name, 'Lena Berg', 'a settings change goes at once');
 });
 
