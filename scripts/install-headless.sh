@@ -19,6 +19,9 @@
 #   --no-start                install, but do not start the service
 #   --linger                  desktop: keep running after logging out (loginctl enable-linger)
 #
+#   AUTARK_DOWNLOAD_BASE=URL  take the release files from this folder URL instead of GitHub (a LAN mirror or a test
+#                             server; it must hold autark-linux-<arch>.tar.gz and SHA256SUMS.txt; needs --version)
+#
 # The app runs as plain Node through its own binary (ELECTRON_RUN_AS_NODE=1 autark …/runtime-cli.mjs --headless):
 # no display, no X/Wayland, no GPU. Docs: docs/headless-linux.md.
 # Owns: download + checksum, the release folders, the service user, the systemd unit, the autark-headless command and
@@ -128,24 +131,50 @@ systemd_ok() {
 TMP=''
 cleanup() { if [ -n "$TMP" ]; then rm -rf "$TMP"; fi; }
 
+# A fresh minimal Debian or LXC template has neither curl nor wget: as root with apt, curl is installed first.
+ensure_fetcher() {
+  have curl && return 0
+  have wget && return 0
+  if [ "$(id -u)" -eq 0 ] && have apt-get; then
+    say 'Installing curl and the CA certificates …'
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+  elif [ "$(id -u)" -eq 0 ] && have dnf; then dnf install -y -q curl ca-certificates
+  fi
+  have curl || have wget || die 'curl or wget is needed (e.g. apt install curl).'
+}
+
+# fetch URL FILE [quiet]: download with curl, else wget.
+fetch() {
+  if have curl; then
+    if [ -n "${3:-}" ]; then curl -fsSL --retry 3 -o "$2" "$1"; else curl -fL --retry 3 --progress-bar -o "$2" "$1"; fi
+  else
+    if [ -n "${3:-}" ]; then wget -q -O "$2" "$1"; else wget -q --show-progress -O "$2" "$1"; fi
+  fi
+}
+
 latest_tag() {
   local url
-  url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") || return 1
+  if have curl; then
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") || return 1
+  else
+    url=$(wget -S --spider --max-redirect=5 "https://github.com/$REPO/releases/latest" 2>&1 | awk '/^ *[Ll]ocation: /{l=$2} END{print l}' | tr -d '')
+  fi
   case "$url" in */tag/*) printf '%s' "${url##*/tag/}" ;; *) return 1 ;; esac
 }
 
 # Fetches autark-linux-$ARCH.tar.gz (else .AppImage) of $TAG into $TMP; sets PKG.
 download() {
-  have curl || die 'curl is needed (apt install curl).'
-  local base="https://github.com/$REPO/releases/download/$TAG" name
+  local base="${AUTARK_DOWNLOAD_BASE:-https://github.com/$REPO/releases/download/$TAG}" name
+  base=${base%/}
   PKG=''
   for name in "autark-linux-$ARCH.tar.gz" "autark-linux-$ARCH.AppImage"; do
     say "Downloading $name ($TAG from $REPO) …"
-    if curl -fL --retry 3 --progress-bar -o "$TMP/$name" "$base/$name"; then PKG=$TMP/$name; break; fi
+    if fetch "$base/$name" "$TMP/$name"; then PKG=$TMP/$name; break; fi
     rm -f "$TMP/$name"
   done
   [ -n "$PKG" ] || die "Release $TAG of $REPO has no autark-linux-$ARCH.tar.gz or .AppImage."
-  if curl -fsSL -o "$TMP/SHA256SUMS.txt" "$base/SHA256SUMS.txt" 2>/dev/null && grep -q " \*\?$(basename "$PKG")\$" "$TMP/SHA256SUMS.txt"; then
+  if fetch "$base/SHA256SUMS.txt" "$TMP/SHA256SUMS.txt" quiet 2>/dev/null && grep -q " \*\?$(basename "$PKG")\$" "$TMP/SHA256SUMS.txt"; then
     have sha256sum || die 'sha256sum is needed to check the download.'
     (cd "$TMP" && grep " \*\?$(basename "$PKG")\$" SHA256SUMS.txt | sha256sum -c --status) || die "Checksum of $(basename "$PKG") does not match SHA256SUMS.txt – not installed."
     say 'Checksum OK.'
@@ -370,6 +399,28 @@ place_release() {
   done
 }
 
+# An LXC container without nesting (Proxmox's default for older unprivileged containers) cannot set up the unit's
+# PrivateTmp/ProtectSystem mounts: systemd then fails the start with 226/NAMESPACE. Drop just those two and retry.
+sandbox_fallback() {
+  [ "$MODE" = server ] || return 0
+  local result i
+  for i in 1 2 3 4 5; do
+    "${SCTL[@]}" is-active --quiet "$SERVICE" && return 0
+    result=$("${SCTL[@]}" show -p ExecMainStatus --value "$SERVICE" 2>/dev/null || true)
+    [ "$result" = 226 ] && break
+    sleep 1
+  done
+  [ "${result:-}" = 226 ] || return 0
+  warn 'This container does not allow the service sandbox (226/NAMESPACE) – starting without PrivateTmp/ProtectSystem.'
+  mkdir -p "/etc/systemd/system/$SERVICE.service.d"
+  printf '[Service]
+PrivateTmp=no
+ProtectSystem=no
+' >"/etc/systemd/system/$SERVICE.service.d/container.conf"
+  "${SCTL[@]}" daemon-reload
+  "${SCTL[@]}" restart "$SERVICE"
+}
+
 installed_version() { cat "$PREFIX/current/.autark-version" 2>/dev/null || true; }
 
 # Waits for the service and shows a pairing link and code right here in the terminal.
@@ -398,6 +449,8 @@ do_install() {
       PKG="$TMP/$(basename "$FILE")"
       cp "$FILE" "$PKG"
     else
+      ensure_fetcher
+      [ -z "${AUTARK_DOWNLOAD_BASE:-}" ] || [ -n "$VERSION" ] || die 'AUTARK_DOWNLOAD_BASE needs --version.'
       TAG=${VERSION:-$(latest_tag)} || die "Could not find the newest release of $REPO (is it published?)."
       [ -n "$TAG" ] || die "Could not find the newest release of $REPO."
       if [ "$ACTION" = update ] && [ -n "$current" ] && [ "${TAG#v}" = "$current" ]; then
@@ -438,6 +491,7 @@ do_install() {
     return 0
   fi
   "${SCTL[@]}" restart "$SERVICE"
+  sandbox_fallback
   say "Autark $(installed_version) runs as the $SERVICE service ($MODE mode)."
   [ "$ACTION" = update ] || show_pairing
   case ":$PATH:" in *":$(dirname "$BIN"):"*) ;; *) warn "$(dirname "$BIN") is not on your PATH – call $BIN with its full path." ;; esac
@@ -449,6 +503,7 @@ do_uninstall() {
     "${SCTL[@]}" disable --now "$SERVICE" >/dev/null 2>&1 || true
   fi
   rm -f "$UNIT" "$BIN"
+  if [ "$MODE" = server ]; then rm -rf "/etc/systemd/system/$SERVICE.service.d"; fi
   if systemd_ok; then "${SCTL[@]}" daemon-reload || true; fi
   rm -rf "${PREFIX:?}"
   if [ "$PURGE" -eq 1 ]; then

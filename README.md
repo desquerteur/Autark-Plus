@@ -67,14 +67,17 @@ The links below always lead to the newest version.
 | Device | File | Download |
 |---|---|---|
 | Windows 10/11 (x64) | `autark-windows-x64.exe` | [Download for Windows](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-windows-x64.exe) |
-| Mac (Apple silicon and Intel) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-universal.dmg) |
-| Linux (x64) | `autark-linux-x64.AppImage` | [Download for Linux](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.AppImage) |
+| Mac (Apple silicon and Intel; built by CI only) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-universal.dmg) |
+| Linux desktop (x64) | `autark-linux-x64.AppImage` | [Download AppImage](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.AppImage) |
+| Debian/Ubuntu desktop (x64 / arm64) | `autark-linux-amd64.deb`, `autark-linux-arm64.deb` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-amd64.deb) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.deb) |
+| Linux server (x64 / arm64) | `autark-linux-x64.tar.gz`, `autark-linux-arm64.tar.gz` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.tar.gz) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.tar.gz) – installed by `scripts/install-headless.sh` |
 | Android phone | `autark-android.apk` | [Download for Android](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-android.apk) |
 | iPhone | – | A web app from your own PC (see below) |
 
 - [Checksums (SHA-256)](https://github.com/desquerteur/Autark-Plus/releases/latest/download/SHA256SUMS.txt) for every file of
   the release, and [release.json](https://github.com/desquerteur/Autark-Plus/releases/latest/download/release.json) with what
   was checked for it and what was not.
+- How releases are built and the Android APK is signed: [docs/RELEASING.md](docs/RELEASING.md).
 - [All releases and their notes](https://github.com/desquerteur/Autark-Plus/releases).
 
 Check a download on Windows with `Get-FileHash .\autark-windows-x64.exe` (PowerShell), on Mac and Linux with

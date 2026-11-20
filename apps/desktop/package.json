@@ -1,10 +1,11 @@
 {
   "name": "autark",
   "productName": "Autark",
-  "version": "0.3.8",
+  "version": "0.3.10",
   "private": true,
   "description": "Local-first AI workforce: agents, chats, tasks and a calm to-do list",
-  "author": "Teydra",
+  "author": "Teydra <noreply@teydra.com>",
+  "homepage": "https://github.com/desquerteur/Autark-Plus",
   "license": "Apache-2.0",
   "type": "module",
   "main": "app/main.cjs",
@@ -129,10 +130,18 @@
             "x64",
             "arm64"
           ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "autark-linux-${arch}.${ext}",
       "category": "Office",
+      "maintainer": "Teydra <noreply@teydra.com>",
       "icon": "assets/icon.png"
     },
     "appImage": {
