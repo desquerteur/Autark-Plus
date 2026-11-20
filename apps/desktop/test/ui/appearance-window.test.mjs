@@ -136,7 +136,7 @@ test('Settings › Appearance: an own theme, panels in order, the dock – kept 
   assert.equal(await rootVar('--text-zoom'), '1.1');
   await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, chat.id);
   await page.locator('textarea.composer-input').waitFor();
-  await page.locator('.chat-header [data-cell="browser"] button').click();
+  await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
   await page.locator('.chat-body > .chat-area.dock-left').waitFor();
   const offered = await page.locator('.chat-area .new-tab-list[aria-label="Open in this tab"] .new-tab-label').allTextContents();
   assert.deepEqual(offered.slice(0, 5), ['Agents', 'My day', 'Notes', 'Files', 'Media'], `the panels in their order, Work left out: ${offered.join(', ')}`);

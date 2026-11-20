@@ -93,7 +93,7 @@ test('the side pane: tab strip, address row, panels as tabs, full view', { timeo
 
   // ---- the frame's cells: the feedback cell right before the caption, clear of it
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await strip.waitFor();
   const feedback = await page.locator('.frame-feedback-cell').boundingBox();
   const workspace = await page.locator('.frame-workspace-cell').boundingBox();
@@ -291,13 +291,13 @@ test('the side pane: tab strip, address row, panels as tabs, full view', { timeo
   const paneTabs = () => page.locator('.global-pane .browser-strip-tab').evaluateAll((tabs) => tabs.map((tab) => tab.dataset.tab));
   const globalTabs = await paneTabs();
   const area = page.locator('.chat-area');
-  const areaCell = page.locator('.chat-header [data-cell="browser"] button');
+  const areaCell = page.locator('.frame-workspace-cell[data-cell="browser"] button');
   await page.locator('.chat-title-button').click();
   await page.locator('.chat-panel .details-notes').click();
   await area.locator('.pane-notes-field').waitFor();
   assert.equal(await area.locator('.browser-strip-tab.selected').getAttribute('data-tab'), `notes:${first.id}`);
   assert.deepEqual(await paneTabs(), globalTabs, 'the global pane keeps its tabs');
-  assert.equal(await areaCell.getAttribute('aria-pressed'), 'true', 'the chat\'s cell shows its area open');
+  assert.equal(await area.isVisible(), true, 'the chat's area is open (the one globe stands for the open global pane here)');
   await page.locator('.chat-title-button').click();
   await page.locator('.chat-panel').waitFor({ state: 'detached' });
   await shot('15b-chat-area-notes-light');

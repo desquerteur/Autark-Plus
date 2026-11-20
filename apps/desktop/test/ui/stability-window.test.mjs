@@ -105,13 +105,13 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   // for three titled tabs beside the caption controls: its strip is its first line under the row (strip-in-row: never
   // set or cleared by a click).
   const cell = page.locator('.frame-workspace-cell button');
-  const head = ['.frame-workspace-cell', '.rail', '.sidebar .frame-header', '.chat-header', '.chat-header .chat-title-button', '.chat-header [data-cell="browser"]', '.chat-header [data-cell="call"]'];
+  const head = ['.frame-workspace-cell', '.rail', '.sidebar .frame-header', '.chat-header', '.chat-header .chat-title-button', '.frame-workspace-cell[data-cell="browser"]', '.chat-header [data-cell="call"]'];
   const atBottom = () => page.evaluate(() => { const el = document.querySelector('.message-scroller'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
   assert.equal(await atBottom(), true, 'the chat opens at the newest message');
   await expectStable(page, head, async () => { await cell.click(); await page.locator('.global-pane').waitFor(); });
   assert.equal(await cell.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.app-frame.strip-in-row').count(), 0, 'the default pane: its strip under the row, not cramped into it');
-  const clear = await page.evaluate(() => document.querySelector('.chat-header [data-cell="browser"]').getBoundingClientRect().right <= document.querySelector('.global-pane').getBoundingClientRect().left + 0.5);
+  const clear = await page.evaluate(() => document.querySelector('.frame-workspace-cell[data-cell="browser"]').getBoundingClientRect().right <= document.querySelector('.global-pane').getBoundingClientRect().left + 0.5);
   assert.ok(clear, 'the chat\'s cells stay left of the pane');
   await page.waitForTimeout(100);
   assert.equal(await atBottom(), true, 'the narrower chat stays at the newest message');
@@ -120,13 +120,13 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   assert.equal(await cell.getAttribute('aria-pressed'), 'false');
 
   // The details panel opens below the header row: no header cell moves.
-  const cells = ['.chat-header', '.chat-header .chat-title-button', '.chat-header [data-cell="browser"]', '.chat-header [data-cell="call"]', '.frame-workspace-cell', '.sidebar .frame-header'];
+  const cells = ['.chat-header', '.chat-header .chat-title-button', '.frame-workspace-cell[data-cell="browser"]', '.chat-header [data-cell="call"]', '.frame-workspace-cell', '.sidebar .frame-header'];
   await expectStable(page, cells, async () => { await page.locator('.chat-title-button').click(); await page.locator('.chat-panel').waitFor(); });
   await shot('stable-03-details-open');
   await expectStable(page, cells, async () => { await page.locator('.chat-title-button').click(); await page.locator('.chat-panel').waitFor({ state: 'detached' }); });
 
   // The chat's area opens above the messages in one fixed height: the header cells and the composer stay where they are.
-  const tabsCell = page.locator('.chat-header [data-cell="browser"] button');
+  const tabsCell = page.locator('.frame-workspace-cell[data-cell="browser"] button');
   const steady = [...cells, '.composer', '.composer-area'];
   assert.equal(await tabsCell.getAttribute('aria-label'), 'Chat tabs');
   await expectStable(page, steady, async () => { await tabsCell.click(); await page.locator('.chat-area .browser-strip').waitFor(); });

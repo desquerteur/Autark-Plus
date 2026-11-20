@@ -3,8 +3,8 @@
 // the chat name, a button that toggles the details panel, and the sub line, always reserved: who is working
 // (LiveLine.tsx → the working popover) or the chat's resting line. Right-click (long press) on the title opens the chat's menu (chat-actions.ts).
 // Desktop: a segmented row – the title track has one fixed width and right after it sit Call (the chat's voice
-// mode, call/CallHeader.tsx) and Chat tabs (opens and closes the chat's area above the messages, ChatArea.tsx; pressed
-// while open, a dot while an agent's new tab waits there – workspace/attention.ts), so nothing moves when the title, the
+// mode, call/CallHeader.tsx); Chat tabs (opens and closes the chat's area above the messages, ChatArea.tsx; pressed
+// while open, a dot while an agent's new tab waits there – workspace/attention.ts) is the frame's one browser cell at the row's right end (shell/WindowBar.tsx), so nothing moves when the title, the
 // live line, the area or a panel changes; the open details panel's name and its X sit in the row above that panel (no
 // second header inside it). Phone: Back as the lead and the cells [call][chat tabs] at the row's end (the details sheet
 // keeps its own top line). B-075: who works and what comes from the chat's rows (the summary's live runs, live-text.ts
@@ -101,7 +101,7 @@ export function useChatHeader(chat: ConversationSummary): HeaderProps {
   });
   if (isMobile.value) return { zone: 'main', class: 'chat-header', lead: chatLead(), title, cells: [call, tabs('workspace')] };
   return {
-    zone: 'main', class: 'chat-header', title, near: [call, tabs('browser')], cells: [],
+    zone: 'main', class: 'chat-header', title, near: [call], cells: [], // Chat tabs: the frame's one browser cell (shell/WindowBar.tsx)
     panel: panel ? { title: PANEL_TITLES[panel], onClose: () => setChatPanel(chat.id, null) } : undefined,
   };
 }

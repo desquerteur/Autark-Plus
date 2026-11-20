@@ -89,7 +89,7 @@ test('pages: a file in <data>/pages is a tab that reaches the app', { timeout: 4
   await size(1280, 800);
   await page.waitForSelector('.shell');
   const cell = page.locator('.frame-workspace-cell button');
-  if ((await cell.getAttribute('aria-expanded')) !== 'true') await cell.click();
+  if ((await cell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
   await strip().waitFor();
 
   // ---- rpc.methods answers what can be called, with params
