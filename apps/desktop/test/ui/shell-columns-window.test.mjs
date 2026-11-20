@@ -97,7 +97,7 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   await size(1440, 900);
   await page.locator('.day-view').waitFor();
   const workspaceCell = page.locator('.frame-workspace-cell button');
-  if ((await workspaceCell.getAttribute('aria-expanded')) !== 'true') await rpc.call('settings.update', { preferences: { workspaceOpen: true } }); // in a chat the one globe is Chat tabs; the global pane opens from elsewhere
+  if ((await workspaceCell.getAttribute('aria-expanded')) !== 'true') await workspaceCell.click();
   await page.locator('.global-pane .browser-bar').waitFor();
   await shot('01-columns-home-light');
 

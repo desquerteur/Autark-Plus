@@ -108,7 +108,7 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   const head = ['.frame-workspace-cell', '.rail', '.sidebar .frame-header', '.chat-header', '.chat-header .chat-title-button', '.frame-workspace-cell[data-cell="browser"]', '.chat-header [data-cell="call"]'];
   const atBottom = () => page.evaluate(() => { const el = document.querySelector('.message-scroller'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
   assert.equal(await atBottom(), true, 'the chat opens at the newest message');
-  await expectStable(page, head, async () => { await cell.click(); await page.locator('.global-pane').waitFor(); });
+  await expectStable(page, head, async () => { await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); await page.locator('.global-pane').waitFor(); });
   assert.equal(await cell.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.app-frame.strip-in-row').count(), 0, 'the default pane: its strip under the row, not cramped into it');
   const clear = await page.evaluate(() => document.querySelector('.frame-workspace-cell[data-cell="browser"]').getBoundingClientRect().right <= document.querySelector('.global-pane').getBoundingClientRect().left + 0.5);
@@ -116,7 +116,7 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   await page.waitForTimeout(100);
   assert.equal(await atBottom(), true, 'the narrower chat stays at the newest message');
   await shot('stable-02-workspace-open');
-  await expectStable(page, head, async () => { await cell.click(); await page.locator('.global-pane').waitFor({ state: 'detached' }); });
+  await expectStable(page, head, async () => { await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); await page.locator('.global-pane').waitFor({ state: 'detached' }); });
   assert.equal(await cell.getAttribute('aria-pressed'), 'false');
 
   // The details panel opens below the header row: no header cell moves.
