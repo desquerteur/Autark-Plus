@@ -3,6 +3,7 @@
 //   * "Daily news to a contact" fills the form (agent job, every day at 06:00); Create makes the job – it appears in the sidebar
 //     with its rule in words and next run, its page shows rule, instructions, next runs and an empty history;
 //   * Run now adds a history line; Pause/Resume change the status; Edit changes the title; a message and a reminder can be created;
+//   * Duplicate opens the form with a copy (same rule);
 //   * Delete (with confirm) removes the row; a past time or a missing text keeps Create off and says why;
 //   * the phone width: Schedules is a tab, the list is its root, a schedule opens as a pushed page (no horizontal scroll);
 //   * no renderer errors.
@@ -129,6 +130,23 @@ test('Schedules tab: create a daily agent job, see its runs, pause, edit, delete
   assert.deepEqual(reminder?.spec.times, ['07:30'], 'the reminder runs at 07:30');
   assert.equal((await rpc.call('schedules.list')).length, 3);
   await shot('schedules-04-list');
+
+  // ---- duplicate opens the form with a copy; creating it adds a fourth schedule, then it is deleted again
+  await page.getByRole('button', { name: 'Duplicate' }).click();
+  await page.waitForFunction(() => location.hash === '#/schedules/new', undefined, { timeout: 10_000 });
+  const copyForm = page.locator('.schedules-form');
+  assert.match(await copyForm.locator('input[maxlength="120"]').inputValue(), /\(copy\)$/, 'the copy is titled as one');
+  await copyForm.getByRole('button', { name: 'Create schedule' }).click();
+  await page.waitForFunction(() => /^#\/schedules\/sch_/.test(location.hash), undefined, { timeout: 10_000 });
+  const copies = (await rpc.call('schedules.list')).filter((entry) => entry.kind === 'reminder');
+  assert.equal(copies.length, 2, 'the duplicate is a second reminder');
+  assert.deepEqual(copies.map((entry) => entry.spec.times), [['07:30'], ['07:30']], 'with the same rule');
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('button', { name: 'Cancel schedule' }).click();
+  await page.waitForFunction(() => location.hash === '#/schedules', undefined, { timeout: 10_000 });
+  assert.equal((await rpc.call('schedules.list')).length, 3);
+  await page.evaluate((id) => { location.hash = `#/schedules/${id}`; }, reminder.id);
+  await page.getByRole('button', { name: 'Delete' }).waitFor();
 
   // ---- delete asks first
   await page.getByRole('button', { name: 'Delete' }).click();

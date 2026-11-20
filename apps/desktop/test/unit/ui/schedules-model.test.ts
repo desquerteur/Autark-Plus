@@ -2,7 +2,7 @@
 // history words and the route.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { build, draftOf, editable, emptyDraft, outcomeText, sortSchedules } from '../../../src/ui/schedules/schedules-model.ts';
+import { build, draftOf, duplicateDraft, editable, emptyDraft, outcomeText, sortSchedules } from '../../../src/ui/schedules/schedules-model.ts';
 import { defaultForm } from '../../../src/ui/chat/composer/schedule-form.ts';
 import { formatRoute, parseRoute } from '../../../src/ui/lib/router.ts';
 import type { Schedule } from '../../../src/shared/model/tasks.ts';
@@ -69,4 +69,9 @@ test('"For me" is the person\'s own reminder (a timer): no agent, chat or level;
   assert.equal(draftOf(own).body, 'Call the dentist');
   assert.equal(editable(own), true);
   assert.equal(editable({ ...own, taskId: 'tk_1' } as Schedule), false);
+});
+
+test('Duplicate fills a new draft with a copy of the schedule, titled as a copy', () => {
+  const job = item({ kind: 'routine', ownerId: 'ag_1', title: 'News', conversationId: 'ch_x', payload: { taskTemplate: { title: 'News', notes: 'Do it' } } });
+  assert.deepEqual(duplicateDraft(job), { type: 'job', title: 'News (copy)', body: 'Do it', agentId: 'ag_1', conversationId: 'ch_x', important: false });
 });
