@@ -37,6 +37,11 @@ export function emptyDraft(type: DraftType = 'job', agentId = ''): Draft {
   return { type, title: '', body: '', agentId, conversationId: '', important: false };
 }
 
+/** A copy of a stored schedule as a new draft (Duplicate): the same kind, words, agent and chat, the title marked as a copy. */
+export function duplicateDraft(schedule: Schedule): Draft {
+  return { ...draftOf(schedule), title: `${schedule.title} (copy)` };
+}
+
 /** A stored schedule as the form's draft (Edit). The contact's chat and the owner stay as they are (not changeable). */
 export function draftOf(schedule: Schedule): Draft {
   const type: DraftType = schedule.kind === 'routine' ? 'job' : schedule.kind === 'reminder' || schedule.kind === 'timer' ? schedule.kind : 'message';

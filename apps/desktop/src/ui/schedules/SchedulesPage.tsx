@@ -1,6 +1,6 @@
 // #20: the Schedules tab's main zone. Without a selection: what schedules are and three starting points (a daily job that
 // sends its result to a contact, a message for later, a weekly reminder). With #/schedules/new: the form. With a
-// schedule: its page – what it does, its rule, the next runs, Pause/Resume, Run now, Edit, Delete – and the history of its
+// schedule: its page – what it does, its rule, the next runs, Pause/Resume, Run now, Edit, Duplicate (the form, filled with a copy), Delete – and the history of its
 // past runs (ran, run now, skipped, failed, ended). Kept fresh by the schedule events (tasks/schedules.ts).
 // Owns: these pages. Never: timing (the runtime scheduler fires) or the rule form (ScheduleEditor.tsx).
 
@@ -22,7 +22,9 @@ import { ensureSchedules, deleteSchedule, schedules, schedulesLoaded, setSchedul
 import { ScheduleEditor } from './ScheduleEditor.tsx';
 import type { Preset } from './ScheduleEditor.tsx';
 import { KIND_ICON, nextText, ruleOf } from './SchedulesNav.tsx';
-import { editable, KIND_LABEL, outcomeText } from './schedules-model.ts';
+import { duplicateDraft, editable, KIND_LABEL, outcomeText } from './schedules-model.ts';
+import { formFromSpec } from '../chat/composer/schedule-form.ts';
+import { localZone } from '../chat/composer/schedule-mode.ts';
 
 const PRESETS: Array<{ title: string; text: string; preset: Preset }> = [
   {
@@ -105,6 +107,10 @@ function Detail(props: { schedule: Schedule }) {
     setRunning(true);
     try { await rpc.call('schedules.runNow', { id: schedule.id }); } catch (error) { toastError(error, 'Could not run it now'); } finally { setRunning(false); }
   };
+  const duplicate = () => {
+    pending = { draft: duplicateDraft(schedule), form: formFromSpec(schedule.spec, Date.now(), schedule.spec.tz || localZone()) };
+    go.schedule('new');
+  };
   const remove = async () => { await deleteSchedule(schedule); if (!schedules.peek().some((entry) => entry.id === schedule.id)) go.schedule(); };
 
   if (editing) {
@@ -131,6 +137,7 @@ function Detail(props: { schedule: Schedule }) {
             {manage && <Button icon={schedule.active ? 'pause' : 'play'} onClick={() => void setScheduleActive(schedule, !schedule.active)}>{schedule.active ? 'Pause' : 'Resume'}</Button>}
             {can('schedules.runNow') && <Button icon="arrow-clockwise" busy={running} onClick={() => void runNow()}>Run now</Button>}
             {manage && editable(schedule) && <Button icon="pencil-simple" onClick={() => setEditing(true)}>Edit</Button>}
+            {can('schedules.create') && editable(schedule) && <Button icon="copy" onClick={duplicate}>Duplicate</Button>}
             {can('schedules.delete') && <Button icon="trash" onClick={() => void remove()}>Delete</Button>}
           </div>
 
