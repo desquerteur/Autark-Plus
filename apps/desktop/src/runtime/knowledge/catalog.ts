@@ -186,6 +186,7 @@ export async function describeSome(services: RuntimeServices, entries: readonly 
     if (!description || !entry.sha) continue;
     rememberDescribed(services, entry.sha, description, services.clock.now()); // also an own file: the same text is not asked again
     if (entry.writable && entry.skill) describeFile(entry.path, entry.skill.name, description, sha256, entry.sha); // the skill library sees the new mtime on its next read
+    skillCache.delete(services); // KV-backed descriptions can change without any skill file mtime change.
     changed.push({ ...entry, description });
   }
   if (changed.length && services.vectors?.available()) await services.vectors.embedTexts?.(changed.map((entry) => ({ key: entry.key, text: embedTextOf({ title: entry.title, description: entry.description, ...(entry.body ? { body: entry.body } : {}) }) })));
