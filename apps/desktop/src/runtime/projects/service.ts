@@ -115,11 +115,11 @@ export class ProjectService {
     return { ...entry, missing: false };
   }
 
-  /** The person's chats with the project's agents, newest first. */
+  /** The person's chats with the project's agents that have a message, newest first. */
   private sessions(agentIds: ReadonlySet<string>, chats: ConversationSummary[]): ProjectSession[] {
     if (!agentIds.size) return [];
     return chats.flatMap((chat) => {
-      if (chat.archivedAt) return [];
+      if (chat.archivedAt || chat.lastMessageAt === undefined) return []; // an empty chat (a hired agent's fresh 1:1) is no session yet
       const ids = chat.members.filter((member) => member.kind === 'agent' && !member.leftAt && agentIds.has(member.memberId)).map((member) => member.memberId);
       if (!ids.length) return [];
       return [{ conversationId: chat.id, title: chat.title, agentIds: ids, lastAt: chat.lastMessageAt ?? chat.updatedAt, working: chat.working.some((agentId) => ids.includes(agentId)) }];

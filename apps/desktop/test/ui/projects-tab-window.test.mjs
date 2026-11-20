@@ -5,7 +5,7 @@
 //   * typing a prompt in a project's "What should happen in …" field and Start session opens a new chat, in which an agent
 //     hired for exactly that folder answers (its prompt carries the folder as its home project); the chat header shows
 //     the project chip;
-//   * a session in the second project stays apart: each project lists its own session;
+//   * a session in the second project stays apart: each project lists its own session (a hired agent's empty 1:1 is none);
 //   * screenshots at 1280 px and phone width; no renderer errors.
 // Run: npm run build && node --test test/ui/projects-tab-window.test.mjs   SCREENSHOTS=<dir> keeps the screenshots.
 
@@ -119,8 +119,9 @@ test('#19: two projects side by side, a prompt in the Projects tab starts an age
   await until('the chat is one of beta\'s sessions', async () => (await sessionsOf(b.id)).includes(betaChat));
   assert.equal((await sessionsOf(a.id)).includes(betaChat), false, 'alpha does not list beta\'s session');
   assert.equal((await sessionsOf(b.id)).includes(alphaChat), false, 'beta does not list alpha\'s session');
+  assert.deepEqual(await sessionsOf(a.id), [alphaChat], 'the hired agent\'s empty 1:1 is no session');
   await page.evaluate((id) => { location.hash = `#/projects/${id}`; }, b.id);
-  await until('beta\'s sessions listed under it', async () => (await page.locator('.project-sessions .project-session').count()) >= 1);
+  await until('beta\'s one session listed under it', async () => (await page.locator('.project-sessions .project-session').count()) === 1);
   await shot('projects-03-two-projects-1280');
   await shot('projects-03-two-projects-1280');
 
