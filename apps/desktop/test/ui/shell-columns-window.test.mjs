@@ -302,10 +302,12 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   // a double-click on its divider gives it back its default width, room for the column and the panel side by side.
   await workspace.dblclick();
   await wait(async () => Number(await workspace.getAttribute('aria-valuenow')) === 400, 'the pane back at its default width');
-  await expectStable(page, ['.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell', '.chat-panel', '.composer'], async () => {
+  // one browser at a time: the globe opens the chat's tabs and closes the global pane, so the panel and composer get its room
+  await expectStable(page, ['.chat-header [data-cell="call"]', '.frame-workspace-cell[data-cell="browser"]', '.chat-header .chat-title-button', '.frame-workspace-cell'], async () => {
     await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
     await page.locator('.chat-area .browser-strip').waitFor();
   });
+  assert.equal(await page.locator('.global-pane').count(), 0, "the chat's tabs replace the global pane");
   const area = await page.evaluate(() => {
     const box = document.querySelector('.chat-area').getBoundingClientRect();
     const color = (selector) => { const el = document.querySelector(selector); return el && getComputedStyle(el).backgroundColor; };
