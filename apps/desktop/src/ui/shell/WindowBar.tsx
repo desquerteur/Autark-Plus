@@ -1,7 +1,8 @@
 // The frame's own header controls: the rail's sidebar toggle, and at the far right of the header row the one Browser
 // cell (globe). In a chat it is the chat's own browser – Chat tabs, the chat's area above the messages (ChatArea.tsx),
 // pressed while open, a dot while an agent's new tab waits there; elsewhere it shows and hides the global pane, a dot
-// while a new tab waits in the closed pane (workspace/attention.ts). One browser button, not two. After it, right before the caption controls (shell.css), the feedback cell. Both lie
+// while a new tab waits in the closed pane (workspace/attention.ts). One browser button, not two – and one browser at a
+// time: in a chat, a global pane opened elsewhere closes when the chat's tabs open. After it, right before the caption controls (shell.css), the feedback cell. Both lie
 // over the end of the pane's tab strip, which keeps their room free; fixed 32 px cells in both states, so nothing
 // beside them moves.
 // Owns: sidebar/workspace toggles, the workspace and feedback cells. Never: view content, the pane itself or
@@ -14,7 +15,7 @@ import { comboLabel } from '../lib/hotkeys.ts';
 import { toastError } from '../lib/toasts.ts';
 import { chatAttention, workspaceAttention } from '../workspace/attention.ts';
 import { activeConversationId } from '../lib/store.ts';
-import { chatAreaOpen, toggleChatArea } from '../lib/shell-state.ts';
+import { chatAreaOpen, setChatArea, toggleChatArea } from '../lib/shell-state.ts';
 
 export function toggleSidebar(): void {
   updatePreferences({ sidebarOpen: !preferences.value.sidebarOpen }).catch((error) => toastError(error));
@@ -30,16 +31,26 @@ export function SidebarToggle() {
     aria-expanded={shown} onClick={toggleSidebar} />;
 }
 
+/** Chat tabs from the one browser cell: one browser at a time – a global pane opened elsewhere gives way to the chat's. */
+function openChatTabs(chatId: string): void {
+  if (preferences.peek().workspaceOpen && !chatAreaOpen.peek()) {
+    updatePreferences({ workspaceOpen: false }).catch((error) => toastError(error));
+    setChatArea(chatId, true);
+    return;
+  }
+  toggleChatArea(chatId);
+}
+
 /** The frame's one browser cell (desktop, a child of the frame; shell.css positions it): in a chat the chat's tabs,
- *  elsewhere – and while the global pane is open – the global pane. */
+ *  elsewhere the global pane. */
 export function WorkspaceCell() {
   const chatId = activeConversationId.value;
-  if (chatId && !preferences.value.workspaceOpen) { // a global pane opened elsewhere stays closable here
+  if (chatId) {
     const open = chatAreaOpen.value;
     return (
       <span class="frame-header-cell frame-workspace-cell" data-cell="browser">
         <IconButton icon="globe" label="Chat tabs" iconSize={18} pressed={open} class="frame-header-button"
-          aria-expanded={open} onClick={() => toggleChatArea(chatId)} />
+          aria-expanded={open} onClick={() => openChatTabs(chatId)} />
         {!open && chatAttention.value === chatId && <span class="frame-header-badge dot" aria-hidden="true" />}
       </span>
     );
