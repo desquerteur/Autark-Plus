@@ -13,6 +13,7 @@ import { WorkforceError } from '../../shared/errors.ts';
 import type { RuntimeServices, Scheduler } from '../contracts.ts';
 import { SCHEDULE_HISTORY_MAX, type Schedule, type ScheduleRun, type ScheduleSpec } from '../../shared/model/tasks.ts';
 import type { NextDueSink } from './next-due.ts';
+import { watchPersonReminders } from './person-reminders.ts';
 import { ScheduleRepo } from './repo.ts';
 import { firesBetween, isOneOff, nextFire, validateSpec } from './spec.ts';
 import { ScheduleGone, announceCreated, fireSchedule } from './fire.ts';
@@ -69,6 +70,7 @@ export class SchedulerImpl implements Scheduler {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.unsubscribe.push(...watchPersonReminders(this.s, this.repo));
     this.wakeScanAt = this.s.clock.now();
     this.unsubscribe.push(this.s.wakes.onChange(({ agentId, dueAt }) => {
       if (dueAt !== undefined && dueAt <= this.s.clock.now()) this.announce([agentId]);
@@ -266,7 +268,9 @@ export class SchedulerImpl implements Scheduler {
       const fired = fireSchedule(schedule, occurrence, this.s);
       const task = fired?.taskId ? { taskId: fired.taskId } : {};
       if (fired?.skipped) return { more: true, run: { ...base, outcome: 'skipped', note: 'The previous task is still open', ...task } };
-      return { more: true, run: { ...base, outcome: 'ok', ...task } };
+      const personActions: ScheduleRun['personActions'] = schedule.kind === 'timer' && !schedule.taskId && schedule.ownerId === HUMAN_ID && fired?.taskId
+        ? [{ state: 'pending', at: base.firedAt }] : undefined;
+      return { more: true, run: { ...base, outcome: 'ok', ...task, ...(personActions ? { personActions } : {}) } };
     } catch (error) {
       if (error instanceof ScheduleGone) {
         this.deactivate(schedule.id, false);

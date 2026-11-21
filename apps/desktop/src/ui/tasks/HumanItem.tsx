@@ -30,6 +30,7 @@ import { KeptTail } from '../lib/kept-tail.ts';
 import { conversationMap, removeById, todos } from '../lib/store.ts';
 import { chatTitle } from '../lib/chat-face.tsx';
 import { dayZone } from '../lib/day-store.ts';
+import { go } from '../lib/router.ts';
 import { rpc } from '../lib/rpc.ts';
 import { toastError } from '../lib/toasts.ts';
 import { AskBlock } from '../blocks/AskBlock.tsx';
@@ -240,6 +241,7 @@ export function HumanItem(props: HumanItemProps) {
             )}
           </span>
         </button>
+        {!leaving && task.origin?.source.startsWith('schedule:') && <button type="button" class="text-button" aria-label="Open source schedule" onClick={() => go.schedule(task.origin!.source.slice(9))}>Schedule</button>}
         {!leaving && <MoreButton build={() => todoMenu(task, handlers)} />}
       </div>
       {declining && !leaving && <DeclineReason task={task} onClose={() => setDeclining(false)} onDeclined={answered} />}

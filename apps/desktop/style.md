@@ -95,3 +95,8 @@ screen's look changes.
 - Layout: the phone layout starts when the zoomed room is under 720 px (`innerWidth / zoom`), so a PC window at 150 % switches below 1080 px.
 - Control row (`.scale-control`, one line): small − icon button, range 200px (min 90), small + icon button, the value as a button back to 100 % (`.scale-value`: 56×28px, 12px `--secondary` tabular, right-aligned, `--hover` behind it on hover, disabled at 100 %); 6px gaps.
 - Keys: Ctrl + (also Ctrl =), Ctrl −, Ctrl 0 outside a website tab; a short info toast names the new size.
+
+## Scheduled person reminders (#34)
+- My day reuses the standard HumanItem row, check widget, due-time meta and snooze menu.
+- A source Schedule button sits beside the more menu, outside the expand button; it reuses `.text-button` theme color, font, focus and spacing without new assets or typography.
+- Schedules history keeps its layout and shows In My day / Done / Snoozed / Skipped for person reminders.

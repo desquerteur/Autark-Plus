@@ -198,8 +198,9 @@ export interface ScheduleRun {
   at: number; // the planned occurrence (epoch ms)
   firedAt: number; // when it was handled
   outcome: 'ok' | 'skipped' | 'failed' | 'ended'; // skipped: missed while the PC was off, or the last routine task was still open; ended: the schedule stopped (its chat or owner is gone)
+  personActions?: Array<{ state: 'pending' | 'done' | 'snoozed' | 'skipped'; at: number; until?: number }>; // #34: last 10 My day actions
   manual?: true; // started with "Run now"
-  taskId?: string; // a routine's run: the task it created, or the still-open one it was skipped for
+  taskId?: string; // a routine/person reminder's task, or the still-open routine task it was skipped for
   note?: string; // one short line (why skipped or failed)
 }
 

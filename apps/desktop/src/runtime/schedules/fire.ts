@@ -111,17 +111,24 @@ export function fireSchedule(schedule: Schedule, occurrence: number, s: FireDeps
       return { taskId: task.id };
     }
     case 'timer': {
-      const linked = schedule.taskId ? s.tasks.get(schedule.taskId) : undefined;
+      // #34: standalone reminders create one My day item per occurrence; linked timers keep theirs.
+      const taskId = schedule.taskId ?? s.tasks.create({
+        title: schedule.title, notes: schedule.payload.note ?? '', assigneeKind: 'human', createdBy: HUMAN_ID,
+        dueAt: occurrence, widget: { type: 'confirm', instructions: schedule.title },
+        origin: { source: scheduleSource(schedule.id), label: `Reminder "${schedule.title}"` },
+        clientId: `schedule:${schedule.id}:${occurrence}`,
+      }).id;
+      const linked = s.tasks.get(taskId);
       if (schedule.taskId && (!linked || linked.status === 'done' || linked.status === 'cancelled')) throw new ScheduleGone('to-do finished');
       s.notifications?.notify({
         kind: 'todo', title: schedule.title, body: schedule.payload.note && schedule.payload.note !== schedule.title ? schedule.payload.note : '',
-        conversationId: schedule.conversationId, taskId: schedule.taskId,
+        conversationId: schedule.conversationId, taskId,
       });
-      if (schedule.taskId) {
-        const task = s.tasks.get(schedule.taskId);
+      if (taskId) {
+        const task = s.tasks.get(taskId);
         if (task && (task.status === 'open' || task.status === 'waiting')) s.tasks.setStatus(task.id, 'needs_you', SYSTEM_ID, 'Timer');
       }
-      return undefined;
+      return schedule.taskId ? undefined : { taskId };
     }
   }
 }

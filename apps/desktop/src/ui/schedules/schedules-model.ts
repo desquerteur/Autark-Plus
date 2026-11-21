@@ -28,7 +28,7 @@ export const TYPE_HINT: Record<DraftType, string> = {
   job: 'An agent works on it at the set time – e.g. researches the news – and can send the result to a contact.',
   message: 'Posts your text into a chat at the set time, as if you wrote it then.',
   reminder: 'Wakes an agent with a note to itself – nothing is posted in a chat.',
-  timer: 'Reminds you with a notification at the set time – no agent, nothing is posted.',
+  timer: 'Adds a reminder to My day and notifies you at the set time – no agent, nothing is posted.',
 };
 
 export const KIND_LABEL: Record<Schedule['kind'], string> = { routine: 'Agent job', message: 'Message', reminder: 'Reminder', timer: 'Timer' };
@@ -66,6 +66,8 @@ export function matches(schedule: Schedule, query: string, ownerName: string): b
 
 /** One line of the history: "Ok", "Skipped – Missed while the app was not running" … */
 export function outcomeText(run: ScheduleRun): string {
+  const action = run.personActions?.at(-1);
+  if (action) return { pending: 'In My day', done: 'Done', snoozed: 'Snoozed', skipped: 'Skipped' }[action.state];
   const head = { ok: run.manual ? 'Run now' : 'Ran', skipped: 'Skipped', failed: 'Failed', ended: 'Ended' }[run.outcome];
   return run.note ? `${head} · ${run.note}` : head;
 }
