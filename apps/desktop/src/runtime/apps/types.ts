@@ -141,7 +141,9 @@ export class McpAuthRequired extends Error {
 /** Network/process failure. `sent`: the request may have reached the server. Message is user-safe. */
 export class McpTransportError extends Error {
   readonly sent: boolean;
-  constructor(message: string, sent: boolean) { super(message); this.name = 'McpTransportError'; this.sent = sent; }
+  /** Nothing listens at the address (ECONNREFUSED): for a local server, its app is not running. */
+  readonly refused: boolean;
+  constructor(message: string, sent: boolean, refused = false) { super(message); this.name = 'McpTransportError'; this.sent = sent; this.refused = refused; }
 }
 
 /** A JSON-RPC error answer from the server (message clipped, user-safe). */

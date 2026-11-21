@@ -1,6 +1,6 @@
 // The words the connectors service gives the AI and the person: what a connector needs when it wants a
 // sign-in or a key, a failure without its secrets, and a connector's address as the person recognises it.
-// Owns: clip, hasAuthorization, signInText, errorText, addressOf. Never: a token, header, env value,
+// Owns: clip, hasAuthorization, signInText, errorText, notRunning, addressOf. Never: a token, header, env value,
 // response body or address from an error (only the host of an http server).
 
 import { WorkforceError } from '../../shared/errors.ts';
@@ -23,6 +23,19 @@ export function errorText(error: unknown, name: string): string {
   if (error instanceof McpProtocolError) return `${name} answered with an error (code ${error.code}).`;
   if (error instanceof WorkforceError) return clip(error.message);
   return `Could not connect to ${name}.`;
+}
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/** A local http server (127.0.0.1 / localhost / [::1]) that refused the connection: its app is simply not running. */
+export function notRunning(error: unknown, connector: Connector): boolean {
+  if (!(error instanceof McpTransportError) || !error.refused || connector.transport !== 'http') return false;
+  try { return LOOPBACK.has(new URL(connector.url ?? '').hostname); } catch { return false; }
+}
+
+/** The status text for a local app that is not running (its own host and port only). */
+export function notRunningText(connector: Connector): string {
+  return `${connector.name} is not running – nothing answers at ${addressOf(connector)}. Start it, then reconnect.`;
 }
 
 /** What the person recognises: an http server's host, a command's name, a mailbox's address. */
