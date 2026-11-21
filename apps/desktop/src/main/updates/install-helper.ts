@@ -43,7 +43,8 @@ export const WINDOWS_PIDS_NAME = 'update-helper-pids.txt';
  * A missing installer is checked first: start would fall back to ShellExecute, whose "cannot find" dialog is visible
  * and keeps the helper alive until someone closes it.
  * The first run only starts the script again with start /b and ends: see spawnHelper for why. AUTARK_UPDATE_WAIT
- * shortens the wait for the real-run test only.
+ * shortens the wait for the real-run test only. The new version starts without any AUTARK_UPDATE_* value: it used to
+ * inherit AUTARK_UPDATE_INNER=1, so its own next helper skipped the start /b, stayed in the job and died with the app.
  */
 export const WINDOWS_HELPER_SCRIPT = `@echo off
 setlocal
@@ -85,7 +86,12 @@ if exist "%AUTARK_UPDATE_EXE%" goto run
 call :note "the app file is missing after the install; nothing to start"
 exit /b 1
 :run
-start "" /D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated
+set "run_dir=%AUTARK_UPDATE_DIR%"
+set "run_exe=%AUTARK_UPDATE_EXE%"
+set "run_log=%AUTARK_UPDATE_LOG%"
+for /f "delims==" %%v in ('set AUTARK_UPDATE_ 2^>nul') do set "%%v="
+start "" /D "%run_dir%" "%run_exe%" --updated
+set "AUTARK_UPDATE_LOG=%run_log%"
 call :note "new version started"
 exit /b 0
 :note
@@ -258,7 +264,7 @@ export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEv
   const windows = platform === 'win32';
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: { ...process.env, ...launch.env },
+    env: helperEnv(launch, process.env),
     detached: !windows,
     stdio: 'ignore',
     windowsHide: true,
@@ -274,6 +280,17 @@ export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEv
     events.started();
   });
   child.once('error', error => events.failed(error));
+}
+
+/**
+ * The helper's environment: this process's without any AUTARK_UPDATE_* it inherited, plus the launch's own values. An
+ * app that an older helper started carries that helper's values (AUTARK_UPDATE_INNER=1 made the new helper skip its way
+ * out of the job; AUTARK_UPDATE_PACKAGE named a package that is gone), so only this launch's values reach the script.
+ */
+export function helperEnv(launch: Pick<HelperLaunch, 'env'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(base)) if (!/^AUTARK_UPDATE_/i.test(key)) env[key] = value;
+  return { ...env, ...launch.env };
 }
 
 function errorCode(error: unknown): string {
