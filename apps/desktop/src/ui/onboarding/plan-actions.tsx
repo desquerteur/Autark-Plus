@@ -9,7 +9,7 @@ import { signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import type { DetectionReport } from '../../shared/model/providers.ts';
 import { rpc } from '../lib/rpc.ts';
-import { accounts } from '../lib/store.ts';
+import { accounts, signInFailures } from '../lib/store.ts';
 import { Button } from '../lib/ui.tsx';
 import { PLAN_LABELS, PLAN_PROVIDERS, startPlanSetup, type PlanEnv, type PlanFlow, type PlanProvider, type PlanView } from './plan-setup.ts';
 
@@ -35,7 +35,7 @@ let rescan: (() => void) | null = null;
 export function startPlan(provider: PlanProvider, report: () => DetectionReport | null, label?: string): void {
   flow?.cancel();
   planFlow.value = { view: planFlow.value.view, running: provider };
-  const handle = startPlanSetup(provider, { rpc: PLAN_RPC, accounts, report, timer, focus, show: (view) => { planFlow.value = { ...planFlow.value, view }; } }, label);
+  const handle = startPlanSetup(provider, { rpc: PLAN_RPC, accounts, failures: signInFailures, report, timer, focus, show: (view) => { planFlow.value = { ...planFlow.value, view }; } }, label);
   flow = handle;
   void handle.done.then((result) => {
     if (flow !== handle) return; // replaced by a newer flow

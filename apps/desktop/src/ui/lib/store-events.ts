@@ -12,8 +12,15 @@ import type { TaskView } from '../../shared/model/tasks.ts';
 import { rpc } from './rpc.ts';
 import {
   accounts, activeConversationId, activity, agents, archivedAgents, conversations, loadAll, messages, models, putMessage,
-  removeById, route, settings, systemInfo, tasks, todoClock, todos, updateState, upsertById, usage,
+  removeById, route, settings, signInFailures, systemInfo, tasks, todoClock, todos, updateState, upsertById, usage,
 } from './store.ts';
+
+/** #24: a refused sign-in is remembered until the account works or is removed. */
+function forgetSignInFailure(id: string): void {
+  if (!(id in signInFailures.value)) return;
+  const { [id]: _gone, ...rest } = signInFailures.value;
+  signInFailures.value = rest;
+}
 import { nextListChange, onForYouList } from '../tasks/todo-time.ts';
 import type { Topic } from '../../shared/api/protocol.ts';
 import { dismissToastsWhere, pushToast, toastNotification } from './toasts.ts';
@@ -109,8 +116,9 @@ export function wireEvents(): void {
   wireSplits(); // B-057: split.upserted, and an agent's groups read again when its split runs start or end
 
   // providers
-  rpc.on('account.upserted', (account) => upsertById(accounts, account));
-  rpc.on('account.removed', ({ id }) => removeById(accounts, id));
+  rpc.on('account.upserted', (account) => { upsertById(accounts, account); if (account.state === 'ok' || account.state === 'cooling') forgetSignInFailure(account.id); });
+  rpc.on('account.removed', ({ id }) => { removeById(accounts, id); forgetSignInFailure(id); });
+  rpc.on('account.sign_in_failed', ({ id, message }) => { signInFailures.value = { ...signInFailures.value, [id]: { message, at: Date.now() } }; });
   rpc.on('usage.updated', (list) => { usage.value = list; });
   rpc.on('models.updated', (list) => { models.value = list; });
 

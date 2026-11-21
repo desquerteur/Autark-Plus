@@ -44,6 +44,8 @@ export interface PlanEnv {
   rpc: PlanRpc;
   /** The accounts as the runtime's events keep them (lib/store.ts accounts). */
   accounts: { peek(): readonly Account[]; subscribe(fn: (value: readonly Account[]) => void): () => void };
+  /** desquerteur/Autark-Plus#24: refused sign-ins by account id (lib/store.ts signInFailures) – step 3 ends with the reason at once. */
+  failures?: { peek(): Readonly<Record<string, SignInFailure>>; subscribe(fn: (value: Readonly<Record<string, SignInFailure>>) => void): () => void };
   /** The latest PC scan (null: none yet – step 1 is left to the runtime's add). */
   report: () => DetectionReport | null;
   /** One timer: calls `fire` after `ms`; returns its cancel. */
@@ -55,6 +57,9 @@ export interface PlanEnv {
 }
 
 export interface PlanFlow { done: Promise<PlanResult>; cancel(): void }
+
+/** Why an account's own sign-in was refused (account.sign_in_failed) and when it arrived. */
+export interface SignInFailure { message: string; at: number }
 
 const WORKS: ReadonlySet<Account['state']> = new Set(['ok', 'cooling']);
 const CANCELLED: PlanResult = { ok: false, reason: 'cancelled', message: '' };
@@ -80,12 +85,15 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     return { ok: false, reason, message };
   };
 
-  /** Step 3: resolves with the account once it is settled (works, or the Free plan), 'gone' when it was removed, else 'timeout' / 'cancelled'. */
-  const waitSignedIn = (id: string) => new Promise<Account | 'timeout' | 'gone' | 'cancelled'>((resolve) => {
+  /**
+   * Step 3: resolves with the account once it is settled (works, or the Free plan), 'gone' when it was removed, the
+   * refusal when the agent turned the sign-in down (#24; one from before this wait does not count), else 'timeout' / 'cancelled'.
+   */
+  const waitSignedIn = (id: string, before: Readonly<Record<string, SignInFailure>> | undefined) => new Promise<Account | SignInFailure | 'timeout' | 'gone' | 'cancelled'>((resolve) => {
     let done = false;
     let seen = false;
     const stops: Array<() => void> = [];
-    const finish = (value: Account | 'timeout' | 'gone' | 'cancelled') => {
+    const finish = (value: Account | SignInFailure | 'timeout' | 'gone' | 'cancelled') => {
       if (done) return;
       done = true;
       abortWait = undefined;
@@ -102,6 +110,11 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
       if (settled(account)) finish(account);
     });
     if (done) off(); else stops.push(off);
+    if (env.failures && !done) {
+      const earlier = before?.[id]; // as it was before accounts.add: a refusal during add counts
+      const offFailures = env.failures.subscribe((all) => { const failure = all[id]; if (failure && failure !== earlier) finish(failure); });
+      if (done) offFailures(); else stops.push(offFailures);
+    }
   });
 
   /** Add an account and wait only for its sign-in, regardless of any existing accounts. */
@@ -109,6 +122,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     let account: Account;
     let url: string | undefined;
     show({ step: 'sign-in', text: SIGN_IN_TEXT });
+    const before = env.failures?.peek();
     try {
       const { signInUrl, ...rest } = await env.rpc.add(provider, label);
       account = rest;
@@ -120,10 +134,11 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     if (settled(fresh)) return fresh;
     show({ step: 'sign-in', text: SIGN_IN_TEXT, url });
     // 3. the browser
-    const waited = await waitSignedIn(fresh.id);
+    const waited = await waitSignedIn(fresh.id, before);
     if (waited === 'cancelled' || cancelled) return CANCELLED;
     if (waited === 'timeout') return fail('sign-in', 'sign-in', SIGN_IN_GAVE_UP);
     if (waited === 'gone') return fail('sign-in', 'sign-in', 'The sign-in was removed – try again.');
+    if ('message' in waited) return fail('sign-in', 'sign-in', waited.message); // #24: e.g. Google refuses personal accounts
     return waited;
   };
 

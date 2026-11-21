@@ -58,6 +58,8 @@ export interface EventMap {
   // providers
   'account.upserted': Account;
   'account.removed': { id: string };
+  /** desquerteur/Autark-Plus#24: an agent's own sign-in ended with its refusal (Gemini CLI: Google no longer serves personal accounts). */
+  'account.sign_in_failed': { id: string; message: string };
   'usage.updated': UsageSummary[];
   'models.updated': ModelInfo[];
   // system
@@ -144,6 +146,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
       return 'org'; // run items are also delivered on runs:<agentId> by the server (it knows the run)
     case 'account.upserted':
     case 'account.removed':
+    case 'account.sign_in_failed':
     case 'usage.updated':
     case 'models.updated':
       return 'providers';

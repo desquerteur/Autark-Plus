@@ -261,12 +261,31 @@ export interface AcpSignInPort {
   authenticate(account: Account, methodId?: string): Promise<boolean>;
 }
 
+/** How an agent's own sign-in ended: signed in, or not – with the agent's reason when it refused (#24). */
+export type SignInEnd = { ok: true } | { ok: false; message?: string };
+
+/**
+ * desquerteur/Autark-Plus#24: Google stopped serving Gemini CLI for personal Google accounts (Code Assist for individuals,
+ * AI Pro and AI Ultra) on 18 June 2026 – its authenticate then answers "This client is no longer supported for Gemini
+ * Code Assist for individuals …" (UNSUPPORTED_CLIENT). Only Code Assist Standard/Enterprise and API keys still work.
+ */
+const GEMINI_PERSONAL_GONE = /no longer supported for gemini code assist for individuals|unsupported_client/i;
+export const GEMINI_PERSONAL_SIGN_IN_GONE = 'Google no longer lets Gemini CLI sign in with a personal Google account (since 18 June 2026). Connect Gemini with an API key from Google AI Studio instead, or sign in with a Google Workspace account that has Gemini Code Assist Standard or Enterprise.';
+
+/** The text the person sees for an agent's refused sign-in: a known refusal explained, else the agent's own words. */
+export function signInRefusal(spec: Pick<AcpProviderSpec, 'provider' | 'name'>, message: string): string {
+  if (spec.provider === 'gemini-cli' && GEMINI_PERSONAL_GONE.test(message)) return GEMINI_PERSONAL_SIGN_IN_GONE;
+  const text = message.replace(/\s+/g, ' ').trim();
+  return `${spec.name} refused the sign-in: ${text.length > 300 ? `${text.slice(0, 299)}…` : text}`;
+}
+
 /**
  * Starts the agent's own sign-in for `account` (ACP authenticate with the spec's method, e.g. Gemini
  * CLI's Google sign-in, which opens the browser). Resolves once it started; `done` ends with the
- * sign-in (true = signed in). Throws 'unavailable' when the CLI cannot start or offers no such method.
+ * sign-in – with the agent's reason when it answered with an error (#24). Throws 'unavailable' when the
+ * CLI cannot start or offers no such method.
  */
-export async function startAuthentication(engine: unknown, account: Account, spec: AcpProviderSpec): Promise<{ done: Promise<boolean> }> {
+export async function startAuthentication(engine: unknown, account: Account, spec: AcpProviderSpec): Promise<{ done: Promise<SignInEnd> }> {
   const port = engine as Partial<AcpSignInPort> | undefined;
   if (typeof port?.authMethods !== 'function' || typeof port.authenticate !== 'function') throw new WorkforceError('unavailable', `${spec.name} is not available.`);
   let methods: AuthMethod[];
@@ -274,5 +293,9 @@ export async function startAuthentication(engine: unknown, account: Account, spe
   catch (error) { throw new WorkforceError('unavailable', error instanceof Error && error.message ? error.message : `${spec.name} could not start.`); }
   const method = signInMethod(spec, methods);
   if (!method) throw new WorkforceError('unavailable', `${spec.name} offers no sign-in Autark can start. Sign in once in ${spec.name} itself, then check again.`);
-  return { done: port.authenticate(account, method.id).catch(() => false) };
+  const done = port.authenticate(account, method.id).then(
+    (ok): SignInEnd => (ok ? { ok: true } : { ok: false }),
+    (error: unknown): SignInEnd => (error instanceof Error && error.message ? { ok: false, message: signInRefusal(spec, error.message) } : { ok: false }),
+  );
+  return { done };
 }

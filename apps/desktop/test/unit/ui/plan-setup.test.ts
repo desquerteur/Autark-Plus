@@ -229,3 +229,17 @@ test('the model setup retains the plan buttons and the reserved sign-in link cel
   assert.doesNotMatch(setup, /uses=|\bdecision\b|\bembeddings\b/i);
   assert.ok(setup.includes('<ConnectionForm '));
 });
+
+test('#24: a refused sign-in (Google no longer serves personal accounts) ends the wait at once with its reason; an older refusal does not', async () => {
+  const failures = signal<Record<string, { message: string; at: number }>>({ acc_new: { message: 'an earlier attempt', at: 1 } });
+  const h = harness();
+  const flow = startPlanSetup('gemini-cli', { ...h.env, failures });
+  await until(() => h.timers.length === 1, 'waiting for the browser');
+  await flush();
+  assert.equal(h.views.at(-1)!.text, SIGN_IN_TEXT, 'the refusal from before this add does not end the wait');
+  failures.value = { acc_new: { message: 'Google no longer lets Gemini CLI sign in with a personal Google account.', at: 2 } };
+  assert.deepEqual(await flow.done, { ok: false, reason: 'sign-in', message: 'Google no longer lets Gemini CLI sign in with a personal Google account.' });
+  assert.deepEqual([h.views.at(-1)!.step, h.views.at(-1)!.tone], ['sign-in', 'error'], 'the status line shows the reason in red');
+  assert.ok(h.timers[0].cancelled, 'the 5-minute timer is gone');
+  assert.equal(h.focus.size, 0, 'the focus listener is gone');
+});

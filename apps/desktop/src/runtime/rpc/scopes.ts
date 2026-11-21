@@ -54,7 +54,7 @@ const PANE_EVENTS: ReadonlySet<string> = new Set(['tabs.changed', 'tabs.position
 /** Events for runtime listeners only: never sent to any client (see the header). */
 const BUS_ONLY: ReadonlySet<string> = new Set(['task.changed', 'phoneUse.reply', 'phoneUse.attached']);
 /** B-078: accounts on the phone (accounts.* is 'settings' on a secure transport, rpc/handlers/providers.ts). */
-const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed']);
+const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed', 'account.sign_in_failed']);
 
 /** True for a syntactically valid topic ('chats' … or 'chat:<id>' / 'runs:<agentId>' / 'browser:<agentId>'). */
 export function isTopic(value: unknown): value is Topic {

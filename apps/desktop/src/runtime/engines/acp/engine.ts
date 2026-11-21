@@ -135,7 +135,11 @@ export class AcpEngine implements Engine {
     return (await this.process(account)).info.authMethods;
   }
 
-  /** ACP authenticate (the agent runs its own sign-in, e.g. a browser OAuth). True when it succeeded. */
+  /**
+   * ACP authenticate (the agent runs its own sign-in, e.g. a browser OAuth). True when it succeeded, false when it
+   * timed out or the agent went away; the agent's own error answer is thrown with its message (desquerteur/Autark-Plus#24:
+   * Google's refusal of personal accounts must reach the person instead of a silent 5-minute wait).
+   */
   async authenticate(account: Account, methodId?: string): Promise<boolean> {
     const proc = await this.process(account);
     const id = methodId ?? proc.info.authMethods[0]?.id;
@@ -145,7 +149,10 @@ export class AcpEngine implements Engine {
       await proc.conn.request('authenticate', { methodId: id }, 5 * 60_000);
       this.offers.delete(account.id);
       return true;
-    } catch { return false; } finally { end(); }
+    } catch (error) {
+      if (error instanceof AcpRpcError && error.kind === 'remote' && error.message) throw error;
+      return false;
+    } finally { end(); }
   }
 
   /** MCP servers for session/new|load: our hub behind the session's proxy key (bound right away). */
