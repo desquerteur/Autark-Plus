@@ -88,3 +88,10 @@ screen's look changes.
 - Ticks: the feedback checkboxes (`.feedback-check`) – "Page it happened on", "Log excerpt (warnings, redacted)"; both off by default.
 - Hint: 11/16px `--muted`; action: one primary button ("Create issue" with a GitHub app, else "Open on GitHub").
 - Filed: state pill (open: `--success` on 14% of it; closed: `--muted` on 16%), repository, ghost "Open".
+
+## Scale (#30) – Settings › Appearance › Scale, `src/ui/styles/appearance.css`
+- What: the whole app zoomed – `html { zoom: calc(var(--text-zoom) * var(--ui-scale)) }`; 80–150 %, 10 % steps, default 100 %. A theme's text size multiplies with it.
+- Two values: `uiScale` (PCs) and `uiScalePhone` (the web app on a touch screen); each window uses its own kind.
+- Layout: the phone layout starts when the zoomed room is under 720 px (`innerWidth / zoom`), so a PC window at 150 % switches below 1080 px.
+- Control row (`.scale-control`, one line): small − icon button, range 200px (min 90), small + icon button, the value as a button back to 100 % (`.scale-value`: 56×28px, 12px `--secondary` tabular, right-aligned, `--hover` behind it on hover, disabled at 100 %); 6px gaps.
+- Keys: Ctrl + (also Ctrl =), Ctrl −, Ctrl 0 outside a website tab; a short info toast names the new size.

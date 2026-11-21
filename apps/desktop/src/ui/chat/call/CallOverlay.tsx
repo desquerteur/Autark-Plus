@@ -21,6 +21,11 @@ import { callCaption, callNow, callPhase, callUi, hangUp, setCallView, toggleCap
 import type { CallUi } from './call-session.ts';
 import { callSink, setCallSink, sinkSupported } from './call-levels.ts';
 import { useCallLevels } from './CallWave.tsx';
+import { pageZoom, unzoom } from '../../lib/platform.ts';
+
+// #30: the mini window's place in the zoomed page's pixels (rects, pointer and the window are window pixels)
+const pageBox = (element: Element) => { const r = element.getBoundingClientRect(); const z = pageZoom(); return { left: r.left / z, top: r.top / z, width: r.width / z, height: r.height / z, right: r.right / z, bottom: r.bottom / z, x: r.x / z, y: r.y / z }; };
+const pageView = () => { const z = pageZoom(); return { width: innerWidth / z, height: innerHeight / z }; };
 
 const MINI_KEY = 'wf.callMini';
 /** The mini window's first place: beside the rail, at the bottom (over the chat list, never over the composer's Send). */
@@ -165,9 +170,9 @@ function CallMini(props: { ui: CallUi }) {
     const element = root.current;
     if (!element || phone) return;
     const place = () => {
-      const box = element.getBoundingClientRect();
-      const start = at ?? { x: MINI_LEFT, y: innerHeight - box.height - 16 }; // first: bottom left, clear of the chat's header, status lines and send
-      const kept = clampMini(start, box, { width: innerWidth, height: innerHeight });
+      const box = pageBox(element);
+      const start = at ?? { x: MINI_LEFT, y: pageView().height - box.height - 16 }; // first: bottom left, clear of the chat's header, status lines and send
+      const kept = clampMini(start, box, pageView());
       if (!at || kept.x !== at.x || kept.y !== at.y) setAt(kept);
     };
     place();
@@ -176,20 +181,21 @@ function CallMini(props: { ui: CallUi }) {
   }, [at, phone]);
   const down = (event: PointerEvent) => {
     if (phone || event.button !== 0 || (event.target as HTMLElement).closest('.call-control-button')) return;
-    const box = root.current!.getBoundingClientRect();
-    drag.current = { x: event.clientX, y: event.clientY, dx: event.clientX - box.left, dy: event.clientY - box.top, moved: false };
+    const box = pageBox(root.current!);
+    const x = unzoom(event.clientX); const y = unzoom(event.clientY);
+    drag.current = { x, y, dx: x - box.left, dy: y - box.top, moved: false };
   };
   const move = (event: PointerEvent) => {
     const grab = drag.current;
     const element = root.current;
     if (!grab || !element) return;
     if (!grab.moved) {
-      if (Math.hypot(event.clientX - grab.x, event.clientY - grab.y) < DRAG_PX) return;
+      if (Math.hypot(unzoom(event.clientX) - grab.x, unzoom(event.clientY) - grab.y) < DRAG_PX) return;
       grab.moved = true;
       element.setPointerCapture(event.pointerId); // from here the window follows the pointer; the release is no click
     }
-    const box = element.getBoundingClientRect();
-    setAt(clampMini({ x: event.clientX - grab.dx, y: event.clientY - grab.dy }, box, { width: innerWidth, height: innerHeight }));
+    const box = pageBox(element);
+    setAt(clampMini({ x: unzoom(event.clientX) - grab.dx, y: unzoom(event.clientY) - grab.dy }, box, pageView()));
   };
   const up = () => {
     const grab = drag.current;

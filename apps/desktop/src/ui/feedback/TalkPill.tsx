@@ -8,6 +8,7 @@
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { dictationLevels } from '../lib/dictation.ts';
+import { pageZoom } from '../lib/platform.ts';
 
 export const BARS = 12;
 const PITCH = 4; // px per bar (bar + gap)
@@ -48,7 +49,8 @@ export function TalkPill(props: { anchor: HTMLElement | null; live: boolean }) {
     if (!anchor) return;
     const box = anchor.getBoundingClientRect();
     const width = WIDTH + 24; // the pill's padding (feedback.css .feedback-talk)
-    setPlace({ left: Math.max(8, Math.min(innerWidth - width - 8, box.left + box.width / 2 - width / 2)), top: box.bottom + 6 });
+    const zoom = pageZoom(); // #30: the box in window pixels, the pill's place on the zoomed page
+    setPlace({ left: Math.max(8, Math.min(innerWidth / zoom - width - 8, (box.left + box.width / 2) / zoom - width / 2)), top: box.bottom / zoom + 6 });
   }, [anchor]);
 
   useEffect(() => {

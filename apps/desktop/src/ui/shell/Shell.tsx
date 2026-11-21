@@ -20,7 +20,7 @@ import { useSignal } from '@preact/signals';
 import { GLOBAL_SPACE } from '../../shared/api/workspace-browser.ts';
 import { isMobile, loadError, loaded, preferences, route, updatePreferences } from '../lib/store.ts';
 import { rpc } from '../lib/rpc.ts';
-import { bridge } from '../lib/platform.ts';
+import { bridge, unzoom } from '../lib/platform.ts';
 import { hotkey } from '../lib/hotkeys.ts';
 import { toggleSettings } from '../lib/router.ts';
 import { ConfirmHost } from '../lib/dialog.tsx';
@@ -100,7 +100,7 @@ function DesktopShell() {
   useLayoutEffect(() => {
     const element = rowRoom.current;
     if (!element) return;
-    const measure = () => { stripInRow.value = element.getBoundingClientRect().width >= ROW_ROOM; };
+    const measure = () => { stripInRow.value = unzoom(element.getBoundingClientRect().width) >= ROW_ROOM; };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);

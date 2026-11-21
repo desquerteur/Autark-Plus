@@ -336,7 +336,7 @@ export const TYPE_DOCS: Record<string, string> = {
   "Agent": "interface Agent { id: string; name: string; role: string; avatar: Avatar; spaceId?: string; managerId?: string; team?: string; instructions: string; mode: string; skills: string[]; modelPolicy: ModelPolicy; deviceId?: string; status: AgentStatus; statusNote?: string; template?: string; voice?: string; createdBy: string; createdAt: number; updatedAt: number; archivedAt?: number; }",
   "AgentPersonality": "type AgentPersonality = Partial<Personality>",
   "AgentStatus": "type AgentStatus = 'idle' | 'working' | 'waiting' | 'paused' | 'error'",
-  "AppearanceSettings": "interface AppearanceSettings { chatDock: ChatDock; theme: string; themes: CustomTheme[]; panels: PanelKind[]; hiddenPanels: PanelKind[]; }",
+  "AppearanceSettings": "interface AppearanceSettings { chatDock: ChatDock; theme: string; themes: CustomTheme[]; panels: PanelKind[]; hiddenPanels: PanelKind[]; uiScale: number; uiScalePhone: number; }",
   "AskBlockType": "type AskBlockType = | 'choice' | 'form' | 'approve' | 'checklist' | 'timer' | 'record' | 'upload' | 'confirm' | 'review'",
   "AssigneeKind": "type AssigneeKind = 'team' | 'agent' | 'human'",
   "Attachment": "interface Attachment { fileId: string; name: string; mime: string; size: number; width?: number; height?: number; durationMs?: number; }",

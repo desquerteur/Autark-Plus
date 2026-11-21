@@ -27,6 +27,7 @@ import { ChatArea } from './ChatArea.tsx';
 import { ChatSidePanel } from './ChatSidePanel.tsx';
 import { captureStart, type CatchUpStart } from './catch-up.ts';
 import { useSignal } from '@preact/signals';
+import { unzoom } from '../lib/platform.ts';
 
 export function ChatView(props: { conversationId: string }) {
   const { conversationId } = props;
@@ -45,7 +46,7 @@ export function ChatView(props: { conversationId: string }) {
   useLayoutEffect(() => {
     const element = view.current;
     if (!element) return;
-    const measure = () => { narrow.value = element.getBoundingClientRect().width < 620; };
+    const measure = () => { narrow.value = unzoom(element.getBoundingClientRect().width) < 620; };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);

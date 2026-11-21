@@ -24,6 +24,7 @@ import { checkTodo, moveBlock, unplanBlock } from './day-actions.ts';
 import { HOUR_PX, SNAP_MIN, clockOf, movedBy, movedTo } from './day-grid.ts';
 import type { Span } from './day-grid.ts';
 import { revealTodo, sources } from './day-state.ts';
+import { unzoom } from '../lib/platform.ts';
 
 const DRAG_PX = 4;
 
@@ -75,7 +76,7 @@ export function DayBlock(props: DayBlockProps) {
   const onPointerMove = (e: PointerEvent) => {
     const state = drag.current;
     if (!state || state.id !== e.pointerId || !mayMove || props.compact || e.pointerType === 'touch') return;
-    const dy = e.clientY - state.y;
+    const dy = unzoom(e.clientY - state.y); // #30: HOUR_PX is the zoomed page's
     if (!state.moved && Math.abs(dy) < DRAG_PX) return;
     state.moved = true;
     setOffset(Math.round((dy / HOUR_PX) * 60 / SNAP_MIN) * SNAP_MIN);

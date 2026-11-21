@@ -26,7 +26,8 @@ export type IconName =
   | 'queue' | 'dots-six-vertical' | 'pause' // AF-016: the composer's prompt queue, a row's drag grip, Pause (AF-010: also the chat tabs' dock grip)
   | 'layout' | 'palette' | 'eye' // AF-008: the layout editor, Appearance, show a panel
   | 'folders' // AF-018: the Projects tab
-  | 'alarm'; // #20: the Schedules tab
+  | 'alarm' // #20: the Schedules tab
+  | 'minus'; // #30: Settings › Appearance › Scale, one step smaller
 
 export function Icon(props: { name: IconName; size?: number; class?: string; title?: string }) {
   const size = props.size ?? 18;

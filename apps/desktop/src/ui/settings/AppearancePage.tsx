@@ -12,15 +12,20 @@
 // Owns: this page. Never: the theme's CSS (shared/model/themes.ts) or how it is applied (lib/theme.ts, lib/appearance.ts).
 
 import { useRef, useState } from 'preact/hooks';
-import { DOCK_LABELS, DOCK_PLACES, PANEL_LABELS, dockPlaceAt, type DockPlace, type PanelKind } from '../../shared/model/appearance.ts';
+import {
+  DEFAULT_SCALE, DOCK_LABELS, DOCK_PLACES, PANEL_LABELS, SCALE_KEYS, SCALE_LIMITS, SCALE_STEP, dockPlaceAt, stepScale,
+  type DockPlace, type PanelKind, type ScaleTarget,
+} from '../../shared/model/appearance.ts';
 import {
   AUTARK_LOOK, DENSITIES, SCHEME_TEXT, THEME_LIMITS, THEME_PRESETS, contrastRatio, exportTheme, importTheme, themeCss, themeFileName, themeIdFor,
   type CustomTheme, type Density,
 } from '../../shared/model/themes.ts';
 import type { Preferences } from '../../shared/model/system.ts';
 import {
-  activeThemeId, chatDock, dockAt, hiddenPanels, panelOrder, resetAppearance, saveDock, savePanels, saveThemes, themeDraft, themes, chooseTheme,
+  activeThemeId, appearance, chatDock, dockAt, hiddenPanels, panelOrder, resetAppearance, saveDock, savePanels, saveScale, saveThemes, scaleTarget,
+  themeDraft, themes, chooseTheme, uiScale,
 } from '../lib/appearance.ts';
+import { os, pageZoom } from '../lib/platform.ts';
 import { confirm } from '../lib/dialog.tsx';
 import { openContextMenu } from '../lib/context-menu.tsx';
 import { preferences, updatePreferences } from '../lib/store.ts';
@@ -28,6 +33,7 @@ import { pushToast, toastError } from '../lib/toasts.ts';
 import { Icon, IconButton } from '../lib/ui.tsx';
 import { act, ActionButton, Group, Row, Segmented, Toggle } from './controls.tsx';
 
+const MOD = os === 'mac' ? '⌘' : 'Ctrl';
 const SCHEMES = [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }] as const;
 const DENSITY_LABELS: Record<Density, string> = { compact: 'Compact', regular: 'Regular', comfortable: 'Roomy' };
 const FONT_SUGGESTIONS = ['Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Georgia', 'Cambria', 'Consolas', 'Cascadia Code', 'Helvetica Neue', 'Avenir Next'];
@@ -240,8 +246,10 @@ function LayoutMap() {
     return rect ? dockPlaceAt({ x: event.clientX, y: event.clientY }, { x: rect.left, y: rect.top, width: rect.width, height: rect.height }) : null;
   };
   const guide = (place: DockPlace) => {
-    const rect = chat.current?.getBoundingClientRect();
-    if (!rect) return null;
+    const measured = chat.current?.getBoundingClientRect();
+    if (!measured) return null;
+    const zoom = pageZoom(); // #30: the guide is drawn in the zoomed page's pixels
+    const rect = { width: measured.width / zoom, height: measured.height / zoom };
     const w = rect.width * 0.38; const h = rect.height * 0.36;
     const box = place === 'right' ? { left: rect.width - w, top: 0, width: w, height: rect.height }
       : place === 'left' ? { left: 0, top: 0, width: w, height: rect.height }
@@ -353,13 +361,39 @@ function SizeRow(props: { label: string; value: number; min: number; max: number
   );
 }
 
+/**
+ * #30: the app's scale for one kind of window – a slider on the 10 % grid (saved when it is let go, so the page does not
+ * resize under the pointer), − and + one step each; the value is a button back to 100 %. This window's own kind changes at once.
+ */
+function ScaleRow(props: { target: ScaleTarget; label: string; hint: string }) {
+  const [live, setLive] = useState<number | null>(null);
+  const saved = props.target === scaleTarget ? uiScale.value : appearance.value[SCALE_KEYS[props.target]];
+  const shown = live ?? saved;
+  const save = (value: number) => { setLive(null); void saveScale(value, props.target).catch((error) => toastError(error, 'Could not save the scale')); };
+  const id = `scale-${props.target}`;
+  return (
+    <Row label={<label for={id}>{props.label}</label>} hint={props.hint}>
+      <span class="scale-control" data-target={props.target}>
+        <IconButton icon="minus" label={`Smaller (${props.label})`} size="small" disabled={saved <= SCALE_LIMITS[0]} onClick={() => save(stepScale(saved, -1))} />
+        <input id={id} type="range" min={SCALE_LIMITS[0]} max={SCALE_LIMITS[1]} step={SCALE_STEP} value={shown}
+          aria-valuetext={`${shown} %`}
+          onInput={(event) => setLive(Number((event.currentTarget as HTMLInputElement).value))}
+          onChange={(event) => save(Number((event.currentTarget as HTMLInputElement).value))} />
+        <IconButton icon="plus" label={`Larger (${props.label})`} size="small" disabled={saved >= SCALE_LIMITS[1]} onClick={() => save(stepScale(saved, 1))} />
+        <button type="button" class="scale-value" title={shown === DEFAULT_SCALE ? 'The default size' : 'Back to 100 %'} aria-label={`${props.label}: ${shown} % – back to 100 %`}
+          disabled={saved === DEFAULT_SCALE && live === null} onClick={() => save(DEFAULT_SCALE)}>{shown} %</button>
+      </span>
+    </Row>
+  );
+}
+
 export function AppearancePage() {
   const prefs = preferences.value;
   const dock = chatDock.value;
   const [editing, setEditing] = useState<{ theme: CustomTheme; isNew: boolean } | null>(null);
   const edit = (theme: CustomTheme, isNew: boolean) => { themeDraft.value = theme; setEditing({ theme, isNew }); };
   const reset = async () => {
-    if (!await confirm({ title: 'Reset the look and layout?', body: 'Autark\'s own theme, the System colour scheme, the chat\'s tabs on the right, the panels in their first order and the sidebar and pane at their first sizes. Your own themes stay in the list.', confirmLabel: 'Reset' })) return;
+    if (!await confirm({ title: 'Reset the look and layout?', body: 'Autark\'s own theme, the System colour scheme, the chat\'s tabs on the right, the panels in their first order, the sidebar and pane at their first sizes and the scale at 100 %. Your own themes stay in the list.', confirmLabel: 'Reset' })) return;
     themeDraft.value = null;
     setEditing(null);
     await resetAppearance().then(() => pushToast({ title: 'Back to the default look and layout', tone: 'info' }, 2500), (error) => toastError(error));
@@ -373,6 +407,10 @@ export function AppearancePage() {
         <ThemeCards onEdit={edit} />
       </Group>
       {editing && <ThemeEditor key={editing.theme.id} theme={editing.theme} isNew={editing.isNew} onDone={() => setEditing(null)} />}
+      <Group title="Scale" id="settings-scale" hint={`Makes text and controls of the whole app larger or smaller. ${MOD} +, ${MOD} − and ${MOD} 0 change it anywhere outside a website tab.`}>
+        <ScaleRow target="desktop" label="On PCs" hint={scaleTarget === 'desktop' ? 'This window' : 'The desktop app'} />
+        <ScaleRow target="phone" label="On phones" hint={scaleTarget === 'phone' ? 'This phone' : 'The web app on a touch screen'} />
+      </Group>
       <Group title="Layout" id="settings-layout" hint="Drag the chat's tabs to a side of the chat, to its top or bottom, or into it to float. Click the sidebar or the browser pane to show or hide it.">
         <LayoutMap />
         <Row label="Chat tabs" hint={DOCK_LABELS[dock.place]}>

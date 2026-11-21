@@ -22,6 +22,7 @@ import { rpc } from '../lib/rpc.ts';
 import { can, isOwner } from '../lib/session.ts';
 import { framePoint } from './browser-input.ts';
 import { createPointerReporter, pagePointInView, pathMs, positionAt, shownPointers, viewSurface } from './pointer-overlay.ts';
+import { pageZoom, unzoom } from '../lib/platform.ts';
 
 const point = (params: { surface: string; x: number; y: number; action?: PointerAction }) => rpc.call('pointers.point', params);
 
@@ -30,7 +31,8 @@ const self: { id?: string; last?: { x: number; y: number } } = {};
 
 interface Drawn { point: PointerPoint; arrived: number }
 
-const box = (rect: DOMRect) => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+// #30: in the zoomed page's pixels, like the pointers' translate()
+const box = (rect: DOMRect) => { const zoom = pageZoom(); return { left: rect.left / zoom, top: rect.top / zoom, width: rect.width / zoom, height: rect.height / zoom }; };
 
 export function PointerLayer(props: { agentId: string; frame: BrowserFrame; view: RefObject<HTMLElement> }) {
   const { frame } = props;
@@ -89,7 +91,7 @@ export function PointerLayer(props: { agentId: string; frame: BrowserFrame; view
     const at = (event: MouseEvent) => {
       const picture = view.querySelector('img');
       if (!picture) return undefined;
-      const spot = framePoint(event.clientX, event.clientY, box(picture.getBoundingClientRect()), size.current);
+      const spot = framePoint(unzoom(event.clientX), unzoom(event.clientY), box(picture.getBoundingClientRect()), size.current);
       return spot ? { x: spot.x, y: spot.y } : undefined;
     };
     const move = (event: MouseEvent) => { const spot = at(event); if (spot) reporter.move(spot); };

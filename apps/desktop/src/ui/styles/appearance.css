@@ -6,7 +6,7 @@
    the preview and the layout map.
    Owns: those rules. Never: colour values (tokens.css and the theme's custom properties). */
 
-html { zoom: var(--text-zoom, 1); }
+html { zoom: calc(var(--text-zoom, 1) * var(--ui-scale, 1)); } /* #30: --ui-scale = Settings › Appearance › Scale (lib/appearance.ts) */
 
 :root[data-accent] .button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 :root[data-accent] .button.primary > .button-spin { color: var(--accent-fg); }
@@ -108,3 +108,12 @@ html { zoom: var(--text-zoom, 1); }
 .panel-order > li.panel-off .panel-name { color: var(--muted); text-decoration: line-through; }
 .panel-order .panel-grip { cursor: grab; color: var(--muted); }
 .panel-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+
+/* #30: Settings › Appearance › Scale – − slider + and the value (a button back to 100 %), one line */
+.scale-control { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 100%; }
+.scale-control > input[type=range] { flex: 0 1 200px; min-width: 90px; accent-color: var(--accent, var(--text)); }
+.scale-value { flex: none; width: 56px; height: 28px; border: 0; border-radius: var(--r-sm, 6px); background: transparent; color: var(--secondary);
+  font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding: 0 6px; cursor: pointer; }
+.scale-value:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.scale-value:disabled { cursor: default; opacity: 1; }
+.scale-value:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

@@ -14,6 +14,7 @@ import { isMobile } from '../lib/store.ts';
 import { SHEET_BELOW, holeFor, inView, placeBubble, type Box, type Placement } from './spotlight-geometry.ts';
 import { progressLabel, progressText } from './spotlight-model.ts';
 import { hintToTour, spot, spotBusy, tourBack, tourExtra, tourNext, tourSkip, watchSpotlight, type SpotView } from './spotlight.ts';
+import { pageZoom, unzoom } from '../lib/platform.ts';
 
 /** Mounted once by the shell: starts the watcher and draws the overlay while something is shown. */
 export function SpotlightHost() {
@@ -22,8 +23,9 @@ export function SpotlightHost() {
   return view ? <SpotlightDialog view={view} /> : null;
 }
 
-const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
-const boxOf = (element: Element): Box => { const rect = element.getBoundingClientRect(); return { x: rect.left, y: rect.top, width: rect.width, height: rect.height }; };
+// #30: everything in the zoomed page's pixels (rects and the window are window pixels)
+const viewport = () => { const zoom = pageZoom(); return { width: window.innerWidth / zoom, height: window.innerHeight / zoom }; };
+const boxOf = (element: Element): Box => { const rect = element.getBoundingClientRect(); const zoom = pageZoom(); return { x: rect.left / zoom, y: rect.top / zoom, width: rect.width / zoom, height: rect.height / zoom }; };
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 interface Layout { hole: Box | null; place: Placement; view: { width: number; height: number } }
@@ -52,7 +54,7 @@ function SpotlightDialog(props: { view: SpotView }) {
       const size = viewport();
       const hole = target?.isConnected ? holeFor(boxOf(target), size) : null;
       const own = bubble.current?.getBoundingClientRect();
-      const place = placeBubble(hole, { width: own?.width ?? 360, height: own?.height ?? 180 }, size, undefined, isMobile.value || size.width < SHEET_BELOW);
+      const place = placeBubble(hole, { width: own ? unzoom(own.width) : 360, height: own ? unzoom(own.height) : 180 }, size, undefined, isMobile.value || size.width < SHEET_BELOW);
       setLayout({ hole, place, view: size });
     };
     const queue = () => { if (!frame) frame = requestAnimationFrame(measure); };

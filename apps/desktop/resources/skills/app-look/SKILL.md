@@ -27,4 +27,5 @@ A new view is a page: a file `<data>/pages/<name>.html` becomes a row on every t
 Simpler changes need no CSS: Settings › Appearance (and `settings.json › appearance`) holds the person's own themes –
 accent colour, background for light and dark, font, text size, density, corner radius – (`themes`, the one in use:
 `theme`), where a chat's tabs dock (`chatDock`: right, left, bottom, top or float, with sizes) and the order of the
-panels a new tab offers (`panels`, `hiddenPanels`). `theme.css` still wins over a theme.
+panels a new tab offers (`panels`, `hiddenPanels`). The size of the whole app – text and controls, 80–150 % – is
+`uiScale` on a PC and `uiScalePhone` on a phone (Ctrl +/− and Ctrl 0 change it too). `theme.css` still wins over a theme.

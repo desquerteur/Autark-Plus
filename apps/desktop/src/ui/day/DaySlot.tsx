@@ -11,6 +11,7 @@ import { DAY_MINUTES, HOUR_PX, atMinute, clickSpan, selection } from './day-grid
 import type { Span } from './day-grid.ts';
 import { joinSaid } from './day-format.ts';
 import { useFieldDictation } from './use-dictation.ts';
+import { unzoom } from '../lib/platform.ts';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 export const minuteText = (minute: number) => `${pad(Math.floor(minute / 60) % 24)}:${pad(minute % 60)}`;
@@ -57,7 +58,7 @@ export function useSlotPicker() {
   const returnTo = useRef<HTMLElement | null>(null);
   const minuteAt = (clientY: number) => {
     const rect = target.current?.getBoundingClientRect();
-    return rect ? Math.min(DAY_MINUTES, Math.max(0, ((clientY - rect.top) / HOUR_PX) * 60)) : 0;
+    return rect ? Math.min(DAY_MINUTES, Math.max(0, (unzoom(clientY - rect.top) / HOUR_PX) * 60)) : 0; // #30: HOUR_PX is the zoomed page's
   };
   const handlers = {
     onPointerDown: (e: PointerEvent) => {

@@ -11,6 +11,7 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Menu } from './popover.tsx';
 import type { MenuSection } from './popover.tsx';
+import { unzoom } from './platform.ts';
 
 interface OpenMenu { x: number; y: number; sections: MenuSection[]; host?: HTMLElement | null }
 
@@ -84,7 +85,7 @@ export function ContextMenuHost() {
         ref={setAnchor}
         class="context-menu-anchor"
         aria-hidden="true"
-        style={{ position: 'fixed', left: `${open?.x ?? -9999}px`, top: `${open?.y ?? -9999}px`, width: '0px', height: '0px', pointerEvents: 'none' }}
+        style={{ position: 'fixed', left: `${open ? unzoom(open.x) : -9999}px`, top: `${open ? unzoom(open.y) : -9999}px`, width: '0px', height: '0px', pointerEvents: 'none' }}
       />, open?.host?.isConnected ? open.host : document.body)}
       <Menu
         key={open ? `${open.x},${open.y}` : 'closed'}

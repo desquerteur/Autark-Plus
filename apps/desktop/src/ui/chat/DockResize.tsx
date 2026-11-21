@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from 'preact/hooks';
 import { toastError } from '../lib/toasts.ts';
+import { unzoom } from '../lib/platform.ts';
 
 interface Props {
   label: string;
@@ -31,7 +32,7 @@ export function DockResize(props: Props) {
   const cursor = props.axis === 'x' ? 'col-resize' : 'row-resize';
   const end = () => { start.current = null; document.documentElement.classList.remove('dock-resizing', 'dock-resizing-y'); };
   useEffect(() => () => end(), []);
-  const point = (event: PointerEvent) => (props.axis === 'x' ? event.clientX : event.clientY);
+  const point = (event: PointerEvent) => unzoom(props.axis === 'x' ? event.clientX : event.clientY); // #30: in the zoomed page's pixels
   const save = (value: number) => { void latest.current.onSave(clamp(value)).catch((error) => toastError(error)); };
   const finish = (event: PointerEvent, cancel = false) => {
     const begin = start.current;

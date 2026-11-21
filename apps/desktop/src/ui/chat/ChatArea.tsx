@@ -26,6 +26,7 @@ import { toastError } from '../lib/toasts.ts';
 import { IconButton, type MenuSection } from '../lib/ui.tsx';
 import { WorkspacePane } from '../workspace/WorkspacePane.tsx';
 import { DockResize } from './DockResize.tsx';
+import { pageZoom, unzoom } from '../lib/platform.ts';
 
 /** Where a drag would put the chat's tabs: the place and its box in the chat body's px. */
 interface Guide { place: DockPlace; box: Box }
@@ -41,10 +42,19 @@ export function dockMenu(conversationId: string, place: DockPlace): MenuSection[
   ];
 }
 
+/** An element's size in the zoomed page's pixels (#30: rects are window pixels). */
 const sizeOf = (element: Element | null | undefined): Size => {
   const rect = element?.getBoundingClientRect();
-  return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+  const zoom = pageZoom();
+  return { width: (rect?.width ?? 0) / zoom, height: (rect?.height ?? 0) / zoom };
 };
+/** A rect in the zoomed page's pixels. */
+const pageBox = (element: Element) => {
+  const rect = element.getBoundingClientRect();
+  const zoom = pageZoom();
+  return { left: rect.left / zoom, top: rect.top / zoom, width: rect.width / zoom, height: rect.height / zoom };
+};
+const pagePoint = (event: PointerEvent) => ({ clientX: unzoom(event.clientX), clientY: unzoom(event.clientY) });
 
 export function ChatArea(props: { chat: ConversationSummary; place: DockPlace }) {
   const { chat, place } = props;
@@ -80,15 +90,17 @@ export function ChatArea(props: { chat: ConversationSummary; place: DockPlace })
     const own = section.current;
     if (event.button !== 0 || !host || !own) return;
     const handle = event.currentTarget as HTMLElement;
-    const from = own.getBoundingClientRect();
-    const begin = { x: event.clientX, y: event.clientY };
+    const from = pageBox(own);
+    const first = pagePoint(event);
+    const begin = { x: first.clientX, y: first.clientY };
     // where the pointer holds the window: inside its title room, at most the floating window's size
-    const hold = { x: Math.min(event.clientX - from.left, dock.floatWidth - 48), y: Math.min(event.clientY - from.top, 30) };
+    const hold = { x: Math.min(first.clientX - from.left, dock.floatWidth - 48), y: Math.min(first.clientY - from.top, 30) };
     let moving = false;
     dragged.current = false;
     handle.setPointerCapture(event.pointerId);
-    const at = (point: PointerEvent): Guide | null => {
-      const rect = host.getBoundingClientRect();
+    const at = (event: PointerEvent): Guide | null => {
+      const point = pagePoint(event);
+      const rect = pageBox(host);
       const target = dockPlaceAt({ x: point.clientX, y: point.clientY }, { x: rect.left, y: rect.top, width: rect.width, height: rect.height });
       if (!target) return null;
       const size = { width: rect.width, height: rect.height };
@@ -96,7 +108,7 @@ export function ChatArea(props: { chat: ConversationSummary; place: DockPlace })
       return { place: target, box: previewBox(target, dock, size, floated) };
     };
     const move = (next: PointerEvent) => {
-      if (!moving && Math.hypot(next.clientX - begin.x, next.clientY - begin.y) < 5) return;
+      if (!moving && Math.hypot(unzoom(next.clientX) - begin.x, unzoom(next.clientY) - begin.y) < 5) return;
       if (!moving) { moving = true; dragged.current = true; setDockDragging(true); }
       guide.value = at(next);
     };

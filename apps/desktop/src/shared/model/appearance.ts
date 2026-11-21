@@ -5,6 +5,8 @@
 // for the UI, the same limits for settings.json's comments and checks – runtime/settings/schema.ts, validate.ts).
 // AF-008: the person's own themes and the one in use (shared/model/themes.ts) and the order and visibility of the panels a
 // new tab offers.
+// #30: the scale of the whole app (text and controls, 80–150 %), one value for PCs and one for phones – a size that suits
+// a large screen is too big on a phone. It multiplies with a theme's text size (both zoom <html>, styles/appearance.css).
 // Owns: the shapes, defaults, limits and the pure geometry. Never: reads or writes files, touches the DOM.
 
 import { THEME_LIMITS, themeOf, themesProblem, type CustomTheme } from './themes.ts';
@@ -49,6 +51,27 @@ export type PanelKind = 'day' | 'work' | 'notes' | 'media' | 'files' | 'agents';
 export const DEFAULT_PANELS: readonly PanelKind[] = ['day', 'work', 'notes', 'media', 'files', 'agents'];
 export const PANEL_LABELS: Readonly<Record<PanelKind, string>> = { day: 'My day', work: 'Work', notes: 'Notes', media: 'Media', files: 'Files', agents: 'Agents' };
 
+/** #30: the app's scale in percent – its range, the steps Ctrl +/− and the slider take, and the default. */
+export const SCALE_LIMITS = [80, 150] as const;
+export const SCALE_STEP = 10;
+export const DEFAULT_SCALE = 100;
+/** Which of the two values a window uses: 'phone' for the web app on a touch screen, else 'desktop'. */
+export type ScaleTarget = 'desktop' | 'phone';
+export const SCALE_KEYS: Readonly<Record<ScaleTarget, 'uiScale' | 'uiScalePhone'>> = { desktop: 'uiScale', phone: 'uiScalePhone' };
+
+/** A forgiving read of a scale (anything unusable: 100; clamped into range, whole percent). */
+export function scaleOf(value: unknown): number {
+  return clampInt(value, SCALE_LIMITS, DEFAULT_SCALE);
+}
+
+/** The scale one step up (1), down (-1) or back to 100 (0): onto the 10 % grid, inside the range. */
+export function stepScale(current: number, step: 1 | -1 | 0): number {
+  if (step === 0) return DEFAULT_SCALE;
+  const at = scaleOf(current);
+  const next = step > 0 ? Math.floor(at / SCALE_STEP) * SCALE_STEP + SCALE_STEP : Math.ceil(at / SCALE_STEP) * SCALE_STEP - SCALE_STEP;
+  return Math.min(SCALE_LIMITS[1], Math.max(SCALE_LIMITS[0], next));
+}
+
 /** settings.json › appearance. */
 export interface AppearanceSettings {
   chatDock: ChatDock;
@@ -60,6 +83,10 @@ export interface AppearanceSettings {
   panels: PanelKind[];
   /** AF-008: the panels a new tab leaves out. */
   hiddenPanels: PanelKind[];
+  /** #30: the app's scale on a PC, in percent. */
+  uiScale: number;
+  /** #30: the app's scale on a phone (the web app on a touch screen), in percent. */
+  uiScalePhone: number;
 }
 
 /** The panels in the person's order: unknown and doubled ones dropped, missing ones at the end. */
@@ -79,7 +106,10 @@ export function appearanceOf(value: unknown): AppearanceSettings {
   }
   const theme = typeof raw.theme === 'string' && themes.some((each) => each.id === raw.theme) ? raw.theme : '';
   const hidden = Array.isArray(raw.hiddenPanels) ? [...new Set(raw.hiddenPanels.filter((item): item is PanelKind => DEFAULT_PANELS.includes(item as PanelKind)))] : [];
-  return { chatDock: chatDockOf(raw.chatDock), theme, themes, panels: panelOrderOf(raw.panels), hiddenPanels: hidden };
+  return {
+    chatDock: chatDockOf(raw.chatDock), theme, themes, panels: panelOrderOf(raw.panels), hiddenPanels: hidden,
+    uiScale: scaleOf(raw.uiScale), uiScalePhone: scaleOf(raw.uiScalePhone),
+  };
 }
 
 /** The problem with written appearance keys other than chatDock (settings.json's check), or undefined. */
@@ -99,6 +129,12 @@ export function appearanceProblem(raw: Record<string, unknown>): { path: string;
     const list = raw.hiddenPanels;
     if (!Array.isArray(list) || new Set(list).size !== list.length || !list.every((item) => DEFAULT_PANELS.includes(item as PanelKind))) {
       return { path: 'hiddenPanels', expected: `some of ${DEFAULT_PANELS.join(', ')}` };
+    }
+  }
+  for (const key of ['uiScale', 'uiScalePhone'] as const) {
+    const item = raw[key];
+    if (item !== undefined && (!Number.isInteger(item) || (item as number) < SCALE_LIMITS[0] || (item as number) > SCALE_LIMITS[1])) {
+      return { path: key, expected: `a whole number from ${SCALE_LIMITS[0]} to ${SCALE_LIMITS[1]} (percent)` };
     }
   }
   return undefined;
