@@ -40,6 +40,7 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   assert.equal(text.replace(/\r\n/g, '').includes('\n'), false, 'every line ends with CRLF');
   assert.equal(/^[\x00-\x7f]*$/.test(text), true, 'no path inside: the script is ASCII');
   assert.match(text, /start "" \/wait "%AUTARK_UPDATE_INSTALLER%" --updated \/S\r\n/);
+  assert.match(text, /if exist "%AUTARK_UPDATE_INSTALLER%" goto install\r\n/, 'never start a missing installer: its ShellExecute dialog is visible and blocks');
   assert.doesNotMatch(text, /--force-run/, 'the helper starts the app, not NSIS through Explorer');
   assert.match(text, /start "" \/D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated/);
   assert.match(text, /"%SystemRoot%\\System32\\tasklist\.exe" \/FI "PID eq %AUTARK_UPDATE_PID%" \/NH >"%AUTARK_UPDATE_PIDS%"/);
@@ -208,7 +209,7 @@ test('Windows script, really run: the app quits, the helper outlives it, runs th
   const log = path.join(dir, 'update-helper.log');
   // the stand-in installer is a copy of whoami, which rejects --updated and ends at once; the app file is missing on purpose
   const installer = path.join(dir, 'autark-windows-x64.exe');
-  copyFileSync(path.join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'whoami.exe'), installer);
+  copyFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), installer);
   const launch = windowsHelper({ pid: 1, installer, exe: path.join(dir, 'missing', 'Autark.exe'), logFile: log });
   const json = JSON.stringify({ ...launch, env: { ...launch.env, AUTARK_UPDATE_PID: 'PID_SELF', AUTARK_UPDATE_WAIT: '20' } });
   const begun = Date.now();
@@ -237,13 +238,17 @@ test('Windows script, really run: an app that keeps running is left alone after 
 test('Windows: spawnHelper reports the helper ended only after it surely finished waiting', { skip: !windows && 'Windows only' }, async () => {
   const dir = path.join(tmp, 'win ended');
   mkdirSync(dir);
-  const launch = windowsHelper({ pid: 1, installer: path.join(dir, 'x.exe'), exe: path.join(dir, 'A.exe'), logFile: path.join(dir, 'h.log') });
-  // pid 1 never matches a running process the helper could wait for, so it goes on to the missing installer at once
+  const log = path.join(dir, 'h.log');
+  const launch = windowsHelper({ pid: 1, installer: path.join(dir, 'missing installer.exe'), exe: path.join(dir, 'A.exe'), logFile: log });
+  // pid 1 never matches a running process the helper could wait for, so it goes on to the missing installer at once.
+  // It must note that and end: start fell back to ShellExecute, whose visible "cannot find" dialog kept cmd alive.
   const timing = await new Promise<number>((resolve, reject) => {
     const begun = Date.now();
-    spawnHelper({ ...launch, env: { ...launch.env, AUTARK_UPDATE_WAIT: '0', AUTARK_UPDATE_INSTALLER: 'C:\Windows\System32\whoami.exe' } }, dir, {
+    spawnHelper({ ...launch, env: { ...launch.env, AUTARK_UPDATE_WAIT: '0' } }, dir, {
       started: () => undefined, failed: reject, ended: () => resolve(Date.now() - begun),
     });
   });
   assert.ok(timing >= HELPER_MARGIN_SECONDS * 1000 - 500, `ended after ${timing} ms`);
+  const lines = await lastLine(log, /the installer is missing; update left for the next try$/, 5_000);
+  assert.equal(lines.some(line => /installer starts/.test(line)), false, 'a missing installer is never started');
 });

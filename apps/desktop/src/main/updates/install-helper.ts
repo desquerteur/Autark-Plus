@@ -40,6 +40,8 @@ export const WINDOWS_PIDS_NAME = 'update-helper-pids.txt';
  * comes (issue #1: `tasklist | find` hung in find and the helper never ended). find's exit code: 0 the app still runs,
  * 1 it ended, 2 the file could not be read (counted as a try, never as "ended"). The three programs run by their
  * System32 path: a PATH with Git's usr/bin first finds GNU find, whose exit code 1 read as "the app ended" at once.
+ * A missing installer is checked first: start would fall back to ShellExecute, whose "cannot find" dialog is visible
+ * and keeps the helper alive until someone closes it.
  * The first run only starts the script again with start /b and ends: see spawnHelper for why. AUTARK_UPDATE_WAIT
  * shortens the wait for the real-run test only.
  */
@@ -67,6 +69,10 @@ call :note "the app still runs after %AUTARK_UPDATE_WAIT% s; update left for the
 exit /b 3
 :gone
 del /q "%AUTARK_UPDATE_PIDS%" >nul 2>nul
+if exist "%AUTARK_UPDATE_INSTALLER%" goto install
+call :note "the installer is missing; update left for the next try"
+exit /b 4
+:install
 call :note "app ended; installer starts"
 if defined AUTARK_UPDATE_PACKAGE goto package
 start "" /wait "%AUTARK_UPDATE_INSTALLER%" --updated /S
