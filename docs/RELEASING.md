@@ -5,8 +5,9 @@ Every release ships **Windows, Linux (x64 + arm64) and the signed Android APK**,
 ## One command (release PC)
 
 ```powershell
-git tag vX.Y.Z            # on the commit to release; the integrator pushes it to desquerteur/Autark-Plus
-                          # before -Publish (gh --verify-tag needs it there)
+git tag autark-plus/vX.Y.Z <commit>     # local name, see "Tags" below
+git push https://github.com/desquerteur/Autark-Plus.git refs/tags/autark-plus/vX.Y.Z:refs/tags/vX.Y.Z
+                                        # before -Publish (gh --verify-tag needs the tag there)
 pwsh scripts/release/release-all.ps1 -Tag vX.Y.Z -Publish
 ```
 
@@ -23,6 +24,18 @@ GitHub release (needs `gh` signed in or `GH_TOKEN`) and uploads everything. `-Sk
 
 Requirements on the release PC: Node 24, JDK 21, Android SDK (`%LOCALAPPDATA%\Android\Sdk`), WSL distro `Ubuntu-24.04`
 with `scripts/release/wsl-setup.sh` run once as root, `gh`.
+
+## Tags
+
+The local clone also carries teydra/OpenAutark's upstream tags (`v0.3.10`, `v0.3.11`, ...), which point to *their*
+commits. A plain `git tag vX.Y.Z` / `git push <remote> vX.Y.Z` can therefore publish against the wrong commit. So:
+
+- Tag locally as `autark-plus/vX.Y.Z` and push it explicitly as `refs/tags/vX.Y.Z` (command above). Never push a tag by
+  its bare name from this clone, and never `git push --tags`.
+- Fetch upstream without tags: `git config remote.upstream.tagOpt --no-tags` (set once per clone).
+- Before publishing, check the remote tag: `git ls-remote https://github.com/desquerteur/Autark-Plus.git refs/tags/vX.Y.Z`
+  must show the release commit.
+- Desktop tags are `vX.Y.Z`; `android-vX.Y.Z` tags on Autark-Plus are older APK-only releases.
 
 ## CI
 
