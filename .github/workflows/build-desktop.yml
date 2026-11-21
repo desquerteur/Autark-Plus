@@ -1,8 +1,9 @@
 # Owns: building the desktop packages of this fork straight from its sources and publishing them as a release of this
 # repository with exactly the files the app's updater and download links expect (AF-019):
 #   Windows x64  autark-windows-x64.exe (+ .blockmap, latest.yml)       – unsigned NSIS installer
-#   Linux x64    autark-linux-x64.AppImage (+ .blockmap, latest-linux.yml)
-#   macOS        autark-mac-universal.dmg/.zip (+ .blockmap, latest-mac.yml) – ad hoc signed, not notarized
+#   Linux        autark-linux-x64.AppImage, autark-linux-{amd64,arm64}.deb, autark-linux-{x64,arm64}.tar.gz
+#                (+ latest-linux.yml, latest-linux-arm64.yml)
+#   macOS        autark-mac-{arm64,x64}.zip (+ .dmg on a Mac runner, latest-mac.yml) – ad hoc signed, not notarized
 # plus SHA256SUMS.txt (every file of the release) and release.json (version, commit, files with size and SHA-256).
 # A pushed tag vX.Y.Z (or vX.Y.Z-beta.N: a prerelease) builds Windows, macOS and Linux and publishes the release
 # once all three are built; "Run workflow"
@@ -51,8 +52,8 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]] || { echo "Use a vX.Y.Z or vX.Y.Z-beta.N tag (got $RELEASE_TAG)"; exit 1; }
           version="${BASH_REMATCH[1]}"
           windows='{"os":"windows-latest","arguments":"--win --x64"}'
-          mac='{"os":"macos-15","arguments":"--mac --universal"}'
-          linux='{"os":"ubuntu-24.04","arguments":"--linux --x64"}'
+          mac='{"os":"macos-15","arguments":"--mac --x64 --arm64"}'
+          linux='{"os":"ubuntu-24.04","arguments":"--linux"}' # package.json gives each Linux target its CPUs
           case "$PLATFORM" in
             windows) matrix="[$windows]" ;;
             mac) matrix="[$mac]" ;;
@@ -109,6 +110,11 @@ jobs:
         run: |
           version=$(node -p 'require("sherpa-onnx-node/package.json").version')
           npm install --no-save --force --no-fund --no-audit "sherpa-onnx-darwin-x64@$version" "sherpa-onnx-darwin-arm64@$version"
+      - name: Add the native voice add-on for both Linux architectures
+        if: runner.os == 'Linux'
+        run: |
+          version=$(node -p 'require("sherpa-onnx-node/package.json").version')
+          npm install --no-save --force --no-fund --no-audit "sherpa-onnx-linux-x64@$version" "sherpa-onnx-linux-arm64@$version"
       - name: Build
         run: npm run build
       - name: Package
@@ -120,8 +126,8 @@ jobs:
           shopt -s nullglob
           case "$RUNNER_OS" in
             Windows) expected=(dist/autark-windows-x64.exe dist/autark-windows-x64.exe.blockmap) ;;
-            Linux) expected=(dist/autark-linux-x64.AppImage) ;;
-            macOS) expected=(dist/autark-mac-universal.dmg dist/autark-mac-universal.zip) ;;
+            Linux) expected=(dist/autark-linux-x64.AppImage dist/autark-linux-amd64.deb dist/autark-linux-arm64.deb dist/autark-linux-x64.tar.gz dist/autark-linux-arm64.tar.gz) ;;
+            macOS) expected=(dist/autark-mac-arm64.dmg dist/autark-mac-arm64.zip dist/autark-mac-x64.dmg dist/autark-mac-x64.zip) ;;
           esac
           for file in "${expected[@]}"; do [[ -f "$file" ]] || { echo "Missing $file"; ls -la dist; exit 1; }; done
           feeds=()
@@ -143,7 +149,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(dist/*.exe dist/*.dmg dist/*.zip dist/*.AppImage dist/*.blockmap)
+          files=(dist/*.exe dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/*.tar.gz dist/*.blockmap)
           for feed in dist/*.yml; do [[ "$(basename "$feed")" == builder-debug.yml ]] || files+=("$feed"); done
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
 
@@ -178,7 +184,7 @@ jobs:
           const path = require('node:path');
           const dir = process.argv[2];
           const platform = (name) => /windows/.test(name) || name === 'latest.yml' || /^[a-z]+\.yml$/.test(name) ? 'windows-x64'
-            : /linux/.test(name) ? 'linux-x64' : /mac/.test(name) ? 'mac-universal' : /android/.test(name) ? 'android' : 'other';
+            : /linux.*arm64/.test(name) ? 'linux-arm64' : /linux/.test(name) ? 'linux-x64' : /mac-arm64/.test(name) ? 'mac-arm64' : /mac/.test(name) ? 'mac-x64' : /android/.test(name) ? 'android' : 'other';
           const files = readdirSync(dir).sort().map((name) => {
             const file = path.join(dir, name);
             return { name, platform: platform(name), size: statSync(file).size, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') };

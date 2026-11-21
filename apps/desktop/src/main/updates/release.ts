@@ -19,7 +19,7 @@ export function releasesURL(repository: string = RELEASE_REPOSITORY): string {
 
 export function downloadName(platform: string, arch: string): string | null {
   if (platform === 'win32' && arch === 'x64') return 'autark-windows-x64.exe';
-  if (platform === 'darwin' && (arch === 'x64' || arch === 'arm64')) return 'autark-mac-universal.dmg';
+  if (platform === 'darwin' && (arch === 'x64' || arch === 'arm64')) return `autark-mac-${arch}.zip`; // one app per CPU (cross-built on Linux, no lipo); the zip keeps symlinks and modes
   if (platform === 'linux' && arch === 'x64') return 'autark-linux-x64.AppImage';
   return null;
 }

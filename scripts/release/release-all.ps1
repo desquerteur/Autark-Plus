@@ -1,5 +1,6 @@
 # Owns: building every platform of one Autark release on the release PC and (with -Publish) attaching it to the GitHub release:
 #   Windows x64 installer, Linux x64 + arm64 (tar.gz for install-headless.sh, AppImage, deb) built in WSL Ubuntu,
+#   macOS arm64 + x64 (zip + dmg, ad-hoc signed, cross-built in WSL by build-mac.sh),
 #   the signed Android APK, update feeds, SHA256SUMS.txt and release.json. One command per release:
 #       pwsh scripts/release/release-all.ps1 -Tag v0.3.10 -Publish
 # CI (.github/workflows/build-desktop.yml) does the same on tag push once GitHub Actions runs; this is the path that works
@@ -8,7 +9,7 @@
 # platform failed for.
 param(
     [Parameter(Mandatory)][ValidatePattern('^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')][string]$Tag,
-    [ValidateSet('windows', 'linux', 'android')][string[]]$Skip = @(),
+    [ValidateSet('windows', 'linux', 'mac', 'android')][string[]]$Skip = @(),
     [switch]$Publish,                       # create/update the GitHub release (needs GH_TOKEN or `gh auth login`)
     [string]$Repo = 'desquerteur/Autark-Plus',
     [string]$WslDistro = 'Ubuntu-24.04'
@@ -71,6 +72,14 @@ if ('linux' -notin $Skip) {
     }
 }
 
+# ---- macOS (WSL cross-build: arm64 + x64, ad-hoc signed with rcodesign; no Mac needed)
+if ('mac' -notin $Skip) {
+    function ToWslM([string]$p) { $d = $p.Substring(0, 1).ToLower(); '/mnt/' + $d + ($p.Substring(2) -replace '\\', '/') }
+    Run 'build macOS app in WSL' {
+        wsl -d $WslDistro -u root -- bash "$(ToWslM $root)/scripts/release/build-mac.sh" (ToWslM $root) $version (ToWslM $out)
+    }
+}
+
 # ---- Android (signed with the key outside the repo: ~/.autark-release/android, backup in the secrets catalog)
 if ('android' -notin $Skip) {
     if (-not $env:ANDROID_HOME) {
@@ -92,7 +101,7 @@ $lines = foreach ($f in $files) { '{0}  {1}' -f (Get-FileHash $f.FullName -Algor
 $commit = (git -C $root rev-parse HEAD).Trim()
 $meta = [ordered]@{
     version = $version; tag = $Tag; repository = $Repo; commit = $commit; builtOn = 'release PC (local)'
-    publishedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); signed = [ordered]@{ android = $true; windows = $false; linux = $false }
+    publishedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); signed = [ordered]@{ android = $true; windows = $false; linux = $false; mac = 'ad-hoc' }
     files = @($files | ForEach-Object { [ordered]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() } })
 }
 [IO.File]::WriteAllText((Join-Path $out 'release.json'), ($meta | ConvertTo-Json -Depth 5) + "`n")

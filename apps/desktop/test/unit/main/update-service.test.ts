@@ -22,7 +22,7 @@ test('macOS: the state offers the manual download; the browser never opens by it
   const h = harness({ platform: 'darwin', arch: 'arm64', autoDownload: () => true });
   assert.equal(h.service.state.automaticInstall, false);
   assert.equal(h.service.state.downloadURL, downloadURL('darwin', 'arm64'));
-  assert.match(h.service.state.downloadURL ?? '', /^https:\/\/github\.com\/.+\/releases\/latest\/download\/autark-mac-universal\.dmg$/);
+  assert.match(h.service.state.downloadURL ?? '', /^https:\/\/github\.com\/.+\/releases\/latest\/download\/autark-mac-arm64.zip$/);
   await h.service.check();
   await settle();
   assert.equal(h.service.state.status, 'available');

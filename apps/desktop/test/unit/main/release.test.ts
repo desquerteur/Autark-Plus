@@ -16,8 +16,8 @@ test('the stable latest-download links point at the fork by default, at another 
   assert.equal(UPSTREAM_REPOSITORY, 'teydra/OpenAutark');
   assert.equal(RELEASE_URL, 'https://github.com/desquerteur/Autark-Plus/releases');
   assert.equal(downloadURL('win32', 'x64'), `${LATEST}autark-windows-x64.exe`);
-  assert.equal(downloadURL('darwin', 'arm64'), `${LATEST}autark-mac-universal.dmg`);
-  assert.equal(downloadURL('darwin', 'x64'), `${LATEST}autark-mac-universal.dmg`);
+  assert.equal(downloadURL('darwin', 'arm64'), `${LATEST}autark-mac-arm64.zip`);
+  assert.equal(downloadURL('darwin', 'x64'), `${LATEST}autark-mac-x64.zip`);
   assert.equal(downloadURL('linux', 'x64'), `${LATEST}autark-linux-x64.AppImage`);
   assert.equal(downloadURL('win32', 'x64', UPSTREAM_REPOSITORY), 'https://github.com/teydra/OpenAutark/releases/latest/download/autark-windows-x64.exe');
   assert.equal(releasesURL('someone/Fork'), 'https://github.com/someone/Fork/releases');

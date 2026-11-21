@@ -48,7 +48,7 @@ Public binaries: https://github.com/desquerteur/Autark-Plus (from 0.3.8; 0.3.3â€
 
 - Windows: `.../releases/latest/download/autark-windows-x64.exe`
 - Linux: `.../releases/latest/download/autark-linux-x64.AppImage`
-- macOS: `.../releases/latest/download/autark-mac-universal.dmg`
+- macOS: `.../releases/latest/download/autark-mac-arm64.zip` (Apple silicon) / `autark-mac-x64.zip` (Intel)
 - Android: `.../releases/latest/download/autark-android.apk` (its version: `latest-android.json`)
 - Version: `.../releases/latest/download/release.json`
 

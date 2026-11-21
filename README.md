@@ -107,7 +107,8 @@ feature was tried by hand on every system. Window tests (real Electron windows) 
 | Headless Linux | Start, pairing, lock against a second start and the script's syntax tested on Windows (11 tests) | [8b6696b](https://github.com/desquerteur/Autark-Plus/commit/8b6696b) | **Not run on a real Linux host** (download, systemd, libraries, update, uninstall) |
 | Project isolation | Unit-tested (22 tests) | [27f2819](https://github.com/desquerteur/Autark-Plus/commit/27f2819) | Not exercised with live agents |
 | Windows installer | Built and verified for 0.3.7 (9/9 installer tests) | [report](docs/TEST_RESULTS.md) | Not re-run for 0.3.8 |
-| Mac, Android | Built by the release workflows | - | Android Gradle build not run in the 0.3.8 test run |
+| Mac | From 0.4.0 cross-built on Linux (`scripts/release/build-mac.sh`), ad-hoc signed; bundle, CPU and signature checked | - | **Not yet started on a real Mac** |
+| Android | Signed APK built on the release PC; installs and starts on the Android emulator | - | - |
 
 ## Screenshot gallery
 
@@ -204,7 +205,7 @@ The links below always lead to the newest version.
 | Device | File | Download |
 |---|---|---|
 | Windows 10/11 (x64) | `autark-windows-x64.exe` | [Download for Windows](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-windows-x64.exe) |
-| Mac (Apple silicon and Intel; built by CI only) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-universal.dmg) |
+| Mac (Apple silicon M1–M4 / Intel) | `autark-mac-arm64.zip`, `autark-mac-x64.zip` | [Apple silicon](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-arm64.zip) · [Intel](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-x64.zip) |
 | Linux desktop (x64) | `autark-linux-x64.AppImage` | [Download AppImage](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.AppImage) |
 | Debian/Ubuntu desktop (x64 / arm64) | `autark-linux-amd64.deb`, `autark-linux-arm64.deb` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-amd64.deb) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.deb) |
 | Linux server (x64 / arm64) | `autark-linux-x64.tar.gz`, `autark-linux-arm64.tar.gz` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.tar.gz) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.tar.gz) – installed by `scripts/install-headless.sh` |
@@ -240,8 +241,11 @@ The packages are not signed by a paid publisher certificate yet, so each system 
 >   public source and this fork stop at 91). This fork then opens a repair screen ("Your data is from a newer
 >   version"). **Restore** goes back to the copy from before that update – everything done since is not in it (it is
 >   set aside in `%APPDATA%\Autark\before-repair-…`). To keep that data, stay on the original's app instead.
-- **Mac:** open the DMG and drag Autark into Applications. The app is ad-hoc signed, without Apple notarization: on the
-  first start, right-click Autark → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**).
+- **Mac:** take `autark-mac-arm64.zip` for Apple silicon (M1 and later) or `autark-mac-x64.zip` for Intel (Apple menu →
+  About This Mac → Chip). Double-click the zip and drag **Autark** into Applications. The app is ad-hoc signed, without Apple notarization: the first start is refused once – open System
+  Settings → Privacy & Security, scroll down and click **Open Anyway** (on macOS 14 and older: right-click Autark →
+  **Open** → **Open**). If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Autark.app`
+  in Terminal once and start it again.
 - **Linux:** make the AppImage executable (`chmod +x autark-linux-x64.AppImage`) and start it. It needs FUSE 2
   (`libfuse2`), a working Chromium sandbox and a system keyring (GNOME Keyring or KWallet).
 - **Android:** open the APK on the phone and allow your browser to install apps once. Then enter your PC's Remote ID

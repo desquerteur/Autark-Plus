@@ -54,7 +54,7 @@ Du brauchst nur drei Schritte. Den Rest macht GitHub (`.github/workflows/build-d
 | Datei | Wofür |
 | --- | --- |
 | `autark-windows-x64.exe` | der Installer (Windows, unsigniert) |
-| `autark-mac-universal.dmg` / `.zip` | die Mac-App (Intel und Apple-Chip, nicht notarisiert) |
+| `autark-mac-arm64.zip` / `autark-mac-x64.zip` | die Mac-App je CPU (Apple-Chip / Intel), ad-hoc signiert, nicht notarisiert |
 | `autark-linux-x64.AppImage` | die Linux-App |
 | `*.blockmap` | damit Updates schneller laden |
 | `latest.yml`, `latest-mac.yml`, `latest-linux.yml` | sagen der App, welche Version es gibt (mit SHA-512 – die App prüft den Download damit) |
