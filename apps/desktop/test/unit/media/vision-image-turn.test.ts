@@ -40,14 +40,22 @@ async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 1_000 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
-test('visionInputs: a busy analyzer holds a turn at most its budget; the copy made later is still cached', async () => {
+test('visionInputs: a busy analyzer holds a turn at most its budget; the copy made later is still cached', async (context) => {
   let answer: (image: NormalizedImage) => void = () => undefined;
-  const t = setup(() => new Promise<NormalizedImage>((resolve) => { answer = resolve; }));
+  let now = Date.now();
+  const t = setup(() => new Promise<NormalizedImage>((resolve) => {
+    answer = resolve;
+    now += 40; // Spend the budget only once the analyzer has actually started.
+  }));
   try {
     const mid = await t.stored(jpegLateSof(1800, 1200), 'mid.jpg', 'image/jpeg');
     const huge = await t.stored(jpegLateSof(4000, 3000), 'huge.jpg', 'image/jpeg');
+    // Real header/cache I/O can itself exceed 40 ms on a loaded PC. Keep the budget clock
+    // still until the analyzer starts, then expire it; the real timeout still has to fire.
+    const clock = context.mock.method(Date, 'now', () => now);
     // The analyzer never answers within the budget: without it the turn would wait for good.
     const items = await visionInputs(t.s, [{ path: mid.path, mime: 'image/jpeg' }, { path: huge.path, mime: 'image/jpeg' }], 40);
+    clock.mock.restore();
     assert.deepEqual(items[0], { type: 'image', path: mid.path, mime: 'image/jpeg' }, 'within 2000 px: as it is');
     assert.deepEqual(items[1], { type: 'text', text: '(Image "huge.jpg" is not attached for me to see: the media analyzer is busy. media.view with its stored path tries again.)' });
     assert.deepEqual(t.asked.map((input) => input.fileId), [mid.ref.id], 'past the budget no further job is queued');
