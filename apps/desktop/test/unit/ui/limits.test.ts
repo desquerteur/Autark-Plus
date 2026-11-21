@@ -48,7 +48,7 @@ test('resetClock and windowText: "64% left · resets in 2 h 14 min (14:27)"; the
   assert.equal(windowText({ name: '5h', windowMinutes: 300, usedPercent: 99, resetsAt: NOW - 1 }, NOW), '–', 'a passed reset is no reading');
 });
 
-test('limitSlots: always the 5-hour and the weekly slot, "–" while missing; other windows only for the tooltip', () => {
+test('limitSlots: the 5-hour and the weekly slot, "–" while missing; no 5-hour slot for a plan without one (#25); other windows only for the tooltip', () => {
   assert.deepEqual(PLAN_SLOTS, ['5h', 'weekly']);
   const empty = limitSlots(undefined, NOW);
   assert.deepEqual(empty, [{ name: '5h', label: '5-hour limit', line: '5-hour limit · –' }, { name: 'weekly', label: 'Weekly', line: 'Weekly · –' }]);
@@ -57,8 +57,11 @@ test('limitSlots: always the 5-hour and the weekly slot, "–" while missing; ot
     { name: 'weekly', windowMinutes: 10080, usedPercent: 25 },
   ] };
   const slots = limitSlots(limits, NOW);
-  assert.deepEqual(slots.map((slot) => [slot.name, slot.left]), [['5h', undefined], ['weekly', 75]], 'a Pro plan without a 5-hour window keeps its slot');
-  assert.equal(slots[1].line, 'Weekly · 75% left');
+  assert.deepEqual(slots.map((slot) => [slot.name, slot.left]), [['weekly', 75]], 'desquerteur/Autark-Plus#25: a plan without a 5-hour window shows no empty 5-hour bar');
+  assert.equal(slots[0].line, 'Weekly · 75% left');
+  assert.deepEqual(limitSlots({ readAt: NOW, windows: [] }, NOW).map((slot) => slot.name), ['5h', 'weekly'], 'a reading without any window: both slots wait');
+  const both = limitSlots({ readAt: NOW, windows: [{ name: '5h', windowMinutes: 300, usedPercent: 99, resetsAt: NOW - 1 }, { name: 'weekly', windowMinutes: 10080, usedPercent: 25 }] }, NOW);
+  assert.deepEqual(both.map((slot) => [slot.name, slot.line]), [['5h', '5-hour limit · –'], ['weekly', 'Weekly · 75% left']], 'a plan with a 5-hour window keeps its slot, "–" once its reset passed');
   assert.deepEqual(otherWindows(limits, NOW), ['Weekly · Opus · 80% left']);
 });
 

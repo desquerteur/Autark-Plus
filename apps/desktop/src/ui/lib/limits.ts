@@ -1,7 +1,8 @@
 // Plan limit texts shared by the quota rail (shell/QuotaRail.tsx) and the account rows
 // (settings/AccountRow.tsx, B-044): humanized window names, the share left, the reset countdown
-// with its clock time ("resets in 2 h 14 min (14:27)"), the rail's 5-hour ring and short wait ("42m", B-078; "2d 5h", AF-009), the two fixed slots of a plan row
-// (5-hour limit, Weekly – '–' while a reading is missing, so the row never changes height) and the
+// with its clock time ("resets in 2 h 14 min (14:27)"), the rail's 5-hour ring and short wait ("42m", B-078; "2d 5h", AF-009), the slots of a plan row
+// (5-hour limit, Weekly – '–' while a reading is missing; no 5-hour slot once a reading shows the plan has no 5-hour
+// window, like the rail's ring – desquerteur/Autark-Plus#25) and the
 // banked Codex resets (count, the credit a reset uses and when it expires, the confirm and outcome texts).
 // Owns: these display rules. Never: fetches, estimates or changes a limit – every number comes from
 // the runtime's readings (an unknown or passed reading is '–', never 0 % or 100 %).
@@ -109,9 +110,14 @@ export interface LimitSlot {
 /** The windows every plan row reserves a bar for, in this order. */
 export const PLAN_SLOTS: readonly string[] = ['5h', 'weekly'];
 
-/** The two fixed bars of a plan row (5-hour limit, Weekly), each '–' while its reading is missing. */
+/**
+ * The bars of a plan row (5-hour limit, Weekly), each '–' while its reading is missing. Before the first reading both
+ * slots stand; a reading without a 5-hour window means the plan has none (Claude and Codex plans on lexivers, Nov 2026):
+ * then only Weekly – an empty "5-hour limit · –" bar read as broken (desquerteur/Autark-Plus#25).
+ */
 export function limitSlots(limits: AccountLimits | undefined, now: number): LimitSlot[] {
-  return PLAN_SLOTS.map((name) => {
+  const noFiveHour = Boolean(limits?.windows.length) && !limits!.windows.some((entry) => entry.name === '5h');
+  return PLAN_SLOTS.filter((name) => !(noFiveHour && name === '5h')).map((name) => {
     const window = limits?.windows.find((entry) => entry.name === name);
     const left = window ? leftOf(window, now) : undefined;
     return { name, label: windowLabel(name), ...(left === undefined ? {} : { left }), line: `${windowLabel(name)} · ${windowText(window, now)}` };
