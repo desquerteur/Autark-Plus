@@ -2,7 +2,7 @@
 
 **An independent, extended build of the Autark desktop app: an AI team with a personal manager, projects, account fallback and a customizable interface.**
 
-Desktop (Windows, Linux; macOS planned) · Android and iPhone web app · headless Linux server mode · Apache-2.0
+Desktop (Windows, macOS, Linux) · Android and iPhone web app · headless Linux server mode · Apache-2.0
 
 [![Autark-Plus: a project with its agents, branch state and a side chat with the project lead](docs/images/project-light.png)](docs/images/project-light.png)
 
@@ -114,7 +114,7 @@ Everything here is on top of the original; where the original already had a thin
 | **Report issue → GitHub** | A feedback report becomes an issue in this repository, with a duplicate check | ✅ Done; look-up fix on main | [a4df521](https://github.com/desquerteur/Autark-Plus/commit/a4df521), fix [c195b66](https://github.com/desquerteur/Autark-Plus/commit/c195b66) ([#29](https://github.com/desquerteur/Autark-Plus/issues/29)) | In 0.3.11 a title with an open bracket can fail; fixed on main | Not proposed: fork-only (upstream has its own feedback receiver) |
 | **Feedback** | Sent, confirmed with a number, failures visible and logged | ✅ Done | [6b2090e](https://github.com/desquerteur/Autark-Plus/commit/6b2090e) | No feedback receiver configured; reports go to GitHub issues instead | Not proposed: upstream 0.3.8 covers it |
 | **Updates from this repository** | Source, channel and automatic check in Settings; Windows update helper without console windows; 0.3.10 → 0.3.11 updated by itself ([page](docs/UPDATES.md)) | ✅ Done | [3d00dd2](https://github.com/desquerteur/Autark-Plus/commit/3d00dd2), [074dda6](https://github.com/desquerteur/Autark-Plus/commit/074dda6), [3c0c762](https://github.com/desquerteur/Autark-Plus/commit/3c0c762) ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)) | 0.3.8 cannot install updates by itself: install 0.3.11 once by hand | Fix [#27](https://github.com/teydra/OpenAutark/issues/27) (missing installer); the update source is fork-only, the helper console upstream fixed itself |
-| **Local release builds** | One script builds Windows x64, Linux x64/arm64 (tar.gz, AppImage, deb) and the Android APK with checksums ([RELEASING](docs/RELEASING.md)) | ✅ Done | [e9000e3](https://github.com/desquerteur/Autark-Plus/commit/e9000e3), [3a0572a](https://github.com/desquerteur/Autark-Plus/commit/3a0572a) | GitHub Actions locked on this account, so builds run on the release PC | Not proposed: workaround, upstream builds in CI |
+| **Local release builds** | One script builds Windows x64, macOS arm64/x64, Linux x64/arm64 (tar.gz, AppImage, deb) and the Android APK with checksums ([RELEASING](docs/RELEASING.md)) | ✅ Done | [e9000e3](https://github.com/desquerteur/Autark-Plus/commit/e9000e3), [3a0572a](https://github.com/desquerteur/Autark-Plus/commit/3a0572a) | GitHub Actions locked on this account, so builds run on the release PC | Not proposed: workaround, upstream builds in CI |
 | **Headless Linux** | Run without a window as a service; pair a browser or phone with a link and code ([page](docs/LINUX_HEADLESS.md)) | ✅ Done | [8b6696b](https://github.com/desquerteur/Autark-Plus/commit/8b6696b) (11 tests) | **Not yet run on a real Linux host** | [#26](https://github.com/teydra/OpenAutark/issues/26) |
 
 ### 3. Original features still missing or planned
@@ -157,7 +157,7 @@ feature from section 2 stays; where both sides solve the same thing, the note sa
 | Model picker with providers and full model IDs; side-tab and notification fixes (main after 0.3.16) | 🔄 In progress (upstream merge) | Merged with our model menu |
 | Security modes *Trust AI* / *Secure mode* with switches the runtime enforces | 🗓️ Planned upstream | Not in the original's 0.3.16 source either; comes with a later merge. Our [access modes](#2-what-autark-plus-adds) cover per agent and chat today. Docs text: [#33](https://github.com/desquerteur/Autark-Plus/issues/33) |
 | Signed Windows installer | 🗓️ Planned ([#31](https://github.com/desquerteur/Autark-Plus/issues/31)) | The original's certificate belongs to its publisher; Autark-Plus needs its own |
-| macOS packages | 🗓️ Planned ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)) | Needs a Mac or CI; current releases are Windows, Linux and Android |
+| macOS packages | ✅ Done in 0.4.0 ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)) | arm64 and x64 zips, cross-built on Linux and ad-hoc signed; **not yet started on a real Mac** |
 | Android APK carry-over feeds (android-v0.3.12 / Lite) | ⏭️ Not taken | Autark-Plus builds and ships its own APK with every release |
 | Ownership and legal notice in the README | ⏭️ Not taken | This README credits and links the original instead ([License and credit](#license-and-credit)) |
 
@@ -170,7 +170,7 @@ feature from section 2 stays; where both sides solve the same thing, the note sa
 | Graphical live view of what every agent is doing (agent-office style) | 🗓️ Planned, on hold until approved | [#12](https://github.com/desquerteur/Autark-Plus/issues/12) | Not proposed: on hold |
 | Fix the 22 failing Electron window tests | 🔄 In progress | [#27](https://github.com/desquerteur/Autark-Plus/issues/27) | Not proposed: our own test setup |
 | Own Windows code-signing certificate | 🗓️ Planned | [#31](https://github.com/desquerteur/Autark-Plus/issues/31) | Not proposed: upstream signs its own builds |
-| macOS packages | 🗓️ Planned | [#32](https://github.com/desquerteur/Autark-Plus/issues/32) | Not proposed: upstream ships them |
+| macOS packages | ✅ Done in 0.4.0 (not yet started on a real Mac) | [#32](https://github.com/desquerteur/Autark-Plus/issues/32), [68f5946](https://github.com/desquerteur/Autark-Plus/commit/68f5946) | Not proposed: upstream ships them |
 | Security section in the docs (Trust AI / Secure mode) | 🗓️ Planned | [#33](https://github.com/desquerteur/Autark-Plus/issues/33) | Not proposed: the text comes from upstream |
 | Run the headless installer once on a real Linux host | 🗓️ Planned | [#36](https://github.com/desquerteur/Autark-Plus/issues/36) | [#26](https://github.com/teydra/OpenAutark/issues/26) (in Headless) |
 
@@ -269,7 +269,7 @@ The links below always lead to the newest version.
 | Device | File | Download |
 |---|---|---|
 | Windows 10/11 (x64) | `autark-windows-x64.exe` | [Download for Windows](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-windows-x64.exe) |
-| Mac (Apple silicon and Intel; built by CI only) | `autark-mac-universal.dmg` | [Download for Mac](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-universal.dmg) |
+| Mac (Apple silicon M1–M4 / Intel) | `autark-mac-arm64.zip`, `autark-mac-x64.zip` | [Apple silicon](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-arm64.zip) · [Intel](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-mac-x64.zip) |
 | Linux desktop (x64) | `autark-linux-x64.AppImage` | [Download AppImage](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.AppImage) |
 | Debian/Ubuntu desktop (x64 / arm64) | `autark-linux-amd64.deb`, `autark-linux-arm64.deb` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-amd64.deb) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.deb) |
 | Linux server (x64 / arm64) | `autark-linux-x64.tar.gz`, `autark-linux-arm64.tar.gz` | [x64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-x64.tar.gz) · [arm64](https://github.com/desquerteur/Autark-Plus/releases/latest/download/autark-linux-arm64.tar.gz) – installed by `scripts/install-headless.sh` |
@@ -296,7 +296,7 @@ curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/script
 ```
 
 The installer verifies the release checksum, starts Autark as its own unprivileged user, and prints a pairing link/code.
-The script runs as root: review it first if required by your server policy. See [server setup and removal](docs/headless-linux.md).
+The script runs as root: review it first if required by your server policy. See [server setup and removal](docs/headless-linux.md) and the [v0.4.0 runtime checks and limits](docs/releases/v0.4.0-runtime-tests.md). Debian/Ubuntu x64 systemd-container checks pass; native ARM64, a real Proxmox host and real Mac launch remain unverified.
 
 ### Desktop and Android
 
@@ -318,8 +318,11 @@ The packages are not signed by a paid publisher certificate yet, so each system 
 >   public source and this fork stop at 91). This fork then opens a repair screen ("Your data is from a newer
 >   version"). **Restore** goes back to the copy from before that update – everything done since is not in it (it is
 >   set aside in `%APPDATA%\Autark\before-repair-…`). To keep that data, stay on the original's app instead.
-- **Mac:** open the DMG and drag Autark into Applications. The app is ad-hoc signed, without Apple notarization: on the
-  first start, right-click Autark → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**).
+- **Mac:** take `autark-mac-arm64.zip` for Apple silicon (M1 and later) or `autark-mac-x64.zip` for Intel (Apple menu →
+  About This Mac → Chip). Double-click the zip and drag **Autark** into Applications. The app is ad-hoc signed, without Apple notarization: the first start is refused once – open System
+  Settings → Privacy & Security, scroll down and click **Open Anyway** (on macOS 14 and older: right-click Autark →
+  **Open** → **Open**). If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Autark.app`
+  in Terminal once and start it again.
 - **Linux:** make the AppImage executable (`chmod +x autark-linux-x64.AppImage`) and start it. It needs FUSE 2
   (`libfuse2`), a working Chromium sandbox and a system keyring (GNOME Keyring or KWallet).
 - **Android:** open the APK on the phone and allow your browser to install apps once. Then enter your PC's Remote ID
@@ -397,7 +400,7 @@ What is not finished or not proven, as of 0.3.11 and `main` on 21 November 2026.
 - **22 window tests fail** on the release PC. These are test-only failures ([#27](https://github.com/desquerteur/Autark-Plus/issues/27), [report](docs/TEST_RESULTS.md#still-open-22-failing-ui-window-tests-not-fixed)).
 - **Headless Linux has not run on a real Linux host.** Only the start, pairing and the script's syntax were tested, on Windows ([#36](https://github.com/desquerteur/Autark-Plus/issues/36), [page](docs/LINUX_HEADLESS.md#what-was-not-tested)).
 - **No feedback receiver** is configured. In-app reports go to GitHub issues through *Report issue* instead.
-- **Installers are unsigned** ([#31](https://github.com/desquerteur/Autark-Plus/issues/31)), so Windows SmartScreen asks once (see [Installing](#installing)). There are **no macOS packages** at the moment ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)).
+- **Installers are unsigned** ([#31](https://github.com/desquerteur/Autark-Plus/issues/31)), so Windows SmartScreen asks once (see [Installing](#installing)). The macOS apps (since 0.4.0) are ad-hoc signed without Apple notarization and **have not been started on a real Mac yet** ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)).
 - **0.3.8 does not install updates by itself.** Install 0.3.11 once by hand; from 0.3.10 on, updates install by themselves ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)).
 - **Switching from the original app is rough.** The original's uninstaller can fail and its newer data schema cannot be opened here (see the box under [Installing](#installing)).
 - **Not run:** live provider tests (they cost money), lint.
