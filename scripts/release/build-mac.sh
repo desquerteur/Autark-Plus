@@ -68,7 +68,7 @@ done
 cat > "$out/latest-mac.yml" <<EOF
 version: $version
 files:
-$feed_files path: autark-mac-arm64.zip
+${feed_files}path: autark-mac-arm64.zip
 sha512: $first_sha
 releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
 EOF
