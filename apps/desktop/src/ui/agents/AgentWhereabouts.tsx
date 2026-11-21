@@ -30,7 +30,7 @@ export function AgentWhereabouts(props: { agent: Agent }) {
       </dl>
       <div class="whereabouts-actions">
         {!archived && canMessage(agent.id) && <Button variant="primary" class="small" icon="chat-circle" onClick={() => openAgentChat(agent.id)}>Open chat</Button>}
-        <Button variant="secondary" class="small" onClick={() => go.tasks(undefined, agent.id)}>Show work</Button>
+        <Button variant="secondary" class="small" onClick={() => go.work(agent.id)}>Show work</Button>{/* F12: its own Work page (AgentWork.tsx) */}
       </div>
     </div>
   );

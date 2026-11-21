@@ -11,7 +11,7 @@
 // API connections (`providers`) travel here; their keys are handles, the values go with the secrets. B-078: profile.notes
 // travels as its own unit 'profile.notes' (OWN_UNITS), so PCs on 0.3.2/0.3.3 skip it like the new section library;
 // B-085: profile.pcAccess the same way for PCs up to 0.3.4; 16.11.2026: profile.forEveryAgent for PCs up to 0.3.8;
-// 17.11.2026: notifications.computerUse for PCs up to 0.3.9.
+// 17.11.2026: notifications.computerUse for PCs up to 0.3.9; Autark-Plus: its preferences and routing keys for upstream PCs.
 // B-080 (live 07.11.–08.11.: a newer PC's voice.dictation made an older one refuse every section of each link-up): a key
 // of a known section this PC does not know is left out of the patch, as settings.json leaves it out (settings/read.ts),
 // and the rest of the section applies.
@@ -34,6 +34,15 @@ const OWN_UNITS: Readonly<Record<string, readonly [section: string, key: string]
   'profile.pcAccess': ['profile', 'pcAccess'], // B-085: a PC on 0.3.4 that wins the profile never clears it
   'profile.forEveryAgent': ['profile', 'forEveryAgent'], // 16.11.2026: a PC on 0.3.8 that wins the profile never resets it
   'notifications.computerUse': ['notifications', 'computerUse'], // 17.11.2026: the same for PCs up to 0.3.9 and the notifications section
+  // Autark-Plus keys in sections upstream Autark PCs know (AF-016, AF-017, AF-021/AF-023, the fallback order): they skip them
+  'preferences.whileWorking': ['preferences', 'whileWorking'],
+  'preferences.dictationSend': ['preferences', 'dictationSend'],
+  'routing.accountFallback': ['routing', 'accountFallback'],
+  'routing.fallbacks': ['routing', 'fallbacks'],
+  'feedback.githubRepo': ['feedback', 'githubRepo'], // AF-003: where Report issue files into
+  'onboarding.tour': ['onboarding', 'tour'], // AF-002: the app tour and its first-visit hints
+  'onboarding.tourStep': ['onboarding', 'tourStep'],
+  'onboarding.hints': ['onboarding', 'hints'],
 };
 const isUnit = (name: string): boolean => Object.prototype.hasOwnProperty.call(OWN_UNITS, name);
 

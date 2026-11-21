@@ -173,9 +173,33 @@
       "note": "AF-024: Gemini CLI's automatic choice (auto-gemini-3 …) – Pro or Flash per request."
     },
     {
-      "match": "grok-4.7*", "name": "Grok 4.7", "tier": "strong", "relCost": 0.3, "smarts": 85,
-      "caps": { "tools": true, "structuredOutput": true },
-      "strengths": { "research": 0.3, "social-media": 0.3, "chat": 0.3 }
+      "match": "grok-4.7*", "name": "Grok 4.7", "tier": "strong", "smarts": 85, "priceInputPerM": 2, "priceOutputPerM": 6, "priceCachedInputPerM": 0.5,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 500000 },
+      "strengths": { "research": 0.3, "social-media": 0.4, "coding": 0.3, "chat": 0.3 },
+      "note": "#28: xAI's flagship (docs.x.ai/developers/models, 21.11.2026: $2/$6 below 200k prompt tokens)."
+    },
+    {
+      "match": "grok-4.6*", "name": "Grok 4.6", "tier": "strong", "smarts": 83, "priceInputPerM": 2, "priceOutputPerM": 6, "priceCachedInputPerM": 0.5,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 500000 },
+      "efforts": ["low", "medium", "high", "xhigh"], "defaultEffort": "high",
+      "strengths": { "research": 0.3, "social-media": 0.4, "coding": 0.3, "chat": 0.3 },
+      "note": "#28: Grok Build's default model on a SuperGrok plan (grok agent stdio 1.0.92, efforts low…xhigh)."
+    },
+    {
+      "match": "grok-4.5*", "name": "Grok 4.5", "tier": "strong", "smarts": 81, "priceInputPerM": 2, "priceOutputPerM": 6, "priceCachedInputPerM": 0.3,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 500000 },
+      "strengths": { "research": 0.2, "social-media": 0.3, "coding": 0.2, "chat": 0.3 }
+    },
+    {
+      "match": "grok-build*", "name": "Grok Build", "tier": "strong", "smarts": 78, "priceInputPerM": 1, "priceOutputPerM": 2, "priceCachedInputPerM": 0.2,
+      "caps": { "tools": true, "contextTokens": 500000 },
+      "strengths": { "coding": 0.4, "chat": -0.2, "writing": -0.3 },
+      "note": "#28: xAI's coding model (grok-build-0.1)."
+    },
+    {
+      "match": "grok-4.3*", "name": "Grok 4.3", "tier": "strong", "smarts": 76, "priceInputPerM": 1.25, "priceOutputPerM": 2.5, "priceCachedInputPerM": 0.2,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
+      "strengths": { "research": 0.2, "social-media": 0.3, "chat": 0.3, "cheap-chat": 0.1 }
     },
     {
       "match": "deepseek-v4*", "name": "DeepSeek V4", "tier": "small", "relCost": 0.02, "smarts": 80,

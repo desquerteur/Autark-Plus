@@ -38,7 +38,7 @@ import { AccountAvatar } from '../lib/account-avatar.tsx';
 import { kindText } from '../lib/account-face.ts';
 
 /** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Copilot CLI has one per PC. */
-const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli']); // AF-024: Gemini CLI too
+const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli', 'grok-cli']); // AF-024: Gemini CLI too; #28: Grok
 /** B-083: the "Plan credits" switch's hint – routing spends them like a plan and before any paying key (accounts/candidates.ts,
  *  routing/pool.ts), not before a plan with quota left. */
 const CREDITS_HINT = 'Prepaid credits from a plan – used like a plan, before paying keys; they expire monthly';

@@ -1,6 +1,6 @@
 // Chat text size on the desktop (17.11.2026, Theo for the owner's portrait product videos: "Der Chattext lässt sich nicht
 // vergrößern … Ctrl+= wirkt nicht"): Ctrl and + / = (with or without Shift, the numpad's too) makes a chat's messages,
-// its live line and its composer larger, Ctrl and − smaller, Ctrl+0 back to 100 % – as in Chrome, kept on this PC. Only
+// its live line and its composer larger, Ctrl and − smaller, Ctrl+0 back to 100 % (since the 0.3.16 merge: Ctrl+Alt, see zoomKey) – as in Chrome, kept on this PC. Only
 // the chat's own column grows (CSS zoom through --chat-zoom, chat.css); the chat's tab area, the sidebar and the side
 // browser stay as they are, so no native page moves. A website tab with the keyboard in it keeps its own zoom
 // (workspace/pane-shortcuts.ts takes the key first). In a browser (the PWA) the browser's own zoom does this.
@@ -27,9 +27,17 @@ export function parseZoom(raw: string | null | undefined): number {
   return (ZOOM_STEPS as readonly number[]).includes(value) ? value : 1;
 }
 
-/** Which way a key press zooms (undefined: not a zoom key). `mod` is Ctrl (Cmd on macOS), no Alt. */
-export function zoomKey(event: { key: string; mod: boolean; alt: boolean }): -1 | 0 | 1 | undefined {
-  if (!event.mod || event.alt) return undefined;
+/** Which way a key press zooms the chat text (undefined: not a zoom key). `mod` is Ctrl (Cmd on macOS) plus Alt – plain Ctrl +/−/0
+ *  scales the whole app (#30, lib/appearance.ts). Ctrl+Alt is AltGr on a German keyboard, which turns + into ~ and 0 into },
+ *  so the physical key (`code`) decides: the +, − and 0 keys of the main block and the number pad on any layout. */
+const ZOOM_CODES: Readonly<Record<string, -1 | 0 | 1>> = {
+  Equal: 1, BracketRight: 1, NumpadAdd: 1, // US = / +, German +
+  Minus: -1, Slash: -1, NumpadSubtract: -1, // US −, German −
+  Digit0: 0, Numpad0: 0,
+};
+export function zoomKey(event: { key: string; code?: string; mod: boolean; alt: boolean }): -1 | 0 | 1 | undefined {
+  if (!event.mod || !event.alt) return undefined;
+  if (event.code && event.code in ZOOM_CODES) return ZOOM_CODES[event.code];
   if (event.key === '+' || event.key === '=') return 1;
   if (event.key === '-' || event.key === '_') return -1;
   if (event.key === '0') return 0;

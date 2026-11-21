@@ -7,7 +7,7 @@ import type { FeedbackKind } from './system.ts';
 
 /**
  * The short report number of a delivered report: the first 8 letters and digits of its receipt (the mailbox
- * document id, a UUID – the team inbox item's `id`), in capitals. Empty without a receipt.
+ * document id, a UUID – the team inbox item's `id`), in capitals ("668FC8DE"; AF-003 shows it after Send too). Empty without a receipt.
  */
 export function reportNumber(receiptId: string | undefined): string {
   return (receiptId ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8).toUpperCase();
@@ -49,14 +49,6 @@ export const FEEDBACK_CLIENT_MAX = 400;
 export const FEEDBACK_CLIENT_DIAGNOSTICS_MAX = 12_000;
 /** feedback.create `clientId`: the writing device's own id for the report – the same id returns the stored report. */
 export const FEEDBACK_CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
-
-/**
- * AF-003: the short number the sender sees after Send and the team sees in its inbox for the same report – the first
- * eight letters and digits of the report's receipt id (the mailbox document id), upper case: "668FC8DE".
- */
-export function reportNumber(receiptId: string): string {
-  return receiptId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8).toUpperCase();
-}
 
 /**
  * `feedback.status`: `sending` – this build has a receiver (resources/feedback/receiver.json: the team's public key

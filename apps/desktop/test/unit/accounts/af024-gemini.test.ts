@@ -79,7 +79,7 @@ test('Gemini CLI (ACP): its quota errors are limits with their wait – "exhaust
 });
 
 const gemini = (id: string, extra: Partial<Account> = {}): Account => ({
-  id, provider: 'gemini-cli', label: id, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...extra,
+  id, provider: 'gemini-cli', label: id, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...extra,
 });
 const limited = (resetsAt: number, perModel: boolean): EngineTurnResult => ({
   text: '', stop: 'limit', error: { code: 'rate_limited', message: 'The usage limit of this account was reached.', retryAfterMs: resetsAt - NOW, details: { quota: { daily: true, perModel, resetsAt } } },

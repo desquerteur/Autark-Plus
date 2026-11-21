@@ -253,7 +253,7 @@ test('accountFailure classifies the engines’ own messages', () => {
 });
 
 test('AF-023: a failure chain moves on account by account – each at most once, no endless loop', async () => {
-  const h = limitSetup({ rotation: false });
+  const h = limitSetup();
   new AccountRepo(h.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: h.now + 2 }));
   h.scripts.acc_1 = async () => LIMIT;
   h.scripts.acc_2 = async () => unavailable('The provider is overloaded. Retry later.');
@@ -266,7 +266,7 @@ test('AF-023: a failure chain moves on account by account – each at most once,
   assert.equal(lines[1], 'Switched to Claude Code 3 – Claude Code 2 just failed.');
 
   // Every account fails: each is tried once, then the turn ends (no loop).
-  const all = limitSetup({ rotation: false });
+  const all = limitSetup();
   new AccountRepo(all.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: all.now + 2 }));
   for (const id of ['acc_1', 'acc_2', 'acc_3']) all.scripts[id] = async () => LIMIT;
   const failed = await all.run();

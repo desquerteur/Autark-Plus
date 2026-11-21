@@ -34,7 +34,11 @@ function written(servers: readonly ImportedServer[], start = ''): { text: string
     const ids = new Map(server.moves.map((move) => [`${move.where}.${move.key}`, `sec_${++n}`]));
     return { name: server.name, entry: withHandles(server, ids) };
   });
-  return withEntries('mcp.json', start, ready);
+  const text = withEntries('mcp.json', start, ready);
+  // since the 0.3.16 merge withEntries returns the text only; the names the imports got are the keys that are new
+  const keys = (raw: string) => Object.keys((raw ? JSON.parse(raw) : {}).mcpServers ?? {});
+  const before = new Set(keys(start));
+  return { text, names: keys(text).filter((key) => !before.has(key)) };
 }
 
 const CLAUDE_DESKTOP = JSON.stringify({
@@ -180,7 +184,7 @@ test('catalog: GitHub, Google, Notion, Slack and Discord connect with one click;
   }
   const google = byName.get('Google')!;
   const entry = catalogEntry(google, { GOOGLE_OAUTH_CLIENT_ID: 'secret://sec_1', GOOGLE_OAUTH_CLIENT_SECRET: 'secret://sec_2' });
-  const text = withEntries('mcp.json', '', [{ name: 'Google', entry }]).text;
+  const text = withEntries('mcp.json', '', [{ name: 'Google', entry }]);
   const [connector] = read(text).connectors;
   assert.deepEqual([connector.transport, connector.command, connector.args], ['stdio', 'uvx', ['workspace-mcp', '--tools', 'gmail', 'calendar', 'drive']]);
   assert.equal(connector.env?.GOOGLE_OAUTH_CLIENT_SECRET, 'secret://sec_2');
@@ -191,7 +195,7 @@ test('catalog: GitHub, Google, Notion, Slack and Discord connect with one click;
 });
 
 test('per connector: off, on and the agents list – each one edit of the entry the runtime reads', () => {
-  const start = withEntries('mcp.json', '', [{ name: 'crm', entry: { url: 'https://crm.example/mcp' } }]).text;
+  const start = withEntries('mcp.json', '', [{ name: 'crm', entry: { url: 'https://crm.example/mcp' } }]);
   const limited = patchedEntry('mcp.json', start, 'crm', agentsPatch(['agt_anna']));
   const off = patchedEntry('mcp.json', limited, 'crm', switchPatch(false));
   assert.deepEqual([read(off).connectors[0].enabled, read(off).connectors[0].agents], [false, ['agt_anna']]);

@@ -14,6 +14,7 @@ import { Icon } from './icons.tsx';
 import { isTypeAheadKey, listKey, placeList, typeAhead, TypeAheadBuffer } from './listbox.ts';
 import type { ListState } from './listbox.ts';
 import { showInTopLayer } from './top-layer.ts';
+import { pageZoom } from './platform.ts';
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -88,14 +89,15 @@ function ListSelect<T extends string>(props: SelectProps<T>) {
     const anchor = button.current;
     if (!open || !el || !anchor) return;
     const rect = anchor.getBoundingClientRect();
-    el.style.minWidth = `${Math.round(rect.width)}px`;
+    const zoom = pageZoom(); // #30: rects are window pixels, offset sizes and styles the zoomed page's
+    el.style.minWidth = `${Math.round(rect.width / zoom)}px`;
     el.style.maxHeight = 'none';
     // offsetHeight includes the border: max-height applies to the border box, so measuring
     // scrollHeight (content only) left the list 2px short and showed a scrollbar.
-    const place = placeList(rect, { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight });
-    el.style.left = `${place.left}px`;
-    el.style.top = `${place.top}px`;
-    el.style.maxHeight = `${place.maxHeight}px`;
+    const place = placeList(rect, { width: el.offsetWidth * zoom, height: el.offsetHeight * zoom }, { width: innerWidth, height: innerHeight });
+    el.style.left = `${place.left / zoom}px`;
+    el.style.top = `${place.top / zoom}px`;
+    el.style.maxHeight = `${place.maxHeight / zoom}px`;
     el.dataset.placement = place.above ? 'top' : 'bottom';
   }, [open]);
 

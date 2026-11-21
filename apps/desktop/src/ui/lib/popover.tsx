@@ -15,6 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Icon } from './icons.tsx';
 import type { IconName } from './icons.tsx';
 import { showInTopLayer } from './top-layer.ts';
+import { unzoom } from './platform.ts';
 
 export type Placement = 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end' | 'right-end' | 'right-start';
 
@@ -62,7 +63,7 @@ export function Popover(props: PopoverProps) {
     if (placement.startsWith('bottom') && top + el.height > innerHeight - 8 && a.top - el.height - gap > 8) top = a.top - el.height - gap;
     left = Math.max(8, Math.min(left, innerWidth - el.width - 8));
     top = Math.max(8, Math.min(top, innerHeight - el.height - 8));
-    setPos({ left, top });
+    setPos({ left: unzoom(left), top: unzoom(top) }); // #30: measured in window pixels, drawn on the zoomed page
   }, [props.open, props.anchor, props.align, props.placement, size]);
 
   useEffect(() => {

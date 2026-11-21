@@ -50,6 +50,7 @@ const FLOWS: Partial<Record<ProviderId, Flow>> = {
   claude: { login: ['auth', 'login', '--claudeai'], logout: ['auth', 'logout'], away: { args: ['auth', 'login', '--claudeai'], paste: true } },
   copilot: { login: [], terminal: true, agent: true },
   'kimi-cli': { login: ['login'], terminal: true },
+  'grok-cli': { login: ['login'], terminal: true }, // #28: `grok login` – the browser sign-in (or a device code) of a SuperGrok / X Premium+ account
 };
 /** The executable of a provider's CLI (Kimi Code's is `kimi`). */
 const cliOf = (provider: ProviderId): CliId => acpProvider(provider)?.cli ?? provider as CliId;

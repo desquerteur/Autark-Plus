@@ -3,6 +3,7 @@
 
 import { useEffect, useRef } from 'preact/hooks';
 import { toastError } from '../lib/toasts.ts';
+import { unzoom } from '../lib/platform.ts'; // #30: pointer and rects in window pixels, widths in the zoomed page's
 
 interface Props {
   label: string; class: string; width: number; min: number; max: number; defaultWidth: number;
@@ -18,7 +19,7 @@ export function ColumnResize(props: Props) {
   const finish = (event: PointerEvent, cancel = false) => {
     const begin = start.current;
     if (!begin) return;
-    const next = clamp(begin.width + (event.clientX - begin.x) * (props.direction ?? 1));
+    const next = clamp(begin.width + (unzoom(event.clientX) - begin.x) * (props.direction ?? 1));
     start.current = null;
     document.documentElement.classList.remove('column-resizing');
     if (cancel) { props.onLive(null); return; }
@@ -31,10 +32,10 @@ export function ColumnResize(props: Props) {
       const handle = event.currentTarget as HTMLElement;
       handle.setPointerCapture(event.pointerId);
       const column = handle.closest('.global-pane') ?? handle.previousElementSibling;
-      start.current = { x: event.clientX, width: column?.getBoundingClientRect().width ?? props.width };
+      start.current = { x: unzoom(event.clientX), width: column ? unzoom(column.getBoundingClientRect().width) : props.width };
       document.documentElement.classList.add('column-resizing');
     }}
-    onPointerMove={(event) => { if (start.current) props.onLive(clamp(start.current.width + (event.clientX - start.current.x) * (props.direction ?? 1))); }}
+    onPointerMove={(event) => { if (start.current) props.onLive(clamp(start.current.width + (unzoom(event.clientX) - start.current.x) * (props.direction ?? 1))); }}
     onPointerUp={(event) => finish(event)} onPointerCancel={(event) => finish(event, true)}
     onLostPointerCapture={() => { if (start.current) clear(); }} onDblClick={() => save(props.defaultWidth)}
     onKeyDown={(event) => {

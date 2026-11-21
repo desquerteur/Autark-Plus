@@ -39,7 +39,7 @@ const skills = [{ name: 'invoice-check', description: 'Checks open invoices', so
 
 test('F20: what a page holds finds it – a secret\'s name, purpose or source, an app\'s name or address, a skill – beside the fixed keywords', () => {
   const words = { secrets: secretWords(secrets, groups), apps: appWords(apps), skills: skillWords(skills) };
-  assert.deepEqual(ids(searchSections('github', SECTIONS, words)), ['secrets', 'apps'], 'the Apps page keeps its keyword github');
+  assert.deepEqual(ids(searchSections('github', SECTIONS, words)), ['secrets', 'apps', 'updates'], 'the Apps page keeps its keyword github (Autark-Plus: the Updates page names its GitHub source too)');
   assert.deepEqual(ids(searchSections('sparkasse', SECTIONS, words)), ['secrets'], 'a login\'s purpose and source');
   assert.deepEqual(ids(searchSections('mcp.linear', SECTIONS, words)), ['apps']);
   assert.deepEqual(ids(searchSections('invoice check', SECTIONS, words)), ['skills'], 'a skill by its name\'s words');

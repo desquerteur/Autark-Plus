@@ -36,7 +36,7 @@ import { setTaskRoute } from '../agents/next-route.ts';
 import '../contracts/people.ts';
 
 export type TaskDeps = Pick<RuntimeServices, 'db' | 'bus' | 'clock' | 'chats' | 'wakes'>
-  & Partial<Pick<RuntimeServices, 'org' | 'subconscious' | 'scheduler' | 'notifications' | 'log' | 'dispatcher' | 'catalog' | 'people' | 'settings' | 'decisions'>>;
+  & Partial<Pick<RuntimeServices, 'org' | 'subconscious' | 'scheduler' | 'notifications' | 'log' | 'dispatcher' | 'catalog' | 'people' | 'settings' | 'decisions' | 'agentCore'>>; // agentCore: AF-026 (tasks/give.ts)
 
 /** A wait as a caller gives it (since is set here). */
 export type WaitInput = Omit<TaskWait, 'since'>;

@@ -17,7 +17,7 @@ const general = readFileSync(path.join(UI, 'settings', 'GeneralPage.tsx'), 'utf8
 const menu = readFileSync(path.join(UI, 'shell', 'ProfileMenu.tsx'), 'utf8');
 
 test('Settings › General ends with the companies, desktop window only, each other one with its own facts', () => {
-  assert.match(general, /<\/Group>\n\n\s*<CompaniesGroup \/>\n\s*<\/>/, 'last on the page: nothing below moves when it arrives');
+  assert.match(general, /<\/Group>\n(\s*<GettingStarted \/>[^\n]*\n)?\n\s*<CompaniesGroup \/>\n\s*<\/>/, 'last on the page: nothing below moves when it arrives (Autark-Plus AF-002 Getting started may sit just above)');
   assert.match(group, /const shown = platform === 'desktop' && can\('companies\.list'\);/);
   assert.match(group, /rpc\.call\('companies\.list', \{ facts: true \}\)/);
   assert.match(group, /<Row key=\{entry\.folder\} label=\{entry\.label\} hint=\{[^\n]*companyLine\(entry\)[^\n]*\} reserve>/, 'one fixed row: the hint line is always there');

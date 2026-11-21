@@ -1,5 +1,5 @@
 // Owner 19.11.2026: what this device shows on a call – its camera or its screen – and the cut-out marked on it. One share at a
-// time per device, bound to the chat whose call it belongs to; it ends with that call (CallCard unmounts → stopShare), with
+// time per device, bound to the chat whose call it belongs to; it ends with that call (CallOverlay unmounts → stopShare), with
 // the person's second tap, or when the system ends the stream (the screen picker's Stop, a camera unplugged).
 // The picture travels with the person's lines: when this chat's voice conversation sends a line, `shownWith` grabs the
 // newest picture, and when it changed since the last one that went out (call-view-model.ts) – or a cut-out was marked –

@@ -71,6 +71,9 @@ const PAGE_EXCEPTIONS: Record<string, string> = {
   'companies.export': "into a folder chosen with the PC's folder picker",
   'companies.import': "from a folder chosen with the PC's folder picker",
   'companies.remove': "main stops the company's window and moves its folder",
+  // Autark-Plus AF-002: Settings › General › Getting started (GettingStarted.tsx) only checks it to show its rows where
+  // the tour and the setup run – the owner's own window; a phone gets neither row.
+  'onboarding.start': "the first-run setup runs on the owner's own window",
 };
 
 const base = (rule: unknown): unknown => (rule && typeof rule === 'object' && 'person' in rule ? (rule as unknown as { base: unknown }).base : rule);

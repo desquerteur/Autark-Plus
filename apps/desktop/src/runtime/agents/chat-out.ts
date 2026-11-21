@@ -23,6 +23,7 @@ import type { RuntimeServices } from '../contracts.ts';
 import type { Message } from '../../shared/model/chat.ts';
 import { appTodosOf, uiBlocksOf } from '../../shared/blocks/parse.ts';
 import { importFiles } from '../media/outputs.ts';
+import { postRefusal } from '../projects/isolation.ts'; // AF-026
 
 export type ChatLevel = 'normal' | 'push' | 'quiet';
 
@@ -174,6 +175,8 @@ export class ChatOutbox {
     for (const conversationId of block.to) {
       if (conversationId === this.skip) continue;
       if (!this.member(conversationId)) { this.note(notMemberNote(conversationId), live); continue; }
+      const outside = postRefusal(this.services, this.agentId, conversationId); // AF-026: outsiders only as an answer
+      if (outside) { this.note(`My <chat to="${conversationId}"> block was not posted: ${outside}`, live); continue; }
       const files = block.files.length ? await importFiles(this.services, this.agentId, block.files, conversationId) : undefined;
       if (files?.errors.length) this.note(`Files of my block to ${conversationId}: ${files.errors.join(' ')} The text went out without them.`, live);
       const message = this.services.chats.send({

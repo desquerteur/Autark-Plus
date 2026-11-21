@@ -21,7 +21,7 @@ import { homeKey, sameEmail, type SharedLogin } from './cli-homes.ts';
 import { PROVIDER_LABELS } from './service-shape.ts';
 
 /** Providers whose logins live in a CLI home (default or <accounts>/<provider>/<id>; Copilot CLI only the default, PR8 – AF-024: Gemini CLI both). */
-export const CLI_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli', 'copilot', 'kimi-cli']);
+export const CLI_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli', 'copilot', 'kimi-cli', 'grok-cli']);
 
 export interface AdoptionDeps {
   repo: AccountRepo;

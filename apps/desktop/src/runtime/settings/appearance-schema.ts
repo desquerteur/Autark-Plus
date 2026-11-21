@@ -4,7 +4,7 @@
 // Owns: these definitions and the check. Never: reads or writes files.
 
 import { WorkforceError } from '../../shared/errors.ts';
-import { DEFAULT_CHAT_DOCK, DEFAULT_PANELS, DOCK_LIMITS, DOCK_PLACES, appearanceProblem, chatDockProblem } from '../../shared/model/appearance.ts';
+import { DEFAULT_CHAT_DOCK, DEFAULT_PANELS, DEFAULT_SCALE, DOCK_LIMITS, DOCK_PLACES, SCALE_LIMITS, appearanceProblem, chatDockProblem } from '../../shared/model/appearance.ts';
 import { DENSITIES, THEME_LIMITS } from '../../shared/model/themes.ts';
 import type { KeyDef, SectionDef } from './schema.ts';
 
@@ -45,6 +45,10 @@ export const APPEARANCE_SECTION: SectionDef = { key: 'appearance', title: 'Look 
     allowed: `a list of up to ${THEME_LIMITS.themes} themes`, default: [], schema: THEME_SCHEMA },
   { key: 'panels', about: 'The panels a new tab offers, in this order', type: 'array', options: DEFAULT_PANELS, default: [...DEFAULT_PANELS] },
   { key: 'hiddenPanels', about: 'Panels a new tab leaves out', type: 'array', options: DEFAULT_PANELS, default: [] },
+  { key: 'uiScale', about: 'The size of the whole app on a PC – text and controls – in percent (Ctrl +/− and Ctrl 0 change it; multiplies with the text size of a theme)', type: 'integer',
+    min: SCALE_LIMITS[0], max: SCALE_LIMITS[1], default: DEFAULT_SCALE },
+  { key: 'uiScalePhone', about: 'The size of the whole app on a phone (the web app on a touch screen), in percent', type: 'integer',
+    min: SCALE_LIMITS[0], max: SCALE_LIMITS[1], default: DEFAULT_SCALE },
 ] };
 
 /** Checks settings.appearance (after merging); throws bad_request naming the first wrong key. */

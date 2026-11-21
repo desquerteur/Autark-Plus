@@ -3,7 +3,7 @@
 // such a socket every call is checked before its handler runs: a param that names an agent (AGENT_KEYS, one level into
 // `patch`; `id` of the agents.* methods) must name one the agent may reach, else 'forbidden' with the rule's wording. And
 // the agent lists it reads show only what it may see (agents.list, agents.org, agents.activity).
-// messages.send needs nothing here: it runs the agent's own chat.send (handlers/agent-send.ts), which holds the rule.
+// messages.send needs nothing here: handlers/chats.ts sendAsAgent holds the rule (AF-001 membership + AF-026 project check).
 // Owns: which params name agents and which results are filtered. Never: touches the person's own sockets or other scopes.
 
 import { WorkforceError } from '../../shared/errors.ts';

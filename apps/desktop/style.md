@@ -102,3 +102,10 @@ screen's look changes.
 - **Connectors (AF-005):** the own-server form (Name | Value rows in a 128 px box) and the pasted-JSON import (220 px text box, 92 px check list) keep their fixed heights (settings.css `.apps-rows`, `.apps-import-*`); upstream's `.apps-paste` form is not used. The row's ⋯ menu holds "Agents…" and "Open mcp.json" only where the connector files are editable (files.writePath + system.root).
 - **Settings:** upstream's Security tab and settings search come in unchanged; our Appearance and Personality tabs keep their places in the section list.
 - **Team (AF-017):** on the computer the directory ("All agents") opens first with "Org chart" one tab away; on the phone the chart first. The agent page shows AgentWhereabouts in place of upstream's lone "Show work" link.
+
+## Scale (#30) – Settings › Appearance › Scale, `src/ui/styles/appearance.css`
+- What: the whole app zoomed – `html { zoom: calc(var(--text-zoom) * var(--ui-scale)) }`; 80–150 %, 10 % steps, default 100 %. A theme's text size multiplies with it.
+- Two values: `uiScale` (PCs) and `uiScalePhone` (the web app on a touch screen); each window uses its own kind.
+- Layout: the phone layout starts when the zoomed room is under 720 px (`innerWidth / zoom`), so a PC window at 150 % switches below 1080 px.
+- Control row (`.scale-control`, one line): small − icon button, range 200px (min 90), small + icon button, the value as a button back to 100 % (`.scale-value`: 56×28px, 12px `--secondary` tabular, right-aligned, `--hover` behind it on hover, disabled at 100 %); 6px gaps.
+- Keys: Ctrl + (also Ctrl =), Ctrl −, Ctrl 0 outside a website tab; a short info toast names the new size. The chat-text zoom from upstream 0.3.16 (chat/text-zoom.ts) moved to Ctrl+Alt +/−/0 so the two never fire together.

@@ -52,7 +52,7 @@ export function issueLabels(kind: FeedbackKind): string[] {
 
 /** The first line of the report, shortened to a title. */
 export function issueTitle(report: Pick<FeedbackReport, 'kind' | 'text'>): string {
-  const first = report.text.split('\n').map((line) => line.trim()).find(Boolean) ?? report.kind;
+  const first = report.text.split('\n').map((line) => line.trim()).find(Boolean) ?? report.kind ?? '';
   const clean = first.replace(/\s+/g, ' ').replace(/^[#>*\-\s]+/, '');
   const title = clean.length > TITLE_MAX ? `${clean.slice(0, TITLE_MAX - 1).trimEnd()}…` : clean;
   return title || 'Report from the app';
@@ -66,7 +66,7 @@ const KIND_TEXT: Record<FeedbackKind, string> = { bug: 'Bug', idea: 'Idea', chan
  */
 export function issueBody(report: FeedbackReport, include: IssueInclude = {}, log?: string): string {
   const lines = [
-    `### Kind`, KIND_TEXT[report.kind], '',
+    `### Kind`, KIND_TEXT[report.kind ?? 'bug'], '',
     `### What happened`, report.text.trim(), '',
     `### App version`, report.context.version, '',
     `### OS`, report.context.os, '',
@@ -88,7 +88,7 @@ export function newIssueUrl(repo: string, title: string, body: string, labels: r
 export function issueDraft(report: FeedbackReport, repo: string, include: IssueInclude = {}, log?: string): IssueDraft {
   const title = issueTitle(report);
   const body = issueBody(report, include, log);
-  const labels = issueLabels(report.kind);
+  const labels = issueLabels(report.kind ?? 'bug'); // a report without a kind (an older client) files as a bug
   return { repo, title, body, labels, url: newIssueUrl(repo, title, body, labels) };
 }
 
@@ -142,11 +142,20 @@ export function parseReply(value: string): unknown {
   return value;
 }
 
-function issueRef(value: unknown): IssueRef | undefined {
+/** The issues in a list or search reply: a bare array, `{issues}` (list_issues) or `{items}` (search). */
+function replyItems(reply: unknown): unknown[] {
+  if (Array.isArray(reply)) return reply;
+  const o = (reply && typeof reply === 'object' ? reply : {}) as Record<string, unknown>;
+  return Array.isArray(o.issues) ? o.issues : Array.isArray(o.items) ? o.items : [];
+}
+
+/** An issue in a reply; `repo` builds its page address when the reply leaves it out (list_issues fields). */
+function issueRef(value: unknown, repo?: string): IssueRef | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const o = value as Record<string, unknown>;
   const number = typeof o.number === 'number' ? o.number : undefined;
-  const url = typeof o.html_url === 'string' ? o.html_url : typeof o.url === 'string' && o.url.includes('github.com/') && !o.url.includes('api.github.com') ? o.url : undefined;
+  const url = typeof o.html_url === 'string' ? o.html_url : typeof o.url === 'string' && o.url.includes('github.com/') && !o.url.includes('api.github.com') ? o.url
+    : repo && number !== undefined ? `https://github.com/${repo}/issues/${number}` : undefined;
   if (number === undefined || !url) return undefined;
   const state = String(o.state ?? 'open').toLowerCase() === 'closed' ? 'closed' : 'open';
   return { number, url, state, title: typeof o.title === 'string' ? o.title : '' };
@@ -176,12 +185,20 @@ function split(repo: string): { owner: string; repo: string } {
 export function appIssueClient(run: ToolRun): IssueClient {
   return {
     async findOpen(repo, title) {
-      const query = title.replace(/…$/, '').slice(0, 200);
-      const reply = await run('search_issues', { query, ...split(repo), perPage: 10, fields: ['number', 'title', 'state', 'html_url'] }) as Record<string, unknown> | unknown[];
-      const items = Array.isArray(reply) ? reply : Array.isArray((reply as Record<string, unknown>)?.items) ? (reply as { items: unknown[] }).items : [];
-      for (const item of items) {
-        const ref = issueRef(item);
-        if (ref && ref.state === 'open' && sameTitle(ref.title, title)) return ref;
+      // Best effort: the open issues by list (no query syntax to trip over), the search as fallback. A failed
+      // look-up never stops the report – then it goes in as a new issue (0.3.10 live test: the search tool refused the title).
+      const lookups: Array<() => Promise<unknown>> = [
+        () => run('list_issues', { ...split(repo), state: 'OPEN', perPage: 100, orderBy: 'UPDATED_AT', direction: 'DESC', fields: ['number', 'title', 'state'] }),
+        () => run('search_issues', { query: searchWords(title), ...split(repo), perPage: 10, fields: ['number', 'title', 'state', 'html_url'] }),
+      ];
+      for (const lookup of lookups) {
+        let reply: unknown;
+        try { reply = await lookup(); } catch { continue; }
+        for (const item of replyItems(reply)) {
+          const ref = issueRef(item, repo);
+          if (ref && ref.state === 'open' && sameTitle(ref.title, title)) return ref;
+        }
+        return undefined;
       }
       return undefined;
     },
@@ -236,4 +253,9 @@ export async function fileIssue(client: IssueClient, draft: IssueDraft, now: num
   }
   const created = await client.create(draft.repo, draft);
   return { repo: draft.repo, number: created.number, url: created.url, state: created.state, checkedAt: now };
+}
+
+/** A title as plain search words: GitHub's search refuses brackets, quotes and qualifiers it cannot parse (an unclosed "(" in a clipped title → 422). */
+export function searchWords(title: string): string {
+  return title.replace(/…$/, '').replace(/[()[\]{}"'`:\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
 }

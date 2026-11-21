@@ -149,7 +149,7 @@ test('an older single settings stamp counts for every section; then a change sta
   edit(a, { voice: { realtime: 'auto' } });
   assert.ok(a.stamps.get('settings/voice')!.at > 5000, 'the changed section is stamped now');
   assert.equal(a.stamps.get('settings/profile')?.at, 5000, 'the others keep theirs');
-  assert.deepEqual(Object.keys(a.sync.current().sections).sort(), ['profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing', 'voice'], 'the link-up sends every section (and the units profile.notes, profile.pcAccess, profile.forEveryAgent)');
+  assert.deepEqual(Object.keys(a.sync.current().sections).sort(), ['profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing', 'routing.accountFallback', 'routing.fallbacks', 'voice'], 'the link-up sends every section (and the units profile.notes, profile.pcAccess, profile.forEveryAgent, routing.accountFallback, routing.fallbacks)');
   off();
 });
 
@@ -177,7 +177,7 @@ test('B-078 with a 0.3.x PC: profile.notes travels as its own unit – the profi
   assert.deepEqual(copy.sections.profile.value, { name: 'Alex' });
   assert.equal(copy.sections.profile.h, hashOf({ name: 'Alex' }), 'the older PC sees no change of its own');
   assert.equal(copy.sections['profile.notes']!.value, 'German at work, du');
-  assert.deepEqual(Object.keys(copy.sections).sort(), ['library', 'profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing'], '0.3.x skips library and the units (no settings sections there)');
+  assert.deepEqual(Object.keys(copy.sections).sort(), ['library', 'profile', 'profile.forEveryAgent', 'profile.notes', 'profile.pcAccess', 'routing', 'routing.accountFallback', 'routing.fallbacks'], '0.3.x skips library and the units (no settings sections there)');
   // The older PC's message: its profile without notes, stamped later – the name follows, the notes stay.
   const old: SettingsMessage = { sections: { profile: { at: 9_000_000, h: hashOf({ name: 'Stan' }), value: { name: 'Stan' } } } };
   a.sync.receive(old, 'dev_old', false);
@@ -270,17 +270,19 @@ test('B-080: a newer PC\'s key in a known section is left out of the patch; the 
  */
 const SHARED_KEYS: Record<string, string[]> = {
   profile: ['name', 'company', 'avatarFileId', 'language', 'timezone', 'notes', 'pcAccess', 'forEveryAgent'], // notes, pcAccess, forEveryAgent: OWN_UNITS
-  preferences: ['theme', 'sidebarOpen', 'sidebarWidth', 'workspaceOpen', 'workspaceWidth', 'enterSends', 'closeToTray', 'openAtLogin', 'autoDownloadUpdates'],
+  personality: ['tone', 'address', 'language', 'emoji', 'length', 'instructions'], // Autark-Plus section: no upstream PC knows it
+  preferences: ['theme', 'sidebarOpen', 'sidebarWidth', 'workspaceOpen', 'workspaceWidth', 'enterSends', 'whileWorking', 'dictationSend', 'closeToTray', 'openAtLogin', 'autoDownloadUpdates'], // whileWorking, dictationSend: OWN_UNITS
+  appearance: ['chatDock', 'theme', 'themes', 'panels', 'hiddenPanels', 'uiScale', 'uiScalePhone'], // Autark-Plus section: no upstream PC knows it
   notifications: ['enabled', 'sound', 'computerUse', 'quietHours', 'pushFor'], // computerUse: OWN_UNITS
   voice: ['ttsVoice', 'vocabulary', 'realtime', 'talker', 'localStt', 'localTts'],
-  routing: ['work', 'decision', 'voice', 'stt', 'tts', 'image', 'video', 'music', 'sound', 'embeddings', 'costMode', 'allowPaidFallback'],
+  routing: ['work', 'decision', 'voice', 'stt', 'tts', 'image', 'video', 'music', 'sound', 'embeddings', 'costMode', 'allowPaidFallback', 'accountFallback', 'fallbacks'], // accountFallback, fallbacks: OWN_UNITS
   providers: [],
   day: ['workStart', 'workEnd', 'bufferMin', 'autoPlan', 'planAt', 'aiHelps', 'keepAwake', 'agentLane'],
   calendar: ['googleClientId', 'googleSecretId'],
   lifecycle: ['retention'],
-  feedback: ['includeDiagnostics'],
+  feedback: ['includeDiagnostics', 'githubRepo'], // githubRepo: OWN_UNITS
   library: ['publish'],
-  onboarding: ['completed', 'step'],
+  onboarding: ['completed', 'step', 'tour', 'tourStep', 'hints'], // tour, tourStep, hints: OWN_UNITS
 };
 
 test('B-080: the shared keys of every known settings section are pinned (voice.dictation is gone)', () => {

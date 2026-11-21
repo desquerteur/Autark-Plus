@@ -27,13 +27,17 @@ test('the stored value: a known step, else 100 %', () => {
 });
 
 test('keys: Ctrl with + or = (Shift or numpad give +), − and 0; Alt or no Ctrl is no zoom', () => {
-  assert.equal(zoomKey({ key: '=', mod: true, alt: false }), 1);
-  assert.equal(zoomKey({ key: '+', mod: true, alt: false }), 1);
-  assert.equal(zoomKey({ key: '-', mod: true, alt: false }), -1);
-  assert.equal(zoomKey({ key: '0', mod: true, alt: false }), 0);
+  assert.equal(zoomKey({ key: '=', mod: true, alt: true }), 1);
+  assert.equal(zoomKey({ key: '+', mod: true, alt: true }), 1);
+  assert.equal(zoomKey({ key: '-', mod: true, alt: true }), -1);
+  assert.equal(zoomKey({ key: '0', mod: true, alt: true }), 0);
   assert.equal(zoomKey({ key: '+', mod: false, alt: false }), undefined);
-  assert.equal(zoomKey({ key: '+', mod: true, alt: true }), undefined, 'AltGr on a German keyboard');
-  assert.equal(zoomKey({ key: 'k', mod: true, alt: false }), undefined);
+  assert.equal(zoomKey({ key: '+', mod: true, alt: false }), undefined, 'plain Ctrl + scales the whole app (#30)');
+  assert.equal(zoomKey({ key: '~', code: 'BracketRight', mod: true, alt: true }), 1, 'AltGr+ on a German keyboard types ~: the key decides');
+  assert.equal(zoomKey({ key: '}', code: 'Digit0', mod: true, alt: true }), 0);
+  assert.equal(zoomKey({ key: '-', code: 'Slash', mod: true, alt: true }), -1);
+  assert.equal(zoomKey({ key: '@', code: 'KeyQ', mod: true, alt: true }), undefined);
+  assert.equal(zoomKey({ key: 'k', mod: true, alt: true }), undefined);
 });
 
 test('wiring: the chat column zooms except its tab area; desktop only, after the pane keys; the window may be 400 px wide', () => {

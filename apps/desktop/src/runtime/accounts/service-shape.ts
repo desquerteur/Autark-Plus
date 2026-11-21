@@ -74,6 +74,6 @@ export const PROVIDER_LABELS: Partial<Record<ProviderId, string>> = {
   codex: 'Codex', claude: 'Claude Code', openai: 'OpenAI API', anthropic: 'Anthropic API', openrouter: 'OpenRouter',
   google: 'Gemini API', xai: 'xAI API', deepseek: 'DeepSeek API', ollama: 'Ollama', lmstudio: 'LM Studio', llamacpp: 'llama.cpp', vllm: 'vLLM',
   compatible: 'Custom server', 'gemini-cli': 'Gemini CLI', copilot: 'Copilot CLI',
-  'kimi-cli': 'Kimi Code', groq: 'Groq API', elevenlabs: 'ElevenLabs', fal: 'fal.ai', // B-058
+  'kimi-cli': 'Kimi Code', 'grok-cli': 'Grok Build', groq: 'Groq API', elevenlabs: 'ElevenLabs', fal: 'fal.ai', // B-058
   'decision-api': 'Decision API',
 };

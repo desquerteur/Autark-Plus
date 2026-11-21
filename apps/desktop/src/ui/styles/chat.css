@@ -75,7 +75,7 @@
   position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; background: var(--surface);
   container: chat-column / inline-size;
 }
-/* 17.11.2026: the chat text size (chat/text-zoom.ts, Ctrl +/−/0 on the desktop) – the chat's own parts, never its tab area */
+/* 17.11.2026: the chat text size (chat/text-zoom.ts, Ctrl+Alt +/−/0 on the desktop) – the chat's own parts, never its tab area */
 .chat-column > :not(.chat-area) { zoom: var(--chat-zoom, 1); }
 /* 18.11.2026 (Mika, window check): inside the zoomed parts 100cqi is still the chat column's real width, which CSS zoom then scaled – at 120 % with a pane open the lines ran past the column's right edge. The widths below divide by the zoom, so they end at the column's edge. */
 .message-column, .composer-area {

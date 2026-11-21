@@ -8,9 +8,9 @@
 // agent started itself never counts as an answer, even when an outsider sits in it from before).
 // A project the person removed from the list (its kv row `hidden`) is no project here: its agents are free again.
 // Where it is held (each gate asks this file, nothing else decides): chat-joins.ts scopeRefusal for every new member
-// pair (chat.send {to}, chat.direct, chat.create, chat.add_members), chat.send and schedules.message for every post,
-// agents/handoff.ts (delegate, handoff), tasks.create / tasks.assign, agents.list / update / archive, and the RPC entry
-// for an agent's own wf (rpc/project-gate.ts) – messages.send runs chat.send, so a post by wf is held there too.
+// pair (chat.direct, chat.create, chat.add_members), agents/chat-out.ts for every <chat> block an agent posts and
+// schedules.message, tasks/give.ts and tasks.create for work, agents.list / update / archive, and the RPC entry for an
+// agent's own wf (rpc/project-gate.ts; messages.send: rpc/handlers/chats.ts postRefusal).
 // Owns: this rule and its wording. Never: limits the person, changes members or chats, or reads a project folder.
 
 import path from 'node:path';

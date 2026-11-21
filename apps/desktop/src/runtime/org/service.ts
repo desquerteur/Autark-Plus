@@ -44,7 +44,6 @@ export interface OrgDeps {
   templatesDir: string; // <resources>/agents
   /** Live activity source (the dispatcher). Default: derived from agents with status 'working'. */
   activity?: () => AgentActivity[];
-  /** The new agent's SYSTEM.md template (org/hire.ts; compose/services.ts renders prompts/system-md.md with the person's name plus `values`: the hire's role). */
   /** The standard SYSTEM.md of `kind` rendered for a hire (org/standard.ts; `values`: its role). */
   systemMd?: (values: Readonly<Record<string, string>>, kind: StandardKind) => string | undefined;
   /** The person's company name (settings.json profile.company) – the company space's name; absent: "Company". */

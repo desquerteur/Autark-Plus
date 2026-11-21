@@ -163,10 +163,10 @@ export async function cancelRunHere(
 ): Promise<boolean> {
   const run = services.runs.get(runId);
   if (!run) {
-    // AF-012: a turn the dispatcher has started (agent.activity names it) but not yet journaled stops by its id too.
+    // AF-012: a turn the dispatcher has started but not yet journaled stops by its id too – the dispatcher knows its own
+    // runs (cancelRun is false for an unknown id), agent.activity may not name it yet.
     const early = services.dispatcher.activity().find((item) => item.runId === runId && !item.split);
-    if (!early) return false;
-    if (early.conversationId) services.promptQueue?.pause(early.conversationId, 'stop'); // AF-016
+    if (early?.conversationId) services.promptQueue?.pause(early.conversationId, 'stop'); // AF-016
     return Boolean(await services.dispatcher.cancelRun?.(runId));
   }
   if (run.status === 'running' || run.status === 'queued') {

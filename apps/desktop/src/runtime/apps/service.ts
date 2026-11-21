@@ -25,7 +25,7 @@ import { AppConnections } from './connections.ts';
 import type { AppsDeps } from './deps.ts';
 import { MailUpkeep } from './mail-upkeep.ts';
 import { type AttemptMode, type Item, realTimers, resolveHandles } from './service-parts.ts';
-import { addressOf, clip, errorText, hasAuthorization, signInText } from './texts.ts';
+import { addressOf, clip, errorText, hasAuthorization, notRunning, notRunningText, signInText } from './texts.ts';
 import { cleanServerText } from './tools-schema.ts';
 import { appToolDefs } from './tools.ts';
 import {
@@ -44,6 +44,8 @@ export class Apps implements AppsService {
   private readonly connections: AppConnections;
   private readonly timers: Timers;
   private readonly relistTimers = new Map<string, unknown>();
+  /** Local apps already logged as not running in this run (one info line each, not a warning per attempt). */
+  private readonly notRunningLogged = new Set<string>();
   private readonly mail: MailUpkeep;
   private readonly background = new Set<Promise<unknown>>();
   private problems: string[] = [];
@@ -274,6 +276,11 @@ export class Apps implements AppsService {
       return this.beginSignIn(item, gen, error);
     }
     if (error instanceof ReconnectNeeded) return this.set(item, { status: 'signin', error: clip(error.message) || signInText(connector) });
+    if (notRunning(error, connector)) { // #26: a closed optional local app (Fusion, Blender …) is a state, not a failure
+      if (!this.notRunningLogged.has(connector.id)) this.d.services.log?.info('connector not running', { appId: connector.id });
+      this.notRunningLogged.add(connector.id);
+      return this.set(item, { status: 'error', error: notRunningText(connector) });
+    }
     this.d.services.log?.warn('connector failed', { appId: connector.id, error: error instanceof Error ? error.name : 'error' });
     this.set(item, { status: 'error', error: errorText(error, connector.name) });
   }

@@ -146,6 +146,7 @@ export function onePerPc(account: { provider: string; home?: string | null }, ow
 export function defaultHome(provider: ProviderId, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string | undefined {
   if (provider === 'codex') return env.CODEX_HOME || path.join(home, '.codex');
   if (provider === 'claude') return env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  if (provider === 'grok-cli') return env.GROK_HOME || path.join(home, '.grok'); // #28
   return provider === 'gemini-cli' ? path.join(home, '.gemini') : undefined;
 }
 
@@ -161,10 +162,11 @@ export function loginDir(account: Pick<Account, 'provider' | 'home'>, env: NodeJ
 
 /**
  * The files that hold a CLI plan's login in its home, the deciding one first. Claude Code on macOS keeps its login
- * in the Keychain, Copilot CLI and Kimi Code keep theirs in no file known here: none.
+ * in the Keychain, Copilot CLI and Kimi Code keep theirs in no file known here: none. #28: Grok Build keeps its
+ * `grok login` in `$GROK_HOME/auth.json` (docs.x.ai/build/enterprise, x.ai/cli/install.ps1).
  */
 export function loginFiles(provider: ProviderId, platform: NodeJS.Platform = process.platform): readonly string[] {
-  if (provider === 'codex') return ['auth.json'];
+  if (provider === 'codex' || provider === 'grok-cli') return ['auth.json'];
   if (provider === 'claude') return platform === 'darwin' ? [] : ['.credentials.json'];
   return provider === 'gemini-cli' ? ['oauth_creds.json', 'google_accounts.json'] : [];
 }

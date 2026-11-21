@@ -159,7 +159,7 @@ test('the flow tally: used stays input + output of every call, cached is the cac
   assert.deepEqual([result.used, result.cached], [2 * 1050, 2 * 640]);
 });
 
-test('pricing: the cached part counts at the prior’s cached price, else at a tenth; the shipped Claude priors carry read and write prices', () => {
+test('pricing: the cached part counts at the prior’s cached price, else at a tenth; the shipped Claude, Terra and Grok priors carry one', () => {
   const usage = { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 600_000 };
   assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8 }), 0.92, 'no cached price: a cached token at a tenth of the input price (package C; the old code: 2)');
   assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8, cachedInputPerM: 0.2 }), 0.92);
@@ -169,10 +169,12 @@ test('pricing: the cached part counts at the prior’s cached price, else at a t
   assert.deepEqual(listPrice(usage, undefined, prior), { usd: 0.92, basis: 'prior-price' });
   assert.deepEqual(attemptCost({ account: { auth: 'api_key', provider: 'openai' } as never, usage, prior }), { basis: 'prior-price', usd: 0.92 });
   const shipped = Priors.load(path.join(RESOURCES, 'model-priors.json'));
-  // Package C: the Claude prices of Claude Code's own table (routing-cost.md section 2.1) and Terra's curated cached price.
+  // Package C: the Claude prices of Claude Code's own table (routing-cost.md section 2.1), Terra's curated cached price and
+  // the Grok entries (#28, added with their cached price).
   assert.deepEqual(shipped.data.models.filter((entry) => entry.priceCachedInputPerM !== undefined).map((entry) => [entry.match, entry.priceInputPerM, entry.priceOutputPerM, entry.priceCachedInputPerM, entry.priceCacheWritePerM]), [
     ['claude-opus-5-5*', 4, 20, 0.2, 8], ['claude-fable-5-2*', 8, 40, 0.2, 16], ['claude-fable-5-1*', 10, 50, 0.25, 20], ['claude-sonnet-5-5*', 2, 10, 0.1, 4], ['claude-haiku-5-5*', 0.1, 0.5, 0.01, 0.2], // FIXES-3 C2: the published list price, measured against Claude Code's own figure 18.11.2026
     ['gpt-6.1-terra*', 1, 5, 0.05, undefined],
+    ['grok-4.7*', 2, 6, 0.5, undefined], ['grok-4.6*', 2, 6, 0.5, undefined], ['grok-4.5*', 2, 6, 0.3, undefined], ['grok-build*', 1, 2, 0.2, undefined], ['grok-4.3*', 1.25, 2.5, 0.2, undefined],
   ]);
   // Claude Code writes its agent sessions into the 1-hour cache at twice the input price: every priced Claude entry says so
   // (review C, minor 5: Fable 5.1 priced its writes at the input price).

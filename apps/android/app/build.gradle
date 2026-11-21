@@ -24,8 +24,8 @@ android {
         // Autark-Plus: the APK published in desquerteur/Autark-Plus (latest-android.json carries this versionCode; it stays
         // above upstream's codes, so a phone that once had teydra's build updates to this one). Upstream 0.3.16 Android
         // features (QR scanner, companies, WebRTC, phone-use bubble, crash report, site/play flavors) are merged in.
-        versionCode = 310
-        versionName = '0.3.10'
+        versionCode = 311
+        versionName = '0.3.11'
         ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' } // F25: libwebrtc for phones only (x86 would add ~20 MB)
     }
     sourceSets { main { assets.srcDir('build/generated/tour') } } // the feedback video page (build.ps1)

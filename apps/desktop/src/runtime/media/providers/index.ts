@@ -13,7 +13,7 @@ import { openaiAdapter } from './openai.ts';
 import type { MediaAdapter } from './types.ts';
 
 /** Providers without a media generation endpoint. */
-const NO_MEDIA: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'anthropic', 'gemini-cli', 'copilot', 'kimi-cli']);
+const NO_MEDIA: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'anthropic', 'gemini-cli', 'copilot', 'kimi-cli', 'grok-cli']);
 
 const OWN: Partial<Record<ProviderId, MediaAdapter>> = { google: geminiAdapter, elevenlabs: elevenlabsAdapter, fal: falAdapter };
 

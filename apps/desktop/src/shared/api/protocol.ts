@@ -70,7 +70,7 @@ export type ClientScope =
   /**
    * Desktop window / local CLI with the launch token: full access. `main` marks Electron main's own port (entry-electron).
    * B-085: `agentId` – an agent's own `wf` (Hello `agent`, checked by http/ws.ts): its chat lines are that agent's
-   * (AF-001: also from its signed identity token, engines/agent-token.ts – rpc/handlers/agent-send.ts posts as the agent).
+   * (AF-001: also from its signed identity token, engines/agent-token.ts – rpc/handlers/chats.ts sendAsAgent posts as the agent).
    * 16.11.2026: `window` marks the desktop window's own port (entry-electron) – the person at the PC, where the launch
    * token alone (a `wf` outside an agent's turn, a script) names nobody (settings/security-log.ts).
    */

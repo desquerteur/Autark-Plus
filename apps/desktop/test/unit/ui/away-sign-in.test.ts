@@ -16,7 +16,7 @@ import { rpc } from '../../../src/ui/lib/rpc.ts';
 import { accounts } from '../../../src/ui/lib/store.ts';
 import { toasts } from '../../../src/ui/lib/toasts.ts';
 import { awaySignIn, CODE_FAILED, openAwaySignIn, submitCode } from '../../../src/ui/settings/away-sign-in.ts';
-import { AWAY_WAIT_MS, SIGN_IN_WAIT_MS, startPlanSetup, type PlanEnv } from '../../../src/ui/onboarding/plan-setup.ts';
+import { AWAY_WAIT_MS, SIGN_IN_WAIT_MS, START_WAIT_MS, startPlanSetup, type PlanEnv } from '../../../src/ui/onboarding/plan-setup.ts';
 
 const account = (id: string, provider: string, state: Account['state']): Account =>
   ({ id, provider, label: provider === 'codex' ? 'Codex' : 'Claude Code', auth: 'cli', enabled: true, state, priority: 0, detected: false, createdAt: 1 }) as Account;
@@ -109,8 +109,9 @@ test('the plan button from the phone opens the sheet and waits the device code\'
       show: () => undefined,
     };
     const flow = startPlanSetup('codex', env);
-    for (let i = 0; i < 20 && !timers.length; i += 1) await flush();
-    assert.deepEqual(timers, [away ? AWAY_WAIT_MS : SIGN_IN_WAIT_MS]);
+    for (let i = 0; i < 20 && timers.length < 2; i += 1) await flush();
+    // Autark-Plus #24: the start (accounts.add) has its own START_WAIT_MS guard before the sign-in wait
+    assert.deepEqual(timers, [START_WAIT_MS, away ? AWAY_WAIT_MS : SIGN_IN_WAIT_MS]);
     assert.deepEqual(awaySignIn.value, away ? { id: 'acc_new', url: DEVICE, code: 'FR4A-CONBK' } : null);
     list.value = [account('acc_new', 'codex', 'ok')];
     assert.equal((await flow.done).ok, true);

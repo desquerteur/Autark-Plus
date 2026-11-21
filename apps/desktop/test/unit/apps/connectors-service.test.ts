@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readConnectors, migrateRecords, mutateConnectors, slug } from '../../../src/runtime/apps/connectors.ts';
-import { McpAuthRequired } from '../../../src/runtime/apps/types.ts';
+import { McpAuthRequired, McpTransportError } from '../../../src/runtime/apps/types.ts';
 import { appsFixture, dataFolder, FakeKv } from './service-fakes.ts';
 
 const settle = async (f: ReturnType<typeof appsFixture>) => { await f.apps.idle(); f.timers.fireAll(); await f.apps.idle(); };
@@ -285,4 +285,26 @@ test('remove refuses to rebind colliding MCP ids across remaining MCP and mail e
   assert.deepEqual(all.map(({ name, id }) => [name, id]), [['A B', 'a-b'], ['A-B', 'a-b-2']]);
   assert.throws(() => mutateConnectors(crossData.dir, { kind: 'remove', id: 'a-b', name: 'A B', transport: 'http' }), /change another app id/);
   assert.equal(Object.keys((crossData.read('mcp.json') as { mcpServers: Record<string, unknown> }).mcpServers).length, 1);
+});
+
+test('a closed local app (Fusion on 127.0.0.1): "not running" in its status, one info line per run, no warning (#26)', async () => {
+  const f = appsFixture();
+  const lines: Array<[string, string, unknown]> = [];
+  const log = (level: string) => (msg: string, data?: unknown) => { lines.push([level, msg, data]); };
+  (f.deps.services as { log?: unknown }).log = { info: log('info'), warn: log('warn'), error: log('error'), debug: log('debug') };
+  const refused = () => new McpTransportError('The app could not be reached.', false, true);
+  f.data.write('mcp.json', { mcpServers: { Fusion: { url: 'http://127.0.0.1:27182/mcp' }, Remote: { url: 'https://mcp.example.com/mcp' } } });
+  f.servers.add('http://127.0.0.1:27182/mcp', ['create_sketch'], { failures: [refused(), refused()] });
+  f.servers.add('https://mcp.example.com/mcp', ['x'], { failures: [refused()] });
+  f.apps.start();
+  await settle(f);
+  const fusion = await f.apps.reconnect('fusion');
+  assert.equal(fusion.status, 'error');
+  assert.match(fusion.error ?? '', /^Fusion is not running – nothing answers at 127\.0\.0\.1:27182\./);
+  assert.deepEqual(lines.filter(([, msg]) => msg === 'connector not running').map(([level, , data]) => [level, data]), [['info', { appId: 'fusion' }]]);
+  // A remote server that refuses is still a real failure.
+  assert.deepEqual(lines.filter(([level]) => level === 'warn').map(([, msg, data]) => [msg, data]), [['connector failed', { appId: 'remote', error: 'McpTransportError' }]]);
+  // Once Fusion runs, it connects as usual.
+  assert.equal((await f.apps.reconnect('fusion')).status, 'ok');
+  await f.apps.stop();
 });

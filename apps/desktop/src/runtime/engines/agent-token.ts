@@ -6,7 +6,7 @@
 // Claude Code per turn, Codex per thread (its shells keep the thread's env, so the token names the agent, not a run),
 // shell.exec and secrets.run per call (tools/builtin/command.ts). wf sends it beside the owner token (Hello `agent`); the
 // socket keeps owner access and carries the agent's id (ClientScope owner `agentId`, http/ws.ts), and messages.send then
-// posts as that agent (rpc/handlers/agent-send.ts). A token from another process (an earlier start, another company) or of
+// posts as that agent (rpc/handlers/chats.ts sendAsAgent). A token from another process (an earlier start, another company) or of
 // an archived agent is refused at the handshake (close 4406), so nothing an agent writes falls back to the person's name.
 // ACP agents share one process per account (acp/engine.ts) and get no token: their wf still writes as the owner.
 // Owns: the key, issuing and checking tokens, the env entry. Never: writes the key or a token to a file or a log.

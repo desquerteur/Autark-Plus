@@ -12,8 +12,7 @@ import { PERSONALITY_FIELDS, personalityProblem, type AgentPersonality } from '.
 import '../../../shared/api/methods-personality.ts'; // the method shapes (module augmentation)
 import type { AgentPersonalityInfo } from '../../../shared/api/methods-personality.ts';
 import type { RuntimeServices } from '../../contracts.ts';
-import '../../contracts/open-fs.ts'; // services.prompts
-import { hasWorkStandard, ownPart, withOwnPart } from '../../org/system-parts.ts';
+import { isRoleHeading, ownHowIWork, ROLE_HEADING, WORK_HEADING } from '../../org/system-parts.ts';
 import { staleBase } from '../../root/text-doc.ts';
 import { personalitySection, personalityText } from '../../personality/prompt.ts';
 import { readAgentPersonality, writeAgentPersonality } from '../../personality/store.ts';
@@ -25,17 +24,26 @@ const MANAGE = { capability: 'manage' } as const;
 /** SYSTEM.md's cap (org/patch.ts). */
 const SYSTEM_MAX = 20_000;
 
-function rules(services: RuntimeServices): string | undefined {
-  try { return services.prompts?.get('rules'); } catch { return undefined; }
+// Since the 0.3.16 merge the team's standard is the "# How I work" part on top of SYSTEM.md (org/system-parts.ts): the
+// Personality page edits only the part from the role heading on and keeps that top part as it is.
+const hasWorkStandard = (text: string): boolean => ownHowIWork(text).how !== '';
+/** The own part of a SYSTEM.md (from the role heading on) when it holds the standard; else the whole text. */
+const ownPart = (text: string): string => { const { how, rest } = ownHowIWork(text); return how ? rest : text; };
+/** `text` as the new own part below the current standard (a text with its own standard replaces the whole file). */
+function withOwnPart(current: string, text: string): string {
+  const own = text.trim();
+  const first = own.split('\n', 1)[0]?.trim() ?? '';
+  const { how } = ownHowIWork(current);
+  if (!how || first === WORK_HEADING) return text;
+  return `${how}\n\n${isRoleHeading(first) ? own : `${ROLE_HEADING}\n${own}`}`;
 }
 
 function info(services: RuntimeServices, agent: Agent): AgentPersonalityInfo {
   const instructions = agent.instructions ?? '';
-  const inForce = rules(services);
   return {
     own: readAgentPersonality(services.paths?.data, agent.id),
-    role: ownPart(instructions, inForce),
-    standard: hasWorkStandard(instructions, inForce),
+    role: ownPart(instructions),
+    standard: hasWorkStandard(instructions),
     instructions,
     preview: personalitySection(services, agent),
   };
@@ -86,7 +94,7 @@ export function register(table: HandlerTable): void {
     const agent = live(ctx.services, id(o, 'agentId'));
     const role = text(o, 'role', { max: SYSTEM_MAX, allowEmpty: true, multiline: true });
     const base = optText(o, 'base', { max: SYSTEM_MAX, allowEmpty: true, multiline: true });
-    const next = role.trim() ? withOwnPart(agent.instructions ?? '', role, rules(ctx.services)) : '';
+    const next = role.trim() ? withOwnPart(agent.instructions ?? '', role) : '';
     if (!next.trim()) bad('role', 'the agent\'s role in a few words');
     if (base !== undefined && staleBase(agent.instructions ?? '', base, next)) {
       throw new WorkforceError('conflict', 'The instructions changed while you were editing (in SYSTEM.md or another edit). Load the new text and save again.');

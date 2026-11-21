@@ -1,4 +1,4 @@
-// B-085: the words of a call's two cards, as plain functions. The floating card (CallCard.tsx) while this device talks:
+// B-085: the words of a call's two cards, as plain functions. The floating card (upstream CallCard.tsx, not shipped in Autark-Plus: CallOverlay.tsx is the call UI) while this device talks:
 // status "Connecting…", "Listening · 1:23", "Speaking · 1:23", "Working… · 1:23", "On hold · 1:23" and the newest line of the call as its
 // caption. The call's row in the chat (CallTranscript.tsx): "Call from Ava" (B-081 ring) or "Call with Ava and Ben"
 // (the agents of the call and those heard in it, else the chat's name), "21:24 · 3 lines", and on the right "Ringing",

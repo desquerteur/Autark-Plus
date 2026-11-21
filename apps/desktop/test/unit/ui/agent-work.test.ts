@@ -91,7 +91,9 @@ const read = (file: string) => readFileSync(path.join(ui, file), 'utf8');
 
 test('the wiring: Show work opens the Work page, the log lives only there, useAgent is shared', () => {
   const view = read('team/AgentView.tsx');
-  assert.match(view, /onClick=\{\(\) => go\.work\(agent\.id\)\}>Show work<\/button>/);
+  // Autark-Plus AF-017: the button sits in the "where is it" line under the profile (AgentWhereabouts.tsx)
+  assert.match(read('agents/AgentWhereabouts.tsx'), /onClick=\{\(\) => go\.work\(agent\.id\)\}>Show work<\/Button>/);
+  assert.match(view, /<AgentWhereabouts agent=\{agent\} \/>/);
   assert.doesNotMatch(view, /AgentLog|go\.tasks\(/, 'the profile carries no log and no jump to the Work list');
   assert.match(view, /export function useAgent\(/);
   const work = read('team/AgentWork.tsx');

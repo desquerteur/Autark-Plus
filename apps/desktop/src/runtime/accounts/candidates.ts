@@ -28,7 +28,7 @@ export const ENGINE_PROVIDERS: Record<EngineId, ProviderId[]> = {
   anthropic: ['anthropic'],
   compatible: ['openrouter', 'google', 'xai', 'deepseek', 'groq', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'compatible'], // B-058: groq; elevenlabs/fal have no chat engine (media adapters only)
   fake: ['compatible'],
-  acp: ['gemini-cli', 'copilot', 'kimi-cli'], // plan CLIs on the generic ACP engine (engines/acp/providers.ts)
+  acp: ['gemini-cli', 'copilot', 'kimi-cli', 'grok-cli'], // plan CLIs on the generic ACP engine (engines/acp/providers.ts)
 };
 
 /** B-058: the engine id the catalog models of media-only accounts carry (no turn ever runs on it for them). */

@@ -41,7 +41,7 @@ test('no line for the whole PC, during the first run, before the snapshots or wh
   assert.equal(accessNotice(input('whole'), () => undefined), null);
   assert.equal(accessNotice(input(undefined), () => undefined), null, 'absent = whole');
   const during = input('careful');
-  during.settings = { ...during.settings!, onboarding: { completed: false, step: 'about' } };
+  during.settings = { ...during.settings!, onboarding: { completed: false, step: 'profile' } };
   assert.equal(accessNotice(during, () => undefined), null);
   assert.equal(accessNotice(input('careful', { loaded: false }), () => undefined), null);
   assert.equal(accessNotice(input('careful', { writable: false }), () => undefined), null);

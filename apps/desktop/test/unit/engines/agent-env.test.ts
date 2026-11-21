@@ -30,8 +30,17 @@ test('asAgent, withShim and agentEnv drop an inherited AUTARK_AGENT and set the 
   assert.equal(agentEnv('/data', { env: inherited, platform: 'linux', entry: '/nowhere/wf.mjs', agent: 'ag_3' }).AUTARK_AGENT, 'ag_3');
 });
 
+// Upstream 0.3.16 (AF-001, agent-identity.test.ts) adds the agent's signed AUTARK_AGENT_TOKEN beside its id; this file
+// pins only the id, so the token is checked for presence and left out of the comparison.
+function withoutToken(set: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!set) return set;
+  const { AUTARK_AGENT_TOKEN: token, ...rest } = set;
+  if (rest.AUTARK_AGENT) assert.match(token ?? '', /^wfa1./, 'an agent shell carries its signed identity too');
+  return rest;
+}
+
 test("a Codex thread's shells get its agent's id (start and resume); none without an agent", async () => {
-  assert.deepEqual(threadIsolation(['/a'], { GIT_PAGER: 'cat' }, 'ag_1').config.shell_environment_policy, { set: { GIT_PAGER: 'cat', AUTARK_AGENT: 'ag_1' } });
+  assert.deepEqual(withoutToken(threadIsolation(['/a'], { GIT_PAGER: 'cat' }, 'ag_1').config.shell_environment_policy.set), { GIT_PAGER: 'cat', AUTARK_AGENT: 'ag_1' });
   assert.deepEqual(threadIsolation(['/a']).config.shell_environment_policy, { set: {} });
   const requests: any[] = [];
   const fake = fakeSpawn(({ child }) => {
@@ -54,7 +63,7 @@ test("a Codex thread's shells get its agent's id (start and resume); none withou
   try {
     assert.equal((await engine.run(turnInput({ cwd: '/home/w', agentId: 'ag_ava' }).input)).stop, 'done');
     assert.equal((await engine.run(turnInput({ cwd: '/home/w', agentId: 'ag_bo', session: { ref: 'thr_9', generation: 1 } }).input)).stop, 'done');
-    const set = (method: string) => requests.find((r) => r.method === method)?.params.config.shell_environment_policy.set;
+    const set = (method: string) => withoutToken(requests.find((r) => r.method === method)?.params.config.shell_environment_policy.set);
     assert.deepEqual(set('thread/start'), { GIT_PAGER: 'cat', AUTARK_AGENT: 'ag_ava' });
     assert.deepEqual(set('thread/resume'), { GIT_PAGER: 'cat', AUTARK_AGENT: 'ag_bo' });
     assert.equal(fake.calls[0]!.options.env?.AUTARK_AGENT, undefined, 'the shared app-server carries none');

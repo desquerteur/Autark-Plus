@@ -77,7 +77,8 @@ function mayGiveTo(t: TaskServiceImpl, by: string, agentId: string): boolean {
 /** AF-026: why agent `by` may not give to agent `to` (outside its project); undefined: it may, or `by` is no agent. */
 function outsideProject(s: TaskServiceImpl['s'], by: string, to: string): string | undefined {
   if (!s.org || isHumanActor(by) || by === SYSTEM_ID) return undefined;
-  try { return reachRefusal({ org: s.org, db: s.db, ...(s.chats ? { chats: s.chats } : {}) }, by, to); } catch { return undefined; }
+  // the agent's home (agentCore) is what puts it in a project – without it nobody would be in one
+  try { return reachRefusal({ org: s.org, db: s.db, ...(s.chats ? { chats: s.chats } : {}), ...(s.agentCore ? { agentCore: s.agentCore } : {}) }, by, to); } catch { return undefined; }
 }
 
 function candidates(t: TaskServiceImpl, by: string, team?: string): Array<{ id: string; label: string }> {

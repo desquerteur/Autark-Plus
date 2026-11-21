@@ -15,7 +15,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GLOBAL_SPACE } from '../../shared/api/workspace-browser.ts';
 import { useContextMenu } from '../lib/context-menu.tsx';
-import { modKey } from '../lib/platform.ts';
+import { modKey, unzoom } from '../lib/platform.ts';
 import { toastError } from '../lib/toasts.ts';
 import { Icon, IconButton } from '../lib/ui.tsx';
 import { tabName, type TabInfo } from './browser-model.ts';
@@ -76,7 +76,7 @@ export function TabStrip(props: { tabs: readonly TabInfo[]; shown: string | unde
   useLayoutEffect(() => {
     const element = room.current;
     if (!element) return;
-    const measure = () => setClient(Math.floor(element.getBoundingClientRect().width));
+    const measure = () => setClient(Math.floor(unzoom(element.getBoundingClientRect().width)));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);

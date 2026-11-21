@@ -114,8 +114,11 @@ test('the windowless page for installers with pages compiles with warnings as er
  * GetTickCount before and after, so Windows' scan of the fresh file is not counted); null when Windows refused three
  * new stubs. `updated` is what electron-builder's ${isUpdated} answers (an installer started with --updated).
  */
-function runRunningCheck(image: string, updated = false, brokerKey = NO_BROKER): { status: number | null; ms: number; moves: number } | null {
+function runRunningCheck(image: string, updated = false, brokerKey = NO_BROKER, ready: () => boolean = () => true): { status: number | null; ms: number; moves: number } | null {
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    // 21.11.2026: an attempt that timed out may already have ended the process under test; a retry against nothing
+    // would pass at once and prove nothing, so it is no run at all.
+    if (!ready()) return null;
     const result = runRunningCheckOnce(image, updated, brokerKey);
     if (result) return result;
   }
@@ -174,7 +177,9 @@ function runRunningCheckOnce(image: string, updated: boolean, brokerKey: string)
   ].join('\r\n'));
   const compile = spawnSync(makensis!, ['-WX', '-V2', script], { encoding: 'utf8' });
   assert.equal(compile.status, 0, `${compile.stdout}\n${compile.stderr}`);
-  const run = spawnSync(exe, ['/S'], { encoding: 'utf8', timeout: 60_000 });
+  // A loaded PC scans a fresh unsigned stub for a minute or more before it starts (21.11.2026: up to ~100 s per test):
+  // a too short limit kills a stub that is mid-check and turns it into a refusal.
+  const run = spawnSync(exe, ['/S'], { encoding: 'utf8', timeout: 240_000 });
   if (run.error || !existsSync(timing)) return null;
   const moves = existsSync(`${timing}.moves`) ? readFileSync(`${timing}.moves`, 'utf8').length : 0;
   return { status: run.status, ms: Number(readFileSync(timing, 'utf8')), moves };
@@ -187,7 +192,10 @@ test('the running check: nothing running passes at once, without PowerShell', { 
   const result = runRunningCheck(`wf-nsh-none-${process.pid}.exe`);
   if (!result) { t.diagnostic('not run, Windows refused the stub'); return; }
   assert.equal(result.status, 0);
-  assert.ok(result.ms < 3000, `the check itself took ${result.ms} ms`);
+  // One probe, no wait loop: under a loaded PC a single tasklist can take seconds itself (21.11.2026: 3.8 s in a full
+  // parallel run), so the bound is one probe as this PC runs it now, never less than 3 s.
+  const probe = probeMs();
+  assert.ok(result.ms < Math.max(3000, 2 * probe + 500), `the check itself took ${result.ms} ms (one bare probe: ${probe} ms)`);
   t.diagnostic(`the check itself took ${result.ms} ms`);
 });
 
@@ -224,22 +232,37 @@ test('the running check: a plain close request before /F, and an update first wa
   assert.match(install, /\$\{AndIf\} \$installMode != "all"\s+Exec '"\$appExe" --updated'/, 'an elevated all-users installer never starts the app elevated');
 });
 
+/** How long one bare probe of the running check takes on this PC right now (tasklist piped into findstr). */
+function probeMs(): number {
+  const start = Date.now();
+  spawnSync('cmd.exe', ['/C', 'tasklist /FI "IMAGENAME eq wf-nsh-probe.exe" /FO CSV /NH | findstr /B /I /C:"wf-nsh-probe.exe"'], { encoding: 'utf8', windowsHide: true });
+  return Date.now() - start;
+}
+
 /** A copied ping.exe under a throwaway image name runs while `check` runs; afterwards it must be gone. */
-async function againstRunning(t: TestContext, tag: string, check: (image: string) => ReturnType<typeof runRunningCheck>) {
+async function againstRunning(t: TestContext, tag: string, check: (image: string, ready: () => boolean) => ReturnType<typeof runRunningCheck>) {
   const image = `wf-nsh-${tag}-${process.pid}.exe`;
   const copy = path.join(root, image);
   copyFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'PING.EXE'), copy);
   const child = spawn(copy, ['-n', '90', '127.0.0.1'], { stdio: 'ignore', windowsHide: true });
-  const ended = new Promise<void>(resolve => child.once('exit', () => resolve()));
-  await new Promise(resolve => setTimeout(resolve, 500));
+  let exited = false;
+  const ended = new Promise<void>(resolve => child.once('exit', () => { exited = true; resolve(); }));
+  // Wait until the copy really shows in tasklist (a fresh unsigned copy may be held by the virus scan, or refused):
+  // a check against a process not there yet passes at once and proves nothing (21.11.2026: 'waited 1188 ms').
+  let seen = false;
+  for (let i = 0; i < 40 && !seen; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    seen = spawnSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/NH'], { encoding: 'utf8' }).stdout.includes(image);
+  }
+  if (!seen) { child.kill(); await ended; t.diagnostic('not run, the copied ping never showed in tasklist'); return null; }
   let result: ReturnType<typeof runRunningCheck> = null;
   let alive = '';
   try {
-    result = check(image);
+    result = check(image, () => !exited && spawnSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/NH'], { encoding: 'utf8' }).stdout.includes(image));
     alive = spawnSync('tasklist', ['/FI', `PID eq ${child.pid}`, '/NH'], { encoding: 'utf8' }).stdout;
   } finally { child.kill(); }
   await ended;
-  if (!result) { t.diagnostic('not run, Windows refused the stub'); return null; }
+  if (!result) { t.diagnostic('not run: Windows refused the stub, or the process under test was gone before a retry'); return null; }
   assert.equal(result.status, 0);
   assert.equal(alive.includes(image), false, 'taskkill ended it');
   t.diagnostic(`the check itself took ${result.ms} ms`);
@@ -247,10 +270,10 @@ async function againstRunning(t: TestContext, tag: string, check: (image: string
 }
 
 test('the running check ends a running process of this user with the app\'s image name', { skip: !makensis }, async (t) => {
-  await againstRunning(t, 'ping', image => runRunningCheck(image));
+  await againstRunning(t, 'ping', (image, ready) => runRunningCheck(image, false, NO_BROKER, ready));
 });
 
 test('the running check during an update gives the app at least 3 s to quit by itself before it ends it', { skip: !makensis }, async (t) => {
-  const result = await againstRunning(t, 'upd', image => runRunningCheck(image, true));
+  const result = await againstRunning(t, 'upd', (image, ready) => runRunningCheck(image, true, NO_BROKER, ready));
   if (result) assert.ok(result.ms >= 3000, `waited ${result.ms} ms before the first kill`);
 });

@@ -6,6 +6,8 @@
 // when that route failed and npm exists. A route counts once the finder sees the CLI (fresh PATH).
 // AF-024: Gemini CLI has no standalone installer – Google's documented way is `npm install -g @google/gemini-cli`
 // (Node.js 20 or newer); without npm the error says so.
+// #28: Grok Build: its official installer (x.ai/cli/install.ps1 / install.sh → ~/.grok/bin), `npm i -g @xai-official/grok`
+// when that failed and npm exists.
 // B-051 integration: demo mode (WORKFORCE_FAKE_ENGINE, e2e and window tests) never runs a real installer.
 // B-080 wave 3 (live 08.–09.11.2026: Codex's shell on Windows was Windows PowerShell 5.1, whose pipes into programs are
 // ASCII – "Nächste" reached a file as "N?chste"): PowerShell 7 for the engines' shells, the way the CLIs come –
@@ -26,16 +28,17 @@ import type { InstallableCli } from '../../shared/model/providers.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { pwshDir } from '../engines/wf-shim.ts';
 
-const NPM_PACKAGES = { codex: '@openai/codex', 'gemini-cli': '@google/gemini-cli' } as const;
+const NPM_PACKAGES = { codex: '@openai/codex', 'gemini-cli': '@google/gemini-cli', 'grok-cli': '@xai-official/grok' } as const;
 export const INSTALL_FAILED: Readonly<Record<InstallableCli, string>> = {
   claude: 'Could not install Claude Code. Check your connection and try again.',
   codex: 'Could not install Codex. Check your connection and try again.',
   'gemini-cli': 'Could not install Gemini CLI. Check your connection and try again.',
+  'grok-cli': 'Could not install Grok Build. Check your connection and try again.',
 };
 /** AF-024: Gemini CLI comes only through npm. */
 export const GEMINI_NEEDS_NODE = 'Gemini CLI needs Node.js 20 or newer. Install it from nodejs.org, then try again.';
 /** The executable each installable CLI is found as. */
-const EXECUTABLE: Readonly<Record<InstallableCli, CliId>> = { claude: 'claude', codex: 'codex', 'gemini-cli': 'gemini' };
+const EXECUTABLE: Readonly<Record<InstallableCli, CliId>> = { claude: 'claude', codex: 'codex', 'gemini-cli': 'gemini', 'grok-cli': 'grok' };
 /** Demo mode: the fake engine needs no CLI, and a real installer must never run there. */
 export const INSTALL_OFF_IN_DEMO = 'The demo does not install programs.';
 /** #24: …nor starts a real sign-in when the CLI happens to be installed (window tests on a developer PC). */
@@ -62,6 +65,16 @@ export function codexInstaller(platform: NodeJS.Platform, env?: NodeJS.ProcessEn
     : { command: '/bin/bash', env: quiet, args: ['-c', 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | sh'] };
 }
 
+/**
+ * #28: Grok Build's official installer (docs.x.ai/build/overview: x.ai/cli/install.ps1 on Windows, install.sh elsewhere) –
+ * both put the native binary into ~/.grok/bin (executables.ts finds it there); the stable channel.
+ */
+export function grokInstaller(platform: NodeJS.Platform, env?: NodeJS.ProcessEnv): InstallRoute {
+  return platform === 'win32'
+    ? { command: 'powershell.exe', env, args: ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Invoke-RestMethod 'https://x.ai/cli/install.ps1'))); if (-not (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.grok/bin/grok.exe'))) { exit 1 }"] }
+    : { command: '/bin/bash', env, args: ['-c', 'set -o pipefail; curl -fsSL https://x.ai/cli/install.sh | bash'] };
+}
+
 /** `npm install -g <package>` (Codex's fallback, Gemini CLI's only route); npm.cmd cannot be spawned without a shell – all arguments are constants, so cmd /c is safe. */
 export function npmInstaller(npm: Executable, platform: NodeJS.Platform, env?: NodeJS.ProcessEnv, pkg: string = NPM_PACKAGES.codex): InstallRoute {
   if (platform === 'win32' && npm.path.toLowerCase().endsWith('.cmd') && npm.command === npm.path) {
@@ -79,6 +92,10 @@ export async function installCli(provider: InstallableCli, deps: InstallDeps): P
     const npm = await deps.finder.find('npm', { force: true });
     if (!npm) throw new WorkforceError('unavailable', GEMINI_NEEDS_NODE);
     if (await runRoute(npmInstaller(npm, platform, deps.env, NPM_PACKAGES['gemini-cli']), provider, deps)) return true;
+  } else if (provider === 'grok-cli') { // #28: the official installer, npm when that failed and npm exists
+    if (await runRoute(grokInstaller(platform, deps.env), provider, deps)) return true;
+    const npm = await deps.finder.find('npm', { force: true });
+    if (npm && await runRoute(npmInstaller(npm, platform, deps.env, NPM_PACKAGES['grok-cli']), provider, deps)) return true;
   } else if (provider === 'claude') {
     if (await runRoute(claudeInstaller(platform, deps.env), provider, deps)) return true;
   } else {

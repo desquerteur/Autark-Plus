@@ -73,7 +73,7 @@ function causeCode(error: unknown): string | undefined {
 
 function networkError(error: unknown, toolCall: boolean): McpTransportError {
   const code = causeCode(error);
-  if (code && NOT_SENT.has(code)) return new McpTransportError('The app could not be reached.', false);
+  if (code && NOT_SENT.has(code)) return new McpTransportError('The app could not be reached.', false, code === 'ECONNREFUSED');
   return new McpTransportError('The connection to the app broke.', toolCall);
 }
 

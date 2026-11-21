@@ -38,8 +38,7 @@ function setup() {
   };
   /** The run ends (`answer` posted as its row), its wakes are done – what the dispatcher does at a turn's end. */
   const ends = async (runId: string, status: Run['status'] = 'done', answer = 'Done.', error?: string) => {
-    const row = f.chats.beginAgentMessage(chat.id, 'ag_ava', runId);
-    f.chats.finishAgentMessage(row.id, { body: answer, state: status === 'failed' ? 'failed' : 'final' });
+    f.chats.postAgentMessage(chat.id, 'ag_ava', runId, { body: answer, state: status === 'failed' ? 'failed' : 'final' }); // 0.3.16: the answer is posted at the end
     f.dispatcher.active = [];
     f.db.run('DELETE FROM wakes');
     f.clock.advance(10);

@@ -23,9 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BaseWindow, BrowserWindow, Menu, MessageChannelMain, Notification, Tray, app, autoUpdater as nativeUpdater, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor,
-  powerSaveBlocker, protocol, safeStorage, screen, session, shell, utilityProcess,
+  powerSaveBlocker, protocol, safeStorage, screen, session, shell, utilityProcess, type MessagePortMain,
 } from 'electron';
-import type { MessagePortMain } from 'electron';
 import { IPC } from '../shared/api/desktop.ts';
 import { appInfo, appPaths } from './app-paths.ts';
 import { Capture, windowLayers } from './capture.ts';
@@ -35,8 +34,6 @@ import { desktopIpcDeps } from './desktop-ipc.ts';
 import { hiddenWindows } from './hidden-windows.ts';
 import { HostServices } from './host-services.ts';
 import { registerIpc } from './ipc.ts';
-import { ensureExplorerMenu, explorerMenuAction, type MenuDeps } from './explorer-menu.ts'; // AF-014
-import { runCommand } from './launcher-tasks.ts'; // AF-014: reg.exe for the Explorer entry
 import { applyLauncher, launcherDeps } from './launcher-tasks.ts';
 import { setupBroker } from './broker-setup.ts'; // B-080
 import { armDueStart } from './launcher-windows.ts';
@@ -45,8 +42,7 @@ import { guardMainErrors } from './crash-guard.ts'; // 17.11.2026: an uncaught e
 import { openMainLog } from './main-log.ts';
 import { ProtocolHandlers, registerProtocolHandlers } from './protocols/handlers.ts';
 import { RendererLink } from './renderer-link.ts';
-import { RuntimeHost } from './runtime-host.ts';
-import type { RuntimeChild } from './runtime-host.ts';
+import { RuntimeHost, type RuntimeChild } from './runtime-host.ts';
 import { RuntimeLink, runtimeEnv } from './runtime-link.ts';
 import { MediaArm } from './security.ts';
 import { sessionEnded, watchSessionEnd } from './session-end.ts';
@@ -55,7 +51,7 @@ import { SettingsView, changedPreferences } from './settings-view.ts';
 import { quitSteps, runShutdown } from './shutdown.ts';
 import { AppTray } from './tray.ts';
 import { DesktopUpdates, inactiveUpdater, loadUpdater, settleAfterStart, siblingUpdates, updateFromElsewhere } from './updates-wiring.ts';
-import { loadUpdateSource, saveUpdateSource } from './updates/source-store.ts'; // AF-019
+import { plusDesktop } from './plus-desktop.ts'; // Autark-Plus: AF-014 Explorer entry, AF-019 update source
 import { MainWindow } from './window.ts';
 import { WorkspaceBrowser } from './workspace-browser.ts';
 import { setFillRpc } from './workspace-fill.ts';
@@ -78,9 +74,7 @@ export interface DesktopOptions {
 }
 
 export interface Desktop {
-  show(): void;
-  /** AF-014: the Explorer's "Create Autark agent from this folder" – the window opens the dialog with that folder. */
-  agentFromFolder(folder: string): void;
+  show(): void; agentFromFolder(folder: string): void; // AF-014: the Explorer's entry – the window opens the dialog with that folder
 }
 
 function errorText(error: unknown): string {
@@ -94,15 +88,12 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   if (platform === 'win32') app.setAppUserModelId('com.teydralab.workforce');
   if (platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
   guardAllContents(app);
-
   const paths = appPaths({ appPath: app.getAppPath(), userData: app.getPath('userData') });
-  // AF-014: the Explorer entry starts this executable (unpackaged: Electron plus the app folder) with the folder.
-  const explorerDeps: MenuDeps = { platform, exe: process.execPath, prefix: app.isPackaged ? [] : [app.getAppPath()], run: runCommand, dir: app.getPath('userData') };
+  const plus = await plusDesktop(paths.data, !options.company && !options.testData); // Autark-Plus additions (plus-desktop.ts)
   const log = openMainLog(paths.logs, !app.isPackaged);
   guardMainErrors(process, line => log.line(line));
   const runMarks = new RunStateMarks(paths.data, line => log.line(line)); // B-044: every deliberate quit is marked (launcher.ts)
   log.line(`starting ${app.getVersion()}${app.isPackaged ? '' : ' (development)'}${testMode ? ' (test data)' : ''}`);
-
   let quitting = false;
   const media = new MediaArm();
   const link = new RuntimeLink<MessagePortMain>();
@@ -296,8 +287,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
       stop: reason => link.stop(reason),
       start: () => link.start(),
     },
-    source: await loadUpdateSource(paths.data), // AF-019: Settings › Updates (update-source.json)
-    saveSource: source => saveUpdateSource(paths.data, source),
+    source: plus.source, saveSource: plus.saveSource, // AF-019: Settings › Updates
     install: { pid: process.pid, exe: process.execPath, appImage: process.env.APPIMAGE, logs: paths.logs, quit: () => app.quit(), args: companyArgs(company) }, // B-080: installFile
     publish: state => {
       renderer.send(IPC.updateState, state);
@@ -394,7 +384,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     clipboardWrite: text => clipboard.writeText(text),
     openExternal: url => shell.openExternal(url),
     titleBarLayout: layout => mainWindow.setTitleBarLayout(layout),
-    explorerMenu: action => explorerMenuAction(action, explorerDeps), // AF-014
+    explorerMenu: plus.explorerMenu, // AF-014
     titleBarDim: dim => mainWindow.setTitleBarDim(dim),
     log: line => log.line(line),
   }));
@@ -455,9 +445,5 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   desktopUpdates.start();
   if (!company) settleAfterStart({ dataDir: paths.data, version: app.getVersion(), launcher, log: line => log.line(line) }); // the rename's and updates' leftovers
   if (!options.background) mainWindow.show();
-  if (!company && !options.testData) void ensureExplorerMenu({ ...explorerDeps, packaged: app.isPackaged }); // AF-014: this user's Explorer entry, once
-  return {
-    show: () => mainWindow.show(),
-    agentFromFolder: (folder) => { mainWindow.show(); renderer.sendWhenLoaded(IPC.navigate, { agentFromFolder: folder }); },
-  };
+  return { show: () => mainWindow.show(), agentFromFolder: (folder) => { mainWindow.show(); renderer.sendWhenLoaded(IPC.navigate, { agentFromFolder: folder }); } };
 }

@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { freshPath } from './fresh-path.ts';
 
-export type CliId = 'codex' | 'claude' | 'gemini' | 'copilot' | 'kimi' | 'tailscale' | 'npm' | 'node';
+export type CliId = 'codex' | 'claude' | 'gemini' | 'copilot' | 'kimi' | 'grok' | 'tailscale' | 'npm' | 'node';
 
 /** How to start a CLI: `command` plus fixed leading args (e.g. node + script for js shims). */
 export interface Executable {
@@ -97,6 +97,14 @@ export class ExecutableFinder {
       const { usable, lone } = await this.byCodexHelper(app);
       candidates.push(...usable, standalone);
       last.push(...lone);
+    }
+    if (id === 'grok') {
+      // #28: Grok Build's native binary – where its official installer (x.ai/cli/install.ps1 / install.sh) and the npm
+      // package's postinstall put it. The npm shim's target is a Node script without extension (bin/grok), which a
+      // `.cmd` shim cannot be resolved to, and it would copy the 180 MB binary into every account's GROK_HOME.
+      const exe = win ? 'grok.exe' : 'grok';
+      if (env.GROK_HOME) candidates.push(join(env.GROK_HOME, 'bin', exe));
+      candidates.push(join(home, '.grok', 'bin', exe));
     }
     if (win && id === 'tailscale') candidates.push(join(env.ProgramFiles ?? 'C:\\Program Files', 'Tailscale', 'tailscale.exe'));
     if (win && env.APPDATA) dirs.push(join(env.APPDATA, 'npm'));

@@ -6,8 +6,7 @@
 // defaults from these definitions; validate.ts takes the known keys, the options, ranges and patterns from here.
 // Owns: the definitions, both texts and how the text is read. Never: reads or writes files, decides what applies.
 
-import type { Settings } from '../../shared/model/system.ts';
-import { ONBOARDING_STEPS, TOUR_STATES } from '../../shared/model/system.ts';
+import { ONBOARDING_STEPS, TOUR_STATES, type Settings } from '../../shared/model/system.ts';
 import { DEFAULT_DAY_SETTINGS, MAX_BUFFER_MIN } from '../../shared/model/day-settings.ts';
 import { DEFAULT_RETENTION, MAX_RETENTION_DAYS } from '../../shared/model/lifecycle.ts';
 import { localSpeechIds } from '../../shared/model/local-speech-models.ts';
@@ -17,7 +16,7 @@ import { DEFAULT_RELAY, DEFAULT_STUN } from '../../shared/model/relay.ts';
 import { MAX_WORDS } from '../../shared/voice/vocabulary.ts';
 import { APPEARANCE_SECTION } from './appearance-schema.ts';
 import { PERSONALITY_SECTION } from '../personality/settings-section.ts'; // AF-006
-import { FALLBACK_USES, MAX_FALLBACK_STEPS } from '../../shared/model/account-fallback.ts'; // AF-023
+import { FALLBACKS_KEY } from './fallbacks-key.ts'; // AF-023
 import { humanDefault, MAX_HUMAN_MD } from '../../shared/model/agent-core.ts';
 
 type Plain = Record<string, unknown>;
@@ -100,15 +99,6 @@ const useKey = (use: ModelUse): KeyDef => {
       ? `"auto" (the app takes what your plans, API keys and local servers offer; ${names}), a model "<connection>:<model>" (a connection of the section providers, also with a name its server does not list; wf call models.list lists the rest), or a plan such as "codex" (its best model for each turn)`
       : `"auto" (the app takes what is connected; ${names}) or a model "<connection>:<model>"${OFFABLE_USES.has(use) ? ', or "off"' : ''}${use === 'tts' || use === 'embeddings' ? ', or "local" (this PC)' : ''}${use === 'image' ? ', or "codex" (the ChatGPT plan)' : ''}`,
     { maxLength: 200, default: USE_AUTO });
-};
-
-/** AF-023: routing.fallbacks – per use, what runs when its account is used up (shared/model/account-fallback.ts). */
-const FALLBACK_STEP_SCHEMA = { type: 'object', properties: { account: { type: 'string', minLength: 1, maxLength: 200 }, model: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['account'], additionalProperties: false };
-const FALLBACKS_KEY: KeyDef = {
-  key: 'fallbacks', type: 'object', default: {},
-  about: 'If an account is used up, take … – per use (work, decision) an ordered list of an account and optionally a model; an empty list = automatic (the same model on the provider\'s next account, else the most similar model elsewhere)',
-  allowed: `{ "work": [{ "account": "<account id>", "model": "<connection>:<model>" (optional: else the same or the nearest model) }], "decision": [ … ] }, up to ${MAX_FALLBACK_STEPS} steps each`,
-  schema: { properties: Object.fromEntries(FALLBACK_USES.map((use) => [use, { type: 'array', maxItems: MAX_FALLBACK_STEPS, items: FALLBACK_STEP_SCHEMA }])), additionalProperties: false },
 };
 
 /** Every setting, in the order settings.json shows them. */
@@ -210,16 +200,13 @@ export const SECTIONS: readonly SectionDef[] = [
   { key: 'onboarding', title: 'First run', keys: [
     flag('completed', 'Whether the first run is finished', false),
     choice('step', 'The setup assistant\'s step on screen (done = finished)', ONBOARDING_STEPS, 'profile'),
-    // AF-002: the spotlight tour through the app (Settings › General › Getting started shows it again)
-    choice('tour', 'The app tour: new = not shown yet, started = stopped part way, done = seen to the end, skipped = closed with Skip', TOUR_STATES, 'new'),
+    choice('tour', 'The app tour: new = not shown yet, started = stopped part way, done = seen to the end, skipped = closed with Skip', TOUR_STATES, 'new'), // AF-002: the spotlight tour (Settings › General › Getting started shows it again)
     text('tourStep', 'The app tour\'s step it goes on at', 'a step id, or "" (the start)', { pattern: PATTERNS.tourStep, default: '' }),
-    { key: 'hints', about: 'The areas whose short first-visit hint was shown', type: 'array', allowed: `a list of up to ${MAX_HINTS} area ids`,
-      default: [], schema: { maxItems: MAX_HINTS, items: { type: 'string', pattern: PATTERNS.tourStep } } },
+    { key: 'hints', about: 'The areas whose short first-visit hint was shown', type: 'array', allowed: `a list of up to ${MAX_HINTS} area ids`, default: [], schema: { maxItems: MAX_HINTS, items: { type: 'string', pattern: PATTERNS.tourStep } } },
   ] },
 ];
 
 const BY_SECTION: ReadonlyMap<string, SectionDef> = new Map(SECTIONS.map((section) => [section.key, section]));
-
 /** The section `name` (undefined: no such section). */
 export const sectionDef = (name: string): SectionDef | undefined => BY_SECTION.get(name);
 

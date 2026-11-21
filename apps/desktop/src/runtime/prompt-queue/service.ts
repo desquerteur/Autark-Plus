@@ -156,7 +156,7 @@ export class PromptQueues implements PromptQueueService {
     const answer = s.chats.messages(run.conversationId!, { limit: RECENT_ROWS }).filter((message) => message.runId === run.id && message.authorKind === 'agent').pop();
     if (answer && (hasAskBlock(answer.body) || endsWithQuestion(answer.body))) return true;
     const since = run.startedAt ?? run.endedAt ?? 0;
-    return s.tasks.list({ conversationId: run.conversationId, assigneeKind: 'human', status: ['open', 'working', 'waiting', 'needs_you', 'blocked'], limit: 20 })
+    return s.tasks.list({ conversationId: run.conversationId, assigneeKind: 'human', status: ['open', 'waiting'], limit: 20 })
       .some((task) => task.createdAt >= since);
   }
 

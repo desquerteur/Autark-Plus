@@ -286,4 +286,5 @@ test('fetch seam: same-origin redirects are followed, another origin is refused,
   const down = await connectMcp({ kind: 'http', url: 'https://down.example/mcp' }, { ...CLIENT, fetch: fake }).catch((caught: unknown) => caught);
   assert.ok(down instanceof McpTransportError);
   assert.equal(down.sent, false);
+  assert.equal(down.refused, true); // nothing listens: a local app is not running (#26)
 });

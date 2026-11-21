@@ -48,11 +48,10 @@ need. Reading it again afterwards shows the same entry, or the reason above it w
 
 Plans come through their own sign-in and stay detected, they are not in the file: `wf call accounts.detect` finds what is on
 this PC, `wf call accounts.add '{"provider":"codex"}'` starts the sign-in. `wf call accounts.add` with a key or address also works
-for an API connection and writes the same entry. With two plans of one provider the upper one in Settings › Models runs
-first; when it runs out (or fails) the next one takes over by itself and the chat says so (AF-023);
-`wf call accounts.update '{"id":"<account>","rotation":true}'` also lets it share the work while the first can still run
-(off by default, as providers' terms differ on rotating logins), and `priority` (Move up / down in Settings › Models)
-sets the order. A plan's sign-in lives once on this PC and every company here runs on that one login: what one
+for an API connection and writes the same entry. Every signed-in plan of a provider takes turns: the one whose week resets first runs
+first, one at its limit steps aside until it is free again. `priority` (Move up / down in Settings › Models) orders plans
+without a reading and keys. When the plan a turn was meant for is used up or fails, `routing.fallbacks` (below) decides what
+runs instead, else the same model on the next plan; the chat says which plan was used up and until when. A plan's sign-in lives once on this PC and every company here runs on that one login: what one
 company signs in is a plan of the others from their next `accounts.detect`, switched on; switching it off or removing it acts
 in that company only, signing out ends the login for all of them.
 

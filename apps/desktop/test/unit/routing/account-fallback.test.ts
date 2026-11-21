@@ -24,12 +24,12 @@ const halfFull = { windows: [{ name: 'weekly', usedPercent: 52, windowMinutes: 1
 /** The person's setup: "Claude Code" (primary, rotation off) and "Claude Code 2" (rotation off, as every plan since B-072). */
 async function userSetup(options: { codex?: boolean; chat?: Record<string, unknown> } = {}) {
   const h = await standardSetup();
-  h.accounts.upsert(account('acc_claude', 'claude', { label: 'fritz1', rotation: false }), false);
-  h.accounts.upsert(account('acc_fritz2', 'claude', { label: 'fritz2', priority: 1, rotation: false, createdAt: T0 + 1, limits: halfFull }), false);
+  h.accounts.upsert(account('acc_claude', 'claude', { label: 'fritz1' }), false);
+  h.accounts.upsert(account('acc_fritz2', 'claude', { label: 'fritz2', priority: 1, createdAt: T0 + 1, limits: halfFull }), false);
   if (options.codex === false) h.accounts.upsert({ ...h.accounts.get('acc_codex')!, enabled: false }, false);
   await h.catalog.refresh({ force: true });
-  h.agents.set(TOM, agent(TOM, {}));
-  h.addChat('ch_main', [TOM], { models: { [TOM]: OPUS }, ...(options.chat ?? {}) });
+  h.agents.set(TOM, agent(TOM, { modelPolicy: { pin: OPUS } })); // the start model: a chat's model chip never routes (upstream 0.3.12)
+  h.addChat('ch_main', [TOM], { ...(options.chat ?? {}) });
   const route = (exclude?: string[]) => h.router.route({ agent: h.agents.get(TOM)!, conversationId: 'ch_main', mode: mode('chat'), text: 'hello', ...(exclude ? { exclude } : {}) });
   return { h, route };
 }
@@ -57,10 +57,12 @@ test('a failed attempt on the first plan moves on to the second (failover with t
   assert.equal(decision.modelId, OPUS);
 });
 
-test('the primary with quota is still used first: no switch while it can run', async () => {
+// Upstream 0.3.12 (accounts/candidates.ts): every signed-in plan takes turns, the one whose week resets first goes first –
+// no primary that holds the others back. fritz2 has a weekly reading (resets in 50 h), fritz1 none, so fritz2 leads.
+test('the plan whose week resets first runs: no switch while it can run', async () => {
   const { route } = await userSetup();
   const decision = await route();
-  assert.equal(decision.accountId, 'acc_claude');
+  assert.equal(decision.accountId, 'acc_fritz2');
   assert.equal(decision.accountSwitch, undefined);
 });
 
@@ -85,9 +87,11 @@ test('the Work order: "if the account is used up, take Codex GPT-6.1 Sol" beats 
   assert.equal(decision.engine, 'codex');
   assert.equal(decision.accountSwitch?.byOrder, true);
   assert.match(decision.reason, /fallback order in Settings/);
-  // While the first plan can run, the order changes nothing.
+  // While the plans can run, the order changes nothing: the plan whose week resets first runs, unmarked.
   h.accounts.upsert({ ...h.accounts.get('acc_claude')!, limits: undefined }, false);
-  assert.equal((await route()).accountId, 'acc_claude');
+  const free = await route();
+  assert.equal(free.accountId, 'acc_fritz2');
+  assert.equal(free.accountSwitch, undefined);
 });
 
 test('order steps that cannot run are skipped; a step without a model takes the same model on its account', async () => {

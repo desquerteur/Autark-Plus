@@ -294,7 +294,6 @@ export class FeedbackService implements FeedbackApi {
   }
 
   // ------------------------------------------------------------------ Autark-Plus: GitHub issues
-
   /** The issue as it would go out (the preview): redacted title, body and labels, the target repo and the new-issue link. */
   issuePreview(id: string, include: IssueInclude = {}): IssueDraft & { connected: boolean } {
     const s = this.deps.services();
@@ -303,11 +302,8 @@ export class FeedbackService implements FeedbackApi {
     return { ...this.draft(s, report, include), connected: Boolean(this.issueClient(s)) };
   }
 
-  /**
-   * Explicit action: file the report as a GitHub issue through the connected GitHub app (an open issue with the same
-   * title gets a comment instead). Without a connected app nothing leaves the PC: the answer carries the prefilled
-   * new-issue link for the browser.
-   */
+  /** Explicit action: file the report as a GitHub issue through the connected GitHub app (an open issue with the same title
+   *  gets a comment instead). Without a connected app nothing leaves the PC: the answer carries the new-issue link. */
   async fileIssue(id: string, include: IssueInclude = {}): Promise<{ report: FeedbackReport; url: string; filed: boolean }> {
     const s = this.deps.services();
     const repo = this.repo(s);

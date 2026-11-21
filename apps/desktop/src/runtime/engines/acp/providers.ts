@@ -31,6 +31,14 @@
 // - Kimi Code: `kimi acp` documents no option (--agent-file, --skills-dir belong to the main command), so nothing
 //   is passed. Possible later: `$KIMI_CODE_HOME/SYSTEM.md` "fully replaces" the main agent's prompt (and without
 //   ${agents_md}/${skills} no AGENTS.md or skill list) – a file in the account's own home, not written today.
+// - Grok Build (desquerteur/Autark-Plus#28; docs.x.ai/build, verified live with grok 1.0.92 on 21.11.2026): `grok agent
+//   stdio` (a subcommand pair, so `command` instead of a --help flag), `grok login` in a terminal (browser or device
+//   code; SuperGrok / X Premium+), GROK_HOME per account. Its ACP session/new refuses ("Authentication required: no
+//   auth method id provided") until the client called authenticate – also with a login cached in GROK_HOME – so a
+//   launch names the method that only reuses that login (`silentAuth`, AcpProcess.start). Its `--system-prompt-file`
+//   belongs to the TUI, not to `agent stdio`: its prompt stays. Its environment turns off the self-update, the
+//   cross-session memory, /goal and subagents, and the Claude Code / Cursor scanners that otherwise pull the person's
+//   CLAUDE.md, ~/.claude MCP servers, skills and hooks into every session (seen live: the KiCad MCP server).
 // Owns: the table, the launch args from --help, the AcpResolver and the choice of sign-in method.
 // Never: reads the CLIs' home or token files, passes provider API keys (childEnv strips them),
 // installs a CLI, starts one in the process cwd or the workspace, writes into a CLI home, or passes a flag
@@ -49,16 +57,20 @@ import { HUB } from './updates.ts';
 import { isRecord, str } from '../shared.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 
-export type AcpPlanProvider = 'gemini-cli' | 'copilot' | 'kimi-cli';
+export type AcpPlanProvider = 'gemini-cli' | 'copilot' | 'kimi-cli' | 'grok-cli';
 
 export interface AcpProviderSpec {
   provider: AcpPlanProvider;
   /** The executable (ExecutableFinder id). */
-  cli: Extract<CliId, 'gemini' | 'copilot' | 'kimi'>;
+  cli: Extract<CliId, 'gemini' | 'copilot' | 'kimi' | 'grok'>;
   name: string;
   /** ACP flags (or a subcommand such as `acp`), preferred first: the first one the CLI's `--help` lists is used, else `fallback`. */
   flags: string[];
   fallback: string;
+  /** #28: fixed ACP launch arguments (a subcommand pair such as `agent stdio`), used instead of `flags`/`fallback`. */
+  command?: readonly string[];
+  /** #28: the ACP auth method that only reuses a cached sign-in; authenticated right after initialize (AcpLaunch.silentAuth). */
+  silentAuth?: RegExp;
   /** 'acp': ACP authenticate with the first method `method` matches; 'terminal': the CLI's own sign-in in a window. */
   signIn: 'acp' | 'terminal';
   method?: RegExp;
@@ -101,6 +113,18 @@ export const GOOGLE_SIGN_IN_ONLY: Readonly<Record<string, string>> = {
   GEMINI_API_KEY: '', GOOGLE_API_KEY: '', GOOGLE_GENAI_USE_VERTEXAI: '', GOOGLE_APPLICATION_CREDENTIALS: '', GOOGLE_CLOUD_LOCATION: '',
 };
 
+/**
+ * #28: Grok Build's launches (docs.x.ai/build/settings/reference, environment variables): no self-update while it serves
+ * a turn, no cross-session memory, /goal or subagents of its own (Autark plans and delegates), and none of its Claude
+ * Code / Cursor compatibility scanners – they would hand the person's CLAUDE.md, ~/.claude MCP servers, skills, agents
+ * and hooks to every Autark session.
+ */
+export const GROK_LEAN_ENV: Readonly<Record<string, string>> = {
+  GROK_DISABLE_AUTOUPDATER: '1', GROK_MEMORY: '0', GROK_GOAL: '0', GROK_SUBAGENTS: '0',
+  GROK_CLAUDE_SKILLS_ENABLED: '0', GROK_CLAUDE_RULES_ENABLED: '0', GROK_CLAUDE_AGENTS_ENABLED: '0', GROK_CLAUDE_MCPS_ENABLED: '0', GROK_CLAUDE_HOOKS_ENABLED: '0',
+  GROK_CURSOR_SKILLS_ENABLED: '0', GROK_CURSOR_RULES_ENABLED: '0', GROK_CURSOR_AGENTS_ENABLED: '0', GROK_CURSOR_MCPS_ENABLED: '0', GROK_CURSOR_HOOKS_ENABLED: '0',
+};
+
 export const ACP_PROVIDERS: Readonly<Record<AcpPlanProvider, AcpProviderSpec>> = {
   'gemini-cli': {
     provider: 'gemini-cli', cli: 'gemini', name: 'Gemini CLI', flags: ['--acp', '--experimental-acp'], fallback: '--experimental-acp',
@@ -121,6 +145,11 @@ export const ACP_PROVIDERS: Readonly<Record<AcpPlanProvider, AcpProviderSpec>> =
   // kimi.com/code/docs: `kimi acp` (JSON-RPC on stdio), `kimi login` (device code, exit 0/1), KIMI_CODE_HOME.
   // B-049 F3: `kimi acp` documents no option; --agent-file/--skills-dir belong to the main command, so none is passed.
   'kimi-cli': { provider: 'kimi-cli', cli: 'kimi', name: 'Kimi Code', flags: ['acp'], fallback: 'acp', signIn: 'terminal', home: 'KIMI_CODE_HOME' },
+  // #28: docs.x.ai/build (CLI reference, headless & scripting, settings reference, enterprise authentication).
+  'grok-cli': {
+    provider: 'grok-cli', cli: 'grok', name: 'Grok Build', flags: [], fallback: 'agent', command: ['agent', 'stdio'],
+    signIn: 'terminal', home: 'GROK_HOME', silentAuth: /^cached[_-]?token$/i, env: GROK_LEAN_ENV,
+  },
 };
 
 /** The variables that point an ACP plan CLI at the account's own home (none for its default home or a CLI without one). */
@@ -143,7 +172,8 @@ const listedIn = (help: string, flag: string) => new RegExp(`(?<![\\w-])${escape
  */
 export function acpArgs(spec: AcpProviderSpec, help: string): string[] {
   const listed = spec.flags.find((flag) => listedIn(help, flag));
-  return [listed ?? spec.fallback, ...(spec.lean ?? []).filter((lean) => listedIn(help, lean.flag)).flatMap((lean) => lean.args)];
+  const base = spec.command ? [...spec.command] : [listed ?? spec.fallback];
+  return [...base, ...(spec.lean ?? []).filter((lean) => listedIn(help, lean.flag)).flatMap((lean) => lean.args)];
 }
 
 /** The sign-in among the agent's ACP methods that `spec.method` names – never an API key or Vertex AI method. */
@@ -193,6 +223,7 @@ export class AcpLaunches {
   /** `home`: the account's home variable (acpHomeEnv); detection probes the default home without one. */
   async launch(spec: AcpProviderSpec, exe: Executable, home: Record<string, string> = {}): Promise<AcpLaunch> {
     const launch: AcpLaunch = { name: spec.name, command: exe.command, args: [...exe.prefixArgs, ...await this.flags(spec, exe)] };
+    if (spec.silentAuth) launch.silentAuth = spec.silentAuth;
     const prompt = await this.systemPrompt(spec);
     if (spec.env || Object.keys(home).length || Object.keys(prompt).length) launch.env = { ...spec.env, ...prompt, ...home };
     return launch;
@@ -218,6 +249,7 @@ export class AcpLaunches {
   }
 
   private flags(spec: AcpProviderSpec, exe: Executable): Promise<string[]> {
+    if (spec.command && !spec.lean?.length) return Promise.resolve(acpArgs(spec, '')); // #28: nothing to read in --help
     const key = `${spec.provider}\n${exe.path}`;
     let pending = this.args.get(key);
     if (!pending) {

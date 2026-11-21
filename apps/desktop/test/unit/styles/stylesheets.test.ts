@@ -16,8 +16,8 @@ const ALL_FILES = readdirSync(STYLES).filter((name) => name.endsWith('.css')).so
 const AREA_FILES = ALL_FILES.filter((name) => name !== 'index.css' && name !== 'tokens.css');
 /** Custom properties set inline by components (style={{ '--x': … }}), not by tokens.css. */
 // AF-008: the theme's own (lib/appearance.ts), the swatches and the layout map (settings/AppearancePage.tsx); AF-010: the chat's tabs' saved size (chat/ChatArea.tsx);
-// --chat-zoom: chat/text-zoom.ts (Ctrl +/−/0), chat.css falls back to 1
-const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width', '--lanes', '--chat-zoom', '--chat-dock-w', '--chat-dock-h', '--accent', '--accent-fg', '--text-zoom', '--sw-side', '--sw-bg', '--sw-text', '--sw-accent', '--map-side', '--map-pane']);
+// --chat-zoom: chat/text-zoom.ts (Ctrl+Alt +/−/0), chat.css falls back to 1; --ui-scale: #30 app-wide scale (lib/appearance.ts)
+const INLINE_VARS = new Set(['--sidebar-width', '--pane-width', '--icon', '--depth', '--tab-width', '--lanes', '--chat-zoom', '--chat-dock-w', '--chat-dock-h', '--accent', '--accent-fg', '--text-zoom', '--ui-scale', '--sw-side', '--sw-bg', '--sw-text', '--sw-accent', '--map-side', '--map-pane']);
 /** Literal colors left in area files, whole rules (open point for the CSS owner: a token for them). B-044 visual
  *  pass: the filled danger button got its tokens (--danger-fill, --danger-fill-fg), none is left. */
 const KNOWN_LITERALS: Record<string, string[]> = {};
