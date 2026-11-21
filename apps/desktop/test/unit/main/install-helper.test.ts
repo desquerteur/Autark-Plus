@@ -11,7 +11,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import os from 'node:os';
 import path from 'node:path';
 import {
-  HELPER_MARGIN_SECONDS, LINUX_HELPER_SCRIPT, LOCK_NAME, LOCK_STALE_MS, QUIT_MS, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperLaunch, installWithHelper, linuxHelper, spawnHelper, takeInstallLock,
+  HELPER_MARGIN_SECONDS, LINUX_HELPER_SCRIPT, LOCK_NAME, LOCK_STALE_MS, QUIT_MS, WAIT_SECONDS, WINDOWS_HELPER_SCRIPT, helperEnv, helperLaunch, installWithHelper, linuxHelper, spawnHelper, takeInstallLock,
   windowsHelper, windowsPidsName, type HelperLaunch, type InstallHelperDeps,
 } from '../../../src/main/updates/install-helper.ts';
 import { INSTALL_WATCHDOG_MS } from '../../../src/main/updates/update-service.ts';
@@ -46,7 +46,8 @@ test('Windows: a plain-ASCII cmd script beside the installer, values through the
   assert.match(text, /start "" \/wait "%AUTARK_UPDATE_INSTALLER%" --updated \/S\r\n/);
   assert.match(text, /if exist "%AUTARK_UPDATE_INSTALLER%" goto install\r\n/, 'never start a missing installer: its ShellExecute dialog is visible and blocks');
   assert.doesNotMatch(text, /--force-run/, 'the helper starts the app, not NSIS through Explorer');
-  assert.match(text, /start "" \/D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated %AUTARK_UPDATE_ARGS%\r\n/);
+  assert.match(text, /set "run_dir=%AUTARK_UPDATE_DIR%"\r\nset "run_exe=%AUTARK_UPDATE_EXE%"\r\nset "run_args=%AUTARK_UPDATE_ARGS%"\r\n/);
+  assert.match(text, /start "" \/D "%run_dir%" "%run_exe%" --updated %run_args%\r\n/, 'F25: the company flag still reaches the new version');
   assert.match(text, /"%SystemRoot%\\System32\\tasklist\.exe" \/FI "PID eq %AUTARK_UPDATE_PID%" \/NH >"%AUTARK_UPDATE_PIDS%"/);
   assert.match(text, /"%SystemRoot%\\System32\\find\.exe" " %AUTARK_UPDATE_PID% " "%AUTARK_UPDATE_PIDS%"/, 'never GNU find from a PATH with Git');
   assert.doesNotMatch(text, / \| /, 'no pipe: find reads a file, so it cannot wait for an end of input (issue #1)');
@@ -61,6 +62,16 @@ test('F25: the company that pressed Update starts again – only its own --compa
   assert.equal(windowsHelper({ pid: 1, installer: INSTALLER, exe: EXE, logFile: LOG, args: ['--company=x&calc', '--background'] }).env.AUTARK_UPDATE_ARGS, '', 'nothing that is no company flag lands in the cmd line');
   assert.equal(linuxHelper({ pid: 1, downloaded: '/a', appImage: '/b', logFile: '/c', args: ['--company=company-3'] }).args.at(-1), '--company=company-3');
   assert.match(LINUX_HELPER_SCRIPT, /if \[ -n "\$company" \]; then exec "\$target" --updated "\$company"; fi/);
+});
+
+test('a helper gets only its own AUTARK_UPDATE_* values, never those an older helper left in the app', () => {
+  const launch = windowsHelper({ pid: 5, installer: INSTALLER, exe: EXE, logFile: LOG });
+  const env = helperEnv(launch, { PATH: 'C:\\Windows', AUTARK_UPDATE_INNER: '1', AUTARK_UPDATE_PACKAGE: 'C:\\gone.7z', autark_update_wait: '45', AUTARK_UPDATE_PID: '77' });
+  assert.equal(env.PATH, 'C:\\Windows');
+  assert.deepEqual(Object.keys(env).filter(key => /^AUTARK_UPDATE_/i.test(key)).sort(), Object.keys(launch.env).sort());
+  assert.equal(env.AUTARK_UPDATE_PID, '5');
+  const run = WINDOWS_HELPER_SCRIPT.slice(WINDOWS_HELPER_SCRIPT.indexOf(':run'), WINDOWS_HELPER_SCRIPT.indexOf('\n:note'));
+  assert.match(run, /for \/f "delims==" %%v in \('set AUTARK_UPDATE_ 2\^>nul'\) do set "%%v="\nstart "" \/D "%run_dir%" "%run_exe%" --updated %run_args%\n/, 'the new version starts without the helper\'s values');
 });
 
 test('Windows: a differential package goes along as --package-file', () => {

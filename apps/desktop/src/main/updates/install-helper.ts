@@ -84,6 +84,8 @@ const LOCK_WAIT_ROUNDS = LOCK_STALE_MS / 1000; // one ping pause of about 1 s pe
  * A missing installer is checked before the install: start would fall back to ShellExecute, whose "cannot find" dialog
  * is visible and keeps the helper alive until someone closes it. The helper is started through a hand-over (see the
  * header and windowsHelper). AUTARK_UPDATE_WAIT shortens the wait for the real-run test only.
+ * The new version starts without any AUTARK_UPDATE_* value: an app that kept a helper's values handed stale ones
+ * (AUTARK_UPDATE_PACKAGE, AUTARK_UPDATE_AFTER) to its own next helper.
  */
 export const WINDOWS_HELPER_SCRIPT = `@echo off
 setlocal
@@ -125,7 +127,13 @@ if exist "%AUTARK_UPDATE_EXE%" goto run
 call :note "the app file is missing after the install; nothing to start"
 exit /b 1
 :run
-start "" /D "%AUTARK_UPDATE_DIR%" "%AUTARK_UPDATE_EXE%" --updated %AUTARK_UPDATE_ARGS%
+set "run_dir=%AUTARK_UPDATE_DIR%"
+set "run_exe=%AUTARK_UPDATE_EXE%"
+set "run_args=%AUTARK_UPDATE_ARGS%"
+set "run_log=%AUTARK_UPDATE_LOG%"
+for /f "delims==" %%v in ('set AUTARK_UPDATE_ 2^>nul') do set "%%v="
+start "" /D "%run_dir%" "%run_exe%" --updated %run_args%
+set "AUTARK_UPDATE_LOG=%run_log%"
 call :note "new version started"
 exit /b 0
 :after
@@ -359,14 +367,11 @@ export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEv
     try { rmSync(lock, { recursive: true, force: true }); } catch { /* taken over after LOCK_STALE_MS */ }
   };
   const failed = (error: Error) => { release(); events.failed(error); };
-  // An app a helper started carries that helper's values in its environment (a waiting helper's AUTARK_UPDATE_AFTER, a
-  // differential package); only this launch's own go to the next helper.
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('AUTARK_UPDATE_')));
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
-      env: { ...inherited, ...launch.env, ...(lock && !held ? { AUTARK_UPDATE_AFTER: '1' } : {}) },
+      env: helperEnv({ env: { ...launch.env, ...(lock && !held ? { AUTARK_UPDATE_AFTER: '1' } : {}) } }, process.env),
       detached: !launch.handoff,
       stdio: 'ignore',
       windowsHide: true,
@@ -393,6 +398,17 @@ export function spawnHelper(launch: HelperLaunch, logs: string, events: HelperEv
     events.started();
   });
   child.once('error', failed);
+}
+
+/**
+ * The helper's environment: this process's without any AUTARK_UPDATE_* it inherited, plus the launch's own values. An
+ * app that an older helper started carries that helper's values (AUTARK_UPDATE_INNER=1 made the new helper skip its way
+ * out of the job; AUTARK_UPDATE_PACKAGE named a package that is gone), so only this launch's values reach the script.
+ */
+export function helperEnv(launch: Pick<HelperLaunch, 'env'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(base)) if (!/^AUTARK_UPDATE_/i.test(key)) env[key] = value;
+  return { ...env, ...launch.env };
 }
 
 function errorCode(error: unknown): string {
