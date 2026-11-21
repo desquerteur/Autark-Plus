@@ -74,11 +74,16 @@ test('loadAll (reconnect): an open hidden chat stays in the store and is refresh
 test('loadAll (reconnect): a deleted open hidden chat is dropped; closed hidden chats are not kept', async () => {
   conversations.value = [summary('ch_listed'), summary('ch_room'), summary('ch_other_hidden')];
   route.value = { view: 'chat', id: 'ch_room' };
-  const gone = () => new Promise((_resolve, reject) => setImmediate(() => reject(new RpcError({ code: 'not_found', message: 'x' }))));
-  stubMethods({ ...SNAPSHOT, 'chats.list': () => [summary('ch_listed')], 'chats.get': gone });
+  let rejectGone!: (error: RpcError) => void;
+  const gone = new Promise<never>((_resolve, reject) => { rejectGone = reject; });
+  const refreshCalls = stubMethods({ ...SNAPSHOT, 'chats.list': () => [summary('ch_listed')], 'chats.get': () => gone });
   await loadAll();
   assert.deepEqual(conversations.value.map((chat) => chat.id), ['ch_listed', 'ch_room']);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(refreshCalls.filter((method) => method === 'chats.get').length, 1);
+  // Release the response explicitly, then drain its promise handlers. A short timer can
+  // run before a queued setImmediate on a loaded event loop, leaving the chat in place.
+  rejectGone(new RpcError({ code: 'not_found', message: 'x' }));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(conversations.value.map((chat) => chat.id), ['ch_listed']);
 
   // A listed open chat needs no extra request.
