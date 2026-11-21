@@ -1,9 +1,8 @@
-// B-057 C – the Codex native fork of a split over a scripted app-server: fork() sends thread/fork for the parent thread
+// The Codex native fork of a split over a scripted app-server: fork() sends thread/fork for the parent thread
 // (through the recorded turn when given, the worker's folder and model, lean config with the isolation, excludeTurns;
 // never ephemeral, never attached to the source, no instructions or dynamic tools – the fork keeps the parent's), loads
-// the new thread with that folder and leaves it un-fresh: its first turn resumes nothing and gets the <workforce-context>
-// block and (H1) the app note; the parent thread is never touched; a server that refuses the lean settings forks with today's, a refusal or a
-// missing id throws, a fork without a known folder is refused before any request.
+// the new thread with that folder and leaves it un-fresh: its first turn resumes nothing and gets the <live>
+// block; the parent thread is never touched; a server that refuses the lean settings, a refusal or a missing id throws, a fork without a known folder is refused before any request.
 // Owns: nothing in production. Never starts a real binary (scripted app-server over fakes.ts).
 
 import { test } from 'node:test';
@@ -86,9 +85,8 @@ test('fork: thread/fork of the parent through its turn, lean and isolated, not e
   assert.equal(fake.sent('thread/start').length, 1, "only the parent's first turn started a thread");
   const start = fake.sent('turn/start').at(-1);
   assert.equal(start.params.threadId, 'thr_fork_1');
-  assert.equal(start.params.input[0].text, '<workforce-context>\nYou are split #2 of 3.\n</workforce-context>', "the split's identity travels as the context block");
-  assert.match(start.params.input[1].text, /^App note: /, "H1: Codex's own note comes again after the parent's history – the app note after it");
-  assert.equal(start.params.input[2].text, 'Your part: count the files.');
+  assert.equal(start.params.input[0].text, '<live>\nYou are split #2 of 3.\n</live>', "the split's identity travels as the context block");
+  assert.equal(start.params.input[1].text, 'Your part: count the files.');
   const touched = fake.requests.filter((r) => r.params?.threadId === 'thr_1').map((r) => r.method);
   assert.deepEqual(touched, ['turn/start', 'thread/fork'], 'the parent thread got its own turn and the fork request only');
   await e.dispose();
@@ -139,17 +137,11 @@ test('a fork in another folder (a worktree) runs there; a turn of it in another 
   await e.dispose();
 });
 
-test('a server that refuses the lean settings forks with today\'s settings (remembered); a refusal or no id throws', async () => {
+test('a server that refuses the lean settings, a refusal or no id throws – no plainer fork', async () => {
   const lean = appServer({ refuseLean: true });
   const e = engineOf(lean.spawn);
-  const forked = await e.fork(forkInput());
-  assert.equal(forked.ref, 'thr_fork_1');
-  const forks = lean.sent('thread/fork');
-  assert.equal(forks.length, 2);
-  assert.equal(forks[1].params.config.web_search, undefined, "today's settings");
-  assert.equal(forks[1].params.sandbox, 'read-only', 'the isolation stays');
-  await e.fork(forkInput({ runId: 'run_w2' }));
-  assert.equal(lean.sent('thread/fork').length, 3, 'remembered: no lean attempt again');
+  await assert.rejects(e.fork(forkInput()));
+  assert.equal(lean.sent('thread/fork').length, 1);
   await e.dispose();
 
   const refused = appServer({ refuseFork: true });

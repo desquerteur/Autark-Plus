@@ -1,9 +1,8 @@
 // B-041 track A2: the morning briefing (runtime/day/briefing.ts, briefing-chats.ts) – done since last evening,
 // prepared to-dos, handed-off work not started yet, today's planned blocks, what needs the person now and the
-// chats that matter, stored per member and day with a 'day.briefing' event; counts without a model, at most 3
-// helper sentences with one (never an "Only me" title or a message body in its prompt; it may only reorder the
-// chats), nothing from the model with "AI helps" off; and the pure chat ranking.
-// Owns: checks of Briefings / rankChats / reorder / countLines only.
+// chats that matter, stored per member and day with a 'day.briefing' event; the counts and the deterministic chat ranking,
+// no model call at all (17.11.2026, "Mein Tag" Paket 1b: whoever does not see a model's sentences needs none); and the pure chat ranking.
+// Owns: checks of Briefings / rankChats / countLines only.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +11,7 @@ import type { ConversationSummary } from '../../../src/shared/model/chat.ts';
 import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
 import { zonedTime } from '../../../src/runtime/calendar/when.ts';
 import { Briefings, countLines } from '../../../src/runtime/day/briefing.ts';
-import { rankChats, reorder } from '../../../src/runtime/day/briefing-chats.ts';
+import { rankChats } from '../../../src/runtime/day/briefing-chats.ts';
 import { dayGroups } from '../../../src/ui/day/day-groups.ts';
 import { BERLIN, agent, dayFixture } from './fixture.ts';
 
@@ -27,11 +26,11 @@ async function night(helper: StructuredRunner | false = false, aiHelps = true) {
   const mara = f.s.chats.create({ title: 'Taxes', agentIds: ['ag_mara'], humans: true, createdBy: HUMAN_ID }).id;
   const tom = f.s.chats.create({ title: 'Website', agentIds: ['ag_tom'], humans: true, createdBy: HUMAN_ID }).id;
   const work = (conversationId: string, assigneeId: string, title: string) => f.s.tasks.create({ conversationId, title, assigneeKind: 'agent', assigneeId, createdBy: HUMAN_ID });
-  f.s.tasks.setStatus(work(mara, 'ag_mara', 'Sort the tax papers').id, 'done', HUMAN_ID);
+  f.s.tasks.finish(work(mara, 'ag_mara', 'Sort the tax papers').id, { status: 'done' as const, summary: 'Done' }, HUMAN_ID);
   work(tom, 'ag_tom', 'Fix the header');
   const [police, diary] = (await f.day.add({ text: 'Zettel zur Polizei bringen' }, HUMAN_ID)).tasks.concat((await f.day.add({ text: 'Tagebuch schreiben', private: true }, HUMAN_ID)).tasks);
   f.s.tasks.update(police.id, { prep: { byAgentId: 'ag_mara', note: 'Opens 08:00–12:00', at: f.clock.now() } }, 'ag_mara');
-  f.s.tasks.create({ conversationId: mara, title: 'Which tax year?', assigneeKind: 'human', createdBy: 'ag_mara', humanReason: 'review' });
+  f.s.tasks.create({ conversationId: mara, title: 'Which tax year?', assigneeKind: 'human', createdBy: 'ag_mara', });
   f.s.chats.send({ conversationId: tom, body: 'SECRET-BODY header draft ready', authorId: 'ag_tom', authorKind: 'agent' });
   f.clock.set(wall(TUE, '06:00'));
   f.calendar.block(police.id, wall(TUE, '08:00'), wall(TUE, '08:30'), 'planner');
@@ -69,34 +68,20 @@ test('the briefing\'s "n need you" is My day\'s Needs-you group (one rule, with 
   assert.equal(during.needsYou, 2);
 });
 
-test('with a helper: at most 3 sentences and its chat order; never a private title or a message body in the prompt', async () => {
-  const prompts: string[] = [];
-  const all: string[] = [];
+test('the briefing asks no model – with "AI helps" on or off, with a helper that answers or fails: one count line and the ranked chats, same every time', async () => {
+  const asked: string[] = [];
   const helper = (async (input: { prompt: string; purpose: string }) => {
-    all.push(input.prompt);
-    if (input.purpose !== 'briefing') return { text: '', by: 'm' }; // the input's split: no usable answer, the rules stand
-    prompts.push(input.prompt);
-    return { text: '', structured: { lines: ['  Mara sorted the tax papers. ', 'Tom has not started.', 'Bring the paper to the police by noon.', 'A fourth line.'], chats: [2, 1] }, by: 'm' };
+    asked.push(input.purpose);
+    return { text: '', structured: { lines: ['Mara sorted the tax papers.', 'A second line.'], chats: [2, 1] }, by: 'm' };
   }) as unknown as StructuredRunner;
-  const { f, mara, tom } = await night(helper);
-  const briefing = await f.day.briefings.build(HUMAN_ID, TUE);
-  assert.deepEqual(briefing.lines, ['Mara sorted the tax papers.', 'Tom has not started.', 'Bring the paper to the police by noon.']);
-  assert.deepEqual(briefing.chats.map((chat) => chat.conversationId), [tom, mara]);
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /Sort the tax papers/);
-  assert.ok(all.every((prompt) => !/Tagebuch/.test(prompt)), 'an "Only me" to-do never reaches a model');
-  assert.doesNotMatch(prompts[0], /SECRET-BODY/, 'never a message body');
-});
-
-test('a helper that fails, and "AI helps" off: the count lines', async () => {
-  const failing = (async () => { throw new Error('cold'); }) as unknown as StructuredRunner;
-  const one = await night(failing);
-  assert.match((await one.f.day.briefings.build(HUMAN_ID, TUE)).lines[0], /^Today: /);
-  let asked = 0;
-  const counting = (async () => { asked++; return { text: '{}', by: 'm' }; }) as unknown as StructuredRunner;
-  const off = await night(counting, false);
-  await off.f.day.briefings.build(HUMAN_ID, TUE);
-  assert.equal(asked, 0);
+  const failing = (async () => { asked.push('failing'); throw new Error('cold'); }) as unknown as StructuredRunner;
+  for (const [runner, aiHelps] of [[helper, true], [helper, false], [failing, true], [false as const, true]] as const) {
+    const { f, mara, tom } = await night(runner, aiHelps);
+    const briefing = await f.day.briefings.build(HUMAN_ID, TUE);
+    assert.deepEqual(briefing.lines, ['Today: 2 to-dos planned, 1 needs you.']);
+    assert.deepEqual(briefing.chats.map((chat) => chat.conversationId), [mara, tom], "the ranking, not a model's order");
+  }
+  assert.deepEqual(asked, [], 'no call reached any model');
   const empty = new Briefings(dayFixture().s);
   assert.equal(empty.get(HUMAN_ID, TUE), null);
 });
@@ -117,18 +102,16 @@ test('rankChats: waits > important unread > unread > working > the person wrote 
     { conversationId: 'unreadOlder', reason: '9 unread' }, { conversationId: 'busy', reason: 'Tom is working' },
     { conversationId: 'wrote', reason: 'You wrote here today' },
   ]);
-  assert.deepEqual(reorder(ranked, [3, 3, 99, 'x', 1]).map((entry) => entry.conversationId), ['unreadOlder', 'waits', 'unread', 'busy', 'wrote']);
   // Important unread (ConversationSummary.importantUnread) ranks after a waiting answer and before plain unread.
   const withImportant = rankChats([chat('unread', { unread: 9, lastMessageAt: 9 }), chat('alarm', { unread: 2, importantUnread: 1, lastMessageAt: 1 }), chat('waits')],
     { waits: new Map([['waits', 1]]), nameOf: (id) => id, now });
   assert.deepEqual(withImportant, [
     { conversationId: 'waits', reason: 'Waits for your answer' }, { conversationId: 'alarm', reason: '1 important unread' }, { conversationId: 'unread', reason: '9 unread' },
   ]);
-  assert.deepEqual(reorder(ranked, undefined), ranked);
 });
 
 test('countLines: nothing to say is no line; never the night counts (Home shows them)', () => {
   assert.deepEqual(countLines({ planned: [], needsYou: 0 }), []);
-  assert.deepEqual(countLines({ planned: [{ at: 0, title: '' }], needsYou: 1 }), ['Today: 1 to-do planned, 1 needs you.']);
+  assert.deepEqual(countLines({ planned: [{ at: 0 }], needsYou: 1 }), ['Today: 1 to-do planned, 1 needs you.']);
   assert.deepEqual(countLines({ planned: [], needsYou: 2 }), ['Today: 2 need you.']);
 });

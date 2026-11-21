@@ -38,8 +38,8 @@ function setup() {
     log: { warn: (...args: unknown[]) => warnings.push(args) },
   } as unknown as Services;
   const file = (name: PromptName) => path.join(data, 'prompts', `${name}.md`);
-  const ship = (text: string, name: PromptName = 'rules') => writeFileSync(path.join(resources, 'prompts', `${name}.md`), text);
-  const own = (text: string, name: PromptName = 'rules') => writeFileSync(file(name), text);
+  const ship = (text: string, name: PromptName = 'standard-agent') => writeFileSync(path.join(resources, 'prompts', `${name}.md`), text);
+  const own = (text: string, name: PromptName = 'standard-agent') => writeFileSync(file(name), text);
   const templates = () => new PromptTemplates(() => path.join(resources, 'prompts'), () => undefined, { data: () => data });
   return {
     s, get db() { return db; }, get queue() { return queue; }, warnings, file, ship, own, templates,
@@ -58,8 +58,8 @@ test('plain defaults use the newest release without writing an override or wakin
   const f = setup(); t.after(f.done);
   f.ship(DEFAULT); reviewPromptOverrides(f.s);
   f.ship(NEXT); reviewPromptOverrides(f.s);
-  assert.equal(f.templates().text('rules'), NEXT);
-  assert.equal(existsSync(f.file('rules')), false);
+  assert.equal(f.templates().text('standard-agent'), NEXT);
+  assert.equal(existsSync(f.file('standard-agent')), false);
   assert.equal(f.queue.pending(), 0);
 });
 
@@ -68,7 +68,7 @@ test('an unchanged copied default follows an update, including cleaned comments 
   f.ship(DEFAULT); f.own(`<!-- own copy -->\r\n${DEFAULT.replaceAll('\n', '\r\n')}\r\n`);
   reviewPromptOverrides(f.s);
   f.ship(NEXT); reviewPromptOverrides(f.s);
-  assert.equal(readFileSync(f.file('rules'), 'utf8'), `${NEXT}\n`);
+  assert.equal(readFileSync(f.file('standard-agent'), 'utf8'), `${NEXT}\n`);
   assert.equal(f.queue.pending(), 0);
 });
 
@@ -78,16 +78,16 @@ test('a custom override remains byte-for-byte intact and is offered only once ac
   f.ship(DEFAULT); f.own(custom); reviewPromptOverrides(f.s);
   const wake = f.queue.list('manager')[0];
   assert.equal(wake.reason, 'review');
-  assert.equal(wake.origin?.source, 'system-prompt:rules');
+  assert.equal(wake.origin?.source, 'system-prompt:standard-agent');
   assert.match(wake.note!, /current configured model/);
-  assert.ok(wake.note!.includes(f.file('rules')));
+  assert.ok(wake.note!.includes(f.file('standard-agent')));
   assert.match(wake.note!, /replace.*adapt.*keep/s);
-  assert.equal(readFileSync(f.file('rules'), 'utf8'), custom);
+  assert.equal(readFileSync(f.file('standard-agent'), 'utf8'), custom);
   f.queue.done([wake.id]);
   f.restart();
   reviewPromptOverrides(f.s);
   assert.equal(f.queue.pending(), 0);
-  assert.equal(readFileSync(f.file('rules'), 'utf8'), custom);
+  assert.equal(readFileSync(f.file('standard-agent'), 'utf8'), custom);
 });
 
 test('the next default revision brings another complete reference and exactly one new review', (t) => {
@@ -98,7 +98,7 @@ test('the next default revision brings another complete reference and exactly on
   f.ship(long); reviewPromptOverrides(f.s); reviewPromptOverrides(f.s);
   const wakes = f.queue.list('manager');
   assert.equal(wakes.length, 1);
-  const reference = promptUpdateReference(f.s.paths, 'rules', long);
+  const reference = promptUpdateReference(f.s.paths, 'standard-agent', long);
   assert.ok(wakes[0].note!.includes(reference));
   assert.equal(readFileSync(reference, 'utf8'), `${long}\n`);
   assert.ok(wakes[0].note!.length < 4000);
@@ -118,7 +118,7 @@ test('editing a prompt against an observed default waits for a new shipped revis
   assert.equal(f.queue.pending(), 0);
   f.ship(NEXT); reviewPromptOverrides(f.s); reviewPromptOverrides(f.s);
   assert.equal(f.queue.list('manager').length, 1);
-  assert.equal(readFileSync(f.file('rules'), 'utf8'), 'Our intentionally customized team instructions.');
+  assert.equal(readFileSync(f.file('standard-agent'), 'utf8'), 'Our intentionally customized team instructions.');
 });
 
 test('no active reviewer leaves the offer retryable, then chooses a manager before the first agent', (t) => {
@@ -126,7 +126,7 @@ test('no active reviewer leaves the offer retryable, then chooses a manager befo
   f.ship(DEFAULT); f.own('Custom instructions.');
   f.agents([{ id: 'archived', template: 'manager', archivedAt: 1 }] as Agent[]);
   reviewPromptOverrides(f.s);
-  assert.equal(new KvRepo(f.db).get('prompt-defaults', 'rules'), undefined);
+  assert.equal(new KvRepo(f.db).get('prompt-defaults', 'standard-agent'), undefined);
   f.agents([{ id: 'first' }, { id: 'manager', template: 'manager' }] as Agent[]);
   reviewPromptOverrides(f.s);
   assert.equal(f.queue.list('manager').length, 1);
@@ -139,7 +139,7 @@ test('a wake failure rolls back its row and marker, so the next start retries', 
   const wakes = { wake: (request: Parameters<RuntimeServices['wakes']['wake']>[0]) => { f.queue.wake(request); throw new Error('wake failed'); } } as unknown as RuntimeServices['wakes'];
   reviewPromptOverrides({ ...f.s, wakes });
   assert.equal(f.queue.pending(), 0);
-  assert.equal(new KvRepo(f.db).get('prompt-defaults', 'rules'), undefined);
+  assert.equal(new KvRepo(f.db).get('prompt-defaults', 'standard-agent'), undefined);
   assert.equal(f.warnings.length, 1);
   reviewPromptOverrides(f.s);
   assert.equal(f.queue.pending(), 1);

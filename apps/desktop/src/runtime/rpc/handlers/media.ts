@@ -7,19 +7,28 @@
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import type { MediaFilter, MediaKind, MediaPatch } from '../../../shared/model/media.ts';
-import { fileId, input, onlyKeys, optId, optIds, optNum, optOneOf, optStrings, optText } from '../params.ts';
+import { bad, fileId, input, onlyKeys, optId, optIds, optNum, optOneOf, optStrings, optText } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
 
 const CHAT = { capability: 'chat' } as const;
 const MEDIA_KINDS: readonly MediaKind[] = ['image', 'audio', 'video', 'document', 'other'];
 
+/** `fileIds`: up to 100 stored-file ids (fileId's shape, checked one by one). */
+function fileIdList(o: Record<string, unknown>): string[] {
+  const value = o.fileIds;
+  if (!Array.isArray(value) || value.length > 100) bad('fileIds', 'a list of at most 100 file ids');
+  return [...new Set(value.map((entry) => fileId({ fileId: entry })))];
+}
+
 export function register(table: HandlerTable): void {
   table.add('media.list', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['conversationId', 'kind', 'text', 'limit']);
+    onlyKeys(o, ['conversationId', 'fileIds', 'kind', 'text', 'limit']);
     const filter: MediaFilter = {};
     const conversationId = optId(o, 'conversationId');
     if (conversationId) filter.conversationId = conversationId;
+    const fileIds = o.fileIds === undefined || o.fileIds === null ? undefined : fileIdList(o);
+    if (fileIds) filter.fileIds = fileIds;
     const kind = optOneOf(o, 'kind', MEDIA_KINDS);
     if (kind) filter.kind = kind;
     const search = optText(o, 'text', { max: 200, allowEmpty: true })?.trim();

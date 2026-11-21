@@ -23,7 +23,7 @@ import { FakeEngine } from './fake.ts';
 import { AcpEngine, type AcpResolver } from './acp/engine.ts';
 import type { FetchFn } from './http/common.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { engineCwd } from '../system/paths.ts';
+import { engineCwd, homeRoots } from '../system/paths.ts';
 import { agentEnv } from './wf-shim.ts';
 
 export type EngineFactories = Partial<Record<EngineId, () => Engine>>;
@@ -71,9 +71,11 @@ export function claudeTranscriptsDir(data: string): string {
 
 /** Default wiring used by the composition root. */
 export function createEngineRegistry(deps: {
-  supervisor: Supervisor; finder: ExecutableFinder; paths: { temp: string; data: string }; version: string;
+  supervisor: Supervisor; finder: ExecutableFinder; paths: { temp: string; data: string; accounts?: string }; version: string;
   apiKey: (account: Account) => Promise<string | undefined>;
   onLimits?: (accountId: string, limits: AccountLimits) => void;
+  /** A warning for the runtime log (Codex: why a connection closed). */
+  warn?: (message: string, data: Record<string, unknown>) => void;
   fetch?: FetchFn; fake?: boolean;
   /** ACP accounts → the agent to start (undefined: no ACP agent is known yet, turns report it as not installed). */
   acp?: AcpResolver;
@@ -83,11 +85,11 @@ export function createEngineRegistry(deps: {
   let shared: NodeJS.ProcessEnv | undefined;
   const env = () => (shared ??= agentEnv(deps.paths.data));
   const factories: EngineFactories = {
-    codex: () => new CodexEngine({ supervisor: deps.supervisor, finder: deps.finder, cwd: processCwd, version: deps.version, onLimits: deps.onLimits, env: env() }),
+    codex: () => new CodexEngine({ supervisor: deps.supervisor, finder: deps.finder, cwd: processCwd, version: deps.version, onLimits: deps.onLimits, log: deps.warn, env: env() }),
     // B-048 E2: rebuilt transcripts live in the app's data folder; only the app's own homes may take the 'project' tier.
     claude: () => new ClaudeEngine({
       supervisor: deps.supervisor, finder: deps.finder, tempDir: deps.paths.temp, env: env(),
-      transcriptsDir: claudeTranscriptsDir(deps.paths.data), accountsRoot: path.join(deps.paths.data, 'accounts'),
+      transcriptsDir: claudeTranscriptsDir(deps.paths.data), accountsRoots: homeRoots(deps.paths), // the plans' homes (Paths.accounts) and <data>/accounts
     }),
     openai: () => new OpenAiEngine(http),
     anthropic: () => new AnthropicEngine(http),

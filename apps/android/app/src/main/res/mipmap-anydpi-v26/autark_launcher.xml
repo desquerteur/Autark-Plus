@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Owns: the platform launcher mask around the existing Autark icon. Never: introduces a new brand asset. -->
+<!-- Owns: the platform launcher mask around the existing Autark icon, and its monochrome layer for themed icons (Android
+     13+): the white mark (drawable/ic_stat_autark) inset so it has the size of the mark in autark_icon.png. Never:
+     introduces a new brand asset. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@android:color/white" />
     <foreground android:drawable="@drawable/autark_icon" />
+    <monochrome>
+        <inset android:drawable="@drawable/ic_stat_autark" android:inset="25%" />
+    </monochrome>
 </adaptive-icon>

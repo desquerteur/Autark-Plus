@@ -25,26 +25,6 @@ function setup() {
 
 const b64 = (text: string) => Buffer.from(text).toString('base64');
 
-test('tasks: create, update with rev, status and completion as the human', async (t) => {
-  const f = setup();
-  t.after(f.cleanup);
-  const task = await f.phone.call<TaskView>('tasks.create', { conversationId: f.chat.id, title: 'Cut the trailer', steps: ['Rough cut', 'Music'], assigneeId: 'ag_ava' });
-  assert.equal(task.createdBy, 'human');
-  assert.equal(task.steps.length, 2);
-  assert.ok(task.messageId, 'anchored by a task message in the chat');
-  const updated = await f.phone.call<TaskView>('tasks.update', { id: task.id, rev: task.rev, patch: { title: 'Cut the 30 s trailer', dueAt: 5000 } });
-  assert.equal(updated.title, 'Cut the 30 s trailer');
-  assert.equal((await f.phone.request('tasks.update', { id: task.id, rev: task.rev, patch: { title: 'stale' } })).error?.code, 'conflict');
-  assert.equal((await f.phone.request('tasks.update', { id: task.id, patch: { status: 'done' } })).error?.code, 'bad_request');
-  const cleared = await f.phone.call<TaskView>('tasks.update', { id: task.id, patch: { dueAt: null } });
-  assert.equal(cleared.dueAt, undefined);
-  const blocked = await f.phone.call<TaskView>('tasks.setStatus', { id: task.id, status: 'blocked', note: 'No footage yet' });
-  assert.equal(blocked.status, 'blocked');
-  const done = await f.phone.call<TaskView>('tasks.complete', { id: task.id, note: 'Shipped it' });
-  assert.equal(done.status, 'done');
-  assert.equal(done.result?.summary, 'Shipped it');
-  assert.equal(done.result?.verification, 'reported_by_human');
-});
 
 test('tasks.list accepts completedSince (recently finished, newest first)', async (t) => {
   const f = setup();
@@ -52,11 +32,11 @@ test('tasks.list accepts completedSince (recently finished, newest first)', asyn
   const early = await f.phone.call<TaskView>('tasks.create', { conversationId: f.chat.id, title: 'Early' });
   const late = await f.phone.call<TaskView>('tasks.create', { conversationId: f.chat.id, title: 'Late' });
   await f.phone.call('tasks.create', { conversationId: f.chat.id, title: 'Open' });
-  await f.phone.call('tasks.complete', { id: early.id });
+  await f.phone.call('tasks.finish', { id: early.id });
   f.clock.advance(5000);
   const since = f.clock.now();
-  await f.phone.call('tasks.complete', { id: late.id });
-  const recent = await f.phone.call<TaskView[]>('tasks.list', { status: ['done', 'cancelled'], completedSince: since, limit: 50 });
+  await f.phone.call('tasks.finish', { id: late.id });
+  const recent = await f.phone.call<TaskView[]>('tasks.list', { status: ['done', 'dropped'], completedSince: since, limit: 50 });
   assert.deepEqual(recent.map((task) => task.title), ['Late']);
   assert.equal((await f.phone.call<TaskView[]>('tasks.list', { completedSince: 0 })).length, 2, 'finished tasks only');
   const negative = await f.phone.request('tasks.list', { completedSince: -1 });
@@ -86,15 +66,15 @@ test('tasks.complete on a widget to-do is an answer; todo-only devices cannot fi
   assert.equal(todo.conversationId, undefined, 'B-054: a to-do from the To-do area is chat-free');
   assert.ok(todo.widget);
   assert.ok((await f.todo.call<TaskView[]>('todos.list')).some((entry) => entry.id === todo.id));
-  const done = await f.todo.call<TaskView>('tasks.complete', { id: todo.id, note: 'called' });
+  const done = await f.todo.call<TaskView>('tasks.finish', { id: todo.id, note: 'called' });
   assert.equal(done.status, 'done');
   assert.deepEqual(done.result?.answer, { done: true, note: 'called' });
   assert.ok(!f.db.get("SELECT 1 FROM messages WHERE kind = 'answer'"), 'B-054: no chat, so no receipt – the answer is stored on the to-do');
 
   const agentTask = f.tasks.create({ conversationId: f.chat.id, title: 'Agent work', assigneeKind: 'agent', assigneeId: 'ag_ava', createdBy: 'human' });
-  assert.equal((await f.todo.request('tasks.complete', { id: agentTask.id })).error?.code, 'forbidden');
+  assert.equal((await f.todo.request('tasks.finish', { id: agentTask.id })).error?.code, 'forbidden');
   assert.equal((await f.todo.request('tasks.list')).error?.code, 'forbidden', "tasks.* needs the 'tasks' capability");
-  assert.equal((await f.phone.call<TaskView>('tasks.complete', { id: agentTask.id })).status, 'done');
+  assert.equal((await f.phone.call<TaskView>('tasks.finish', { id: agentTask.id })).status, 'done');
 });
 
 test('B-054: todos.add without a chat makes a chat-free to-do; no hidden To-do chat is made', async (t) => {
@@ -322,18 +302,25 @@ test('files.open: bytes still on another PC are a clear error, APKs go directly 
   assert.equal(calls[0].reveal, true, 'no OS-open attempt or app chooser for an Android installer');
 });
 
-test('files.open falls back to its folder when an ordinary file has no associated app', async (t) => {
+test('B-080: files.open opens once – a failed open is that failure, never a second open in the folder', async (t) => {
+  // Live 07.11.2026: the editor started 29 s after the click, the host's timeout fired first and Explorer opened too.
   const f = setup();
   t.after(f.cleanup);
   const ref = await f.owner.call<FileRef>('files.upload', { name: 'report.unassigned', dataBase64: b64('report') });
   const host = f.services.host;
-  const open = host.openPath;
+  const calls: Array<{ target: string; reveal: boolean | undefined }> = [];
   host.openPath = async (target, reveal) => {
-    if (!reveal) throw new Error('No application is associated with the specified file for this operation.');
-    return open(target, reveal);
+    calls.push({ target, reveal });
+    throw new Error('No application is associated with the specified file for this operation.');
   };
-  await f.owner.call('files.open', { id: ref.id });
-  assert.equal(f.opened.at(-1)?.reveal, true);
+  const before = f.opened.length;
+  const failed = await f.owner.request('files.open', { id: ref.id });
+  assert.ok(failed.error, "the open's own failure reaches the client");
+  assert.deepEqual(calls.map((call) => call.reveal), [false], 'exactly one host call, no reveal');
+  assert.equal(f.opened.length, before, 'nothing shown in a folder');
+  calls.length = 0;
+  await f.owner.request('files.open', { id: ref.id, reveal: true });
+  assert.deepEqual(calls.map((call) => call.reveal), [true], 'showing it in its folder is asked for on its own');
 });
 
 test('schedules.create (#20): an agent job for a contact chat, a message and a reminder; edit and history through the RPC', async (t) => {

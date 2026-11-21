@@ -2,13 +2,15 @@
 //   #/home · #/day[/<YYYY-MM-DD>] · #/chats · #/chat/<id> · #/projects[/<projectId>] (AF-018)
 //   · #/schedules[/<scheduleId>|new] (#20)
 //   · #/tasks[/<filter>][?owner=<agentId|team>][&task=<taskId>]
-//   · #/team[/<agentId>] · #/team/<agentId>/split/<splitId> · #/team/person/<personId>
+//   · #/team[/<agentId>] · #/team/<agentId>/work · #/team/<agentId>/split/<splitId> · #/team/person/<personId>
+//   · #/team/person/new (F13: Add person – a page, person ids are 'per_…')
 //   · #/settings[/<page>]  (a split's page under its agent; a Settings page, or an older name mapped to the page that
 //     holds those rows, see settingsPage)
 // ('day' is My day – today without a date; an older #/tasks/for-you link opens it. 'chats' is the
 // phone list view; on desktop it shows the last chat or the empty main slot; `owner` – O5, "All
 // work" on an agent's page – narrows the task lists to one agent or the team; `task` is the task
-// open in Work's detail.) An in-app `<a href="#/…">` navigates through routeLink.
+// open in Work's detail; F11 16.11.2026: an agent's `work` page – what it does now, its active tasks and its log.) An in-app `<a href="#/…">` navigates through routeLink.
+// '#/chat/<id>?call=1' (owner 18.11.2026, the floating to-do button) also asks for that chat's call (callRequest).
 // Owns: the current route signal, parsing/formatting, navigation, in-app link clicks and back.
 // Never: loads data – views react to the route themselves.
 
@@ -23,13 +25,13 @@ export type Route =
   | { view: 'projects'; id?: string } // AF-018: the Projects tab, one project open when `id` is set
   | { view: 'schedules'; id?: string } // #20: the Schedules tab, one schedule open when `id` is set ('new' = the new-schedule form)
   | { view: 'tasks'; filter?: string; owner?: string; task?: string }
-  | { view: 'team'; agentId?: string; personId?: string; splitId?: string }
+  | { view: 'team'; agentId?: string; personId?: string; splitId?: string; work?: true; addPerson?: true }
   | { view: 'settings'; section?: string };
 
 export type RouteView = Route['view'];
 
 /** The Settings pages (settings/sections.ts holds their titles and keywords), in nav order. */
-export const SETTINGS_PAGES = ['general', 'appearance', 'personality', 'models', 'calendar', 'secrets', 'apps', 'skills', 'devices', 'feedback', 'updates', 'about'] as const; // AF-008: appearance; AF-006: personality; AF-019: updates
+export const SETTINGS_PAGES = ['general', 'appearance', 'personality', 'models', 'calendar', 'secrets', 'security', 'apps', 'skills', 'devices', 'feedback', 'updates', 'about'] as const; // AF-008: appearance; AF-006: personality; AF-019: updates
 export type SettingsPage = (typeof SETTINGS_PAGES)[number];
 export const DEFAULT_SETTINGS_PAGE: SettingsPage = 'general';
 
@@ -38,7 +40,7 @@ const PAGE_OF: Readonly<Record<string, SettingsPage>> = {
   accounts: 'models', providers: 'models', routing: 'models', usage: 'models', abilities: 'models',
   voice: 'models', speech: 'models', // B-078: the Voice page joined Models
   knowledge: 'skills', memory: 'skills',
-  permissions: 'secrets',
+  permissions: 'security', access: 'security', // owner 16.11.2026: Settings › Security holds the PC access
   connectors: 'apps', integrations: 'apps', mcp: 'apps', // AF-005: the Connectors page
   remote: 'devices', phone: 'devices', android: 'devices',
   profile: 'general', notifications: 'general', customize: 'general',
@@ -77,8 +79,9 @@ export function parseRoute(hash: string): Route {
       return { view: 'tasks', ...(parts[1] ? { filter: parts[1] } : {}), ...(owner ? { owner } : {}), ...(task ? { task } : {}) };
     }
     case 'team':
-      if (parts[1] === 'person') return parts[2] ? { view: 'team', personId: parts[2] } : { view: 'team' };
+      if (parts[1] === 'person') return parts[2] === 'new' ? { view: 'team', addPerson: true } : parts[2] ? { view: 'team', personId: parts[2] } : { view: 'team' };
       if (parts[1] && parts[2] === 'split' && parts[3]) return { view: 'team', agentId: parts[1], splitId: parts[3] }; // B-057
+      if (parts[1] && parts[2] === 'work') return { view: 'team', agentId: parts[1], work: true }; // F11
       return parts[1] ? { view: 'team', agentId: parts[1] } : { view: 'team' };
     case 'settings':
       if (parts[1] === 'agents') return { view: 'team' }; // B-044: Settings › Agents went; its agents are on Team
@@ -99,8 +102,10 @@ export function formatRoute(route: Route): string {
       return `#/tasks${route.filter ? `/${enc(route.filter)}` : ''}${query ? `?${query}` : ''}`;
     }
     case 'team':
+      if (route.addPerson) return '#/team/person/new';
       if (route.personId) return `#/team/person/${enc(route.personId)}`;
       if (route.agentId && route.splitId) return `#/team/${enc(route.agentId)}/split/${enc(route.splitId)}`;
+      if (route.agentId && route.work) return `#/team/${enc(route.agentId)}/work`;
       return route.agentId ? `#/team/${enc(route.agentId)}` : '#/team';
     case 'settings': return route.section ? `#/settings/${enc(route.section)}` : '#/settings';
     default: return `#/${route.view}`;
@@ -144,9 +149,21 @@ export function back(): void {
   else navigate({ view: 'home' });
 }
 
+/** Owner 18.11.2026 (the floating to-do button): the chat whose call starts once its header shows (CallHeader.tsx). */
+export const callRequest = signal<string | null>(null);
+
+/** '#/chat/<id>?call=1' asks for that chat's call: the request is noted and the address loses its query. */
+export function takeCallRoute(hash: string): void {
+  const next = parseRoute(hash);
+  if (next.view !== 'chat' || !/[?&]call=1(&|$)/.test(hash)) return;
+  callRequest.value = next.id;
+  history.replaceState(null, '', formatRoute(next));
+}
+
 export function startRouter(): void {
+  takeCallRoute(location.hash);
   window.addEventListener('popstate', () => { route.value = parseRoute(location.hash); });
-  window.addEventListener('hashchange', () => { route.value = parseRoute(location.hash); });
+  window.addEventListener('hashchange', () => { takeCallRoute(location.hash); route.value = parseRoute(location.hash); });
 }
 
 /** Convenience helpers used across the app. */
@@ -164,8 +181,12 @@ export const go = {
   agent: (agentId: string) => navigate({ view: 'team', agentId }),
   /** B-057: a split's page under its agent. */
   split: (agentId: string, splitId: string) => navigate({ view: 'team', agentId, splitId }),
+  /** F11: an agent's Work page – what it does now, its active tasks, its activity log. */
+  work: (agentId: string) => navigate({ view: 'team', agentId, work: true }),
   /** A person's page in Team (F-52 people: 'per_…'). */
   person: (personId: string) => navigate({ view: 'team', personId }),
+  /** F13: Team › Add person, a page. */
+  addPerson: () => navigate({ view: 'team', addPerson: true }),
   settings: (section?: string) => navigate(section ? { view: 'settings', section } : { view: 'settings' }),
   tasks: (filter?: string, owner?: string) => navigate({ view: 'tasks', ...(filter ? { filter } : {}), ...(owner ? { owner } : {}) }),
 };

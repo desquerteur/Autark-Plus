@@ -4,6 +4,7 @@
 // Owns: interface shapes only. Keep methods few and meaningful; add, never silently change.
 
 import type { ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
+import type { SkillDocument } from '../../shared/api/methods-skills.ts';
 import type { Agent } from '../../shared/model/org.ts';
 
 export interface SkillSaveInput {
@@ -15,6 +16,8 @@ export interface SkillSaveInput {
   modes?: string[];
   /** Wave 3: a new skill goes into the owner's Main Skills (<data>/agents/<owner>/skills; needs ownerAgentId, a taken name is refused). A Main Skill saved again stays one either way. */
   main?: boolean;
+  /** B-085: public library entries the skill draws on ("library:<id>@<rev>"); joined with the kept ones (the same entry is replaced); absent keeps them. */
+  derivedFrom?: string[];
 }
 
 /** MM8: one skill from an agent file (SKILL.md only), stored as `ownerAgentId`'s own; without an owner in the shared library. */
@@ -30,6 +33,11 @@ export interface SkillImportInput {
 
 declare module './models.ts' {
   interface SkillService {
+    /** Exact-copy editor; optional for runtimes/fakes without a filesystem skill library. */
+    catalog?(): SkillInfo[];
+    open?(id: string): SkillDocument;
+    edit?(id: string, revision: string, body: string): SkillDocument;
+    create?(name: string, description: string): SkillDocument;
     /** Addition (CTX4): `modes` replaces the skill's modes ([] = every mode); absent keeps them. */
     save(input: SkillSaveInput): SkillInfo;
     /**

@@ -7,7 +7,13 @@
 // `person.upserted`), ends their chats and returns their open work (people/offboard.ts); every
 // change of access is audited (people_audit). A person may manage agents and people, and an agent
 // or a person may manage a person (managerId: one org chart).
-// Owns: people rows, invites, joins, revocation, authentication of person tokens, audit, events.
+// F13: Accept of a device in Settings › Devices may make the person (remote.decide newPerson → save) when that device
+// links; an employee's PC that linked marks its person joined (joinedWith), as a phone's pairing does (pwa/service.ts).
+// F14: a person who never joined is removed for good (remove: offboarded like a revocation, then `forget` – row, audit
+// lines, tokens, open code – and person.removed, which my other PCs apply the same way, devices/sync/tables.ts).
+// F13: `role` 'ceo' – a CEO beside the owner: every space, chats and tasks for agents always (CEO_SCOPES), at the top of
+// the org unless a manager is named, and their devices' scope carries the role (authenticate).
+// Owns: people rows, invites, joins, revocation and removal, authentication of person tokens, audit, events.
 // Never: grants owner rights, treats a person's or agent's message as the owner's consent, or keeps
 // plain tokens, tickets or codes.
 
@@ -17,7 +23,7 @@ import { WorkforceError } from '../../shared/errors.ts';
 import { HUMAN_ID, newId } from '../../shared/ids.ts';
 import type { Avatar } from '../../shared/model/org.ts';
 import type { Message } from '../../shared/model/chat.ts';
-import { isPersonId, type Person, type PersonAudit, type PersonInvite, type PersonScopes } from '../../shared/model/people.ts';
+import { CEO_SCOPES, hasJoined, isPersonId, type Person, type PersonAudit, type PersonInvite, type PersonRole, type PersonScopes } from '../../shared/model/people.ts';
 import type { Bus } from '../bus.ts';
 import type { Clock, Logger, RuntimeServices, SettingsService } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
@@ -43,7 +49,7 @@ export interface PeopleDeps {
   timers?: Timers;
 }
 
-export interface SaveInput { id?: string; name?: string; title?: string; avatar?: Avatar; managerId?: string | null; scopes?: PersonScopes }
+export interface SaveInput { id?: string; name?: string; title?: string; avatar?: Avatar; managerId?: string | null; scopes?: PersonScopes; role?: PersonRole }
 
 export class PeopleService {
   readonly repo: PeopleRepo;
@@ -105,8 +111,8 @@ export class PeopleService {
 
   // ------------------------------------------------------------------ owner changes
 
-  /** A new person (status invited) or an edit; `by` is 'human' (only the owner edits people). */
-  save(input: SaveInput): Person {
+  /** A new person (status invited) or an edit; `by` – who changes people: the owner, or (F13) a CEO person. */
+  save(input: SaveInput, by: string = HUMAN_ID): Person {
     const now = this.deps.clock.now();
     const current = input.id ? this.repo.get(input.id) : undefined;
     if (input.id && !current) throw new WorkforceError('not_found', 'Person not found.', { details: { personId: input.id } });
@@ -115,8 +121,8 @@ export class PeopleService {
     const name = input.name !== undefined ? cleanName(input.name) : current?.name;
     if (!name && id !== HUMAN_ID) throw new WorkforceError('bad_request', 'Enter a name.', { details: { field: 'name' } });
     const next: Person = current ? { ...current } : {
-      id, name: name ?? '', title: '', avatar: defaultAvatar(id, name ?? ''), status: 'invited', owner: false,
-      scopes: cleanScopes({}), createdAt: now, updatedAt: now,
+      id, name: name ?? '', title: '', avatar: defaultAvatar(id, name ?? ''), status: 'invited', owner: false, role: 'member',
+      scopes: { ...cleanScopes({}), spaces: 'all' }, createdAt: now, updatedAt: now,
     };
     if (id !== HUMAN_ID && name) {
       if (current?.avatar.kind === 'initials' && input.avatar === undefined && name !== current.name) next.avatar = defaultAvatar(id, name);
@@ -125,18 +131,24 @@ export class PeopleService {
     if (input.title !== undefined) next.title = cleanText(input.title, 'title', 80).trim();
     if (input.avatar !== undefined) next.avatar = cleanAvatar(input.avatar);
     if (input.scopes !== undefined && id !== HUMAN_ID) next.scopes = this.checkScopes(input.scopes);
+    if (input.role !== undefined && id !== HUMAN_ID) {
+      const role: PersonRole = input.role === 'ceo' ? 'ceo' : 'member';
+      if (role === 'ceo' && current?.role !== 'ceo' && input.managerId === undefined) next.managerId = undefined; // a new CEO sits at the top
+      next.role = role;
+    }
+    if (next.role === 'ceo' && id !== HUMAN_ID) next.scopes = { ...CEO_SCOPES };
     if (input.managerId !== undefined) next.managerId = checkPersonManager(this.repo, this.deps.services()?.org, id, input.managerId ?? undefined);
     next.updatedAt = now;
     this.deps.db.tx(() => {
       this.repo.save(next);
       const changed = Object.keys(input).filter((key) => key !== 'id');
-      this.repo.audit(id, now, HUMAN_ID, current ? 'updated' : 'created', { fields: changed });
+      this.repo.audit(id, now, by, current ? 'updated' : 'created', { fields: changed });
     });
     return this.emit(id);
   }
 
   /** A fresh invite (link/QR 72 h and a 6-digit code 10 min); replaces an open one. */
-  async invite(id: string): Promise<PersonInvite> {
+  async invite(id: string, by: string = HUMAN_ID): Promise<PersonInvite> {
     const person = this.require(id);
     if (person.owner) throw new WorkforceError('bad_request', 'The owner does not need an invite.');
     const address = this.deps.address();
@@ -144,23 +156,23 @@ export class PeopleService {
     const { ticket, expiresAt } = this.tokens.createInvite(id);
     const code = this.joins.newCode(id);
     if (person.status === 'revoked') this.repo.save({ ...this.repo.get(id)!, status: 'invited', revokedAt: undefined, updatedAt: this.deps.clock.now() });
-    this.record(id, HUMAN_ID, 'invited', { reachable: address.reachable });
+    this.record(id, by, 'invited', { reachable: address.reachable });
     const url = `${address.url}/#join=${ticket}`;
     const invite: PersonInvite = { personId: id, url, qrDataUrl: await this.deps.qr(url), code: code.code, codeExpiresAt: code.expiresAt, expiresAt, reachable: address.reachable };
     this.emit(id);
     return invite;
   }
 
-  closeInvite(id: string): void {
+  closeInvite(id: string, by: string = HUMAN_ID): void {
     this.require(id);
     const closed = this.tokens.closeInvites(id);
     this.joins.dropCode(id);
-    if (closed) this.record(id, HUMAN_ID, 'invite_closed', {});
+    if (closed) this.record(id, by, 'invite_closed', {});
     this.emit(id);
   }
 
   /** Ends a person's access at once: tokens and invites, open join requests, chats, open work. */
-  revoke(id: string): Person {
+  revoke(id: string, by: string = HUMAN_ID): Person {
     const person = this.require(id);
     if (person.owner) throw new WorkforceError('bad_request', 'The owner cannot be removed.');
     const now = this.deps.clock.now();
@@ -171,16 +183,54 @@ export class PeopleService {
     this.emit(id); // the RPC server closes the person's live connections now
     const s = this.deps.services();
     const result = s ? offboard(s, this.repo, this.deps.log, id, now) : { chats: 0, tasks: 0, reports: 0 };
-    this.record(id, HUMAN_ID, 'revoked', { ...result });
+    this.record(id, by, 'revoked', { ...result });
     for (const report of reports) this.emit(report);
     return this.emit(id);
   }
 
+  /**
+   * F14: a person who never joined leaves the organisation for good – their reports move up, they leave their chats and
+   * their open work goes back (offboard), then the row goes with its invite, code and audit lines. Someone who joined
+   * keeps their row; their access ends with revoke.
+   */
+  remove(id: string): void {
+    const person = this.require(id);
+    if (person.owner) throw new WorkforceError('bad_request', 'The owner cannot be removed.');
+    if (hasJoined(person)) throw new WorkforceError('conflict', `${person.name} has joined already: remove their access instead.`);
+    const now = this.deps.clock.now();
+    const reports = this.repo.reports(id).map((entry) => entry.id);
+    this.tokens.revokeAll(id);
+    this.joins.closeFor(id, 'This invite was withdrawn.');
+    const s = this.deps.services();
+    const result = s ? offboard(s, this.repo, this.deps.log, id, now) : { chats: 0, tasks: 0, reports: 0 };
+    for (const report of reports) this.emit(report);
+    this.forget(id);
+    this.deps.log.info('person removed', { personId: id, ...result });
+  }
+
+  /** F14: the row of a removed person goes here – tokens, open code and requests, audit lines – then person.removed. */
+  forget(id: string): void {
+    this.tokens.removeAll(id);
+    this.joins.closeFor(id, 'This invite was withdrawn.');
+    this.repo.remove(id);
+    try { this.deps.bus.emit('person.removed', { id }); } catch (error) { this.deps.log.warn('person event not sent', { error: String((error as Error)?.message ?? error) }); }
+  }
+
+  /** An employee's PC linked for this person (remote/service.ts): the person is in now – active, one 'joined' line. */
+  joinedWith(id: string, device: { id: string; name: string }): Person {
+    const person = this.repo.get(id);
+    if (!person || person.owner || person.status === 'revoked') throw new WorkforceError('forbidden', 'This person no longer has access.');
+    const now = this.deps.clock.now();
+    this.repo.save({ ...person, status: 'active', joinedAt: person.joinedAt ?? now, updatedAt: now });
+    this.record(id, HUMAN_ID, 'joined', { deviceId: device.id, device: device.name });
+    return this.emit(id);
+  }
+
   /** Removes one device of a person (its token ends; the connection closes). */
-  removeDevice(id: string, deviceId: string): Person {
+  removeDevice(id: string, deviceId: string, by: string = HUMAN_ID): Person {
     this.require(id);
     if (!this.tokens.revokeDevice(id, deviceId)) throw new WorkforceError('not_found', 'Device not found.', { details: { deviceId } });
-    this.record(id, HUMAN_ID, 'device_removed', { deviceId });
+    this.record(id, by, 'device_removed', { deviceId });
     return this.emit(id);
   }
 
@@ -219,7 +269,7 @@ export class PeopleService {
     if (!found) return undefined;
     const person = this.repo.get(found.personId);
     if (!person || person.status === 'revoked' || person.owner) return undefined;
-    return { kind: 'person', personId: found.personId, deviceId: found.deviceId, tokenId: found.tokenId };
+    return { kind: 'person', personId: found.personId, deviceId: found.deviceId, tokenId: found.tokenId, role: person.role === 'ceo' ? 'ceo' : 'member' };
   }
 
   /** A refused token of a removed person/device (closed with 4403, the page shows "removed"). */

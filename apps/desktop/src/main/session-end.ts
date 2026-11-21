@@ -10,6 +10,8 @@
 // person's window is destroyed when it is closed to the tray – so one hidden native window without web
 // contents (BaseWindow: never shown, no taskbar entry, no renderer process) lives as long as the app to
 // receive it; every BrowserWindow gets the handler as well.
+// B-080 wave 3: sessionEnded is that callback – the quit mark first, then one line in main.log written at once
+// (main-log.ts lineNow), so the next start reads a restart, shutdown or sign-out instead of a silent end.
 // Owns: watching for the end of the session. Never: writes the file itself, quits the app or delays the
 // session end (no 'query-session-end' handler: a cancelled shutdown would leave a wrong mark).
 
@@ -23,6 +25,17 @@ export interface SessionEndElectron {
 }
 
 let watcher: BaseWindow | undefined; // held for the app's lifetime
+
+/** The line main.log gets when the system ends the session. */
+export const SESSION_END_LINE = 'the system ends the session (restart, shutdown or sign-out)';
+
+/** B-080 wave 3: what the end of the session does – the quit mark {by: 'system'}, then the main.log line; both synchronous. */
+export function sessionEnded(marks: { quit(by: 'system'): void }, log: { lineNow(message: string): void }): () => void {
+  return () => {
+    marks.quit('system');
+    log.lineNow(SESSION_END_LINE);
+  };
+}
 
 /** Calls `ended` (synchronously, once per event) when the system ends the session; never throws. */
 export function watchSessionEnd(electron: SessionEndElectron, ended: () => void, log?: (line: string) => void): void {

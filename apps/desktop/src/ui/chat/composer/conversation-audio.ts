@@ -1,51 +1,54 @@
 // The microphone feed of a voice conversation (pwa-conversation.ts runs the loop in this page, on the desktop
-// and the phone alike): a level detector cuts utterances (MediaRecorder); each one is uploaded and handed to the
-// sink, only while the microphone's view is 'listening' and not right after a reply was spoken (echo guard: its
-// tail may still reach the microphone). Replies are read through the page's one speech output (device-speech.ts);
+// and the phone alike): the turn detector (ui/lib/turn-detect.ts) cuts utterances from the 16 kHz PCM; each one is a
+// WAV with a PRE_ROLL_MS pre-roll in front (the first word is never cut), uploaded at once and handed to the sink in the
+// order it was said, while the microphone's view is 'listening' or 'transcribing' (words said while the last line is
+// still heard are the next line, KI-Runde 17.11.) and not right after a reply was spoken (echo guard: its tail may still
+// reach the microphone). The sink also hears when each take's speech ended (`spoke`, for the call turn's log line,
+// ui/chat/call/turn-meter.ts). Replies are read through the page's one speech output (device-speech.ts);
 // while anything is read (and its tail) the capture takes nothing. Self barge-in (`bargeIn`): with the browser's
 // echo cancellation on, a voice clearly above the reading's echo stops the reading and is taken at once
-// (ui/lib/barge-in.ts); without it the echo guard stays as it was. AF-015: every block's level goes to the call view
-// (`level`), and while the call is muted (`muted`, call/call-levels.ts micGate) a block counts as silence – nothing is taken.
-// Owns: the capture's microphone/recorder lifetime. Never: the conversation loop (shared/voice/conversation.ts),
+// (ui/lib/barge-in.ts); without it the echo guard stays as it was. B-082: Silero VAD + Smart Turn (ui/lib/turn-models.ts, a
+// lazy chunk) load while the conversation starts and replace the level detector between two lines; failing, it stays.
+// AF-015: every block's level goes to the call view (`level`), and while the call is muted (B-085 mute.ts, or the call
+// view's gate `muted`, call/call-levels.ts micGate) a block counts as silence – nothing is taken.
+// Owns: the capture's microphone/take lifetime. Never: the conversation loop (shared/voice/conversation.ts),
 // chat messages or reading aloud.
 
 import type { VoiceSessionView } from '../../../shared/voice/conversation.ts';
 import { uploadRef } from '../../lib/files.ts';
 import { openMicrophone } from '../../lib/microphone.ts';
 import type { Microphone, SampleListener } from '../../lib/microphone.ts';
-import { UtteranceDetector, rms } from '../../lib/pcm.ts';
+import { PCM_RATE, Pcm16Encoder, pcm16ToFloat, rms, wavFile } from '../../lib/pcm.ts';
+import { createTurnDetector, type TurnModels } from '../../lib/turn-detect.ts';
 import { BargeInDetector, echoCancelled } from '../../lib/barge-in.ts';
-import { deviceSpeech } from './device-speech.ts';
+import { deviceSpeech, prepareLocalVoice } from './device-speech.ts';
+import { callMuted } from '../call/mute.ts';
 import { micBlocked, reportMicLevel } from '../call/call-levels.ts';
 
 /** After a spoken reply its tail (room echo, a slow speaker) is not taken for the person. */
 export const ECHO_TAIL_MS = 450;
-
-/** The MediaRecorder surface a capture uses (a fake in tests). */
-export interface RecorderLike {
-  readonly state: 'inactive' | 'recording' | 'paused';
-  readonly mimeType: string;
-  ondataavailable: ((event: BlobEvent) => void) | null;
-  onstop: ((event: Event) => void) | null;
-  start(timeslice?: number): void;
-  stop(): void;
-}
+/** Audio kept before the start edge, so the first word is whole. */
+export const PRE_ROLL_MS = 300;
+const PRE_ROLL_BYTES = (PRE_ROLL_MS * PCM_RATE * 2) / 1000;
 
 /** Where captured speech goes: the page's conversation loop. */
 export interface CaptureSink {
   /** One uploaded utterance. */
   utterance(micId: string, fileId: string): Promise<void>;
+  /** A take's speech ended at `at` (its upload starts now). */
+  spoke?(micId: string, at: number): void;
   /** Self barge-in: the person talks over this device's own reading; true when the reading stopped for it. */
   bargeIn?(micId: string): boolean;
 }
 
 export interface CaptureDeps {
   openMicrophone(onSamples: SampleListener): Promise<Microphone>;
-  newRecorder(stream: MediaStream): RecorderLike;
   upload(blob: Blob, name: string): Promise<{ id: string }>;
   now(): number;
   /** This device reads something aloud now (or just stopped): the microphone may hear it (echo guard). */
   speaking?(): boolean;
+  /** B-082: the turn models (Silero VAD, Smart Turn); missing or failing -> the level detector decides. */
+  turnModels?(): Promise<TurnModels>;
   /** AF-015: each block's RMS (the call view's microphone level). */
   level?(rms: number): void;
   /** AF-015: the call is muted (or a call signal plays): the block is silence. */
@@ -53,14 +56,17 @@ export interface CaptureDeps {
 }
 
 export const browserCapture: CaptureDeps = {
-  openMicrophone: (onSamples) => openMicrophone(onSamples),
-  newRecorder: (stream) => new MediaRecorder(stream),
+  // 85 ms blocks, as before PCM: the barge-in levels are tuned to them (a 32 ms block dips between syllables); the turn detector frames itself.
+  openMicrophone: (onSamples) => openMicrophone(onSamples, { sampleRate: PCM_RATE, blockMs: 85 }),
   upload: (blob, name) => uploadRef(blob, name),
   now: () => Date.now(),
   speaking: () => deviceSpeech.speaking(ECHO_TAIL_MS),
+  turnModels: () => import('../../lib/turn-models.ts').then((loaded) => loaded.loadTurnModels()),
   level: (value) => reportMicLevel(value),
   muted: () => micBlocked(),
 };
+
+const modelsLost = (error: unknown) => { console.warn('[workforce] turn models off, the level detector decides:', String(error)); };
 
 /** One conversation's microphone: opened first, bound to the microphone's id by the first `follow`. */
 export class ConversationCapture {
@@ -70,10 +76,15 @@ export class ConversationCapture {
   private micId: string | null = null;
   private status: VoiceSessionView['status'] = 'starting';
   private mic: Microphone | null = null;
-  private recorder: RecorderLike | null = null;
-  private readonly detector = new UtteranceDetector();
+  private take: Uint8Array[] | null = null; // the running take's 16 kHz PCM16
+  private preRoll: Uint8Array[] = [];
+  private preBytes = 0;
+  private encoder: Pcm16Encoder | null = null;
+  private rate = 0;
+  private detector = createTurnDetector();
+  private models: TurnModels | null = null; // loaded, waiting for the gap between two lines
   private readonly barge = new BargeInDetector();
-  private busy = false; // an utterance is being uploaded and handed over
+  private handing: Promise<void> = Promise.resolve(); // the takes go to the sink one after another, in the order said
   private closed = false;
   private quietUntil = 0;
   private aec = false; // the browser cancels this device's echo on the microphone
@@ -89,7 +100,8 @@ export class ConversationCapture {
 
   /** Opens the microphone (blocks before the first `follow` are dropped). */
   async open(): Promise<void> {
-    const mic = await this.deps.openMicrophone((samples) => this.samples(samples));
+    this.deps.turnModels?.().then((models) => { if (!this.closed) this.models = models; }, modelsLost);
+    const mic = await this.deps.openMicrophone((samples, rate) => this.samples(samples, rate));
     if (this.closed) { mic.close(); return; } // stopped while the microphone opened
     this.mic = mic;
     this.aec = echoCancelled(mic.stream);
@@ -112,74 +124,79 @@ export class ConversationCapture {
     this.mic = null;
   }
 
-  private samples(samples: Float32Array): void {
+  private samples(samples: Float32Array, rate: number): void {
     const micId = this.micId;
     if (this.closed || !micId) return;
+    if (callMuted.peek() || this.deps.muted?.() === true) { // B-085 mute (mute.ts); AF-015 the call view's gate (a call signal plays)
+      this.deps.level?.(0); this.discard(); this.detector.reset(); return; // a block is silence, a take in progress goes
+    }
+    if (!this.encoder || rate !== this.rate) { this.encoder = new Pcm16Encoder(rate, PCM_RATE, { lowPass: true }); this.rate = rate; }
+    const pcm = this.encoder.push(samples);
+    this.take?.push(pcm);
+    this.keepPreRoll(pcm);
     const echo = this.deps.speaking?.() === true; // another reader of this device is heard aloud
     const now = this.deps.now();
-    const muted = this.deps.muted?.() === true;
-    const level = muted ? 0 : rms(samples);
-    this.deps.level?.(level);
-    if (muted) { this.discard(); this.detector.reset(); return; } // a muted call takes nothing, a take in progress is dropped
-    if (this.status === 'speaking' && this.aec && this.sink.bargeIn && !this.busy && this.barge.feed(level, now) && this.sink.bargeIn(micId)) {
+    const level = rms(samples);
+    this.deps.level?.(level); // AF-015: the call view's microphone level
+    if (this.status === 'speaking' && this.aec && this.sink.bargeIn && this.barge.feed(level, now) && this.sink.bargeIn(micId)) {
       this.barged = true; // talked over this device's own reading: take it now, no echo tail
       this.status = 'listening';
       this.quietUntil = 0;
       this.detector.reset();
-      this.detector.feed(Number.POSITIVE_INFINITY, now); // the take has begun
+      this.detector.begin(); // the take has begun
       this.record();
       return;
     }
-    if (this.status !== 'listening' || this.busy || now < this.quietUntil || (echo && !this.barged)) {
-      this.discard(); // the loop ignores utterances while it transcribes or speaks
+    if ((this.status !== 'listening' && this.status !== 'transcribing') || now < this.quietUntil || (echo && !this.barged)) {
+      this.discard(); // nothing is taken while the loop starts or speaks
       this.detector.reset();
       return;
     }
-    const edge = this.detector.feed(level, now);
+    if (this.models && !this.take && !this.detector.speaking) { this.detector = createTurnDetector({ models: this.models, onModelError: modelsLost }); this.models = null; }
+    const edge = this.detector.feed(pcm16ToFloat(pcm));
     if (edge === 'start') this.record(); else if (edge === 'end') this.finish();
   }
 
+  /** The block and at least PRE_ROLL_MS of PCM before it, always kept: a take starts with it (the start edge comes a block late). */
+  private keepPreRoll(pcm: Uint8Array): void {
+    while (this.preRoll.length && this.preBytes - this.preRoll[0].byteLength >= PRE_ROLL_BYTES) this.preBytes -= this.preRoll.shift()!.byteLength;
+    this.preRoll.push(pcm);
+    this.preBytes += pcm.byteLength;
+  }
+
   private record(): void {
-    if (!this.mic || this.recorder) return;
-    // Each take keeps its own chunks: the last data of a stopped take arrives after the next
-    // take may already have started.
-    const chunks: Blob[] = [];
-    const recorder = this.deps.newRecorder(this.mic.stream);
-    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-    recorder.onstop = () => void this.send(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
-    recorder.start(250);
-    this.recorder = recorder;
+    if (!this.mic || this.take) return;
+    this.take = [...this.preRoll]; // already holds the block that started it
   }
 
   private finish(): void {
-    const recorder = this.recorder;
-    this.recorder = null;
+    const take = this.take;
+    this.take = null;
     this.barged = false;
-    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    if (take) this.send(new Blob([wavFile(take).buffer as ArrayBuffer], { type: 'audio/wav' }));
   }
 
   /** Drops a running take. */
   private discard(): void {
-    const recorder = this.recorder;
-    this.recorder = null;
+    this.take = null;
     this.barged = false;
-    if (!recorder || recorder.state === 'inactive') return;
-    recorder.onstop = null;
-    recorder.stop();
   }
 
-  private async send(blob: Blob): Promise<void> {
+  /** Uploads the take at once; it reaches the sink after the takes before it. */
+  private send(blob: Blob): void {
     const micId = this.micId;
     if (this.closed || !micId || !blob.size) return;
-    this.busy = true;
-    try {
-      const ref = await this.deps.upload(blob, 'Utterance.webm');
-      if (!this.closed) await this.sink.utterance(micId, ref.id);
-    } catch (error) {
-      if (!this.closed) this.onFailure(error);
-    } finally {
-      this.busy = false;
-    }
+    this.sink.spoke?.(micId, this.deps.now());
+    const upload = this.deps.upload(blob, 'Utterance.wav');
+    upload.catch(() => undefined); // its failure is reported in its turn below
+    this.handing = this.handing.then(async () => {
+      try {
+        const ref = await upload;
+        if (!this.closed) await this.sink.utterance(micId, ref.id);
+      } catch (error) {
+        if (!this.closed) this.onFailure(error);
+      }
+    });
   }
 }
 
@@ -189,10 +206,12 @@ export type { SpeechOutput } from './device-speech.ts';
 export { browserSpeech } from './device-speech.ts';
 
 /**
- * Mobile Safari reads aloud only after speech was started inside a tap: call this synchronously
- * in the "Start conversation" click (an empty utterance; nothing is heard).
+ * A phone plays audio only after it was started inside a tap: call this synchronously in the "Start conversation"
+ * click. It opens the page's audio output for the PC's voice (device-speech.ts prepareLocalVoice) and, for Mobile
+ * Safari, starts speechSynthesis with an empty utterance (nothing is heard).
  */
 export function primeSpeech(): void {
+  prepareLocalVoice();
   if (typeof speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') return;
   try { speechSynthesis.speak(new SpeechSynthesisUtterance('')); } catch { /* reading aloud may still work */ }
 }

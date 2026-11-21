@@ -5,14 +5,21 @@
 // relaunch helper (updates/install-helper.ts); a while after a start settleAfterStart tidies up after a move
 // or a Mac self-update.
 // Drain order: renderer saves drafts (prepareRestart ack) → runtime pauses wakes and checkpoints
-// (system.prepareRestart) → runtime exits ('update').
+// (system.prepareRestart, B-080: with the version it installs) → runtime exits ('update').
+// B-080: installFile – a build from a file (app.install / system.install through main's host op) installs the same way:
+// the same drain, then the relaunch helper with that installer, then quit.
+// F25 (16.11.2026): every company has its updater; the helper starts the company that installed again (its `args`, on a
+// Mac too), and
+// siblingVersion / installFailed pass a linked PC's version and a not-landed install on to the service.
 // Owns: that order and the "drained" flag, binding electron to the updater wrapper. Never: talks to
 // electron-updater's download or install directly (the Updater is injected) or relaunches without the drain.
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { UpdateState } from '../shared/model/system.ts';
+import type { Device } from '../shared/model/devices.ts';
+import type { SystemInfo, UpdateState } from '../shared/model/system.ts';
 import { WorkforceError } from '../shared/errors.ts';
 import { NEW_PRODUCT_NAME, OLD_PRODUCT_NAME, finishIdentityMove, updaterCacheRoot } from './identity-move.ts';
 import { applyLauncher, runCommand, type LauncherDeps } from './launcher-tasks.ts';
@@ -21,7 +28,7 @@ import { appBundleOf, macSelfUpdater, settleMacUpdate, type FeedFile } from './u
 import { UpdateService } from './updates/update-service.ts';
 import type { Updater } from './updates/update-service.ts';
 import { allowInstallerRetry } from './updates/install-retry.ts';
-import { HELPER_LOG, installWithHelper, spawnHelper } from './updates/install-helper.ts';
+import { HELPER_LOG, installWithHelper, linuxHelper, spawnHelper, windowsHelper } from './updates/install-helper.ts';
 import type { UpdateSource } from './updates/source.ts';
 
 export interface DesktopUpdatesDeps {
@@ -37,10 +44,13 @@ export interface DesktopUpdatesDeps {
   idleSeconds(): number;
   runtime: {
     readiness(): Promise<{ ready: boolean }>;
-    prepareRestart(cancel: boolean): Promise<void>;
+    /** system.prepareRestart; B-080: `to` – the version being installed. */
+    prepareRestart(cancel: boolean, to?: string): Promise<void>;
     stop(reason: 'update'): Promise<void>;
     start(): void;
   };
+  /** B-080 (installFile): this app's process, executable, AppImage (Linux) and logs folder, and its quit; absent: no install from a file. */
+  install?: { pid: number; exe: string; appImage?: string; logs: string; quit(): void; spawn?: typeof spawnHelper; exists?(file: string): boolean; args?: readonly string[] }; // F25: args – this company's start arguments
   publish(state: UpdateState): void;
   /** AF-019: the stored update source (updates/source-store.ts) and how a change is saved. */
   source?: UpdateSource;
@@ -54,40 +64,44 @@ export interface DesktopUpdatesDeps {
 }
 
 export const DRAFT_FLUSH_TIMEOUT_MS = 8000;
+/** installFile: how long after its quit request a still-running app waits before it takes its work back: after the install helper's own wait (install-helper.ts WAIT_SECONDS, 45 s), under the 60 s asked for on 18.11.2026. */
+export const INSTALL_FILE_WATCHDOG_MS = 50_000;
 
 /**
  * electron-updater's autoUpdater (loaded only for packaged builds). Its export is a getter that
  * Node's CJS export detection misses, so read it from the namespace or the default export.
  */
-export async function loadUpdater(log?: (line: string) => void): Promise<Updater> {
+export async function loadUpdater(log?: (line: string) => void, args: readonly string[] = []): Promise<Updater> {
   const loaded = await import('electron-updater') as unknown as { autoUpdater?: Updater; default?: { autoUpdater?: Updater } };
   const updater = loaded.autoUpdater ?? loaded.default?.autoUpdater;
   if (!updater) throw new Error('The updater is not available.');
   if (process.platform === 'win32') allowInstallerRetry(updater);
-  if (process.platform === 'darwin') return selfUpdatingMac(updater, log);
-  if (process.platform === 'win32' || process.platform === 'linux') await relaunchingHelper(updater, log);
+  if (process.platform === 'darwin') return selfUpdatingMac(updater, log, args);
+  if (process.platform === 'win32' || process.platform === 'linux') await relaunchingHelper(updater, log, args);
   return updater;
 }
 
-/** Windows and Linux: quitAndInstall starts the relaunch helper and quits; without it the library's own way runs. */
-async function relaunchingHelper(updater: Updater, log?: (line: string) => void): Promise<void> {
+/** Windows and Linux: quitAndInstall starts the relaunch helper and quits; without it the library's own way runs. F25: `args` – this company's (it starts again). */
+async function relaunchingHelper(updater: Updater, log: ((line: string) => void) | undefined, args: readonly string[]): Promise<void> {
   const { app } = await electronMain();
   const logs = path.join(app.getPath('userData'), 'logs');
   installWithHelper(updater, {
     platform: process.platform,
     pid: process.pid,
+    args,
     exe: process.execPath,
     appImage: process.env.APPIMAGE,
     logFile: path.join(logs, HELPER_LOG),
     spawn: (launch, events) => spawnHelper(launch, logs, events),
     quit: () => app.quit(),
+    exit: () => app.exit(0),
     log,
   });
 }
 
 /** What this needs of electron's main module (its exports sit on the namespace or the default export, as for shell below). */
 interface ElectronMain {
-  app: { getName(): string; getVersion(): string; getPath(name: 'userData'): string; quit(): void };
+  app: { getName(): string; getVersion(): string; getPath(name: 'userData'): string; quit(): void; exit(code?: number): void };
   net: { fetch(url: string): Promise<Response> };
   shell: { trashItem(target: string): Promise<void> };
 }
@@ -107,7 +121,8 @@ export function feedFileUrl(updater: Updater, file: FeedFile, info: unknown): st
 
 const macCacheDir = () => path.join(os.homedir(), 'Library', 'Caches', 'workforce-self-update');
 
-async function selfUpdatingMac(updater: Updater, log?: (line: string) => void): Promise<Updater> {
+/** macOS: the zip swap of mac-self-update.ts. F25: `args` – this company's (the swap starts it again). */
+async function selfUpdatingMac(updater: Updater, log: ((line: string) => void) | undefined, args: readonly string[]): Promise<Updater> {
   const bundle = appBundleOf(process.execPath);
   if (!bundle) return updater;
   const { app, net } = await electronMain();
@@ -128,6 +143,7 @@ async function selfUpdatingMac(updater: Updater, log?: (line: string) => void): 
     },
     quit: () => app.quit(),
     log,
+    args,
   }) ?? updater;
 }
 
@@ -187,6 +203,29 @@ async function shellOpenExternal(url: string): Promise<void> {
   await shell.openExternal(url);
 }
 
+/** What siblingUpdates reads from the runtime over main's own link. */
+export interface SiblingRpc {
+  on(event: 'device.upserted', listener: (device: Device) => void): () => void;
+  subscribe(topic: 'system'): Promise<() => void>;
+  call(method: 'system.info'): Promise<SystemInfo>;
+}
+
+/**
+ * F25 (16.11.2026): a linked own PC's version (device.upserted carries its caps; my own PCs only – no employee's PC,
+ * none this PC joined as an employee) reaches the updater, and at each runtime start this start's notice – an install
+ * that did not land names its version (SystemInfo.notice `to`). Returns what to call when the runtime is up.
+ */
+export function siblingUpdates(rpc: SiblingRpc, updates: Pick<DesktopUpdates, 'siblingVersion' | 'installFailed'>): () => void {
+  rpc.on('device.upserted', (device) => {
+    const own = device.kind === 'pc' && !device.self && !device.personId && device.joinedAs !== 'employee' && device.status === 'online';
+    if (own && typeof device.caps?.version === 'string') updates.siblingVersion(device.caps.version);
+  });
+  void rpc.subscribe('system');
+  return () => {
+    void rpc.call('system.info').then((info) => { if (info.notice?.failed && info.notice.to) updates.installFailed(info.notice.to); }, () => {});
+  };
+}
+
 /** A stand-in for electron-updater in development and test mode (UpdateService never calls it). */
 export function inactiveUpdater(): Updater {
   return {
@@ -219,7 +258,7 @@ export class DesktopUpdates {
       version: deps.version,
       autoDownload: deps.autoDownload,
       facts: () => this.facts(),
-      prepareInstall: () => this.prepareInstall(),
+      prepareInstall: (to) => this.prepareInstall(to),
       cancelInstall: () => this.cancelInstall(),
       openExternal: url => openHttps(url, deps.openExternal),
       changed: state => deps.publish(state),
@@ -246,6 +285,8 @@ export class DesktopUpdates {
 
   state(): UpdateState { return this.service.state; }
   apply(): Promise<UpdateState> { return this.service.apply(); }
+  /** 19.11.2026 (host op app.update): the Update button pressed from another own PC – check the feed now, then apply. */
+  async updateNow(): Promise<UpdateState> { await this.service.check(); return this.service.apply(); }
   defer(): UpdateState { return this.service.defer(); }
   start(): void { this.service.start(); }
   dispose(): void { this.service.dispose(); }
@@ -260,6 +301,10 @@ export class DesktopUpdates {
     await this.deps.saveSource?.(next);
     return this.service.setSource(next);
   }
+  /** F25: a linked own PC runs `version` (a newer one asks for one check now). */
+  siblingVersion(version: string): void { this.service.siblingVersion(version); }
+  /** F25: this start's notice says the install of `version` did not land here. */
+  installFailed(version: string): void { this.service.installFailed(version); }
 
   async setAutoDownload(enabled: boolean): Promise<UpdateState> {
     await this.deps.setAutoDownload(enabled);
@@ -281,12 +326,58 @@ export class DesktopUpdates {
     return { ...base, runtimeReady: (await this.deps.runtime.readiness()).ready };
   }
 
-  private async prepareInstall(): Promise<void> {
+  /**
+   * B-080 (host op app.install – app.install / system.install): a build from a file installs the way an update does – the
+   * file must exist, then the same drain, then the relaunch helper with this installer (Windows: its Setup .exe; Linux:
+   * the AppImage moved over $APPIMAGE) and quit. macOS refuses. A helper that cannot start resumes the app; any refusal
+   * before it tells the runtime (system.prepareRestart {cancel}), which answers the install record it kept (tasks/recover-notes.ts).
+   */
+  async installFile(installer: string): Promise<void> {
+    const own = this.deps.install;
+    try {
+      if (!own || this.deps.platform === 'darwin') throw new WorkforceError('unavailable', 'This app cannot install a build from a file here.');
+      if (!(own.exists ?? existsSync)(installer)) throw new WorkforceError('not_found', 'The installer file does not exist.');
+      const logFile = path.join(own.logs, HELPER_LOG);
+      const launch = this.deps.platform === 'win32' ? windowsHelper({ pid: own.pid, installer, exe: own.exe, logFile, args: own.args })
+        : own.appImage ? linuxHelper({ pid: own.pid, downloaded: installer, appImage: own.appImage, logFile, args: own.args }) : undefined;
+      if (!launch) throw new WorkforceError('unavailable', 'This app was not started from an AppImage, so it cannot replace itself.');
+      await this.prepareInstall();
+      this.deps.log?.('installing a build from a file');
+      (own.spawn ?? spawnHelper)(launch, own.logs, {
+        // Arm before quit: a synchronous exception in quit must not leave a drained runtime without a watchdog.
+        started: () => { this.watchInstall(); own.quit(); },
+        failed: () => { this.deps.log?.('install helper did not start; resuming'); this.cancelInstall(); },
+        ended: () => {},
+      });
+    } catch (error) {
+      const held = this.drained || this.paused; // cancelInstall tells such a runtime itself
+      this.cancelInstall();
+      if (!held) void this.deps.runtime.prepareRestart(true).catch(() => {}); // B-080: it answers the install record it kept
+      throw error;
+    }
+  }
+
+  /**
+   * An app that was asked to quit for an install and is still running when the helper has given up did not quit (18.11.2026:
+   * an exception in the quit left it up with the runtime stopped from 13:06 to 22:35 – nobody worked and nobody noticed). It takes
+   * its work back after INSTALL_FILE_WATCHDOG_MS and says so; a quit that works ends this process before the timer fires.
+   */
+  private watchInstall(): void {
+    const fire = (): void => {
+      if (!this.drained && !this.paused) return;
+      this.deps.log?.(`INSTALL FAILED: the app did not end within ${INSTALL_FILE_WATCHDOG_MS / 1000} s; the runtime resumes`);
+      this.cancelInstall();
+    };
+    if (this.deps.setTimer) this.deps.setTimer(fire, INSTALL_FILE_WATCHDOG_MS);
+    else setTimeout(fire, INSTALL_FILE_WATCHDOG_MS).unref?.();
+  }
+
+  private async prepareInstall(to?: string): Promise<void> {
     if (!(await this.deps.renderer.prepareRestart(DRAFT_FLUSH_TIMEOUT_MS))) {
       throw new Error('The window did not confirm that its drafts are saved.');
     }
     try {
-      await this.deps.runtime.prepareRestart(false);
+      await this.deps.runtime.prepareRestart(false, to);
       this.paused = true;
     } catch (error) {
       // A runtime that is not running has nothing to pause; anything else aborts the update.
@@ -298,7 +389,10 @@ export class DesktopUpdates {
     this.deps.log?.('drained for update install');
   }
 
-  /** The restart did not happen after all: bring everything back. */
+  /**
+   * The restart did not happen after all: bring everything back. B-080: a paused runtime hears the cancel and answers the
+   * install record it kept; a drained one starts again and answers it at its start (the same app process: no install).
+   */
   private cancelInstall(): void {
     if (this.drained) {
       this.drained = false;
@@ -308,5 +402,16 @@ export class DesktopUpdates {
     }
     this.paused = false;
     this.deps.log?.('update install cancelled; resumed');
+  }
+}
+
+/** 19.11.2026 (host op app.update – system.update {device}): this PC's Update button, pressed from another of the owner's PCs. */
+export async function updateFromElsewhere(updates: DesktopUpdates | null | undefined, log: (line: string) => void): Promise<void> {
+  try {
+    if (!updates) throw new Error('the updater wiring is not ready');
+    const state = await updates.updateNow();
+    log(`update from another PC: ${state.status}${state.availableVersion ? ` ${state.availableVersion}` : ''}`);
+  } catch (error) {
+    log(`update from another PC failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

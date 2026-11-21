@@ -19,27 +19,13 @@ import type { PageConversationDeps } from '../../../src/ui/chat/composer/pwa-con
 import { conversationAvailable } from '../../../src/ui/chat/composer/voice.ts';
 import { session } from '../../../src/ui/lib/session.ts';
 
-class FakeRecorder {
-  static made: FakeRecorder[] = [];
-  state: 'inactive' | 'recording' | 'paused' = 'inactive';
-  mimeType = 'audio/webm';
-  ondataavailable: ((event: { data: Blob }) => void) | null = null;
-  onstop: (() => void) | null = null;
-  constructor() { FakeRecorder.made.push(this); }
-  start(): void { this.state = 'recording'; }
-  stop(): void {
-    this.state = 'inactive';
-    this.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/webm' }) });
-    queueMicrotask(() => this.onstop?.());
-  }
-}
-
 const tick = async (rounds = 6) => { for (let i = 0; i < rounds; i++) await new Promise<void>((resolve) => setImmediate(resolve)); };
-const loud = new Float32Array(512).fill(0.2);
+// B-082: a voice (125 Hz and its harmonics: exactly 4 periods per 32 ms block at 16 kHz, so blocks join seamlessly)
+const loud = Float32Array.from({ length: 512 }, (_, i) => { let v = 0; for (let h = 1; h <= 12; h++) v += Math.sin((2 * Math.PI * 125 * h * i) / 16_000) / h; return 0.15 * v; });
 const silent = new Float32Array(512);
+const uploads = (log: string[]) => log.filter((entry) => entry.startsWith('upload Utterance.wav ')).length;
 
 function setup(options: { microphone?: string; uploadFails?: boolean; holdMic?: boolean; holdChat?: boolean; noChat?: boolean; language?: string } = {}) {
-  FakeRecorder.made = [];
   const log: string[] = [];
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const observers: Array<(message: Message) => void> = [];
@@ -76,7 +62,6 @@ function setup(options: { microphone?: string; uploadFails?: boolean; holdMic?: 
         feed = onSamples;
         return { stream: {} as MediaStream, close: () => log.push('microphone closed') };
       },
-      newRecorder: () => new FakeRecorder() as never,
       upload: async (blob, name) => {
         log.push(`upload ${name} ${blob.size}`);
         if (options.uploadFails) throw new Error('Upload failed: the connection dropped.');
@@ -94,7 +79,8 @@ function setup(options: { microphone?: string; uploadFails?: boolean; holdMic?: 
     newId: () => `id_${++ids}`,
   };
   const conversation = new PageConversation(deps);
-  const samples = (block: Float32Array, at: number) => { clock = at; feed?.(block, 48_000); };
+  /** B-082: the microphone as it runs – 32 ms blocks at 16 kHz from the last time up to `at`. */
+  const samples = (block: Float32Array, at: number) => { for (let t = clock + 32; t <= at; t += 32) { clock = t; feed?.(block, 16_000); } clock = at; };
   const reply = (conversationId: string, body: string) => {
     const message = { id: `reply_${++seq}`, conversationId, seq: seq + 100, authorId: 'ag_tom', authorKind: 'agent', kind: 'text', body, state: 'final', silent: false, meta: {} } as unknown as Message;
     for (const observe of observers) observe(message);
@@ -113,12 +99,12 @@ test('one utterance: microphone first, then record → upload → voice.transcri
   assert.equal(f.conversation.active, true);
 
   f.samples(loud, 1100);
-  assert.equal(FakeRecorder.made.length, 1, 'speech starts a take');
   f.samples(loud, 1500);
+  assert.equal(uploads(f.log), 0, 'a take runs');
   f.samples(silent, 2700); // more than 1.1 s of silence ends the utterance
   await tick();
-  assert.ok(f.log.includes('upload Utterance.webm 3'));
-  assert.deepEqual(f.calls.find((call) => call.method === 'voice.transcribe')?.params, { fileId: 'f'.repeat(64), language: 'de-DE' }, 'the hint the composer\'s dictation gives too');
+  assert.equal(uploads(f.log), 1, 'the take as a WAV');
+  assert.deepEqual(f.calls.find((call) => call.method === 'voice.transcribe')?.params, { fileId: 'f'.repeat(64), live: true, language: 'de-DE' }, 'heard live, with the hint the composer\'s dictation gives too');
   assert.deepEqual(f.sends(), [{ conversationId: 'ch_1', body: 'Call Teydra tomorrow', clientId: 'id_3', speech: { ...spokenMeta(true), call: 'call_ch_1' } }], 'a line of the call of the chat');
   assert.equal(f.chats.at(-1)?.[0]?.status, 'responding');
 
@@ -143,15 +129,19 @@ test('the reply is read aloud; its sound and tail are not taken for the person (
 
   f.samples(loud, 3000);
   f.samples(loud, 3400);
-  assert.equal(FakeRecorder.made.length, 1, 'the speaker is not recorded');
 
   f.speaking[0].done();
   assert.equal(f.views.at(-1)?.status, 'listening');
   const doneAt = f.now();
   f.samples(loud, doneAt + ECHO_TAIL_MS - 100);
-  assert.equal(FakeRecorder.made.length, 1, 'the tail of the reply is not recorded');
-  f.samples(loud, doneAt + ECHO_TAIL_MS + 50);
-  assert.equal(FakeRecorder.made.length, 2, 'after the tail the person is heard again');
+  f.samples(silent, doneAt + ECHO_TAIL_MS);
+  f.samples(silent, doneAt + 2000);
+  await tick();
+  assert.equal(uploads(f.log), 1, 'neither the reply nor its tail is taken for the person');
+  f.samples(loud, doneAt + 2600);
+  f.samples(silent, doneAt + 3800);
+  await tick();
+  assert.equal(uploads(f.log), 2, 'after the tail the person is heard again');
   f.conversation.stop();
 });
 
@@ -185,7 +175,9 @@ test('hiding the page ends the conversation and releases microphone, wake lock, 
     assert.ok(f.log.includes(entry), `${entry}`);
   }
   f.samples(loud, 5000);
-  assert.equal(FakeRecorder.made.length, 0, 'a closed capture records nothing');
+  f.samples(silent, 6500);
+  await tick();
+  assert.equal(uploads(f.log), 0, 'a closed capture records nothing');
 });
 
 test('it never starts what cannot work: no microphone API, a chat that does not exist', async () => {
@@ -246,7 +238,9 @@ test('a second tap while the microphone opens joins the first: one microphone, o
   assert.equal(f.log.filter((entry) => entry === 'microphone').length, 1);
   assert.equal(f.log.filter((entry) => entry === 'hold chat:ch_1').length, 1, 'one session holds the topic');
   f.samples(loud, 1100);
-  assert.equal(FakeRecorder.made.length, 1, 'the microphone hears the person');
+  f.samples(silent, 2400);
+  await tick();
+  assert.equal(uploads(f.log), 1, 'the microphone hears the person');
   f.conversation.stop();
   assert.ok(f.log.includes('release chat:ch_1'));
 });

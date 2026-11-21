@@ -4,7 +4,7 @@
 // ([[hang:bash …]]) that never returns, and the runtime is killed (SIGKILL) mid-turn. After a
 // restart on the same data: the run is 'interrupted' and the command's effect 'unknown' (the chat's quiet
 // "Cut off by a restart" line went with the recovery notes); the agent is told to verify before
-// repeating, so the command is not started again, and the task completes (its tasks.complete
+// repeating, so the command is not started again, and the task completes (its tasks.finish
 // call). The start notice says "Restarted after an interruption · 1 task continued".
 // Run: npm run build && node --test test/e2e/runtime-crash-resume.test.mjs
 
@@ -26,13 +26,13 @@ test('SIGKILL mid-turn: after the restart the unknown effect is named, not repea
   assert.ok(manager, 'the first run seeds a manager');
   const chat = await before.call('chats.create', { title: 'Report', agentIds: [manager.id] });
   await before.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`, `runs:${manager.id}`] });
-  const task = await before.call('tasks.create', { conversationId: chat.id, title: 'Export the monthly report', assigneeKind: 'agent', assigneeId: manager.id });
+  const task = await before.call('tasks.create', { conversationId: chat.id, title: 'Export the monthly report', to: manager.id });
   // the first turn on the task: a background turn, so its answer stays in the run journal (B-047 D4, agents/publishing.ts)
   await before.waitFor('run.upserted', (run) => run.agentId === manager.id && run.taskId === task.id && run.endedAt !== undefined, 60_000);
 
   await before.call('messages.send', {
     conversationId: chat.id,
-    body: `Export it now [[hang:bash {"command":"export-report --month 10"}]] [[tool:tasks.complete {"taskId":"${task.id}","summary":"Report exported once","evidence":[{"kind":"check","label":"Export log shows one run"}]}]]`,
+    body: `Export it now [[hang:bash {"command":"export-report --month 10"}]] [[tool:tasks.finish {"taskId":"${task.id}","status":"done","summary":"Report exported once","evidence":[{"kind":"check","label":"Export log shows one run"}]}]]`,
   });
   const started = await before.waitFor('run.item', (item) => item.kind === 'tool_call' && item.name === 'bash', 60_000);
   const crashedRun = started.runId;
@@ -46,7 +46,7 @@ test('SIGKILL mid-turn: after the restart the unknown effect is named, not repea
   const after = second.client;
   await after.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`, `runs:${manager.id}`] });
 
-  // The task completes after the restart (its tasks.complete call), without starting the command again.
+  // The task completes after the restart (its tasks.finish call), without starting the command again.
   let done;
   for (let i = 0; i < 120 && done?.status !== 'done'; i++) {
     done = await after.call('tasks.get', { id: task.id });
@@ -61,13 +61,12 @@ test('SIGKILL mid-turn: after the restart the unknown effect is named, not repea
 
   const messages = await after.call('messages.list', { conversationId: chat.id });
   assert.ok(messages.some((message) => message.authorId === manager.id && /bash not started again: its effect is unknown/.test(message.body)), 'the agent verified instead of repeating');
-  const continued = messages.find((message) => message.authorId === manager.id && /App system events: interrupted work/.test(message.body));
+  // agents/interruption-context.ts: one note first – when and why my last turn was cut off –, then what arrived since.
+  const continued = messages.find((message) => message.authorId === manager.id && /My last turn here was cut off/.test(message.body));
   assert.ok(continued, 'the resumed engine received app-authored interruption context');
-  assert.match(continued.body, /app has restarted/);
+  assert.match(continued.body, /cut off at .*\(the app restarted\)/);
   assert.match(continued.body, /When you continue, preview the exported report first/);
-  assert.match(continued.body, /Retrying now.*input changed/);
-  assert.ok(continued.body.indexOf('app has restarted') < continued.body.indexOf('When you continue, preview'));
-  assert.ok(continued.body.indexOf('When you continue, preview') < continued.body.indexOf('Retrying now'));
+  assert.ok(continued.body.indexOf('the app restarted') < continued.body.indexOf('When you continue, preview'));
 
   // The command was started exactly once over both lifetimes of the runtime.
   const runIds = new Set([crashedRun, ...after.events.filter((frame) => frame.event === 'run.upserted' && frame.data.agentId === manager.id).map((frame) => frame.data.id)]);

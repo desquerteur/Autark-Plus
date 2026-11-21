@@ -77,6 +77,8 @@ function tagsOf(item: ImportedMeta & { folder?: string }, importTag: string, twi
 const UNDESCRIBED = /\bnot described (?:or checked )?yet\b/i;
 
 /** The description an item came with – none when it is an earlier import's placeholder (exported before the review). */
+/** B-080 wave 3: an imported description keeps what the catalog holds (secrets.save, groups.ts: 4000) – it was cut at 500. */
+const DESCRIPTION_CHARS = 4000;
 const givenDescription = (item: ImportedMeta): string | undefined => (item.description && !UNDESCRIBED.test(item.description) ? item.description : undefined);
 
 /** One entry's group input (metadata: name, description, tags, route, source). `twin`: a stored login it differs from. */
@@ -86,7 +88,7 @@ function entryOf(item: ImportedLogin | ImportedCard, format: string, date: strin
   if (item.type === 'card') {
     const last = item.number.replace(/\D/g, '').slice(-4);
     const description = givenDescription(item) ?? `Payment card imported from ${format} on ${date}; not described yet.`;
-    return { label: clip(item.name ?? `Card •••• ${last}`, 120), kind: 'card', ...route, tags: tagsOf(item, importTag), description: clip(description, 500), fields: cardFields(item) };
+    return { label: clip(item.name ?? `Card •••• ${last}`, 120), kind: 'card', ...route, tags: tagsOf(item, importTag), description: clip(description, DESCRIPTION_CHARS), fields: cardFields(item) };
   }
   const site = siteOf(item.url);
   const where = item.url && item.url !== `https://${site}` ? `${site || 'a site'} (${clip(item.url, 200)})` : site || 'an unknown site';
@@ -96,7 +98,7 @@ function entryOf(item: ImportedLogin | ImportedCard, format: string, date: strin
   ].filter(Boolean).join(' ');
   return {
     label: clip(item.name ?? (site || 'Imported login'), 120), kind: 'login', ...(site ? { source: site } : {}), ...route,
-    tags: tagsOf(item, importTag, twin), description: clip(description, 500), fields: loginFields(item, true),
+    tags: tagsOf(item, importTag, twin), description: clip(description, DESCRIPTION_CHARS), fields: loginFields(item, true),
   };
 }
 
@@ -120,7 +122,7 @@ export async function importSecrets(vault: Vault, text: string, options: { fileN
       try {
         await vault.save({
           id, label: item.name, kind: item.kind ?? kindForName(item.name), value: item.value, tags: tagsOf(item, result.tag),
-          description: clip(givenDescription(item) ?? `Imported from ${options.fileName ?? parsed.format} on ${date}; not described yet.`, 4000),
+          description: clip(givenDescription(item) ?? `Imported from ${options.fileName ?? parsed.format} on ${date}; not described yet.`, DESCRIPTION_CHARS),
           ...(item.route ? { route: item.route } : {}), ...(source ? { source } : {}), ...(options.createdBy ? { createdBy: options.createdBy } : {}),
         });
         values.add(print);
@@ -201,7 +203,7 @@ export function startReview(services: RuntimeServices, result: SecretImportResul
   const origin = { source: 'secrets-import', label: `Import from ${result.format}` };
   const task = services.tasks.create({
     title: `Sort the ${total} imported ${total === 1 ? 'entry' : 'entries'}`, notes: reviewBrief(result), origin,
-    steps: ['Name and describe every imported entry', 'Sort out differing duplicates', 'Check the logins the team will use', 'Report the result'],
+    plan: ['Name and describe every imported entry', 'Sort out differing duplicates', 'Check the logins the team will use', 'Report the result'],
     assigneeKind: 'agent', assigneeId: manager.id, createdBy: SYSTEM_ID,
   });
   services.wakes.wake({ agentId: manager.id, reason: 'task', taskId: task.id, coalesceKey: `task:${task.id}`, origin });

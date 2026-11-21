@@ -39,7 +39,7 @@ export async function testEndpoint(input: EndpointTestInput, deps: EndpointTestD
   const key = handleId(input.apiKey) ? await handleValue(input.apiKey!, deps.secrets) : input.apiKey?.trim().slice(0, 4096) || undefined;
   const account: Account = {
     id: `test_${randomUUID()}`, provider: input.provider, label: 'Test', auth: key ? 'api_key' : 'none', baseUrl,
-    state: 'unknown', priority: 0, rotation: false, enabled: true, detected: false, createdAt: deps.now(),
+    state: 'unknown', priority: 0, enabled: true, detected: false, createdAt: deps.now(),
   };
   if (key) deps.keys.set(account.id, key);
   try {

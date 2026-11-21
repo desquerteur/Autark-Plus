@@ -103,7 +103,7 @@ test('X02: a To-do-only phone takes over the agent browser from its to-do, taps,
   const widget = { type: 'confirm', instructions: 'Press the button, type your name, then hand back.', url: pageUrl, confirmLabel: 'Done' };
   await owner.call('messages.send', {
     conversationId: chat.id,
-    body: `Sign in please [[tool:browser.open {"url":"${pageUrl}"}]] [[tool:human.ask ${JSON.stringify({ title: 'Sign in to the test shop', reason: 'credential', widget })}]]`,
+    body: `Sign in please [[tool:browser.open {"url":"${pageUrl}"}]] [[tool:tasks.create ${JSON.stringify({ title: 'Sign in to the test shop', to: 'human', widget })}]]`,
   });
   const todo = await until(async () => (await owner.call('todos.list')).find((task) => task.widget?.type === 'confirm' && task.createdBy === manager.id), 'the confirm to-do', 120_000);
   assert.ok((await owner.call('browser.list')).some((entry) => entry.agentId === manager.id), 'the agent browser is open');

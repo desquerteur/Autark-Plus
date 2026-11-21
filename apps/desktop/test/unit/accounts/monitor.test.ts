@@ -30,7 +30,7 @@ const reading = (readAt: number, used = 30, resetsAt = readAt + 3 * DAY): Accoun
 });
 
 function plan(id: string, provider: ProviderId, patch: Partial<Account> = {}): Account {
-  return { id, provider, label: id, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: T0, ...patch };
+  return { id, provider, label: id, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: T0, ...patch };
 }
 
 const monitors: AccountMonitor[] = [];
@@ -97,9 +97,12 @@ function harness() {
   return { db, bus, clock, service, repo, checks, answers, holds, flight, login, usage, upserts, run, startServer, servers, settle, signingIn, loginEnded };
 }
 
-test('adoption: a login found on this PC gets exactly one check; a sign-out outside Workforce becomes needs_login, old limits kept', async () => {
+test('adoption: a login found on this PC gets exactly one check once the person says "Use"; a sign-out outside Workforce becomes needs_login, old limits kept', async () => {
   const h = harness();
   await h.service.detect();
+  await h.settle();
+  assert.deepEqual([h.service.list().length, h.checks.length], [0, 0], 'offered, not used: no account, no check');
+  await h.service.useFound('claude:default');
   await h.settle();
   const [adopted, ...rest] = h.service.list();
   assert.equal(rest.length, 0);
@@ -171,6 +174,7 @@ test('stale: readings older than two minutes or with a passed reset are flagged;
   assert.equal(summary.weeklyRemainingPercent, 70);
   assert.equal(usageSummaries([plan('acc_a', 'claude', { limits })], T0 + MIN)[0].limits?.stale, false);
   assert.deepEqual(usageSummaries([plan('acc_k', 'openrouter', { auth: 'api_key' })], T0), [], 'only plans');
+  assert.deepEqual(usageSummaries([plan('acc_off', 'claude', { enabled: false, state: 'disabled', limits })], T0 + MIN), [], 'feedback F24: a switched-off plan is not on the rail');
 
   // A signed-out plan is not checked by the cadence, yet its readings turning stale reach the UI once.
   const h = harness();
@@ -180,7 +184,7 @@ test('stale: readings older than two minutes or with a passed reset are flagged;
   h.run();
   await h.settle();
   assert.equal(h.usage.length, 0, 'nothing changed');
-  h.clock.advance(2 * MIN);
+  h.clock.advance(2 * MIN + 1); // the work's first STALE_MS judge by the quiet cadence (its reads are on the way)
   h.run();
   await h.settle();
   assert.equal(h.usage.length, 1);
@@ -228,26 +232,26 @@ test('failed checks keep the old limits and state; an error account comes back t
   // The check throws (CLI hung): nothing is stored.
   h.answers.set('acc_claude', new Error('timed out'));
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.deepEqual(h.service.get('acc_claude'), before);
   assert.equal(h.upserts.length, 0);
-  // Retried with the cadence, not on every event.
-  h.service.monitor.activity();
+  // Retried with the cadence, not on every event (activity(true): the working cadence, as with the person back).
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.checks.length, 1);
 
   // The check answers 'error' (did not answer): a background check changes nothing.
   h.answers.set('acc_claude', { state: 'error', message: 'Claude Code did not answer the account check.' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.deepEqual(h.service.get('acc_claude'), before);
 
   // Signed in but no usage reading this time: plan, e-mail and limits stay, the check time moves.
   h.answers.set('acc_claude', { state: 'ok' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   const kept = h.service.get('acc_claude')!;
   assert.deepEqual(kept.limits, old);
@@ -259,12 +263,12 @@ test('failed checks keep the old limits and state; an error account comes back t
   assert.equal(h.service.markUnavailable('acc_claude', 'error'), true);
   h.answers.set('acc_claude', { state: 'error', message: 'Claude Code is not installed.' });
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.service.get('acc_claude')?.state, 'error');
   h.answers.delete('acc_claude');
   h.clock.advance(5 * MIN);
-  h.service.monitor.activity();
+  h.service.monitor.activity(true);
   await h.settle();
   assert.equal(h.service.get('acc_claude')?.state, 'ok');
   assert.equal(h.service.get('acc_claude')?.limits?.readAt, h.clock.now());

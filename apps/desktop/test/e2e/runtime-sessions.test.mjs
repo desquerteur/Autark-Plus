@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const finalFrom = (chatId, agentId, pattern) => (message) =>
   message.conversationId === chatId && message.authorId === agentId && message.state === 'final' && pattern.test(message.body);
@@ -38,7 +38,7 @@ test('a chat still answers after a runtime restart between two turns, on the sam
   const chat = await live.client.call('chats.create', { title: 'Across restarts', agentIds: [manager.id] });
   await live.client.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`] });
   await live.client.call('messages.send', { conversationId: chat.id, body: 'First question before the restart' });
-  await live.client.waitFor('message.updated', finalFrom(chat.id, manager.id, /First question before the restart/), 90_000);
+  await live.client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /First question before the restart/), 90_000);
   // B-076: the run is booked a few ms after its final line; a stop in between leaves it "interrupted", and its retry after
   // the restart would take the next message along. The test is about resuming the session, so the run ends first.
   for (let i = 0; i < 100; i++) {
@@ -49,7 +49,7 @@ test('a chat still answers after a runtime restart between two turns, on the sam
   await live.stop();
   live = undefined;
 
-  const before = binding(dataDir, manager.id, chat.id);
+  const before = binding(dataDir, manager.id, 'main'); // 13.11.2026: one context per agent – every turn runs on its 'main' session
   assert.ok(before, 'the session binding is stored in the database');
   assert.ok(!String(before.session_ref).startsWith('seed:'), 'no reference to state of the old process');
   assert.ok(Number(before.cursor_seq) > 0);
@@ -57,12 +57,12 @@ test('a chat still answers after a runtime restart between two turns, on the sam
   live = await startRuntime({ dataDir, keepData: true });
   await live.client.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`] });
   await live.client.call('messages.send', { conversationId: chat.id, body: 'Second question after the restart' });
-  const reply = await live.client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Second question after the restart/), 90_000);
+  const reply = await live.client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Second question after the restart/), 90_000);
   assert.ok(!reply.body.includes('First question before the restart'), 'the resumed session gets only the new message');
   await live.stop();
   live = undefined;
 
-  const after = binding(dataDir, manager.id, chat.id);
+  const after = binding(dataDir, manager.id, 'main');
   assert.equal(after.session_ref, before.session_ref, 'the same native session continued');
   assert.ok(Number(after.cursor_seq) > Number(before.cursor_seq), 'its cursor followed the chat');
 });

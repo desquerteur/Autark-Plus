@@ -1,5 +1,6 @@
 // B-053 track D: the fixed tool list of a mail connection – what listTools() returns – with honest annotations
 // (reading is readOnly; send/reply reach people; delete is destructive). Schemas are small and strict.
+// B-080: search and send say "email" (tools.find ranks them for it) and that Sent is the record of every mail sent from here.
 // Owns: names, schemas, annotations. Never: behaviour (actions.ts).
 
 import type { McpToolDef } from '../types.ts';
@@ -16,7 +17,7 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
 export const MAIL_TOOLS: McpToolDef[] = [
   {
     name: 'search', title: 'Search mail',
-    description: 'Finds messages in a folder (default INBOX), newest first. All filters are optional and combine; without any, the newest messages. Returns ids for read, reply, move, mark and delete.',
+    description: 'Finds emails in a folder (default INBOX), newest first. "sent" holds every mail sent from this mailbox by any of us – to: <address or domain> there shows who already got mail from us. Bounces show as automatic (delivery report); folders names the folders server rules sort mail into. All filters are optional and combine; without any, the newest messages. Returns ids for read, reply, move, mark and delete.',
     inputSchema: object({
       query: str('Words anywhere in the message (Gmail search syntax works on Gmail).'),
       from: str('Sender address or name contains.'), to: str('Recipient contains.'), subject: str('Subject contains.'),
@@ -48,7 +49,7 @@ export const MAIL_TOOLS: McpToolDef[] = [
   },
   {
     name: 'send', title: 'Send a message',
-    description: 'Sends a new message from this mailbox and keeps a copy in Sent. replyTo (a message id) threads it as a reply.',
+    description: 'Sends an email from this mailbox over its SMTP server and keeps the copy in Sent, the record of everything sent from here. replyTo (a message id) threads it as a reply.',
     inputSchema: object({ to: addresses('Recipient address(es).'), cc: addresses('Copy to.'), bcc: addresses('Blind copy to.'), subject: str('Subject.'), text: str('Plain text body.'), replyTo: ID }, ['to', 'subject', 'text']),
     annotations: { title: 'Send a message', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },

@@ -1,13 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Owns: launcher, the pair link (App Links: https://metajarvis.teydralab.com/autark/pair/#<Remote ID> opens the app), foreground
-     media permissions, the phone-use AccessibilityService (reads nothing until the PC asks; phoneuse/UseService) with its one
-     enable notification, and plain http only to the app's own 127.0.0.1 entrance. Never: embedded credentials. -->
+<!-- Owns: launcher, the home-screen shortcuts (Chats, Work, My day: res/xml/shortcuts.xml), "Share to Autark" (SEND and
+     SEND_MULTIPLE of text, images and any file: ShareIn), the pair link (App Links: https://openautark.com/pair/#<Remote ID>
+     opens the app), foreground media permissions, network-change wake-ups (ACCESS_NETWORK_STATE), light haptics (VIBRATE),
+     the small foreground service while paired (KeepAlive, type remoteMessaging), the camera app's files for a capture the
+     page asked for (CaptureFiles, not exported, a one-time grant per file), the phone's text-to-speech engines
+     (PhoneSpeech), the phone-use AccessibilityService (reads
+     nothing until the PC asks; phoneuse/UseService – it also carries the person's to-do button, phoneuse/TodoButton, with
+     its dictation through the phone's speech recognition) with its one enable notification (which opens the in-app disclosure
+     UseDisclosure first) and the AI's question as a notification with ✓ / ✕ (phoneuse/AskNotice, not exported), an agent's
+     ring as an incoming call notice with Accept / Decline (CallNotice, not exported), the crash report that needs no PC (CrashReport: the last uncaught exception's trace, shown on
+     the next start), and plain http only to the app's own 127.0.0.1 entrance. A theme switch (uiMode) recreates the
+     activity on purpose, so the night theme applies. Never: embedded credentials, SMS or notification-listener access. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -17,13 +30,21 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Android 11+ shows TextToSpeech only the engines named here (PhoneSpeech, the call's phone voice). -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <!-- Android 11+ binds SpeechRecognizer only to the recognition services named here (the to-do button's dictation, phoneuse/TodoButton). -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
-    <application android:label="@string/app_label" android:icon="@mipmap/autark_launcher"
+    <application android:name=".CrashReport" android:label="@string/app_label" android:icon="@mipmap/autark_launcher"
         android:theme="@style/AppTheme" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|keyboard|navigation"
             android:windowSoftInputMode="adjustResize" android:enableOnBackInvokedCallback="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -33,9 +54,25 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="metajarvis.teydralab.com" android:pathPrefix="/autark/pair" />
+                <data android:scheme="https" android:host="openautark.com" android:pathPrefix="/pair" />
             </intent-filter>
+            <intent-filter android:label="@string/share_label">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+        <service android:name=".KeepAlive" android:exported="false" android:foregroundServiceType="remoteMessaging" />
+        <provider android:name=".CaptureFiles" android:authorities="${applicationId}.capture"
+            android:exported="false" android:grantUriPermissions="true" />
+        <activity android:name=".phoneuse.UseDisclosure" android:exported="false" android:excludeFromRecents="true"
+            android:launchMode="singleTop" />
+        <receiver android:name=".phoneuse.AskNotice" android:exported="false" />
+        <receiver android:name=".CallNotice" android:exported="false" />
         <service android:name=".phoneuse.UseService" android:exported="true"
             android:label="@string/use_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

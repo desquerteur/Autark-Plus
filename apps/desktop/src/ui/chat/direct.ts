@@ -1,5 +1,5 @@
-// The default 1:1 with a member (B-050 K1/K9): "Message" on an agent or a person, and the new-chat dialog
-// with one member and no topic, open it – chats.direct finds it, adopts an older unnamed chat of exactly
+// The default 1:1 with a member (B-050 K1/K9): "Message" on an agent or a person opens it (the new-chat
+// dialog always creates a new chat since 12.11.2026 – new-chat.ts) – chats.direct finds it, adopts an older unnamed chat of exactly
 // the two or creates it on first open (the owner's with an agent exists from the hire on – B-050 K1, Nachtrag
 // Runde 4 –, so for an agent it is found). Wherever the session lists
 // chats.direct this is the one path – the owner, a phone with 'chat', a person's device (its person

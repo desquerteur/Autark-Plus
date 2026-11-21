@@ -6,6 +6,8 @@
 // enabled – preference.ts workPlanOf) an agent turn's model on that provider's plan login gets WORK_PLAN_BONUS while
 // the plan has at least WORK_PLAN_MIN_HEADROOM % left – a preference, never a pin.
 // "Paid" is the booking rule of models/pricing.ts (chargeOf), so routing and spend agree.
+// B-083: an API key holding a plan's monthly API credits (Account.credits) is no spill-over – it costs like a plan whose
+// headroom is unknown (no balance read exists), so its credits are spent before they expire; used up, it cools a day.
 // Owns: the weights. Never: I/O – the router passes models and accounts in.
 
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
@@ -19,7 +21,7 @@ export type Tier = ModelInfo['tier'];
 
 /** Strength at or below this means "never for this category" (priors use −1 for that). */
 export const NEVER = -0.95;
-/** Return rule: the previous model is kept unless its strength for the category is below this. */
+/** Where my context starts anew, the model I am on stays unless its strength for the turn's work is below this (router.ts Auto). */
 export const WEAK = -0.3;
 
 const TIER_FIT: Record<CostMode, Record<Tier, number>> = {
@@ -32,6 +34,8 @@ const PREFER_BONUS = 0.25;
 const HEADROOM_WEIGHT = 0.2;
 const TIER_COST: Record<Tier, number> = { local: 0, small: 0.05, strong: 0.3, frontier: 0.6 };
 const PLAN_PROVIDERS: ReadonlySet<string> = new Set(['codex', 'claude']);
+/** The cost factor of a plan whose remaining quota is unknown – also an API key holding plan credits (B-083). */
+export const UNKNOWN_HEADROOM = 0.3;
 /** B-044: bonus of a model on the preferred work plan (the Work use, preference.ts workPlanOf) while it has quota. */
 export const WORK_PLAN_BONUS = 0.3;
 /** Below this share left (percent) the work plan is no longer preferred. */
@@ -64,7 +68,7 @@ export function unmetNeed(model: ModelInfo, needs: { vision?: boolean; computerU
 /**
  * Pay-per-use connection: an API key (typed, or from the environment – auth 'env'), or a Codex/Claude
  * Code login with an API key (plan 'api') – the same accounts whose turns are booked as spend
- * (models/pricing.ts). Plans and local runtimes are not.
+ * (models/pricing.ts). Plans, keys holding plan credits (B-083) and local runtimes are not.
  */
 export function isPaid(account: Account): boolean {
   return chargeOf(account) === 'paid';
@@ -72,22 +76,29 @@ export function isPaid(account: Account): boolean {
 
 /**
  * Share of the list price that a turn on this account really costs at the margin:
- * local 0, plans with quota left ~0.15 (less headroom for `model` → closer to full), paid 1.
+ * local 0, plans with quota left ~0.15 (less headroom for `model` → closer to full), unknown headroom and
+ * plan credits (B-083) UNKNOWN_HEADROOM, paid 1.
  */
 export function costFactor(account: Account | undefined, now: number, model?: string): number {
   if (!account) return 1;
   if (isPaid(account)) return 1;
   if (account.auth === 'local' || LOCAL_PROVIDERS.has(account.provider)) return 0;
+  if (account.credits) return UNKNOWN_HEADROOM;
   if (!PLAN_PROVIDERS.has(account.provider) || account.auth !== 'cli') return 0.5;
   const headroom = remaining(account, now, model);
-  if (headroom === undefined) return 0.3;
+  if (headroom === undefined) return UNKNOWN_HEADROOM;
   if (headroom < 10) return 1;
   return headroom < 30 ? 0.5 : 0.15;
 }
 
+/** A model's list price on the 0..1 scale: its relCost, else a guess from its tier (not discounted by a plan). */
+export function listPrice(model: Pick<ModelInfo, 'relCost' | 'tier'>): number {
+  return model.relCost ?? TIER_COST[model.tier] ?? TIER_COST.strong;
+}
+
 /** What a turn on this model and account really costs, relative (relCost × costFactor) – the 'cheaper' need compares it. */
 export function marginalCost(model: ModelInfo, account: Account | undefined, now: number): number {
-  return (model.relCost ?? TIER_COST[model.tier]) * costFactor(account, now, model.model);
+  return listPrice(model) * costFactor(account, now, model.model);
 }
 
 function headroomBonus(account: Account | undefined, now: number, model?: string): number {
@@ -121,7 +132,7 @@ export interface ScoreInput {
 
 export function scoreModel(input: ScoreInput): number {
   const { model, account, costMode, now } = input;
-  const relCost = model.relCost ?? TIER_COST[model.tier];
+  const relCost = listPrice(model);
   return strengthOf(model, input.category)
     + TIER_FIT[costMode][model.tier]
     - COST_WEIGHT[costMode] * relCost * costFactor(account, now, model.model)

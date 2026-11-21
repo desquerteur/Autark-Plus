@@ -3,7 +3,8 @@
 // and anything a frame of another site asks for are refused. Downloads go to <workspace>/downloads/personal
 // (main/workspace-downloads.ts) without a dialog – also those of pages an agent opened; the tab shows its last one
 // and 'reveal' shows it in its folder.
-// Owns: the session's permission and download handlers and the last download per tab. Never: imports electron's
+// 17.11.2026: the session speaks as plain Chrome (chromeUserAgent) – hCaptcha and others stall on Electron's tokens.
+// Owns: the session's user agent, permission and download handlers and the last download per tab. Never: imports electron's
 // values (the browser hands in `reveal`), reads page content or opens a downloaded file.
 
 import { existsSync, mkdirSync } from 'node:fs';
@@ -24,6 +25,15 @@ export function siteOf(url: string | undefined): string | undefined {
     const parsed = new URL(url);
     return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : undefined;
   } catch { return undefined; }
+}
+
+/**
+ * fb_1m7mtty0aszywt5y0 (17.11.2026, Discord in the person's browser: hCaptcha's spinner never ended, the same page in a
+ * plain Chrome showed the challenge): the session's user agent without Electron's own tokens – "Electron/x" and the
+ * app's "name/version" – so sites see the Chrome it is. Anything else stays as Chromium wrote it.
+ */
+export function chromeUserAgent(agent: string): string {
+  return agent.replace(/\s(?:Electron|autark|workforce|proactive-agent-workforce)\/[^\s]+/gi, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 /** The fixed rule: an allowed permission, asked by the site of the page itself. */
@@ -49,6 +59,7 @@ export class WorkspaceSession {
   constructor(session: Session, tabs: SessionTabs, options: { downloadsDir?: string; reveal(file: string): void }) {
     this.tabs = tabs;
     this.show = options.reveal;
+    if (typeof session.getUserAgent === 'function' && typeof session.setUserAgent === 'function') session.setUserAgent(chromeUserAgent(session.getUserAgent()));
     session.setPermissionRequestHandler((contents, permission, callback, details) => callback(siteMay(permission, details.requestingUrl, contents.getURL())));
     session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => siteMay(permission, requestingOrigin, details.embeddingOrigin ?? contents?.getURL()));
     session.setDevicePermissionHandler(() => false);

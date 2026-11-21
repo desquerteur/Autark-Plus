@@ -2,11 +2,11 @@
 //  - chat.set_parent: puts a chat I am in under another chat I am in (one level), or back on top (without parentId) –
 //    the way I keep a work group's special chats under its main chat.
 //  - chat.thread: the thread on one message (found or opened with that chat's members) – a small side space for one
-//    piece of work, so the main chat stays readable. Answers its chat id; I write there with chat.send {chatId}.
+//    piece of work, so the main chat stays readable. Answers its chat id; I write there with a <chat to="its id"> block.
 // Owns: these tools and their wording. Never: changes members (runtime/chat/members-change.ts).
 
 import type { ToolDef } from '../types.ts';
-import { failure, json } from '../types.ts';
+import { CHAT_ID_PROPERTY, failure, json, SEQ_PROPERTY } from '../types.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { openThread, setParent } from '../../chat/children.ts';
 import { defineTool, internal, resolveChat, viewTitle } from './util.ts';
@@ -15,10 +15,10 @@ const refused = (error: unknown) => (error instanceof WorkforceError ? failure(`
 
 const setParentTool = defineTool<{ chatId?: string; parentId?: string }>({
   name: 'chat.set_parent',
-  description: 'I put a chat I am in under another chat I am in (parentId), so the special chats of one topic or work group sit under its main chat in the list; without parentId it goes back on top. One level: a sub-chat holds no sub-chats.',
+  description: 'Puts a chat I am in under another of my chats, one level deep, or back on top. So the special chats of one topic sit under its main chat.',
   inputSchema: {
     type: 'object',
-    properties: { chatId: { type: 'string' }, parentId: { type: 'string', minLength: 1, maxLength: 64 } },
+    properties: { chatId: CHAT_ID_PROPERTY, parentId: { type: 'string', minLength: 1, maxLength: 64, description: 'Leave out to move it back on top.' } },
     additionalProperties: false,
   },
   category: 'think',
@@ -36,11 +36,11 @@ const setParentTool = defineTool<{ chatId?: string; parentId?: string }>({
 
 const threadTool = defineTool<{ chatId?: string; seq?: number; messageId?: string; title?: string }>({
   name: 'chat.thread',
-  description: 'The thread on one message (#seq in a chat I am in, or its messageId): found, or opened now with the members of that chat. I use it for one piece of work that needs a few lines of its own, so the main chat stays readable; I write there with chat.send {chatId}.',
+  description: 'Finds or opens the thread on one message and returns its chat id. It holds a piece of work that needs its own lines, so the main chat stays readable; I write there with <chat to="its id">.',
   inputSchema: {
     type: 'object',
     properties: {
-      chatId: { type: 'string' }, seq: { type: 'integer', minimum: 1 }, messageId: { type: 'string', minLength: 1, maxLength: 64 }, title: { type: 'string', maxLength: 120 },
+      chatId: CHAT_ID_PROPERTY, seq: SEQ_PROPERTY, messageId: { type: 'string', minLength: 1, maxLength: 64 }, title: { type: 'string', maxLength: 120 },
     },
     additionalProperties: false,
   },

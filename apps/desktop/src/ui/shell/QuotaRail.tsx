@@ -12,9 +12,9 @@
 // the name): the ring goes round the plan's picture (lib/account-avatar.tsx: the provider's logo, else the account's
 // avatar, else its initials – never empty), the weekly % has its own line, and the wait line shows the weekly reset
 // ("2d 5h") when the plan has no 5-hour reset to count down. The stack is the tour's `accounts` target.
-// Active rotation plan first, then by weekly share; max 4 + "+n". A stale reading dims the badge.
+// The plan in use first, then by weekly share; max 4 + "+n". A stale reading dims the badge.
 // Details on hover/focus/click: the picture, the plan's name and kind ("Max subscription"), every limit window with bar, share
-// left and "resets in 42 min", the next rotation plan and
+// left and "resets in 42 min", the next plan and
 // – B-044 – a Codex plan's banked resets with the next one's expiry (labels and shares from the shared helper, lib/limits.ts).
 // Opening the details asks the runtime for fresh readings (lib/usage-refresh.ts: usage.list refresh – with
 // the Codex reset details; the runtime's account monitor shares its 15 s Codex / 60 s Claude cadence;

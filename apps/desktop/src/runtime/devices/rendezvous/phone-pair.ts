@@ -5,17 +5,24 @@
 // On Accept the phone is stored as a phone with its key (pwa/service.ts pairPhone) – the meeting server then pins it
 // (rendezvous/service.ts), the roster carries it to my other PCs (devices/sync/roster.ts) – and its device token rides
 // in the accepted answer, which travels sealed. Access exists exactly while that device row exists; Remove ends it.
+// F1: Accept names whose phone it is (remote.decide personId; Me = none): an employee's phone gets that person's token,
+// my own phone the device token as before. F13: or a new person (newPerson), made when the phone collects its answer.
+// F17: the phones' requests are this PC's own, so they show on my other PCs too (remote/mirror.ts) and are decided here.
 // Owns: routing the phone's request steps, merging them into the PCs' request list, the phone's linked notice.
-// Never: links a phone without the person's Accept, or hands a phone a PC link.
+// Never: links a phone without the person's Accept, gives an employee's phone my access, or hands a phone a PC link.
 
-import type { RemoteIncoming, RemoteState } from '../../../shared/model/remote.ts';
+import type { RemoteIncoming } from '../../../shared/model/remote.ts';
+import type { Decision } from '../../remote/mirror.ts';
 import { TargetRequests, type Timers } from '../../remote/requests.ts';
 import { RemoteService, type RemoteDeps } from '../../remote/service.ts';
 import type { Reply } from '../pair-proof.ts';
 
 export interface PhonePairDeps {
-  /** Stores the accepted phone with its key and issues its device token (pwa/service.ts pairPhone). */
-  pair(input: { id: string; name: string; publicKey: string }): { token: string; deviceId: string };
+  /**
+   * Stores the accepted phone with its key and issues its token (pwa/service.ts pairPhone): mine, or with `personId` that
+   * employee's person token (`person` = their name).
+   */
+  pair(input: { id: string; name: string; publicKey: string; personId?: string }): { token: string; deviceId: string; person?: string };
 }
 
 const realTimers: Timers = {
@@ -23,8 +30,12 @@ const realTimers: Timers = {
   clear: (handle) => { if (handle) clearTimeout(handle as ReturnType<typeof setTimeout>); },
 };
 
-/** The notice once a phone is linked: which phone, what it reaches, where to remove it. */
-export function phoneLinkedNote(name: string): { title: string; body: string } {
+/** The notice once a phone is linked: which phone, whose, what it reaches, where to remove it. */
+export function phoneLinkedNote(name: string, person?: string): { title: string; body: string } {
+  if (person) return {
+    title: `${name} is now linked as ${person}'s phone`,
+    body: `The phone ${name} belongs to ${person}: it opens this company with ${person}'s access, not yours. Remove it in Settings › Devices.`,
+  };
   return {
     title: `${name} is now linked`,
     body: `The phone ${name} is linked as your phone: it reaches this company's chats, tasks, settings and secrets on each of your PCs. Remove it in Settings › Devices.`,
@@ -39,35 +50,37 @@ export function isPhoneStep(body: Record<string, unknown>, phones: Pick<TargetRe
 /** RemoteService with the phones' requests in the same list and the same decide. */
 export class RemoteWithPhones extends RemoteService {
   readonly phones: TargetRequests;
-  private readonly bus: RemoteDeps['bus'];
 
   constructor(deps: RemoteDeps & PhonePairDeps) {
     super(deps);
-    this.bus = deps.bus;
     this.phones = new TargetRequests({
       now: () => deps.clock.now(), timers: deps.timers ?? realTimers, log: deps.log, signer: deps.identity, roles: ['phone'],
       findable: () => { try { return deps.findable(); } catch { return false; } },
       self: () => deps.mesh.selfInfo(),
-      link: (info) => {
-        const issued = deps.pair({ id: info.id, name: info.name, publicKey: info.pub });
-        deps.linked?.(phoneLinkedNote(info.name));
+      link: (info, picked, newPerson) => {
+        const personId = this.personFor(picked, newPerson);
+        const issued = deps.pair({ id: info.id, name: info.name, publicKey: info.pub, ...(personId ? { personId } : {}) });
+        deps.linked?.(phoneLinkedNote(info.name, issued.person));
+        if (personId && issued.person) {
+          try { deps.admitted?.(personId); } catch (error) { deps.log.warn('employee welcome not sent', { personId, error: String((error as Error)?.message ?? error) }); }
+        }
         return { token: issued.token, deviceId: issued.deviceId };
       },
       shown: (view) => deps.notify?.(view),
-      changed: () => this.announce(),
+      changed: () => this.changed(),
     });
   }
 
-  override state(): RemoteState {
-    const state = super.state();
-    // `this.phones` is set after super(): the base constructor never asks for the state.
-    const phones: RemoteIncoming[] = this.phones ? this.phones.incoming() : [];
-    return phones.length ? { ...state, incoming: [...state.incoming, ...phones] } : state;
+  // `this.phones` is set after super(): the base constructor never asks for the list.
+  protected override ownIncoming(): RemoteIncoming[] {
+    return [...super.ownIncoming(), ...(this.phones ? this.phones.incoming() : [])];
   }
 
-  override decide(id: string, accept: boolean, personId?: string): void {
-    if (this.phones.holds(id)) this.phones.decide(id, accept);
-    else super.decide(id, accept, personId);
+  protected override holdsHere(id: string): boolean { return super.holdsHere(id) || Boolean(this.phones?.holds(id)); }
+
+  protected override decideHere(decision: Decision): void {
+    if (!this.phones.holds(decision.id)) return super.decideHere(decision);
+    this.phones.decide(decision.id, decision.accept, decision.personId, decision.newPerson);
   }
 
   override handle(body: Record<string, unknown>, remote: { address?: string }): Promise<Reply> {
@@ -77,9 +90,5 @@ export class RemoteWithPhones extends RemoteService {
   override refresh(): void {
     super.refresh();
     try { if (!(this.wellKnown().findable)) this.phones?.closeAll(); } catch { /* not ready */ }
-  }
-
-  private announce(): void {
-    try { this.bus.emit('remote.updated', this.state()); } catch { /* the list still shows on the next read */ }
   }
 }

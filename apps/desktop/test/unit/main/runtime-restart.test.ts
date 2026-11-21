@@ -9,7 +9,7 @@ import type { RuntimeStatus } from '../../../src/shared/api/desktop.ts';
 import type { AppInfo, HostRequest } from '../../../src/shared/api/host-bridge.ts';
 import { HOST_BRIDGE_PROTOCOL } from '../../../src/shared/api/host-bridge.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
-import { RESTORE_BOOT_MS, RuntimeHost } from '../../../src/main/runtime-host.ts';
+import { BOOT_TIMEOUT_MS, RESTORE_BOOT_MS, RuntimeHost } from '../../../src/main/runtime-host.ts';
 import type { RuntimeChild } from '../../../src/main/runtime-host.ts';
 import { HostServices, type HostServicesDeps } from '../../../src/main/host-services.ts';
 import { HostBridgeClient, createElectronHost } from '../../../src/runtime/host-electron.ts';
@@ -116,7 +116,7 @@ test('runtime.booting: a start that applies a restore gets the longer wait for r
   const h = harness();
   h.host.start();
   const child = h.children[0];
-  assert.deepEqual([...h.timers.values()].map(timer => timer.ms), [30_000]);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.ms), [BOOT_TIMEOUT_MS]);
   h.ask(child, 3, 'runtime.booting', { reason: 'restore' });
   assert.deepEqual(child.posted.at(-1), { id: 3, type: 'host-result', ok: true, result: { ok: true } });
   assert.deepEqual([...h.timers.values()].map(timer => timer.ms), [RESTORE_BOOT_MS], 'the boot timer was re-armed');

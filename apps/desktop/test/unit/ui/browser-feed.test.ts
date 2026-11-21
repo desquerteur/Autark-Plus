@@ -99,7 +99,7 @@ test('a reconnect subscribes the shown browsers again; a refused subscription sh
 });
 
 /** X02 pull mode: pulls wait until the test answers them; parts are kept per frame `at`. */
-function pulling() {
+function pulling(options: { keep?: number } = {}) {
   const calls: string[] = [];
   const waiting: Array<{ agentId: string; resolve: (reply: BrowserPull) => void; reject: (error: unknown) => void }> = [];
   const parts = new Map<number, string[]>();
@@ -125,6 +125,7 @@ function pulling() {
       if (!list) throw Object.assign(new Error('That picture is gone. Look again.'), { code: 'not_found' });
       return { data: list[index] };
     },
+    keep: options.keep,
   });
   const state = (at: number): BrowserViewState => ({ agentId: 'ag_1', open: true, tabs: [], live: true, at });
   const frame = (at: number, data: string): BrowserFrame => ({ agentId: 'ag_1', tab: 't1', data, width: 1280, height: 720, at });
@@ -205,6 +206,55 @@ test('pull mode: a reconnect starts a new loop and the old one stops; an error s
   p.reconnect();
   await settle();
   assert.equal(p.waiting.length, 1, 'pulls again after the next reconnect');
+});
+
+test('B-081 keep: the newest browsers without a view keep their last picture for a view coming back; the oldest go, drop forgets', async () => {
+  const p = pulling({ keep: 2 });
+  const show = async (key: string, data?: string) => {
+    const off = p.feed.subscribe(key, () => undefined);
+    await settle();
+    await p.answer({ state: p.state(1), ...(data ? { frame: { ...p.frame(2, data), agentId: key } } : {}) });
+    off();
+    await p.answer({ state: p.state(1) }); // the loop's last pull: no view, it ends
+  };
+  await show('ag_1', 'ONE');
+  const seen: BrowserFeedView[] = [];
+  const off = p.feed.subscribe('ag_1', (view) => seen.push(view));
+  assert.equal(seen[0]?.frame?.data, 'ONE', 'its last picture at once, before the new pull answers');
+  assert.equal(p.feed.last('ag_1')?.frame?.data, 'ONE', 'a view can draw it in its first paint');
+  off();
+  await p.answer({ state: p.state(1) });
+  await show('ag_2', 'TWO');
+  await show('ag_3');
+  assert.equal(p.feed.last('ag_3'), null, 'nothing to show: not kept');
+  await show('ag_4', 'FOUR');
+  assert.equal(p.feed.last('ag_1'), null, 'beyond two kept, the oldest went');
+  assert.deepEqual(['ag_2', 'ag_4'].map((key) => p.feed.last(key)?.frame?.data), ['TWO', 'FOUR']);
+  p.feed.drop('ag_2');
+  assert.equal(p.feed.last('ag_2'), null, 'a closed tab\'s picture goes');
+  assert.deepEqual(p.feed.active(), []);
+});
+
+test('B-081 refresh: the next pull starts now, past what the view has, at most one per running pull; the old reply is ignored', async () => {
+  const p = pulling();
+  const seen: BrowserFeedView[] = [];
+  p.feed.subscribe('ag_1', (view) => seen.push(view));
+  await settle();
+  await p.answer({ state: p.state(1), frame: p.frame(2, 'A') });
+  assert.equal(p.waiting.length, 1);
+  p.feed.refresh('ag_1');
+  p.feed.refresh('ag_1');
+  assert.equal(p.waiting.length, 2, 'one more pull, not two');
+  assert.deepEqual(p.calls.filter((call) => call.startsWith('pull')).slice(-2), ['pull ag_1 {"state":1,"frame":2}', 'pull ag_1 {"state":1,"frame":2}']);
+  await p.answer({ state: p.state(7), frame: p.frame(8, 'OLD') }); // the pull from before the refresh
+  assert.equal(seen.at(-1)?.frame?.data, 'A', 'its late answer is not shown');
+  assert.equal(p.waiting.length, 1, 'and it pulls no more');
+  await p.answer({ state: p.state(3), frame: p.frame(4, 'NEW') });
+  assert.equal(seen.at(-1)?.frame?.data, 'NEW');
+  p.feed.refresh('ag_1');
+  assert.equal(p.waiting.length, 2, 'answered: the next refresh may pull again');
+  assert.equal(p.most(), 2);
+  p.feed.refresh('ag_none');
 });
 
 test("the agents' open browsers and the session list after browser.sessions", () => {

@@ -62,7 +62,7 @@ test('Settings › Devices: Remote ID, nearby PCs, a request with the same code,
   const row = (label) => devices.locator('.set-row', { has: page.locator('.set-row-label', { hasText: label }) });
 
   await page.evaluate(() => { location.hash = '#/settings/remote'; }); // the old link opens Devices
-  const devices = page.locator('#settings-devices');
+  const devices = page.locator('#settings-add-device');
   await devices.waitFor({ timeout: 15_000 });
   const id = devices.locator('.remote-id');
   await id.filter({ hasText: /\d/ }).waitFor({ timeout: 15_000 });
@@ -96,20 +96,20 @@ test('Settings › Devices: Remote ID, nearby PCs, a request with the same code,
   const typo = remoteId.slice(0, 8) + String((Number(remoteId[8]) + 1) % 10);
   await connectRow.getByRole('textbox', { name: 'Remote ID or address of the other PC' }).fill(typo);
   const before = (await connectRow.locator('.remote-slot-title').textContent())?.trim();
-  await expectStable(page, ['#settings-devices .remote-connect-row', '#settings-devices .remote-phone-row'], async () => {
+  await expectStable(page, ['#settings-add-device .remote-connect-row', '#settings-add-device .remote-phone-row'], async () => {
     await connectRow.getByRole('button', { name: 'Connect' }).click();
     await page.waitForFunction((text) => {
-      const line = document.querySelector('#settings-devices .remote-connect-row .remote-slot-title');
+      const line = document.querySelector('#settings-add-device .remote-connect-row .remote-slot-title');
       return line && line.textContent.trim() !== text && line.classList.contains('error');
     }, before, { timeout: 30_000 });
   });
   await shot('devices-02-unknown-id');
   // A valid Remote ID nobody has: what was searched, the meeting server that is off, and what to do.
   await connectRow.getByRole('textbox', { name: 'Remote ID or address of the other PC' }).fill(remoteIdOf('9'.repeat(64)));
-  await expectStable(page, ['#settings-devices .remote-connect-row', '#settings-devices .remote-phone-row'], async () => {
+  await expectStable(page, ['#settings-add-device .remote-connect-row', '#settings-add-device .remote-phone-row'], async () => {
     await connectRow.getByRole('button', { name: 'Connect' }).click();
     await page.waitForFunction(() => {
-      const line = document.querySelector('#settings-devices .remote-connect-row .remote-slot-title');
+      const line = document.querySelector('#settings-add-device .remote-connect-row .remote-slot-title');
       return Boolean(line?.classList.contains('error') && /^Meeting server off \(devices\.relay\) – no PC with this Remote ID on this network\./.test(line.getAttribute('title') ?? ''));
     }, undefined, { timeout: 30_000 });
   });

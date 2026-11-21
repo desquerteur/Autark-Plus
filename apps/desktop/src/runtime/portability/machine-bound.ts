@@ -2,7 +2,9 @@
 // identity, the web-push VAPID key), the `self` device row
 // and the push subscriptions made for that VAPID key.
 // Owns: carrying the running PC's own rows into a freshly restored database (so a restore on the same PC keeps
-// working secrets and pairings and a restore on a new PC keeps the new PC's identity).
+// working secrets and pairings and a restore on a new PC keeps the new PC's identity), and (16.11.2026) dropping them
+// where nothing was live before – a company imported into a new folder (portability/company.ts) makes its own at its
+// start, as a new PC does: each folder has a key of its own, so the backup's identity could not be read there.
 // Never: decrypts anything or touches account homes.
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -54,5 +56,28 @@ export function carryOver(restored: DatabaseSync, previousFile: string): void {
     }
   } finally {
     restored.exec('DETACH DATABASE previous');
+  }
+}
+
+/**
+ * A restore into a folder with no live database (an imported company): drops the backup's PC-bound rows – the bound kv
+ * rows, the `self` device row (references to it fall back to "this PC", NULL) and the push subscriptions made for its
+ * VAPID key – so this folder's start makes its own identity and keys.
+ */
+export function forgetBound(restored: DatabaseSync): void {
+  const kv = kvWhere('');
+  restored.exec('BEGIN IMMEDIATE');
+  try {
+    restored.prepare(`DELETE FROM kv WHERE ${kv.sql}`).run(...kv.params);
+    for (const { id } of restored.prepare('SELECT id FROM devices WHERE self = 1').all() as Array<{ id: string }>) {
+      restored.prepare('UPDATE agents SET device_id = NULL WHERE device_id = ?').run(id);
+      restored.prepare('UPDATE accounts SET device_id = NULL WHERE device_id = ?').run(id);
+    }
+    restored.exec('DELETE FROM devices WHERE self = 1');
+    restored.exec('DELETE FROM push_subscriptions');
+    restored.exec('COMMIT');
+  } catch (error) {
+    restored.exec('ROLLBACK');
+    throw error;
   }
 }

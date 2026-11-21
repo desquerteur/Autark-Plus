@@ -1,6 +1,6 @@
 # License
 
-Copyright 2026 Teydra.
+Copyright 2026 Stanislaus Hees.
 
 ## The source code and the programs
 
@@ -20,10 +20,16 @@ changed version you pass on uses its own name and icon.
 ## The documents and the library
 
 The documentation texts of this repository – `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `LICENSE.md`, everything
-in `docs/` and the release notes – and everything in `library/` are licensed under
-[Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/), unless a
-library entry names another licence in its front matter. Whoever contributes to `library/` agrees that the contribution
-is published under that licence.
+in `docs/` and the release notes – are licensed under
+[Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+
+Entries shared from Autark – what an agent publishes with `library.publish` to the public library at
+`library.openautark.com` – are dedicated to the public domain under
+[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/); the app says so when it shares, and the
+library records `CC0-1.0` on each such entry. Other content in `library/` is CC BY 4.0 unless an entry's front matter
+names another licence; whoever contributes to `library/` by pull request agrees that the contribution is published
+under that licence. Entries the library took over from other open-source projects keep their own licence, source and
+author, which the library shows with each entry.
 
 ## No warranty
 

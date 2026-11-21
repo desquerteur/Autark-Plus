@@ -1,6 +1,7 @@
 // Agent templates from resources/agents/*.md: a small front matter block (name, role,
-// description, mode, skills, spaceKind, effort, reportsTo) followed by the instructions as body.
+// description, mode, skills, spaceKind, reportsTo) followed by the instructions as body.
 // `reportsTo: human` keeps a hire out of the hiring manager's branch (the secretary, O3).
+// B-083 (owner 08.11.2026): a template carries no effort – the agent picks model and effort per step itself.
 //
 //   ---
 //   name: Video editor
@@ -9,7 +10,6 @@
 //   mode: video
 //   skills: [video-editing, captions]
 //   spaceKind: company
-//   effort: high
 //   ---
 //   Instructions …
 //
@@ -18,10 +18,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentTemplate, Space } from '../../shared/model/org.ts';
-import type { Effort } from '../../shared/model/providers.ts';
 
 const SPACE_KINDS: ReadonlyArray<Space['kind']> = ['company', 'brand', 'private', 'custom'];
-const EFFORTS: readonly Effort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 const KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 function unquote(value: string): string {
@@ -57,7 +55,6 @@ export function parseTemplate(key: string, source: string): AgentTemplate | unde
   const name = unquote(fields.name ?? '');
   if (!name) return undefined;
   const spaceKind = unquote(fields.spaceKind ?? '') as Space['kind'];
-  const effort = unquote(fields.effort ?? '') as Effort;
   const template: AgentTemplate = {
     key,
     name,
@@ -68,7 +65,6 @@ export function parseTemplate(key: string, source: string): AgentTemplate | unde
     instructions: match[2].trim(),
   };
   if (SPACE_KINDS.includes(spaceKind)) template.spaceKind = spaceKind;
-  if (EFFORTS.includes(effort)) template.effort = effort;
   if (unquote(fields.reportsTo ?? '') === 'human') template.reportsTo = 'human';
   return template;
 }

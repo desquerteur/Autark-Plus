@@ -3,7 +3,9 @@
 // calendar by link (ICS)"; "Connect Google Calendar" – disabled with one honest line while no client ID is set – and "Use
 // your own Google app" (a row whose Set up opens a dialog: the client ID into settings.calendar, the client secret into the
 // vault; settings keep its id only). Reloaded by 'calendar.sources' and settings events and on reconnect (no polling).
-// Every control is gated with can(): a phone sees the list only.
+// Every control is gated with can(): 16.11.2026 the owner's phone has them all (the runtime lets its secure session do
+// them); Google's consent returns to the PC's own address, so from the phone it opens in the PC's pane, which the phone's
+// sheet shows (side.open, workspace/phone-tabs.ts).
 // Owns: these rows and the Google app dialog. Never: keeps a calendar link or a secret beyond the field (or the open
 // dialog) it is typed into, or words statuses itself (calendar-model.ts).
 
@@ -12,18 +14,24 @@ import type { CalendarSource } from '../../shared/model/calendar.ts';
 import { confirm, Dialog, DialogActions } from '../lib/dialog.tsx';
 import { openExternal } from '../lib/platform.ts';
 import { errorText, rpc } from '../lib/rpc.ts';
-import { can, isOwner } from '../lib/session.ts';
+import { can, canEditOwnerSettings } from '../lib/session.ts';
 import { settings, updateSettings } from '../lib/store.ts';
 import { Button } from '../lib/ui.tsx';
+import { openInPcPane, opensInPcPane } from '../workspace/phone-tabs.ts';
 import { clientIdValid, GOOGLE_CLIENT_SUFFIX, googleHint, googleView, linkValid, sourceKind, syncLine, type GoogleView } from './calendar-model.ts';
 import { act, CLEAR, Group, Note, Row, Toggle, useAsync, useBusy } from './controls.tsx';
 
 const GOOGLE_TOKEN_HOST = 'oauth2.googleapis.com';
 
-/** Starts the Google consent; the browser opens on the PC (the link is kept in case it did not). */
+/** The consent page where the person sees it: the PC's pane from the phone, else the system browser. */
+const showConsent = (url: string): void => { if (opensInPcPane()) void openInPcPane(url); else openExternal(url); };
+
+/** Starts the Google consent; the browser opens on the PC (the link is kept in case it did not) – from the phone in the PC's pane. */
 async function startGoogle(setLink: (url: string) => void): Promise<void> {
   const result = await act(() => rpc.call('calendar.connectGoogle', {}), 'Could not connect Google Calendar');
-  if (result?.authUrl) setLink(result.authUrl);
+  if (!result?.authUrl) return;
+  setLink(result.authUrl);
+  if (opensInPcPane()) void openInPcPane(result.authUrl);
 }
 
 function SourceRow(props: { source: CalendarSource; onChanged: () => void; onConnect: () => void }) {
@@ -134,7 +142,7 @@ function GoogleConnect(props: { view: GoogleView; link: string | null; onConnect
     <Row label="Connect Google Calendar"
       hint={<>
         <span class={view.error && !view.waiting ? 'calendar-settings-problem' : undefined}>{googleHint(view)}</span>
-        {view.waiting && props.link && <> <a href={props.link} onClick={(event) => { event.preventDefault(); openExternal(props.link!); }}>Open the sign-in page</a></>}
+        {view.waiting && props.link && <> <a href={props.link} onClick={(event) => { event.preventDefault(); showConsent(props.link!); }}>Open the sign-in page</a></>}
       </>}>
       <button type="button" class="button small" disabled={!view.configured || view.waiting} onClick={props.onConnect}>{view.waiting ? 'Waiting…' : 'Connect'}</button>
     </Row>
@@ -170,7 +178,7 @@ export function CalendarsGroup() {
       {sources.map((source) => <SourceRow key={source.id} source={source} onChanged={() => void list.reload()} onConnect={connect} />)}
       {can('calendar.addIcs') && <AddLink onAdded={() => void list.reload()} />}
       {can('calendar.connectGoogle') && (!hasGoogle || view.waiting || Boolean(view.error)) && <GoogleConnect view={view} link={link} onConnect={connect} />}
-      {can('calendar.connectGoogle') && can('secrets.save') && isOwner() && <OwnGoogleApp />}
+      {can('calendar.connectGoogle') && can('secrets.save') && canEditOwnerSettings() && <OwnGoogleApp />}
     </Group>
   );
 }

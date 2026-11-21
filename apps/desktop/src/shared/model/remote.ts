@@ -3,9 +3,14 @@
 // same 4-digit code; the person on the other PC accepts. The requester joins as the CEO (the same
 // person – everything the same) or as an employee (a person of the organisation, people/*).
 // Phones scan the pwa.link QR code (CEO) or a person's invite (people.invite, employee).
+// F17 (16.11.2026): a request waiting on one of my other PCs shows here too (`via`, remote/mirror.ts); Accept there goes
+// to that PC. F13: Accept may name a new person (`newPerson`) – the person is made when the device links, in one step.
+// F09: a PC on this network names its company (`company`), so Settings › Devices lists a PC's companies under it.
 // Owns: the shapes shared by runtime and UI for this flow, the remote.* methods and the
 // remote.updated event (augmenting Methods / EventMap).
 // Never: carries keys, tickets, session secrets or tokens.
+
+import type { PersonRole } from './people.ts';
 
 /** How a device joins: as the CEO (same person, everything the same) or as an employee (a person). */
 export type JoinRole = 'ceo' | 'employee';
@@ -35,6 +40,18 @@ export interface RemoteIncoming {
   /** Where the request came from (empty when it came through this PC's own loopback). */
   address?: string;
   expiresAt: number;
+  /** F17: the request waits on this other PC of mine (Accept here answers there); absent = it waits on this PC. */
+  via?: { deviceId: string; name: string };
+}
+
+/** F13: the person Accept makes for an employee's PC or phone (people.save) – made when that device links, as them. */
+export interface NewPerson {
+  name: string;
+  title?: string;
+  /** Their manager: an agent or a person (people/manager.ts). */
+  managerId?: string;
+  /** F13: 'ceo' – a second CEO beside the owner (shared/model/people.ts); absent = a member. */
+  role?: PersonRole;
 }
 
 /** This PC's own request to another PC (one at a time). */
@@ -68,6 +85,8 @@ export interface NearbyPc {
   fingerprint: string;
   /** Base URLs it answered on (http://<ip>:<port>). */
   addresses: string[];
+  /** F09: the company this answer is (one PC holds several; each has its own key and Remote ID); absent from older PCs. */
+  company?: string;
   /** 'new' not linked yet, 'linked' already linked, 'waiting' this PC's request to it is open. */
   state: 'new' | 'linked' | 'waiting';
 }
@@ -80,8 +99,11 @@ declare module '../api/methods.ts' {
     'remote.connect': { params: { target: string; role?: JoinRole }; result: RemoteOutgoing };
     /** Owner: cancels this PC's open request, or closes its last outcome. */
     'remote.cancel': { params: void; result: { ok: true } };
-    /** Owner: accept or decline a PC's request waiting on this PC; an employee's needs the person it belongs to. */
-    'remote.decide': { params: { id: string; accept: boolean; personId?: string }; result: { ok: true } };
+    /**
+     * Owner: accept or decline a request waiting on this PC or (F17) on another of my PCs (`via`); an employee's PC needs
+     * the person it belongs to – `personId`, or `newPerson` to make them (F13); a phone takes either too (none = mine).
+     */
+    'remote.decide': { params: { id: string; accept: boolean; personId?: string; newPerson?: NewPerson }; result: { ok: true } };
     /** Owner: PCs on this network that accept requests (self excluded); `refresh` asks the network again. */
     'remote.nearby': { params: { refresh?: boolean } | void; result: NearbyPc[] };
   }

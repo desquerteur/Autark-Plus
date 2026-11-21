@@ -29,12 +29,15 @@ export interface RuntimeLinkOptions {
 /**
  * Environment for the runtime process: inherited, minus switches that change how Electron runs it. AUTARK_DATA names
  * its data folder (B-072), so `wf` started by anything the runtime starts reaches this company (wf-cli/discover.ts).
+ * F07: AUTARK_SYSTEM_LANGUAGE is this PC's display language (Electron's first preferred system language – not the
+ * regional format Intl reports), the language a new profile starts in (runtime/settings/defaults.ts).
  */
-export function runtimeEnv(env: Record<string, string | undefined>, dataDir?: string): Record<string, string | undefined> {
+export function runtimeEnv(env: Record<string, string | undefined>, dataDir?: string, language?: string): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
   delete out.ELECTRON_RUN_AS_NODE;
   delete out.NODE_OPTIONS;
   if (dataDir) out.AUTARK_DATA = dataDir;
+  if (language?.trim()) out.AUTARK_SYSTEM_LANGUAGE = language.trim();
   return out;
 }
 

@@ -1,8 +1,10 @@
 // A notification decided on one of my PCs reaches the phones of all my devices (D3, owner 06.11.2026: the phone belongs
 // to the company, not to one PC). The PC whose filters let it push (notify/service.ts) pushes it itself to every
 // subscription it holds: its own through its channel (pwa/push.ts), and those of my other PCs, which the roster brought
-// here with their keys (held-push.ts), under the same tag, so a duplicate replaces the other on the phone. A person's
-// device gets nothing here (pwa/person-push.ts decides theirs).
+// here with their keys (held-push.ts), under the same tag and id. A service worker drops a duplicate only within its own
+// origin: the iPhone web app (one origin, one subscription) shows it once, but a browser paired by QR at two of my PCs'
+// own addresses holds two subscriptions and shows it twice (B-087: a known gap – nothing links the two origins; one
+// pairing by Remote ID avoids it). A person's device gets nothing here (pwa/person-push.ts decides theirs).
 // Compatibility: a PC on 0.3.x sends no roster, so its phones are not held here – such a PC (online, a 'ceo' link that
 // never sent a roster) still gets the old hand-over 'notify.relay' – as in 0.3.x only while this PC reaches no phone
 // of the owner itself (a phone paired with both PCs would alert twice) – and one from it reaches this PC's own channels.

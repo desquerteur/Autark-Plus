@@ -1,7 +1,7 @@
 // Human-readable age of retrieved knowledge: the relative age ("3 weeks ago") and, B-044, the absolute
 // day next to it ("saved 2026-10-04, 3 weeks ago") – every retrieval surface (search reasons, find
 // candidates, an opened note, pinned memory) carries it, so agents judge how old a hint is
-// (rules.md › Memory). The day is the calendar day in the person's time zone – the zone the prompt's
+// (How I work › Trust and memory). The day is the calendar day in the person's time zone – the zone the prompt's
 // Now line names (context/time.ts profileZone) –, so a note saved just after local midnight shows that day.
 // Owns: these formatting rules and DAY_MS. Never: reads settings (callers pass the zone), or dates in
 // prompts that must stay cache-stable (only volatile sections and tool results use this).

@@ -1,8 +1,8 @@
 // Arming of human to-do widgets (F02): one step for every way a to-do with a widget is made or
-// changed – an ask block in a message, a typed to-do, human.ask, the tasks.create/update RPC,
+// changed – an ask block in a message, a typed to-do, tasks.create to a person, the tasks.create/update RPC,
 // "Show as…" – so a timer always rings and a widget always renders:
 //  * prepareWidget (pure): an agent's widget goes through the catalog's validation with
-//    coercion (invalid → a precise 'bad_request' the agent gets back); widgets the runtime built
+//    coercion (invalid → a precise 'bad_request' the agent gets back – B-080: with the type's catalog signature); widgets the runtime built
 //    itself (typed to-dos, "Show as…", the verifier's review to-do) are kept as they are. A timer's duration ("PT10M") becomes an
 //    absolute `at` from the creation time (the duration stays for display), and that `at` is the
 //    to-do's due time unless one was given – a due time the old timer set moves with a new one
@@ -18,17 +18,15 @@
 
 import { HUMAN_ID, SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import type { UiBlock } from '../../shared/blocks/catalog.ts';
+import { specFor, type UiBlock } from '../../shared/blocks/catalog.ts';
 import { validateBlock } from '../../shared/blocks/validate.ts';
 import type { Schedule, ScheduleSpec, Task } from '../../shared/model/tasks.ts';
-import { isSnoozed, snoozeEnd } from '../../shared/model/todo-later.ts';
+import { SNOOZED_REASON, isSnoozed, snoozeEnd } from '../../shared/model/todo-later.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { isAskBlock, parseDue } from './widgets.ts';
 
 /** A widget ring's payload carries `ring: 'widget'`; a snooze's ring has none. */
 type RingPayload = Schedule['payload'] & { ring?: 'widget' };
-/** waitingOn.reason of a snoozed to-do (tasks/human.ts snooze). */
-const SNOOZED = 'Snoozed';
 
 /**
  * The widget as stored and the due time it implies. `by` is who made it: an agent's widget is
@@ -38,7 +36,10 @@ export function prepareWidget(widget: UiBlock, from: number, by: string): { widg
   let block = widget;
   if (by !== HUMAN_ID && by !== SYSTEM_ID) {
     const checked = validateBlock(widget);
-    if (!checked.ok) throw new WorkforceError('bad_request', `Invalid ${widget.type ?? 'widget'} widget: ${checked.error}.`, { details: { param: 'widget' } });
+    if (!checked.ok) {
+      const shape = specFor(String(checked.type ?? widget.type))?.signature; // B-080: the catalog's signature, e.g. checklist{items:[text|{text,done?}]}
+      throw new WorkforceError('bad_request', `Invalid ${widget.type ?? 'widget'} widget: ${checked.error}.${shape ? ` Its shape: ${shape}` : ''}`, { details: { param: 'widget' } });
+    }
     if (!isAskBlock(checked.block)) throw new WorkforceError('bad_request', `A to-do needs an ask widget, not "${checked.block.type}".`, { details: { param: 'widget' } });
     const { todo: _ingestOnly, ...rest } = checked.block; // "todo" only steers ingestBlocks
     block = rest as UiBlock;
@@ -99,7 +100,7 @@ function isWidgetRing(schedule: Schedule, task: Pick<Task, 'waitingOn'>): boolea
   if (schedule.kind !== 'timer') return false;
   const ring = (schedule.payload as RingPayload).ring;
   if (ring !== undefined) return ring === 'widget';
-  return schedule.spec.cron !== undefined || task.waitingOn?.reason !== SNOOZED;
+  return schedule.spec.cron !== undefined || task.waitingOn?.why !== SNOOZED_REASON;
 }
 
 /**
@@ -142,5 +143,6 @@ export function snoozeChanged(s: Pick<RuntimeServices, 'scheduler' | 'tasks'>, s
   const until = snoozeEnd(s.scheduler.list({ taskId: task.id }), task.id);
   if (until === task.waitingOn.until) return;
   const { until: _previous, ...wait } = task.waitingOn;
-  s.tasks.update(task.id, { waitingOn: until === undefined ? wait : { ...wait, until } }, HUMAN_ID);
+  const { since: _since, ...rest } = wait;
+  s.tasks.update(task.id, { waitingOn: until === undefined ? rest : { ...rest, until } }, HUMAN_ID);
 }

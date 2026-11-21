@@ -55,7 +55,7 @@ test('call: any method with JSON params (inline or stdin); unknown method 2, not
   assert.deepEqual(JSON.parse(refused.err), { error: { code: 'forbidden', message: 'Not allowed.' } });
   const badJson = await wf(['call', 'chats.get', '{id:'], { runtime });
   assert.equal(badJson.code, 2);
-  assert.match(badJson.err, /not valid JSON/);
+  assert.match(badJson.err, /The params arrived as \{id: – no JSON\. In Windows PowerShell they go on stdin: '<json>' \| wf call chats\.get -/); // B-080
   const badName = await wf(['call', 'Not a method'], { runtime });
   assert.equal(badName.code, 2);
   const redacted = await wf(['call', 'system.echoToken'], { runtime });
@@ -87,7 +87,7 @@ test('send: body from words or stdin, @mentions stay in the text, --important, a
   t.after(() => runtime.stop());
   const sent = await wf(['send', 'Launch', 'Hello', '@Manager', 'please'], { runtime });
   assert.equal(sent.code, 0, sent.err);
-  assert.equal(sent.out, 'Sent to Launch (msg_sent).\n');
+  assert.equal(sent.out, 'Sent to Launch (#5, msg_sent).\n');
   const params = runtime.calls.filter((call) => call.method === 'messages.send').map((call) => call.params as Record<string, unknown>);
   assert.equal(params[0].body, 'Hello @Manager please');
   assert.equal(params[0].conversationId, launch.id);
@@ -101,6 +101,34 @@ test('send: body from words or stdin, @mentions stay in the text, --important, a
   assert.equal(JSON.parse(piped.out).id, 'msg_sent');
   const empty = await wf(['send', 'Launch', '   '], { runtime });
   assert.deepEqual([empty.code, empty.err], [2, 'wf: Nothing to send.\n']);
+});
+
+test('send --file (BEFUND §4, 17.11.2026): each file stored by path, one message with all; --attach works too; a missing file sends nothing', async (t) => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = await mkdtemp(path.join(tmpdir(), 'wf-send-file-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, 'a.png'), 'png');
+  await writeFile(path.join(dir, 'b.pdf'), 'pdf');
+  let stored = 0;
+  const runtime = await fakeRuntime({
+    'files.uploadPath': () => ({ id: `${String(++stored).repeat(64)}`.slice(0, 64) }),
+    'messages.send': (params) => message({ id: 'msg_sent', seq: 9, conversationId: launch.id, body: (params as { body: string }).body }),
+  });
+  t.after(() => runtime.stop());
+  const sent = await wf(['send', 'Launch', 'Bericht', '--file', path.join(dir, 'a.png'), '--attach', path.join(dir, 'b.pdf')], { runtime });
+  assert.equal(sent.code, 0, sent.err);
+  assert.equal(sent.out, 'Sent to Launch (#9, msg_sent, 2 files).\n');
+  const uploads = runtime.calls.filter((call) => call.method === 'files.uploadPath').map((call) => (call.params as { path: string }).path);
+  assert.deepEqual(uploads, [path.join(dir, 'a.png'), path.join(dir, 'b.pdf')]);
+  const params = runtime.calls.find((call) => call.method === 'messages.send')!.params as { attachments: Array<{ fileId: string; name: string }> };
+  assert.deepEqual(params.attachments, [{ fileId: '1'.repeat(64), name: 'a.png' }, { fileId: '2'.repeat(64), name: 'b.pdf' }]);
+  const before = runtime.calls.length;
+  const missing = await wf(['send', 'Launch', 'Bericht', '--file', path.join(dir, 'a.png'), '--file', path.join(dir, 'fehlt.md')], { runtime });
+  assert.equal(missing.code, 2);
+  assert.match(missing.err, /No file at .*fehlt\.md; nothing was sent\./);
+  assert.ok(!runtime.calls.slice(before).some((call) => call.method === 'messages.send' || call.method === 'files.uploadPath'), 'nothing stored, nothing sent');
 });
 
 test('send --wait: subscribed before sending, so a reply pushed even before the answer is caught; failed replies exit 1', async (t) => {
@@ -118,7 +146,7 @@ test('send --wait: subscribed before sending, so a reply pushed even before the 
   const human = await wf(['send', 'Launch', 'hi', '--wait'], { runtime });
   assert.equal(human.code, 0, human.err);
   assert.equal(human.out, '14:02  Manager: Echo: hi\n');
-  assert.match(human.err, /Sent to Launch \(msg_sent\)\. Waiting for a reply/);
+  assert.match(human.err, /Sent to Launch \(#5, msg_sent\)\. Waiting for a reply/);
   const order = runtime.calls.map((call) => call.method);
   assert.ok(order.indexOf('events.subscribe') < order.indexOf('messages.send'), 'subscribe first');
   const json = await wf(['send', 'Launch', 'hi', '--wait', '--json'], { runtime });
@@ -185,7 +213,7 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
     'events.subscribe': (params, fake) => {
       setTimeout(() => {
         for (const topic of (params as { topics: string[] }).topics) {
-          if (topic === 'tasks') fake.push('task.upserted', task({ id: 'task_1', title: 'Draft plan', status: 'working' }), 'tasks');
+          if (topic === 'tasks') fake.push('task.upserted', task({ id: 'task_1', title: 'Draft plan', status: 'open' }), 'tasks');
           if (topic === `chat:${launch.id}`) fake.push('message.updated', { id: 'msg_x', conversationId: launch.id, authorId: 'ag_x', body: '', attachments: [], state: 'streaming' }, topic); // B-075: a run's live row
         }
       }, 20);
@@ -201,7 +229,7 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
 
   const short = await wf(['events', 'tasks', 'chat:launch', '--count', '2', '--timeout', '1.5'], { runtime });
   assert.equal(short.code, 1, 'the live row is not printed in human mode, so only 1 of 2 arrived');
-  assert.match(short.out, /task\.upserted  Draft plan · working/);
+  assert.match(short.out, /task\.upserted  Draft plan · open/);
   assert.match(short.err, /1 of 2 arrived before the timeout/);
 
   const unknown = await wf(['events', 'everything'], { runtime });
@@ -212,25 +240,6 @@ test('events: topics by name, NDJSON with --json, --count not reached before --t
   assert.deepEqual(runtime.calls.filter((call) => call.method === 'events.subscribe').at(-1)?.params, { topics: [`runs:${manager.id}`] });
 });
 
-test('todos, tasks and agents: default filters, --status, --all', async (t) => {
-  const runtime = await fakeRuntime({
-    'todos.list': () => [task({ id: 'task_t', title: 'Record a voice line', assigneeKind: 'human', status: 'needs_you', widget: { type: 'record' } })],
-    'tasks.list': () => [task({ id: 'task_w', title: 'Draft plan', status: 'working', assigneeKind: 'agent', assigneeId: manager.id })],
-  });
-  t.after(() => runtime.stop());
-  const todos = await wf(['todos'], { runtime });
-  assert.equal(todos.out, '• Record a voice line · record · in Launch · task_t\n');
-  await wf(['tasks'], { runtime });
-  await wf(['tasks', '--status', 'open, done'], { runtime });
-  await wf(['tasks', '--all', '--limit', '10'], { runtime });
-  assert.deepEqual(runtime.calls.filter((call) => call.method === 'tasks.list').map((call) => call.params), [
-    { status: ['open', 'working', 'waiting', 'needs_you', 'blocked'] }, { status: ['open', 'done'] }, { limit: 10 },
-  ]);
-  const both = await wf(['tasks', '--all', '--status', 'open'], { runtime });
-  assert.equal(both.code, 2);
-  const agents = await wf(['agents'], { runtime });
-  assert.equal(agents.out, 'Manager · idle · reports to You · ag_manager0001\n');
-});
 
 test('no runtime: missing runtime.json, a stopped app, a refused token, a closed port – all exit 5 or 3', async (t) => {
   const missing = await wf(['chats'], { info: null });

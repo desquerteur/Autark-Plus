@@ -5,10 +5,9 @@
 // the newer block find it – tasks/block-todo.ts), answers (store result, complete the to-do quietly,
 // post the person's own line – a click on a button is what they picked, in full, shared/blocks/answer-text.ts –
 // and wake the authoring agent as for a line they typed; F06: the answer's stored files ride on that line –
-// tasks/answer-files.ts, tasks/answer-receipt.ts; the person's decline {declined, reason} cancels the to-do instead –
+// tasks/answer-files.ts, tasks/answer-receipt.ts; the person's decline {declined, reason} drops the to-do instead –
 // tasks/decline.ts, never a mini-app's own data),
-// free-text to-dos (addTodo: a plain to-do from tasks/todo-draft.ts, no model), "Give to me" (makeMine: the
-// person's own work becomes their to-do), widget switching ("Show as…"; mini-apps keep theirs), snoozing (F03: the to-do waits and rings again – no receipt, nobody
+// free-text to-dos (addTodo: a plain to-do from tasks/todo-draft.ts, no model), widget switching ("Show as…"; mini-apps keep theirs), snoozing (F03: the to-do waits and rings again – no receipt, nobody
 // woken; a snooze answer of older widgets is routed here) and repeating timers
 // (Done posts a receipt and waits for the next ring – due then; the author hears only the first
 // Done; "Stop repeating" ends it); every widget is armed by tasks/timers.ts (validated when an
@@ -25,14 +24,13 @@
 // Owns: those flows. Never: puts agent work on the list.
 
 import { HUMAN_ID } from '../../shared/ids.ts';
-import { FINISHED } from './lifecycle.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import { APP_TODO_REASON, APP_TODO_TITLE, appTodoWidget, appWidgetOf } from '../../shared/blocks/app-todo.ts';
+import { APP_TODO_TITLE, appTodoWidget, appWidgetOf } from '../../shared/blocks/app-todo.ts';
 import { becomesTodo, isImportantAsk, type UiBlock } from '../../shared/blocks/catalog.ts';
 import { appTodosOf, uiBlocksOf } from '../../shared/blocks/parse.ts';
 import type { Message } from '../../shared/model/chat.ts';
-import type { Task, TaskView } from '../../shared/model/tasks.ts';
-import type { RuntimeServices, TaskService } from '../contracts.ts';
+import { isFinished, type Task, type TaskView } from '../../shared/model/tasks.ts';
+import type { TaskService } from '../contracts.ts';
 import type { TaskServiceImpl } from './service.ts';
 import { answerText, oneLine } from '../../shared/blocks/answer-text.ts';
 import { answerFiles, fileNames } from './answer-files.ts';
@@ -42,7 +40,8 @@ import { blockTodo } from './block-todo.ts';
 import { declineFrom, declineTodo } from './decline.ts';
 import { armTimer, dropTimers, dueAfter, prepareWidget, repeatingTimer, snoozeUntil } from './timers.ts';
 import { quickDraft } from './todo-draft.ts';
-import { humanReasonFor, isAskBlock, parseDue, titleForBlock, widgetOfType } from './widgets.ts';
+import { REPEATS_REASON, SNOOZED_REASON } from '../../shared/model/todo-later.ts';
+import { isAskBlock, parseDue, titleForBlock, widgetOfType } from './widgets.ts';
 import { askTarget } from '../people/ask-target.ts';
 
 export { notesFor, quickDraft, type TodoDraft } from './todo-draft.ts';
@@ -71,16 +70,16 @@ export class HumanTodos {
         const armed = prepareWidget(block, message.createdAt, message.authorId);
         const updated = this.t.mutate(previous.id, draft => {
           const due = dueAfter(draft, armed); // a due time the old timer set follows the new one
-          draft.widget = armed.widget; draft.title = title; draft.messageId = message.id; draft.humanReason = humanReasonFor(block);
+          draft.widget = armed.widget; draft.title = title; draft.messageId = message.id;
           if (due !== undefined) draft.dueAt = due;
         });
         armTimer(this.t.s, updated);
         out.push(this.t.emit(updated));
         return;
       }
-      const asked = askTarget(this.t.s.db, message.conversationId, message.seq, humanReasonFor(block)); // F-52: the person who wrote last, else the owner
+      const asked = askTarget(this.t.s.db, message.conversationId, message.seq, block); // the person who wrote last, else the owner
       const view = this.t.create({
-        conversationId: message.conversationId, title, assigneeKind: 'human', ...(asked ? { assigneeId: asked } : {}), widget: block, humanReason: humanReasonFor(block),
+        conversationId: message.conversationId, title, assigneeKind: 'human', ...(asked ? { assigneeId: asked } : {}), widget: block,
         createdBy: message.authorId, priority: isImportantAsk(block) ? 1 : 0, dueAt: parseDue(block.due, message.createdAt),
         parentId: this.openParent(message),
       }, { anchor: message, clientId });
@@ -101,12 +100,12 @@ export class HumanTodos {
     const out: TaskView[] = [];
     for (const { index, attrs } of appTodosOf(message.body)) {
       try {
-        const asked = askTarget(this.t.s.db, message.conversationId, message.seq, attrs.reason ?? APP_TODO_REASON); // F-52
+        const asked = askTarget(this.t.s.db, message.conversationId, message.seq);
         out.push(this.t.s.db.tx(() => this.t.create({
           conversationId: message.conversationId, title: attrs.title?.trim() || APP_TODO_TITLE, assigneeKind: 'human', ...(asked ? { assigneeId: asked } : {}),
           // Task.widget is still typed UiBlock; the stored value is an AppTodoWidget (shared/model/tasks.ts).
           widget: appTodoWidget(message.id, index, attrs) as unknown as UiBlock,
-          humanReason: attrs.reason ?? APP_TODO_REASON, createdBy: message.authorId, parentId: this.openParent(message),
+          createdBy: message.authorId, parentId: this.openParent(message),
         }, { anchor: message, clientId: `blk:${message.id}:${index}`, runtimeWidget: true })));
       } catch (error) {
         this.t.s.log?.warn('mini-app to-do failed', { messageId: message.id, index, error: String(error) });
@@ -118,7 +117,7 @@ export class HumanTodos {
   /** The message's open top-level task: a to-do from its blocks becomes a step of it. */
   private openParent(message: Message): string | undefined {
     const parent = message.taskId ? this.t.repo.get(message.taskId) : undefined;
-    return parent && parent.status !== 'done' && parent.status !== 'cancelled' && !parent.parentId ? parent.id : undefined;
+    return parent && !isFinished(parent.status) && !parent.parentId ? parent.id : undefined;
   }
 
   answer(input: Parameters<TaskService['answer']>[0]): TaskView | undefined {
@@ -166,8 +165,9 @@ export class HumanTodos {
       const next = repeating.nextAt; // the scheduler moved it on before the ring ran
       view = this.t.emit(this.t.mutate(task.id, draft => {
         draft.status = 'waiting';
-        draft.waitingOn = { kind: 'schedule', id: repeating.id, reason: 'Repeats', since: now };
+        draft.waitingOn = { on: 'outside', why: REPEATS_REASON, since: now, ...(next !== undefined ? { until: next } : {}) };
         draft.ledger = { ...draft.ledger, doneCount: count };
+        draft.nextAt = next;
         if (next === undefined || draft.widget?.type !== 'timer') return;
         // Due at its next ring, not "overdue · yesterday" when it rings again (a due time given
         // explicitly stays); the same clock time keeps the ring as it is.
@@ -175,7 +175,7 @@ export class HumanTodos {
         draft.widget = { ...draft.widget, at: new Date(next).toISOString() };
       }));
     } else if (task) {
-      view = this.t.complete(task.id, { summary, evidence: evidenceFor(summary, files, input.answer), verification: 'reported_by_human', answer: input.answer }, input.by);
+      view = this.t.finish(task.id, { status: 'done', summary, evidence: evidenceFor(summary, files, input.answer), answer: input.answer }, input.by);
     }
     // The person's line (with the answer's files; only in a chat) and, for the first answer, the author's wake.
     const question = asked ? titleForBlock(asked) : task?.title; // review fix: which ask this line answers
@@ -195,7 +195,7 @@ export class HumanTodos {
     const task = found;
     const id = task.id;
     if (task.assigneeKind !== 'human') throw new WorkforceError('bad_request', 'Only to-dos can be snoozed.');
-    if (task.status === 'done' || task.status === 'cancelled') throw new WorkforceError('conflict', 'This to-do is already finished.');
+    if (isFinished(task.status)) throw new WorkforceError('conflict', 'This to-do is already finished.');
     const now = s.clock.now();
     if (!Number.isFinite(until) || until < now + 60_000 || until > now + 30 * DAY_MS) throw new WorkforceError('bad_request', 'Snooze for at least a minute and at most 30 days.');
     if (!s.scheduler) throw new WorkforceError('unavailable', 'Reminders are not available.');
@@ -204,7 +204,8 @@ export class HumanTodos {
     s.scheduler.create({ ownerId: HUMAN_ID, conversationId: task.conversationId, taskId: id, kind: 'timer', title: task.title, spec: { at: until }, payload: { note } });
     return this.t.emit(this.t.mutate(id, draft => {
       draft.status = 'waiting';
-      draft.waitingOn = { kind: 'schedule', reason: 'Snoozed', since: now, until };
+      draft.waitingOn = { on: 'outside', why: SNOOZED_REASON, since: now, until };
+      draft.nextAt = until;
     }));
   }
 
@@ -213,7 +214,7 @@ export class HumanTodos {
     const task = this.t.require(id);
     if (task.assigneeKind !== 'human' || !repeatingTimer(this.t.s, id)) throw new WorkforceError('bad_request', 'This to-do does not repeat.');
     dropTimers(this.t.s, id, true);
-    return this.t.complete(id, { summary: 'Stopped repeating', evidence: [{ kind: 'note', label: 'Stopped repeating' }], verification: 'reported_by_human' }, by);
+    return this.t.finish(id, { status: 'done', summary: 'Stopped repeating', evidence: [{ kind: 'note', label: 'Stopped repeating' }] }, by);
   }
 
   /** A typed to-do: a plain to-do at once (chat-free unless a chat is given). */
@@ -241,25 +242,3 @@ export class HumanTodos {
     return this.t.emit(updated);
   }
 }
-
-/**
- * "Give to me": the person's own unfinished top-level work becomes their plain to-do (already theirs: as it is). The
- * agents' queued turns for it end, its splits stop and a turn still running on it stops.
- */
-export function makeMine(s: Pick<RuntimeServices, 'tasks' | 'wakes' | 'clock'> & Partial<Pick<RuntimeServices, 'dispatcher' | 'log'>>, id: string): TaskView {
-  const task = s.tasks.get(id);
-  if (!task) throw new WorkforceError('not_found', 'Task not found.', { details: { taskId: id } });
-  if (task.assigneeKind === 'human') return task;
-  if (FINISHED.has(task.status)) throw new WorkforceError('conflict', 'This task is already finished.');
-  const draft = quickDraft(s, task.title); // the title names it; the notes stay on the row
-  s.wakes.cancelTask(id);
-  s.tasks.assign(id, { kind: 'human' }, HUMAN_ID);
-  if (s.tasks.get(id)?.status !== 'open') s.tasks.setStatus(id, 'open', HUMAN_ID);
-  const mine = s.tasks.update(id, { widget: draft.widget, humanReason: 'taste' }, HUMAN_ID);
-  try { (s as Partial<Pick<RuntimeServices, 'splits'>>).splits?.stop({ taskId: id }, HUMAN_ID); } catch (error) { s.log?.warn('stopping the splits on work the person took failed', { taskId: id, error: String(error) }); }
-  for (const run of s.dispatcher?.activity().filter((entry) => entry.taskId === id) ?? []) {
-    s.dispatcher!.interrupt(run.agentId, run.conversationId).catch((error: unknown) => s.log?.warn('stopping the turn on work the person took failed', { taskId: id, error: String(error) }));
-  }
-  return mine;
-}
-

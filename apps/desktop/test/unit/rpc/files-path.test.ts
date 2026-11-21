@@ -1,6 +1,6 @@
 // files.readPath / writePath / listPath behind the pane's file tab: anywhere on the PC, for the owner and a phone holding
 // 'manage' on a secure transport (B-076: its pane is the PC's; never over plain LAN http); what is text, what only says
-// what it is; a save on an old stamp is a conflict.
+// what it is; a save on an old stamp is a conflict; B-081: a missing path names similar existing ones (`near`).
 // And files.openPath's `anywhere`.
 
 import { test } from 'node:test';
@@ -47,8 +47,13 @@ test('readPath says what a path holds, anywhere on the PC', async (t) => {
   assert.equal(big.state, 'large');
   assert.equal(big.text, undefined);
 
-  assert.equal((await read(path.join(f.dir, 'nope', 'x.md'))).state, 'missing');
-  assert.equal((await read(path.join(f.dir, 'nope.md'), '')).state, 'same', 'still missing');
+  const missing = await read(path.join(f.dir, 'nope', 'x.md'));
+  assert.equal(missing.state, 'missing');
+  assert.equal(missing.near?.at(-1)?.path, f.dir, 'B-081: the nearest existing folder, last');
+  assert.equal((await read(path.join(f.dir, 'nite.md'))).near?.[0]?.path, note, 'a similar name first');
+  const look = await read(path.join(f.dir, 'nope.md'), '');
+  assert.equal(look.state, 'same', 'still missing');
+  assert.equal(look.near, undefined, 'a tab\'s look stays one stat');
   assert.equal((await read(f.dir)).state, 'folder');
   assert.equal((await f.owner.request('files.readPath', { path: 'relative/x.md' })).error?.code, 'bad_request');
 });
@@ -86,7 +91,9 @@ test('listPath lists folders first, says what is above and that a folder is miss
   assert.equal(list.total, 4);
   const root = await f.owner.call<PathList>('files.listPath', { path: path.parse(f.dir).root });
   assert.equal(root.parent, undefined, 'nothing above a root');
-  assert.equal((await f.owner.call<PathList>('files.listPath', { path: path.join(f.dir, 'gone') })).missing, true);
+  const gone = await f.owner.call<PathList>('files.listPath', { path: path.join(f.dir, 'a99.md') });
+  assert.equal(gone.missing, true);
+  assert.deepEqual(gone.near?.map((entry) => entry.name), ['a9.md', path.basename(f.dir)], 'B-081: the similar entry, then the nearest folder');
   assert.equal((await f.owner.request('files.listPath', { path: path.join(f.dir, 'b.md') })).error?.code, 'conflict');
   assert.ok(LIST_MAX_ENTRIES >= 1000);
 });

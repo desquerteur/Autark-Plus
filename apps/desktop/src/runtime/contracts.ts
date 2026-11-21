@@ -14,8 +14,10 @@ import type {
   Conversation, ConversationSettings, ConversationSummary, Member, Message, MessageMeta, SendMessageInput, StatusLine,
 } from '../shared/model/chat.ts';
 import type {
-  CreateTaskInput, Schedule, Task, TaskFilter, TaskResult, TaskStatus, TaskView,
+  CreateTaskInput, Schedule, Task, TaskFilter, TaskResult, TaskView,
 } from '../shared/model/tasks.ts';
+import type { FinishInput, TaskPatch } from './tasks/service.ts';
+import type { NextRoute } from './agents/next-route.ts';
 import type { Handoff, KnowledgeHit, KnowledgeItem, KnowledgeQuery, ModeInfo, SkillInfo } from '../shared/model/knowledge.ts';
 import type {
   Account, AccountLimits, DetectionReport, Effort, EngineId, ModelInfo, ProviderId, RouteDecision, UsageSummary,
@@ -112,19 +114,15 @@ export interface ChatService {
   unarchive(id: string): void;
   remove(id: string): void;
   /** Persists a message (human or agent), updates seq/preview/unread, emits events, triggers delivery. */
-  /** `runId` (B-047 D4): the agent run that posts it (chat.send). `silent`: no unread or notification – mentioned agents are still reached. */
-  send(input: SendMessageInput & { authorId: string; authorKind?: Message['authorKind']; meta?: MessageMeta; kind?: Message['kind']; taskId?: string; silent?: boolean; runId?: string }): Message;
-  /** Quiet status line ("Switched to Opus 5.5 · high"). `runId`: an agent run's own update (chat.send status); `fromRun`: meta.fromRun of a line the runtime writes during a run. */
+  /** `runId` (B-047 D4): the agent run that posts it (a <chat> block, agents/chat-out.ts). `silent`: no unread or notification – mentioned agents are still reached. */
+  /** `deliver: false` (runtime only, F07's start line): stored and shown, delivered to nobody – no wake, no notification. */
+  send(input: SendMessageInput & { authorId: string; authorKind?: Message['authorKind']; meta?: MessageMeta; kind?: Message['kind']; taskId?: string; silent?: boolean; runId?: string; deliver?: false }): Message;
+  /** Quiet status line ("Mara → Opus 5.5 · high – …"). `runId`: the run it belongs to; `fromRun`: meta.fromRun of a line the runtime writes during a run. */
   status(conversationId: string, line: StatusLine, options?: { authorId?: string; taskId?: string; runId?: string; fromRun?: string }): Message;
-  /** Streaming agent message lifecycle. */
-  beginAgentMessage(conversationId: string, agentId: string, runId: string, meta?: MessageMeta): Message;
-  appendDelta(messageId: string, text: string): void;
   /** `files`: outputs the engine produced (e.g. Codex images) – stored and attached before the message is announced (MM2). */
   /** `silent`: in the chat without unread or notification – unless it mentions the person (a colleague's mention still reaches the colleague quietly). `priority` (B-050 K4): 'important' for an answer the agent marked [[important]]. */
-  /** B-047 D4: a message that is no longer the chat's last one (something was posted after it began) moves to the end (a new seq). */
-  finishAgentMessage(messageId: string, final: { body: string; state: Message['state']; meta?: MessageMeta; files?: EngineFile[]; silent?: boolean; priority?: Message['priority'] }): Message;
-  /** B-047 D4: a run's final answer without a streaming placeholder – posted at the end of the chat, like finishAgentMessage. */
-  postAgentMessage(conversationId: string, agentId: string, runId: string, final: { body: string; meta?: MessageMeta; files?: EngineFile[]; silent?: boolean; priority?: Message['priority'] }): Message;
+  /** B-047 D4: a run's answer – posted at the end of the chat; `state` 'failed'/'stopped' for a run that ended so. */
+  postAgentMessage(conversationId: string, agentId: string, runId: string, final: { body: string; meta?: MessageMeta; files?: EngineFile[]; silent?: boolean; priority?: Message['priority']; state?: 'final' | 'failed' | 'stopped' }): Message;
   /** Who `body` would @mention when `authorId` posts it in this chat (agent ids, 'human', person ids) – nothing is posted. */
   mentionsOf(conversationId: string, authorId: string, body: string): string[];
   edit(messageId: string, body: string, by: string): Message;
@@ -141,7 +139,7 @@ export interface ChatService {
   // --- additions (A2)
   /** The agent that answers un-addressed messages and picks owners for team tasks. */
   lead(conversationId: string): string | undefined;
-  /** Startup: messages left 'streaming' by a crash become 'stopped' (keeps their text). */
+  /** Startup: rows an older version left 'streaming' go (chat/lifecycle.ts). */
   reconcileStreaming(): number;
 }
 
@@ -159,67 +157,56 @@ export interface DeliveryService {
 export interface TaskService {
   list(filter?: TaskFilter): TaskView[];
   get(id: string): TaskView | undefined;
-  /** `fromRun` (B-047 D4): the run that caused it – its anchor message carries meta.fromRun. */
+  /** `fromRun`: the run that caused it – its anchor message carries meta.fromRun. The owner is set (an agent, the person or a colleague). */
   create(input: CreateTaskInput & { createdBy: string }, options?: { fromRun?: string }): TaskView;
-  update(id: string, patch: Partial<Task>, by: string, rev?: number): TaskView;
-  setStatus(id: string, status: TaskStatus, by: string, note?: string): TaskView;
-  /** Atomically claim an open/team task for an agent (false if someone else has it). */
-  claim(id: string, agentId: string): boolean;
-  assign(id: string, assignee: { kind: Task['assigneeKind']; id?: string }, by: string): TaskView;
-  /** Completion requires a result (summary + evidence); runs the verifier when doneWhen exists.
-   *  `notify: false` (B-047 D4, never stored): the 'Done' line stays, the person's 'done' notification is skipped. */
-  complete(id: string, result: TaskResult & { notify?: boolean }, by: string): TaskView;
+  /** New work for `to` ("me", "team", an agent, the person or a colleague by id) – "team" picks one owner now (tasks/give.ts). */
+  createTo(input: Omit<CreateTaskInput, 'assigneeKind' | 'assigneeId'> & { createdBy: string }, to: string, options?: { fromRun?: string; team?: string; route?: Omit<NextRoute, 'at' | 'reason'> }): Promise<TaskView>;
+  /** Fields; status 'waiting' with waitingOn sets a wait, 'open' ends it (a person's 'open' reopens finished work); plan, fact. */
+  update(id: string, patch: TaskPatch, by: string, rev?: number): TaskView;
+  /** Gives the task to `to` (as createTo); the receiver hears at once, the giver hears how it ends. */
+  give(id: string, to: string, by: string, input?: { note?: string; effort?: Effort; fact?: string; givenIn?: string }): Promise<TaskView>;
+  /** Ends it: done with what came out, or dropped with why; the one verification step runs on a done one with doneWhen. */
+  finish(id: string, input: FinishInput, by: string): TaskView;
+  /** Takes back the latest logged change of a task (or `changeId`) within 24 hours: the fields it changed come back (tasks/changes.ts). */
+  undo(id: string, by: string, changeId?: string): TaskView;
   remove(id: string, by: string): void;
-  /** Open tasks assigned to the human (the calm "For you" list). */
-  todos(limit?: number, personId?: string): TaskView[]; // personId (F-52): that person's to-dos instead of the owner's
-  /** Ask blocks in an agent message → human to-dos (idempotent per message+block index). */
-  /** Ask blocks of a final agent message → human to-dos. `indexes[i]` is the parse index of `blocks[i]`
-   *  (the chat's blockIndex; default i) – it keys the to-do, so answers by blockIndex find it.
-   *  F01: the message's ```app todo=true fences become mini-app to-dos too (agent authors only, keyed the same way). */
+  /** A person's open to-dos and those waiting for a ring (the calm "For you" list); `personId`: a colleague's instead of the owner's. */
+  todos(limit?: number, personId?: string): TaskView[];
+  /** Ask blocks of a final agent message → human to-dos. `indexes[i]` is the parse index of `blocks[i]` (the chat's
+   *  blockIndex; default i) – it keys the to-do, so answers by blockIndex find it; ```app todo=true fences become mini-app to-dos too. */
   ingestBlocks(message: Message, blocks: UiBlock[], indexes?: number[]): TaskView[];
-  /** The human answered a widget/to-do: store, post receipt, wake the author. */
-  /** Addition (F06): stored files of the answer (file, files, form upload fields) are attached to the receipt and
-   *  their paths named in the wake; the answer {declined: true, reason?} declines the to-do (cancelled, tasks/decline.ts).
-   *  `decline` (fix F06): the person's "Can't do this…" (todos.decline). Without it a mini-app's data never declines. */
+  /** The person answered a widget/to-do: store, post their line, wake the author; {declined: true, reason?} with
+   *  `decline` (todos.decline) drops it instead (tasks/decline.ts). A mini-app's data never declines. */
   answer(input: { taskId?: string; messageId?: string; blockIndex?: number; answer: unknown; by: string; clientId?: string; decline?: boolean }): TaskView | undefined;
-  /** Free text → task with the right widget (decision model + keyword fallback). */
+  /** Free text → the person's own to-do. */
   addTodo(text: string, conversationId?: string): Promise<TaskView>;
   changeWidget(id: string, type: string): TaskView;
-  /** F03: a to-do waits until `until` and rings again (no receipt, nobody woken). */
+  /** A to-do waits until `until` and rings again (no receipt, nobody woken). */
   snooze(ref: string | { messageId: string; blockIndex: number }, until: number): TaskView;
-  /** F03: a repeating to-do stops repeating and is done. */
+  /** A repeating to-do stops repeating and is done. */
   stopRepeating(id: string, by: string): TaskView;
-  /** Tasks an agent owns that are not finished (used for "promised work" in its prompt). */
+  /** Tasks an agent owns that are not finished. */
   openFor(agentId: string): TaskView[];
-  // --- additions (T02): a human Stop pauses the work on a task; optional so simple fakes stay valid
-  /** Back to 'open', waiting on the human ("Paused by you"), quiet 'Paused' line; no automatic turns until resumed. */
-  pause?(id: string, by: string): TaskView;
-  /** Ends a pause: agent work goes back to 'working' ('Resumed' line); with `wakeNote` the owner (team work: the lead) is woken. */
-  resume?(id: string, by: string, wakeNote?: string): TaskView;
+  /** The person's Stop: it waits on them ("Paused by you"); nothing runs on it until they or its owner move it on. */
+  pause(id: string, by: string): TaskView;
+  /** Ends a pause: open again, its owner goes on. */
+  resume(id: string, by: string): TaskView;
 }
 
-/** The never-give-up loop: decides the next step after each turn on a task. */
+/** The follow-up of each turn of an owner on its task, and the start (tasks/watch.ts – the watcher). */
 export interface OwnershipService {
-  /** Outcome 'stopped' (addition T02): the human stopped the turn – the task pauses, nothing is retried.
-   *  Outcome 'unavailable' (addition T04): no model or account could run the turn (signed out, none
-   *  connected, connection lost) – like 'limit' no stall, retried later. */
   /**
-   * `progress` (T05, B-059 – agents/turn-progress.ts): 'real' = an outcome (the task's status or result, a step's
-   * status, a finished step of the same engine plan, a child's result); 'busy' = activity without one (a
-   * state-changing tool, task work, a changed plan – at most 7 in a row); 'soft' = only text/read tools (at most
-   * twice in a row); 'none'. Without it `progressed` decides (true = an outcome). `approach`: the run summary +
-   * effectful tools for ledger.tried; `plan` / `planDone`: the engine's latest plan and its done steps for ledger.plan.
+   * `progressed`: the task moved in the turn, or a call did something (agents/turn-types.ts effectful) – it decides
+   * between going on now and the doubling pause. Outcome 'stopped': the person stopped the turn – the task pauses.
+   * 'limit' / 'unavailable': no model or account could run it – retried within 30 min (`retryAfterMs` at the earliest).
    */
   afterTurn(input: {
     agentId: string; taskId: string; runId: string; progressed: boolean;
     outcome: 'done' | 'failed' | 'interrupted' | 'limit' | 'unavailable' | 'waiting' | 'stopped'; note?: string;
-    progress?: 'real' | 'busy' | 'soft' | 'none'; approach?: string; plan?: string[]; planDone?: number;
-    retryAfterMs?: number; // B-059: an 'unavailable' route said when it can run again (every fitting account limited, unfit.ts) – the retry waits at least that long
+    approach?: string; plan?: string[];
+    retryAfterMs?: number;
   }): void;
-  /**
-   * On startup: resume or reconcile tasks that were in progress. RC1: the unknown effects of the
-   * `interruptedRuns` go into the wake notes (and the chats); returns how many tasks continue.
-   */
+  /** On startup: older rows converted, one pass of the watcher, cut-off chat turns woken; returns how many tasks go on. */
   recover(input?: { interruptedRuns?: readonly string[] }): number;
 }
 
@@ -322,6 +309,8 @@ export interface Dispatcher {
   setCall?(ctx: { agentId: string; runId: string; callId: string }, running: boolean): void;
   /** 17:09: a normal message of the person folded into the agent's running turn in that chat (engine steer); false = it waits for the next turn. */
   steer?(agentId: string, conversationId: string): Promise<boolean>;
+  /** B-080: a person's line in a group chat folded into the agent's running turn wherever it runs, without a pick or a waiting line (chat/delivery-route.ts). */
+  hear?(agentId: string, conversationId: string): Promise<boolean>;
   /** D15: a call's live voice relays `text` into the agent's running turn in that chat ('next': only where it lands at the next model request); false = not steered (calls/talker.ts). */
   relay?(agentId: string, conversationId: string, text: string, mode: 'now' | 'next'): Promise<boolean>;
   /** The person's emergency stop (agents/work-stop.ts): no new turn while halted. */
@@ -333,8 +322,10 @@ export interface Dispatcher {
    * boundary (the urgent interrupt path: its wakes are kept) and its chat (task) runs again at once with
    * `note`, on the route the request set. Never awaits the cut (the caller is a tool of that turn);
    * false = that run is not running here.
+   * `target` (addition, B-080): the model (and effort) the turn goes on with – when it runs on the turn's own engine,
+   * the running turn takes it at its next step without a cut (Engine.setModel); else the cut above.
    */
-  continueNow?(agentId: string, runId: string, note: string): boolean;
+  continueNow?(agentId: string, runId: string, note: string, target?: { modelId: string; effort?: Effort }): boolean;
   /** B-050 K4 round 3: a person's quiet line reached chats of these agents (chat/delivery.ts) – each one with no turn running picks it up a little later (chat/quiet-pickup.ts). */
   quietArrived?(agentIds: readonly string[]): void;
 }
@@ -344,46 +335,44 @@ export interface PromptParts {
   volatile: string; // pinned memory, open tasks/promises, time
   /** B-049 F6: `volatile` by section name ('now' …; joined it is `volatile`) – agents/volatile-delta.ts. */
   sections?: Array<{ name: string; text: string; failed?: true }>;
+  /** S2: `stable` by section name ('identity' …; joined by a blank line it is `stable`) – agents/volatile-delta.ts stableDelta. */
+  stableSections?: Array<{ name: string; text: string }>;
 }
 
 export interface ContextService {
-  /** Builds the system prompt sections for a turn. */
-  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision }): PromptParts;
-  /**
-   * New conversation lines (and backfill) the agent has not seen yet, rendered for the engine.
-   * `includeOwn` + `knownSeqs`: catch-up of a resumed session that missed the agent's own turns
-   * in another engine (lines this session wrote itself are skipped).
-   */
-  delta(input: { agent: Agent; conversationId: string; sinceSeq: number; full: boolean; includeOwn?: boolean; knownSeqs?: number[] }): { text: string; images: Array<{ path: string; mime: string }>; lastSeq: number };
+  /** Builds the system prompt sections for a turn; `direct` (S2): the tools a resumed session holds, so "More tools" lists the rest. */
+  prompt(input: { agent: Agent; conversationId?: string; taskId?: string; thread?: string; mode: ModeInfo; route: RouteDecision; direct?: readonly string[] }): PromptParts;
+  /** New chat lines the agent has not seen yet, rendered for the engine (context/delta.ts: within their reach). */
+  delta(input: { agent: Agent; conversationId: string; sinceSeq: number }): { text: string; images: Array<{ path: string; mime: string }>; lastSeq: number };
   /** Portable checkpoint for handoffs/model switches. */
   checkpoint(input: { agentId: string; taskId?: string; conversationId?: string }): Handoff;
   /** Compaction: summarize old segments into observations (session renewal then starts fresh). */
-  compact(input: { agentId: string; conversationId: string }): Promise<string>;
   /** Addition (R3-C): extracts text of unseen text/PDF attachments so the next delta() can
    * include it (delta() is synchronous; a PDF never extracted before is otherwise only named). */
   prepare?(input: { agentId: string; conversationId: string; sinceSeq: number }): Promise<void>;
 }
 
-/** One service for the subconscious: its automatic runs, the main AI's own call, and the small side-work around turns. */
+/** One service for the subconscious: the routing call before a turn, the main AI's own call, and the small side-work around turns. */
 export interface Subconscious {
   /** A running call reached its estimate: choose another interval in seconds or abort it. */
   toolTimeout?(input: import('./tools/timeout.ts').ToolTimeoutInput & { agent: Agent; signal: AbortSignal }): Promise<import('./tools/timeout.ts').ToolTimeoutDecision>;
   /** Verifies a task result against its done-condition (clean context). */
   /** `checked` (addition, R3-C): false when no real check ran (no done-condition, no decision
-   * model, unsure or failed verifier) – then `ok` only means "do not reopen", not "verified". */
-  verify(task: Task, result: TaskResult): Promise<{ ok: boolean; reason: string; checked?: boolean }>;
+   * model, unsure or failed verifier) – then `ok` only means "do not reopen", not "verified".
+   * `fact` (addition, B-080): the failure is a runtime fact (a named file is missing, a link does not answer), not a
+   * model's doubt – only such a failure wakes the assignee (tasks/verification.ts). */
+  verify(task: Task, result: TaskResult): Promise<{ ok: boolean; reason: string; checked?: boolean; fact?: boolean }>;
   /** Free text → ask block for the human list. */
   widgetFor(text: string): Promise<UiBlock>;
   /** Addition (F05), optional so simple fakes stay valid: the props `text` gives that `block` lacks – the
    * text's own first, then the cheap model; the type stays. */
   fillWidget?(block: UiBlock, text: string): Promise<UiBlock>;
-  /** Addition (01.11.2026), optional so simple fakes stay valid: a turn ended – behind the cheap wake check, debounced per
-   * chat (subconscious/after-turn.ts). `fromSeq`..`toSeq`: the chat lines of the turn. Returns at once and never throws. */
-  afterTurn?(input: { agent: Agent; conversationId?: string; thread?: string; taskId?: string; runId?: string; mode?: string; fromSeq: number; toSeq: number; reply: string; contextTokens?: number; contextWindow?: number; taskEnded?: boolean; switchPlanned?: boolean }): void;
-  /** Addition (01.11.2026), optional: what the main AI's history gets before this turn's model call – the trace kept for the thread; undefined = nothing. `said`: what people wrote for this turn: with content, the flow looks first and the turn waits for it, bounded (subconscious/service.ts). `signal`: the turn's stop, which ends the look too. Never throws. */
-  beforeTurn?(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined>;
-  /** Addition (01.11.2026), optional: a turn that never reached its engine gives back what beforeTurn gave it; the next turn on the thread shows it. Never throws. */
+  /** Addition (01.11.2026), optional: what the main AI's history gets before this turn's model call – the trace kept for the thread; undefined = nothing. `said`: what people wrote for this turn; `woke` (v1, 14.11.2026): what other agents wrote for it; `taskText`: the turn's task as it reads it, its title and newest note (else its notes) – with content (`said` when a person wrote, else `woke` with content, else `taskText`), one call sets the turn's model and effort – not while a request of the agent's own or of its task (`taskId`) holds the turn –, opens the hits of the word search it chooses (first in the trace) and condenses context items whose job is done, and the turn waits for it, bounded (subconscious/service.ts, route-turn.ts, look.ts); `vision`: the turn shows an image (the call offers only models that see); `callId` (FIXES-3 D2): this turn answers a line of that running call (a task's turn too) – it does not wait for the call. `signal`: the turn's stop, which ends that call too. Never throws. */
+  beforeTurn?(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; woke?: string; taskText?: string; vision?: boolean; callId?: string; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined>;
+  /** Addition (01.11.2026), optional: a turn that never reached its engine gives back what beforeTurn gave it, a native turn the timeout decisions it could not take in (agents/native-timeout.ts); the next turn on the thread shows it. Never throws. */
   putBack?(agentId: string, thread: string, trace: SubconsciousTrace): void;
+  /** Addition (F26, 16.11.2026), optional: a forked part's first start – the call that condenses context items whose job is done, as beside the agent's own turns, on the part's own record (`thread`) with its brief as what wakes it; the part waits for it, bounded, and `signal` (its turn's stop) ends it. Returns how many items it condensed. Never throws. */
+  condensePart?(input: { agent: Agent; thread: string; conversationId?: string; brief: string; signal?: AbortSignal }): Promise<number>;
   /** Addition (01.11.2026), optional: the main AI's own call (tools/builtin/subconscious.ts): `ask` is any text; the answer is its tool output. Never throws. */
   ask?(input: { agent: Agent; conversationId?: string; thread?: string; taskId?: string; mode?: string; ask: string; context?: 'none' | 'recent' | 'chat'; signal?: AbortSignal }): Promise<string>;
   /** Addition (01.11.2026), optional: the person's Forget – a kept trace that mentions it goes. Never throws. */

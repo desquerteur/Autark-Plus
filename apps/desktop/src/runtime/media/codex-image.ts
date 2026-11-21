@@ -18,10 +18,10 @@
 // environment), so view_image – which emits no turn event – is gone too; the stray-tool stop stays as the second line.
 // Owns: the account and model pick, the turn, its deadline and stop, the stray-tool stop, and reading the one image back.
 // Never: reads token or auth files (only the generated image, after realpath, inside generated_images), uses a
-// pay-per-use login, offers our other tools, returns the model's free text, or keeps the thread.
+// pay-per-use login, offers our other tools, returns the model's free text, or keeps the thread or its saved images.
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
@@ -131,7 +131,7 @@ export async function codexImage(s: CodexImageServices, account: Account, reques
   try {
     const result = await engine.run({
       runId: `img_${randomUUID()}`, agentId: options.agentId ?? 'runtime', account, model: model.model, effort: 'low',
-      system: { stable: INSTRUCTIONS, volatile: 'I reply in one short sentence.' },
+      system: { stable: INSTRUCTIONS, volatile: '' },
       input: [{ type: 'text', text: `I make exactly one image with my image generation tool and write no files.${sizeLine(request.size)} Prompt: ${request.prompt}` }],
       tools: [UNABLE_TOOL],
       callTool: async (_name, args) => {
@@ -158,8 +158,18 @@ export async function codexImage(s: CodexImageServices, account: Account, reques
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener('abort', stop);
-    if (ref) await deleteThread(s, engine, account, ref);
+    if (ref) {
+      await deleteThread(s, engine, account, ref);
+      await dropImages(account, ref);
+    }
   }
+}
+
+/** The thread's saved images (<home>/generated_images/<thread>): thread/delete leaves them, and each is 3 MB or more (18.11.2026: three of Theo's sat there). */
+async function dropImages(account: Account, thread: string): Promise<void> {
+  if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(thread)) return; // a plain thread id, never a path
+  const home = account.home ?? process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
+  await rm(path.join(home, 'generated_images', thread), { recursive: true, force: true }).catch(() => undefined);
 }
 
 /** thread/delete before the call returns (live 29.10.: a delete left running lost the race against the server's end), at most DELETE_MS. */

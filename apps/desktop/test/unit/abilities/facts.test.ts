@@ -19,7 +19,7 @@ import { fitLocalSpeech, localSpeechModel } from '../../../src/shared/model/loca
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 import { modelDir, unpackDir } from '../../../src/runtime/voice/local/store.ts';
 
-const codex = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'plus', state: 'ok', priority: 0, rotation: false, enabled: true, detected: true, createdAt: 1 } as Account;
+const codex = { id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', plan: 'plus', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 1 } as Account;
 const sol = { id: 'codex:gpt-6.1-sol', provider: 'codex', model: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', engine: 'codex', efforts: [], caps: { vision: true }, tier: 'frontier', strengths: {}, available: true, accounts: [codex.id] } as unknown as ModelInfo;
 
 function services(input: { data: string; functions?: Record<string, string>; voice?: Record<string, unknown>; installed?: string[]; tools?: string[]; engine?: boolean }): { s: RuntimeServices; updates: unknown[] } {
@@ -63,7 +63,8 @@ test('read from the services: a Codex plan sees images and makes them, nothing e
   assert.equal(a['hear-speech'].state, 'setup');
   assert.equal(a['hear-speech'].action?.target, 'fastconformer-de-int8', 'the model recommended for German');
   assert.deepEqual([a['use-web'].state, a['use-web'].note], ['ready', undefined]);
-  assert.equal(a['use-pc'].note, undefined, 'computer use is granted');
+  // Computer use exists on Windows only (abilities/facts.ts pc); elsewhere it reads "Not available here".
+  assert.equal(a['use-pc'].note, process.platform === 'win32' ? undefined : 'Not available here', 'computer use is granted where it exists');
   assert.equal(a.speak.state, 'ready', 'the local voice downloads itself on first use');
   assert.deepEqual([a['make-video'].state, a['make-video'].action?.target], ['off', 'fal']);
 });

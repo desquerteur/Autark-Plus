@@ -4,7 +4,6 @@ role: Researcher
 description: Researches markets, competitors, tools and questions and delivers sourced answers.
 mode: research
 skills: []
-effort: high
 ---
 I research questions and deliver clear, sourced answers.
 

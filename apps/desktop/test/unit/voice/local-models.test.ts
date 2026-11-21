@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitLocalSpeech, localSpeechIds, localSpeechModel, LOCAL_SPEECH_MODELS, SILERO_VAD } from '../../../src/shared/model/local-speech-models.ts';
+import { fitLocalSpeech, localSpeechIds, localSpeechModel, LOCAL_SPEECH_MODELS, ORT_WASM_FILES, SILERO_VAD, SMART_TURN, turnFile } from '../../../src/shared/model/local-speech-models.ts';
 
 test('the catalog: unique ids, pinned HTTPS release downloads with SHA-256, German in every model, licences, no Kokoro', () => {
   const all = [...LOCAL_SPEECH_MODELS, SILERO_VAD];
@@ -54,4 +54,19 @@ test('fit: a language the tiny models lack recommends the model that speaks it; 
   const rows = fitLocalSpeech(pc(8_192, 1_700, 8), 'de', (id) => id === 'canary-180m-flash-int8');
   assert.deepEqual(rows.filter((row) => row.installed).map((row) => row.id), ['canary-180m-flash-int8']);
   assert.deepEqual(rows.map((row) => row.downloadMb), [108, 154, 487, 129]);
+});
+
+test('B-082: Smart Turn v3.2 is pinned (Hugging Face revision, SHA-256, size), fetched with the VAD, never listed or chosen; turn files by fixed name', () => {
+  assert.match(SMART_TURN.download.url, /^https:\/\/huggingface\.co\/pipecat-ai\/smart-turn-v3\/resolve\/[0-9a-f]{40}\/smart-turn-v3\.2-cpu\.onnx$/);
+  assert.equal(SMART_TURN.download.sha256, '2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f');
+  assert.equal(SMART_TURN.download.bytes, 8_679_182);
+  assert.deepEqual([SMART_TURN.download.format, SMART_TURN.download.file, SMART_TURN.files], ['file', 'smart-turn-v3.2-cpu.onnx', ['smart-turn-v3.2-cpu.onnx']]);
+  assert.equal(SMART_TURN.licence, 'BSD-2-Clause');
+  assert.equal(localSpeechModel(SMART_TURN.id), SMART_TURN);
+  assert.equal(localSpeechModel(SMART_TURN.id, 'stt'), undefined);
+  assert.ok(!LOCAL_SPEECH_MODELS.includes(SMART_TURN) && !localSpeechIds('stt').includes(SMART_TURN.id));
+  assert.deepEqual(turnFile('silero_vad.onnx'), { model: SILERO_VAD });
+  assert.deepEqual(turnFile('smart-turn-v3.2-cpu.onnx'), { model: SMART_TURN });
+  for (const name of ORT_WASM_FILES) assert.deepEqual(turnFile(name), { ort: name });
+  for (const name of ['', 'ort.node.min.js', '../silero_vad.onnx', 'silero-vad/silero_vad.onnx', 'model_int8.onnx']) assert.equal(turnFile(name), undefined, name);
 });

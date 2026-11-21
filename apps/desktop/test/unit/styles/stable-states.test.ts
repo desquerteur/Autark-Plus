@@ -21,7 +21,7 @@ import { splitList, styleRules } from './css-rules.ts';
 
 const STYLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/ui/styles');
 /** Content inside messages (markdown, display blocks): its :has(…) rules describe the content's shape, not a control's state. */
-const CONTENT = new Set(['blocks.css', 'widgets.css']);
+const CONTENT = new Set(['blocks.css', 'markdown.css', 'widgets.css']);
 const FILES = readdirSync(STYLES).filter((name) => name.endsWith('.css') && name !== 'index.css' && name !== 'tokens.css' && !CONTENT.has(name)).sort();
 
 const STATE = /\.(?:selected|on|current|active|pressed|expanded)(?![\w-])|\[aria-(?:pressed|expanded|selected|current|checked)\b|:has\((?![^)]*\.mobile-shell)/;
@@ -126,8 +126,7 @@ test("lines and cells that come with a result are reserved: the dialog message, 
   assert.equal(declarations('chat.css', '.chat-head-text')['grid-template-columns'], 'minmax(0, 1fr)', 'a long chat name ends in an ellipsis');
   // one fixed avatar cell: the chat name starts at the same x in a 1:1 and a group
   assert.equal(declarations('chat.css', '.chat-head-avatar').width, '36px');
-  // the composer's action row: Ultra and the model chip keep one width whatever they show, so a pick moves nothing
-  assert.equal(declarations('composer.css', '.ultra-switch').width, '52px');
+  // the composer's action row: the model chip keeps one width whatever it shows, so a pick moves nothing
   assert.equal(declarations('composer.css', '.model-chip').width, '148px');
   const ui = path.resolve(STYLES, '..');
   const chat = readFileSync(path.join(ui, 'chat', 'ChatHeader.tsx'), 'utf8');

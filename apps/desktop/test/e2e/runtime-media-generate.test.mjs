@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 /** A 2×1 PNG (signature + IHDR is enough for the sniffers). */
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), Buffer.from('IHDR'), Buffer.from([0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0, 0, 0, 0])]);
@@ -63,13 +63,13 @@ test('agents create an image and speech; both land in the chat\'s media library'
   await client.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`] });
 
   await client.call('messages.send', { conversationId: chat.id, body: 'Make the cover [[tool:media.image {"prompt":"A calm blue wave logo","quality":"low"}]]' });
-  const drawn = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /media\.image → /), 120_000);
+  const drawn = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /media\.image → /), 120_000);
   const image = /"fileId":"([a-f0-9]{64})"/.exec(drawn.body)?.[1];
   assert.ok(image, drawn.body);
   assert.match(drawn.body, /```ui/);
 
   await client.call('messages.send', { conversationId: chat.id, body: 'Now the voice-over [[tool:media.speak {"text":"Welcome to the launch."}]]' });
-  const spoken = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /media\.speak → /), 120_000);
+  const spoken = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /media\.speak → /), 120_000);
   const audio = /"fileId":"([a-f0-9]{64})"/.exec(spoken.body)?.[1];
   assert.ok(audio, spoken.body);
 

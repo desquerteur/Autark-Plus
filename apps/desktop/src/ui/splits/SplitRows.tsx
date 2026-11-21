@@ -2,41 +2,35 @@
 // spinner while it runs), "#3 title" (ellipsis), the model · effort in a fixed slot at the right (what it runs on – the
 // live activity's while it runs; a narrow row shows the effort alone, splits.css) and the duration in a
 // fixed slot after it; a row click opens that split's own steps right below it (team/run-items.tsx, the parent
-// agent's run stream). Used by the parent's step line "Split · 3 of 5 done" (SplitStep, in the chat's run item lists:
-// the live block, "Worked … · N steps", the working popover), by the chat's one live block per running group
-// (SplitLiveBlock: "<Agent> 3 of 5 parts working" over its rows, the live block's frame – it holds the agent's run
-// stream while shown, where the connection may) and by an open run in Team › agent › Runs (RunSplits, below its
-// steps – there SplitStepRows is false and the agents.split call stays an ordinary step line: a run's splits show once).
+// agent's run stream). Used by the parent's step line "Split · 3 of 5 done" (SplitStep, in run item lists), by the
+// working popover's group row; the agent's activity log (Team › agent) shows the same step line, open
+// from the start and as columns – one per running part (SplitColumns, SplitLanes.tsx).
 // Rows open below fixed rows only; nothing above them moves.
 // Owns: this markup and which rows are open. Never: polls, or shows a step the runtime did not journal.
 
 import { createContext } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useContext, useEffect, useState } from 'preact/hooks';
 import type { RunItem } from '../../shared/model/runs.ts';
 import type { SplitGroupView, SplitStatus, SplitView } from '../../shared/model/splits.ts';
-import { AgentAvatar, Icon, Spinner } from '../lib/ui.tsx';
+import { Icon, Spinner } from '../lib/ui.tsx';
 import type { IconName } from '../lib/icons.tsx';
 import { activity, agentName } from '../lib/store.ts';
 import { useContextMenu } from '../lib/context-menu.tsx';
-import { go } from '../lib/router.ts';
 import { modelShortName } from '../lib/model-name.ts';
-import { RunItemList, holdRunsTopic, useRunItems } from '../team/run-items.tsx';
+import { RunItemList, useRunItems } from '../team/run-items.tsx';
 import { ensureModelNames, groupsOfRun, watchSplits } from './split-model.ts';
+import { SplitLanes } from './SplitLanes.tsx';
 import { splitMenu } from './split-menu.ts';
 import {
-  SPLIT_STATUS_LABEL, groupDone, groupForCall, groupWorking, isLiveGroup, liveOfSplit, partLabel, splitDuration, splitIconKind, splitModelParts,
+  SPLIT_STATUS_LABEL, groupDone, groupForCall, isLiveGroup, liveOfSplit, partLabel, splitDuration, splitIconKind, splitModelParts,
 } from './split-text.ts';
 import type { SplitIconKind } from './split-text.ts';
 
 /** Steps an open split row shows before "+N earlier steps" while it runs (as many as the live block). */
 const ROW_STEPS = 6;
 
-/**
- * Whether a run item list draws the parent's agents.split call as "Split · 3 of 5 done" with its rows (team/run-steps.tsx
- * StepEntry). False where the run's splits are listed below its steps anyway (Team › agent › Runs: RunSplits), so a run's
- * splits show once there and its call stays an ordinary step line ("Split into 3 parts").
- */
-export const SplitStepRows = createContext(true);
+/** True where a split step opens as columns from the start (the agent's activity log), else to its rows on a click. */
+export const SplitColumns = createContext(false);
 
 const ICONS: Record<Exclude<SplitIconKind, 'running'>, IconName> = {
   waiting: 'hourglass-simple', done: 'check-circle', failed: 'warning-circle', stopped: 'stop-circle', skipped: 'arrow-right',
@@ -71,7 +65,7 @@ function SplitRow(props: { split: SplitView; agentId: string; open: boolean; onT
       </button>
       {open && (
         <div class="split-row-body">
-          {split.error && <p class="split-row-error">{split.error}</p>}
+          {split.error && <p class={split.status === 'queued' ? 'split-row-note' : 'split-row-error'}>{split.error}</p>}
           {split.run
             ? <SplitSteps runId={split.run.id} agentId={props.agentId} live={split.status === 'running'} quiet={!!split.error} />
             : <p class="split-row-note">{SPLIT_STATUS_LABEL[split.status]}</p>}
@@ -120,7 +114,8 @@ function resultText(result: RunItem | undefined): string | undefined {
  */
 export function SplitStep(props: { call: RunItem; result?: RunItem; live: boolean }) {
   const { call, result } = props;
-  const [open, setOpen] = useState(false);
+  const columns = useContext(SplitColumns);
+  const [open, setOpen] = useState(columns);
   useEffect(() => watchSplits({ parentRunId: call.runId }), [call.runId, result?.id]);
   const group = groupForCall(groupsOfRun(call.runId), call.createdAt, resultText(result));
   const running = (!result && props.live) || (group ? isLiveGroup(group) : false);
@@ -132,52 +127,12 @@ export function SplitStep(props: { call: RunItem; result?: RunItem; live: boolea
         <span class="run-item-target">{group ? `· ${groupDone(group)}` : ''}</span>
       </button>
       {open && (
-        <div class="run-item-body split-step-body">
-          {group ? <SplitList group={group} /> : <span class="split-row-loading"><Spinner size={14} /></span>}
+        <div class={`run-item-body split-step-body${columns ? ' columns' : ''}`}>
+          {!group ? <span class="split-row-loading"><Spinner size={14} /></span> : columns ? <SplitLanes group={group} /> : <SplitList group={group} />}
         </div>
       )}
     </li>
   );
 }
 
-/**
- * The chat's live block of one running group (the live block's frame and byline): the agent, "3 of 5 parts working"
- * in the byline's fixed slot, then its split rows.
- */
-export function SplitLiveBlock(props: { group: SplitGroupView }) {
-  const { group } = props;
-  const name = agentName(group.agentId);
-  // While shown: the agent's run stream, so every part's change arrives as it happens.
-  useEffect(() => holdRunsTopic(group.agentId), [group.agentId]);
-  return (
-    <article class="message agent working-message split-live" data-group-id={group.id} aria-label={`${name} split working`}>
-      <div class="message-author">
-        <AgentAvatar agentId={group.agentId} size={26} working onClick={() => go.agent(group.agentId)} />
-        <button type="button" class="author-name" onClick={() => go.agent(group.agentId)}>{name}</button>
-        <span class="working-model tabular" title={group.goal}>{groupWorking(group)}</span>
-      </div>
-      <SplitList group={group} />
-    </article>
-  );
-}
 
-/** An open run's splits in Team › agent › Runs: per group its "Split · 3 of 5 done" line and rows. */
-export function RunSplits(props: { runId: string }) {
-  useEffect(() => watchSplits({ parentRunId: props.runId }), [props.runId]);
-  const groups = groupsOfRun(props.runId);
-  if (!groups.length) return null;
-  return (
-    <div class="run-splits">
-      {groups.map((group) => (
-        <div key={group.id} class="run-split-group">
-          <div class="run-split-head" title={group.goal}>
-            <span class="run-item-icon" aria-hidden="true">{isLiveGroup(group) ? <Spinner size={12} label="Running" /> : <Icon name="git-branch" size={14} />}</span>
-            <span class="run-item-verb">Split</span>
-            <span class="run-item-target">· {groupDone(group)}</span>
-          </div>
-          <SplitList group={group} />
-        </div>
-      ))}
-    </div>
-  );
-}

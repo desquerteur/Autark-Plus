@@ -118,8 +118,7 @@ test('the owner posts as the human via the bridge: not echoed, wakes the agent, 
     assert.ok(s.h.wakeRows().some((row) => row.agent_id === 'ag_ada' && row.reason === 'message'), 'the agent is woken like for the desktop');
     assert.deepEqual(s.telegram.sent.map((m) => m.text), [CONFIRM], 'nothing from Telegram is echoed back');
 
-    const draft = s.h.chats.beginAgentMessage(s.chat.id, 'ag_ada', 'run_1');
-    s.h.chats.finishAgentMessage(draft.id, { body: 'On track.', state: 'final' });
+    s.h.chats.postAgentMessage(s.chat.id, 'ag_ada', 'run_1', { body: 'On track.', state: 'final' });
     await s.bridges.settled();
     assert.deepEqual(s.telegram.sent.map((m) => m.text), [CONFIRM, 'Ada: On track.']);
   } finally {
@@ -130,7 +129,7 @@ test('the owner posts as the human via the bridge: not echoed, wakes the agent, 
 test('owner messages never answer an ask: always plain text, the open to-do stays open', async () => {
   const s = await connected();
   try {
-    const ask = s.h.tasks.create({ conversationId: s.chat.id, title: 'Approve the budget?', assigneeKind: 'human', humanReason: 'approval', createdBy: 'ag_ada' });
+    const ask = s.h.tasks.create({ conversationId: s.chat.id, title: 'Approve the budget?', assigneeKind: 'human', createdBy: 'ag_ada' });
     await linked(s);
     await delivered(s.telegram, s.bridges, owner('yes'), owner('approve', { reply_to_message: { message_id: 1 } }));
     const posted = texts(s).filter((m) => m.authorKind === 'human');

@@ -7,15 +7,17 @@
 
 import type { ComputerActivityState } from '../../shared/model/computer.ts';
 import { can } from '../lib/session.ts';
+import { settings } from '../lib/store.ts';
 import { openScreen } from '../workspace/pages.ts';
 import { computerActivity, watchComputerActivity } from './computer-activity.ts';
 import { NOTICE_PRIORITY, registerNotice, type Notice } from './notices.ts';
 
 export const COMPUTER_NOTICE_ID = 'computer-use';
 
-/** The line while an agent uses this PC (and computer use is not stopped), or null. */
-export function computerNotice(state: ComputerActivityState | null, canWatch: boolean, watch: () => void): Notice | null {
-  if (!state?.active || state.stopped) return null;
+/** The line while an agent uses this PC (and computer use is not stopped), or null. `shown`: the person asked for it
+ *  (Settings › General › Notifications; off by default – feedback 17.11.2026: "keine nervige Meldung", the agents use the PC all day). */
+export function computerNotice(state: ComputerActivityState | null, canWatch: boolean, watch: () => void, shown = true): Notice | null {
+  if (!shown || !state?.active || state.stopped) return null;
   const text = `${state.agent ?? 'An agent'} is using this PC${state.summary ? ` · ${state.summary}` : ''}`;
   return {
     id: COMPUTER_NOTICE_ID, tone: 'info', text, priority: NOTICE_PRIORITY.computer,
@@ -26,5 +28,5 @@ export function computerNotice(state: ComputerActivityState | null, canWatch: bo
 /** Registers the provider (once per app start); returns the function that removes it. */
 export function registerComputerNotice(): () => void {
   watchComputerActivity();
-  return registerNotice(() => computerNotice(computerActivity.value, can('computer.preview'), openScreen));
+  return registerNotice(() => computerNotice(computerActivity.value, can('computer.preview'), openScreen, settings.value?.notifications.computerUse === true));
 }

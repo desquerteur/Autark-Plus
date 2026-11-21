@@ -7,23 +7,25 @@
 // before a JSON summary – the library's name, size, saved description and tags – that asks agents to save what they
 // see (MEDIA_DESCRIBE_HINT). Every engine hands tool images to its model (codex/turn.ts, mcp/convert.ts, http/*);
 // in Codex code mode a nested call's images are steered into the turn (engines/code-mode.ts nestedImageSteer).
-// A path's resource is files.read's (files.ts workspaceResource).
+// A path's resource is files.read's (files.ts workspaceResource). B-080: a path with no file answers like files.read's
+// miss (file-miss.ts missText: the nearest folder's listing and the files of that name).
 // Owns: the tool's arguments, refusals, caption and summary.
 // Never: shows media of chats the agent is not a member of or beyond its turn's reach (media-common.ts readableMedia),
 // sends an image to a model known not to see, or presents what an image
 // shows as instructions.
 
 import { stat } from 'node:fs/promises';
-import path from 'node:path';
 import type { ImageRegion } from '../../../shared/api/host-bridge.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { MediaInfo } from '../../../shared/model/media.ts';
 import type { ModelInfo } from '../../../shared/model/providers.ts';
 import { parseMediaRef } from '../../../shared/text/media-ref.ts';
 import { VISION_LIMITS, visionFile, visionImage, type ShownImage } from '../../media/vision-image.ts';
+import { storedId } from '../../media/outputs.ts';
 import type { ToolContext, ToolOutput } from '../types.ts';
-import { failure } from '../types.ts';
+import { FILE_ID_PROPERTY, failure } from '../types.ts';
 import { readPath, workspaceResource } from './files.ts';
+import { missText } from './file-miss.ts';
 import { MEDIA_DESCRIBE_HINT, mediaFileId, readableMedia, referencedPart, untilStopped, view } from './media-common.ts';
 import { clip, defineTool, internal } from './util.ts';
 
@@ -88,20 +90,12 @@ async function storedImage(ctx: ToolContext, value: string): Promise<ToolOutput>
   return shown(`Image "${info.name}"${image.cut ? ' (the referenced region)' : ''}${pixels(image)}`, image, summary);
 }
 
-/** A blob path ("stored at …") given as path: the stored file's id. */
-function blobPath(ctx: ToolContext, given: string): string | undefined {
-  const id = mediaFileId(given);
-  if (!id || !path.isAbsolute(given)) return undefined;
-  const relative = path.relative(path.resolve(ctx.services.paths.blobs), path.resolve(given));
-  return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? id : undefined;
-}
-
 async function fileImage(ctx: ToolContext, given: string): Promise<ToolOutput> {
-  const stored = blobPath(ctx, given);
+  const stored = storedId(ctx.services.paths, given); // a blob path ("stored at …"): the stored file – B-080: the rule of a posted message's files (media/outputs.ts)
   if (stored) return storedImage(ctx, stored);
   let real: string;
   try { real = await readPath(ctx, given); } catch (error) { return failed(error); }
-  if (!(await stat(real).catch(() => undefined))?.isFile()) return failure(`No file at ${given}.`);
+  if (!(await stat(real).catch(() => undefined))?.isFile()) return failure(await missText(ctx, given, real));
   const sightless = cannotSee(ctx);
   if (sightless) return failure(sightless);
   if (ctx.signal.aborted) return failure(STOPPED);
@@ -115,12 +109,12 @@ async function fileImage(ctx: ToolContext, given: string): Promise<ToolOutput> {
 
 export const mediaView = defineTool<{ fileId?: string; path?: string }>({
   name: 'media.view',
-  description: `See an image for myself: a stored image (an earlier attachment, a media.search hit, one I made, or a region of it) or an image file, returned as an image (JPEG/PNG, longest edge ≤ ${VISION_LIMITS.maxPx} px) with its name, size, saved description and tags. fileId: the 64-character name at the end of the file's "stored at" path, or a media: reference from the chat (its region is cut out); path: a workspace path (or absolute, anywhere on this PC). ${VIEW_NOTE}`,
+  description: `Shows me an image: a stored one, a region of it, or an image file. It comes with its saved description and tags, the longest edge at most ${VISION_LIMITS.maxPx} px.`,
   inputSchema: {
     type: 'object',
     properties: {
-      fileId: { type: 'string', minLength: 64, maxLength: 1000 },
-      path: { type: 'string', minLength: 1, maxLength: 1024 },
+      fileId: { ...FILE_ID_PROPERTY, description: 'A stored image, or a media: reference from the chat (its region is cut out).' },
+      path: { type: 'string', minLength: 1, maxLength: 1024, description: 'An image file on this PC.' },
     },
     additionalProperties: false,
   },

@@ -62,7 +62,7 @@ test('every built-in pattern parses; the CEO assistant pattern is optional and u
     assert.equal(ceo.optional, true);
     assert.equal(ceo.agents[0].template, 'ceo-assistant');
     assert.match(ceo.agents[0].instructions, /I assist the person who runs this company/); // B-076: the templates speak in the first person
-    assert.equal(ceo.agents[1].include, false); // the task coordinator is optional
+    assert.equal(ceo.agents.length, 1, "the watcher finds stuck work; no coordinator agent");
     const research = f.patterns.get('builtin:research-team');
     const [lead, researcher, checker] = research.agents;
     assert.deepEqual([lead.template, lead.role, lead.mode], ['researcher', 'Research lead', 'research']);

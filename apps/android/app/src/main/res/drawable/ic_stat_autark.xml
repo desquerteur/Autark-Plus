@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: the Autark mark as one white shape on transparent – the Λ and its dot, traced from drawable-nodpi/autark_icon.png
+     (1024 px: legs 288..736 × 335..760, inner apex 512,430, dot r48 at 512,643), cropped to a 512 square around the mark.
+     It is the small icon of every notification (Android tints it for light and dark bars; setColor gives the shade its
+     orange), the monochrome launcher layer (themed icons) and the phone-use bubble's mark. Never: a second colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="512" android:viewportHeight="512">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M216,43 L296,43 L480,468 L396,468 L256,138 L116,468 L32,468 Z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M208,351 a48,48 0 1,0 96,0 a48,48 0 1,0 -96,0 Z" />
+</vector>

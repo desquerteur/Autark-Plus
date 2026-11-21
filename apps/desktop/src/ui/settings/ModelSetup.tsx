@@ -1,15 +1,18 @@
 // The model setup – the first run's AI card and Settings › Models show the same: the plans on this PC (Claude Code
 // and Codex always, Kimi Code / Gemini CLI / Copilot CLI when found) with their state – a connected one as its account
-// row (AccountRow.tsx, with its models) –, `children` (Settings: the other connections), the provider key variables set on
+// row (AccountRow.tsx, with its models); a plan login this PC found (or another company on it made) that is no account here
+// as a "Found: … – use in this company?" row with Use / Not here (17.11.2026: used and shared only after Use) –, `children` (Settings: the other connections), the provider key variables set on
 // this PC not in use yet (Use), one fixed row of five buttons –
 // Claude plan, Codex plan (plan-actions.tsx: add an account and sign in, install if needed), AF-024 Google Gemini (gemini-add.tsx:
 // Google sign-in or API key, several accounts), API key and Local server (both open the one connection form inline under it,
-// account-forms.tsx) – with the sign-in link cell and one status line for the plan flow. Settings shows the use rows under it (ModelUses.tsx).
+// account-forms.tsx) – with the sign-in link cell and one status line for the plan flow, and the sheet of a sign-in started
+// from the phone (SignInSheet.tsx). Settings shows the use rows under it (ModelUses.tsx).
 // Owns: this layout and its PC scan (accounts.detect, again after a plan flow). Never: a flow's steps (plan-setup.ts).
 
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { envKeyProvider, type DetectionReport } from '../../shared/model/providers.ts';
+import { envKeyProvider, type DetectionReport, type FoundLogin } from '../../shared/model/providers.ts';
+import { choose } from '../lib/dialog.tsx';
 import { rpc } from '../lib/rpc.ts';
 import { accounts, loadModels } from '../lib/store.ts';
 import { pushToast } from '../lib/toasts.ts';
@@ -22,7 +25,9 @@ import { ConnectionForm } from './account-forms.tsx';
 import { GeminiAdd } from './gemini-add.tsx'; // AF-024
 import { AccountRow } from './AccountRow.tsx';
 import { ActionButton, Row, useBusy } from './controls.tsx';
+import { SignInSheet } from './SignInSheet.tsx';
 import { cliRowView, groupAccounts, needsSignIn, PC_CLIS, PROVIDER_NAMES, stateLabel } from './providers.ts';
+import { foundText } from './extra-usage.ts';
 
 type Cli = DetectionReport['clis'][number];
 
@@ -38,7 +43,7 @@ function CliRow(props: { cli: Cli; scanned: boolean; onChanged: () => void }) {
   const action = props.scanned && !covered ? view.action : undefined;
   const add = (detected: boolean) => void run(async () => {
     const added = await rpc.call('accounts.add', { provider, ...(detected ? { detected: true } : {}) });
-    if (needsSignIn(added)) signInStarted(added.id, added.provider);
+    if (needsSignIn(added)) signInStarted(added.id, added.provider, added);
     else pushToast({ title: `${view.name}: ${stateLabel(added)}` });
   });
   return (
@@ -47,6 +52,49 @@ function CliRow(props: { cli: Cli; scanned: boolean; onChanged: () => void }) {
         {(action === 'sign-in' || action === 'add') && <ActionButton label="Sign in" busy={busy} onClick={() => add(false)} />}
         {action === 'add-again' && <ActionButton label="Add again" busy={busy} onClick={() => add(true)} />}
         {action === 'check' && <ActionButton label="Check again" busy={busy} onClick={props.onChanged} />}
+      </span>
+    </Row>
+  );
+}
+
+/**
+ * A plan login on offer (accounts.detect → found): no account yet – nothing uses it and no PC of the company gets it –
+ * until Use; Not here keeps it out of this company (it stays on the PC). A declined one of another company can still be used.
+ */
+function FoundRow(props: { found: FoundLogin; cli: Cli | undefined; onChanged: () => void }) {
+  const { found } = props;
+  const [busy, run] = useBusy();
+  const text = foundText(found, props.cli);
+  const name = PROVIDER_NAMES[found.provider] ?? found.provider;
+  // 17.11.2026 (Konrad #109): "Use" asks where the login goes; only "On all PCs of this company" syncs it
+  const use = async () => {
+    const where = await choose({
+      title: `Use ${name} in this company?`,
+      body: found.where === 'this-pc' ? 'It is signed in on this PC. Where should it be used?' : 'Another company on this PC made this sign\u2011in. Where should it be used?',
+      choices: [
+        { value: 'pc', label: 'Only on this PC', hint: 'The company\'s other PCs get neither the account nor the sign\u2011in' },
+        { value: 'company', label: 'On all PCs of this company', hint: 'The account and its sign\u2011in go to every PC of this company' },
+      ],
+      value: 'pc', confirmLabel: 'Use',
+    });
+    if (where === null) return;
+    await run(async () => {
+      const added = await rpc.call('accounts.useFound', { key: found.key, thisPcOnly: where === 'pc' });
+      accounts.value = await rpc.call('accounts.list');
+      props.onChanged();
+      pushToast({ title: `${name}: ${stateLabel(added)}`, body: where === 'pc' ? 'Used on this PC only.' : 'Used on all PCs of this company.' });
+    });
+  };
+  const decline = () => void run(async () => {
+    await rpc.call('accounts.declineFound', { key: found.key });
+    props.onChanged();
+    pushToast({ title: `${name} not used here`, body: 'Still signed in on this PC.' });
+  });
+  return (
+    <Row class={`found-row${found.declined ? ' declined' : ''}`} label={text.label} hint={text.hint}>
+      <span class="found-actions">
+        <ActionButton variant={found.declined ? 'secondary' : 'primary'} label="Use" busy={busy} onClick={() => void use()} />
+        {!found.declined && <ActionButton label="Not here" disabled={busy} onClick={decline} />}
       </span>
     </Row>
   );
@@ -77,7 +125,7 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
   const scan = async (force = false) => {
     try {
       setReport(await rpc.call('accounts.detect', force ? { force: true } : undefined));
-      accounts.value = await rpc.call('accounts.list'); // the logins the scan adopted
+      accounts.value = await rpc.call('accounts.list'); // the local servers the scan adopted (a plan login is only offered: `found`)
       void loadModels(force);
     } catch { /* the rows still show; the buttons say what is missing */ } finally { setScanned(true); }
   };
@@ -90,8 +138,11 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
     <>
       {PC_CLIS.flatMap((provider) => {
         const list = groupAccounts(accounts.value.filter((account) => account.provider === provider && account.auth === 'cli'))[0]?.accounts ?? [];
-        if (list.length) return list.map((account) => <AccountRow key={account.id} account={account} siblings={list} />);
         const cli = report?.clis.find((entry) => entry.provider === provider);
+        const offers = (report?.found ?? []).filter((found) => found.provider === provider)
+          .map((found) => <FoundRow key={found.key} found={found} cli={cli} onChanged={() => void scan()} />);
+        if (list.length) return [...list.map((account) => <AccountRow key={account.id} account={account} siblings={list} />), ...offers];
+        if (offers.length) return offers; // the offer says what the plan row would: signed in on this PC, not used here yet
         return WITH_BUTTON.has(provider) || cli?.path ? [<CliRow key={provider} cli={cli ?? { provider }} scanned={scanned} onChanged={() => void scan(true)} />] : [];
       })}
       {props.children}
@@ -106,6 +157,7 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
       <p class={`model-setup-status${view?.tone ? ` ${view.tone}` : ''}`} role="status" title={view?.text}>{view?.text ?? ''}</p>
       {form === 'gemini' && <GeminiAdd report={() => report} onDone={() => setForm(null)} />}
       {form && form !== 'gemini' && <ConnectionForm key={form} kind={form} onDone={() => setForm(null)} {...(form === 'local' && server ? { found: server } : {})} />}
+      <SignInSheet />
     </>
   );
 }

@@ -3,7 +3,7 @@
 // service worker registration, install prompt, Web Push subscription, the offline "For you"
 // snapshot, SW navigation and the socket check on every push ('wf.wake'), and Back layer by layer (back.ts).
 // Inside the iPhone web app (pwa/hosted.ts): the shell's worker instead of /sw.js, /rpc under the shell's base, and the
-// notices of read chats closed while the app is in front (Apple gets no clear pushes).
+// notices of read chats and calls closed while the app is in front (Apple gets no clear pushes).
 // Owns: everything the browser/phone build needs beyond the shared UI.
 // Never: runs inside the Electron window (desktop has the preload bridge), never logs or
 // displays the token; the token is kept only in localStorage 'wf.token' (read by lib/rpc.ts).
@@ -22,6 +22,7 @@ import { idbGet, idbSet, TODO_SNAPSHOT_KEY } from './idb.ts';
 import { watchPersonMark } from './person-access.ts';
 import { startBack } from './back.ts';
 import { hostedPath, hostedShell } from './hosted.ts';
+import { requestBadgeSync } from './badge.ts';
 
 const TOKEN_KEY = 'wf.token';
 
@@ -119,6 +120,12 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
         }
       }
     });
+    const refreshNotices = () => {
+      if (loaded.peek() && document.visibilityState === 'visible') void closeReadNotices();
+      else requestBadgeSync(registration);
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', refreshNotices);
+    refreshNotices();
     return registration;
   } catch (error) {
     console.warn('[pwa] service worker registration failed', error);
@@ -248,23 +255,23 @@ export async function disablePush(): Promise<PushResult> {
 
 /**
  * The iPhone web app: Apple's push service gets no `{clear}` pushes (iOS revokes a subscription that receives pushes
- * without a notice – runtime/pwa/read-clear.ts), so the notices of chats that are read by now close here whenever the
- * app is in front: when it comes back and whenever the chat list changes. Returns how many it closed.
+ * without a notice – runtime/pwa/read-clear.ts), so read chats' notices close here when the loaded app comes to the
+ * front or its chat list changes. Call notices close too: the app itself shows the call. Returns how many it closed.
  */
-export async function closeReadNotices(reg: Pick<ServiceWorkerRegistration, 'getNotifications'> | null = registration, chats = conversations.peek()): Promise<number> {
+export async function closeReadNotices(reg: Pick<ServiceWorkerRegistration, 'getNotifications' | 'active'> | null = registration, chats = conversations.peek()): Promise<number> {
   const read = new Set(chats.filter((chat) => chat.unread === 0).map((chat) => `chat:${chat.id}`));
   let closed = 0;
   for (const notice of (await reg?.getNotifications?.().catch(() => [])) ?? []) {
-    if (notice.tag && read.has(notice.tag)) { notice.close(); closed++; }
+    if (notice.tag && (read.has(notice.tag) || notice.tag.startsWith('call:'))) { notice.close(); closed++; }
   }
+  requestBadgeSync(reg);
   return closed;
 }
 
 function watchReadNotices(): void {
-  if (!hostedShell()) return;
   const visible = () => document.visibilityState === 'visible';
-  document.addEventListener('visibilitychange', () => { if (visible()) void closeReadNotices(); });
-  effect(() => { void conversations.value; if (visible()) void closeReadNotices(); });
+  document.addEventListener('visibilitychange', () => { if (visible() && loaded.peek()) void closeReadNotices(); });
+  effect(() => { void conversations.value; if (loaded.value && visible()) void closeReadNotices(); });
 }
 
 // ------------------------------------------------------------------ offline snapshot

@@ -11,8 +11,8 @@
 //   long_context – a larger context window than `from` (unknown `from`: at least LONG_CONTEXT_MIN);
 //                  the window the engine or the curated caps report
 // Every need except stronger skips models that are weak at the turn's work (strength < WEAK). The
-// router (router.ts) applies it in the place of the agent's own request – after a chat or agent pin,
-// inside the policy band and the pool's hard filters.
+// router (router.ts) applies it in the place of the agent's own request – over the start model (B-083: the person's
+// suggestion in the chat or the agent's own), inside the policy band and the pool's hard filters.
 // Owns: these rules and their texts. Never: I/O, leaves the router's pool, or picks a model itself.
 
 import type { RouteRequest } from '../contracts.ts';

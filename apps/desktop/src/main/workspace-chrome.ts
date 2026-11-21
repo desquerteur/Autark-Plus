@@ -5,17 +5,24 @@
 // and not what an agent browses in a tab of its own: this is the person's history) and the browser shortcuts pressed
 // inside the page (shared/api/workspace-browser-keys.ts): main does reload, back/forward, stop, zoom, DevTools and reopen
 // itself; the app's go to the app, with the keyboard where a field of the app takes it, and the app's own shortcuts are
-// passed on as before. A site's prefers-color-scheme follows the app's theme (colorScheme).
+// passed on as before. A site's prefers-color-scheme follows the app's theme (colorScheme). B-081: the Pin button
+// ('pick': `picking` on the page entry, the picker itself is main/side-driver's – host.pick) and its pins, which go to
+// the app window as the key event 'pick' with the tab and its kept address (the keyboard stays where it is).
+// Feedback 16.11.2026 (F15): the feedback shortcut pressed inside a page goes to the app window as IPC feedbackKey (its
+// press and its release – a hold is talk); the keyboard goes back to the app with the release, where the snapshot's
+// field takes it.
 // Owns: that per-tab state, these commands, the page's shortcuts and its color scheme. Never: reads page content or runs
 // script in a page.
 
 import type { BrowserWindow, Event, Input, WebContents } from 'electron';
-import { WORKSPACE_BROWSER, type BrowserKeyAction, type HistoryEntry, type WorkspaceBrowserCommand, type WorkspaceBrowserPage } from '../shared/api/workspace-browser.ts';
-import { pageKey, type MainKeyAction } from '../shared/api/workspace-browser-keys.ts';
+import { IPC } from '../shared/api/desktop.ts';
+import { WORKSPACE_BROWSER, keptAddress, type BrowserKeyAction, type BrowserKeyEvent, type HistoryEntry, type WorkspaceBrowserCommand, type WorkspaceBrowserPage } from '../shared/api/workspace-browser.ts';
+import { FeedbackKey, pageKey, type MainKeyAction } from '../shared/api/workspace-browser-keys.ts';
+import type { PickedElement } from '../shared/model/page-pick.ts';
 import { BrowserHistory } from './workspace-history.ts';
 import { SiteZoom, zoomStep } from './workspace-tab-memory.ts';
 
-interface ChromeState { find?: { active: number; matches: number }; findText?: string }
+interface ChromeState { find?: { active: number; matches: number }; findText?: string; picking?: boolean }
 
 export interface ChromeHost {
   window(): BrowserWindow | null;
@@ -24,11 +31,13 @@ export interface ChromeHost {
   mainKey(id: string, action: Extract<MainKeyAction, 'reload' | 'back' | 'forward' | 'stop' | 'reopen'>): void;
   /** An agent opened this tab (what it browses there stays out of the person's history). */
   agentTab(id: string): boolean;
+  /** B-081: the tab's picker on or off (main/side-driver); without it the Pin button does nothing. */
+  pick?(id: string, on: boolean): void;
 }
 
 /** The commands this part answers (the rest is the tab's lifetime). */
-export type ChromeCommand = Extract<WorkspaceBrowserCommand, { action: 'focus' | 'find' | 'find-stop' | 'zoom' | 'mute' | 'devtools' }>;
-export const CHROME_ACTIONS: ReadonlySet<string> = new Set(['focus', 'find', 'find-stop', 'zoom', 'mute', 'devtools']);
+export type ChromeCommand = Extract<WorkspaceBrowserCommand, { action: 'focus' | 'find' | 'find-stop' | 'zoom' | 'mute' | 'devtools' | 'pick' }>;
+export const CHROME_ACTIONS: ReadonlySet<string> = new Set(['focus', 'find', 'find-stop', 'zoom', 'mute', 'devtools', 'pick']);
 
 /** The app's fields take these, so the keyboard goes there; a tab switch or a close leaves it where it is (the next page keeps it). */
 const TAKES_KEYBOARD: ReadonlySet<BrowserKeyAction> = new Set<BrowserKeyAction>(['new-tab', 'address', 'find', 'history']);
@@ -55,6 +64,7 @@ export class TabChrome {
   private readonly states = new Map<string, ChromeState>();
   private readonly host: ChromeHost;
   private readonly mac = process.platform === 'darwin';
+  private readonly feedbackKey = new FeedbackKey(); // one for every tab: the keyboard is in one page at a time
 
   constructor(host: ChromeHost, options: { historyFile?: string; zoomFile?: string } = {}) {
     this.host = host;
@@ -86,14 +96,26 @@ export class TabChrome {
 
   /** The tab's Chrome fields for its page entry. */
   extras(id: string, contents: WebContents): Partial<WorkspaceBrowserPage> {
-    const find = this.states.get(id)?.find;
+    const state = this.states.get(id);
+    const find = state?.find;
     const percent = Math.round(contents.getZoomFactor() * 100);
     return {
       ...(contents.isCurrentlyAudible() ? { audible: true } : {}),
       ...(contents.isAudioMuted() ? { muted: true } : {}),
       ...(percent !== 100 ? { zoom: percent } : {}),
       ...(find ? { find: { ...find } } : {}),
+      ...(state?.picking ? { picking: true } : {}),
     };
+  }
+
+  /** B-081: a pin from tab `id` for the app window (its address kept as for the history), or null: the picker ended there. */
+  picked(id: string, contents: WebContents | undefined, pick: PickedElement | null): void {
+    const state = this.states.get(id);
+    if (!pick) { if (state?.picking) { state.picking = false; this.host.publish(); } return; }
+    const window = this.host.window();
+    if (!state?.picking || !contents || contents.isDestroyed() || !window || window.isDestroyed()) return;
+    const event: BrowserKeyEvent = { id, action: 'pick', pick: { ...pick, tab: id, url: keptAddress(contents.getURL()) ?? '' } };
+    window.webContents.send(WORKSPACE_BROWSER.key, event);
   }
 
   /** History for the app (newest first) or Clear history. */
@@ -121,6 +143,10 @@ export class TabChrome {
       state.findText = text;
       state.find ??= { active: 0, matches: 0 };
       contents.findInPage(text, { forward: command.forward !== false, findNext: !again });
+    } else if (command.action === 'pick') {
+      if (!this.host.pick || !this.states.has(id)) return;
+      state.picking = command.on;
+      this.host.pick(id, command.on);
     } else {
       contents.stopFindInPage('clearSelection');
       state.find = undefined; state.findText = undefined;
@@ -128,6 +154,15 @@ export class TabChrome {
   }
 
   private key(id: string, contents: WebContents, event: Event, input: Input): void {
+    const feedback = this.feedbackKey.step(input, this.mac);
+    if (feedback) {
+      event.preventDefault();
+      const window = this.host.window();
+      if (feedback === 'swallow' || !window || window.isDestroyed()) return;
+      window.webContents.send(IPC.feedbackKey, feedback);
+      if (feedback === 'up') window.webContents.focus(); // the snapshot's field is in the app
+      return;
+    }
     const key = pageKey(input, this.mac, contents.isLoading());
     if (!key) return;
     event.preventDefault();

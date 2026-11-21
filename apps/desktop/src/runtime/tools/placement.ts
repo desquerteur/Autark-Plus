@@ -1,6 +1,10 @@
-// Where a tool call runs: remote tools (computer, browser, phone) get the optional `device`
+// Where a tool call runs: remote tools (computer, browser, phone, shell, files.read/list) get the optional `device`
 // argument; without it they run on the agent's home device (its deviceId; none = this PC). `device`
-// values resolve to a linked PC, and a forwarded call's journal text names that PC.
+// values resolve to a linked PC, and a forwarded call's journal text names that PC. B-080: the home takes a call
+// only when this PC forwards to it – one of my own linked PCs, or an employee's PC (it runs its employer's calls,
+// devices/sync/home.ts) – else the call runs on this PC: a removed, half-paired or unknown home, or a PC this PC
+// joined as an employee (that PC turns an employee's calls away), leaves "default = this PC" true for every agent
+// whose turns run here.
 // B-075 (owner 04.11.2026: an agent could not reach "Company 2"): any call may carry `company` – another company on this
 // PC by its name or folder from companies.list (tools.call declares it beside the target's arguments; no tool schema
 // grows) – and then runs in that company's runtime (registry.ts forwards it, its effect journaled as external; it refuses
@@ -10,10 +14,10 @@
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { Device } from '../../shared/model/devices.ts';
-import type { CompanyEntry } from '../../shared/model/companies.ts';
 import type { ActionDescription, ToolContext, ToolDef } from './types.ts';
 import { DEVICE_ARG, DEVICE_PROPERTY } from './types.ts';
 import { companyFolder, listCompanies } from '../root/companies.ts';
+import { DevicesRepo } from '../devices/repo.ts';
 
 /** A PC a call runs on. `id` is undefined only for this PC while its own id is unknown. */
 export interface DeviceTarget { id?: string; name: string; self: boolean }
@@ -69,9 +73,19 @@ export function place(services: RuntimeServices, tool: ToolDef, args: Record<str
   }
   if (!ctx.deviceId) ctx.deviceId = undefined; // '' never names a PC
   if (ctx.deviceId === undefined || ctx.deviceId === safeSelfId(services)) return { input };
-  const known = safe(() => services.devices.list().find((device) => device.id === ctx.deviceId));
-  if (known?.status === 'revoked') return { error: `${known.name}, my home device, was removed. Pass device: "this" or another PC from devices.list.` };
-  return { input, target: { id: ctx.deviceId, name: known?.name ?? ctx.deviceId, self: false } };
+  const home = forwardedHome(services, ctx.deviceId);
+  if (!home) { ctx.deviceId = safeSelfId(services); return { input }; } // B-080: a home this PC does not forward to – the call runs here
+  return { input, target: { id: home.id, name: home.name, self: false } };
+}
+
+/**
+ * B-080: the agent's home device when this PC forwards calls to it – a linked PC (not removed, not half-paired) on one of
+ * my own links or an employee's PC; undefined for an unknown home and for a PC this PC joined as an employee.
+ */
+export function forwardedHome(services: RuntimeServices, deviceId: string): Device | undefined {
+  const known = safe(() => services.devices.list().find((device) => device.id === deviceId));
+  if (!known || known.kind !== 'pc' || known.self || known.revokedAt || known.status === 'revoked' || known.status === 'pairing') return undefined;
+  return safe(() => new DevicesRepo(services.db).get(deviceId))?.joinedAs === 'employee' ? undefined : known;
 }
 
 /** The journal names the PC a forwarded call runs on ("Click Save on Tower"). */
@@ -82,16 +96,11 @@ export function onPc(action: ActionDescription, target: DeviceTarget): ActionDes
 
 /** B-075: the argument naming another company on this PC, on any call (registry.ts takes it off before validation). */
 export const COMPANY_ARG = 'company';
-/** The first company's folder as companies.list names it (its data folder has no company id). */
-export const FIRST_FOLDER = 'first';
 
 /** Another company on this PC a call runs in: its data folder, its name, and the name of the company that sends the call. */
 export interface CompanyTarget { dir: string; name: string; from: string }
 
 const THIS_COMPANY = /^this(?: company| one)?$/i;
-
-/** A company's folder as agents pass it: its id, or 'first' for the first one. */
-export const folderOf = (entry: Pick<CompanyEntry, 'id'>): string => entry.id ?? FIRST_FOLDER;
 
 /**
  * Resolves a `company` value – 'this', a folder from companies.list or a company's exact name (case and surrounding
@@ -103,14 +112,14 @@ export function resolveCompany(services: RuntimeServices, value: string): Compan
   if (THIS_COMPANY.test(wanted)) return null;
   const app = safe(() => services.host.app);
   const companies = (app && safe(() => listCompanies(app))) || [];
-  const byFolder = companies.filter((entry) => folderOf(entry) === wanted);
+  const byFolder = companies.filter((entry) => entry.folder === wanted);
   const matches = byFolder.length ? byFolder : companies.filter((entry) => entry.label.trim().toLowerCase() === wanted);
   const shown = value.trim().length > 60 ? `${value.trim().slice(0, 60)}…` : value.trim();
   if (!matches.length) {
     if (companies.length < 2) return { error: `There is no other company on this PC, so "${shown}" names none (companies.list).` };
-    return { error: `No company on this PC is called "${shown}". Companies here: ${companies.map((entry) => `${entry.label} (folder ${folderOf(entry)}${entry.current ? ', this one' : ''})`).join(', ')}.` };
+    return { error: `No company on this PC is called "${shown}". Companies here: ${companies.map((entry) => `${entry.label} (folder ${entry.folder}${entry.current ? ', this one' : ''})`).join(', ')}.` };
   }
-  if (matches.length > 1) return { error: `Several companies on this PC are called "${shown}": pass the folder instead (${matches.map(folderOf).join(', ')}).` };
+  if (matches.length > 1) return { error: `Several companies on this PC are called "${shown}": pass the folder instead (${matches.map((entry) => entry.folder).join(', ')}).` };
   const company = matches[0];
   const dir = app && companyFolder(app, company.id);
   if (company.current || !dir) return null;

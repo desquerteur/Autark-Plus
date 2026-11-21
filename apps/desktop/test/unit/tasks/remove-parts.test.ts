@@ -15,7 +15,7 @@ test('a removed task takes the wakes and schedules of its steps and delegated wo
   const chat = h.chats.create({ title: 'Launch', agentIds: ['ag_tom', 'ag_ivy'], createdBy: 'human' });
   const parent = h.tasks.create({ conversationId: chat.id, title: 'Cut the launch video', assigneeId: 'ag_tom', createdBy: 'human' });
   const child = h.tasks.create({ conversationId: chat.id, parentId: parent.id, title: 'Find the music', assigneeId: 'ag_ivy', createdBy: 'ag_tom' });
-  const todo = h.tasks.create({ conversationId: chat.id, parentId: child.id, title: 'Pick a track', assigneeKind: 'human', humanReason: 'physical', createdBy: 'ag_ivy' });
+  const todo = h.tasks.create({ conversationId: chat.id, parentId: child.id, title: 'Pick a track', assigneeKind: 'human', createdBy: 'ag_ivy' });
   const other = h.tasks.create({ conversationId: chat.id, title: 'Write the post', assigneeId: 'ag_ivy', createdBy: 'human' });
   h.wakes.wake({ agentId: 'ag_ivy', reason: 'task', conversationId: chat.id, taskId: child.id, coalesceKey: `task:${child.id}` });
   h.scheduler.create({ ownerId: HUMAN_ID, conversationId: chat.id, taskId: todo.id, kind: 'timer', title: todo.title, spec: { at: h.clock.now() + 3_600_000 }, payload: {} });

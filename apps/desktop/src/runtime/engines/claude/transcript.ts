@@ -7,7 +7,7 @@
 // `mcp__workforce__*` names 1:1; engine-native calls through neutral-calls.ts (B-049: Claude Code's own core tools
 // verbatim, a Codex shell call as Bash – PowerShell on Windows for a PowerShell script – with its output as the
 // tool_result, an edit as a note with its diff); Claude thinking only unchanged with its signature (same account
-// and model family); everything else as text ("[ran <tool>: …]" + output note, "(thinking: …)" – B-049 F9: a Codex exec
+// and model family); everything else as text (a user-side "[record of an earlier call …]" with its output – BEFUND §3, "(thinking: …)" – B-049 F9: a Codex exec
 // script as such a note with its source and the line naming its nested calls; a nested call itself is skipped); a condensed item's
 // restore stamp in its text – and the turn boundary: every tool_use is answered in the next record, the
 // first record is a user one, the last an assistant one (a labelled closing record of the app when the history
@@ -17,7 +17,7 @@
 
 import type { RebuildItem } from '../types.ts';
 import { toWireName } from '../shared.ts';
-import { boundOutput, noteText, oursCall, outputNote, sameReasoningSource, withStamp } from '../rebuild-text.ts';
+import { boundOutput, oursCall, recordText, sameReasoningSource, withStamp } from '../rebuild-text.ts';
 import { mapNativeCall, type Mapped } from '../neutral-calls.ts';
 import { coreTools } from './lean.ts';
 import { HUB_SERVER } from './stream.ts';
@@ -88,8 +88,8 @@ export function transcriptMessages(items: RebuildItem[], context: Pick<Transcrip
     if (call) {
       const mapped: Mapped | undefined = oursCall(call) ? undefined : mapNativeCall(call, item.origin?.engine, mapTarget);
       if (mapped?.as === 'note' || mapped?.as === 'custom') { // 'custom' (Codex's own custom tools) never maps into Claude Code
-        add('assistant', { type: 'text', text: noteText(call, mapped.as === 'note' ? mapped.detail : undefined, item.calls) });
-        add('user', { type: 'text', text: outputNote(call, item.stamp) });
+        // 17.11.2026 (BEFUND §3): one user-side record, never assistant text the model would imitate
+        add('user', { type: 'text', text: recordText(call, { ...(mapped.as === 'note' && mapped.detail ? { detail: mapped.detail } : {}), ...(item.calls ? { calls: item.calls } : {}), ...(item.stamp ? { stamp: item.stamp } : {}) }) });
         continue;
       }
       const id = toolUseId(call.callId, item.itemId, used);
@@ -120,7 +120,7 @@ export function transcriptMessages(items: RebuildItem[], context: Pick<Transcrip
     message.blocks = message.blocks.filter((block, index) => block.type !== 'thinking' || index < lastOther);
   }
   out = out.filter((message) => message.blocks.length);
-  if (!context.parentUuid && out[0]?.role === 'assistant') out.unshift({ role: 'user', blocks: [{ type: 'text', text: '[Earlier work in this chat, rebuilt by the app]' }] });
+  if (!context.parentUuid && out[0]?.role === 'assistant') out.unshift({ role: 'user', blocks: [{ type: 'text', text: '[My earlier work, rebuilt from my record]' }] });
   // A clean turn boundary: Claude Code (2.1.303, read from the CLI) treats a transcript that ends in a user record –
   // a tool_result or a note – as an interrupted turn on resume ("Continue from where you left off.").
   if (out.at(-1)?.role === 'user') out.push({ role: 'assistant', blocks: [{ type: 'text', text: context.closing ?? END_MARK }] });

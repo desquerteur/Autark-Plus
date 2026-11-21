@@ -20,6 +20,7 @@ test('the mode prompts speak as I, not to a "you", outside quoted lines and code
     const prose = mode.instructions
       .replace(/`[^`]*`/g, '') // tool names, paths, placeholders and app strings stay exact
       .replace(/"[^"]*"/g, ''); // quoted lines the person, a page or the app sees
+    if (!prose.replace(/^#[^\n]*/, '').trim()) continue; // 14.11.: the manager mode's text lives in prompts/standard-manager.md ("## Leading")
     assert.match(prose, /\bI\b/, mode.key);
     assert.doesNotMatch(prose, /\b(you|your|yours|yourself)\b/i, mode.key);
     assert.doesNotMatch(prose, /\b(must|may|allowed|only if|only when|ask only)\b/i, mode.key);

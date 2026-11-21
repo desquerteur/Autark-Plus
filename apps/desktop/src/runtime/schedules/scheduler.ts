@@ -5,7 +5,9 @@
 // (drop fires later than the grace period). Due wakes are announced to the dispatcher through onDueWakes(); wakes
 // due "now" are announced immediately (microtask batch). B-044: each arm reports the earliest due time to
 // `nextDue` (next-due.json, settled at stop); `pausedBy`: an agent never resumes the person's pause. B-054: only a
-// scheduled message requires a chat; a routine may have none (its tasks are then chat-free, fire.ts).
+// scheduled message requires a chat; a routine may have none (its tasks are then chat-free, fire.ts). B-080: a stopped
+// schedule without a recorded pause has ended (its runs are used up) – a new spec brings it back. F06 (16.11.2026):
+// list/get show an active schedule another PC fires with its next time (`shown`, never stored).
 // Owns: schedule CRUD, timing and firing. Never: runs agents (the dispatcher claims wakes).
 
 import { HUMAN_ID, newId } from '../../shared/ids.ts';
@@ -169,6 +171,9 @@ export class SchedulerImpl implements Scheduler {
     if (patch.active === false && by !== undefined && (schedule.active || !agent)) schedule.pausedBy = by; // the person's pause always counts
     else if (patch.active) delete schedule.pausedBy;
     if (patch.active !== undefined) schedule.active = patch.active;
+    // B-080 (live: Nora's used-up reminder got a new time and stayed off): a new spec brings an ended schedule back; one
+    // with a recorded pause (the person's or an agent's) keeps it.
+    if (patch.spec && !schedule.active && schedule.pausedBy === undefined && patch.active !== false) schedule.active = true;
     if (patch.spec || patch.active === true) {
       const next = this.firstFire(schedule.spec, this.s.clock.now());
       const exhausted = schedule.spec.maxRuns !== undefined && schedule.runs >= schedule.spec.maxRuns;
@@ -186,9 +191,12 @@ export class SchedulerImpl implements Scheduler {
     this.arm();
   }
 
-  list(filter?: { conversationId?: string; ownerId?: string; taskId?: string }): Schedule[] { return this.repo.list(filter); }
+  list(filter?: { conversationId?: string; ownerId?: string; taskId?: string }): Schedule[] { return this.repo.list(filter).map((schedule) => this.shown(schedule)); }
 
-  get(id: string): Schedule | undefined { return this.repo.get(id); }
+  get(id: string): Schedule | undefined {
+    const schedule = this.repo.get(id);
+    return schedule && this.shown(schedule);
+  }
 
   runNow(id: string): void {
     const schedule = this.require(id);
@@ -198,15 +206,30 @@ export class SchedulerImpl implements Scheduler {
     schedule.lastAt = now;
     if (!result.more) { schedule.active = false; delete schedule.nextAt; } // execute() switched it off in the table
     this.repo.save(this.withHistory(schedule, [{ ...result.run, manual: true }]));
-    this.s.bus.emit('schedule.upserted', schedule);
+    this.s.bus.emit('schedule.upserted', this.shown(schedule));
+  }
+
+  /**
+   * Feedback F06 (16.11.2026): a schedule as it is read. One PC fires each (devices/sync/tables.ts placeSchedules), so on
+   * every other PC an active schedule keeps no due time; read there, it carries the next time its spec gives – its
+   * display, never written to the row (firing stays with repo.nextAt/take on the PC that fires it).
+   */
+  private shown(schedule: Schedule): Schedule {
+    if (!schedule.active || schedule.nextAt !== undefined) return schedule;
+    if (schedule.spec.maxRuns !== undefined && schedule.runs >= schedule.spec.maxRuns) return schedule;
+    let next: number | undefined;
+    try { next = this.firstFire(schedule.spec, this.s.clock.now()); } catch { return schedule; } // a spec that no longer computes shows none
+    return next === undefined ? schedule : { ...schedule, nextAt: next };
   }
 
   next(spec: ScheduleSpec, after: number): number | undefined { return nextFire(spec, after); }
 
-  /** The person's pause: pausedBy 'human' – or, before B-044 only the person could pause, a stopped schedule that has not ended and records no one. */
+  /**
+   * The person's pause: pausedBy 'human'. B-080 (live: 45 inactive rows, all used-up one-offs, read as the person's pause
+   * by the pre-B-044 fallback, so an agent's paused:false was refused): the stored pausedBy is the only rule.
+   */
   private pausedByPerson(schedule: Schedule): boolean {
-    if (schedule.pausedBy !== undefined) return schedule.pausedBy === HUMAN_ID;
-    try { return (schedule.spec.maxRuns ?? Infinity) > schedule.runs && nextFire(schedule.spec, this.s.clock.now()) !== undefined; } catch { return false; }
+    return schedule.pausedBy === HUMAN_ID;
   }
 
   // ------------------------------------------------------------- firing

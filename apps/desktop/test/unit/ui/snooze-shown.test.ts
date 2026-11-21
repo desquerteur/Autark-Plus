@@ -21,8 +21,8 @@ const END = NOW + 30 * 60_000;
 
 const todo = (until?: number): TaskView => ({
   id: 'todo_1', conversationId: 'ch_a', title: 'Call the tax office', notes: '', status: 'waiting', assigneeKind: 'human', createdBy: 'ag_ava',
-  priority: 0, ledger: {}, attempts: 0, sort: 1, rev: 2, createdAt: NOW - 60_000, updatedAt: NOW,
-  waitingOn: { kind: 'schedule', reason: 'Snoozed', since: NOW, ...(until !== undefined ? { until } : {}) },
+  priority: 0, ledger: {}, sort: 1, rev: 2, createdAt: NOW - 60_000, updatedAt: NOW,
+  waitingOn: { on: 'outside', why: 'Snoozed', since: NOW, ...(until !== undefined ? { until } : {}) },
   steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'Alpha', running: false,
 });
 

@@ -1,4 +1,6 @@
 // Owns: following shipped prompt revisions for global overrides and one durable review request per edited default.
+// B-080: the team's reviewer (its manager, else the top agent) gets the offer on the PC it runs on – when it is at home
+// on another CEO PC, this PC offers nothing, so one agent reviews a synced prompt.
 // Never: overwrites customized prompts, calls a model directly, or puts custom text or secret values in references.
 
 import { createHash } from 'node:crypto';
@@ -7,6 +9,7 @@ import type { Paths, RuntimeServices } from '../contracts.ts';
 import { readText, writeAtomic } from '../root/text-doc.ts';
 import { KvRepo } from '../store/kv.ts';
 import { cleanTemplate, OVERRIDABLE, OVERRIDE_MAX_BYTES, type PromptName } from './templates.ts';
+import { homeElsewhere } from '../devices/sync/home.ts';
 
 type Services = Pick<RuntimeServices, 'db' | 'clock' | 'paths' | 'org' | 'wakes' | 'log'>;
 interface DefaultState { text: string; offered?: string }
@@ -47,7 +50,9 @@ export function reviewPromptOverrides(s: Services): void {
       if (previous?.text === text || previous?.offered === hash) continue;
       const active = s.org.list().filter((agent) => agent.archivedAt === undefined);
       const reviewer = active.find((agent) => agent.template === 'manager') ?? active.find((agent) => !agent.managerId) ?? active[0];
-      if (!reviewer) continue; // Without a recipient nothing was offered; retry at the next runtime start.
+      // Without a recipient nothing was offered; retry at the next runtime start. B-080 review: a reviewer at home on
+      // another CEO PC gets the offer from that PC, so no colleague here reviews the same synced prompt beside it.
+      if (!reviewer || homeElsewhere(s, reviewer.id)) continue;
       const reference = promptUpdateReference(s.paths, name, text);
       const note = [
         `Autark has a new default system prompt: ${name}. My team's version was customized and has been kept unchanged.`,

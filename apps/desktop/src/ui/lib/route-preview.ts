@@ -1,17 +1,17 @@
 // The model routing takes now for an agent while the picker in front of the person has nothing chosen
-// (routing.preview with ignorePin: router rules only, no model call). A picker's "nothing chosen" option names that
-// model, never a mode word (B-072, owner: if it were automatic, the model would stand there, not "automatic"). In a
-// chat the chat's own choice is left out and its runs continue (the composer's model chip); without a chat the
-// agent's own pin is left out (the agent page; runtime/rpc/handlers/providers.ts).
-// Owns: that one call as a hook and the hint beside the named model. Never: picks, stores or guesses a model.
+// (routing.preview with ignorePin: router rules only, no model call). B-083 (owner 08.11.: the Auto system was
+// missing) replaces B-072's "never a mode word": the "nothing chosen" option is "Auto" – nothing is suggested, the AI
+// decides – and names that model beside it ("Opus 5.5 now", the composer's model chip). A chat's own suggestion never
+// routes (13.11.2026: information for the AI on the person's line), so in a chat this is what runs; its runs continue.
+// Owns: that one call as a hook and the words of the "nothing chosen" option. Never: picks, stores or guesses a model.
 
 import { useEffect, useState } from 'preact/hooks';
 import type { RouteDecision } from '../../shared/model/providers.ts';
 import { rpc } from './rpc.ts';
 import { can } from './session.ts';
 
-/** The hint beside the model a "nothing chosen" option names; its label while that model is not known yet. */
-export const PER_TASK = 'Chosen per task';
+/** The "nothing chosen" option: nothing is suggested, the AI decides each turn. */
+export const AUTO = 'Auto';
 
 /**
  * The route for `agentId` with nothing chosen in the picker (`conversationId`: in that chat). Undefined until it

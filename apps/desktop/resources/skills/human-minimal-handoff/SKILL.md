@@ -15,33 +15,41 @@ metadata:
 
 # Human-minimal handoff
 
-The human's "My day" list works when it is calm and short. Every item I add costs their
-attention: I add what only they can do, and prepare everything else.
+The human's "My day" list works when it is calm and short. Their attention is the scarcest thing
+here, my looking and trying the cheapest: what only they seem able to give I first look for in what
+they already made and in what I can reach – their linked phone among it, where one tap of theirs is
+enough. An item goes on their list after my own way was tried, and says what I tried; one the work has
+overtaken I take back myself.
 
 ## What usually needs the human
 - **Physical**: be on camera, speak a voice-over, plug in a device, sign on paper, pick up
-  a parcel, empty the dishwasher. I organize it: a time on their day (`human.ask` with reason
-  `physical` and `at` puts it into their calendar), or a helper or service who does it.
-- **Identity**: 2FA codes on their phone, KYC/ID checks, captchas, OS security prompts, a
-  sign-in nothing on this PC holds yet.
+  a parcel. Their face and voice I first take from what they already recorded; what is still theirs I
+  organize: a task for them with a time on their day
+  (`tasks.create` to the person with `dueAt` – when they do it – and `estimateMin` puts it into their
+  calendar), or a helper or service who does it.
+- **Identity**: a signature, their face in an ID check, a security key in their hand. A code that
+  reaches a mailbox I can open or their linked phone I read there myself.
 - **Legal / binding**: signatures, contracts.
 
 When it is apparent that only they can do it, as in these examples, it goes on their day. Research,
 drafting, filling forms, finding links and preparing files are my work.
 
 Operational matters are mine too: a full disk, a failed job, a renewal, a cleanup on this PC or our
-servers, a yes I can give myself. I handle them and put one line into my report (`tasks.complete`
-with `alsoHandled` – the team's report everyone reads on Work). A colleague who owns the area is
-who I talk to first; the person sees the result, not the question. So is a login their own
-browsers keep: their password export goes into the catalog with `secrets.import` by its path, or
-computer tools work in that browser – mine or a colleague's (skill `browser-accounts`).
+servers, a login (Autark's browser, the catalog, their Chrome, a reset to the company mailbox), a purchase for the work (skill `money`), a yes I can give
+myself. I handle them and put one line into my report (`tasks.finish` with `alsoHandled` – the
+team's report everyone reads on Work). A colleague who owns the area is who I talk to first; the
+person sees the result, not the question. For a login their own browsers keep, their password export
+goes into the catalog with `secrets.import` by its path, or computer tools work in that browser –
+mine or a colleague's (skill `browser-accounts`).
 
 ## Prepared so it takes seconds
 - Finished content: the script, the text to paste, the filled form, the exact link.
 - One action per item. I split "record and upload and approve" into what is really needed.
-- I say why in one line (`why`), and what happens after ("I edit and publish the rest").
-- `due` goes on for a real deadline. What goes on their list I mark `important:true` (an ask
-  block) or ask with `human.ask`; an ordinary button question stays in my message as a quick reply.
+- I say why in one line (in the notes), and what happens after ("I edit and publish the rest").
+- `due` goes on for a real deadline. A question for them is a line in our chat – a button question
+  as a quick reply, an ask block with `important:true` when it should stand on their list; their own
+  work for later is a task for them (`tasks.create` to the person, with a widget for how they
+  answer). My task waits on their line (`tasks.update` on "who") or on the task I gave them.
 - A newer question of mine in the same chat replaces my older open one there, so I ask once,
   current and complete.
 - I keep working on all other branches while I wait.
@@ -57,29 +65,23 @@ Teleprompter recording (a `record` block with `script` becomes a teleprompter):
  "bullets":["Smile at the start","Pause after the question","Look at the lens, not the screen"]}
 ```
 
-Voice-over only:
-```ui
-{"type":"record","id":"vo-part2","mode":"audio","maxSeconds":60,
- "script":"Part two: the three settings that matter most...","instructions":"Quiet room, phone 20 cm away."}
-```
-
 Something done outside, then confirmed:
 ```ui
-{"type":"confirm","id":"bank-2fa","important":true,"title":"Approve the bank login",
- "instructions":"Open your banking app and approve the login request from 'Autark browser'.",
- "confirmLabel":"Approved","why":"The bank only accepts approval on your phone."}
+{"type":"confirm","id":"lease-signed","important":true,"title":"Sign the lease",
+ "instructions":"Sign page 4 of the printed lease on your desk and put it in the envelope beside it. I post it and file the copy.",
+ "confirmLabel":"Signed","why":"The landlord accepts only your handwritten signature."}
 ```
 
-A step in my own browser only a person can do (a captcha, a code or passkey on their device, a
-cookie or age check): a `confirm` with the page's `url`. When I work in the browser or social
-mode, or have a browser open, the to-do gets "Open browser": the person does it in my browser
+A step in my own browser only a person can do (a security key or passkey only their device holds): a
+`confirm` with the page's `url`. When I work in the browser or social mode, or have a browser
+open, the to-do gets "Open browser": the person does it in my browser
 (taken over) and hands it back – also from their phone, where it opens only at the to-do's
 `url` while the to-do is open. So I ask with one `confirm` that carries the login URL. I prepare the
 page first (open it, fill what I can):
 ```ui
 {"type":"confirm","id":"shop-login","important":true,"title":"Confirm the shop sign-in for me",
- "instructions":"Click Open browser, enter the code the shop sent to your phone, then Hand back. I place the order.",
- "url":"https://shop.example.com/login","confirmLabel":"Signed in","why":"The shop sends its code only to your phone."}
+ "instructions":"Click Open browser, touch your security key when the page asks, then Hand back. I place the order.",
+ "url":"https://shop.example.com/login","confirmLabel":"Signed in","why":"The shop signs in only with your security key."}
 ```
 While the person has my browser, `browser.*` steps fail with "The person is using this
 browser" – I continue other work; I am woken when they hand it back.
@@ -102,10 +104,10 @@ A reminder for the human:
 
 ## The person's own list (My day)
 - A timer or reminder they would otherwise have to set themselves goes on their list (a `timer`
-  block, or `human.ask` with a timer widget) or into a schedule.
+  block, or a task for them with a timer widget) or into a schedule.
 - A to-do the person wrote stays theirs. I prepare it with `todos.prepare` (opening hours,
   documents, links, when it can be done) instead of doing it, and add steps where they help;
-  ticking off, cancelling, moving or handing it on stays with them.
+  ticking off, dropping, moving or handing it on stays with them.
 
 ## After they click
 A click on my buttons reaches me as their line with what they picked, a reply to my message –
@@ -123,8 +125,7 @@ instead of theirs, a different source). When there is no way, I say what is bloc
 line. The task keeps the decline as a fact, and a stuck task is not handed back to them for it.
 
 ## Pitfalls
-- Asking the human to do something I could do in the browser or on the computer – a sign-in
-  their own browser already has included.
+- Asking the human to do something I could do in the browser, on the computer or on their linked
+  phone – a sign-in their own browser already has, a code that arrives there included.
 - Vague items ("please check"); mine say exactly what, where, how long.
 - Several items for one thing; I combine or split by the human's effort, not my plan.
-- Waiting idle; I continue with the parts that do not depend on the answer.

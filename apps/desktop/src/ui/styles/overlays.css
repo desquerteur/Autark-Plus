@@ -79,3 +79,10 @@ dialog.dialog.anchored { margin-block: var(--dialog-top) auto; max-height: calc(
 
 /* askText (lib/dialog.tsx): one full-width field above the buttons */
 .dialog-field.input { width: 100%; margin: 4px 0 4px; }
+/* choose(): radio options with a quiet hint under each (Use a found login: only on this PC / on all PCs of the company) */
+.dialog-choices { display: grid; gap: 8px; margin: 12px 0 4px; }
+.dialog-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.dialog-choice.on { border-color: var(--text); }
+.dialog-choice input[type=radio] { flex: none; width: 16px; height: 16px; margin: 2px 0 0; }
+.dialog-choice-text { display: grid; gap: 2px; min-width: 0; color: var(--text); font-size: 14px; line-height: 1.4; }
+.dialog-choice-text small { color: var(--muted); font-size: 12px; line-height: 1.5; }

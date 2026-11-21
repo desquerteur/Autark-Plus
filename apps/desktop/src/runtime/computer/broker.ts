@@ -1,11 +1,14 @@
 // The desktop broker connection (B-077, computer use on the lock screen): once `AutarkDesktopBroker` is installed
-// (scripts/broker-install.ps1), its SYSTEM worker in the console session serves the helper protocol on a named pipe and
+// (B-080: resources/broker/install.ps1, run by the app's setup or at a start where it is missing – main/broker-setup.ts),
+// its SYSTEM worker in the console session serves the helper protocol on a named pipe and
 // follows the input desktop, so the normal computer.* tools also reach the locked screen and UAC prompts.
 // brokerLease() hands WindowsHelper (helper.ts) a lease whose "child" is the pipe: the handshake proves the
 // installation key both ways, then lines pass through unchanged – except typed text ('type', 'act' value), which leaves
 // this process only sealed with the session key (AES-256-CBC + HMAC-SHA256, op 'type_secret') and is opened by the worker
 // right before SendInput. Each answer names the input desktop; `brokerState` keeps the route and the last desktop.
-// Owns: reachability, the handshake, sealing and the route state. Never: retries, resolves secrets (secrets/handles.ts)
+// F03 (16.11.2026): it also keeps how the broker's setup at this app's start ended (main/broker-setup.ts, the bus event
+// 'broker.setup'), and secureDesktopLine says in my words when the secure desktop is out of reach and how one Yes changes that.
+// Owns: reachability, the handshake, sealing, the route state and that line. Never: retries, resolves secrets (secrets/handles.ts)
 // or logs anything typed.
 
 import { createHmac, createCipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -15,6 +18,8 @@ import net from 'node:net';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import type { Logger } from '../contracts.ts';
+import type { Bus } from '../bus.ts';
+import type { EventMap } from '../../shared/api/events.ts';
 import type { ChildLike, Lease } from '../system/supervisor.ts';
 import { asciiJson } from './protocol.ts';
 
@@ -22,12 +27,33 @@ export const BROKER_PIPE_NAME = 'AutarkDesktopBroker';
 export const BROKER_PIPE = `\\\\.\\pipe\\${BROKER_PIPE_NAME}`;
 export const BROKER_KEY = path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'AutarkDesktopBroker', 'broker.key');
 
-/** Which way computer use runs on this PC and which desktop took input at the last answer ('Winlogon' = locked or UAC). */
-export const brokerState: { via: 'broker' | 'powershell'; desktop?: string } = { via: 'powershell' };
+/**
+ * Which way computer use runs on this PC, which desktop took input at the last answer ('Winlogon' = locked or UAC), and
+ * F03: how the broker's setup at this app's start ended (undefined: none ran – a start without a window, a build that is not installed).
+ */
+export const brokerState: { via: 'broker' | 'powershell'; desktop?: string; setup?: EventMap['broker.setup'] } = { via: 'powershell' };
 
 /** True when the broker's desktop is the Windows sign-in / secure desktop. */
 export function lockedDesktop(): boolean {
   return brokerState.via === 'broker' && (brokerState.desktop ?? '').toLowerCase() === 'winlogon';
+}
+
+/** F03: main's word on the setup (sticky: replayed to a restarted runtime) lands in brokerState. */
+export function followBrokerSetup(bus: Pick<Bus, 'on'>): () => void {
+  return bus.on('broker.setup', (setup) => { brokerState.setup = setup; });
+}
+
+/**
+ * F03: the fact line of the computer tools on Windows while the secure desktop (UAC prompts, the locked screen) is out of
+ * my reach – the broker did not answer this helper start and the setup at the app's start did not install it. Undefined
+ * otherwise (the broker serves, or no setup ran here to tell).
+ */
+export function secureDesktopLine(platform: NodeJS.Platform = process.platform): string | undefined {
+  const setup = brokerState.setup;
+  if (platform !== 'win32' || brokerState.via === 'broker' || !setup || setup.state === 'installed') return undefined;
+  const why = setup.state === 'declined' ? 'Windows asked at this app\'s start and got no Yes' : `its setup at this app's start failed${setup.code !== undefined ? ` (exit ${setup.code})` : ''}`;
+  return `The Windows secure desktop (UAC prompts, the locked screen) is out of my reach on this PC: the desktop broker is not installed – ${why}. `
+    + `When I need it, I run powershell -ExecutionPolicy Bypass -File "${setup.script}": Windows then asks the person once (the prompt names Windows PowerShell; it installs the desktop broker), and their Yes lets these same tools reach it.`;
 }
 
 /** What drivers.ts needs to pick the broker (tests inject a fake). */
@@ -79,6 +105,7 @@ let leases = 0;
 
 /** A lease on one pipe connection: WindowsHelper talks to it like to the PowerShell child. */
 export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; connect?: (pipe: string) => net.Socket }): Lease {
+  const connectionId = ++leases;
   const socket = (input.connect ?? ((pipe) => net.connect(pipe)))(input.pipe);
   const stdout = new PassThrough();
   const events = new EventEmitter();
@@ -86,6 +113,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   let serverNonce: Buffer | undefined;
   let session: Buffer | undefined;
   let buffer = '';
+  let observedDesktop: string | undefined;
   let resolveExit: (code: number | null) => void = () => undefined;
   const exited = new Promise<number | null>((resolve) => { resolveExit = resolve; });
 
@@ -105,9 +133,20 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
       if (proof.length !== expected.length || !timingSafeEqual(proof, expected)) return fail('the broker did not prove the installation key');
       session = mac(input.key, 'session', serverNonce, clientNonce);
       brokerState.via = 'broker';
+      input.log.info('desktop broker authenticated', { connectionId, via: 'broker' });
     }
     const desktop = DESKTOP.exec(line.slice(-100));
-    if (desktop) brokerState.desktop = desktop[1];
+    if (desktop) {
+      brokerState.desktop = desktop[1];
+      // Only names from the transport envelope, never a result, UI text or typed value.
+      // Log the first actual response (not just ready) and later desktop changes.
+      const response = JSON.parse(line) as { id?: number };
+      if (Number.isSafeInteger(response.id) && observedDesktop !== desktop[1]) {
+        observedDesktop = desktop[1];
+        const name = /^(Default|Winlogon|Screen-saver)$/i.test(desktop[1]) ? desktop[1] : 'other';
+        input.log.info('desktop broker observed', { connectionId, requestId: response.id, desktop: name });
+      }
+    }
     stdout.write(`${line}\n`);
   };
   socket.setEncoding('utf8');
@@ -124,6 +163,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   });
   socket.on('error', (error) => input.log.debug('desktop broker pipe error', { message: error.message }));
   socket.on('close', () => {
+    input.log.info('desktop broker disconnected', { connectionId, authenticated: Boolean(session) });
     child.exitCode = session ? 0 : 1;
     stdout.end();
     events.emit('exit', child.exitCode, null);
@@ -150,7 +190,7 @@ export function brokerLease(input: { pipe: string; key: Buffer; log: Logger; con
   const release = async () => { socket.destroy(); await exited; };
   const now = Date.now();
   return {
-    id: ++leases, owner: 'computer:desktop-broker', kind: 'light', startedAt: now, lastActiveAt: now,
+    id: connectionId, owner: 'computer:desktop-broker', kind: 'light', startedAt: now, lastActiveAt: now,
     child: child as unknown as ChildLike, touch: () => undefined, release, releaseAfter: release, exited,
   };
 }

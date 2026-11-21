@@ -1,4 +1,5 @@
-// Media capture for the `record` widget: microphone, camera or screen → MediaRecorder → Blob.
+// Media capture for the `record` widget and the composer's RecordBar (chat/composer/RecordBar.tsx, F23): microphone,
+// camera or screen → MediaRecorder → Blob.
 // States: idle → preparing → ready (preview live) → recording → recorded (playback) → retake.
 // Desktop arms the Electron media permission from the user gesture first; the PWA falls back
 // to the OS recorder (<input capture>) when getUserMedia/MediaRecorder are missing or denied.
@@ -53,7 +54,7 @@ export function canRecordLive(mode: RecordMode): boolean {
   return typeof navigator.mediaDevices.getUserMedia === 'function';
 }
 
-function friendlyError(error: unknown): string {
+export function friendlyError(error: unknown): string {
   const name = (error as { name?: string } | null)?.name;
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Access was not allowed.';
   if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No suitable device found.';
@@ -67,11 +68,11 @@ function friendlyError(error: unknown): string {
  * names withheld (media-devices.ts). For 'screen' main's display-media handler picks the
  * primary screen while video is armed.
  */
-async function armMedia(kinds: CaptureMode[]): Promise<void> {
+export async function armMedia(kinds: CaptureMode[]): Promise<void> {
   try { await bridge?.armMedia?.(kinds); } catch { /* not on this host */ }
 }
 
-async function openStream(mode: RecordMode, camera: string, device: string | undefined): Promise<MediaStream> {
+export async function openStream(mode: RecordMode, camera: string, device: string | undefined): Promise<MediaStream> {
   await armMedia(mode === 'audio' ? ['audio'] : ['audio', 'video']);
   const open = (constraints: MediaStreamConstraints) => openMediaStream((value) => navigator.mediaDevices.getUserMedia(value), constraints);
   if (mode === 'audio') return open({ audio: { ...deviceConstraint(device), echoCancellation: true, noiseSuppression: true } });
@@ -86,7 +87,7 @@ async function openStream(mode: RecordMode, camera: string, device: string | und
   return navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
 }
 
-function stopStream(stream: MediaStream | null): void {
+export function stopStream(stream: MediaStream | null): void {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
@@ -383,5 +384,5 @@ export function useRecorder(mode: RecordMode, options: { camera?: string; maxSec
     moveTo('idle');
   };
 
-  return { state, error, stream, elapsed, started, take, facing, devices: devices.choice, resumable, chooseDevice, prepare, start, stop, retake, takeFile, resume, forget, reset };
+  return { state, error, stream, elapsed, started, take, facing, devices: devices.choice, resumable, chooseDevice, prepare, start, stop, retake, takeFile, resume, forget, reset, discard };
 }

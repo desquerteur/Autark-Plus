@@ -13,6 +13,9 @@ import { AvatarMirror } from '../agent-core/avatar.ts';
 import { mainSkillRoots, mainSkillsDir } from '../agent-core/layout.ts';
 import type { Org } from '../org/service.ts';
 import type { SkillLibrary, SkillServiceOptions } from '../skills/service.ts';
+import { KvRepo } from '../store/kv.ts';
+
+const OWN_NS = 'agentCore.own';
 
 /** The library options for Main Skills (before s.skills exists; the org is read lazily). */
 export function mainSkillOptions(s: RuntimeServices): Pick<SkillServiceOptions, 'mainRoots' | 'mainDir' | 'chain'> {
@@ -25,7 +28,12 @@ export function mainSkillOptions(s: RuntimeServices): Pick<SkillServiceOptions, 
 
 /** Creates and starts the agent core (a start failure is logged; prompts then use the agent rows). */
 export function createAgentCore(s: RuntimeServices, org: Org, library: SkillLibrary): AgentCore {
-  const core = new AgentCore({ dataDir: s.paths.data, org: () => s.org, skills: () => library, bus: s.bus, clock: s.clock, log: s.log, root: s.rootWatcher, paths: s.paths });
+  const kv = new KvRepo(s.db);
+  const own = { // B-087: which SYSTEM.md is the app's own, across a restart (kv stays on this PC)
+    get: (agentId: string) => kv.get<string>(OWN_NS, agentId),
+    set: (agentId: string, sig: string | undefined) => { if (sig === undefined) kv.delete(OWN_NS, agentId); else kv.set(OWN_NS, agentId, sig, s.clock.now()); },
+  };
+  const core = new AgentCore({ dataDir: s.paths.data, org: () => s.org, skills: () => library, bus: s.bus, clock: s.clock, log: s.log, root: s.rootWatcher, paths: s.paths, own });
   s.agentCore = core;
   org.setCoreFiles(core);
   try {

@@ -15,7 +15,7 @@ import type { Avatar as AvatarModel } from '../../shared/model/org.ts';
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import { isHumanActor, OWNER_ALIAS } from '../../shared/model/people.ts';
 import { distinctLooks } from '../../shared/text/avatar-looks.ts';
-import { fileUrl } from './files.ts';
+import { useFileUrl } from './files.ts';
 import { initials } from './format.ts';
 import { agents, knownAgentMap, settings } from './store.ts';
 import { peopleMap } from './people.ts';
@@ -50,7 +50,7 @@ export function Avatar(props: AvatarProps) {
   // `seed` is the agent id for agent avatars (chat ids never match an agent).
   const look = props.seed && (!avatar || avatar.kind === 'initials') ? agentLooks.value.get(props.seed) : undefined;
   const color = look?.color ?? avatar?.color ?? paletteIndex(props.seed ?? props.name);
-  const image = avatar?.kind === 'image' ? fileUrl(avatar.value).value : null;
+  const image = useFileUrl(avatar?.kind === 'image' ? avatar.value : null);
   const content = image
     ? <img src={image} alt="" />
     : avatar?.kind === 'emoji' ? <span class="avatar-emoji">{avatar.value}</span>

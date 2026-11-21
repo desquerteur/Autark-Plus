@@ -1,7 +1,8 @@
 // MediaService (src/runtime/media/service.ts + library.ts + repo.ts) on a real blob store:
 // one row per stored file (idempotent), background probes that fill facts and emit once,
 // message attachments linking files to their first chat, search (German folding, all words
-// then any word, substring fallback) with filters, and human descriptions.
+// then any word, substring fallback) with filters, and human descriptions; B-080 F4: bytes that land
+// later are probed on arrival, and a fresh library probes the waiting rows whose bytes are here.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +10,8 @@ import { topicOf } from '../../../src/shared/api/events.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import type { MediaInfo } from '../../../src/shared/model/media.ts';
 import { fakePdf, jpegLateSof, png, str, wav, webmRecording } from './fixtures.ts';
+import { renameSync } from 'node:fs';
+import { MediaService } from '../../../src/runtime/media/service.ts';
 import { mediaSetup } from './setup.ts';
 
 test('every stored file gets one row (kind, size, header size); storing it again changes nothing', async () => {
@@ -80,6 +83,21 @@ test('message attachments link a file to the first chat it appears in (also file
   } finally { temp.cleanup(); }
 });
 
+test('list by file ids: the same bytes sent in a second chat are found by id, though the row belongs to the first chat (Mika 18.11.)', async () => {
+  const { temp, media, chat, other, put, attach } = mediaSetup();
+  try {
+    const clip = await put(new TextEncoder().encode('same bytes'), 'drone.txt');
+    attach(chat.id, clip);
+    await media.idle();
+    attach(other.id, clip); // the second chat: no row of its own
+    await media.idle();
+    assert.deepEqual(media.list({ conversationId: other.id }).map((info) => info.fileId), [], 'the second chat has no row');
+    assert.deepEqual(media.list({ fileIds: [clip.id] }).map((info) => info.fileId), [clip.id], 'found by id');
+    assert.deepEqual(media.list({ fileIds: [] }), [], 'no ids, nothing');
+    assert.deepEqual(media.list({ fileIds: ['f'.repeat(64)] }), [], 'an unknown id');
+  } finally { temp.cleanup(); }
+});
+
 test('list: chat and kind filters, folded search over name/description/tags, all words first, then any, then substring', async () => {
   const { temp, media, chat, put, attach } = mediaSetup();
   try {
@@ -141,5 +159,31 @@ test('onFileStored never throws: a file without a files row is logged and skippe
     assert.doesNotThrow(() => media.onFileStored({ id: 'f'.repeat(64), name: 'x.png', mime: 'image/png', size: 1, createdAt: 1 }));
     assert.equal(media.get('f'.repeat(64)), undefined);
     assert.deepEqual(warnings, ['media row not recorded']);
+  } finally { temp.cleanup(); }
+});
+
+test('B-080 F4: bytes that land later are probed on arrival; a fresh library probes the waiting rows whose bytes are here, once', async () => {
+  const { h, temp, media, put } = mediaSetup();
+  try {
+    const voice = await put(wav(2000), 'voice.wav');
+    const far = await put(wav(1500), 'far.wav');
+    await media.idle();
+    // As after a pull the media hook never saw: the rows wait for their probe.
+    h.db.run('UPDATE media SET duration_ms = NULL WHERE file_id IN (?, ?)', [voice.id, far.id]);
+    const blob = h.services.files.path(far.id);
+    renameSync(blob, `${blob}.away`); // far's bytes are on another PC
+    const fresh = new MediaService({ services: () => h.services, pdfPages: async () => undefined, later: () => {} });
+    await fresh.idle();
+    assert.equal(fresh.get(voice.id)!.durationMs, 2000, 'its bytes are here: probed at start');
+    assert.equal(fresh.get(far.id)!.durationMs, undefined, 'no bytes, no pull at start');
+    renameSync(`${blob}.away`, blob); // the bytes arrive (devices/sync/blobs.ts onArrival)
+    fresh.arrived(far.id);
+    await fresh.idle();
+    assert.equal(fresh.get(far.id)!.durationMs, 1500);
+    fresh.arrived(far.id);
+    await fresh.idle();
+    assert.equal(fresh.get(far.id)!.durationMs, 1500, 'a row that needs no probe stays as it is');
+    fresh.arrived('e'.repeat(64)); // no row: nothing
+    await fresh.idle();
   } finally { temp.cleanup(); }
 });

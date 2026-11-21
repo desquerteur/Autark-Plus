@@ -1,6 +1,7 @@
-// Migration 92 (official 0.3.5): a split group remembers the engine session of the turn that split (parent_session).
-// Taken over unchanged from the official Autark 0.3.5 (teydra/OpenAutark, Apache-2.0, release build of 09.11.2026),
-// whose public source stopped at 091: a profile that official build migrated must open in this fork (AF-022).
+// Migration 92 (08.11.2026, B-080): a split group keeps the native session its parent's splitting turn ended with
+// (SplitGroup.parentSession, JSON: engine, account, ref, context tokens, native turn id), recorded when the group starts –
+// a 'fork' part forks that session through that turn, whatever the parent's later turns do to its binding
+// (runtime/splits/fork.ts). Groups from before stay without one (their 'fork' parts start from the text seed).
 // Owns: this column. Never: data rows, or edits of shipped migrations.
 
 export const sql = /* sql */ `

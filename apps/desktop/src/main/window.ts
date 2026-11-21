@@ -3,11 +3,16 @@
 // (title-bar.ts), app://app/index.html, navigation and window-open guards, bounds persistence
 // and crash recovery (window-recovery.ts decides: reload, or stop and tell the person). Closing it
 // destroys the renderer (frees its memory); agents keep running in the runtime and the tray stays.
+// Feedback 16.11.2026: the caption controls dim while the page says a modal's backdrop dims it (setTitleBarDim; a
+// reload starts undimmed), and the feedback shortcut pressed in the page goes to the page as IPC feedbackKey
+// (shared/api/workspace-browser-keys.ts FeedbackKey) – read before the page, so it works under every dialog.
 // Owns: one BrowserWindow at a time and its event wiring. Never: decides whether closing quits
 // the app (desktop.ts does), grants permissions (session-guards.ts), talks RPC.
 
 import { BrowserWindow, dialog, nativeTheme, screen, shell } from 'electron';
+import { IPC } from '../shared/api/desktop.ts';
 import type { TitleBarLayout } from '../shared/api/desktop.ts';
+import { FeedbackKey } from '../shared/api/workspace-browser-keys.ts';
 import type { AppPaths } from './app-paths.ts';
 import type { RendererLink } from './renderer-link.ts';
 import { mainFrameNavigation, subFrameNavigationAllowed, windowOpenDecision } from './security.ts';
@@ -40,6 +45,8 @@ export class MainWindow {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** The UI's layout (IPC titleBarLayout); a new window starts in columns until its page reports. */
   private captionLayout: TitleBarLayout = 'columns';
+  /** A modal's backdrop dims the page (IPC titleBarDim); a new or reloaded page starts undimmed. */
+  private captionDim = false;
 
   constructor(deps: MainWindowDeps) {
     this.deps = deps;
@@ -94,9 +101,17 @@ export class MainWindow {
     this.recolor();
   }
 
+  /** A modal's backdrop dims the page (true) or none is open: the caption controls follow (title-bar.ts dimmedColors). */
+  setTitleBarDim(dim: boolean): void {
+    if (dim === this.captionDim) return;
+    this.captionDim = dim;
+    this.recolor();
+  }
+
   private create(): void {
     const { deps } = this;
     this.captionLayout = 'columns';
+    this.captionDim = false;
     this.recovery.reset();
     const bounds = clampBounds(this.state.bounds, screen.getAllDisplays().map(display => display.workArea), screen.getPrimaryDisplay().workArea);
     const dark = nativeTheme.shouldUseDarkColors;
@@ -155,9 +170,16 @@ export class MainWindow {
     // A committed main-frame document change (reload) drops the page state. Not did-start-navigation:
     // that also fires for navigations will-navigate cancels (a web link), which would leave the
     // link "loading" forever – pushes queued, readiness lost.
-    contents.on('did-navigate', () => deps.renderer.loading());
+    contents.on('did-navigate', () => { deps.renderer.loading(); this.setTitleBarDim(false); }); // a reloaded page has no dialog open
     contents.on('did-finish-load', () => deps.renderer.finishedLoading());
     contents.on('render-process-gone', (_event, details) => this.recover(details.reason));
+    const feedbackKey = new FeedbackKey(); // the feedback cell's press from the keyboard, also under a modal dialog
+    contents.on('before-input-event', (event, input) => {
+      const step = feedbackKey.step(input, mac);
+      if (!step) return;
+      event.preventDefault();
+      if (step !== 'swallow') contents.send(IPC.feedbackKey, step);
+    });
     if (deps.devTools) {
       contents.on('before-input-event', (_event, input) => {
         const toggle = input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'));
@@ -189,7 +211,7 @@ export class MainWindow {
     const dark = nativeTheme.shouldUseDarkColors;
     window.setBackgroundColor(titleBarColors(dark).color);
     if (this.deps.platform !== 'darwin') {
-      try { window.setTitleBarOverlay(titleBarOverlay(dark, this.captionLayout)); } catch { /* no overlay on this platform */ }
+      try { window.setTitleBarOverlay(titleBarOverlay(dark, this.captionLayout, this.captionDim)); } catch { /* no overlay on this platform */ }
     }
   }
 

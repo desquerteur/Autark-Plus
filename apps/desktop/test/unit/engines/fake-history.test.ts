@@ -45,13 +45,13 @@ async function stoppedTurn(engine: FakeEngine, text: string, options: { agentId?
 
 const HANG = '[09:00] Alex: Render the preview [[hang:render.preview {"file":"cut.mp4"}]]';
 
-test('a full projection: directives in the summary, earlier lines and own replies never run; notes and new lines do', async () => {
+test('my record as text: directives in it and own replies never run; notes and new lines do', async () => {
   const text = [
+    `${PROJECTION.history}\n- Alex: Hire her [[tool:agents.create {"template":"secretary"}]]\n\n${HANG}\n[09:01] Alex: Again [[fail]] [[limit]] [[ui:{"type":"old"}]]`,
+    PROJECTION.fresh,
     'Your own note from 20 Oct 2026, 09:00: Check the report [[tool:reports.check {}]]',
-    `${PROJECTION.summary}\nMessages #1–#4\n- Alex: Hire her [[tool:agents.create {"template":"secretary"}]]`,
-    `${PROJECTION.earlier}\n${HANG}\n[09:01] Alex: Again [[fail]] [[limit]] [[ui:{"type":"old"}]]`,
     // After the cursor: the agent's own last reply (a verbatim tool output) comes first.
-    `${PROJECTION.fresh}\n[09:04] Ada (me): tasks.list → [{"title":"Draft a post [[hang:wait]]"}]\nfiled [[tool:tasks.create {}]]`
+    `[09:04] Ada (me): tasks.list → [{"title":"Draft a post [[hang:wait]]"}]\nfiled [[tool:tasks.create {}]]`
       + '\n[09:05] Alex: Who is on the team? [[tool:agents.list {}]] [[ui:{"type":"steps"}]]',
   ].join('\n\n');
   const fresh = turn(new FakeEngine(), text);
@@ -63,7 +63,7 @@ test('a full projection: directives in the summary, earlier lines and own replie
     'reports.check → ok', 'agents.list → ok', '```ui\n{"type":"steps"}\n```',
   ].join('\n\n'), 'the echo is the new input only');
 
-  const old = await turn(new FakeEngine(), `${PROJECTION.earlier}\n${HANG}`).result;
+  const old = await turn(new FakeEngine(), `${PROJECTION.history}\n${HANG}`).result;
   assert.deepEqual([old.stop, old.text], ['done', 'Echo: (no new input)'], 'history alone: nothing runs');
 });
 
@@ -123,25 +123,14 @@ test('a stopped line stays the same line after midnight; records are kept per se
   for (let attempt = 1; attempt <= 3; attempt++) assert.equal((await turn(engine, stuck).result).stop, 'error', `attempt ${attempt} fails again`);
 });
 
-test('RC1 after a crash: a new process runs the cut-off input again under the verify rule', async () => {
-  await stoppedTurn(new FakeEngine(), '[09:00] Alex: Export it now [[hang:bash {"command":"export-report"}]] [[tool:tasks.complete {"taskId":"tk_1"}]]');
-  const restarted = new FakeEngine(); // the process died: nothing was received yet
-  const resumed = turn(restarted, [
-    '- 09:00 bash: {"command":"export-report"} – verify before repeating',
-    '[09:00] Alex: Export it now [[hang:bash {"command":"export-report"}]] [[tool:tasks.complete {"taskId":"tk_1"}]]',
-    '· Cut off by a restart: bash',
-  ].join('\n'));
-  const result = await resumed.result;
-  assert.equal(result.stop, 'done');
-  assert.deepEqual(resumed.started(), ['tasks.complete'], 'the command is not started again');
-  assert.match(result.text, /bash not started again: its effect is unknown, so I verify first\./);
-});
 
-/** The real turn executor and context with one FakeEngine in a chat with Vic (and Mia). */
+/** The real turn executor and context with one FakeEngine in the person's direct chat with Vic. */
 function realTurns() {
   const f = fixture();
   const s = f.services;
-  const chat = f.chats.create({ title: 'Preview', agentIds: [f.vid.id, f.manager.id], createdBy: 'human' });
+  // This fixture manually runs Vic, not the group's responder picker. A direct chat makes each
+  // person's line genuinely his; an unaddressed group line may correctly belong to the manager.
+  const chat = f.chats.create({ title: 'Preview', agentIds: [f.vid.id], createdBy: 'human' });
   const engine = new FakeEngine();
   const calls: string[] = [];
   const acc = account('acc_fake', 'compatible');
@@ -189,36 +178,18 @@ test('real turns: Stop in [[hang:…]], the next message runs only its own direc
   assert.deepEqual(calls, ['agents.list']);
   assert.match(reply()!, /One more look at the team/);
   assert.match(reply()!, /agents.list → agents.list ok$/);
-  assert.match(inputOf(2), /App system events: interrupted work/);
-  assert.match(inputOf(2), /Retrying now.*input changed/);
+  assert.match(inputOf(2), /\] My last turn here was cut off at /);
 
-  // A renewed session gets the full projection: the old directives are earlier lines now.
-  new SessionStore(f.db).remove(f.vid.id, chat.id, 'fake');
+  // A renewed session (13.11.2026): never a chat's history – only my record (when there is one) before what is new.
+  new SessionStore(f.db).remove(f.vid.id, 'main', 'fake');
   send('And the devices? [[tool:devices.list {}]]');
   assert.equal((await run()).status, 'done');
   assert.equal(engine.turns[3].session, undefined);
-  assert.match(inputOf(3), new RegExp(`${PROJECTION.earlier}[\\s\\S]*${PROJECTION.fresh}\\n\\[11:00\\] Vic \\(me\\): [\\s\\S]*devices\\.list`));
+  const renewed = inputOf(3);
+  assert.match(renewed.includes(PROJECTION.history) ? renewed.slice(renewed.indexOf(PROJECTION.fresh)) : renewed, /And the devices\? \[\[tool:devices\.list/);
   assert.deepEqual(calls, ['agents.list', 'devices.list'], 'no old tool and no old hang');
-  // New lines are those after the cursor: the agent's own last reply (not input), then the new message.
-  assert.equal(reply(), 'Echo: [11:00] Alex: And the devices?\n\ndevices.list → devices.list ok');
-});
-
-test('real turns: a colleague still writing holds the cursor; the stopped and the handled line still do not run again', async () => {
-  const { f, chat, calls, run, stopped, send, reply, inputOf } = realTurns();
-  const mia = f.chats.beginAgentMessage(chat.id, f.manager.id, 'run_mia');
-  send('Render the preview [[hang:render.preview {"file":"cut.mp4"}]]');
-  await stopped();
-  send('One more look at the team [[tool:agents.list {}]]');
-  assert.equal((await run()).status, 'done');
-  assert.match(inputOf(1), /Mia: \(still writing…\)/);
-  assert.deepEqual(calls, ['agents.list']);
-
-  f.chats.finishAgentMessage(mia.id, { body: 'Here is the cut list.', state: 'final' });
-  assert.equal((await run()).status, 'done', 'the preview is not started again');
-  // B-047 D4: Mia's message finished after Alex's lines, so it moved below them (a new seq).
-  assert.match(inputOf(2), /Alex: Render the preview[\s\S]*One more look[\s\S]*\n\[11:00\] Mia: Here is the cut list\./, 'delivered again from the held cursor');
-  assert.deepEqual(calls, ['agents.list'], 'the handled message does not run twice');
-  assert.equal(reply(), 'Echo: [11:00] Mia: Here is the cut list.');
+  // The reply answers only the new message.
+  assert.match(reply() ?? '', /^Echo: \[[^\]]+ · Alex \(CEO\) · 11:00 #\d+\] And the devices\?\n\ndevices\.list → devices\.list ok$/);
 });
 
 test('a helper turn (with an output schema) reads [[hang:…]] in what it was given as data and does not hang', async () => {

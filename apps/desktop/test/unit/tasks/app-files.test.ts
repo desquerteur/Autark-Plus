@@ -45,7 +45,7 @@ function setup(f: Fixture, body = APP, meta?: { via: 'bridge' }) {
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
   const message = meta
     ? f.chats.send({ conversationId: chat.id, body, authorId: 'ag_ava', authorKind: 'agent', meta })
-    : f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`).id, { body, state: 'final' });
+    : f.chats.postAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`, { body, state: 'final' });
   const [todo] = f.tasks.ingestBlocks(message, [], []);
   return { chat, message, todo };
 }
@@ -235,7 +235,7 @@ test('declining a mini-app to-do releases its registry and queues its takes; oth
   const take = await put(f, wav(0.1, 4), 'take.wav');
   registerAppFile(f.services, { messageId: message.id, blockIndex: 0, fileId: take.id });
   const declined = await new TestClient(f.server, TODO_ONLY).call<{ status: string }>('todos.decline', { id: todo.id, reason: 'No microphone here' });
-  assert.equal(declined.status, 'cancelled');
+  assert.equal(declined.status, 'dropped');
   assert.equal(new KvRepo(f.db).get(APP_FILES_NS, `${message.id}:0`), undefined);
   assert.deepEqual(reclaimed, [[take.id]]);
 

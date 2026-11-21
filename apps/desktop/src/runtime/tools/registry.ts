@@ -1,20 +1,24 @@
-// The tool registry: one list of workforce tools exposed identically to every engine. B-072: shell.exec and
-// secrets.run start in the CLI engines' env (builtin/command.ts → engines/wf-shim.ts agentEnv), so `wf` is the app's
-// client for API-key and local agents too.
-// Owns: registration (remote tools get the optional `device` argument), the per-agent/per-mode offer (deterministic
-// order for prompt caching) and the one call path: validate → place (device → linked PC, placement.ts) → AF-013 the agent's
-// access (runtime/access: allowed, refused, or waiting for the person's approval) → run here or
-// on a linked device → redact/truncate (outputs.ts) → journal (journal.ts) with an idempotency key (a resend of a running call id gets its result; one cut off before
-// its result is told so). Each call with an id is reported to the turn's tool boundary (onCall start/end).
-// A tool is offered when its mode fits: the mode's tool patterns, or EVERY_MODE, or anyMode (a connector's tools and a few like spend.note);
-// `requires: 'device'` keeps the device tools to modes that work on a computer or browser (or name the tool).
-// B-049 F4: offerFor/callThrough serve the meta layer (tools/core-sets.ts, learned.ts, builtin/tools-meta.ts).
-// Owner 29.10.2026: every string argument passes the leak redactor first (secrets/guard.ts), so a stored secret value
-// is never written into a note, memory, file or message – it arrives as its handle.
-// B-075: a call with `company` (tools.call's own, or in the arguments: placement.ts placeCompany) runs in that company's
-// runtime on this PC: journaled here as an external effect (a break-off leaves it unknown), its summary and result name
-// the company, the run there is that runtime's companies.tool (builtin/companies.ts runCompanyTool) over loopback
-// (root/companies.ts callCompany).
+// The tool registry: one list of Autark tools, the same for every engine (an engine differs only in its direct offer,
+// core-sets.ts). shell.exec starts in the CLI engines' env (engines/wf-shim.ts agentEnv).
+// Owns: registration (remote tools get the optional `device` argument), the per-agent/per-mode offer (sorted, for prompt
+// caching) and the one call path: can it work here → company placement (placement.ts placeCompany) → coerce + validate →
+// device placement → leak redactor (secrets/guard.ts: a stored secret value arrives as its handle) → idempotency by
+// (run, call id): a resend while it runs gets its result, one cut off before its result is told so → run here, on a
+// linked PC or in another company on this PC → cut and redact (outputs.ts) → journal (journal.ts). Each call with an id
+// is reported to the turn's tool boundary (onCall). A call that could not reach a linked PC wakes the agent once that
+// PC is back (devices/back-wake.ts). A call refused before it runs (unknown tool, one that cannot work here, invalid
+// arguments, a placement or tools.call shape that does not fit) is journaled as a failed call with its reason; its
+// arguments go into the journal only for a tool I can name: the keys its schema declares, under its own HIDDEN_ARGS,
+// and none of a tool with HIDDEN_ARGS whose arguments were refused (journalable).
+// Every tool is reachable in every mode (KI-Runde 17.11.2026: 16 of 17 agents could not reach phone.*): the mode chooses
+// only the core set an engine holds directly (core-sets.ts) and its text. A tool that cannot work here is not listed –
+// phone.* while no app phone is linked (phone/linked.ts) and adb is not installed on this PC (phone/adb.ts installed();
+// with adb, phone.* says itself when no phone is on the cable; a mode that names phone.* keeps it, for setting adb up),
+// `requires: 'embeddings'` while no chosen embedding model can serve. The gate follows no cable, so the offer changes
+// only when a phone is paired or unpaired, adb is installed, or an embedding model is chosen.
+// AF-013: after idempotency and before the run, the agent's access (runtime/access: allowed, refused, or waiting for the
+// person's approval). AF-005: a tool with `forAgent` (a connector shared with some agents only) is neither offered to
+// nor run for the others.
 // Never: retries external effects, puts secret values or HIDDEN_ARGS into outputs or the journal, or forwards a call
 // to a revoked, unknown or non-PC device.
 
@@ -26,14 +30,17 @@ import type { ActionDescription, ToolContext, ToolDef, ToolOutput, ToolSpec } fr
 import { DEVICE_ARG, failure } from './types.ts';
 import { inCompany, isRecord, onPc, place, placeCompany, safeSelfId, withDeviceArg, type CompanyTarget } from './placement.ts';
 import { callCompany } from '../root/companies.ts';
-import { validate } from './validate.ts';
+import { coerce, validate } from './validate.ts';
 import { finalizeOutput, preview } from './outputs.ts';
 import { cachedResult, journalArgs, journalResult, journaled, safeItem, safeUpdate } from './journal.ts';
-import { CALL_TOOL, coreNames } from './core-sets.ts'; // B-049 F4
-import { noteLearned } from './learned.ts'; // B-049 F4
-import { callRefusal, callTarget } from './builtin/tools-meta.ts'; // B-049 F4
+import { CALL_TOOL, coreNames } from './core-sets.ts';
+import { noteLearned } from './learned.ts';
+import { PHONE_FAMILY, callRefusal, callTarget, cannotWork } from './builtin/tools-meta.ts';
 import { withoutSecretValues } from '../secrets/guard.ts';
 import '../contracts/access.ts'; // AF-013: services.access
+import { linkedPhones } from '../phone/linked.ts';
+import { missed } from '../devices/back-wake.ts'; // B-080
+import '../contracts/vectors.ts';
 
 export { resolveDevice, withDeviceArg, type DeviceTarget } from './placement.ts';
 
@@ -56,25 +63,6 @@ export function matchesPatterns(name: string, patterns: string[] | undefined): b
   }
   return allowed;
 }
-
-/** Offered in every mode, whatever its tool patterns: asking the person, handing work on, self-routing, reporting,
- *  handing a choice to the decision model, the secrets catalog (save, generate, run, import, export, delete), the
- *  companies on this PC, finding knowledge and the person's references, the web search, splitting, the meta tools,
- *  seeing an image and starting a CLI sign-in. AF-001: and the chat essentials (CHAT_ALWAYS) – an agent session can always
- *  write, read and open chats, so it never has to fall back to the person's wf to say something. */
-export const CHAT_ALWAYS: readonly string[] = ['chat.send', 'chat.read', 'chat.direct', 'chat.create', 'chat.list', 'chat.search'];
-export const EVERY_MODE: ReadonlySet<string> = new Set([
-  ...CHAT_ALWAYS, // AF-001
-  'human.ask', 'agents.handoff', 'agents.delegate', 'model.set', 'models.list', 'feedback.report', 'decide',
-  'references.find', 'references.capture',
-  'secrets.list', 'secrets.save', 'secrets.generate', 'secrets.run', 'secrets.import', 'secrets.export', 'secrets.delete',
-  'companies.list',
-  'knowledge.find', 'knowledge.open', 'skills.load', 'skills.find',
-  'web.search',
-  'tools.find', 'tools.call',
-  'agents.split', 'agents.split_results', 'agents.split_stop', 'agents.split_merge',
-  'media.view', 'accounts.sign_in', 'telegram.connect',
-]);
 
 /** Arguments the journal never shows (a phone's pairing code is a one-time secret; a secret's value). */
 export const HIDDEN_ARGS: ReadonlyMap<string, readonly string[]> = new Map([['phone.pair', ['code']], ['decide', ['context']], ['secrets.save', ['value']]]);
@@ -117,24 +105,35 @@ export class Registry implements ToolRegistry {
     return [...this.tools.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
-  /** Is `tool` offered in `mode`? (Same rule for the offer and for calls.) */
-  allowed(tool: ToolDef, agent: Agent, mode: ModeInfo): boolean {
+  /** Is `tool` offered in `mode`? (Same rule for the offer and for calls: every tool that can work here – AF-005: for this agent.)
+   *  `phoneCanWork`: one answer for a whole offer – the phone gate reads the devices once per specsFor, not per phone tool. */
+  allowed(tool: ToolDef, agent: Agent, mode: ModeInfo, phoneCanWork: () => boolean = () => this.phoneCanWork()): boolean {
     if (!forAgent(tool, agent)) return false; // AF-005: a connector shared with some agents only
     if (tool.modes && !tool.modes.includes(mode.key)) return false;
-    if (!EVERY_MODE.has(tool.name) && !tool.anyMode && !matchesPatterns(tool.name, mode.tools)) return false;
-    if (tool.requires === 'device') return mode.workspace === 'computer' || mode.workspace === 'browser' || (mode.tools ?? []).some((pattern) => pattern !== '*' && matchesPatterns(tool.name, [pattern]));
+    if (tool.requires === 'embeddings') return this.embeddings();
+    if (tool.name.startsWith(PHONE_FAMILY)) return phoneCanWork() || (mode.tools ?? []).some((pattern) => pattern !== '*' && matchesPatterns(tool.name, [pattern]));
     return true;
   }
 
-  specsFor(agent: Agent, mode: ModeInfo, engine?: { ownTools: boolean; via: 'mcp' | 'native' }): ToolSpec[] {
+  /** phone.* can work here: an app phone is linked to this company (phone/linked.ts) or adb is installed on this PC. */
+  private phoneCanWork(): boolean {
+    try {
+      const services = this.options.services();
+      return services.phones?.adbInstalled?.() === true || linkedPhones(services).some((phone) => phone.via === 'app');
+    } catch { return false; }
+  }
+
+  /** An embedding model a person chose can serve now (models/embeddings.ts). */
+  private embeddings(): boolean {
+    try { return Boolean(this.options.services().vectors?.available()); } catch { return false; }
+  }
+
+  /** B-080: the same tools for every engine (`_engine` names the caller; its direct offer is offerFor's core set). */
+  specsFor(agent: Agent, mode: ModeInfo, _engine?: { ownTools: boolean; via: 'mcp' | 'native' }): ToolSpec[] {
+    let linked: boolean | undefined; // one devices read for the whole offer, however many phone tools are registered
+    const phoneCanWork = () => (linked ??= this.phoneCanWork());
     return this.all()
-      .filter((tool) => this.allowed(tool, agent, mode))
-      .filter((tool) => {
-        if (!engine) return tool.audience === undefined;
-        if (tool.audience === 'http') return !engine.ownTools;
-        if (tool.audience === 'mcp') return engine.via === 'mcp';
-        return true;
-      })
+      .filter((tool) => this.allowed(tool, agent, mode, phoneCanWork))
       .map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }));
   }
 
@@ -151,23 +150,25 @@ export class Registry implements ToolRegistry {
     const services = this.options.services();
     const ctx: ToolContext = { ...base, services, callId: callId || undefined }; // a nested call never inherits its caller's id
     const tool = this.tools.get(name);
-    if (!tool) return failure(`Unknown tool "${name}". Use one of the listed tools.`);
+    const refuse = (reason: string, argsRefused = false) => this.refuse(services, base, name, args, callId, reason, argsRefused);
+    if (!tool) return refuse(`Unknown tool "${name}". tools.find lists what I can use here.`);
 
-    if (!forAgent(tool, ctx.agent)) return failure(`"${name}" belongs to a connected app the person shares with other agents only, so I cannot use it.`); // AF-005
+    if (!forAgent(tool, ctx.agent)) return refuse(`"${name}" belongs to a connected app the person shares with other agents only, so I cannot use it.`); // AF-005
     let mode: ModeInfo | undefined;
     try { mode = services.modes.get(ctx.mode); } catch { mode = undefined; }
-    if (mode && !this.allowed(tool, ctx.agent, mode)) return failure(`Tool "${name}" is not in mode "${ctx.mode}".`);
+    if (mode && !this.allowed(tool, ctx.agent, mode)) return refuse(cannotWork(name, tool));
 
     const placedIn = placeCompany(services, tool, args, company); // B-075: `company` – another company of this PC runs it
-    if ('error' in placedIn) return failure(placedIn.error);
-    const errors = validate(placedIn.input, tool.inputSchema);
+    if ('error' in placedIn) return refuse(placedIn.error);
+    const given = coerce(placedIn.input, tool.inputSchema); // B-080: "2" where a number fits, an enum value in another case
+    const errors = validate(given, tool.inputSchema);
     if (errors.length) {
-      const stray = !tool.remote && isRecord(placedIn.input) && Object.hasOwn(placedIn.input, DEVICE_ARG) && errors.some((line) => line.startsWith(`${DEVICE_ARG}:`));
-      return failure(stray ? `${name} always runs on this PC, so it takes no "${DEVICE_ARG}".` : `Invalid arguments for ${name}:\n${errors.join('\n')}`);
+      const stray = !tool.remote && isRecord(given) && Object.hasOwn(given, DEVICE_ARG) && errors.some((line) => line.startsWith(`${DEVICE_ARG}:`));
+      return refuse(stray ? `${name} always runs on this PC, so it takes no "${DEVICE_ARG}".` : `Invalid arguments for ${name}:\n${errors.join('\n')}`, true);
     }
-    const fields = (placedIn.input ?? {}) as Record<string, unknown>;
+    const fields = (given ?? {}) as Record<string, unknown>;
     const placed: ReturnType<typeof place> = placedIn.target ? { input: fields } : place(services, tool, fields, ctx); // in another company, that one places it
-    if ('error' in placed) return failure(placed.error);
+    if ('error' in placed) return refuse(placed.error);
     const { target } = placed;
     const input = withoutSecretValues(services.secrets, placed.input, VAULT_ARGS.get(name)); // owner 29.10.2026 (secrets/guard.ts)
 
@@ -183,7 +184,7 @@ export class Registry implements ToolRegistry {
     let action: ActionDescription = { summary: name, external: false };
     if (tool.describe) {
       try { action = tool.describe(input, ctx); } catch (error) {
-        if (!placedIn.target) return failure(`Invalid arguments for ${name}: ${toErrorData(error).message}`); // in another company its describe read this one's data
+        if (!placedIn.target) return refuse(`Invalid arguments for ${name}: ${toErrorData(error).message}`, true); // in another company its describe read this one's data
       }
     }
     if (target) action = onPc(action, target);
@@ -199,20 +200,52 @@ export class Registry implements ToolRegistry {
   }
 
   /**
-   * B-049 F4 tools.call: its target runs through call() under the target's own name and this call id – the same
-   * validation, journal and result as a direct call (tools-meta.ts callRefusal); a target outside the mode's core
-   * set is noted for the next fresh session.
+   * tools.call: its target runs through call() under the target's own name and this call id – the same validation,
+   * journal and result as a direct call (tools-meta.ts callRefusal); a target that succeeded and is in no core set (also
+   * not the file and web tools an engine without its own gets) is noted for when its session next starts anew (learned.ts).
    */
   private async callThrough(args: unknown, base: Omit<ToolContext, 'services'>, callId: string): Promise<ToolOutput> {
     const services = this.options.services();
     const target = callTarget(args);
-    if ('error' in target) return failure(target.error);
+    if ('error' in target) return this.refuse(services, base, CALL_TOOL, args, callId, target.error);
     const refused = callRefusal({ ...base, services, callId: callId || undefined }, target.name);
-    if (refused) return failure(refused);
+    if (refused) return this.refuse(services, base, target.name, target.args, callId, refused);
+    const output = await this.call(target.name, target.args, base, callId, target.company);
+    if (output.isError) return output; // a wrong or failed call never takes a learned slot
     try {
-      if (!base.split && !coreNames(services.modes.get(base.mode)).has(target.name)) noteLearned(services, base.agent.id, base.conversationId, target.name); // B-057 S9: a split learns no tools
-    } catch { /* unknown mode or no store: nothing learned, the call still runs */ }
-    return this.call(target.name, target.args, base, callId, target.company);
+      if (!coreNames(services.modes.get(base.mode), { ownTools: false }).has(target.name)) noteLearned(services, base.agent.id, target.name); // a part learns for its agent, like every turn
+    } catch { /* unknown mode or no store: nothing learned */ }
+    return output;
+  }
+
+  /** A call refused before it runs, journaled as a failed call with its reason (once per call id; without one, only answered). */
+  private refuse(services: RuntimeServices, base: Omit<ToolContext, 'services'>, name: string, args: unknown, callId: string, reason: string, argsRefused = false): ToolOutput {
+    const output = failure(reason);
+    if (!callId || !base.runId) return output;
+    const idemKey = `${base.runId}:${callId}`;
+    try {
+      if (journaled(services, idemKey)) return output;
+      safeItem(services, base.runId, { kind: 'tool_call', name, data: { callId, args: preview(services.secrets, this.journalable(name, args, argsRefused)), summary: name, refused: true }, effectStatus: 'none', idemKey });
+      journalResult(services, base.runId, name, callId, idemKey, output, []);
+    } catch { /* the journal is best effort: the refusal is answered all the same */ }
+    return output;
+  }
+
+  /**
+   * The arguments the journal may show for a refused call: of a registered tool (a tools.call unwrapped to its target
+   * first), the keys its schema declares, under its own HIDDEN_ARGS. Nothing else is written – no tool I cannot name, no
+   * key the schema does not know, nothing of a tool with HIDDEN_ARGS whose arguments were refused: a password on its way
+   * into the vault under a wrong key is not stored yet, so no redactor would know it. The reason line says what happened.
+   */
+  private journalable(name: string, args: unknown, argsRefused: boolean): Record<string, unknown> {
+    const target = name === CALL_TOOL ? callTarget(args) : { name, args };
+    if ('error' in target) return {};
+    const tool = this.tools.get(target.name);
+    if (!tool || !isRecord(target.args)) return {};
+    const hidden = HIDDEN_ARGS.get(tool.name);
+    if (hidden && argsRefused) return {};
+    const declared = isRecord(tool.inputSchema.properties) ? tool.inputSchema.properties : {};
+    return journalArgs(Object.fromEntries(Object.entries(target.args).filter(([key]) => Object.hasOwn(declared, key))), hidden);
   }
 
   /** AF-013: undefined = the agent's access lets this call run (runtime/access/service.ts gateTool), else the refusal its turn reads. */
@@ -238,7 +271,7 @@ export class Registry implements ToolRegistry {
       output = company ? await forward(company, tool, input, ctx) : await this.execute(tool, input, ctx);
     } catch (error) {
       // A throw after an external call started may still have had an effect: never retry blindly.
-      output = { ...failure(toErrorData(error).message), effect: action.external ? { status: 'unknown' } : undefined };
+      output = { ...failure(toErrorData(error).message + backLater(ctx, error)), effect: action.external ? { status: 'unknown' } : undefined };
     }
     const { output: finalOutput, blobIds } = await finalizeOutput(output, services, name);
     if (callItem && action.external) {
@@ -262,10 +295,26 @@ export class Registry implements ToolRegistry {
       }, ctx.signal);
     } catch (error) {
       if (!nothingRan(error)) throw error;
-      return failure(error.message);
+      return failure(error.message + backLater(ctx, error, ctx.deviceId));
     }
     return normalizeOutput(result);
   }
+}
+
+/**
+ * B-080: for a call that could not reach a linked PC (unavailable, reachable false; not a refusal, never this PC): the
+ * agent is noted for a wake when that PC is back (devices/back-wake.ts), and the sentence that says so; else ''.
+ * `forwardedTo`: the PC a forwarded call went to. An error naming another PC came from that PC's own dial of a third
+ * one (a devices.send_file there): this PC may well reach the third PC, so no online change and no wake would come –
+ * the plain failure then.
+ */
+function backLater(ctx: ToolContext, error: unknown, forwardedTo?: string): string {
+  if (!(error instanceof WorkforceError) || error.code !== 'unavailable' || error.details?.reachable !== false || error.details.refused) return '';
+  const named = typeof error.details.deviceId === 'string' ? error.details.deviceId : undefined;
+  if (forwardedTo !== undefined && named !== undefined && named !== forwardedTo) return '';
+  const id = named ?? forwardedTo;
+  if (!id || id === safeSelfId(ctx.services)) return '';
+  return missed(ctx.services, id, { agentId: ctx.agent.id, conversationId: ctx.conversationId, taskId: ctx.taskId }) ? ' I hear it here when it is back.' : '';
 }
 
 const PEER_REFUSALS: ReadonlySet<string> = new Set(['forbidden', 'bad_request']); // that PC's or company's checks and arguments (devices/tools.ts, builtin/companies.ts)

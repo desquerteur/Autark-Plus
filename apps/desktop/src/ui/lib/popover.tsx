@@ -3,6 +3,10 @@
 // layer, lib/top-layer.ts, so the dialog's scrollbar never takes its clicks), placed next to its anchor
 // element and clamped to the viewport – again whenever its content changes size (a ResizeObserver,
 // so a list that fills in or grows while open stays on screen); it closes on outside click and Escape.
+// Feedback 16.11.2026 (F11: "dann kann man von allem Feedback machen"): a press on an element marked
+// data-keeps-popovers (the feedback cell, whose press snapshots the window as it is) leaves it open, so the snapshot
+// shows it; and Escape belongs to the layer that has the keyboard – a modal opened over the popover (the snapshot
+// overlay) takes it first.
 // Owns: placement, dismissal, menu keyboard navigation. Never: holds business logic.
 
 import type { ComponentChildren, JSX } from 'preact';
@@ -74,11 +78,15 @@ export function Popover(props: PopoverProps) {
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (ref.current?.contains(target) || props.anchor?.contains(target)) return;
+      if ((target as Partial<Element>).closest?.('[data-keeps-popovers]')) return;
       props.onClose();
     };
+    const layerOf = (node: Element | null | undefined) => node?.closest('dialog[open]') ?? null;
     const onKey = (event: KeyboardEvent) => {
+      const focused = layerOf(document.activeElement); // the keyboard in another dialog (one opened over this popover): its Escape
+      if (event.key !== 'Escape' || (focused !== null && focused !== layerOf(ref.current))) return;
       // preventDefault: Escape closes only the popover, never a surrounding dialog (like lib/select.tsx).
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose(); props.anchor?.focus({ preventScroll: true }); }
+      event.preventDefault(); event.stopPropagation(); props.onClose(); props.anchor?.focus({ preventScroll: true });
     };
     document.addEventListener('pointerdown', onPointer, true);
     document.addEventListener('keydown', onKey, true);
@@ -106,6 +114,8 @@ export function Popover(props: PopoverProps) {
 export interface MenuItem {
   label: string;
   icon?: IconName;
+  /** Drawn in the icon's place (a company's picture in the phone's profile sheet); wins over `icon`. */
+  lead?: ComponentChildren;
   hint?: string; // small grey text right/below
   description?: string; // one line under the label
   checked?: boolean;
@@ -154,7 +164,7 @@ export function Menu(props: Omit<PopoverProps, 'children'> & { sections: MenuSec
                 key={`${sectionIndex}:${index}`} // by place, not label: two rows can read the same (two companies of one name)
                 onClick={() => { props.onClose(); item.onSelect(); }}
               >
-                {item.icon && <Icon name={item.icon} size={18} />}
+                {item.lead ?? (item.icon && <Icon name={item.icon} size={18} />)}
                 <span class="menu-label">
                   <span>{item.label}</span>
                   {item.description && <small>{item.description}</small>}

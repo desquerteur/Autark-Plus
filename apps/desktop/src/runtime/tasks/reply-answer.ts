@@ -1,5 +1,5 @@
 // A typed reply answers the ask (B-078 D9): when the person writes a text line as a reply (replyTo) to an agent's
-// message that open to-dos of theirs are anchored to – its important ask blocks, a human.ask card – the one to-do the
+// message that open to-dos of theirs are anchored to – its important ask blocks, a task given to the person – the one to-do the
 // line answers (answeredTodo: one ask per reply, never two with the same text) is done with their text ({text}). Their line is the answer: no receipt is posted and nobody is woken
 // here (the line itself reaches the agent through the chat like any line). The AskStrip's buttons put an option
 // into the composer as such a reply, so a sent strip answer lands here too.
@@ -23,7 +23,7 @@ const NOT_BY_TEXT = new Set(['timer', 'app']);
 export function repliedTodos(t: TaskServiceImpl, conversationId: string, messageId: string, personId: string): Task[] {
   const rows = t.s.db.all<Record<string, unknown>>(
     `SELECT * FROM tasks WHERE conversation_id = ? AND message_id = ? AND assignee_kind = 'human'
-       AND status NOT IN ('done', 'cancelled') AND widget IS NOT NULL ORDER BY created_at LIMIT 10`,
+       AND status IN ('open', 'waiting') AND widget IS NOT NULL ORDER BY created_at LIMIT 10`,
     [conversationId, messageId],
   );
   return rows.map(toTask).filter((task) => {
@@ -68,7 +68,7 @@ export function answerByReply(t: TaskServiceImpl, message: Message): void {
   const todo = answeredTodo(todos, text);
   if (todo) {
     try {
-      t.complete(todo.id, { summary: oneLine(text), evidence: [], verification: 'reported_by_human', answer: { text } }, message.authorId);
+      t.finish(todo.id, { status: 'done', summary: oneLine(text), answer: { text } }, message.authorId);
     } catch (error) {
       t.s.log?.warn('answering an ask by reply failed', { taskId: todo.id, error: String(error) });
     }

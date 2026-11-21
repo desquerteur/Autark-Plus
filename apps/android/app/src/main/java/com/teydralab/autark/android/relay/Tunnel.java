@@ -1,17 +1,13 @@
 // Owns: one meeting-server tunnel exactly as rendezvous/tunnel.ts frames it – [u32 tunnel id][flags][≤ 60 KiB chunk],
-// flag MORE joins chunks, text (handshake) frames sealed to the other device with the counter cipher of seal.ts.
+// flag MORE joins chunks, text (handshake) frames sealed to the other device with the counter cipher of seal.ts. A Pipe
+// (F29): the fallback when no direct address of the PC answers (Route).
 // Never: decides trust (the peer handshake does) or holds more than one message being joined.
 package com.teydralab.autark.android.relay;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 
-public final class Tunnel {
-    public interface Listener {
-        void message(byte[] data, boolean text);
-        void closed();
-    }
-
+public final class Tunnel implements Pipe {
     interface Link {
         void send(byte[] frame);
         void close(int tid);
@@ -31,7 +27,7 @@ public final class Tunnel {
     private long sent;
     private long received;
     private final ByteArrayOutputStream parts = new ByteArrayOutputStream();
-    private volatile Listener listener;
+    private volatile Pipe.Listener listener;
     private volatile boolean closed;
 
     Tunnel(int tid, String peer, Link link, byte[] sendKey, byte[] receiveKey) {
@@ -42,16 +38,16 @@ public final class Tunnel {
         this.receiveKey = receiveKey;
     }
 
-    public void listen(Listener listener) { this.listener = listener; }
+    @Override public void listen(Pipe.Listener listener) { this.listener = listener; }
 
-    public boolean isClosed() { return closed; }
+    @Override public boolean isClosed() { return closed; }
 
-    public synchronized void sendText(String text) {
+    @Override public synchronized void sendText(String text) {
         byte[] sealed = Crypto.seal(sendKey, sent++, text.getBytes(StandardCharsets.UTF_8));
         frames(sealed, true);
     }
 
-    public synchronized void sendBinary(byte[] data) { frames(data, false); }
+    @Override public synchronized void sendBinary(byte[] data) { frames(data, false); }
 
     private void frames(byte[] body, boolean text) {
         if (closed) return;

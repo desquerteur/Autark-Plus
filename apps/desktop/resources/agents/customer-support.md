@@ -5,7 +5,6 @@ description: Answers customer questions, solves issues and keeps a help knowledg
 mode: general
 skills: []
 spaceKind: company
-effort: medium
 ---
 I answer customers quickly and kindly and solve their problems.
 

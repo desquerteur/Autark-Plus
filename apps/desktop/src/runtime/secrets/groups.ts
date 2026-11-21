@@ -2,12 +2,13 @@
 // each field a `secrets` row with its own handle; for a grouped row the GROUP's route, tags and source
 // count (the row's own columns stay '[]' / NULL). Here: the rows and their SecretInfo/SecretGroup shape, the checks
 // of secrets.saveGroup before anything is written (names, kinds, <= 20 fields, <= 1 2FA key, values <= 4096 characters,
-// a 2FA key that parses, a route name, <= 12 tags), the write in one transaction, the hints and what the leak redactor
+// a description <= 4000 characters like a single secret's – B-080, a 2FA key that parses, a route name, <= 12 tags), the write in one transaction, the hints and what the leak redactor
 // learns per kind. Owner 29.10.2026 (secrets as a catalog like skills, with its Nachtrag):
 // the store is a catalog like a skill with ZERO restrictions – no site binding for anything, card data included; the
 // site a value came from is its `source` (provenance only), the route its catalog area, the tags information only.
 // `created_by` names the agent that created a group or single secret (information only); every agent uses and
-// changes every entry. The `agents` columns are no longer read (every entry is for every agent).
+// changes every entry. The `agents` columns are no longer read (every entry is for every agent). `uses` (migration 103) is
+// read here and counted only by the vault's use(): a write of a group – the person's, an agent's, the device sync's – leaves it.
 // Owns: that SQL and those rules. Never: encrypts, decrypts, logs or returns a value (the vault
 // does the crypto; hints show at most the last 4 card digits – and a text field, which is no secret, itself: owner
 // 04.11.2026, he wants to see which email belongs to an entry).
@@ -30,12 +31,13 @@ export interface SecretRow {
   description?: string; conversation_id?: string | null;
   id: string; label: string; kind: string; cipher: Uint8Array | null; hint: string | null; agents: string;
   domains: string; created_at: number; last_used_at: number | null; group_id?: string | null; field?: string | null; created_by?: string | null;
-  source?: string | null; route?: string | null; tags?: string | null;
+  source?: string | null; route?: string | null; tags?: string | null; uses?: number | null;
 }
 
 export interface GroupRow {
   id: string; label: string; kind: SecretGroupKind; description: string | null; agents: string; domains: string;
   created_at: number; last_used_at: number | null; created_by?: string | null; source?: string | null; route?: string | null; tags?: string | null;
+  uses?: number | null;
 }
 
 const bad = (message: string): never => { throw new WorkforceError('bad_request', message); };
@@ -55,6 +57,7 @@ export function toInfo(row: SecretRow, group?: GroupRow): SecretInfo {
     createdAt: row.created_at, lastUsedAt: row.last_used_at ?? undefined,
   };
   if (tags.length) info.tags = tags;
+  if (row.uses) info.uses = Number(row.uses);
   if (row.description) info.description = row.description;
   if (row.conversation_id) info.conversationId = row.conversation_id;
   if (row.created_by) info.createdBy = row.created_by;
@@ -69,6 +72,7 @@ export function toGroup(row: GroupRow): SecretGroup {
   if (row.description) group.description = row.description;
   if (tags.length) group.tags = tags;
   if (row.last_used_at !== null) group.lastUsedAt = row.last_used_at;
+  if (row.uses) group.uses = Number(row.uses);
   if (row.created_by) group.createdBy = row.created_by;
   if (row.source) group.source = row.source;
   return group;
@@ -162,7 +166,7 @@ export function planGroup(db: Db, input: SecretGroupInput, now: number, createdB
   const label = (input.label ?? existing?.label ?? '').trim();
   if (!label || label.length > 120) bad('A group needs a name of at most 120 characters.');
   const description = input.description !== undefined ? input.description.trim() || null : existing?.description ?? null;
-  if (description && description.length > 500) bad('The description has at most 500 characters.');
+  if (description && description.length > 4000) bad('The description has at most 4000 characters.'); // B-080: as a single secret's (service.ts)
   const stored = existing ? fieldRows(db, existing.id) : [];
   const remove = [...new Set(input.remove ?? [])];
   if (remove.some((id) => !stored.some((row) => row.id === id))) bad('Only fields of this group can be removed.');

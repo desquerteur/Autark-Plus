@@ -99,6 +99,15 @@ public final class ScreenTree {
 
     private static void flag(Map<String, Object> row, String key, boolean value) { if (value) row.put(key, true); }
 
+    /** Whether the row sits inside a WebView: a page's elements take a real touch (Chromium's ACTION_CLICK reports
+     *  success on Autark's own page while nothing happens), so a tap there is always a gesture. */
+    public static boolean insideWeb(List<Map<String, Object>> rows, int index) {
+        for (int i = index; i >= 0 && i < rows.size(); i = (Integer) rows.get(i).get("parent")) {
+            if ("WebView".equals(rows.get(i).get("cls"))) return true;
+        }
+        return false;
+    }
+
     /** The row index of the smallest clickable element around (x, y), -1 when none: a tap then clicks it instead of a gesture. */
     @SuppressWarnings("unchecked")
     public static int clickableAt(List<Map<String, Object>> rows, int x, int y) {

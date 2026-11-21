@@ -2,7 +2,9 @@
    The call view is its own layer over the window – dark in both themes, like a phone's call screen – with the agent big
    in the middle, a ring that pulses with who speaks (--call-ring, data-speaker – set per frame by CallWave.tsx), the
    status and clock, the wave, captions, the background line and four round controls; the mini view is a small floating
-   window (a bar under the top edge on the phone). The call card is the call's bubble in the chat.
+   window (a bar under the top edge on the phone). Upstream B-085: the live preview of the camera or screen this device
+   shows on the call (CallShare.tsx) sits in the stage under the captions; a call's row in the chat (CallTranscript.tsx)
+   is upstream's card. Upstream's floating call card (CallCard.tsx) is not mounted in Autark-Plus, so it has no rules here.
    Owns: these rules. Never: rules of other areas. */
 
 .call-view {
@@ -124,18 +126,39 @@
   .call-view[data-phase=connecting] .call-ring { animation: none; }
 }
 
-/* ---------------------------------------------------------------- the call card in the chat */
-.call-card { width: min(440px, 100%); padding: 12px 14px 10px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
-.call-card-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.call-card-mark { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--hover); color: var(--secondary); }
-.call-card.running .call-card-mark { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
-.call-card-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.call-card-title { overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.call-card-meta { font-size: 12px; line-height: 1.4; }
-.call-card-length { flex: none; font-size: 14px; font-weight: 600; }
-.call-card-length.live { color: var(--success); }
-.call-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; padding-left: 46px; }
-.call-card .call-transcript-toggle { margin-left: -6px; padding: 0 8px 0 4px; }
-.call-card-open { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 8px; border-radius: 6px; color: var(--success); font-size: 12px; font-weight: 500; }
-.call-card-open:hover { background: var(--hover); }
-.call-card .call-transcript-body { margin: 8px 0 0 18px; }
+/* ---------------------------------------------------------------- the camera / screen preview (B-085, CallShare.tsx) */
+/* in the stage under the captions; its width and aspect come from the stream (inline style); a drag marks the cut-out
+   that goes with the next line */
+.call-share {
+  position: relative; flex: none; max-width: 100%; overflow: hidden;
+  border-radius: 12px; background: var(--call-bg); box-shadow: inset 0 0 0 1px var(--call-edge), var(--call-shadow); cursor: crosshair; touch-action: none;
+}
+.call-share video { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.call-cut { position: absolute; box-sizing: border-box; border: 2px solid var(--call-person); border-radius: 4px; box-shadow: 0 0 0 9999px color-mix(in srgb, var(--call-bg) 45%, transparent); }
+.call-cut-drop {
+  position: absolute; top: -10px; right: -10px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
+  border-radius: 50%; background: var(--call-fg); color: var(--call-bg); font-size: 14px; line-height: 1; cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- a call's row in the chat (upstream B-085) */
+/* the card: a round mark, "Call with Ava" over "21:24 · 3 lines", the state or length right, the Transcript caret under
+   it (indented to the words) and, while the call runs on this device, Open call; the transcript opens below the card */
+.call-transcript { min-width: 0; margin: 0 0 12px; }
+.call-row-card {
+  box-sizing: border-box; max-width: 440px; padding: 12px 14px 8px;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+}
+.call-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; min-height: 36px; }
+.call-row-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--hover); color: var(--muted); }
+.call-row-mark.live { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.call-row-words { display: flex; flex-direction: column; min-width: 0; }
+.call-row-title, .call-row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-row-title { color: var(--text); font-size: 14px; font-weight: 600; line-height: 20px; }
+.call-row-meta { color: var(--muted); font-size: 12px; line-height: 16px; }
+.call-row-end { color: var(--text); font-size: 14px; font-weight: 600; }
+.call-row-end.live { color: var(--success); }
+.call-row-card > .call-transcript-toggle { margin: 4px 0 0 44px; }
+/* AF-015: Open call, while the call runs on this device */
+.call-row-open { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; margin: 4px 0 0 8px; padding: 0 8px; border-radius: 6px; color: var(--success); font-size: 12px; font-weight: 500; }
+.call-row-open:hover { background: var(--hover); }
+.call-transcript > .call-transcript-body { margin-top: 8px; }

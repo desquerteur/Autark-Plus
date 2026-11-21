@@ -33,7 +33,7 @@ test('secrets.list and secrets.generate are offered wherever browser.act is', ()
     if (names.has('browser.act')) assert.ok(names.has('secrets.generate') && names.has('secrets.list'), `${key}: the vault comes with browser.act`);
   }
   const writing = offered('writing');
-  assert.ok(!writing.has('browser.act'), 'no browser in writing mode');
+  assert.ok(writing.has('browser.act'), 'every mode reaches the browser (KI-Runde 17.11.2026)');
   assert.ok(writing.has('secrets.list') && writing.has('secrets.generate'), 'the secrets catalog is in every mode');
 });
 

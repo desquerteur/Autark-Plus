@@ -1,7 +1,8 @@
 // One act step in a side tab, done like a person would: the ref is resolved to its node,
 // scrolled into view, and the mouse travels to the node's center along the shared motion model
 // (pointer-motion.ts) as real mouseMoved events at their times – hover effects included – before it
-// presses and releases. fill = focus + select all + insertText; select/check work on the node itself
+// presses and releases (with x/y and a ref: at that point inside the element – 17.11.2026). fill = focus + select all +
+// insertText; type into a text field inserts the text, into anything else (a custom combobox) clicks it and presses real keys; select/check work on the node itself
 // (with input/change events); scroll is a wheel at a point; back/forward/reload use the tab's history.
 // Every failure is one sentence for the agent (a stale ref asks for a new snapshot).
 // Owns: the step mechanics. Never: decides whether a step may run (driver.ts keeps the person-first rule).
@@ -17,6 +18,8 @@ export interface StepContext {
   tab: SideTab;
   agentId: string;
   style: MotionStyle;
+  /** The object group this act resolves its nodes into (its own, so a parallel act's release frees only its own). */
+  group: string;
   now(): number;
   sleep(ms: number): Promise<void>;
   /** The agent's cursor moves (overlay + pointer report) – before the mouse events run. */
@@ -24,6 +27,9 @@ export interface StepContext {
 }
 
 const GROUP = 'wf-side-step';
+let groupSeq = 0;
+/** A fresh object group for one act call, so two acts on the same tab never free each other's nodes. */
+export function newStepGroup(): string { return `${GROUP}-${(groupSeq = (groupSeq + 1) % 1e9)}`; }
 const stale = (ref: string) => new SideError(`The element ${ref} is not on the page any more – take a new snapshot.`);
 
 interface Node { objectId: string; backendNodeId: number }
@@ -32,7 +38,7 @@ async function resolve(ctx: StepContext, ref: string): Promise<Node> {
   const backendNodeId = Number(ref.slice(1));
   let objectId: string | undefined;
   try {
-    const out = await ctx.tab.cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: await ctx.tab.cdp.world(), objectGroup: GROUP }) as { object?: { objectId?: string } };
+    const out = await ctx.tab.cdp.send('DOM.resolveNode', { backendNodeId, executionContextId: await ctx.tab.cdp.world(), objectGroup: ctx.group }) as { object?: { objectId?: string } };
     objectId = out.object?.objectId;
   } catch (error) {
     if (error instanceof SideError) throw error;
@@ -82,18 +88,38 @@ async function moveTo(ctx: StepContext, to: Point, size: number, action: Pointer
   const path = planMotion(from, to, { style: ctx.style, targetSize: Math.max(4, size) });
   ctx.moved(path, action, ref);
   const start = ctx.now();
+  // The moves go out without waiting for each answer: Chromium answers a mouseMoved only after the page handles it on
+  // its next frame, so awaiting every one made a ~25-step glide take ~25 s on a slow page (and run into the CDP/host
+  // timeouts – the B-081 glide regression). They still leave in order and at their planned times, and the press that
+  // follows is processed after them (CDP input is FIFO). A send that fails (page gone mid-glide) surfaces at the press.
   for (const step of path) {
     const wait = start + step.t - ctx.now();
     if (wait > 0) await ctx.sleep(wait);
-    await mouse(ctx, { type: 'mouseMoved', x: step.x, y: step.y, button: 'none', buttons: 0 });
+    void mouse(ctx, { type: 'mouseMoved', x: step.x, y: step.y, button: 'none', buttons: 0 }).catch(() => {});
   }
   ctx.tab.cursors.set(ctx.agentId, { x: to.x, y: to.y });
+}
+
+/** fb_1m7mtty0aszywt5y0 (17.11.2026): a point inside the node, `x`/`y` CSS px from its top-left (an image CAPTCHA's tile, a
+ *  canvas, a map) – after it is scrolled into view; null when it has no box. Throws when the point lies outside it. */
+async function inside(ctx: StepContext, node: Node, ref: string, x: number, y: number): Promise<{ x: number; y: number; size: number } | null> {
+  if (!(await center(ctx, node))) return null; // scrolls it into view
+  const out = await ctx.tab.cdp.send('DOM.getContentQuads', { backendNodeId: node.backendNodeId }).catch(() => ({ quads: [] })) as { quads?: number[][] };
+  for (const q of out.quads ?? []) {
+    if (q.length < 8) continue;
+    const xs = [q[0]!, q[2]!, q[4]!, q[6]!], ys = [q[1]!, q[3]!, q[5]!, q[7]!];
+    const left = Math.min(...xs), top = Math.min(...ys), width = Math.max(...xs) - left, height = Math.max(...ys) - top;
+    if (width < 1 || height < 1) continue;
+    if (x > width || y > height) throw new SideError(`The point ${Math.round(x)},${Math.round(y)} is outside the element ${ref} (${Math.round(width)}×${Math.round(height)}).`);
+    return { x: left + x, y: top + y, size: 12 };
+  }
+  return null;
 }
 
 async function target(ctx: StepContext, step: SideActStep, action: PointerAction): Promise<{ point: Point; node?: Node }> {
   if (step.ref) {
     const node = await resolve(ctx, step.ref);
-    const box = await center(ctx, node);
+    const box = step.x !== undefined && step.y !== undefined ? await inside(ctx, node, step.ref, step.x, step.y) : await center(ctx, node);
     if (!box) throw new SideError(`The element ${step.ref} is not visible on the page (it has no size there).`);
     await moveTo(ctx, box, box.size, action, step.ref);
     return { point: box, node };
@@ -157,6 +183,37 @@ const CHECK = `function (want) {
   return { ok: state() === want };
 }`;
 
+/** fb_1m7mtty0aszywt5y0: `type` into an element that is no text field (a custom combobox, a date picker's parts, a
+ *  canvas editor) clicks it like a person and types real key presses into whatever took the focus. True: a text field. */
+async function focusForTyping(ctx: StepContext, ref: string): Promise<boolean> {
+  const node = await resolve(ctx, ref);
+  const info = await ctx.tab.cdp.callOn<{ editable: boolean; disabled: boolean; readonly: boolean; direct: boolean }>(node.objectId, EDITABLE);
+  if (info.editable) { await focus(ctx, ref); return !info.direct; }
+  if (info.disabled) throw new SideError(`The element ${ref} is disabled.`);
+  const box = await center(ctx, node);
+  if (!box) throw new SideError(`The element ${ref} is not visible on the page (it has no size there).`);
+  await moveTo(ctx, box, box.size, 'click', ref);
+  await click(ctx, box, 'left', 1);
+  return false;
+}
+
+/** Whether the page's focused element takes inserted text (an input, a textarea, an editable region). */
+const FOCUSED_EDITABLE = `(() => { let el = document.activeElement; while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+  if (!el) return false; const tag = el.tagName;
+  return (tag === 'INPUT' && !/^(checkbox|radio|submit|button|reset|image|file|range|color|hidden|date|time|datetime-local|month|week)$/i.test(el.type)) || tag === 'TEXTAREA' || el.isContentEditable === true; })()`;
+
+/** Types `text` as real key presses, one character after the other (a character no key names goes as its text). */
+async function typeKeys(ctx: StepContext, text: string): Promise<void> {
+  for (const ch of text) {
+    ctx.tab.agentKey();
+    const plan = ch === ' ' ? parseKey('Space') : ch === '\n' ? parseKey('Enter') : parseKey(ch);
+    if (plan) { for (const event of keyEvents(plan)) await ctx.tab.cdp.send('Input.dispatchKeyEvent', event); continue; }
+    await ctx.tab.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch, unmodifiedText: ch });
+    await ctx.tab.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+    if (ctx.style !== 'instant') await ctx.sleep(12);
+  }
+}
+
 /** Focuses a text field (the pointer goes there first). `direct`: a date/time field, which takes its value set, not typed. */
 async function focus(ctx: StepContext, ref: string): Promise<{ node: Node; direct: boolean }> {
   const node = await resolve(ctx, ref);
@@ -214,11 +271,15 @@ export async function runStep(ctx: StepContext, step: SideActStep): Promise<void
       else await press(ctx, 'Delete');
       return;
     }
-    case 'type':
-      if (step.ref) await focus(ctx, step.ref);
+    case 'type': {
+      // A text field takes the text at once; anything else (no text field, a date/time part, nothing focused that
+      // takes text) gets real key presses – a stored secret too (fb_1m7mtty0aszywt5y0: "not a text field").
+      const field = step.ref ? await focusForTyping(ctx, step.ref) : await cdp.inWorld<boolean>(FOCUSED_EDITABLE).catch(() => false);
       tab.agentKey();
-      await cdp.send('Input.insertText', { text: step.value ?? '' });
+      if (field) await cdp.send('Input.insertText', { text: step.value ?? '' });
+      else await typeKeys(ctx, step.value ?? '');
       return;
+    }
     case 'press':
       if (step.ref && !tab.dialog) { const node = await resolve(ctx, step.ref); await cdp.send('DOM.focus', { backendNodeId: node.backendNodeId }).catch(() => {}); }
       await press(ctx, step.key!);
@@ -263,7 +324,7 @@ export async function runStep(ctx: StepContext, step: SideActStep): Promise<void
   }
 }
 
-/** Lets go of the nodes a call resolved. */
-export function release(tab: SideTab): void {
-  void tab.cdp.send('Runtime.releaseObjectGroup', { objectGroup: GROUP }).catch(() => {});
+/** Lets go of the nodes this act resolved (its own group only – a parallel act on the tab keeps its own). */
+export function release(tab: SideTab, group: string): void {
+  void tab.cdp.send('Runtime.releaseObjectGroup', { objectGroup: group }).catch(() => {});
 }

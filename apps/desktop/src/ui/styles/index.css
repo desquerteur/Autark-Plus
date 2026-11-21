@@ -7,14 +7,17 @@
 @import "./shell.css";
 @import "./header.css"; /* B-044: one header for every zone (lib/header.tsx) and the notice band */
 @import "./chat.css";
+@import "./call.css"; /* AF-015: the call view (full and mini), B-085: its camera/screen preview and a call's row in the chat */
 @import "./chat-tree.css"; /* B-078: sub-chats under their parent */
 @import "./chat-area.css"; /* B-072: a chat's area – its tabs above the messages */
-@import "./working.css"; /* B-048 E4.5: the chat header's working popover and the live block's model slot */
+@import "./working.css"; /* B-048 E4.5: the chat header's working popover */
+@import "./live-bar.css"; /* 13.11.2026: who works for the chat, above the composer */
 @import "./composer.css";
 @import "./queue.css"; /* AF-016: the prompt queue above the composer and the Send split */
 @import "./model-menu.css"; /* AF-021: the effort slider and the account choice */
 @import "./ask-strip.css"; /* B-078: important question above the composer */
 @import "./schedule.css"; /* B-044: the schedule dialog and the chat's Scheduled line */
+@import "./markdown.css"; /* B-081: Markdown typography, split from blocks.css */
 @import "./blocks.css";
 @import "./widgets.css";
 @import "./settings.css";
@@ -27,13 +30,14 @@
 @import "./mobile.css";
 @import "./phone-swipe.css"; /* B-078: swipe between a chat and its area on the phone */
 @import "./first-run.css"; /* B-044: the first-run layer */
-@import "./tour.css"; /* B-055 Q5: the feedback tour (first-run step and replay dialog) */
+@import "./tour.css"; /* B-055 Q5: the feedback tour (its replay dialog) */
 @import "./spotlight.css"; /* AF-002: the spotlight tour through the app and the first-visit hints */
 @import "./tasks.css";
 @import "./task-center.css"; /* task center: quick composer, posts, quick-task panel, references */
 @import "./day.css"; /* B-041: My day */
 @import "./day-overview.css"; /* the blocks under My day's list */
 @import "./team.css";
+@import "./agent-work.css"; /* F12: an agent's Work page – Now cards, active tasks, Jump to now */
 @import "./people.css"; /* F-52: people of the organisation */
 @import "./projects.css"; /* AF-018: the Projects tab */
 @import "./schedules-tab.css"; /* #20: the Schedules tab */
@@ -54,7 +58,7 @@
 @import "./agent-view.css"; /* AF-004: the chat's agent view – several agents and their parts as one tree */
 @import "./remote.css";
 @import "./repair.css"; /* 23.10.: repair screen after a broken upgrade or a crash loop */
+@import "./skill-editor.css"; /* Settings › Skills editor (SkillEditor.tsx) */
 @import "./appearance.css"; /* AF-008: the person's own theme beyond the tokens, Settings › Appearance */
-@import "./call.css"; /* AF-015: the call view (full and mini) and the call card in the chat */
 @import "./updates.css"; /* AF-019: the update notice and the release notes in Settings › Updates */
 @import "./fallback-order.css"; /* AF-023: Settings › Models – the fallback order of Work and Decisions */

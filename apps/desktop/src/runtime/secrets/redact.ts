@@ -4,7 +4,41 @@
 // Owns: the in-memory matcher. Never: logs values, matches values shorter than MIN_SECRET_CHARS
 // (too many false hits; the UI flags such secrets as "too short for leak detection").
 
+import { findKeys } from '../../shared/secrets/token-patterns.ts';
+
 export const MIN_SECRET_CHARS = 8;
+
+/**
+ * 18.11.2026 (a live Stripe key printed by an error text – the third case in two days): what a tool prints is masked by the
+ * shape of a key too, not only by the values the vault knows. The mark names the kind and never the value: "‹secret:stripe-live›".
+ * Used for a tool's output, the run journal's previews and stored outputs (tools/outputs.ts) and an engine's own calls
+ * (agents/turn-attempt.ts). Not for chat messages or app pages (a web key inside an app is public there; secrets.redact leaves them).
+ */
+export function keyMark(key: { name: string; value: string }): string {
+  const value = key.value;
+  const slug = key.name === 'Stripe key' ? (/^(?:sk|rk)_live_/.test(value) ? 'stripe-live' : 'stripe-test')
+    : key.name === 'Stripe webhook secret' ? 'stripe-webhook'
+    : key.name === 'API key' ? (/^sk-ant-/.test(value) ? 'anthropic-key' : /^sk-proj-/.test(value) ? 'openai-key' : 'api-key')
+    : key.name === 'GitHub token' ? 'github-token'
+    : key.name === 'Slack token' ? 'slack-token'
+    : key.name === 'AWS key' ? 'aws-key'
+    : key.name === 'Google API key' ? 'google-api-key'
+    : key.name === 'Private key' ? 'private-key'
+    : key.name === 'Token' ? (/^eyJ/.test(value) ? 'jwt' : 'bearer-token')
+    : 'key';
+  return `‹secret:${slug}›`;
+}
+
+/** `text` with every key that shows itself by its shape replaced by its mark (see keyMark); idempotent. */
+export function maskKeyShapes(text: string): string {
+  if (!text || text.length < 16) return text;
+  const keys = findKeys(text, { apps: false });
+  if (!keys.length) return text;
+  let out = '';
+  let at = 0;
+  for (const key of keys) { out += text.slice(at, key.start) + keyMark(key); at = key.end; }
+  return out + text.slice(at);
+}
 
 export function handleFor(id: string): string {
   return `secret://${id}`;

@@ -2,7 +2,10 @@
 // person's new text message that is only a recording, while speech to text is ready and the recording's bytes are on
 // this PC (media/dictation.ts transcribes exactly those), is held back until its transcript arrives – the
 // 'message.updated' that brings a body or meta.dictation (also { failed: true }: nothing was heard, dictation.ts) – or
-// DICTATION_WAIT_MS passed; then it is delivered once.
+// DICTATION_WAIT_MS passed; then it is delivered once. B-080 F6: a bare recording whose files row is here but whose
+// bytes are not – written on another PC whose line is delivered here (an employee's PC, devices/sync/rows.ts), which
+// transcribes it – is held the same way; its body or meta.dictation (also { failed }) comes with the writer's synced
+// row update, within the same DICTATION_WAIT_MS.
 // Event-driven: bus listeners and one timer per held message, no polling; one deleted while it waits wakes nobody. A quit while one is held loses nothing:
 // recover() at the next start delivers the unanswered line (chat/delivery-recovery.ts).
 // Owns: holding and releasing those messages. Never: transcribes, writes a message, or holds one twice.
@@ -49,9 +52,10 @@ export class DictationWait {
     if (message.authorKind !== 'human' || message.kind !== 'text' || message.state !== 'final' || message.silent || message.body.trim()) return false;
     if (message.meta?.dictation) return false;
     const file = (message.attachments ?? []).find((attachment) => isRecording(attachment.mime));
-    if (!file || !this.s.stt || !this.s.files) return false;
+    if (!file || !this.s.files) return false;
     try {
-      return this.s.stt.state() === 'ready' && existsSync(this.s.files.path(file.fileId));
+      if (existsSync(this.s.files.path(file.fileId))) return this.s.stt?.state() === 'ready'; // written here: transcribed here
+      return this.s.files.get(file.fileId) !== undefined; // B-080 F6: written on another PC – its row update brings the text
     } catch { return false; }
   }
 

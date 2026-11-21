@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { Bus } from '../../../src/runtime/bus.ts';
-import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
+import type { Logger, RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { SocketLike } from '../../../src/runtime/devices/channel.ts';
 import { HttpServer } from '../../../src/runtime/http/server.ts';
 import type { HttpServerDeps, McpReply, RpcConnection } from '../../../src/runtime/http/types.ts';
@@ -44,7 +44,7 @@ export class FakeRpc {
   }
 }
 
-export function fixture(options: { port?: number; pwaEnabled?: boolean; bindHost?: string; allowedHosts?: HttpServerDeps['allowedHosts'] } = {}) {
+export function fixture(options: { port?: number; pwaEnabled?: boolean; bindHost?: string; allowedHosts?: HttpServerDeps['allowedHosts']; log?: Logger } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'wf-http-'));
   const ui = path.join(root, 'ui');
   mkdirSync(path.join(ui, 'chunks'), { recursive: true });
@@ -120,7 +120,7 @@ export function fixture(options: { port?: number; pwaEnabled?: boolean; bindHost
     launchToken: LAUNCH_TOKEN,
     bind: () => ({ host: options.bindHost ?? '127.0.0.1', port: options.port ?? 0 }),
     allowedHosts: options.allowedHosts,
-    log: silentLog,
+    log: options.log ?? silentLog,
     helloTimeoutMs: 2_000,
   });
 

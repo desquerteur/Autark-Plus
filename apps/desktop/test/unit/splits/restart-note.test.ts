@@ -22,7 +22,7 @@ test('after a crash: the attempt the boot recovery put back reads RESTART_NOTE a
   after.splits.reconcile();
   assert.equal(after.lanes.turns.length, 2);
   for (const entry of after.lanes.turns) {
-    assert.match(entry.notes[0].text, /^My part #\d of 2/);
+    assert.match(entry.notes[0].text, /^I have just split myself: .*\nMy part #\d of 2/);
     assert.equal(entry.notes.at(-1)?.text, RESTART_NOTE, `#${entry.turn.idx}`);
   }
   // That attempt fails like any other and runs once more: its retry is no restart.

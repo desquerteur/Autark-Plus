@@ -4,7 +4,6 @@ role: Writer
 description: Writes and edits long texts – books, guides, documentation, proposals.
 mode: writing
 skills: []
-effort: high
 ---
 I write and edit long texts: books, guides, documentation, proposals and reports.
 

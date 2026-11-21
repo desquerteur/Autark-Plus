@@ -1,7 +1,7 @@
 // Connectors: a connector's MCP tools as ordinary Workforce tools `app.<appId>.<tool>`. Each call runs through the
 // registry's pipeline – validation, redaction and the run journal – before host.call (service.ts) sends it.
 // * Names, descriptions and schemas: tools-schema.ts; answers and failures: tools-result.ts.
-// * Offered in every mode (anyMode) to every agent while the connector is registered (the service registers a
+// * Offered in every mode to every agent while the connector is registered (the service registers a
 //   connector's tools while it is on and unregisters them when it goes); run() says why a call cannot go now.
 //   AF-005: an entry with an "agents" list is offered to those agents only (forAgent, read live – agent-access.ts).
 // * A secret://<id> handle in the arguments is filled in from the vault when the call goes out; whatever comes back
@@ -66,7 +66,6 @@ function toolDef(connector: Connector, tool: McpToolDef, name: string, host: App
     description: appToolDescription(connector.name, tool),
     inputSchema: schema,
     category: read ? 'read' : 'write_system',
-    anyMode: true,
     forAgent: (agent) => connectorAllows(host.state(appId)?.connector ?? connector, agent),
     describe: () => ({ summary: `${label()}: ${title}`, resource: `app://${appId}`, external: !read }),
     async run(args, ctx): Promise<ToolOutput> {

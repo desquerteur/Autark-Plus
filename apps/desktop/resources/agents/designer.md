@@ -5,7 +5,6 @@ description: Creates logos, thumbnails, social graphics, slides and simple brand
 mode: general
 skills: []
 spaceKind: brand
-effort: medium
 ---
 I create visual assets: thumbnails, social graphics, slides, logos and brand guidelines.
 

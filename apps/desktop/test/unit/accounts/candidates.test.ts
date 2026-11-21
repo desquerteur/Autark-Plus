@@ -1,6 +1,6 @@
 // Limit-aware account selection (PR1): a used-up window counts as cooling until its reset, model
-// windows (weekly-opus …) exclude only matching models, the plan primary is the first signed-in
-// account while the opt-in rotation stays, ranking takes the smallest headroom of the windows that
+// windows (weekly-opus …) exclude only matching models, every signed-in plan takes turns (09.11.2026: no
+// opt-in; one that is limited steps aside until it is free), ranking takes the smallest headroom of the windows that
 // apply, the router asks per model, and the real AccountService passes the model through and
 // records turn-reported states.
 
@@ -16,7 +16,6 @@ import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate } from '../../../src/runtime/db/migrate.ts';
 import { Bus } from '../../../src/runtime/bus.ts';
 import { ManualClock } from '../../../src/runtime/system/clock.ts';
-import { planPrimary } from '../../../src/shared/model/plan-roles.ts';
 import type { Account, EngineId, LimitWindow, ProviderId } from '../../../src/shared/model/providers.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { agent, mode, standardSetup } from '../models/harness.ts';
@@ -28,7 +27,7 @@ const DAY = 24 * HOUR;
 function plan(id: string, provider: ProviderId, patch: Partial<Account> = {}): Account {
   return {
     id, provider, label: id, auth: provider === 'codex' || provider === 'claude' ? 'cli' : 'api_key', state: 'ok',
-    priority: 0, rotation: false, enabled: true, detected: false, createdAt: T0, ...patch,
+    priority: 0, enabled: true, detected: false, createdAt: T0, ...patch,
   };
 }
 
@@ -85,53 +84,48 @@ test('weekly-opus at 100 % excludes opus but keeps sonnet; model windows need th
   assert.equal(windowApplies('5h', 'anything'), true);
 });
 
-test('a primary that needs sign-in lets the second plan run without rotation', () => {
+test('every signed-in plan takes turns: one that needs sign-in, fails or is switched off steps aside', () => {
   const first = plan('acc_1', 'claude', { state: 'needs_login', priority: 0 });
-  const second = plan('acc_2', 'claude', { priority: 1, rotation: false, createdAt: T0 + 1 });
+  const second = plan('acc_2', 'claude', { priority: 1, createdAt: T0 + 1 });
   assert.deepEqual(ids(selectCandidates([first, second], 'claude', T0)), ['acc_2']);
-  assert.equal(planPrimary([first, second])?.id, 'acc_2');
-  // An error or a switched-off first plan never shuts out the next one either.
   assert.deepEqual(ids(selectCandidates([{ ...first, state: 'error' }, second], 'claude', T0)), ['acc_2']);
   assert.deepEqual(ids(selectCandidates([{ ...first, state: 'disabled', enabled: false }, second], 'claude', T0)), ['acc_2']);
-  // Once signed in again it is the primary and the second (rotation off) stays out.
-  assert.deepEqual(ids(selectCandidates([{ ...first, state: 'ok' }, second], 'claude', T0)), ['acc_1']);
+  // Signed in again, both run – without readings in the order of Settings.
+  assert.deepEqual(ids(selectCandidates([second, { ...first, state: 'ok' }], 'claude', T0)), ['acc_1', 'acc_2']);
 });
 
-test('AF-023: the primary cooling or used up lets the backup stand in – with rotation off too', () => {
-  const primary = plan('acc_1', 'claude', { state: 'cooling', coolingUntil: T0 + HOUR, priority: 0 });
+test('a cooling or used-up plan steps aside and is back the moment it is free', () => {
+  const cooling = plan('acc_1', 'claude', { state: 'cooling', coolingUntil: T0 + HOUR, priority: 0 });
   const second = plan('acc_2', 'claude', { priority: 1, createdAt: T0 + 1 });
-  assert.deepEqual(ids(selectCandidates([primary, second], 'claude', T0)), ['acc_2'], 'before AF-023 nothing ran here');
-  assert.deepEqual(ids(selectCandidates([primary, { ...second, rotation: true }], 'claude', T0)), ['acc_2']);
-  // A used-up window cools the primary the same way (no state change needed).
+  assert.deepEqual(ids(selectCandidates([cooling, second], 'claude', T0)), ['acc_2']);
+  // A used-up window cools it the same way (no state change needed).
   const usedUp = plan('acc_1', 'claude', { priority: 0, limits: limits(win('5h', 100, T0 + HOUR)) });
   assert.deepEqual(ids(selectCandidates([usedUp, second], 'claude', T0)), ['acc_2']);
-  assert.deepEqual(ids(selectCandidates([usedUp, { ...second, rotation: true }], 'claude', T0)), ['acc_2']);
-  // A primary that just failed this turn (excluded) lets the backup run; an excluded backup never runs.
+  // After the reset it runs first again.
+  assert.deepEqual(ids(selectCandidates([cooling, second], 'claude', T0 + HOUR)), ['acc_1', 'acc_2']);
+  assert.deepEqual(ids(selectCandidates([usedUp, second], 'claude', T0 + HOUR)), ['acc_1', 'acc_2']);
+  // AF-023: a plan that just failed this turn (excluded) lets the next one run; an excluded plan never runs.
   const ok = plan('acc_1', 'claude', { priority: 0 });
   assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0, undefined, ['acc_1'])), ['acc_2']);
   assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0, undefined, ['acc_1', 'acc_2'])), []);
-  // While the primary can run, a backup outside rotation stays behind (no spread over plans).
-  assert.deepEqual(ids(selectCandidates([ok, second], 'claude', T0)), ['acc_1']);
-  // After the reset the primary is used first again, the backup stays behind it.
-  assert.deepEqual(ids(selectCandidates([primary, { ...second, rotation: true }], 'claude', T0 + HOUR)), ['acc_1', 'acc_2']);
-  // Keyed providers have no rotation rule.
+  // Keyed providers the same way.
   const keys = [plan('acc_k1', 'openrouter', { state: 'cooling', coolingUntil: T0 + HOUR }), plan('acc_k2', 'openrouter', { priority: 1 })];
   assert.deepEqual(ids(selectCandidates(keys, 'compatible', T0)), ['acc_k2']);
 });
 
 test('ranking takes the smallest remaining share of 5h and weekly (and the model window)', () => {
-  // Weekly alone would prefer A (80 % left); its 5h window has only 5 % left.
-  const a = plan('acc_a', 'codex', { rotation: true, limits: limits(win('5h', 95, T0 + HOUR), win('weekly', 20, T0 + 3 * DAY)) });
-  const b = plan('acc_b', 'codex', { rotation: true, createdAt: T0 + 1, limits: limits(win('5h', 10, T0 + HOUR), win('weekly', 60, T0 + 3 * DAY)) });
+  // Weekly alone would prefer A (80 % left); its 5h window has only 5 % left. Both weeks reset at the same time.
+  const a = plan('acc_a', 'codex', { limits: limits(win('5h', 95, T0 + HOUR), win('weekly', 20, T0 + 3 * DAY)) });
+  const b = plan('acc_b', 'codex', { createdAt: T0 + 1, limits: limits(win('5h', 10, T0 + HOUR), win('weekly', 60, T0 + 3 * DAY)) });
   assert.equal(headroom(a, T0), 5);
   assert.equal(headroom(b, T0), 40);
   assert.deepEqual(ids(selectCandidates([a, b], 'codex', T0)), ['acc_b', 'acc_a']);
-  // Priority still comes first.
+  // With the same reset, priority comes before the remaining share.
   assert.deepEqual(ids(selectCandidates([a, { ...b, priority: 1 }], 'codex', T0)), ['acc_a', 'acc_b']);
 
   // An opus turn also counts the opus window; a sonnet turn does not.
-  const c = plan('acc_c', 'claude', { rotation: true, limits: limits(win('weekly', 10, T0 + DAY), win('weekly-opus', 90, T0 + DAY)) });
-  const d = plan('acc_d', 'claude', { rotation: true, createdAt: T0 + 1, limits: limits(win('weekly', 50, T0 + DAY), win('weekly-opus', 20, T0 + DAY)) });
+  const c = plan('acc_c', 'claude', { limits: limits(win('weekly', 10, T0 + DAY), win('weekly-opus', 90, T0 + DAY)) });
+  const d = plan('acc_d', 'claude', { createdAt: T0 + 1, limits: limits(win('weekly', 50, T0 + DAY), win('weekly-opus', 20, T0 + DAY)) });
   assert.deepEqual(ids(selectCandidates([c, d], 'claude', T0, 'claude-opus-5-5')), ['acc_d', 'acc_c']);
   assert.deepEqual(ids(selectCandidates([c, d], 'claude', T0, 'claude-sonnet-5')), ['acc_c', 'acc_d']);
   // Unknown limits rank in the middle; expired readings are unknown.
@@ -176,7 +170,7 @@ test('AccountService: candidates get the model; turn-reported sign-out and missi
   });
   const repo = new AccountRepo(db);
   repo.save(plan('acc_1', 'claude', { limits: limits(win('weekly-opus', 100, T0 + DAY), win('weekly', 20, T0 + 3 * DAY)) }));
-  repo.save(plan('acc_2', 'claude', { priority: 1, rotation: true, createdAt: T0 + 1 }));
+  repo.save(plan('acc_2', 'claude', { priority: 1, createdAt: T0 + 1 }));
 
   assert.deepEqual(ids(service.candidates('claude', 'claude-opus-5-5')), ['acc_2']);
   assert.deepEqual(ids(service.candidates('claude', 'claude-sonnet-5')), ['acc_1', 'acc_2']);
@@ -217,12 +211,12 @@ test('the router asks per model: a used-up weekly-opus moves opus work to anothe
   assert.notEqual(moved.modelId, 'claude:claude-opus-5-5');
   assert.equal((await h.router.route({ ...video, agent: agent('ag_1', { modelPolicy: { pin: 'claude:claude-haiku-5-5' } }) })).accountId, 'acc_claude', 'other Claude models keep the plan');
 
-  // Every plan used up: the error says when the first one is back (the 5h reset, not the weekly one).
+  // Every plan used up: the error says when the first one is back (the 5h reset, not the weekly one) – F28: by account, soonest first.
   h.accounts.upsert({ ...claude, limits: limits(win('weekly', 100, now + DAY)) }, false);
   h.accounts.upsert({ ...h.accounts.get('acc_codex')!, limits: limits(win('5h', 100, now + HOUR)) }, false);
   await assert.rejects(h.router.route(video), (error: unknown) => {
     assert.ok(error instanceof WorkforceError);
-    assert.match(error.message, /limited right now/);
+    assert.match(error.message, /^acc_codex used up until \S+ · acc_claude used up until /);
     assert.equal(error.retryAfterMs, HOUR);
     return true;
   });

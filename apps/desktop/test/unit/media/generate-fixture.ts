@@ -19,7 +19,7 @@ export const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(64, 7)]);
 export const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(64, 3)]);
 
 export function account(id: string, auth: Account['auth'], baseUrl: string, provider: Account['provider'] = auth === 'api_key' ? 'openai' : 'vllm', extra: Partial<Account> = {}): Account {
-  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...extra } as Account;
+  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...extra } as Account;
 }
 
 export function model(id: string, fn: ModelFunction, accountId: string, provider: string, engine = 'compatible'): ModelInfo {

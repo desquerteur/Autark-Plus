@@ -8,9 +8,12 @@
 // was removed) is remembered in `refused` until the runtime answers again, so the app can say so
 // instead of showing "offline"; a later 4401 for a token the runtime revoked stays 4403, also
 // after a reload (lib/refusal.ts). Reconnecting goes on with backoff, which only an answer from
-// the runtime resets (a refused socket opens, then closes). Whenever the phone/browser page comes
-// back (visible, pageshow, online, a push), checkAlive connects a socket that is not open at once
-// and gives an open one 3 s to answer `session.info`, else replaces it as half-open.
+// the runtime resets (a refused socket opens, then closes). A socket gets 8 s to open (a dead phone
+// tunnel would leave it 'connecting' for minutes). When the phone/browser page comes back (visible,
+// pageshow, online, a push, the Android app's `resume`, the iPhone shell's new channel – autarkResume),
+// checkAlive connects a socket that is not open at once (replacing an attempt older than 8 s, whose timer a sleeping phone froze)
+// and gives an open one 3 s to answer `session.info`, else replaces it as half-open. refresh()
+// (pull-down) does the same and reloads everything once a live socket answers.
 // Owns: framing, request ids, the event fan-out, connection status, the socket's liveness check.
 // Never: holds app state (see store.ts) or retries calls itself (callers decide; effects
 // must never be blindly repeated).
@@ -20,26 +23,17 @@ import type { EventMap, EventName } from '../../shared/api/events.ts';
 import type { MethodName, ParamsOf, ResultOf } from '../../shared/api/methods.ts';
 import { PROTOCOL_VERSION, isEvent, isResponse } from '../../shared/api/protocol.ts';
 import type { Hello, RpcRequest, Topic } from '../../shared/api/protocol.ts';
-import type { ErrorCode, WorkforceErrorData } from '../../shared/errors.ts';
 import { hostedShell } from '../pwa/hosted.ts';
+import { onNative } from '../pwa/native-port.ts';
 import { bridge, platform } from './platform.ts';
 import { RefusalMemory } from './refusal.ts';
+import { RpcError } from './rpc-error.ts';
+import { readToken } from './rpc-token.ts';
 import { RuntimeEpochs, requestPort } from './runtime-port.ts';
 import type { PortHost } from './runtime-port.ts';
 
+export { RpcError, errorText } from './rpc-error.ts';
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
-
-/** Error thrown by rpc.call: carries the runtime's safe error code + message. */
-export class RpcError extends Error {
-  readonly code: ErrorCode;
-  readonly data: WorkforceErrorData;
-  constructor(data: WorkforceErrorData) {
-    super(data.message);
-    this.name = 'RpcError';
-    this.code = data.code;
-    this.data = data;
-  }
-}
 
 interface Pending {
   resolve(value: unknown): void;
@@ -52,7 +46,6 @@ interface Transport {
   close(): void;
 }
 
-const TOKEN_KEY = 'wf.token';
 const status = signal<ConnectionStatus>('connecting');
 /** Close code of the last socket the runtime refused (4401) or revoked (4403); null once it answers. */
 const refused = signal<4401 | 4403 | null>(null);
@@ -67,20 +60,13 @@ let retryDelay = 500;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let connecting = false; // one connect attempt at a time
+let attempt = 0; // the current attempt; one that was given up and settles late changes nothing
+let attemptAt = 0;
+let giveUp: (() => void) | null = null; // ends the current socket attempt now
 let probing = false; // one liveness probe at a time
+let reloadOnAnswer = false; // refresh(): the probe's answer reloads everything
+const OPEN_LIMIT = 8_000;
 const epochs = new RuntimeEpochs();
-
-/** Reads the device token: `#token=` in the URL wins (then stored and removed), else storage. */
-function readToken(): string {
-  const match = /(?:^#|&)token=([^&]+)/.exec(location.hash);
-  if (match) {
-    const token = decodeURIComponent(match[1]);
-    try { localStorage.setItem(TOKEN_KEY, token); } catch { /* storage may be blocked */ }
-    history.replaceState(null, '', location.pathname + location.search);
-    return token;
-  }
-  try { return localStorage.getItem(TOKEN_KEY) ?? ''; } catch { return ''; }
-}
 
 function handleFrame(raw: unknown): void {
   retryDelay = 500; // the runtime answered: this connection was accepted
@@ -148,7 +134,16 @@ function connectSocket(): Promise<void> {
     const next: Transport = { send: (frame) => socket.send(JSON.stringify(frame)), close: () => { socket.onmessage = null; socket.close(); } };
     let opened = false;
     let token = '';
+    const end = () => {
+      clearTimeout(limit);
+      socket.onopen = socket.onmessage = socket.onclose = null;
+      try { socket.close(); } catch { /* never opened */ }
+      reject(new Error('socket did not open'));
+    };
+    const limit = setTimeout(end, OPEN_LIMIT); // event-armed once; open or close clears it
+    giveUp = end;
     socket.onopen = () => {
+      clearTimeout(limit);
       opened = true;
       token = readToken();
       const hello: Hello = { protocol: PROTOCOL_VERSION, token, client: 'pwa', deviceName: navigator.userAgent.slice(0, 80) };
@@ -158,6 +153,7 @@ function connectSocket(): Promise<void> {
     };
     socket.onmessage = (event) => handleFrame(event.data);
     socket.onclose = (event) => {
+      clearTimeout(limit);
       const refusal = refusals.closed(event.code, token);
       if (refusal !== null) refused.value = refusal;
       if (!opened) reject(new Error('socket closed'));
@@ -168,21 +164,29 @@ function connectSocket(): Promise<void> {
 
 async function connect(): Promise<void> {
   if (connecting) return;
+  const mine = ++attempt;
   connecting = true;
+  attemptAt = Date.now();
   status.value = 'connecting';
   try {
     if (platform === 'desktop' && bridge) await connectPort();
     else await connectSocket();
   } catch {
+    if (mine !== attempt) return;
     status.value = 'closed';
     scheduleReconnect();
   } finally {
-    connecting = false;
+    if (mine === attempt) { connecting = false; giveUp = null; }
   }
 }
 
 /** Drops the current transport (its pending calls reject, status 'closed') and connects again right away. */
 function reconnectNow(): void {
+  if (connecting) { // only a socket attempt can be given up (the desktop port reports its own end)
+    if (!giveUp) return;
+    giveUp();
+    connecting = false;
+  }
   const stale = transport;
   if (stale) {
     onClosed();
@@ -202,16 +206,32 @@ function watchRuntime(): void {
 }
 
 /**
- * Phone/browser (the desktop port reports its own end): a socket that is not open connects now;
- * an open one answers `session.info` within 3 s, or it is half-open (events stopped, calls hang)
- * and is replaced at once. Runs on visible, pageshow, online and a push (pwa/install.ts).
+ * Phone/browser (the desktop port reports its own end): a socket that is not open connects now
+ * (a connect attempt older than 8 s is replaced); an open one answers `session.info` within 3 s, or
+ * it is half-open (events stopped, calls hang) and is replaced at once. Runs on visible, pageshow,
+ * online, a push (pwa/install.ts), the Android app's `resume` and the iPhone shell's new channel (autarkResume).
  */
 export function checkAlive(): void {
-  if (bridge || !started || connecting || probing) return;
+  if (bridge || !started || probing) return;
+  if (connecting && Date.now() - attemptAt < OPEN_LIMIT) return;
   if (status.peek() !== 'open') { reconnectNow(); return; }
+  probe();
+}
+
+function probe(): void {
   probing = true;
   const dead = setTimeout(reconnectNow, 3_000); // every close rejects the probe first, which clears this
-  void call('session.info').catch(() => undefined).finally(() => { clearTimeout(dead); probing = false; });
+  void call('session.info').then(() => { if (reloadOnAnswer) emitLocal('rpc.open'); }, () => undefined)
+    .finally(() => { clearTimeout(dead); probing = false; reloadOnAnswer = false; });
+}
+
+/** Pull-down: a socket that is not open connects now; an open one is probed and its answer reloads everything (rpc.open). */
+export function refresh(): void {
+  if (!started) return start();
+  if (status.peek() !== 'open') { reconnectNow(); return; }
+  if (bridge) { emitLocal('rpc.open'); return; }
+  reloadOnAnswer = true;
+  if (!probing) probe();
 }
 
 function emitLocal(name: string): void {
@@ -272,13 +292,8 @@ function start(): void {
   window.addEventListener('online', () => { if (!bridge) checkAlive(); else if (status.value !== 'open' && retryTimer) reconnectNow(); });
   window.addEventListener('pageshow', checkAlive);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlive(); });
+  (window as { autarkResume?: () => void }).autarkResume = checkAlive; // the iPhone shell after a new channel (hosted/shell.ts)
+  onNative('resume', checkAlive);
 }
 
-export const rpc = { call, on, subscribe, unsubscribe, onOpen: onOpenEvent, start, status, refused };
-
-/** Short user-safe text for any error thrown by rpc.call. */
-export function errorText(error: unknown): string {
-  if (error instanceof RpcError) return error.message;
-  if (error instanceof Error && error.message) return error.message;
-  return 'Something went wrong.';
-}
+export const rpc = { call, on, subscribe, unsubscribe, onOpen: onOpenEvent, start, status, refused, refresh };

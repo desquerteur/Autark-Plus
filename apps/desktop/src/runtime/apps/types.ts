@@ -72,13 +72,16 @@ export interface StdioTarget {
 /** B-053: a mailbox (runtime/apps/mail/*): IMAP for reading/drafts/folders/IDLE, SMTP for sending. */
 export interface MailTarget {
   kind: 'mail';
+  contactStopFile?: string;
+  /** Runtime-owned incarnation check; no connector-file field can set it. */
+  assertCurrent?: () => void;
   address: string;
   imap: { host: string; port: number; tls: 'implicit' | 'starttls' };
   smtp: { host: string; port: number; tls: 'implicit' | 'starttls' };
   /** Login user (usually the address) and the app password / token, resolved from the vault. */
   login: () => Promise<{ user: string; password: string }>;
   /** Called on new mail in INBOX while the connection holds IDLE (the service wakes the mailbox's agent). */
-  onNewMail?: (info: { count: number; from?: string; subject?: string }) => void;
+  onNewMail?: (info: { count: number; from?: string; subject?: string; messageIds?: string[]; generation?: string }) => void;
   /** B-059: where the IDLE watcher keeps its high-water mark (mail/idle.ts), so mail that came while it was away wakes once. */
   mark?: { get(): MailMark | undefined; set(mark: MailMark): void };
 }
@@ -199,6 +202,8 @@ export interface AppKv {
 
 /** One connector as its file names it (values may hold secret://<id> handles, resolved when it connects). */
 export interface Connector {
+  /** Runtime-owned, persisted independently of connector files. */
+  mailGeneration?: string;
   /** The tool-name id (APP_ID_PATTERN), from its key. */
   id: string;
   /** Its key in the file. */
@@ -213,7 +218,7 @@ export interface Connector {
   cwd?: string;
   env?: Record<string, string>;
   /** mail: the mailbox; servers are looked up from the address when not given; `agent` (id or name) is woken by new mail. */
-  mail?: { address: string; user?: string; password: string; imap?: MailServer; smtp?: MailServer; agent?: string };
+  mail?: { contactStopFile?: string; address: string; user?: string; password: string; imap?: MailServer; smtp?: MailServer; agent?: string };
   enabled: boolean;
   /** Changes whenever the entry's content does (a changed entry connects again; its "agents" list is left out). */
   fingerprint: string;
@@ -226,7 +231,7 @@ export interface AppToolHost {
   /** The connector and its live state – read at call time. */
   state(appId: string): { connector: Connector; status: ConnectedApp['status']; error?: string } | undefined;
   /** Runs the MCP call on a (lazily opened) connection. Rejects with Mcp* errors / ReconnectNeeded. */
-  call(appId: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult>;
+  call(appId: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal, generation?: string): Promise<McpCallResult>;
 }
 
 /** The connectors service (RuntimeServices.apps, contracts/apps.ts). */
@@ -236,8 +241,13 @@ export interface AppsService {
   /** Ends sign-ins and the watcher, closes connections and stdio servers. */
   stop(): Promise<void>;
   list(): ConnectedApp[];
+  mailGeneration?(id: string): string | undefined;
   /** Connects again; an MCP server that needs a sign-in opens it in the system browser. */
-  reconnect(id: string): Promise<ConnectedApp>;
+  reconnect(id: string, expected?: { id: string; name: string; transport: 'http' | 'stdio' | 'mail' }): Promise<ConnectedApp>;
+  /** Checks a complete MCP add batch against the current files without writing or connecting. */
+  validateAdd(entries: Array<{ name: string; entry: Record<string, unknown> }>): void;
+  mutate(mutation: import('./connectors.ts').ConnectorMutation): void;
   /** Ids of the connectors whose tools this agent gets right now (for the environment line; AF-005: their "agents" lists). */
   usableBy(agentId: string): string[];
 }
+

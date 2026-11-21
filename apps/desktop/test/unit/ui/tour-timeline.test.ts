@@ -1,86 +1,99 @@
-// B-055 Q5: the feedback tour's pure timeline (src/ui/tour/timeline.ts) – about 40 s in five chapters, time
-// clamped and seekable (the same t always gives the same state, in any order), the story in its order (click
-// opens and closes the menu, hold shows the waveform, release opens the menu and reveals the transcript word
-// by word, the Screenshot tooltip, the editor opened from the thumbnail, the black stroke over the e-mail and
-// the phone number, Done, Send, the end card), the cursor on the element it clicks at every click, a hand-like
-// path that never jumps, and the end state.
+// B-055 Q5, re-cut 16.11.2026 for the snapshot overlay (F11/F15): the feedback tour's pure timeline
+// (src/ui/tour/timeline.ts) for both variants – the computer's window and a phone's screen: about 35 s in four
+// chapters, time clamped and seekable (the same t always gives the same state, in any order), the shipped flow in its
+// order (the computer's cell names its shortcut, a press freezes the screen with the dock at its foot, the pen paints
+// over the e-mail and the phone number on the frozen screen, a hold on the dock's mic listens and the words come into
+// the field, Send closes the overlay and the status line says "Feedback sent", the end card), the pointer on the
+// element it presses at every press, a hand-like path that never jumps, and each layout's targets in their frame.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  CAPTIONS, CHAPTERS, DURATION, PAINT_PATH, PAINT_SPAN, RIPPLE_MS, SWITCHES, WORDS, clampTime, firstOn, stateAt,
-} from '../../../src/ui/tour/timeline.ts';
-import {
-  CURSOR_START, EDITOR, EDITOR_PART, FEEDBACK_CELL, MENU, MENU_PART, PEN, PRIVATE, SCENE_H, SCENE_W, abs, inside, type Rect,
-} from '../../../src/ui/tour/scene-layout.ts';
+import { CELL_TIP, RIPPLE_MS, SENT_LINE, SWITCHES, TOURS, WORDS, type Tour } from '../../../src/ui/tour/timeline.ts';
+import { DESKTOP, PEN, PHONE, center, dockTop, inside, type Layout, type Rect, type Variant } from '../../../src/ui/tour/scene-layout.ts';
 import type { Point } from '../../../src/shared/model/pointer-motion.ts';
 
 const FRAME = 1000 / 60;
-const frames = (from = 0, to = DURATION) => { const out: number[] = []; for (let t = from; t <= to; t += FRAME) out.push(t); return out; };
+const VARIANTS: Variant[] = ['desktop', 'phone'];
+const frames = (tour: Tour, from = 0, to = tour.duration) => { const out: number[] = []; for (let t = from; t <= to; t += FRAME) out.push(t); return out; };
 
-test('about 40 s in five chapters in order; captions short and in order', () => {
-  assert.ok(DURATION >= 32_000 && DURATION <= 45_000, `duration ${DURATION} ms`);
-  assert.deepEqual(CHAPTERS.map((chapter) => chapter.title), ['The feedback button', 'Hold to talk', 'Screenshot', 'Paint over', 'Send']);
-  assert.equal(CHAPTERS[0]!.at, 0);
-  for (let i = 1; i < CHAPTERS.length; i += 1) assert.ok(CHAPTERS[i]!.at > CHAPTERS[i - 1]!.at + 2000, `chapter ${i} starts after the one before`);
-  assert.ok(CHAPTERS.at(-1)!.at < DURATION);
-  for (let i = 1; i < CAPTIONS.length; i += 1) assert.ok(CAPTIONS[i]!.at >= CAPTIONS[i - 1]!.at);
-  for (const caption of CAPTIONS) assert.ok(caption.text.length <= 60 && !/[äöüß]/i.test(caption.text), `short English caption: ${caption.text}`);
-  assert.equal(CAPTIONS.at(-1)!.text, '', 'the end card speaks for itself');
-});
+for (const variant of VARIANTS) {
+  const tour = TOURS[variant];
+  const { layout } = tour;
 
-test('time is clamped and monotonic; stateAt is deterministic and order-free (seekable)', () => {
-  assert.equal(stateAt(-500).t, 0);
-  assert.equal(stateAt(Number.NaN).t, 0);
-  assert.equal(stateAt(DURATION * 3).t, DURATION);
-  assert.equal(clampTime(1234.5), 1234.5);
-  let last = -1;
-  for (const t of frames()) { const now = stateAt(t).t; assert.ok(now >= last); last = now; }
-  const times = [0, 1, 2605, 7158.3, 11_000, 18_100, 24_100, 26_000.7, 28_000, 33_800, DURATION - 1, DURATION];
-  const forward = times.map((t) => stateAt(t));
-  const shuffled = [...times].reverse().map((t) => stateAt(t)).reverse();
-  assert.deepEqual(shuffled, forward, 'seeking backwards gives the same pictures');
-  assert.deepEqual(stateAt(26_000), stateAt(26_000));
-});
+  test(`${variant}: about half a minute in four chapters in order; captions short and in order`, () => {
+    assert.ok(tour.duration >= 24_000 && tour.duration <= 45_000, `duration ${tour.duration} ms`);
+    assert.deepEqual(tour.chapters.map((chapter) => chapter.title), ['Press to freeze', 'Paint', 'Talk or type', 'Send']);
+    assert.equal(tour.chapters[0]!.at, 0);
+    for (let i = 1; i < tour.chapters.length; i += 1) assert.ok(tour.chapters[i]!.at > tour.chapters[i - 1]!.at + 2000, `chapter ${i} starts after the one before`);
+    assert.ok(tour.chapters.at(-1)!.at < tour.duration);
+    for (let i = 1; i < tour.captions.length; i += 1) assert.ok(tour.captions[i]!.at >= tour.captions[i - 1]!.at);
+    for (const caption of tour.captions) assert.ok(caption.text.length <= 60 && !/[äöüß]/i.test(caption.text), `short English caption: ${caption.text}`);
+    assert.equal(tour.captions.at(-1)!.text, '', 'the end card speaks for itself');
+    assert.match(tour.heard, /^0:0[2-5]$/, 'the talk is a few seconds long (the Recording row says so)');
+  });
 
-test('the poster: the cursor rests in the chat, nothing open, nothing painted', () => {
-  const s = stateAt(0);
-  assert.deepEqual(s.cursor, CURSOR_START);
-  for (const name of SWITCHES) assert.equal(s[name].on, false, name);
-  assert.equal(s.words, 0);
-  assert.equal(s.paint, 0);
-  assert.equal(s.pressed, false);
-  assert.equal(s.chapter, 0);
-});
+  test(`${variant}: time is clamped and monotonic; stateAt is deterministic and order-free (seekable)`, () => {
+    assert.equal(tour.stateAt(-500).t, 0);
+    assert.equal(tour.stateAt(Number.NaN).t, 0);
+    assert.equal(tour.stateAt(tour.duration * 3).t, tour.duration);
+    assert.equal(tour.clamp(1234.5), 1234.5);
+    let last = -1;
+    for (const t of frames(tour)) { const now = tour.stateAt(t).t; assert.ok(now >= last); last = now; }
+    const times = [0, 1, 2605, 7158.3, 11_000, 15_100, 18_100, 21_000.7, 24_100, 27_500, tour.duration - 1, tour.duration];
+    const forward = times.map((t) => tour.stateAt(t));
+    const shuffled = [...times].reverse().map((t) => tour.stateAt(t)).reverse();
+    assert.deepEqual(shuffled, forward, 'seeking backwards gives the same pictures');
+    assert.deepEqual(tour.stateAt(21_000), tour.stateAt(21_000));
+  });
 
-test('the story in order: menu, hold, transcript, tooltip, editor, sent, end', () => {
-  const order = ['menu', 'wave', 'tooltip', 'editor', 'sent', 'end'] as const;
-  for (let i = 1; i < order.length; i += 1) assert.ok(firstOn(order[i]!) > firstOn(order[i - 1]!), `${order[i]} after ${order[i - 1]}`);
-  // click → open, click → closed before the hold; the menu is shut while the waveform shows
-  const opened = firstOn('menu');
-  assert.equal(stateAt(opened + 50).hot, 'feedback', 'the cursor is on the cell when the menu opens');
-  assert.equal(stateAt(firstOn('wave') - 300).menu.on, false, 'the second click closed it');
-  const holding = stateAt(firstOn('wave') + 500);
-  assert.equal(holding.pressed, true, 'held down');
-  assert.equal(holding.menu.on, false);
-  assert.equal(holding.hot, 'feedback');
-  // release: the waveform goes, the menu opens and the words come one by one
-  const released = frames(firstOn('wave'), firstOn('tooltip')).find((t) => !stateAt(t).wave.on)!;
-  const after = stateAt(released);
-  assert.equal(after.menu.on, true);
-  assert.equal(after.pressed, false);
-  let words = 0;
-  for (const t of frames(released, firstOn('tooltip'))) { const now = stateAt(t).words; assert.ok(now >= words); words = now; }
-  assert.equal(words, WORDS.length, 'the whole transcript is in before the tooltip');
-  assert.ok(frames(released, firstOn('tooltip')).some((t) => { const w = stateAt(t).words; return w > 3 && w < 10; }), 'word by word, not at once');
-});
+  test(`${variant}: the poster – the pointer rests in the chat, nothing on, nothing painted`, () => {
+    const s = tour.stateAt(0);
+    assert.deepEqual(s.pointer, layout.start);
+    for (const name of SWITCHES) assert.equal(s[name].on, false, name);
+    assert.equal(s.words, 0);
+    assert.equal(s.paint, 0);
+    assert.equal(s.pressed, false);
+    assert.equal(s.chapter, 0);
+  });
 
-test('the tooltip points at the checked Screenshot box; the editor opens from the thumbnail', () => {
-  const tip = stateAt(firstOn('tooltip') + 100);
-  assert.equal(tip.hot, 'check');
-  assert.equal(tip.menu.on, true);
-  assert.ok(stateAt(firstOn('editor') - 1).hot === 'thumb', 'clicked on the thumbnail');
-  assert.equal(stateAt(firstOn('editor') + 10).editor.on, true);
+  test(`${variant}: the shipped flow in order – press, frozen with the dock, hold the mic, the words, Send, the status line`, () => {
+    const order = ['frozen', 'listen', 'busy', 'sent', 'end'] as const;
+    for (let i = 1; i < order.length; i += 1) assert.ok(tour.firstOn(order[i]!) > tour.firstOn(order[i - 1]!), `${order[i]} after ${order[i - 1]}`);
+    // the press on the cell freezes the screen (the computer's tooltip names the shortcut first and goes at the press)
+    const frozen = tour.firstOn('frozen');
+    assert.equal(tour.stateAt(frozen - 1).hot, 'feedback', 'the pointer is on the cell when the screen freezes');
+    if (layout.tip) {
+      assert.ok(tour.firstOn('tip') > 0 && tour.firstOn('tip') < frozen, 'the tooltip before the press');
+      assert.equal(tour.stateAt(tour.firstOn('tip') + 50).hot, 'feedback');
+      const pressing = frames(tour, tour.firstOn('tip'), frozen).find((t) => tour.stateAt(t).pressed)!;
+      assert.equal(tour.stateAt(pressing).tip.on, false, 'the press hides the tooltip');
+    } else {
+      assert.equal(tour.firstOn('tip'), -1, 'a finger has no hover');
+    }
+    for (const t of frames(tour, frozen + 1, tour.firstOn('sent') - 200)) assert.equal(tour.stateAt(t).frozen.on, true, `frozen until Send (${Math.round(t)})`);
+    // the hold on the dock's mic listens; letting go brings the words, one by one
+    const holding = tour.stateAt(tour.firstOn('listen') + 500);
+    assert.equal(holding.pressed, true, 'held down');
+    assert.equal(holding.hot, 'mic');
+    assert.equal(holding.listen.on, true);
+    const released = tour.stateAt(tour.firstOn('busy'));
+    assert.equal(released.pressed, false);
+    assert.equal(released.listen.on, false);
+    assert.equal(released.words, 0, 'the words come after the transcription');
+    let words = 0;
+    for (const t of frames(tour, tour.firstOn('busy'), tour.firstOn('sent'))) { const now = tour.stateAt(t).words; assert.ok(now >= words); words = now; }
+    assert.equal(words, WORDS.length, 'the whole transcript is in before Send');
+    assert.ok(frames(tour, tour.firstOn('busy'), tour.firstOn('sent')).some((t) => { const w = tour.stateAt(t).words; return w > 2 && w < 6; }), 'word by word, not at once');
+    // Send: the overlay goes, the status line says it
+    const sent = tour.stateAt(tour.firstOn('sent'));
+    assert.ok(inside(sent.pointer, layout.send), 'Send was pressed');
+    assert.equal(sent.frozen.on, false, 'the overlay closed at once');
+    assert.match(SENT_LINE, /^Feedback sent · No\. [0-9A-Z]{8}$/, 'the status line as ui/feedback/delivery.ts writes it');
+  });
+}
+
+test('the computer cell\'s tooltip is the live one\'s', () => {
+  assert.equal(CELL_TIP, 'Feedback – Ctrl+Shift+F, hold to talk');
 });
 
 /** Shortest distance from `point` to the polyline. */
@@ -95,60 +108,88 @@ function distance(point: Point, path: readonly Point[]): number {
   return best;
 }
 
-test('the pen paints along the cursor, pressed, in the editor – and covers the e-mail and the phone number', () => {
-  assert.equal(stateAt(PAINT_SPAN.start - 1).paint, 0, 'nothing before the press');
-  let count = 0;
-  for (const t of frames(PAINT_SPAN.start + 1, PAINT_SPAN.end - 1)) {
-    const s = stateAt(t);
-    assert.ok(s.pressed && s.editor.on && s.paintTip, `pressed in the editor at ${t}`);
-    assert.ok(s.paint >= count);
-    count = s.paint;
-  }
-  assert.equal(stateAt(PAINT_SPAN.end).paint, PAINT_PATH.length, 'the whole stroke once released');
-  assert.equal(stateAt(PAINT_SPAN.end).paintTip, null);
-  for (const rect of [PRIVATE.email, PRIVATE.phone] as Rect[]) {
-    for (let x = rect.x; x <= rect.x + rect.w; x += 2) {
-      for (let y = rect.y + 2; y <= rect.y + rect.h - 2; y += 1) {
-        assert.ok(distance({ x, y }, PAINT_PATH) <= PEN / 2, `(${x}, ${y}) is under the black stroke`);
+for (const variant of VARIANTS) {
+  const tour = TOURS[variant];
+  const { layout } = tour;
+
+  test(`${variant}: the pen paints on the frozen screen along the pointer – and covers the e-mail and the phone number`, () => {
+    const span = tour.paintSpan;
+    assert.equal(tour.stateAt(span.start - 1).paint, 0, 'nothing before the press');
+    let count = 0;
+    for (const t of frames(tour, span.start + 1, span.end - 1)) {
+      const s = tour.stateAt(t);
+      assert.ok(s.pressed && s.frozen.on && s.paintTip, `pressed on the frozen screen at ${t}`);
+      assert.deepEqual(s.paintTip, s.pointer, 'the pen is at the pointer (the frozen screen is 1:1)');
+      assert.ok(s.paint >= count);
+      count = s.paint;
+    }
+    assert.equal(tour.stateAt(span.end).paint, tour.paintPath.length, 'the whole stroke once released');
+    assert.equal(tour.stateAt(span.end).paintTip, null);
+    assert.equal(tour.stateAt(tour.firstOn('sent') - 200).paint, tour.paintPath.length, 'the marks stay until Send');
+    for (const rect of [layout.email, layout.phone]) {
+      assert.ok(rect.y + rect.h < dockTop(layout) && rect.y > layout.header, 'the private lines lie between the top row and the dock');
+      for (let x = rect.x; x <= rect.x + rect.w; x += 2) {
+        for (let y = rect.y + 2; y <= rect.y + rect.h - 2; y += 1) {
+          assert.ok(distance({ x, y }, tour.paintPath) <= PEN / 2, `(${x}, ${y}) is under the black stroke`);
+        }
       }
     }
-  }
-});
+  });
 
-test('Done closes the editor, Send sends, then the end card; every click lands on its element', () => {
-  const closed = frames(firstOn('editor') + 1000).find((t) => !stateAt(t).editor.on)!;
-  assert.ok(inside(stateAt(closed).cursor, abs(EDITOR_PART.done, EDITOR)), 'Done was clicked');
-  assert.equal(stateAt(closed + 200).paint, PAINT_PATH.length, 'the thumbnail keeps the painted picture');
-  assert.ok(inside(stateAt(firstOn('sent')).cursor, abs(MENU_PART.send, MENU)), 'Send was clicked');
-  for (const t of frames()) {
-    const s = stateAt(t);
-    if (s.ripple && s.ripple.age < FRAME) {
-      assert.ok(s.ripple.age < RIPPLE_MS);
-      // just before the press ends, while what it opens or closes has not changed yet
-      assert.ok(stateAt(t - s.ripple.age - 1).hot !== null, `the click at ${Math.round(t - s.ripple.age)} lands on an element`);
+  test(`${variant}: every press lands on its element; the end card`, () => {
+    let presses = 0;
+    for (const t of frames(tour)) {
+      const s = tour.stateAt(t);
+      if (s.ripple && s.ripple.age < FRAME) {
+        presses += 1;
+        assert.ok(s.ripple.age < RIPPLE_MS);
+        // just before the press ends, while what it opens or closes has not changed yet
+        assert.ok(tour.stateAt(t - s.ripple.age - 1).hot !== null, `the press at ${Math.round(t - s.ripple.age)} lands on an element`);
+      }
     }
-  }
-  const end = stateAt(DURATION);
-  assert.equal(end.end.on, true);
-  assert.equal(end.menu.on, false);
-  assert.equal(end.editor.on, false);
-  assert.equal(end.sent.on, true);
-  assert.equal(end.words, WORDS.length);
-  assert.equal(end.caption, '');
-  assert.equal(end.chapter, CHAPTERS.length - 1);
-  assert.equal(stateAt(firstOn('end') - 1).end.on, false);
-});
+    assert.equal(presses, 3, 'the cell, the mic, Send');
+    const end = tour.stateAt(tour.duration);
+    assert.equal(end.end.on, true);
+    assert.equal(end.frozen.on, false);
+    assert.equal(end.sent.on, true, 'the status line still says it under the end card');
+    assert.equal(end.words, WORDS.length);
+    assert.equal(end.caption, '');
+    assert.equal(end.chapter, tour.chapters.length - 1);
+    assert.equal(tour.stateAt(tour.firstOn('end') - 1).end.on, false);
+  });
 
-test('the cursor moves like a hand: inside the scene, never a jump between two frames, a visible glide to the cell', () => {
-  let previous = stateAt(0).cursor;
-  let longest = 0;
-  for (const t of frames()) {
-    const { cursor } = stateAt(t);
-    assert.ok(cursor.x >= 0 && cursor.x <= SCENE_W && cursor.y >= 0 && cursor.y <= SCENE_H, `inside the scene at ${t}`);
-    longest = Math.max(longest, Math.hypot(cursor.x - previous.x, cursor.y - previous.y));
-    previous = cursor;
+  test(`${variant}: the pointer moves like a hand – inside the scene, never a jump between two frames, a visible glide to the cell`, () => {
+    let previous = tour.stateAt(0).pointer;
+    let longest = 0;
+    for (const t of frames(tour)) {
+      const { pointer } = tour.stateAt(t);
+      assert.ok(pointer.x >= 0 && pointer.x <= layout.w && pointer.y >= 0 && pointer.y <= layout.h, `inside the scene at ${t}`);
+      longest = Math.max(longest, Math.hypot(pointer.x - previous.x, pointer.y - previous.y));
+      previous = pointer;
+    }
+    assert.ok(longest < 40, `at most ${longest.toFixed(1)} units per frame`);
+    const reach = frames(tour, 0, tour.firstOn('frozen')).find((t) => inside(tour.stateAt(t).pointer, layout.cell))!;
+    assert.ok(reach > 1500, `the first glide takes its time (on the cell at ${Math.round(reach)} ms)`);
+  });
+}
+
+/** Whether `a` and `b` overlap. */
+const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const within = (rect: Rect, layout: Layout) => rect.x >= 0 && rect.y >= 0 && rect.x + rect.w <= layout.w && rect.y + rect.h <= layout.h;
+
+test('each layout: the cell in its top row, the dock\'s targets at its foot side by side, the status line under the top row', () => {
+  for (const layout of [DESKTOP, PHONE]) {
+    const name = layout.variant;
+    for (const rect of [layout.cell, layout.workspace, layout.close, layout.mic, layout.send, layout.status, layout.card, layout.typing]) assert.ok(within(rect, layout), `${name}: inside the frame`);
+    assert.ok(layout.cell.y + layout.cell.h <= layout.header && layout.workspace.x + layout.workspace.w <= layout.cell.x, `${name}: the cell is the top row's last cell`);
+    assert.ok(layout.close.x + layout.close.w < layout.mic.x && layout.mic.x + layout.mic.w < layout.send.x, `${name}: close | field with the mic | Send`);
+    assert.equal(layout.mic.y + layout.mic.h + 5, layout.send.y + layout.send.h, `${name}: the mic sits at the field's foot, Send beside it`);
+    assert.ok(dockTop(layout) < layout.send.y && dockTop(layout) > layout.typing.y, `${name}: the dock covers the composer, not the chat above it`);
+    assert.ok(layout.status.y >= layout.header && !overlap(layout.status, layout.cell), `${name}: the status line under the top row`);
+    assert.ok(layout.paint.every((point) => point.y > layout.header && point.y < dockTop(layout)), `${name}: the stroke stays on the visible screen`);
   }
-  assert.ok(longest < 40, `at most ${longest.toFixed(1)} units per frame`);
-  const reach = frames(0, firstOn('menu')).find((t) => inside(stateAt(t).cursor, FEEDBACK_CELL))!;
-  assert.ok(reach > 1700, `the first glide takes its time (on the cell at ${Math.round(reach)} ms)`);
+  assert.ok(DESKTOP.tip && DESKTOP.tip.x + DESKTOP.tip.w <= center(DESKTOP.cell).x && DESKTOP.tip.y >= DESKTOP.cell.y + DESKTOP.cell.h, 'the computer\'s tooltip under the cell, left of the cursor\'s tip');
+  assert.equal(PHONE.tip, null);
+  assert.ok(PHONE.dock.x === 0 && PHONE.dock.w === PHONE.w && PHONE.dock.bottom === 0, 'the phone\'s dock is the bottom edge');
+  assert.ok(PHONE.mic.w >= 30 && PHONE.send.h >= 38, 'finger-sized targets as the live dock\'s');
 });

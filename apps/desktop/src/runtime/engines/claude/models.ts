@@ -18,6 +18,8 @@ export const CLAUDE_MODELS: EngineModel[] = [
   { model: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: CLAUDE_EFFORTS, defaultEffort: 'medium', vision: true, contextTokens: 1_000_000 },
   { model: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', efforts: CLAUDE_EFFORTS, defaultEffort: 'high', vision: true, contextTokens: 1_000_000 },
   { model: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', efforts: CLAUDE_EFFORTS, defaultEffort: 'medium', vision: true, contextTokens: 1_000_000 },
+  // The newest version of a family first: a bare alias ("fable") maps to the first one listed (idOf).
+  { model: 'claude-fable-5-2', name: 'Claude Fable 5.2', efforts: CLAUDE_EFFORTS, defaultEffort: 'high', vision: true, contextTokens: 1_000_000 },
   { model: 'claude-fable-5-1', name: 'Claude Fable 5.1', efforts: CLAUDE_EFFORTS, defaultEffort: 'high', vision: true, contextTokens: 1_000_000 },
 ];
 

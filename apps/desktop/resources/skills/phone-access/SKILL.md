@@ -19,8 +19,11 @@ Settings live in `settings.json` (skill `app-settings`); the app applies a chang
   QR code that carries only it. The person scans it with the camera (it opens the app) or types the Remote ID in the
   app. Both screens show the same 4-digit code; the person taps **Accept** on the PC. That tap is theirs – comparing the
   code is the proof that the phone is theirs.
-- The app reaches the PC through the meeting server: no VPN, no address, no switch to turn on. Access exists exactly as
-  long as the phone's row in Settings › Devices does; Remove ends it on all their PCs.
+- The app reaches the PC straight to its peer port whenever one of the PC's addresses answers (the same Wi-Fi,
+  Tailscale, the router's mapped port, IPv6), otherwise through the meeting server – end to end encrypted either way,
+  no VPN, no address to type, no switch. Settings › Devices shows each phone's way and its bytes direct and through the
+  server today; the iPhone web app always goes through the server. Access exists exactly as long as the phone's row in
+  Settings › Devices does; Remove ends it on all their PCs.
 - The paired phone is the owner's: chats, tasks, settings, secrets, plans and API keys all work from it. A CLI sign-in
   (Codex, Claude Code) started on the phone opens its page as a tab in this PC's own browser pane, which the phone
   mirrors – the person finishes it there from the phone. Kimi and Copilot sign in inside a terminal on the PC; those
@@ -28,18 +31,25 @@ Settings live in `settings.json` (skill `app-settings`); the app applies a chang
 - "Forget this phone" is in the profile menu inside the app.
 
 ## Phone use (Android): I operate the person's phone
-- `phone.devices` lists the app phone (serial = its device id) next to ADB phones; `phone.ui_tree`, `phone.tap`,
-  `phone.swipe`, `phone.type`, `phone.key`, `phone.open` and `phone.screenshot` work the same on it – no ADB, no cable.
-  Swipes through the app follow a light, slightly jittered curve like a finger.
+- `phone.devices` lists the app phone (serial = its device id, "Autark app") next to ADB phones; `phone.ui_tree`,
+  `phone.tap`, `phone.swipe`, `phone.type`, `phone.key`, `phone.open` and `phone.screenshot` work the same on it – no
+  ADB, no cable – and a step without `serial` goes to it first. Swipes through the app follow a light, slightly
+  jittered curve like a finger. `phone.type` shows what the field reads afterwards, so a word beside mine shows at once.
 - It works while the app's connection lives, also with the app in the background. The service reads nothing until I
   ask, so it costs next to no battery.
 - The first time, the step fails with "phone use is off": the phone shows the person a notification "Let the AI use this
   phone"; one tap opens Android's Accessibility settings (Autark › Use this phone). A sideloaded app on Android 13+
   first needs App info › ⋮ › Allow restricted settings – I tell the person that in one line.
-- While I act, a bubble shows at the top of the phone; when the person taps it, my step stops and phone use pauses for
-  30 s. That is their brake – I wait and look again instead of retrying at once.
-- The first time I reach an app, the bubble asks "Let the AI use <App>?" once; their Allow is kept for that app. A
-  "consent" error means the person has not let me into that app (yet).
+- While I act, a small bubble at the top of the phone names me ("<my name> is using this phone") with Pause and ✕.
+  The person's touch pauses me until 5 s after their last touch, so their help costs me only a moment: a step that met
+  the touch did not run or stopped part-way, and I repeat it from a fresh look. Their Pause holds until they tap
+  Continue; their ✕ ends this task's phone use, and I finish the task another way or tell them in the chat what is left
+  on the phone.
+- `phone.say` puts my line in the bubble – what I am doing there – so the person sees it without opening the app,
+  which would take the phone out of my hands. With `ask: true` it is a question with ✓ and ✕: yes gives me the phone
+  for this task (also after their Pause or ✕), no means not now, none means no tap within 60 s. When the phone is in
+  use and my steps can wait, I ask; otherwise I go straight ahead. The line and the question need the app 0.3.15 or
+  newer – an older app says so, and my other steps work as before.
 - I read `phone.ui_tree` before each next step; nothing I do there is verified until I looked.
 
 ## iPhone: the web app, paired by Remote ID (the normal way)

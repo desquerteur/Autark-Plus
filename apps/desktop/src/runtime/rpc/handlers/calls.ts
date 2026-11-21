@@ -4,17 +4,31 @@
 // (key 'pc' for the owner, else the paired device id, named from the devices list), never a client parameter; its
 // connection closing ends its call and session. Also registers the people's speech variants (F-52, people/rpc-voice.ts:
 // their dictation and voice conversation).
+// B-081: calls.start / calls.realtimeOpen with a callId take that call – answer an agent's ring (the opening line comes
+// back as `say`) or take it over from another device; calls.decline says no to a ring; calls.live lists ringing and
+// running calls (calls/ring.ts). calls.turn writes one log line per call turn the device measured: numbers, the two ways
+// it names (heard by, answered by) and the answer's model id – nothing a page could put words of the call into.
 // Owns: param checks and the device identity. Never: provider protocol or audio.
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { CallDevice } from '../../../shared/model/call.ts';
-import { callLogOf, realtimeOf } from '../../calls/wiring.ts';
+import { callLogOf, realtimeOf, ringsOf } from '../../calls/wiring.ts';
 import { registerPersonVoice } from '../../people/rpc-voice.ts';
 import { callerDeviceName } from '../device-name.ts';
-import { id, input, onlyKeys, optNum, text } from '../params.ts';
+import { bad, id, input, num, onlyKeys, oneOf, optNum, optText, text, type Obj } from '../params.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
 
 const CHAT = { capability: 'chat' } as const;
+/** Who heard a call turn: the `HeardBy` ways voice.transcribe answers with, plus 'unknown' for a take that carried none (ui/chat/call/turn-meter.ts). */
+const HEARD_BY = ['plan', 'local', 'service', 'listener', 'unknown'] as const;
+/** The model of a call turn is the id the runtime wrote into the answer's meta, so the log line holds no words of the call. */
+const MODEL_ID = /^[A-Za-z0-9._:/-]+$/;
+
+function modelId(o: Obj): string | undefined {
+  const value = optText(o, 'model', { max: 80 });
+  if (value !== undefined && !MODEL_ID.test(value)) bad('model', 'a model id');
+  return value;
+}
 
 /** The calling device: this PC ('pc') or the paired phone/browser. */
 export function callDevice(ctx: Pick<HandlerContext, 'scope' | 'services'>): CallDevice {
@@ -31,11 +45,26 @@ function callLog(ctx: Pick<HandlerContext, 'services'>) {
   return log;
 }
 
+function rings(ctx: Pick<HandlerContext, 'services'>) {
+  const found = ringsOf(ctx.services);
+  if (!found) throw new WorkforceError('unavailable', 'Calls are not available in this runtime.');
+  return found;
+}
+
 export function register(table: HandlerTable): void {
   table.add('calls.start', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['conversationId']);
-    return { callId: callLog(ctx).start(id(o, 'conversationId'), callDevice(ctx), ctx.signal) };
+    onlyKeys(o, ['conversationId', 'callId']);
+    const conversationId = id(o, 'conversationId');
+    const take = optText(o, 'callId', { max: 64 });
+    const log = callLog(ctx);
+    if (!take) {
+      const callId = log.start(conversationId, callDevice(ctx), ctx.signal);
+      return { callId, holder: log.holder(callId) ?? '' };
+    }
+    const taken = log.take(conversationId, take, callDevice(ctx), ctx.signal);
+    const opening = taken.answered ? ringsOf(ctx.services)?.answered(conversationId, taken.callId) : undefined;
+    return { callId: taken.callId, holder: taken.holder, ...(opening ? { say: opening.say } : {}) };
   }, CHAT);
   table.add('calls.end', (params, ctx) => {
     const o = input(params);
@@ -43,10 +72,32 @@ export function register(table: HandlerTable): void {
     callLog(ctx).end(text(o, 'callId', { max: 64 }), callDevice(ctx).key);
     return { ok: true };
   }, CHAT);
+  table.add('calls.decline', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['callId']);
+    rings(ctx).decline(text(o, 'callId', { max: 64 }), callDevice(ctx));
+    return { ok: true };
+  }, CHAT);
+  table.add('calls.live', (params, ctx) => {
+    onlyKeys(input(params), []);
+    callDevice(ctx); // the owner's PCs and paired devices; a person's calls come after B-080
+    return { calls: ringsOf(ctx.services)?.live() ?? [] };
+  }, CHAT);
+  table.add('calls.turn', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['callId', 'heardMs', 'answerMs', 'speakMs', 'heardBy', 'answeredBy', 'model']);
+    const ms = (key: string) => num(o, key, { min: 0, max: 3_600_000 });
+    ctx.services.log.info('call turn', {
+      callId: text(o, 'callId', { max: 64 }), device: callDevice(ctx).key,
+      heardMs: ms('heardMs'), answerMs: ms('answerMs'), speakMs: ms('speakMs'),
+      heardBy: oneOf(o, 'heardBy', HEARD_BY), answeredBy: oneOf(o, 'answeredBy', ['talker', 'turn', 'program']), model: modelId(o),
+    });
+    return { ok: true };
+  }, CHAT);
   table.add('calls.realtimeOpen', (params, ctx) => {
     const o = input(params);
-    onlyKeys(o, ['conversationId']);
-    return realtimeOf(ctx.services).open(id(o, 'conversationId'), callDevice(ctx), ctx.signal);
+    onlyKeys(o, ['conversationId', 'callId']);
+    return realtimeOf(ctx.services).open(id(o, 'conversationId'), callDevice(ctx), ctx.signal, optText(o, 'callId', { max: 64 }));
   }, CHAT);
   table.add('calls.realtimeSend', (params, ctx) => {
     const o = input(params);

@@ -31,5 +31,6 @@ export type DayGroupKey = keyof typeof DAY_GROUPS;
 /** Work's two regions (B-078 D10), told apart by shape: accent cards for what needs the person, a quiet report. */
 export const WORK_REGIONS = {
   forYou: 'For you',
+  yours: 'Your tasks',
   report: 'Report',
 } as const;

@@ -1,7 +1,7 @@
 // One chat: the chat header (ChatHeader.tsx) as one row over the whole view, under it the chat column
 // (the chat's area when open – ChatArea.tsx, its tabs; AF-010: docked right of it by default, else left, below, above or
 // floating, appearance.chatDock –, message list, the important-question strip – AskStrip.tsx,
-// B-078 –, composer) and the optional details panel –
+// B-078 –, the live bar of who works for the chat – LiveBar.tsx –, composer) and the optional details panel –
 // content below the header row, so opening either moves no header cell. Loads the newest page on open and
 // marks the chat read while visible. Chats the list leaves out (agent-only rooms, the To-do chat) are
 // fetched on demand. Before the first markRead it captures the person's read cursor (catch-up.ts), so
@@ -23,6 +23,7 @@ import { ChatHeader, chatLead } from './ChatHeader.tsx';
 import { MessageList } from './MessageList.tsx';
 import { Composer } from './Composer.tsx';
 import { AskStrip } from './AskStrip.tsx';
+import { LiveBar } from './LiveBar.tsx';
 import { ChatArea } from './ChatArea.tsx';
 import { ChatSidePanel } from './ChatSidePanel.tsx';
 import { captureStart, type CatchUpStart } from './catch-up.ts';
@@ -109,6 +110,7 @@ export function ChatView(props: { conversationId: string }) {
           {area && place === 'top' && <ChatArea chat={chat} place={place} />}
           <MessageList conversationId={conversationId} loading={loading.value && !list.value.length} start={start.value ?? null} />
           <AskStrip conversationId={conversationId} />
+          <LiveBar chat={chat} />
           <Composer chat={chat} />
           {area && place === 'bottom' && <ChatArea chat={chat} place={place} />}
         </section>

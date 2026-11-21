@@ -1,5 +1,5 @@
-// F-52 what a person sees beyond their chats' messages: the agents of their spaces (none by default,
-// never the private space unless the owner picks it), the agents of their chats, their manager and
+// F-52 what a person sees beyond their chats' messages: the agents of their spaces (18.11.2026: every space by
+// default, the private one too, until the owner unticks "Also your private agents"), the agents of their chats, their manager and
 // reports; tasks of their chats only from their join on (unless the chat shares its history); image
 // avatars. Plus the org chart's one cycle walk across people and agents, the handler table's merged
 // cache and the global limit on wrong invite codes.
@@ -18,39 +18,16 @@ import type { Agent, Space } from '../../../src/shared/model/org.ts';
 import type { TaskView } from '../../../src/shared/model/tasks.ts';
 import path from 'node:path';
 
-test('a new person works with no space\'s agents until the owner picks spaces', async (t) => {
+test('a new person works with every space\'s agents by default, the private one too (owner 18.11.2026)', async (t) => {
   const r = peopleRig();
   t.after(() => r.cleanup());
-  assert.deepEqual(DEFAULT_PERSON_SCOPES.spaces, []);
+  assert.deepEqual(DEFAULT_PERSON_SCOPES.spaces, []); // what stored scopes without spaces read as
   const dana = await r.owner.call<Person>('people.save', { name: 'Dana' });
-  assert.deepEqual(dana.scopes.spaces, [], 'never every space (with the private one) by default');
+  assert.equal(dana.scopes.spaces, 'all', 'every space, the private one too');
+  const kept = await r.owner.call<Person>('people.save', { id: dana.id, scopes: { ...dana.scopes, spaces: ['sp_company'] } });
+  assert.deepEqual(kept.scopes.spaces, ['sp_company'], '"Also your private agents" unticked: the shared spaces only');
 });
 
-test('a space-limited person sees only the agents of their spaces, chats and reporting lines', async (t) => {
-  const r = peopleRig();
-  t.after(() => r.cleanup());
-  const cara = await r.join('Cara', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
-  await cara.client.call('events.subscribe', { topics: ['org'] });
-  const ids = async () => (await cara.client.call<Agent[]>('agents.list')).map((agent) => agent.id).sort();
-  assert.deepEqual(await ids(), ['ag_research']);
-  r.bus.emit('agent.upserted', r.org.get('ag_secret')!);
-  r.bus.emit('space.upserted', { id: 'sp_private', name: 'Private', kind: 'private', sort: 1, createdAt: 0 } satisfies Space);
-  r.bus.emit('space.upserted', { id: 'sp_company', name: 'Company', kind: 'company', sort: 0, createdAt: 0 } satisfies Space);
-  r.bus.emit('agent.activity', { active: [{ agentId: 'ag_secret', runId: 'run_1', note: 'private errand', startedAt: 1 }, { agentId: 'ag_research', runId: 'run_2', note: 'x', startedAt: 1 }] });
-  await settle();
-  assert.equal(cara.client.events('agent.upserted').length, 0, 'not the private space\'s agent');
-  assert.deepEqual(cara.client.events('space.upserted').map((event) => (event.data as Space).id), ['sp_company']);
-  const active = (cara.client.events('agent.activity').at(-1)!.data as { active: Array<{ agentId: string }> }).active;
-  assert.deepEqual(active.map((entry) => entry.agentId), ['ag_research']);
-  // The owner shares a chat with the secretary: Cara meets it there (but may not give it work).
-  const chat = r.chats.create({ agentIds: ['ag_secret'], people: [cara.person.id], createdBy: 'human', title: 'With the secretary' });
-  assert.deepEqual(await ids(), ['ag_research', 'ag_secret']);
-  await assert.rejects(cara.client.call('tasks.create', { conversationId: chat.id, title: 'Book it', assigneeKind: 'agent', assigneeId: 'ag_secret' }), /may not work with this agent/);
-  // Her manager is visible too.
-  r.org.update('ag_manager', {});
-  await r.owner.call('people.save', { id: cara.person.id, managerId: 'ag_manager' });
-  assert.deepEqual(await ids(), ['ag_manager', 'ag_research', 'ag_secret']);
-});
 
 test('with history "join", tasks of a chat made before the person joined stay hidden', async (t) => {
   const r = peopleRig();

@@ -1,7 +1,8 @@
 # Builds AutarkDesktopBroker.exe next to this script with the csc.exe of .NET Framework 4.x (no SDK).
 # The computer-use part is cut out of ../computer/windows-helper.ps1 (between "$source = @'" and "'@"), so the
 # broker and the PowerShell helper answer every op from one source. Same inputs give the same exe behaviour; the
-# script prints the SHA-256 of the inputs and of the exe.
+# script prints the SHA-256 of the inputs and of the exe. B-080: the exe ships unpacked (package.json asarUnpack) and the
+# service runs it from here (install.ps1 beside it), so every app update brings the new broker along.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File resources\broker\build.ps1
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path

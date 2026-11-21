@@ -2,8 +2,10 @@
 // shows (settings.onboarding.step not 'done', on the owner's window, never in a hidden preview, on My day – 'home' and
 // 'day' alike), the step order – AF-002: Profile (language, name, company), AI (a model that answers, or skipped on
 // purpose), Connectors (optional) and Your first agent (the Manager, or a first hire) –, each step's one sentence on what
-// it is for, whether any model can answer (the AI step's Continue, Home's "No AI" notice), the profile write and when
-// "Connect to my other device" (ConnectCard.tsx) ends the layer.
+// it is for, whether any model can answer (the AI step's Continue, Home's "No AI" notice), the profile write (language,
+// name, company and – upstream B-085 – the PC access), the public-library tick and when "Connect to my other device"
+// (ConnectCard.tsx) ends the layer. Upstream's choice card (its step 'tour') is our Profile step's "Connect to my
+// other device" button; a stored 'tour' reads as 'profile' (settings/validate.ts).
 // Owns: these pure checks. Never: reads signals, calls the runtime or renders.
 
 import type { Account, AccountState, ModelInfo } from '../../shared/model/providers.ts';
@@ -17,6 +19,9 @@ export type Card = (typeof CARDS)[number];
 export const FIRST_STEP: Card = CARDS[0];
 /** The layer's title: the computer's header row and the phone's top row. */
 export const FIRST_RUN_TITLE = 'Set up';
+
+/** B-085: the profile step's PC access choice (settings.profile.pcAccess; absent = whole). */
+export type PcAccess = NonNullable<Settings['profile']['pcAccess']>;
 
 /** Each step's heading and its one sentence: what it is for. */
 export const STEP_INFO: Readonly<Record<Card, { title: string; purpose: string }>> = {
@@ -73,13 +78,14 @@ export function linkedAsCeo(out: Pick<RemoteOutgoing, 'status' | 'role'> | undef
   return out?.status === 'accepted' && out.role === 'ceo';
 }
 
-/** The profile step's write: trimmed name and company and the language, only what changed. */
-export function profilePatch(current: Pick<Settings['profile'], 'name' | 'company'> & { language?: string } | undefined, name: string, company: string, language?: string): Partial<Settings['profile']> | undefined {
+/** The profile step's write: trimmed name and company, the language and (B-085) the PC access, only what changed. */
+export function profilePatch(current: Pick<Settings['profile'], 'name' | 'company' | 'pcAccess'> & { language?: string } | undefined, name: string, company: string, language?: string, access?: PcAccess): Partial<Settings['profile']> | undefined {
   const next = { name: name.trim().slice(0, 120), company: company.trim().slice(0, 200) };
   const patch: Partial<Settings['profile']> = {};
   if (next.name !== (current?.name ?? '')) patch.name = next.name;
   if (next.company !== (current?.company ?? '')) patch.company = next.company;
   if (language && LANGUAGE_CODE.test(language) && language !== current?.language) patch.language = language;
+  if (access && access !== (current?.pcAccess ?? 'whole')) patch.pcAccess = access;
   return Object.keys(patch).length ? patch : undefined;
 }
 
@@ -99,4 +105,12 @@ export function languageOptions(current: string | undefined): { options: Readonl
   const base = code.split('-')[0];
   const known = LANGUAGES.find((language) => language.code === base);
   return { options: [{ code, name: known ? `${known.name} (${code})` : code }, ...LANGUAGES], selected: code };
+}
+
+/**
+ * 17.11.2026 (upstream): the profile step's "share in the public library" tick (settings.library.publish; absent = on).
+ * Only what changed is written: left ticked on a new PC nothing is, unticked it is `publish: false`.
+ */
+export function libraryPatch(current: Settings['library'] | undefined, share: boolean): { publish: boolean } | undefined {
+  return share === (current?.publish !== false) ? undefined : { publish: share };
 }

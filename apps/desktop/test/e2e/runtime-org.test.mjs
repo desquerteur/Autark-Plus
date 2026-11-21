@@ -6,9 +6,9 @@
 //     approval to-do); the Secretary exists once,
 //     reports to the person (no manager, her own root) and works in the new Private space – her
 //     own system prompt says so.
-//  3. Delegation: the Manager gives a web developer a job (agents.delegate into a work chat); the
-//     developer finishes it with tasks.complete in its handoff turn; the Manager is woken with
-//     reason 'child' in that chat.
+//  3. Delegation: the Manager gives a web developer a job (tasks.create to the developer, in a work
+//     chat); the developer finishes it with tasks.finish in its 'task' turn; the Manager is woken
+//     with reason 'child' in the chat it gave the work from (tasks/lifecycle.ts tellGiver, ledger.givenIn).
 //  4. Scale: 30 agents in 3 spaces under 3 managers (and the Manager above them) – org depth and
 //     counts, the identity's report list cap (15 + "and N more"), the size of agents.list for a
 //     model, the setup-facts cap, RPC and turn response times, and that hiring costs no turns
@@ -21,7 +21,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ask, startRuntime, waitForNew } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, ask, startRuntime, waitForNew } from './lib/runtime-client.mjs';
 import { MAX_TEXT_CHARS } from '../../src/runtime/tools/outputs.ts';
 import { SETUP_CAP } from '../../src/runtime/context/setup-facts.ts';
 
@@ -84,7 +84,7 @@ test('hiring and delegation: the secretary at once, delegated work comes back to
   await client.call('events.subscribe', { topics: [`chat:${first.id}`, `runs:${manager.id}`] });
 
   // 2. Agents may do everything: the hire runs at once (no approval to-do, no permission mode).
-  const hired = later(waitForNew(client, 'message.updated', finalFrom(first.id, manager.id, /agents\.create → /), 30_000));
+  const hired = later(waitForNew(client, MESSAGE_EVENTS, finalFrom(first.id, manager.id, /agents\.create → /), 30_000));
   await client.call('messages.send', { conversationId: first.id, body: 'Hire my private assistant [[tool:agents.create {"template":"secretary"}]]' });
   const created = toolResult((await hired).body, 'agents.create');
   assert.equal(created.ok, true, JSON.stringify(created));
@@ -103,21 +103,27 @@ test('hiring and delegation: the secretary at once, delegated work comes back to
   await client.call('events.subscribe', { topics: [`chat:${errands.id}`] });
   const own = await ask(client, errands.id, secretary.id, 'Who do you work for? [[prompt:I report directly]] [[prompt:My area]]', { pattern: /prompt → / });
   const told = promptLines(own.message.body);
-  assert.ok(told.some((line) => line.startsWith('I report directly to ')), `her prompt names no manager: ${told.join(' | ')}`);
-  assert.ok(told.includes('My area: Private.'), told.join(' | '));
+  // "# Who I am" holds area, manager and reports on one line (resources/prompts/identity.md).
+  assert.ok(told.some((line) => line.includes('I report directly to ')), `her prompt names no manager: ${told.join(' | ')}`);
+  assert.ok(told.some((line) => line.includes('My area: Private.')), told.join(' | '));
 
   // 3. Delegation: a web developer under the Manager gets a job in a work chat and finishes it.
   const dev = await client.call('agents.create', { template: 'web-developer', managerId: manager.id });
   assert.equal(dev.managerId, manager.id);
   assert.equal((await client.call('spaces.list')).find((space) => space.id === dev.spaceId)?.kind, 'company', 'the company area');
   // A fresh chat for the brief (the first chat holds the hire directive, which a renewed session
-  // would run again) and a work chat the developer joins (it never sees the brief's directive).
+  // would run again) and a work chat named for the job (the person is in it, so the work lands in the Manager's 1:1 with the developer).
   const brief = await client.call('chats.create', { title: 'Website', agentIds: [manager.id] });
   const work = await client.call('chats.create', { title: 'Landing page', agentIds: [manager.id] });
-  await client.call('events.subscribe', { topics: [`chat:${brief.id}`, `chat:${work.id}`, `runs:${dev.id}`] });
+  await client.call('events.subscribe', { topics: [`chat:${brief.id}`, `chat:${work.id}`, `runs:${dev.id}`, `runs:${manager.id}`] });
 
-  const complete = '[[tool:tasks.complete {"taskId":"$task","summary":"Landing page built","evidence":[{"kind":"note","label":"Landing page checked in the preview"}]}]]';
-  const job = { to: dev.id, title: 'Build the landing page', chatId: work.id, goal: `Build the landing page ${complete}` };
+  const complete = '[[tool:tasks.finish {"taskId":"$task","status":"done","summary":"Landing page built","evidence":[{"kind":"note","label":"Landing page checked in the preview"}]}]]';
+  // The fake engine runs directives only from new input: the developer's turn reads the task's anchor line in the work
+  // chat ("[task …] <title>") as new, not the brief in its prompt – so the finishing directive rides at the end of the
+  // title, past the 120 characters its wake note and line headers quote (a cut-off directive there would swallow it).
+  const brief120 = 'Build the landing page: one screen with a headline, three short benefits, the pricing table and a sign-up form, checked in the preview.';
+  assert.ok(brief120.length > 120);
+  const job = { to: dev.id, title: `${brief120} ${complete}`, chatId: work.id, notes: 'One page; brand colours; works on phones.' };
   // The checkpoint quotes the first 300 characters of the latest request to the developer: the
   // brief comes first, so no complete directive of the Manager's own call reaches it.
   const text = 'The landing page presents the product on one screen: a headline, three short benefits, the pricing table and a sign-up '
@@ -126,21 +132,26 @@ test('hiring and delegation: the secretary at once, delegated work comes back to
   assert.ok(text.length > 300);
   const doneTask = later(waitForNew(client, 'task.upserted', (task) => task.title === job.title && task.status === 'done', 30_000));
   const childRun = later(waitForNew(client, 'run.upserted', (run) => run.agentId === manager.id && run.trigger === 'child' && run.status === 'done', 30_000));
-  const sent = await ask(client, brief.id, manager.id, `${text} [[tool:agents.delegate ${hidden(job)}]]`, { pattern: /agents\.delegate → / });
-  const delegated = toolResult(sent.message.body, 'agents.delegate');
-  assert.deepEqual([delegated.ok, delegated.to], [true, dev.id], JSON.stringify(delegated));
+  const sent = await ask(client, brief.id, manager.id, `${text} [[tool:tasks.create ${hidden(job)}]]`, { pattern: /tasks\.create → / });
+  const delegated = toolResult(sent.message.body, 'tasks.create');
+  assert.deepEqual([delegated.ok, delegated.owner], [true, `${dev.name} (${dev.id})`], JSON.stringify(delegated));
 
   const done = await doneTask;
   assert.equal(done.id, delegated.taskId);
-  assert.deepEqual([done.assigneeId, done.createdBy, done.conversationId, done.parentId], [dev.id, manager.id, work.id, undefined]);
+  // KI-Runde 17.11. §5.6: work handed from a chat the person is in to an agent who is not in it lands in the giver's 1:1 with the receiver.
+  const room = await client.call('chats.get', { id: done.conversationId });
+  assert.equal(room.settings.direct, true, 'the work lands in a 1:1');
+  assert.deepEqual(room.members.filter((member) => !member.leftAt).map((member) => member.memberId).sort(), [manager.id, dev.id].sort(), 'the Manager\'s 1:1 with the developer');
+  assert.deepEqual([done.assigneeId, done.createdBy, done.parentId], [dev.id, manager.id, undefined]);
   assert.equal(done.result?.summary, 'Landing page built');
   assert.equal(done.result?.verification, 'claimed_by_agent');
   const runs = client.events.filter((frame) => frame.event === 'run.upserted' && frame.data.agentId === dev.id).map((frame) => frame.data);
-  assert.ok(runs.some((run) => run.trigger === 'handoff' && run.taskId === done.id), 'the developer worked on it in its handoff turn');
-  assert.ok((await client.call('chats.get', { id: work.id })).members.some((member) => member.memberId === dev.id && !member.leftAt), 'the developer joined the work chat');
+  assert.equal(done.ledger?.givenIn, brief.id, 'it knows the chat it was given from');
+  assert.ok(runs.some((run) => run.trigger === 'task' && run.taskId === done.id), 'the developer worked on it in its task turn');
+  assert.ok(!(await client.call('chats.get', { id: work.id })).members.some((member) => member.memberId === dev.id && !member.leftAt), 'the person\'s work chat keeps its members');
 
   const woken = await childRun;
-  assert.deepEqual([woken.taskId, woken.conversationId], [done.id, work.id], 'the Manager hears back in the work chat');
+  assert.equal(woken.conversationId, brief.id, 'the Manager hears back in the chat it gave the work from');
   const tree = await client.call('agents.org');
   assert.deepEqual(tree.find((node) => node.agent.id === manager.id).reports.map((node) => node.agent.id), [dev.id]);
   assert.equal((await client.call('todos.list')).filter((task) => task.widget?.type === 'approve').length, 0, 'no approval card anywhere');
@@ -208,7 +219,7 @@ test('scale: 30 agents in 3 spaces under 3 managers', { timeout: FILE_LIMIT_MS }
   await client.call('events.subscribe', { topics: Object.values(chatOf).map((id) => `chat:${id}`) });
   const turn = (agent, body, pattern) => ask(client, chatOf[agent.id], agent.id, body, { pattern, timeoutMs: TURN_MS });
   const together = await timed(() => Promise.all([
-    turn(seed, '[[tool:app.status {}]] [[prompt:- Agents:]] [[prompt:My direct reports]]', /app\.status → /),
+    turn(seed, '[[tool:app.status {}]] [[prompt:My direct reports]]', /app\.status → /),
     turn(lead.Ada, '[[prompt:My direct reports]] [[size:agents.list {}]]', /agents\.list size → /),
     turn(lead.Bea, '[[prompt:My direct reports]] [[prompt:I report to]]', /prompt → /),
     turn(lead.Cy, '[[prompt:My direct reports]]', /prompt → /),
@@ -218,13 +229,13 @@ test('scale: 30 agents in 3 spaces under 3 managers', { timeout: FILE_LIMIT_MS }
   for (const [name, ms] of [['seed', seedTurn.ms], ['Ada', adaTurn.ms], ['Bea', beaTurn.ms], ['Cy', cyTurn.ms]]) assert.ok(ms < TURN_MS, `${name}'s turn took ${ms} ms`);
 
   // Identity: at most 15 reports by name, then "and N more".
-  const reportsLine = (body) => promptLines(body).filter((line) => line.startsWith('My direct reports: '));
+  const reportsLine = (body) => [...new Set(promptLines(body).map((line) => /My direct reports: .*$/.exec(line)?.[0]).filter(Boolean))]; // one identity line, quoted once per [[prompt:…]] it matches
   const listed = (agents) => [...agents].sort((a, b) => a.name.localeCompare(b.name)).map((agent) => `${agent.name} (${agent.role})`);
   assert.deepEqual(reportsLine(adaTurn.message.body), [`My direct reports: ${listed(acme).slice(0, 15).join(', ')} and 3 more.`]);
   assert.deepEqual(reportsLine(beaTurn.message.body), [`My direct reports: ${listed(studio).join(', ')}.`]);
   assert.deepEqual(reportsLine(cyTurn.message.body), [`My direct reports: ${listed(lab).join(', ')}.`]);
   assert.deepEqual(reportsLine(seedTurn.message.body), [`My direct reports: ${listed([lead.Ada, lead.Bea, lead.Cy]).join(', ')}.`]);
-  assert.ok(promptLines(beaTurn.message.body).includes(`I report to ${seed.name} (${seed.role}).`));
+  assert.ok(promptLines(beaTurn.message.body).some((line) => line.includes(`I report to ${seed.name} (${seed.role}).`)));
 
   // agents.list as a model gets it: all 30, whole (never cut into a file).
   const size = toolResult(adaTurn.message.body, 'agents.list size');
@@ -232,7 +243,8 @@ test('scale: 30 agents in 3 spaces under 3 managers', { timeout: FILE_LIMIT_MS }
   assert.deepEqual([size.items, size.truncated, size.error], [30, false, false], JSON.stringify(size));
   assert.ok(size.chars < MAX_TEXT_CHARS, `agents.list is ${size.chars} characters for a model`);
 
-  // Setup facts: within the cap, the real counts per space – in app.status and in the prompt.
+  // Setup facts: within the cap, the real counts per space, in app.status (the prompt has no team section: the team
+  // stands in "# Who I am" and agents.list – kontext-neu standing/live-part.md §5).
   const setupPart = seedTurn.message.body.split('\n\n').find((part) => part.startsWith('app.status → '));
   const setup = setupPart.slice('app.status → '.length);
   timings.setupChars = setup.length;
@@ -242,7 +254,6 @@ test('scale: 30 agents in 3 spaces under 3 managers', { timeout: FILE_LIMIT_MS }
   assert.ok(setupLines.includes('- Spaces: Acme (company), Studio (brand), Lab (custom)'), setup);
   const agentsLine = '- Agents: 30 active – Acme 19 (manager Ada) · Studio 6 (managers Bea, Studio agent 1) · Lab 4 (manager Cy) · no space 1 (manager Manager)';
   assert.ok(setupLines.includes(agentsLine), setup);
-  assert.ok(promptLines(seedTurn.message.body).includes(agentsLine), 'the Manager\'s prompt carries the same facts');
 
   // Bounded: hiring 29 agents started no turn – only the four agents asked ran, once each.
   await sleep(1000);

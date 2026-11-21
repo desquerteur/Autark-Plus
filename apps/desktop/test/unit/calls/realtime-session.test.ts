@@ -69,7 +69,7 @@ async function fakeRealtime() {
 }
 
 function withAccount(services: RuntimeServices, baseUrl: string, keyed = true, apiKey: () => Promise<string> = async () => 'sk-test-key') {
-  const account = { id: 'acc_oai', provider: 'openai', label: 'OpenAI', auth: 'api_key', baseUrl, state: 'ok', priority: 1, rotation: false, enabled: true, detected: false, createdAt: 0 };
+  const account = { id: 'acc_oai', provider: 'openai', label: 'OpenAI', auth: 'api_key', baseUrl, state: 'ok', priority: 1, enabled: true, detected: false, createdAt: 0 };
   Object.assign(services, {
     accounts: { list: () => (keyed ? [account] : []), apiKey },
     catalog: { list: () => [{ provider: 'openai', model: 'gpt-4o-realtime-preview', accounts: [] }, { provider: 'openai', model: 'gpt-realtime-mini', accounts: ['acc_oai'] }, { provider: 'openai', model: 'gpt-5', accounts: [] }] },

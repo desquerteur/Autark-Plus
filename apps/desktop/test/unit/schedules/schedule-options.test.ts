@@ -55,42 +55,6 @@ test('messages.schedule: Important is posted as important and steers the agent',
   assert.equal((await f.phone.request('messages.schedule', { conversationId: f.chat.id, body: 'x', spec: { at: f.now + H }, priority: 'urgent' })).error?.code, 'bad_request');
 });
 
-test('messages.schedule asTask: every run posts a team task with steps and High priority', async (t) => {
-  const f = setup();
-  t.after(f.cleanup);
-  const body = 'Check the video comments\n- Answer questions\n- Flag spam\nKeep it friendly.';
-  const schedule = await f.phone.call<Schedule>('messages.schedule', {
-    conversationId: f.chat.id, body, spec: { everyMs: 53 * MIN, at: f.now + H }, asTask: true, priority: 'important',
-  });
-  assert.equal(schedule.kind, 'routine');
-  assert.equal(schedule.ownerId, 'human');
-  assert.equal(schedule.title, 'Check the video comments');
-  assert.deepEqual(schedule.payload, {
-    body, priority: 'important',
-    taskTemplate: { title: 'Check the video comments', notes: 'Keep it friendly.', steps: ['Answer questions', 'Flag spam'] },
-  });
-  f.scheduler.start();
-  f.clock.advance(H);
-  f.timers.fire();
-  f.clock.advance(53 * MIN);
-  f.timers.fire();
-  const posted = f.tasks.list({ conversationId: f.chat.id }).filter((task) => task.title === 'Check the video comments');
-  assert.equal(posted.length, 2, 'one task per run');
-  for (const task of posted) {
-    assert.equal(task.assigneeKind, 'team');
-    assert.equal(task.createdBy, 'human');
-    assert.equal(task.priority, 1, 'Important → High');
-    assert.equal(task.notes, 'Keep it friendly.');
-    assert.deepEqual(task.steps.map((step) => step.title), ['Answer questions', 'Flag spam']);
-    assert.ok(task.messageId, 'anchored by a task post in the chat');
-  }
-  assert.equal(f.chats.messages(f.chat.id).filter((message) => message.kind === 'task' && message.authorId === 'human').length, 2);
-  assert.equal(f.scheduler.get(schedule.id)?.runs, 2);
-  // Team work needs the 'tasks' tier, like tasks.create; plain scheduled messages do not.
-  const chatOnly = new TestClient(f.server, CHAT_ONLY);
-  assert.equal((await chatOnly.request('messages.schedule', { conversationId: f.chat.id, body, spec: { at: f.now + 3 * H }, asTask: true })).error?.code, 'forbidden');
-  assert.equal((await chatOnly.call<Schedule>('messages.schedule', { conversationId: f.chat.id, body: 'Plain', spec: { at: f.now + 3 * H } })).kind, 'message');
-});
 
 test('schedules.preview: the next runs as the scheduler takes them', async (t) => {
   const f = setup();
@@ -151,12 +115,12 @@ test("schedules.update rewords the person's own posts; an agent's schedule keeps
   assert.equal((await f.owner.request('schedules.update', { id: message.id, colour: 'red' })).error?.code, 'bad_request');
 });
 
-test('schedules.message tool: urgent schedules an important post', async (t) => {
+test('schedules.message tool: level important schedules an important post', async (t) => {
   const f = setup();
   t.after(f.cleanup);
   const ctx = { agent: f.org.get('ag_ava'), runId: 'run_1', conversationId: f.chat.id, mode: 'general', services: f.services, signal: new AbortController().signal, status() {} } as unknown as ToolContext;
   const tool = (name: string) => scheduleTools.find((entry) => entry.name === name)!;
-  const urgent = await tool('schedules.message').run({ text: 'Render finished – please check', when: { once: '+1h' }, urgent: true }, ctx);
+  const urgent = await tool('schedules.message').run({ text: 'Render finished – please check', when: { at: '+1h' }, level: 'important' }, ctx);
   assert.ok(!urgent.isError, JSON.stringify(urgent.content));
   const plain = await tool('schedules.message').run({ text: 'Weekly numbers', when: { repeat: { cron: '0 9 * * 1' } } }, ctx);
   const [important, normal] = [urgent, plain].map((output) => f.scheduler.get((output.structured as { scheduleId: string }).scheduleId)!);
@@ -179,19 +143,20 @@ test('routines: stored task templates are bounded at every run; task posts keep 
   });
   const byTitle = (title: string) => f.tasks.list({ conversationId: f.chat.id }).find((task) => task.title === title && !task.parentId);
   f.scheduler.runNow(routine({ title: 'Answer comments', steps: 'abc' }).id);
-  assert.deepEqual(byTitle('Answer comments')?.steps, [], 'a non-array steps value no longer breaks every run');
+  assert.equal(byTitle('Answer comments')?.ledger?.plan, undefined, 'a non-array steps value no longer breaks every run');
   const flood = Array.from({ length: 5000 }, (_, i) => `Step ${i}`);
   f.scheduler.runNow(routine({ title: 'x'.repeat(1000), notes: 7, steps: [42, '  ', 'z'.repeat(400), ...flood] }).id);
   const bounded = byTitle('x'.repeat(300));
   assert.ok(bounded, 'the title is cut to 300 characters');
   assert.equal(bounded.notes, '');
-  assert.equal(bounded.steps.length, 100, 'at most 100 steps per run');
-  assert.equal(bounded.steps[0].title, 'z'.repeat(300));
+  // B-080: a routine's steps are the task's plan (tasks/create.ts keeps at most 20 lines)
+  assert.equal(bounded.ledger?.plan?.length, 20, 'at most 20 plan lines per run');
+  assert.equal(bounded.ledger?.plan?.[0], 'z'.repeat(300));
   f.scheduler.runNow(routine(undefined).id);
   assert.ok(byTitle('Comments'), 'no template: the schedule title');
 
   const tool = scheduleTools.find((entry) => entry.name === 'schedules.routine')!;
-  const routineArgs = (task: unknown) => validate({ title: 'Comments', task, when: { once: '+1h' } }, tool.inputSchema);
+  const routineArgs = (task: unknown) => validate({ title: 'Comments', task, when: { at: '+1h' } }, tool.inputSchema);
   assert.deepEqual(routineArgs({ title: 'Comments', steps: ['Answer', 'Flag spam'] }), []);
   for (const task of [{ title: 'C', steps: 'abc' }, { title: 'C', steps: Array(51).fill('a') }, { title: 'C', steps: ['y'.repeat(301)] }, { title: 'x'.repeat(301) }, { title: 'C', extra: 1 }]) {
     assert.ok(routineArgs(task).length > 0, JSON.stringify(task).slice(0, 60));

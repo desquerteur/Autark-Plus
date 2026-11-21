@@ -1,84 +1,71 @@
-// B-048 E4.1 – "use it or lose it" inside one provider (accounts/candidates.ts): expiring = remaining share
-// × urgency(reset) – weekly windows urgent within 24 h, 5h windows within 1 h –, only for plan quota,
-// with the guard that a 5h window under 10 % is never pushed while the weekly window has more; the plan
-// login whose quota resets soonest with some left goes first (priority still before it); deterministic
-// with a fixed clock. Owns: these assertions only. Never: real accounts or timers.
+// Use it or lose it inside one provider (accounts/candidates.ts, owner 09.11.2026): every signed-in plan takes turns, the
+// plan whose current weekly reading resets first runs first – ahead of the order in Settings –, a 5h limit only pauses it
+// and it is first again the moment the 5h window is free, a used-up week sends it behind until the monitor reads its new
+// week. Keys, local runtimes and plans without a current reading rank behind, by priority; paying keys stay last.
+// Owns: these assertions only. Never: real accounts or timers.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EXPIRING_MIN, expiring, expiringRank, selectCandidates, urgency } from '../../../src/runtime/accounts/candidates.ts';
+import { selectCandidates, weeklyReset } from '../../../src/runtime/accounts/candidates.ts';
 import type { Account, LimitWindow, ProviderId } from '../../../src/shared/model/providers.ts';
 
-const T0 = Date.UTC(2026, 9, 28, 9, 0, 0);
+const T0 = Date.UTC(2026, 10, 9, 18, 0, 0);
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 function plan(id: string, provider: ProviderId, patch: Partial<Account> = {}): Account {
   return {
     id, provider, label: id, auth: provider === 'codex' || provider === 'claude' ? 'cli' : 'api_key', state: 'ok',
-    priority: 0, rotation: true, enabled: true, detected: false, createdAt: T0, ...patch,
+    priority: 0, enabled: true, detected: false, createdAt: T0, ...patch,
   };
 }
 const win = (name: string, usedPercent: number, resetsAt?: number): LimitWindow => ({ name, windowMinutes: name.startsWith('5h') ? 300 : 10080, usedPercent, resetsAt });
 const limits = (...windows: LimitWindow[]) => ({ windows, readAt: T0 });
 const ids = (accounts: Account[]) => accounts.map((account) => account.id);
 
-test('urgency: weekly within 24 h and 5h within 1 h are 1; weekly decays slowly, 5h falls to 0 one hour later', () => {
-  assert.equal(urgency(10080, 23 * HOUR), 1);
-  assert.equal(urgency(10080, DAY), 1);
-  assert.equal(urgency(10080, 2 * DAY), 0.5);
-  assert.equal(urgency(10080, 6 * DAY), 1 / 6);
-  assert.equal(urgency(300, 30 * 60_000), 1);
-  assert.equal(urgency(300, 1.5 * HOUR), 0.5);
-  assert.equal(urgency(300, 2 * HOUR), 0);
-  assert.equal(urgency(300, 4.5 * HOUR), 0);
+test('weeklyReset: the reset of a plan\'s current weekly reading; Infinity for keys, API logins and plans without one', () => {
+  const week = limits(win('5h', 10, T0 + HOUR), win('weekly', 40, T0 + 2 * DAY));
+  assert.equal(weeklyReset(plan('acc_c', 'claude', { limits: week }), T0), T0 + 2 * DAY);
+  assert.equal(weeklyReset(plan('acc_none', 'claude'), T0), Infinity, 'never read');
+  assert.equal(weeklyReset(plan('acc_old', 'codex', { limits: limits(win('weekly', 10, T0 - 1)) }), T0), Infinity, 'the reading\'s reset has passed');
+  assert.equal(weeklyReset(plan('acc_key', 'openai', { limits: week }), T0), Infinity, 'a key that pays per use');
+  assert.equal(weeklyReset(plan('acc_api', 'codex', { plan: 'api', limits: week }), T0), Infinity, 'a CLI signed in with an API key pays per use');
 });
 
-test('expiring: remaining share × urgency for plan quota only; the 5h guard', () => {
-  const soon = plan('acc_soon', 'codex', { limits: limits(win('5h', 10, T0 + 4 * HOUR), win('weekly', 40, T0 + 10 * HOUR)) });
-  assert.equal(expiring(soon, T0), 0.6, '60 % of the week left, reset in 10 h');
-  const later = plan('acc_later', 'codex', { limits: limits(win('5h', 0, T0 + 4 * HOUR), win('weekly', 10, T0 + 6 * DAY)) });
-  assert.equal(expiring(later, T0), 0.15, '90 % left, reset in 6 days');
-  // The smallest remaining share of the windows that apply is what can still be used.
-  const capped = plan('acc_capped', 'claude', { limits: limits(win('weekly', 20, T0 + 5 * HOUR), win('weekly-opus', 70, T0 + 5 * HOUR)) });
-  assert.equal(expiring(capped, T0, 'claude-opus-5-5'), 0.3);
-  assert.equal(expiring(capped, T0, 'claude-sonnet-5'), 0.8);
-  // A 5h window about to reset counts too while the weekly window has room.
-  assert.equal(expiring(plan('acc_5h', 'codex', { limits: limits(win('5h', 30, T0 + 30 * 60_000), win('weekly', 50, T0 + 5 * DAY)) }), T0), 0.5);
+test('the owner\'s case: the plan whose week resets first runs first, a 5h limit only pauses it', () => {
+  // Claude Code is first in Settings with 80 % of its week left (reset in 5 days); Claude Code 2 has 30 % left, reset in 2 days.
+  const first = plan('acc_1', 'claude', { label: 'Claude Code', priority: 0, limits: limits(win('5h', 0, T0 + 4 * HOUR), win('weekly', 20, T0 + 5 * DAY)) });
+  const second = plan('acc_2', 'claude', { label: 'Claude Code 2', priority: 1, createdAt: T0 + 1, limits: limits(win('5h', 20, T0 + 3 * HOUR), win('weekly', 70, T0 + 2 * DAY)) });
+  const third = plan('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: T0 + 2 }); // signed in, never read
+  assert.deepEqual(ids(selectCandidates([first, second, third], 'claude', T0)), ['acc_2', 'acc_1', 'acc_3']);
+  for (let i = 0; i < 3; i++) assert.deepEqual(ids(selectCandidates([third, first, second], 'claude', T0)), ['acc_2', 'acc_1', 'acc_3'], 'same input, same order');
 
-  // Guard: under 10 % of the 5h window left while the weekly window has more – never pushed further.
-  const guarded = plan('acc_guard', 'codex', { limits: limits(win('5h', 95, T0 + 3 * HOUR), win('weekly', 20, T0 + 5 * HOUR)) });
-  assert.equal(expiring(guarded, T0), 0);
-  assert.equal(expiring({ ...guarded, limits: limits(win('5h', 95, T0 + 3 * HOUR), win('weekly', 97, T0 + 5 * HOUR)) }, T0), 0.03, 'the weekly window has less: nothing to protect');
+  // Claude Code 2 reaches its 5h limit: Claude Code takes over …
+  const paused = { ...second, limits: limits(win('5h', 100, T0 + 3 * HOUR), win('weekly', 85, T0 + 2 * DAY)) };
+  assert.deepEqual(ids(selectCandidates([first, paused, third], 'claude', T0 + HOUR)), ['acc_1', 'acc_3']);
+  // … and the moment its 5h window is free, Claude Code 2 runs first again.
+  assert.deepEqual(ids(selectCandidates([first, paused, third], 'claude', T0 + 3 * HOUR)), ['acc_2', 'acc_1', 'acc_3']);
 
-  // No plan quota, no reading, expired readings: 0.
-  const reset = limits(win('weekly', 10, T0 + HOUR));
-  assert.equal(expiring(plan('acc_key', 'openai', { limits: reset }), T0), 0, 'a pay-per-use key never expires');
-  assert.equal(expiring(plan('acc_env', 'claude', { auth: 'env', limits: reset }), T0), 0);
-  assert.equal(expiring(plan('acc_apilogin', 'codex', { plan: 'api', limits: reset }), T0), 0, 'a CLI signed in with an API key pays per use');
-  assert.equal(expiring(plan('acc_none', 'codex'), T0), 0);
-  assert.equal(expiring(plan('acc_old', 'codex', { limits: limits(win('weekly', 10, T0 - 1)) }), T0), 0);
-  assert.equal(expiringRank(plan('acc_small', 'codex', { limits: limits(win('weekly', 50, T0 + 5 * DAY)) }), T0), 0, `below ${EXPIRING_MIN} it does not rank`);
+  // Its week used up: out until its weekly reset.
+  const week = { ...second, limits: limits(win('5h', 40, T0 + 8 * HOUR), win('weekly', 100, T0 + 2 * DAY)) };
+  assert.deepEqual(ids(selectCandidates([first, week, third], 'claude', T0 + 6 * HOUR)), ['acc_1', 'acc_3']);
+  // After that reset its old reading says nothing (behind the plan with a known reset) until the monitor reads the new week,
+  // which then resets after Claude Code's.
+  assert.deepEqual(ids(selectCandidates([first, week, third], 'claude', T0 + 2 * DAY + 1)), ['acc_1', 'acc_2', 'acc_3']);
+  const renewed = { ...second, limits: limits(win('5h', 0, T0 + 2 * DAY + 5 * HOUR), win('weekly', 0, T0 + 9 * DAY)) };
+  assert.deepEqual(ids(selectCandidates([first, renewed, third], 'claude', T0 + 2 * DAY + HOUR)), ['acc_1', 'acc_2', 'acc_3']);
 });
 
-test('the login whose quota resets soonest with some left goes first; priority still first; deterministic', () => {
-  // Headroom alone would pick B (90 % left); A's 60 % are lost in 10 h.
-  const a = plan('acc_a', 'codex', { limits: limits(win('5h', 10, T0 + 4 * HOUR), win('weekly', 40, T0 + 10 * HOUR)) });
-  const b = plan('acc_b', 'codex', { createdAt: T0 + 1, limits: limits(win('5h', 0, T0 + 4 * HOUR), win('weekly', 10, T0 + 6 * DAY)) });
-  assert.deepEqual(ids(selectCandidates([b, a], 'codex', T0)), ['acc_a', 'acc_b']);
-  for (let i = 0; i < 3; i++) assert.deepEqual(ids(selectCandidates([a, b], 'codex', T0)), ['acc_a', 'acc_b'], 'same input, same order');
-  assert.deepEqual(ids(selectCandidates([a, { ...b, priority: -1 }], 'codex', T0)), ['acc_b', 'acc_a'], 'the person’s priority first');
+test('Codex plans the same way; a model window counts only for its model; paying accounts stay last', () => {
+  const a = plan('acc_a', 'codex', { priority: 0, limits: limits(win('weekly', 10, T0 + 6 * DAY)) });
+  const b = plan('acc_b', 'codex', { priority: 1, createdAt: T0 + 1, limits: limits(win('weekly', 90, T0 + DAY)) });
+  assert.deepEqual(ids(selectCandidates([a, b], 'codex', T0)), ['acc_b', 'acc_a'], 'B\'s 10 % are lost in a day');
+  const apiLogin = plan('acc_api', 'codex', { plan: 'api', priority: -1, limits: limits(win('weekly', 0, T0 + HOUR)) });
+  assert.deepEqual(ids(selectCandidates([apiLogin, a, b], 'codex', T0)), ['acc_b', 'acc_a', 'acc_api'], 'an API login pays per use: behind every plan');
 
-  // A's 5h window nearly used up while the week has more: the guard – headroom decides again.
-  const drained = { ...a, limits: limits(win('5h', 95, T0 + 4 * HOUR), win('weekly', 40, T0 + 10 * HOUR)) };
-  assert.deepEqual(ids(selectCandidates([drained, b], 'codex', T0)), ['acc_b', 'acc_a']);
-
-  // Two days later B's reset is near and A's window has reset (its old reading expired): B first.
-  const later = T0 + 5.5 * DAY;
-  assert.deepEqual(ids(selectCandidates([a, b], 'codex', later)), ['acc_b', 'acc_a']);
-
-  // Inside one step of EXPIRING_TIE the remaining share decides (transitive order).
-  const c = plan('acc_c', 'codex', { createdAt: T0 + 2, limits: limits(win('weekly', 40, T0 + 10 * HOUR)) });
-  const d = plan('acc_d', 'codex', { createdAt: T0 + 3, limits: limits(win('weekly', 38, T0 + 10 * HOUR)) });
-  assert.deepEqual(ids(selectCandidates([c, d], 'codex', T0)), ['acc_d', 'acc_c'], '0.62 and 0.6 share a step: more left first');
+  // Claude Code 2's Opus week is used up: Opus turns go to Claude Code, Sonnet turns still prefer Claude Code 2.
+  const c1 = plan('acc_1', 'claude', { limits: limits(win('weekly', 30, T0 + 4 * DAY)) });
+  const c2 = plan('acc_2', 'claude', { priority: 1, limits: limits(win('weekly', 60, T0 + DAY), win('weekly-opus', 100, T0 + DAY)) });
+  assert.deepEqual(ids(selectCandidates([c1, c2], 'claude', T0, 'claude-opus-5-5')), ['acc_1']);
+  assert.deepEqual(ids(selectCandidates([c1, c2], 'claude', T0, 'claude-sonnet-5')), ['acc_2', 'acc_1']);
 });

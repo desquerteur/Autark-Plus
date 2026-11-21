@@ -2,7 +2,8 @@
 // probe (devices/discovery.ts) – this PC left out, one entry per device and key (an impostor never
 // hides the real PC), names as plain text, each marked 'linked' (a linked PC with that key),
 // 'waiting' (this PC's open request goes there) or 'new'. Connect on a row sends a normal request
-// with its Remote ID, so the other PC's person still accepts it with the code.
+// with its Remote ID, so the other PC's person still accepts it with the code. F09: each entry keeps the company that
+// answered (plain text) – the UI lists a PC's companies under it (ui/settings/connect-text.ts nearbyGroups).
 // Asked when Settings › Devices opens (the last answer while younger than NEARBY_FRESH_MS) and on
 // Refresh; one search at a time; never on a timer.
 // Owns: the search, marking and the short cache. Never: polls or lists a PC whose Remote ID is not its key's.
@@ -40,7 +41,11 @@ export function mergeNearby(lan: Candidate[], self: { deviceId: string; fingerpr
     if (candidate.remoteId !== remoteId) continue;
     const known = all.get(keyOf(candidate));
     if (known) { known.addresses = [...new Set([...known.addresses, ...candidate.addresses])].slice(0, 8); continue; }
-    all.set(keyOf(candidate), { deviceId: candidate.deviceId, name: plainLabel(candidate.name) || 'PC', remoteId, fingerprint: candidate.fingerprint, addresses: candidate.addresses.slice(0, 8) });
+    const company = plainLabel(candidate.company, 80);
+    all.set(keyOf(candidate), {
+      deviceId: candidate.deviceId, name: plainLabel(candidate.name) || 'PC', remoteId, fingerprint: candidate.fingerprint, addresses: candidate.addresses.slice(0, 8),
+      ...(company ? { company } : {}),
+    });
   }
   return [...all.values()].sort((a, b) => a.name.localeCompare(b.name) || a.deviceId.localeCompare(b.deviceId) || a.fingerprint.localeCompare(b.fingerprint));
 }

@@ -142,3 +142,18 @@ test('runtime: fillChoices lists the page\'s site first (registrable domain), fi
   assert.equal(table.get('secrets.fillLogin')!.scope, 'owner');
   await assert.rejects(Promise.resolve().then(() => table.get('secrets.fillChoices')!.handler({ url: 'file:///etc' } as never, ctx(owner))), /http/);
 });
+
+test('feedback 17.11.2026: a tab that closes while the login is typed ends the fill quietly – no rejection into main', async () => {
+  const { rpc } = fakeRpc([]);
+  setFillRpc(rpc);
+  const gone = () => { throw new Error('Object has been destroyed'); };
+  for (const [name, patch] of [
+    ['focus throws', { focus: gone }],
+    ['insertText rejects', { insertText: async () => gone() }],
+  ] as const) {
+    const { contents } = fakePage();
+    const result = await fillLogin(rpc, { ...contents, ...patch } as FillContents, 'sec_1');
+    assert.deepEqual(result, { error: 'The page changed before the login was filled.' }, name);
+  }
+  setFillRpc(undefined);
+});

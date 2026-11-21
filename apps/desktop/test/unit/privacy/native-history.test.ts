@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { NativeHistory } from '../../../src/runtime/privacy/native-history.ts';
+import { homeRoots } from '../../../src/runtime/system/paths.ts';
 import { ClaudeEngine } from '../../../src/runtime/engines/claude/engine.ts';
 import { PURGE_ARGS } from '../../../src/runtime/engines/claude/purge.ts';
 import type { Engine } from '../../../src/runtime/engines/types.ts';
@@ -14,11 +15,12 @@ import { account, fakeFinder, fakeSpawn, memoryFiles, testSupervisor, tick, turn
 import { clock, memoryDb } from '../store/helpers.ts';
 
 const ROOT = path.resolve('/data/accounts');
+const LOGINS = path.resolve('/companies/logins'); // this PC's logins folder (Paths.accounts)
 
 function world(engines: Partial<Record<string, Partial<Engine>>>, accounts = [account({ id: 'acc_codex' })]) {
   const db = memoryDb();
   const time = clock();
-  const history = new NativeHistory({ db, clock: time, accounts: () => accounts, engine: (id) => engines[id] as Engine | undefined, accountsRoot: ROOT });
+  const history = new NativeHistory({ db, clock: time, accounts: () => accounts, engine: (id) => engines[id] as Engine | undefined, accountsRoots: homeRoots({ data: path.dirname(ROOT), accounts: LOGINS }) });
   const run = (agentId: string, status: string, accountId = 'acc_codex') => db.run(`INSERT INTO runs (id, agent_id, trigger, status, account_id, engine) VALUES (?, ?, 'message', ?, ?, 'codex')`, [`run_${agentId}_${status}`, agentId, status, accountId]);
   const session = (agentId: string, engine: string, ref: string, accountId: string) => db.run(
     `INSERT INTO engine_sessions (agent_id, conversation_id, engine, account_id, session_ref, cursor_seq, generation, updated_at) VALUES (?, 'chat_1', ?, ?, ?, 0, 0, ?)`, [agentId, engine, accountId, ref, time.now()]);
@@ -42,6 +44,14 @@ test('Claude Code: purge only for this app\'s own homes, never during a running 
   assert.deepEqual(result, { accountId: 'acc_own', label: 'Claude · work', purged: true, renewed: 1 });
   assert.deepEqual(purged, ['acc_own']);
   assert.deepEqual(w.db.all<{ engine: string }>('SELECT engine FROM engine_sessions').map((row) => row.engine), ['codex'], 'only the Claude sessions of that account renew');
+});
+
+test('the app\'s own homes are those in this PC\'s logins folder and those that stayed in <data>/accounts (macOS, a move refused)', () => {
+  const shared = account({ id: 'acc_shared', provider: 'claude', label: 'Claude · shared', home: path.join(LOGINS, 'claude', 'acc_shared') });
+  const stayed = account({ id: 'acc_mac', provider: 'claude', label: 'Claude · mac', home: path.join(ROOT, 'claude', 'acc_mac') });
+  const other = account({ id: 'acc_other', provider: 'claude', label: 'Claude · other', home: path.resolve('/elsewhere/claude/acc_other') });
+  const w = world({ claude: {} }, [shared, stayed, other]);
+  assert.deepEqual(w.history.state().claude.map((item) => item.accountId), ['acc_shared', 'acc_mac']);
 });
 
 test('engine: Claude Code runs purge with the account home and reads its answer', async () => {

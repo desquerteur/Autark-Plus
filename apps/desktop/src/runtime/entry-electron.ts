@@ -57,10 +57,10 @@ function portConnection(port: PortMainLike): RpcConnection {
   };
 }
 
-/** Main's own port is marked `main` (secrets.fillLogin answers it alone); the window's is plain owner scope. */
+/** Main's own port is marked `main` (secrets.fillLogin answers it alone); the window's is owner scope marked `window` (16.11.2026: the Security log names the person only there). */
 function serve(port: PortMainLike, client: 'desktop' | 'main'): void {
   if (!runtime && !repair) { pendingPorts.push({ port, client }); return; }
-  if (runtime) runtime.attach(portConnection(port), client === 'main' ? { kind: 'owner', main: true } : { kind: 'owner' });
+  if (runtime) runtime.attach(portConnection(port), client === 'main' ? { kind: 'owner', main: true } : { kind: 'owner', window: true });
   else repair!.attach(portConnection(port));
   port.start();
 }
@@ -71,6 +71,7 @@ async function boot(token: string, app: AppInfo): Promise<void> {
   const outcome = await guardedBoot({
     journal,
     version: app.version,
+    ...(process.platform === 'linux' ? { keyringAvailable: async () => (await bridge.call('storage.ready', {})).available } : {}),
     repair: (problem) => startRepairRuntime({ dataDir: app.dataDir, version: app.version, host, journal: journal!, problem, log: new FileLogger({ dir: path.join(app.dataDir, 'logs'), clock: systemClock }) }),
     start: () => createRuntime({
       host,

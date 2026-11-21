@@ -1,6 +1,7 @@
 // RPC contract part: files by their path on this PC, the pane's file tab (handlers runtime/rpc/handlers/files-path.ts).
 // No folder limits; for the owner and the phone ('manage'). B-076: `device` names the linked CEO PC the file is on (a
-// tab that came from there) – the call goes on to that PC. Merged into Methods by module augmentation.
+// tab that came from there) – the call goes on to that PC. B-081: a missing path answers with `near`, similar paths
+// found on the PC that holds it. Merged into Methods by module augmentation.
 // Owns: these method shapes. Never: behaviour.
 
 /** What a path holds now. `same`: the file still has the stamp the caller named in `since`. */
@@ -15,6 +16,8 @@ export interface PathRead {
   stamp: string;
   /** The content, for `state: 'text'`. */
   text?: string;
+  /** B-081, with `state: 'missing'`: similar existing paths (at most 5, best first, the nearest existing folder last). */
+  near?: PathEntry[];
 }
 
 export interface PathWritten { path: string; size: number; stamp: string }
@@ -31,6 +34,8 @@ export interface PathList {
   total: number;
   /** The folder does not exist. */
   missing?: true;
+  /** B-081, with `missing`: similar existing paths (at most 5, best first, the nearest existing folder last). */
+  near?: PathEntry[];
 }
 
 declare module '../api/methods.ts' {

@@ -59,7 +59,8 @@ test('our client and our hub agree: handshake, tools, a call with the lease cont
     assert.deepEqual(tools.map((tool) => [tool.name, tool.title]), [['human__ask', 'human.ask'], ['tasks__create', 'tasks.create']]);
     assert.equal(tools[1].inputSchema.type, 'object');
     const result = await connection.callTool('tasks__create', { title: 'Write the report' });
-    assert.deepEqual(result, { content: [{ type: 'text', text: '{"id":"task_9"}' }], isError: false, structuredContent: { id: 'task_9' } });
+    // B-080: no structuredContent – the agent reads the text and images (mcp/convert.ts)
+    assert.deepEqual(result, { content: [{ type: 'text', text: '{"id":"task_9"}' }], isError: false });
     assert.deepEqual(calls, [{ name: 'tasks.create', args: { title: 'Write the report' }, runId: 'run_7' }]);
 
     lease.release();

@@ -1,18 +1,13 @@
-// B-066: the one-time renewal of the standard SYSTEM.md head (org/standard-upgrade.ts) against fixtures of the old forms:
-// the owner's live Manager, the baseline in its renderings and the standard before B-066; an edited head stays, the role
-// text is never touched, and the second run finds nothing.
+// B-066/B-080: the exact recognition of an old standard SYSTEM.md head (org/standard-upgrade.ts standardHead, used by the
+// updater org/prompt-updates.ts) against fixtures of the old forms: the owner's live Manager, the baseline in its
+// renderings and the standard before B-066 are recognized with the creator they name and the role text below as it is;
+// an edited head is none of them. B-080: the caller-less one-time renewal (upgradedInstructions, upgradeStandardHeads)
+// is gone with its tests.
 // Owns: these assertions only.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import path from 'node:path';
-import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
-import { upgradeStandardHeads, upgradedInstructions } from '../../../src/runtime/org/standard-upgrade.ts';
-import type { Agent } from '../../../src/shared/model/org.ts';
-import { RESOURCES } from '../store/helpers.ts';
-
-const prompts = new PromptTemplates(() => path.join(RESOURCES, 'prompts'));
-const render = (values: Readonly<Record<string, string>>) => prompts.renderText('agent-default', { owner: 'Ada', ...values });
+import { standardHead } from '../../../src/runtime/org/standard-upgrade.ts';
 
 const ROLE = `## Your role
 Chief of staff.
@@ -65,29 +60,25 @@ You are part of the person's AI team. This is your SYSTEM.md: it starts as the t
 - Money: you pay alone up to 50 per purchase (in the person's currency) when it is clearly settled that it should be bought – need, price and seller checked. Above that, or while it is unclear, hand the purchase to the agent above you with the facts and your recommendation; it buys or hands it up to the person.
 - Hand up: a step that cannot be undone or speaks for the person to outsiders, while you are not sure it is wanted – with the facts and your recommendation; everything else goes on.`;
 
-const FALSE_SENTENCES = /enforces|Full autonomy|Permissions section|your Rights|up to 50|only Ada|only the person/;
 
-test('every old form gets the new head; the role text below stays byte for byte', () => {
+test('every old form is recognized; the role text below comes back byte for byte', () => {
   for (const head of [LIVE_HEAD, BASELINE_HIRE, BASELINE_AUTONOMOUS, SIMPLIFIED_HEAD]) {
-    const next = upgradedInstructions(`${head}\n\n${ROLE}`, render);
-    assert.ok(next, head.slice(0, 120));
-    assert.ok(next.endsWith(`\n\n${ROLE}`), 'the role part is untouched');
-    assert.doesNotMatch(next, FALSE_SENTENCES);
-    assert.match(next, /\n# How I work\nThis company is my own work – Ada/, 'B-076: the new head carries the team\'s How I work');
-    assert.doesNotMatch(next.slice(0, next.indexOf('## Your role')), /## Money|<<Still open/, 'no money section, no slots in the new head');
-    assert.match(next, /^This is my SYSTEM\.md(, started by \w+)? – the main part of what I read each turn\./);
+    const found = standardHead(`${head}\n\n${ROLE}`, []);
+    assert.ok(found, head.slice(0, 120));
+    assert.equal(found.suffix, ROLE, 'the role part as it is');
   }
   const rest = `${ROLE}  \n\n\nHard break above, blank lines kept.\r\nA Windows line end too.\n`;
-  assert.ok(upgradedInstructions(`${LIVE_HEAD}\n\n${rest}`, render)?.endsWith(`\n\n${rest}`), 'nothing below the head is tidied');
+  assert.equal(standardHead(`${LIVE_HEAD}\n\n${rest}`, [])?.suffix, rest, 'nothing below the head is tidied');
 });
 
-test('the creator named in the old text stays named; line ends do not matter', () => {
-  const next = upgradedInstructions(`${BASELINE_HIRE}\n\n${ROLE}`, render);
-  assert.ok(next?.startsWith('This is my SYSTEM.md, started by Grace – the main part'), next);
-  assert.ok(upgradedInstructions(`${LIVE_HEAD}\n\n${ROLE}`.replace(/\n/g, '\r\n'), render));
+test('the creator named in the old text is named back; line ends and trailing spaces do not matter', () => {
+  assert.equal(standardHead(`${BASELINE_HIRE}\n\n${ROLE}`, [])?.creator, 'Grace');
+  assert.equal(standardHead(`${LIVE_HEAD}\n\n${ROLE}`, [])?.creator, '');
+  assert.ok(standardHead(`${LIVE_HEAD}\n\n${ROLE}`.replace(/\n/g, '\r\n'), []));
+  assert.ok(standardHead(`${LIVE_HEAD.replace(/\n/g, '  \n')}\n\n${ROLE}`, []));
 });
 
-test('an edited head stays: one changed word, an added line, another name in one place', () => {
+test('an edited head is none of them: one changed word, an added line, another name in one place', () => {
   const edited = [
     LIVE_HEAD.replace('Up to 20 EUR per purchase you decide, within task and budget.', 'Up to 20 EUR per purchase you decide.'),
     LIVE_HEAD.replace('## Money\n', '## Money\n- Hosting renewals are settled.\n'),
@@ -96,38 +87,16 @@ test('an edited head stays: one changed word, an added line, another name in one
     BASELINE_AUTONOMOUS.replace('Tell Ada results and real', 'Tell Bob results and real'),
     '# My own rules\nDo good work.',
   ];
-  for (const head of edited) assert.equal(upgradedInstructions(`${head}\n\n${ROLE}`, render), undefined, head.slice(0, 200));
+  for (const head of edited) assert.equal(standardHead(`${head}\n\n${ROLE}`, []), undefined, head.slice(0, 200));
 });
 
-test('a text without the role heading, or a person\'s own standard without it, stays', () => {
-  assert.equal(upgradedInstructions(LIVE_HEAD, render), undefined);
-  assert.equal(upgradedInstructions(ROLE, render), undefined, 'nothing above the role');
-  assert.equal(upgradedInstructions(`${LIVE_HEAD}\n\n${ROLE}`, () => '# Mine\nNo role heading.'), undefined);
+test('a text without the role heading, or with nothing above it, is no standard head', () => {
+  assert.equal(standardHead(LIVE_HEAD, []), undefined);
+  assert.equal(standardHead(ROLE, []), undefined, 'nothing above the role');
 });
 
-test('the run at start renews each agent once, and a failing agent does not stop the others', () => {
-  const agents = new Map<string, Agent>();
-  const add = (id: string, instructions: string) => agents.set(id, { id, instructions } as Agent);
-  add('live', `${LIVE_HEAD}\n\n${ROLE}`);
-  add('edited', `# My own rules\nDo good work.\n\n${ROLE}`);
-  add('stuck', `${SIMPLIFIED_HEAD}\n\n${ROLE}`);
-  add('late', `${SIMPLIFIED_HEAD}\n\nNo role heading in this one.`);
-  const warnings: string[] = [];
-  const reasons: string[] = [];
-  const org = {
-    list: () => [...agents.values()],
-    update(id: string, patch: { instructions: string }, meta: { by: string; reason: string }) {
-      if (id === 'stuck') throw new Error('locked');
-      agents.get(id)!.instructions = patch.instructions;
-      reasons.push(meta.reason);
-    },
-  };
-  const log = { info() {}, warn: (message: string) => warnings.push(message) };
-  assert.equal(upgradeStandardHeads({ org, render, log }), 1);
-  assert.equal(warnings.length, 1);
-  assert.equal(reasons.length, 1);
-  assert.doesNotMatch(agents.get('live')!.instructions, /enforces/);
-  assert.match(agents.get('edited')!.instructions, /^# My own rules/);
-  agents.delete('stuck');
-  assert.equal(upgradeStandardHeads({ org, render, log }), 0, 'the new head no longer matches: one time only');
+test('a remembered template is recognized as rendered for that agent; an edit of it is not', () => {
+  const template = '# How I work\nThis is my SYSTEM.md{{#creator}}, started by {{creator}}{{/creator}}.\n\n## My role\n';
+  assert.equal(standardHead(`# How I work\nThis is my SYSTEM.md, started by Konrad.\n\n${ROLE}`, [template])?.creator, 'Konrad');
+  assert.equal(standardHead(`# How I work\nThis is my SYSTEM.md, started by Konrad.\nMy own line.\n\n${ROLE}`, [template]), undefined);
 });

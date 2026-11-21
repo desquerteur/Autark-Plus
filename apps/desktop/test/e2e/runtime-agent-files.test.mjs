@@ -5,7 +5,7 @@
 // Covers: the fake engine answers with a media block naming a workspace file → the final
 // message carries the stored fileId (path kept, no absolute path added); a second WebSocket
 // client with device scope ('todo' + 'chat', like the PWA) reads that file by id and finds it
-// under the chat in media.list; chat.send `files` arrive as an attachment the phone can read;
+// under the chat in media.list; a <chat to> block's `files` arrive as an attachment the phone can read;
 // a path outside the workspace is not stored.
 // Run: npm run build && node --test test/e2e/runtime-agent-files.test.mjs
 
@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { connect, startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, connect, startRuntime } from './lib/runtime-client.mjs';
 
 /** A tiny valid PNG header (IHDR 4×3) – enough for type sniffing and the image size. */
 function png() {
@@ -66,7 +66,7 @@ test('agent outputs: stored with a fileId, readable by a phone, listed under the
 
   // 1. A media block naming a workspace file: the final message carries the stored file id.
   await client.call('messages.send', { conversationId: chat.id, body: 'Show it [[ui:{"type":"media","src":"out/chart.png","caption":"Chart"}]]' });
-  const reply = await client.waitFor('message.updated', fromManager(chat.id, manager.id, (message) => message.body.includes('out/chart.png')), 90_000);
+  const reply = await client.waitFor(MESSAGE_EVENTS, fromManager(chat.id, manager.id, (message) => message.body.includes('out/chart.png')), 90_000);
   const fileId = /"fileId":"([a-f0-9]{64})"/.exec(reply.body)?.[1];
   assert.equal(fileId, sha256(image), 'the block carries the stored file id');
   assert.ok(reply.body.includes('"src":"out/chart.png"'), 'the path stays for the desktop');
@@ -85,8 +85,8 @@ test('agent outputs: stored with a fileId, readable by a phone, listed under the
   const listed = await phone.call('media.list', { conversationId: chat.id });
   assert.ok(listed.some((row) => row.fileId === fileId && row.kind === 'image'), 'the media library lists it under the chat');
 
-  // 3. chat.send files become an attachment the phone can read.
-  await client.call('messages.send', { conversationId: chat.id, body: 'Send it [[tool:chat.send {"text":"Report attached","files":["out/report.txt"]}]]' });
+  // 3. A <chat to> block's files become an attachment the phone can read.
+  await client.call('messages.send', { conversationId: chat.id, body: `Send it <chat to="${chat.id}" files="out/report.txt">Report attached</chat>` });
   const sent = await client.waitFor('message.created', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.body === 'Report attached', 90_000);
   assert.deepEqual(sent.attachments.map((file) => file.name), ['report.txt']);
   const report = await phone.call('files.read', { id: sent.attachments[0].fileId });
@@ -94,7 +94,7 @@ test('agent outputs: stored with a fileId, readable by a phone, listed under the
 
   // 4. A path outside the workspace (an existing file next to it) is not stored.
   await client.call('messages.send', { conversationId: chat.id, body: 'Leak it [[ui:{"type":"file","path":"../outside.txt"}]]' });
-  const leak = await client.waitFor('message.updated', fromManager(chat.id, manager.id, (message) => message.body.includes('outside.txt')), 90_000);
+  const leak = await client.waitFor(MESSAGE_EVENTS, fromManager(chat.id, manager.id, (message) => message.body.includes('outside.txt')), 90_000);
   assert.ok(!leak.body.includes('"fileId"'), 'no file id for a path outside the workspace');
   const all = await client.call('media.list', {});
   assert.ok(!all.some((row) => row.name === 'outside.txt'), 'nothing from outside reached the library');

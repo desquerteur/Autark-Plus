@@ -12,7 +12,7 @@ import { CHAT, PARENT, part, splitAndEnd, world } from './fixture.ts';
 
 test('a group waits for the end of the turn that split, then its parts run on lanes', () => {
   const w = world({ ultra: true });
-  const view = w.splits.create(w.ctx(), { goal: 'Review the release', parts: [part('Tests'), part('Docs', { context: 'brief', model: 'cheap', effort: 'low' })] });
+  const view = w.splits.create(w.ctx(), { goal: 'Review the release', parts: [part('Tests'), part('Docs', { context: 'fork', model: 'cheap', effort: 'low' })] });
   assert.equal(view.status, 'pending');
   assert.equal(view.ultra, true, 'the person\'s latest message suggested Ultra');
   const plain = world().splits.create(w.ctx(), { goal: 'Plain', parts: [part('A')] });
@@ -30,11 +30,11 @@ test('a group waits for the end of the turn that split, then its parts run on la
   assert.equal(first.turn.parentRunId, PARENT);
   assert.equal(first.turn.parentThread, CHAT);
   assert.equal(first.turn.parentConversationId, CHAT);
-  assert.equal(first.turn.context, 'fork');
+  assert.equal(first.turn.context, 'brief', 'owner 15.11.2026: a part starts fresh from its brief unless it asks for fork');
   assert.equal(first.turn.firstTurn, true);
   assert.equal(first.turn.cwd, 'C:/work/repo', 'parts share the parent folder by default');
-  assert.deepEqual([second.turn.model, second.turn.effort, second.turn.context], ['cheap', 'low', 'brief']);
-  assert.equal(first.notes[0].text, 'My part #1 of 2 – Tests\nDo tests.\nI bring back: a concise result my main self can merge');
+  assert.deepEqual([second.turn.model, second.turn.effort, second.turn.context], ['cheap', 'low', 'fork']);
+  assert.equal(first.notes[0].text, 'I have just split myself: this session starts fresh with my brief.\nMy part #1 of 2 – Tests\nDo tests.\nI bring back: a concise result my origin can merge');
   const running = w.splits.get(w.lanes.started[0])!;
   assert.equal(running.split.status, 'running');
   assert.equal(running.split.attempts, 1);
@@ -42,19 +42,19 @@ test('a group waits for the end of the turn that split, then its parts run on la
   assert.equal(running.split.run?.status, 'running', 'the view joins the split run');
 });
 
-test('settled once every part ended: ONE child wake on the parent thread, cost summed', () => {
+test('each part wakes its origin as it ends (one coalesced wake while unclaimed); settled once every part ended, cost summed', () => {
   const w = world();
   const groupId = splitAndEnd(w, [part('A'), part('B'), part('C')]);
   const [a, b, c] = w.lanes.started;
   w.lanes.end(a, 'done', { answer: 'Result A', costUsd: 0.01 });
   w.lanes.end(b, 'failed', { error: 'The model refused.' });
-  assert.equal(w.wakes.list('ag_ava').length, 0, 'no wake before the last part');
+  assert.equal(w.wakes.list('ag_ava').length, 1, 'the first part to end wakes its origin at once (owner 13.11.2026)');
   const runC = w.lanes.end(c, 'done', { answer: 'Result C', costUsd: 0.02 });
   const wakes = w.wakes.list('ag_ava');
-  assert.equal(wakes.length, 1, 'exactly one wake');
+  assert.equal(wakes.length, 1, 'still one wake: unclaimed, the returns and the group end coalesce');
   assert.equal(wakes[0].reason, 'child');
   assert.equal(wakes[0].conversationId, CHAT);
-  assert.match(wakes[0].note ?? '', /3 splits for "Review the release" ended \(2 done, 1 failed\)/);
+  assert.match(wakes[0].note ?? '', /3 parts for "Review the release" ended \(2 done, 1 failed\)/);
   const group = w.splits.list({ groupId })[0];
   assert.equal(group.status, 'settled');
   assert.equal(group.costUsd, 0.03);
@@ -81,7 +81,7 @@ test('a chat-free parent is woken on its task, else on its source', () => {
   w.lanes.end(w.lanes.started[1], 'done', { answer: 'ok' });
   const mail = w.wakes.list('ag_ben')[0];
   assert.deepEqual(mail.origin, { source: 'app:mail', label: 'New mail' });
-  assert.equal(w.splits.pendingResults('ag_ben', 'src:app:mail')?.groupIds.length, 1);
+  assert.equal(w.splits.pendingResults('ag_ben', 'src:app:mail')?.splitIds.length, 1);
 });
 
 test('at most runningPerAgent parts run at once; a freed lane starts the next', () => {
@@ -139,7 +139,7 @@ test('list and get: filters, active groups and views', () => {
   w.splits.markFork(splitId, { how: 'ledger', engine: 'codex', accountId: 'acc_1' }); // the turn pipeline records the seeding
   assert.deepEqual(w.splits.get(splitId)!.split.fork, { how: 'ledger', engine: 'codex', accountId: 'acc_1' });
   w.lanes.end(splitId, 'done', { answer: 'A' });
-  w.splits.markGathered('run_next', [groupId]);
+  w.splits.markGathered('run_next', w.splits.pendingResults('ag_ava', CHAT)!.splitIds);
   assert.equal(w.splits.list({ agentId: 'ag_ava', active: true }).length, 0, 'gathered groups are not active');
   const found = w.splits.get(splitId)!;
   assert.equal(found.group.id, groupId);

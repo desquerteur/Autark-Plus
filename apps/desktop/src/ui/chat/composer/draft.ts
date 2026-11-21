@@ -7,13 +7,22 @@
 // edits and an emptied field, until the reply is sent or cancelled; a failed send gives it back.
 // B-054: a key starting with 'local:' (the quick composer's tasks/quick-post.ts QUICK_DRAFT_KEY) is no chat, so
 // its draft is kept in memory only and never sent to ui.saveDraft.
+// B-082: a draft starts with its saved files (ui.state draftFiles: a kept take survives a reload) and holds the hidden
+// marks of its dictated text in memory only (draft-marks.ts; after a reload the text is just plain): a text change
+// without new marks moves them along.
 // Owns: the draft map and persistence. Never: sends messages, or repeats a save the runtime refused.
 
 import { signal } from '@preact/signals';
 import type { Signal } from '@preact/signals';
 import type { Attachment, MessageLevel } from '../../../shared/model/chat.ts';
+import type { TextMarks } from '../../../shared/voice/marks.ts';
 import { RpcError, rpc } from '../../lib/rpc.ts';
-import { drafts, secretDrafts, loaded } from '../../lib/store.ts';
+import * as store from '../../lib/store.ts';
+import { shiftMarks } from './draft-marks.ts';
+
+const { drafts, secretDrafts, draftFiles, loaded } = store;
+/** The saved files of a chat's draft (store.ts draftFiles from ui.state). */
+const savedFiles = (conversationId: string): Attachment[] => draftFiles.value[conversationId] ?? [];
 
 export interface Draft {
   /** Vault references only, persisted with the draft and kept across chat navigation. */
@@ -24,8 +33,8 @@ export interface Draft {
   level: MessageLevel;
   /** C6: the id of the message this draft answers (sent as `replyTo`). */
   replyTo?: string;
-  /** B-057 (owner 30.10.2026): Ultra suggested for the next message (composer/UltraCell.tsx) – in memory only, off once sent. */
-  ultra?: boolean;
+  /** B-082: unsure places and dictated parts of `text` as spans – in memory only, never saved. */
+  marks?: TextMarks;
 }
 
 const map = new Map<string, Signal<Draft>>();
@@ -39,14 +48,16 @@ export function draftFor(conversationId: string): Signal<Draft> {
   const ready = loaded.value;
   let entry = map.get(conversationId);
   if (!entry) {
-    entry = signal<Draft>({ text: drafts.value[conversationId] ?? '', attachments: [], level: 'normal', secrets: secretDrafts.value[conversationId] ?? [] });
+    entry = signal<Draft>({ text: drafts.value[conversationId] ?? '', attachments: savedFiles(conversationId), level: 'normal', secrets: secretDrafts.value[conversationId] ?? [] });
     map.set(conversationId, entry);
     if (!ready) beforeLoad.add(conversationId);
   }
   // Desktop restart-readiness reads a draft before the initial snapshot has arrived.
   // Hydrate that early placeholder once; subsequent edits keep their in-memory state.
   if (ready && beforeLoad.delete(conversationId) && !timers.has(conversationId)) {
-    entry.value = { ...entry.peek(), text: drafts.value[conversationId] ?? '', secrets: secretDrafts.value[conversationId] ?? [] };
+    const { marks: _stale, ...early } = entry.peek(); // the saved text replaces it: its spans would not fit
+    entry.value = { ...early, text: drafts.value[conversationId] ?? '', secrets: secretDrafts.value[conversationId] ?? [],
+      attachments: early.attachments.length ? early.attachments : savedFiles(conversationId) };
   }
   return entry;
 }
@@ -75,7 +86,9 @@ rpc.onOpen(() => {
 export function updateDraft(conversationId: string, patch: Partial<Draft>): void {
   const entry = draftFor(conversationId);
   beforeLoad.delete(conversationId);
-  entry.value = { ...entry.value, ...patch };
+  const current = entry.value;
+  const moved = patch.text !== undefined && !('marks' in patch) && current.marks ? { marks: shiftMarks(current.text, patch.text, current.marks) } : {};
+  entry.value = { ...current, ...patch, ...moved };
   clearTimeout(timers.get(conversationId));
   timers.set(conversationId, setTimeout(() => persist(conversationId), SAVE_DELAY));
 }

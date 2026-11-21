@@ -1,10 +1,12 @@
 // Fixture for the media library tests: chat harness + a real blob store in a temp dir wired
 // through the media hook to a MediaService (PDF page counter injected), two chats with one
-// agent each, and helpers to store files and attach them in a message.
+// agent each, and helpers to store files and attach them in a message. B-080 F4: pulled bytes reach the library
+// as compose/services.ts wires them (onArrival).
 // Owns: fixtures only. Never: imported by production code.
 
 import path from 'node:path';
 import { Blobs } from '../../../src/runtime/files/store.ts';
+import { onArrival } from '../../../src/runtime/devices/sync/blobs.ts';
 import { withMediaHook } from '../../../src/runtime/media/hook.ts';
 import { MediaService } from '../../../src/runtime/media/service.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
@@ -21,6 +23,7 @@ export function mediaSetup(options: { pdfPages?: (bytes: Uint8Array) => Promise<
   const blobs = new Blobs({ db: h.db, blobs: path.join(temp.dir, 'blobs'), clock: h.clock, log });
   const media = new MediaService({ services: () => h.services, pdfPages: options.pdfPages ?? (async () => undefined) });
   h.services.files = withMediaHook(blobs, (file) => media.onFileStored(file), log);
+  onArrival(h.services.files, (id) => media.arrived(id));
   h.org.add(agent('ag_ada', 'Ada'));
   h.org.add(agent('ag_bo', 'Bo'));
   const chat = h.chats.create({ title: 'Brand', agentIds: ['ag_ada'], createdBy: 'human' });

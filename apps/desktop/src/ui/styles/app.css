@@ -24,7 +24,7 @@
 .offline-empty { padding: 20px 18px; }
 .offline-note { margin: 0; padding: 4px 18px 8px; color: var(--muted); font-size: 13px; }
 /* The iPhone app's way out when its PCs never answer (removed there): a fixed row under the list. */
-.offline-actions { flex: none; display: flex; padding: 10px 18px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+.offline-actions { flex: none; display: flex; gap: 8px; padding: 10px 18px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .offline-actions > .button { min-height: 44px; }
 .offline-later { display: flex; flex-direction: column; min-width: 0; padding-top: 4px; }
 .offline-later-toggle {

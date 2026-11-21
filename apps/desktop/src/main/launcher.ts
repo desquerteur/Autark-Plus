@@ -18,10 +18,10 @@
 //     app, or (Windows) a task start 30 minutes after the cap: a later sign-in or due work;
 //   * an update install → not while its installer may run (10 minutes); the session ended (shutdown,
 //     restart, log-off, Fast Startup: session-end.ts) or a 'running' state from before this boot → start;
-//   * quit by the person → start when <userData>/next-due.json (the runtime scheduler's earliest schedule
-//     or wake) is due within 10 minutes; a Windows task start also from 5 minutes after the quit on, or
-//     when the quit was before this boot (a sign-in – a crash while the app was still closing fires its
-//     event earlier, in the same boot, and stays quit).
+//   * quit by the person → it stays quit (14.11.2026, owner: closing has to close; before, due work started it
+//     again a minute later): only a Windows task start from 5 minutes after the quit on, or when the quit was
+//     before this boot (a sign-in – a crash while the app was still closing fires its event earlier, in the same
+//     boot, and stays quit), starts it; a macOS/Linux unit start never does (its sign-in item is 'person').
 // A Windows task start that goes on writes nothing and hands over (`handoff`): index.ts starts the app
 // again detached as an ordinary background start, which decides as 'person' (same result), so the app
 // never runs as the task's instance – re-registering or deleting the task cannot end it, and the task's
@@ -38,7 +38,6 @@ import { NEXT_DUE_FILE, RUN_STATE_FILE, type NextDue, type QuitBy, type RunState
 export const LAUNCHER_FLAG = '--launcher';
 export const BACKGROUND_FLAG = '--background';
 export const RESTARTED_FLAG = '--restarted'; // a Windows task start after an unexpected close handed over (its notice)
-export const DUE_WINDOW_MS = 10 * 60_000;
 export const CAP_ENDS = 3;
 export const CAP_WINDOW_MS = 30 * 60_000;
 export const UPDATE_GRACE_MS = 10 * 60_000;
@@ -55,7 +54,6 @@ export const NOTICES: Record<LaunchNotice, { title: string; body: string }> = {
 export interface LaunchInput {
   previous: RunState | undefined;
   source: LaunchSource;
-  nextDue: number | null | undefined; // <userData>/next-due.json
   now: number;
   bootAt: number; // when this system booted (a 'running' state from before it ended with the system; a quit before it: a task start is a sign-in)
   pid: number;
@@ -63,7 +61,7 @@ export interface LaunchInput {
 
 export interface LaunchDecision {
   start: boolean;
-  reason: 'start' | 'unexpected' | 'capped' | 'quit' | 'updating' | 'due' | 'resume' | 'signin';
+  reason: 'start' | 'unexpected' | 'capped' | 'quit' | 'updating' | 'resume' | 'signin';
   write?: RunState; // the state to write now (none: leave the file as it is)
   notice?: LaunchNotice;
   handoff?: true; // a Windows task start that goes on: start the app again detached (it writes the state)
@@ -100,7 +98,6 @@ function decide(input: LaunchInput): LaunchDecision {
   if (previous.state === 'running') return { start: true, reason: 'resume', write: running }; // ended with the system before this boot
   if (previous.by === 'update' && now - previous.at < UPDATE_GRACE_MS) return { start: false, reason: 'updating' };
   if (previous.by === 'update' || previous.by === 'system') return { start: true, reason: 'resume', write: running };
-  if (typeof input.nextDue === 'number' && input.nextDue <= now + DUE_WINDOW_MS) return { start: true, reason: 'due', write: running };
   if (input.source === 'task' && (now - previous.at >= QUIT_SETTLE_MS || previous.at < input.bootAt)) return { start: true, reason: 'signin', write: running };
   return { start: false, reason: 'quit' };
 }
@@ -135,9 +132,9 @@ export function writeRunState(dataDir: string, state: RunState, log?: (line: str
   }
 }
 
-/** Reads both files, decides and writes the new state (index.ts, before anything else starts). */
-export function beginLaunch(input: Omit<LaunchInput, 'previous' | 'nextDue'> & { dataDir: string }): LaunchDecision {
-  const decision = decideLaunch({ ...input, previous: readRunState(input.dataDir), nextDue: readNextDue(input.dataDir) });
+/** Reads the state, decides and writes the new state (index.ts, before anything else starts). */
+export function beginLaunch(input: Omit<LaunchInput, 'previous'> & { dataDir: string }): LaunchDecision {
+  const decision = decideLaunch({ ...input, previous: readRunState(input.dataDir) });
   if (decision.write) writeRunState(input.dataDir, decision.write);
   return decision;
 }

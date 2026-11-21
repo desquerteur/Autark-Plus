@@ -1,7 +1,7 @@
 // Descriptions nobody has to type (B-078 D12, owner 06.11.2026: "Descriptions wird immer verwendet … Nur halt man muss das
 // nicht eintragen"): a catalog entry without one gets a first-person line from the decision model ("I use this when …"),
 // in the background, a few per catalog sync. An own file (a skill of the workspace or of an agent) gets it in its front
-// matter; a read-only one (built in, another tool's folder, a home project, the public library) in kv by the text's sha256,
+// matter; a read-only one (built in, another tool's folder, a home project) in kv by the text's sha256,
 // so the same text is never described twice and a changed text gets a new line. Until then – and without a model – the
 // first heading and sentence stand in (shared/text/external.ts fallbackDescription). A described own file changes once
 // and is then no longer missing one: no loop.

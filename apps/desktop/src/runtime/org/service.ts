@@ -4,15 +4,19 @@
 // takes over the archived agent's role, mode, place (manager, space, team), its reports and (tasks/owners.ts) its open
 // tasks; an agent may archive itself; at least one agent stays – and restore (O6: back under the old manager while
 // active, else the person – org/restore.ts), the seed Manager, org tree, management rights, live status, and the
-// avatar image file ids agents use (references for blob clean-up – org/avatar-files.ts).
+// avatar image file ids agents use (references for blob clean-up – org/avatar-files.ts). F14: the list with archived
+// agents leaves out those that never ran and are in no chat and no task (store/agents.ts listWithArchived).
 // Wave 3: the agent's SYSTEM.md (agent-core/service.ts) is written before an edit that changes the
 // instructions is saved, and a hire gets its folder (setCoreFiles; absent in tests = DB only).
-// Emits 'agent.upserted', 'agent.removed', 'agent.activity' ('space.upserted' via spaces.ts).
+// Emits 'agent.upserted', 'agent.removed', 'agent.activity' ('space.upserted' via spaces.ts); a live status with only a new
+// step note is 'agent.activity' alone (18.11.2026), a changed status both.
+// FIXES-3b F3: an edit that changes the start model (ModelPolicy.pin) ends the agent's older model.set request for another
+// model (agents/next-route.ts startModelSet) – the newest choice holds; an edit of any other field ends nothing.
 // Never: runs agents, or gives the seed Manager a space – it spans all areas; spaces appear when the first agent of an
 // area is hired.
 
 import type { Bus } from '../bus.ts';
-import type { Clock, Logger, OrgService } from '../contracts.ts';
+import type { Clock, OrgService } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
@@ -21,6 +25,7 @@ import type { AgentActivity } from '../../shared/model/runs.ts';
 import { AgentRepo } from '../store/agents.ts';
 import { avatarFiles } from './avatar-files.ts';
 import { hiredAgent, type CreateInput } from './hire.ts';
+import type { StandardKind } from './standard.ts';
 import { patchedAgent, STATUSES } from './patch.ts';
 import { restoredAgent } from './restore.ts';
 import { loadTemplates } from './templates.ts';
@@ -30,7 +35,7 @@ import { cleanText } from './validate.ts';
 import { isPersonId } from '../../shared/model/people.ts';
 import { activePerson, personManagerId } from '../people/repo.ts';
 import { reportsUpTo } from '../people/manager.ts';
-import { rememberAgentDefault } from './prompt-updates.ts';
+import { startModelSet } from '../agents/next-route.ts';
 
 export interface OrgDeps {
   db: Db;
@@ -39,15 +44,9 @@ export interface OrgDeps {
   templatesDir: string; // <resources>/agents
   /** Live activity source (the dispatcher). Default: derived from agents with status 'working'. */
   activity?: () => AgentActivity[];
-  /**
-   * B-044/B-047: the standard SYSTEM.md above every new agent's instructions (org/hire.ts; compose/services.ts renders
-   * prompts/agent-default.md with the person's name plus `values`: the hire's creator and role).
-   */
-  standingRules?: (values?: Readonly<Record<string, string>>) => string | undefined;
-  /** The unrendered standard a hire starts with, remembered for future app updates. */
-  standingTemplate?: () => string;
-  /** B-047: where a hire reports what it had to leave out (absent: nowhere). */
-  log?: Pick<Logger, 'warn'>;
+  /** The new agent's SYSTEM.md template (org/hire.ts; compose/services.ts renders prompts/system-md.md with the person's name plus `values`: the hire's role). */
+  /** The standard SYSTEM.md of `kind` rendered for a hire (org/standard.ts; `values`: its role). */
+  systemMd?: (values: Readonly<Record<string, string>>, kind: StandardKind) => string | undefined;
   /** The person's company name (settings.json profile.company) – the company space's name; absent: "Company". */
   companyName?: () => string | undefined;
 }
@@ -123,8 +122,9 @@ export class Org implements OrgService {
 
   // ---------------------------------------------------------------- agents
 
+  /** `includeArchived`: with the archived agents that left a trace (F14: a seed Manager retired at link-up is no "Archived" row). */
   list(options: { includeArchived?: boolean } = {}): Agent[] {
-    return this.agents.list(options.includeArchived ?? false);
+    return options.includeArchived ? this.agents.listWithArchived() : this.agents.list();
   }
 
   get(id: string): Agent | undefined {
@@ -156,14 +156,9 @@ export class Org implements OrgService {
       space: (spaceId) => this.spaceBook.get(spaceId),
       spaceForKind: (kind, near) => this.spaceBook.forKind(kind, near),
       now: () => this.deps.clock.now(),
-      standingRules: (values) => this.deps.standingRules?.(values),
-      warn: (message, details) => this.deps.log?.warn(message, details),
+      systemMd: (values, kind) => this.deps.systemMd?.(values, kind),
     });
-    this.deps.db.tx(() => {
-      this.agents.save(agent);
-      const standard = this.deps.standingTemplate?.();
-      if (standard) rememberAgentDefault(this.deps.db, agent.id, standard, agent.instructions, this.deps.clock.now());
-    });
+    this.agents.save(agent);
     const saved = this.require(agent.id);
     this.coreFiles?.created(saved);
     this.deps.bus.emit('agent.upserted', saved);
@@ -278,8 +273,11 @@ export class Org implements OrgService {
   setStatus(id: string, status: Agent['status'], note?: string): void {
     if (!STATUSES.includes(status)) throw new WorkforceError('bad_request', 'Invalid agent status.');
     const clean = note === undefined ? undefined : cleanText(note, 'status', 200).slice(0, 200) || undefined;
+    const before = this.agents.get(id)?.status;
     if (!this.agents.setStatus(id, status, clean, this.deps.clock.now())) throw new WorkforceError('not_found', 'This agent no longer exists.');
-    this.deps.bus.emit('agent.upserted', this.require(id));
+    // 18.11.2026 (phone traffic): a new step note travels in agent.activity alone – the whole agent (its SYSTEM.md, ~27 KB)
+    // went to every window and phone and to every agent.upserted listener at each step of every turn (~1 GB a day to one phone).
+    if (before !== status) this.deps.bus.emit('agent.upserted', this.require(id));
     this.emitActivity();
   }
 
@@ -309,6 +307,7 @@ export class Org implements OrgService {
     this.coreFiles?.beforeSave(agent, next); // wave 3: SYSTEM.md first – a refused write saves nothing
     this.agents.save(next);
     const saved = this.require(id);
+    if (agent.modelPolicy?.pin !== saved.modelPolicy?.pin) startModelSet(this.deps.db, id, saved.modelPolicy?.pin); // F3: the newest choice of a model holds
     this.deps.bus.emit('agent.upserted', saved);
     if (Object.hasOwn(patch, 'status') || Object.hasOwn(patch, 'statusNote')) this.emitActivity();
     return saved;

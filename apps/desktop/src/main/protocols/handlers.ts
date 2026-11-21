@@ -1,5 +1,5 @@
 // protocol.handle implementations for app://, wf-sandbox:// and wf-file://.
-//   app://app/<path>          shipped UI (app/ui)
+//   app://app/<path>          shipped UI (app/ui) · app://app/turn/<name> → the turn detector's fixed files (B-082), streamed
 //   wf-sandbox://lib/<x>.js   sandbox helpers · wf-sandbox://app/<messageId>/<n> → ```app document · wf-sandbox://page/<name> → a view in <data>/pages
 //   wf-file://<sha256>        blob store file, streamed, with single-range support (media seeking)
 // Owns: turning a Request into a Response with the right headers (CSP, MIME, ranges).
@@ -8,10 +8,11 @@
 
 import { createReadStream } from 'node:fs';
 import { open, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import { isErrorCode } from '../../shared/errors.ts';
 import {
-  APP_CSP, PAGE_CSP, SANDBOX_CSP, blobPath, mimeForPath, parseBlobUrl, parseRange, resolveUnder, routeAppUrl, routeSandboxUrl, sniffMime, wrapSandboxHtml,
+  APP_CSP, PAGE_CSP, SANDBOX_CSP, blobPath, mimeForPath, ortDirOf, parseBlobUrl, parseRange, resolveUnder, routeAppUrl, routeSandboxUrl, sniffMime, turnFilePath, wrapSandboxHtml,
 } from './rules.ts';
 
 /** Electron CustomScheme entries (structural: this module stays electron-free). Register before ready. */
@@ -25,6 +26,9 @@ export interface ProtocolDeps {
   uiDir: string; // <root>/app/ui
   sandboxLibDir: string; // <root>/app/ui/sandbox
   blobsDir: string; // <userData>/blobs
+  /** B-082: onnxruntime-web's dist folder (default: <root>/node_modules/onnxruntime-web/dist, unpacked) and <userData>/models/speech. */
+  ortDir?: string;
+  speechDir?: string;
   /** Raw HTML of an ```app fence (RpcClient `blocks.appHtml`). */
   appHtml(messageId: string, blockIndex: number): Promise<string>;
   /** The document of a view in <data>/pages (RpcClient `pages.read`). */
@@ -83,6 +87,7 @@ export class ProtocolHandlers {
     if (!verb) return plain(405, 'Method not allowed.');
     const route = routeAppUrl(request.url);
     if (!route) return plain(404, 'Not found.');
+    if (route.kind === 'turn') return this.turn(verb, route.name);
     const file = resolveUnder(this.deps.uiDir, route.pathname);
     const body = file ? await readSmall(file) : null;
     if (!file || !body) return plain(404, 'Not found.');
@@ -91,6 +96,19 @@ export class ProtocolHandlers {
     if (mime.startsWith('text/html')) headers['Content-Security-Policy'] = APP_CSP;
     else if (mime.startsWith('image/svg+xml')) headers['Content-Security-Policy'] = SVG_CSP;
     return new Response(verb === 'HEAD' ? null : body, { status: 200, headers });
+  }
+
+  /** app://app/turn/<name> – a fixed file of the conversation's turn models (ort wasm 15 MB, a model), streamed; 404 for any other name or a model not downloaded. */
+  private async turn(verb: 'GET' | 'HEAD', name: string): Promise<Response> {
+    const { uiDir, blobsDir } = this.deps;
+    const file = turnFilePath(name, {
+      ortDir: this.deps.ortDir ?? ortDirOf(path.resolve(uiDir, '..', '..')),
+      speechDir: this.deps.speechDir ?? path.join(path.dirname(blobsDir), 'models', 'speech'),
+    });
+    const info = file ? await regularFile(file) : null;
+    if (!file || !info) return plain(404, 'Not found.');
+    const headers = { ...BASE_HEADERS, 'Content-Type': mimeForPath(file), 'Cache-Control': 'no-cache', 'Content-Length': String(info.size) };
+    return new Response(verb === 'HEAD' || info.size === 0 ? null : toWeb(file), { status: 200, headers });
   }
 
   /** wf-sandbox:// – a helper script or one ```app block as a sandboxed document. */

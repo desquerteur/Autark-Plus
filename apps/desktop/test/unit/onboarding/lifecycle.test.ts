@@ -1,7 +1,7 @@
 // Onboarding lifecycle against the real RPC server, settings, chat service and skill library: the built-in
 // team-building skill (org-setup-onboarding) never retires – it stays in the manager's index before and after
 // the first run; onboarding.reset (owner only) opens the setup assistant again at step 'profile'; onboarding.start
-// (owner only) ends the layer, completes the onboarding and posts the start text, which wakes the Manager.
+// (owner only) ends the layer, completes the onboarding and posts the start line and the Manager's first message (B-090: nobody wakes).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ test('the team-building skill stays in the manager index before and after the fi
   assert.ok(f.indexed(MANAGER_MODE).includes(SKILL));
 });
 
-test("onboarding.start (owner only): step done, the Manager's chat and a message wake there; a phone cannot", async (t) => {
+test("onboarding.start (owner only): step done, the Manager's chat and its first message there; a phone cannot", async (t) => {
   const f = setup();
   t.after(f.cleanup);
   assert.equal((await f.phone.request('onboarding.start')).error?.code, 'forbidden', 'owner only');
@@ -64,9 +64,8 @@ test("onboarding.start (owner only): step done, the Manager's chat and a message
   const { conversationId } = await f.owner.call<{ conversationId: string }>('onboarding.start');
   assert.ok(f.chats.get(conversationId), "the Manager's first chat");
   assert.deepEqual(stepOf(f.services.settings.get().onboarding), { completed: true, step: 'done' }, 'start completes the onboarding');
-  const wake = f.wakeRows().find((row) => row.reason === 'message');
-  assert.equal(wake?.agent_id, f.boss.id);
-  assert.equal(wake?.conversation_id, conversationId);
+  assert.equal(f.chats.messages(conversationId).at(-1)?.authorId, f.boss.id, "B-090: the Manager's first message");
+  assert.equal(f.wakeRows().length, 0, 'nobody wakes until the person answers');
   assert.ok(f.indexed(MANAGER_MODE).includes(SKILL), 'the team-building skill stays');
   assert.equal((await f.owner.request('messages.send', { conversationId, body: 'x', via: 'suggestion' })).error?.code, 'bad_request', 'the setup draft origin is gone');
 });

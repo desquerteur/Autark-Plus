@@ -1,9 +1,8 @@
-// The agents' one `when` shape (B-044, schedules.message/remind/routine/update) → a ScheduleSpec,
-// mirroring the person's dialog: { once: "<ISO or +2h>" } or { repeat: { every | times | cron,
-// days, window, start, until, count, ifMissed } }. A time without a zone ("2026-10-26T09:00") is
-// read in the profile time zone (`tz` overrides), relative forms ("+2h", "PT30M", "2d") from now;
-// an interval is anchored at its start (default: now + one interval), so every list and preview
-// shows the real runs. Also the rule in a few words and zone-offset ISO times for tool results.
+// The agents' one `when` shape (schedules.message/remind/routine/update) → a ScheduleSpec, mirroring the person's
+// dialog: { at: "<ISO or +2h>" } or { repeat: { every | times | cron, days, window, start, until, count, ifMissed } }.
+// A time without a zone ("2026-10-26T09:00") is read in the profile time zone (`tz` overrides), relative forms
+// ("+2h", "PT30M", "2d") from now; an interval is anchored at its start (default: now + one interval), so every list
+// and preview shows the real runs. Also the rule in a few words and zone-offset ISO times for tool results.
 // Owns: that translation and wording. Never: stores or fires schedules (the scheduler does).
 
 import type { ScheduleSpec } from '../../shared/model/tasks.ts';
@@ -11,7 +10,7 @@ import { parseWhen } from '../tools/builtin/util.ts';
 import { MAX_TIMES, isOneOff, localParts, nextDate, nextFire, validateSpec, wallInstant } from './spec.ts';
 
 export interface WhenArgs {
-  once?: string;
+  at?: string;
   repeat?: RepeatArgs;
   tz?: string;
 }
@@ -31,32 +30,32 @@ export interface RepeatArgs {
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const CLOCK = { type: 'string', description: 'HH:MM' };
 
-/** The tool schema of `when` (one object; exactly one of once / repeat is checked in code). */
+/** The tool schema of `when` (exactly one of at / repeat is checked in code). */
 export const WHEN_SCHEMA = {
   type: 'object', additionalProperties: false,
-  description: 'Either {"once": …} or {"repeat": {…}}. Times without a zone are in the profile time zone.',
+  description: '{"at": time} once, or {"repeat": {…}}.',
   properties: {
-    once: { type: 'string', description: 'One time: ISO datetime ("2026-10-26T09:00") or from now ("+2h", "PT30M", "2d").' },
+    at: { type: 'string', description: 'ISO ("2026-11-20T09:00", in the person\'s time zone) or from now ("+2h", "2d").' },
     repeat: {
       type: 'object', additionalProperties: false,
-      description: 'Recurring: give one of every, times or cron.',
+      description: 'One of every, times or cron; days, window, start, until, count narrow it.',
       properties: {
         every: { type: 'string', description: 'Interval: "30m", "2h", "1d", "2w".' },
-        times: { type: 'array', items: CLOCK, minItems: 1, maxItems: MAX_TIMES, description: 'Clock times each day, e.g. ["09:00", "13:30", "18:00"].' },
-        days: { type: 'array', items: { type: 'string', enum: DAY_NAMES }, minItems: 1, maxItems: 7, description: 'Only on these weekdays.' },
-        window: { type: 'object', properties: { from: CLOCK, to: CLOCK }, required: ['from', 'to'], additionalProperties: false, description: 'Only between these times.' },
-        cron: { type: 'string', description: '5-field cron, e.g. "0 18 * * 1" (local time).' },
-        start: { type: 'string', description: 'First run not before (ISO or from now); default now.' },
-        until: { type: 'string', description: 'Last day or time (ISO date/datetime or from now).' },
+        times: { type: 'array', items: CLOCK, minItems: 1, maxItems: MAX_TIMES, description: 'Clock times each day, e.g. ["09:00", "18:00"].' },
+        days: { type: 'array', items: { type: 'string', enum: DAY_NAMES }, minItems: 1, maxItems: 7 },
+        window: { type: 'object', properties: { from: CLOCK, to: CLOCK }, required: ['from', 'to'], additionalProperties: false, description: 'Only between from and to.' },
+        cron: { type: 'string', description: '5-field cron, local time.' },
+        start: { type: 'string', description: 'First run not before; default now.' },
+        until: { type: 'string', description: 'Last day or time.' },
         count: { type: 'integer', minimum: 1, maximum: 10_000, description: 'Runs in total.' },
-        ifMissed: { type: 'string', enum: ['once', 'all', 'skip'], description: 'If the PC was off: one late run (default), every missed run, or skip.' },
+        ifMissed: { type: 'string', enum: ['once', 'all', 'skip'], description: 'After the PC was off: once (default), all or skip.' },
       },
     },
-    tz: { type: 'string', description: 'IANA time zone; default the profile time zone.' },
+    tz: { type: 'string', description: 'IANA time zone.' },
   },
 } as const;
 
-const SHAPE = 'Give when: {"once": "<time>"} or {"repeat": {"every" | "times" | "cron": …}}.';
+const SHAPE = 'Give when: {"at": "<time>"} or {"repeat": {"every" | "times" | "cron": …}}.';
 const ZONELESS = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EVERY = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hrs?|hours?|d|days?|w|weeks?)$/i;
@@ -92,14 +91,14 @@ function clock(value: string): string | undefined {
 
 /** Builds and validates a spec from the tool's `when`; returns an error line when unusable. */
 export function specFromWhen(when: WhenArgs | undefined, now: number, profileTz?: string): ScheduleSpec | string {
-  if (!when || typeof when !== 'object' || (when.once === undefined) === (when.repeat === undefined)) return SHAPE;
+  if (!when || typeof when !== 'object' || (when.at === undefined) === (when.repeat === undefined)) return SHAPE;
   const tz = when.tz || profileTz || undefined;
   if (tz) {
     try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); } catch { return 'Unknown time zone.'; }
   }
-  if (when.once !== undefined) {
-    const at = parsePoint(when.once, now, tz);
-    if (at === undefined) return `Cannot read the time "${when.once}".`;
+  if (when.at !== undefined) {
+    const at = parsePoint(when.at, now, tz);
+    if (at === undefined) return `Cannot read the time "${when.at}".`;
     if (at < now - 60_000) return 'That time is in the past.';
     return { at, tz, catchUp: 'once' };
   }

@@ -1,6 +1,6 @@
 // Opening one candidate step by step (FIND, wave 3): a page of a skill, a memory note or a reference. The version the
 // caller saw is compared: a newer skill text, corrected note or reference version is opened and said ("changed since
-// you found it"). A corrected note opens as the newest version of its chain and counts as used; its first line says
+// I found it"). A corrected note opens as the newest version of its chain and counts as used; its first line says
 // the day it was saved and its age. Another agent's own notes stay its own.
 // Owns: paging and the version check. Never: returns more than one page, or presents a document as instructions.
 
@@ -32,7 +32,7 @@ export interface Opened {
 
 const gone = (): never => { throw new WorkforceError('not_found', GONE); };
 const changedNote = (seen: string | undefined, now: string): string | undefined =>
-  seen && seen !== now ? `changed since you found it (version ${seen} → ${now})` : undefined;
+  seen && seen !== now ? `changed since I found it (version ${seen} → ${now})` : undefined;
 
 /** Pages of at most `max` characters, cut at a heading when one is near, else at a line. */
 export function pagesOf(text: string, max = PAGE_CHARS): Array<{ text: string; firstLine: number; lastLine: number }> {
@@ -53,14 +53,14 @@ export function pagesOf(text: string, max = PAGE_CHARS): Array<{ text: string; f
 }
 
 export function openSkill(services: RuntimeServices, caller: FindCaller, name: string, input: OpenInput, mode: ModeInfo | undefined): Opened {
-  const loaded = services.skills.get(name);
+  const loaded = services.skills.get(name, caller.agent?.id);
   if (!loaded) return gone();
   const candidate = skillFound(services, caller, loaded.info, mode, 1, [])!;
   const pages = pagesOf(loaded.body);
   const page = Math.min(Math.max(1, input.page ?? 1), pages.length);
   const shown = pages[page - 1];
   return {
-    candidate: { ...candidate, lines: { from: shown.firstLine, to: shown.lastLine }, why: 'opened' }, text: shown.text, page, pages: pages.length,
+    candidate: { ...candidate, lines: { from: shown.firstLine, to: shown.lastLine }, why: 'opened' }, text: page === 1 ? `(folder: ${loaded.info.path})\n\n${shown.text}` : shown.text, page, pages: pages.length,
     ...(changedNote(input.version, candidate.version) ? { changed: changedNote(input.version, candidate.version) } : {}),
   };
 }
@@ -74,7 +74,7 @@ export function openNote(services: RuntimeServices, caller: FindCaller, id: stri
   for (let step = 0; item?.expiredAt !== undefined && step < MAX_CORRECTIONS; step++) { // corrected or ended: the current version
     const next = services.db.get<{ id: string }>('SELECT id FROM knowledge WHERE supersedes = ? ORDER BY recorded_at DESC LIMIT 1', [item.id]);
     item = next ? services.knowledge.get(next.id) : undefined;
-    changed = item ? `corrected since you found it – this is the current version note:${item.id}` : undefined;
+    changed = item ? `corrected since I found it – this is the current version note:${item.id}` : undefined;
   }
   if (!item || item.expiredAt !== undefined) return gone();
   if (item.scope === 'agent' && caller.agent && item.scopeId && item.scopeId !== caller.agent.id) return gone(); // another agent's own note

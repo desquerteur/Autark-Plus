@@ -125,7 +125,7 @@ test('delta: the section goes again only when it changed; when it ends the sessi
     const one = volatileDelta(asSections(w.section()), undefined);
     assert.match(one.text, /Bob is editing src\/app\.ts \(just now, still working\)/);
     const two = volatileDelta(asSections(w.section()), one.sections);
-    assert.equal(two.text, 'Unchanged since my last turn: Working nearby.');
+    assert.equal(two.text, '', 'an unchanged section is not sent again');
     w.clock.advance(2 * MIN);
     const three = volatileDelta(asSections(w.section()), two.sections);
     assert.match(three.text, /\(2 min ago, still working\)/);

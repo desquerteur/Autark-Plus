@@ -1,20 +1,20 @@
-// The MCP hub: ONE Streamable-HTTP MCP server inside the runtime for every CLI engine run
-// (Claude Code, ACP agents …) instead of an MCP server copy per CLI process.
-// Each run gets a lease: a random 32-byte token mapped to the run's tool context (agent, run,
-// chat, task, mode, device). The HTTP server calls handle() for `POST /mcp/<token>` and for
-// `POST /mcp` with `Authorization: Bearer <token>`. JSON response mode only (no SSE):
-// initialize (version echo + Mcp-Session-Id), ping, tools/list (the agent's tools for its mode
-// under MCP-safe wire names), tools/call (→ ToolRegistry.call with the lease context, so validation,
-// idempotency and the run journal apply), notifications → 202, batches.
-// No resources (B-044: the secret area resources are gone; secrets are files and tools – secrets.list,
-// secrets.run – through that same tool path).
-// Releasing a lease aborts its in-flight calls; the token is rejected afterwards (401).
-// The 2026-07-28 stateless core works too: nothing here depends on initialize.
-// Owns: leases, the JSON-RPC/MCP method handling, version negotiation.
+// The MCP hub: ONE Streamable-HTTP MCP server inside the runtime for every CLI engine run (Claude Code, ACP agents
+// through acp/mcp-proxy.ts). Each run gets a lease: a random 32-byte token mapped to the run's tool context (agent,
+// run, chat, task, mode, device), reached as `POST /mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`.
+// JSON response mode only (no SSE): initialize (version echo + Mcp-Session-Id), ping, tools/list (the agent's direct
+// offer under MCP-safe wire names – the tool names the run's lease was given, S2: a resumed session's own; without them the
+// agent's current offer), tools/call (→ ToolRegistry.call with the lease context), notifications → 202,
+// batches. Releasing a lease aborts its in-flight calls; the token is rejected afterwards (401). Nothing depends on
+// initialize (the stateless 2026-07-28 core works too).
+// A call's id is the model's own tool-call id where the client sends it (Claude Code: params._meta
+// "claudecode/toolUseId"), so a re-sent call is the same call to the registry's idempotency and cut-off guard – as
+// Codex's call ids are. Without one it is a fresh process-wide "mcp-N": the JSON-RPC id restarts with every client
+// connection and could name another call, and a hash of the arguments would hand a deliberate repeat an old result.
+// Owns: leases, the JSON-RPC/MCP method handling, version negotiation, the call id.
 // AF-013: a turn that is not unlimited also lists access.prompt, Claude Code's permission prompt tool, which the hub answers
 // itself (access/prompt-tool.ts) – the one call that does not go through ToolRegistry.call.
-// Never: runs an agent's tool outside ToolRegistry.call, accepts an unknown token, logs tokens or tool
-// arguments, opens SSE streams or sends server-initiated requests.
+// Never: runs a tool outside ToolRegistry.call, accepts an unknown token, logs tokens or tool arguments, opens SSE
+// streams or sends server-initiated requests.
 
 import { randomBytes } from 'node:crypto';
 import type { McpHub, RuntimeServices } from '../contracts.ts';
@@ -24,13 +24,16 @@ import { toErrorData, WorkforceError } from '../../shared/errors.ts';
 import { classify, clip, isRecord, RPC_ERROR, rpcError, rpcResult, type JsonRpcId, type RpcResponse } from './jsonrpc.ts';
 import { errorResult, toCallResult, toMcpTool } from './convert.ts';
 import { McpToolNames } from './names.ts';
-import { engineOffer } from '../tools/learned.ts'; // B-049 F4
+import { engineOffer } from '../tools/learned.ts';
 import { ACCESS_PROMPT, ACCESS_PROMPT_SPEC, answerPrompt, promptToolWanted } from '../access/prompt-tool.ts'; // AF-013
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28'] as const;
 export const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const MAX_BATCH = 64;
 const MAX_TOKEN = 128;
+/** Where Claude Code puts the model's tool_use id in a tools/call (its CLI sends it with every call). */
+export const TOOL_USE_ID_META = 'claudecode/toolUseId';
+const CALL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 export type LeaseContext = Omit<ToolContext, 'services' | 'signal' | 'status'>;
 
@@ -52,6 +55,7 @@ interface LeaseState {
   controller: AbortController;
   inflight: Map<string, AbortController>; // JSON-RPC request id → call (notifications/cancelled)
   specs?: ToolSpec[]; // offered tools, computed once per lease (mode is fixed for a run)
+  tools?: readonly string[]; // the names the turn offers (S2: a resumed session's own)
 }
 
 type Reply = { response?: RpcResponse; sessionId?: string; invalid?: boolean } | undefined;
@@ -62,15 +66,15 @@ const PARSE_ERROR = Symbol('parse_error');
 export class Mcp implements McpHub {
   private readonly deps: McpDeps;
   private readonly leases = new Map<string, LeaseState>();
-  private callSeq = 0; // process-wide: call ids stay unique per run even across leases (failover)
+  private callSeq = 0; // process-wide: a fallback call id stays unique per run even across leases (failover)
 
   constructor(deps: McpDeps) {
     this.deps = deps;
   }
 
-  lease(ctx: LeaseContext): { url: string; token: string; release(): void } {
+  lease(ctx: LeaseContext, tools?: readonly string[]): { url: string; token: string; release(): void } {
     const token = randomBytes(32).toString('base64url');
-    const state: LeaseState = { ctx: { ...ctx }, controller: new AbortController(), inflight: new Map() };
+    const state: LeaseState = { ctx: { ...ctx }, controller: new AbortController(), inflight: new Map(), ...(tools ? { tools } : {}) };
     this.leases.set(token, state);
     return {
       url: `${this.base()}/mcp/${token}`,
@@ -207,14 +211,26 @@ export class Mcp implements McpHub {
   private specs(lease: LeaseState): ToolSpec[] {
     if (lease.specs) return lease.specs;
     const services = this.deps.services();
+    lease.specs = this.offer(lease, services);
+    if (promptToolWanted(services, lease.ctx) && !lease.specs.some((spec) => spec.name === ACCESS_PROMPT)) {
+      lease.specs = [...lease.specs, ACCESS_PROMPT_SPEC]; // AF-013: Claude Code's permission prompts
+    }
+    return lease.specs;
+  }
+
+  /** The tools a lease lists: the names its turn was given (S2), else the agent's current offer. */
+  private offer(lease: LeaseState, services: RuntimeServices): ToolSpec[] {
+    if (lease.tools) {
+      return lease.tools.flatMap((name) => {
+        const tool = services.tools.get(name);
+        return tool ? [{ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }] : [];
+      });
+    }
     let mode: ModeInfo;
     try { mode = services.modes.get(lease.ctx.mode); } catch { mode = services.modes.get('general'); }
-    // B-049 F4: core set + learned + tools.find/tools.call (as the turn's key). B-057 S8: a split's lease has no chat – its
-    // learned tools are its parent chat's (split-turn.ts offerScope), so a forked session gets the parent's exact list.
-    const scope = lease.ctx.conversationId ?? lease.ctx.split?.parentConversationId;
-    lease.specs = engineOffer(services, lease.ctx.agent, mode, { ownTools: true, via: 'mcp' }, scope);
-    if (promptToolWanted(services, lease.ctx)) lease.specs = [...lease.specs, ACCESS_PROMPT_SPEC]; // AF-013: Claude Code's permission prompts
-    return lease.specs;
+    // The core set + the agent's learned tools + tools.find/tools.call (as the turn's key) – a part's are its agent's,
+    // so a forked session gets the exact list it was forked with.
+    return engineOffer(services, lease.ctx.agent, mode, { ownTools: true, via: 'mcp' });
   }
 
   private async call(lease: LeaseState, id: JsonRpcId, params: Record<string, unknown>): Promise<RpcResponse> {
@@ -232,7 +248,7 @@ export class Mcp implements McpHub {
     try {
       const signal = AbortSignal.any([lease.controller.signal, call.signal]);
       if (name === ACCESS_PROMPT) return rpcResult(id, toCallResult(await answerPrompt(services, lease.ctx, args, signal))); // AF-013: a protocol hook, not an agent tool
-      const output = await services.tools.call(name, args, { ...lease.ctx, signal, status: () => {} }, `mcp-${++this.callSeq}`);
+      const output = await services.tools.call(name, args, { ...lease.ctx, signal, status: () => {} }, this.callId(params));
       return rpcResult(id, toCallResult(output));
     } catch (error) {
       // Tool failures are results the model can read, not protocol errors.
@@ -241,6 +257,12 @@ export class Mcp implements McpHub {
     } finally {
       if (lease.inflight.get(key) === call) lease.inflight.delete(key);
     }
+  }
+
+  /** The model's own tool-call id when the client sends one, else a fresh "mcp-N" (see the header). */
+  private callId(params: Record<string, unknown>): string {
+    const own = isRecord(params._meta) ? params._meta[TOOL_USE_ID_META] : undefined;
+    return typeof own === 'string' && CALL_ID.test(own) ? own : `mcp-${++this.callSeq}`;
   }
 
   private version(): string {

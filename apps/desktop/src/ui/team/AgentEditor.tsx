@@ -7,6 +7,7 @@
 import type { ComponentChildren } from 'preact';
 import { useId, useState } from 'preact/hooks';
 import type { ParamsOf } from '../../shared/api/methods.ts';
+import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import { Button } from '../lib/ui.tsx';
 import { agents, upsertById } from '../lib/store.ts';
@@ -63,7 +64,7 @@ export function AgentEditor(props: { agent: Agent; onDone: () => void }) {
         </Field>
       </div>
       <Field id={`${ids}-instructions`} label="Instructions" hint="Saved in SYSTEM.md in its agent folder.">
-        <textarea id={`${ids}-instructions`} class="input agent-instructions-input" rows={8} value={draft.instructions} maxLength={20_000}
+        <textarea id={`${ids}-instructions`} class="input agent-instructions-input" rows={8} value={draft.instructions} maxLength={MAX_SYSTEM_MD}
           onInput={(event) => set('instructions', text(event))} />
       </Field>
       <div class="agent-editor-actions">

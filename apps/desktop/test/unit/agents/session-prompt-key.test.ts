@@ -1,9 +1,14 @@
-// SES2 – session prompt key over the real chat store, context service (real stable prompt) and
-// run journal with a recording Codex-like engine (native sessions + dynamic tools): a mode switch
-// general → computer renews the session with the computer tools and the "Mode changed" note, a
-// changed tool offer in the same mode renews with fresh 'prompt', a row from before SES2
-// (migration 8 adds the columns as NULL) is accepted once, and the human mode switch over RPC
-// posts one quiet 'mode_switched' line.
+// SES2 / S2 (17.11.2026) – session prompt key over the real chat store, context service (real stable prompt) and
+// run journal with a recording Codex-like engine (native sessions + dynamic tools): a changed key no longer renews – the
+// agent's own mode switch general → computer, a changed tool offer and an edited SYSTEM.md keep the session on the system
+// text and tools it started with, the "My mode is now" note and the changed stable lines (was / now) come once in the live
+// block (again after a failed turn), and a session that starts anew takes the current prompt; a row from before SES2
+// (migration 8 adds the columns as NULL) is accepted once, and a chat has no mode of its own (13.11.2026: chats.update
+// After the review (18.11.2026): a session bound before the start record, whose key differs, gets every current section
+// once; the record is written only where a binding is saved, so a turn that ends without a session leaves it; a note no
+// engine read waits for the next turn.
+// writes no settings.mode and posts no line). B-089 (11.11.2026, live 10.11.: the models line moved every agent's stable
+// prompt by itself, 216 cold sessions in 26.7 h): a relist, a price and an account state keep the key; the line is volatile.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +18,8 @@ import { agent } from '../chat/harness.ts';
 import { OWNER, TestClient, rpcFixture } from '../rpc/s1-helpers.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
-import { promptKey } from '../../../src/runtime/agents/session-key.ts';
+import { SESSION_START_NS, promptKey } from '../../../src/runtime/agents/session-key.ts';
+import { saveOutputNotes } from '../../../src/runtime/media/outputs.ts';
 import { SCHEMA_VERSION } from '../../../src/runtime/db/migrate.ts';
 import { sql as sessionPromptKey } from '../../../src/runtime/db/migrations/008-session-prompt-key.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
@@ -38,7 +44,7 @@ function setup() {
   const vic = f.vid;
   const chat = f.chats.create({ title: 'Desk', agentIds: [vic.id], createdBy: 'human' });
   const calls: EngineTurnInput[] = [];
-  const state: { reply?: Reply; sessions: number; extraTool?: string } = { sessions: 0 };
+  const state: { reply?: Reply; sessions: number; extraTool?: string; callTool?: boolean } = { sessions: 0 };
   const caps: EngineCaps = { sessions: true, dynamicTools: true, mcp: false, images: false, rebase: true, structured: false, ownTools: true };
   const engine = {
     id: 'codex', caps,
@@ -50,9 +56,6 @@ function setup() {
   } as unknown as Engine;
   const models = new Map<string, ModelInfo>([['codex:sol', model('codex:sol', 'frontier', 'GPT Sol')]]);
   const route: RouteDecision = { modelId: 'codex:sol', engine: 'codex', accountId: 'acc_codex', effort: 'medium', category: 'chat', reason: 'test', by: 'rules', alternatives: [] };
-  const compacts: string[] = [];
-  const compact = f.context.compact.bind(f.context);
-  f.context.compact = (input) => { compacts.push(input.conversationId); return compact(input); };
   const acc = account('acc_codex', 'codex');
   Object.assign(s, {
     modes: { get: (key: string) => { const mode = MODES.get(key); if (!mode) throw new Error(`unknown mode ${key}`); return mode; }, list: () => [...MODES.values()] },
@@ -62,11 +65,11 @@ function setup() {
     catalog: { get: (id: string) => models.get(id), list: () => [...models.values()] },
     subconscious: {},
     tools: {
-      get: () => undefined,
+      get: (name: string) => (['tasks.list', 'computer.screenshot', 'computer.click', 'tools.call', state.extraTool].includes(name) ? spec(name) : undefined),
       // Device tools only in the computer workspace (as ToolRegistry.allowed does).
       specsFor: (_agent: unknown, mode: ModeInfo) => [
         spec('tasks.list'), ...(mode.workspace === 'computer' ? [spec('computer.screenshot'), spec('computer.click')] : []),
-        ...(state.extraTool ? [spec(state.extraTool)] : []),
+        ...(state.extraTool ? [spec(state.extraTool)] : []), ...(state.callTool ? [spec('tools.call')] : []),
       ],
       call: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
     },
@@ -75,14 +78,15 @@ function setup() {
   let runs = 0;
   const store = new SessionStore(f.db);
   return {
-    ...f, vic, chat, calls, state, compacts, store,
+    ...f, vic, chat, calls, state, store,
     send: (body: string) => f.chats.send({ conversationId: chat.id, body, authorId: 'human' }),
-    setMode: (mode: string) => f.chats.update(chat.id, { settings: { mode } }, 'human'),
+    setMode: (mode: string) => f.org.add({ ...f.org.require(vic.id), mode }), // the mode is the agent's own
+    setInstructions: (instructions: string) => f.org.add({ ...f.org.require(vic.id), instructions }),
     turn: () => new TurnExecutor(() => s).execute({
       runId: `run_${++runs}`, agentId: vic.id, conversationId: chat.id, reason: 'message', notes: [],
       signal: new AbortController().signal, control: { lastSeq: 0, steeredSeq: 0 },
     }),
-    binding: () => store.get(vic.id, chat.id, 'codex'),
+    binding: () => store.get(vic.id, 'main', 'codex'),
     notes: (runId: string) => s.runs.items(runId).filter((item) => item.kind === 'note' && item.name !== 'Answer').map((item) => item.data), // the final answer's item (B-047 D4) is no renewal note
   };
 }
@@ -91,7 +95,7 @@ const textOf = (input: EngineTurnInput | undefined) => (input?.input[0] as { tex
 const toolsOf = (input: EngineTurnInput | undefined) => (input?.tools ?? []).map((tool) => tool.name).sort();
 const keyOf = (input: EngineTurnInput) => promptKey(input.system.stable, input.tools.map((tool) => tool.name));
 
-test('general → computer renews the session: computer prompt and tools, the "Mode changed" note, fresh: mode', async () => {
+test('S2: general → computer keeps the session on the prompt and tools it started with; the note and the changed mode section come once', async () => {
   const h = setup();
   h.send('Hello');
   assert.equal((await h.turn()).status, 'done');
@@ -111,41 +115,112 @@ test('general → computer renews the session: computer prompt and tools, the "M
   h.setMode('computer');
   h.send('Take a screenshot of the desktop');
   assert.equal((await h.turn()).status, 'done');
-  const renewed = h.calls[2];
-  assert.equal(renewed.session, undefined, 'a fresh native session');
-  assert.deepEqual(toolsOf(renewed), ['computer.click', 'computer.screenshot', 'tasks.list'], 'the new session gets the computer tools');
-  assert.match(renewed.system.stable, /Look at the screen before every click/, 'and the computer mode prompt');
-  const text = textOf(renewed);
-  assert.match(text, /Mode changed from General to Computer\./);
-  assert.match(text, /Earlier messages:[\s\S]*Hello[\s\S]*Take a screenshot/, 'the full projection');
-  assert.deepEqual(h.notes('run_3'), [{ fresh: 'mode', from: 'general', to: 'computer' }]);
-  assert.deepEqual(h.compacts, [h.chat.id], 'renewed the SES1 way (compaction first)');
-  const second = h.binding()!;
-  assert.equal(second.ref, 'codex-s2');
-  assert.equal(second.mode, 'computer');
-  assert.equal(second.promptKey, keyOf(renewed));
+  const switched = h.calls[2];
+  assert.equal(switched.session?.ref, 'codex-s1', 'no renewal: the session resumes');
+  assert.equal(switched.system.stable, h.calls[0].system.stable, 'on the system text it started with');
+  assert.deepEqual(toolsOf(switched), ['tasks.list'], 'and its own tools – the computer ones are reachable through tools.call until it starts anew');
+  assert.match(textOf(switched), /My mode is now Computer \(was General\)\./);
+  assert.match(switched.system.volatile, /Parts of my standing text changed since this session began\.[\s\S]*## Mode: Computer\n(?:was: [^\n]*\n)*now: ## Mode: Computer[\s\S]*now: Look at the screen before every click\./, 'the mode section as changed lines in the live block');
+  assert.deepEqual(h.notes('run_3'), [], 'no fresh note');
+  assert.equal(h.binding()?.promptKey, first.promptKey, 'the binding keeps the key it started with');
+  assert.equal(h.binding()?.mode, 'computer');
 
   h.send('Click OK');
   await h.turn();
-  assert.equal(h.calls[3].session?.ref, 'codex-s2', 'the computer session is resumed');
-  assert.ok(!textOf(h.calls[3]).includes('Mode changed'), 'the note comes once');
+  assert.equal(h.calls[3].session?.ref, 'codex-s1');
+  assert.ok(!textOf(h.calls[3]).includes('My mode is now'), 'the note comes once');
+  assert.ok(!h.calls[3].system.volatile.includes('standing text changed'), 'the changed lines come once');
 });
 
-test('a changed tool offer in the same mode renews with fresh: prompt and no mode note', async () => {
+test('S2: a changed tool offer keeps the session and its own tools; "More tools" names the new one as a changed line', async () => {
   const h = setup();
+  h.state.callTool = true; // "More tools" lists what tools.call reaches beyond the direct tools
   h.send('Hello');
   await h.turn();
+  assert.ok(!h.calls[0].system.stable.includes('media.image'));
   h.state.extraTool = 'media.image';
   h.send('Draw a logo');
   await h.turn();
-  assert.equal(h.calls[1].session, undefined);
-  assert.deepEqual(toolsOf(h.calls[1]), ['media.image', 'tasks.list']);
-  assert.ok(!textOf(h.calls[1]).includes('Mode changed'));
-  assert.deepEqual(h.notes('run_2'), [{ fresh: 'prompt' }]);
-  assert.equal(h.binding()?.promptKey, keyOf(h.calls[1]));
+  assert.equal(h.calls[1].session?.ref, 'codex-s1', 'resumed');
+  assert.deepEqual(toolsOf(h.calls[1]), ['tasks.list', 'tools.call'], 'its own offer');
+  assert.equal(h.calls[1].system.stable, h.calls[0].system.stable);
+  assert.equal(keyOf(h.calls[1]), h.binding()?.promptKey, 'and the key it started with');
+  assert.ok(!textOf(h.calls[1]).includes('My mode is now'));
+  assert.deepEqual(h.notes('run_2'), []);
+  assert.match(h.calls[1].system.volatile, /## More tools[\s\S]*now: [^\n]*media\.image/, 'reachable through tools.call, named once');
 });
 
-test('a session row from before SES2 is reused once (stamped on acceptance); then the key decides', async () => {
+test('S2: my SYSTEM.md changes – the resumed session keeps its system text and gets the changed lines once; a failed turn sends them again; a new session takes the new text', async () => {
+  const h = setup();
+  h.setInstructions('# How I work\nI write tight.\n\n## My role\nDesk work.');
+  h.send('Hello');
+  await h.turn();
+  const started = h.calls[0].system.stable;
+  assert.match(started, /I write tight\./);
+
+  h.setInstructions('# How I work\nI write tight and warm.\n\n## My role\nDesk work.');
+  h.state.reply = () => ({ text: '', stop: 'error', error: { code: 'internal', message: 'The engine crashed.' } });
+  h.send('Next');
+  await h.turn();
+  assert.equal(h.calls[1].session?.ref, 'codex-s1');
+  assert.equal(h.calls[1].system.stable, started, 'the system text it started with');
+  assert.match(h.calls[1].system.volatile, /## My SYSTEM\.md\nwas: I write tight\.\nnow: I write tight and warm\./);
+
+  h.state.reply = undefined;
+  h.send('Again');
+  await h.turn();
+  assert.match(h.calls[2].system.volatile, /was: I write tight\.\nnow: I write tight and warm\./, 'the failed turn did not count: the lines come again');
+  h.send('Thanks');
+  await h.turn();
+  assert.ok(!h.calls[3].system.volatile.includes('standing text changed'), 'then not again');
+  assert.equal(h.calls[3].system.stable, started);
+
+  h.store.remove(h.vic.id, 'main', 'codex'); // the session starts anew (S1 decides when)
+  h.send('Fresh');
+  await h.turn();
+  assert.equal(h.calls[4].session, undefined);
+  assert.match(h.calls[4].system.stable, /I write tight and warm\./, 'a new session takes the current prompt');
+  assert.ok(!h.calls[4].system.volatile.includes('standing text changed'));
+  h.send('On');
+  await h.turn();
+  assert.equal(h.calls[5].system.stable, h.calls[4].system.stable, 'and keeps it');
+  assert.ok(!h.calls[5].system.volatile.includes('standing text changed'), 'the new start counts from itself');
+});
+
+test('B-089: a catalog relist, a new price and an account that cools keep the stable prompt and its key – the models line comes in the volatile delta', async () => {
+  const h = setup();
+  const s = h.services as unknown as Record<string, Record<string, unknown>>;
+  const sol = { ...model('codex:sol', 'frontier', 'GPT Sol'), accounts: ['acc_codex'], smarts: 90, price: { inputPerM: 2, outputPerM: 8, source: 'priors' as const } };
+  const extra = Array.from({ length: 12 }, (_, index) => ({ ...model(`codex:m${index}`, 'small', `Mini ${index}`), accounts: ['acc_codex'], smarts: 40 + index }));
+  let catalog = [sol, ...extra];
+  let state: 'ok' | 'cooling' = 'ok';
+  const accounts = () => [account('acc_codex', 'codex', { state }), account('acc_key', 'openai')];
+  Object.assign(s.catalog, { list: () => catalog, get: (id: string) => catalog.find((entry) => entry.id === id) });
+  Object.assign(s.accounts, { list: accounts, get: (id: string) => accounts().find((entry) => entry.id === id) });
+  h.send('Hello');
+  await h.turn();
+  const first = h.calls[0];
+  assert.ok(!first.system.stable.includes('Models I can use'), 'no models line in the stable prompt');
+  assert.match(first.system.volatile, /Models I can use [^\n]*GPT Sol \$2\/\$8 · 90 · plan[^\n]*\(\+5 more in models\.list\)/, 'the line in the first volatile text');
+
+  // What moves the line by itself (live 10.11.: "+387 more" → "+385 more"): a relist drops two models, the price changes, the account cools.
+  catalog = [{ ...sol, price: { inputPerM: 2.5, outputPerM: 10, source: 'priors' as const } }, ...extra.slice(2)];
+  state = 'cooling';
+  h.send('Next');
+  await h.turn();
+  const next = h.calls[1];
+  assert.equal(next.system.stable, first.system.stable, 'the stable prompt is byte-identical');
+  assert.equal(keyOf(next), keyOf(first), 'the same prompt key');
+  assert.equal(next.session?.ref, 'codex-s1', 'the session resumes');
+  assert.deepEqual(h.notes('run_2'), []);
+  assert.match(next.system.volatile, /Models I can use [^\n]*GPT Sol \$2\.5\/\$10 · 90 · plan[^\n]*\(\+3 more in models\.list\)/, 'the changed line comes in the delta');
+
+  h.send('Thanks');
+  await h.turn();
+  assert.ok(!h.calls[2].system.volatile.includes('Models I can use ('), 'unchanged: not sent again');
+});
+
+test('a session row from before SES2 is reused once (stamped on acceptance) and keeps going on a mode switch', async () => {
   const h = setup();
   assert.ok(SCHEMA_VERSION >= 8);
   h.send('Hello');
@@ -168,41 +243,127 @@ test('a session row from before SES2 is reused once (stamped on acceptance); the
   assert.equal(h.binding()?.promptKey, keyOf(h.calls[1]), 'stamped with the accepting turn\'s key');
   assert.equal(h.binding()?.mode, 'computer');
 
-  // From now on the key decides: back to general renews it.
+  // S2: back to general keeps the session too. The accepting turn ended without a session, so no start is recorded for it
+  // (the record is written where a binding is saved): what the session holds is unknown, and its stamped key differs from
+  // today's – it gets the current text and every current stable section once.
   h.state.reply = undefined;
   h.setMode('general');
   h.send('Thanks');
   await h.turn();
-  assert.equal(h.calls[2].session, undefined, 'not accepted a second time');
-  assert.deepEqual(h.notes('run_3'), [{ fresh: 'mode', from: 'computer', to: 'general' }]);
-  assert.match(textOf(h.calls[2]), /Mode changed from Computer to General\./);
-  assert.equal(h.binding()?.ref, 'codex-s2');
+  assert.equal(h.calls[2].session?.ref, 'codex-s1', 'no renewal');
+  assert.match(h.calls[2].system.stable, /## Mode: General\n/, 'the current text');
+  assert.match(h.calls[2].system.volatile, /Parts of my standing text changed since this session began\.[\s\S]*## Mode: General\nnow: ## Mode: General/, 'every section, once');
+  assert.deepEqual(h.notes('run_3'), []);
+  assert.match(textOf(h.calls[2]), /My mode is now General \(was Computer\)\./);
+  h.send('On');
+  await h.turn();
+  assert.equal(h.calls[3].system.stable, h.calls[2].system.stable, 'that turn is its start now');
+  assert.ok(!h.calls[3].system.volatile.includes('standing text changed'));
 });
 
-test('chats.update: a human mode switch posts one quiet mode_switched line', async (t) => {
+test('S2 fix: a session bound before the start record, whose prompt changed since, gets every current stable section once', async () => {
+  const h = setup();
+  h.send('Hello');
+  await h.turn();
+  const started = h.calls[0].system.stable;
+  // A session of the version before this one: its binding carries the key it started with, but no start record exists.
+  h.db.run('DELETE FROM kv WHERE ns = ?', [SESSION_START_NS]);
+  h.setInstructions('# How I work\nI write tight.\n\n## My role\nDesk work.');
+
+  h.send('Next');
+  await h.turn();
+  const after = h.calls[1];
+  assert.equal(after.session?.ref, 'codex-s1', 'the session is kept');
+  assert.ok(after.system.stable.includes('I write tight.'), 'without a record the turn passes the current text');
+  assert.match(after.system.volatile, /Parts of my standing text changed since this session began\./);
+  assert.match(after.system.volatile, /## My SYSTEM\.md\n(?:now: [^\n]*\n)*now: I write tight\./, 'every current section as "now" lines');
+  assert.ok(!after.system.volatile.includes('was: '), 'nothing is known of what it held');
+
+  h.send('Thanks');
+  await h.turn();
+  assert.ok(!h.calls[2].system.volatile.includes('standing text changed'), 'the record is its start now: once');
+  assert.equal(h.calls[2].system.stable, after.system.stable);
+  assert.notEqual(after.system.stable, started);
+});
+
+test('S2 fix: a session from before the start record whose first turn fails gets every current section again – its start counts once a turn ran through', async () => {
+  const h = setup();
+  h.send('Hello');
+  await h.turn();
+  h.db.run('DELETE FROM kv WHERE ns = ?', [SESSION_START_NS]);
+  h.setInstructions('# How I work\nI write tight.\n\n## My role\nDesk work.');
+
+  h.state.reply = () => ({ text: '', stop: 'error', error: { code: 'internal', message: 'The engine crashed.' } }); // the session stays bound
+  h.send('Next');
+  assert.equal((await h.turn()).status, 'failed');
+  assert.equal(h.calls[1].session?.ref, 'codex-s1');
+  assert.match(h.calls[1].system.volatile, /now: I write tight\./);
+
+  h.state.reply = undefined;
+  h.send('Again');
+  await h.turn();
+  assert.equal(h.calls[2].session?.ref, 'codex-s1');
+  assert.match(h.calls[2].system.volatile, /## My SYSTEM\.md\n(?:now: [^\n]*\n)*now: I write tight\./, 'the failed turn did not count: every section again');
+  h.send('Thanks');
+  await h.turn();
+  assert.ok(!h.calls[3].system.volatile.includes('standing text changed'), 'then not again');
+});
+
+test('S2 fix: a turn that ends without a session leaves the start record of the session that stands', async () => {
+  const h = setup();
+  h.send('Hello');
+  await h.turn();
+  const started = h.calls[0].system.stable;
+  const first = h.binding()!.promptKey;
+
+  // A turn on another account cannot resume this session (one account home per session), so it starts a fresh one – and ends
+  // without one (a sign-in error before the thread opens). The bound session and its start stay as they were.
+  h.db.run('UPDATE engine_sessions SET account_id = ? WHERE agent_id = ?', ['acc_other', h.vic.id]);
+  h.setInstructions('# How I work\nI write tight.\n\n## My role\nDesk work.');
+  h.state.reply = () => ({ text: '', stop: 'error', error: { code: 'unavailable', message: 'This account is not signed in.' }, session: undefined });
+  h.send('Next');
+  assert.equal((await h.turn()).status, 'failed');
+  assert.equal(h.calls[1].session, undefined, 'a fresh session was tried');
+
+  h.state.reply = undefined;
+  h.db.run('UPDATE engine_sessions SET account_id = ? WHERE agent_id = ?', ['acc_codex', h.vic.id]);
+  h.send('Again');
+  await h.turn();
+  const back = h.calls[2];
+  assert.equal(back.session?.ref, 'codex-s1', 'the old session is resumed');
+  assert.equal(back.system.stable, started, 'on the text it started with');
+  assert.equal(h.binding()?.promptKey, first);
+  assert.match(back.system.volatile, /## My SYSTEM\.md\nwas: Prefer short cuts\.[^\n]*\n(?:now: [^\n]*\n)*now: I write tight\./, 'the lines of the change it never got');
+});
+
+test('S2 fix: a note that no engine read waits for my next turn (the standard\'s among them)', async () => {
+  const h = setup();
+  const note = 'The team\'s standard for my SYSTEM.md changed with this version of the app.';
+  saveOutputNotes(h.db, 1, h.vic.id, [note]);
+  h.state.reply = () => ({ text: '', stop: 'error', error: { code: 'internal', message: 'The engine crashed.' } });
+  h.send('Hello');
+  assert.equal((await h.turn()).status, 'failed');
+  assert.ok(textOf(h.calls[0]).includes(note), 'it went out with the failed turn');
+
+  h.state.reply = undefined;
+  h.send('Next');
+  await h.turn();
+  assert.ok(textOf(h.calls[1]).includes(note), 'and comes again, because nothing of mine ran on it');
+  h.send('Thanks');
+  await h.turn();
+  assert.ok(!textOf(h.calls[2]).includes(note), 'the turn that ran on it took it');
+});
+
+test('chats.update: a chat has no mode – settings.mode is not written and posts no line', async (t) => {
   const f = rpcFixture();
   t.after(f.cleanup);
   Object.assign(f.services, { modes: { get: (key: string) => { const mode = MODES.get(key); if (!mode) throw new Error('unknown'); return mode; } } });
   f.org.add(agent('ag_ava', 'Ava'));
   const owner = new TestClient(f.server, OWNER);
   const chat = await owner.call<Conversation>('chats.create', { agentIds: ['ag_ava'] });
-  const lines = async () => (await owner.call<Message[]>('messages.list', { conversationId: chat.id })).filter((message) => message.meta.status?.type === 'mode_switched');
-
-  await owner.call('chats.update', { id: chat.id, settings: { mode: 'computer' } });
-  let switched = await lines();
-  assert.equal(switched.length, 1);
-  assert.equal(switched[0].body, 'Switched to Computer mode');
-  assert.equal(switched[0].kind, 'status');
-  assert.equal(switched[0].silent, true, 'quiet: no unread, no notification');
-  assert.deepEqual(switched[0].meta.status?.details, { to: 'computer', by: 'human' });
-
-  await owner.call('chats.update', { id: chat.id, settings: { mode: 'computer' } });
-  await owner.call('chats.update', { id: chat.id, title: 'Desk work' });
-  assert.equal((await lines()).length, 1, 'no line without a change');
-
-  await owner.call('chats.update', { id: chat.id, settings: { mode: null } });
-  switched = await lines();
-  assert.equal(switched.length, 2);
-  assert.equal(switched[1].body, 'Mode reset to the agent default');
-  assert.equal(f.wakeRows().filter((wake) => wake.reason === 'message').length, 0, 'status lines wake nobody');
+  const updated = await owner.call<Conversation>('chats.update', { id: chat.id, settings: { mode: 'computer' } });
+  assert.equal(updated.settings.mode, undefined, 'the mode is the agent\'s own');
+  const lines = (await owner.call<Message[]>('messages.list', { conversationId: chat.id })).filter((message) => message.meta.status?.type === 'mode_switched');
+  assert.equal(lines.length, 0);
+  assert.equal(f.wakeRows().filter((wake) => wake.reason === 'message').length, 0);
 });

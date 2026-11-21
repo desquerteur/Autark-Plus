@@ -50,7 +50,8 @@ test('key combos map to virtual keys with modifiers first; dangerous ones are re
   assert.deepEqual(parseCombo('ctrl++'), [0x11, 0xbb]);
   assert.throws(() => parseCombo('ctrl+banana'), /Unknown key "banana"/);
   assert.throws(() => parseCombo('a+b'), /one main key/);
-  assert.match(forbiddenCombo(parseCombo('ctrl+alt+delete')) ?? '', /secure screen/);
+  // B-080: the way on the lock screen itself, not "I ask the person"
+  assert.equal(forbiddenCombo(parseCombo('ctrl+alt+delete')), 'Ctrl+Alt+Delete counts only from a real keyboard; on the lock screen I click it or press space to reach the password field.');
   assert.match(forbiddenCombo(parseCombo('win+l')) ?? '', /lock/);
   assert.equal(forbiddenCombo(parseCombo('ctrl+c')), undefined);
 });

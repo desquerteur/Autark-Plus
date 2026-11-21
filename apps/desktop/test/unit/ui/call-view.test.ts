@@ -260,14 +260,16 @@ test('voice conversation: a muted call takes nothing and reports silence; unmute
   });
   await capture.open();
   capture.follow({ id: 'mic_1', conversationId: CHAT, status: 'listening' });
-  const run = (level: number, ms: number) => { for (let t = 0; t < ms; t += 85) { now += 85; feed!(new Float32Array(4096).fill(level), 48_000); } };
+  // a voice-like tone (upstream 0.3.16's capture ignores a constant signal): `level` is its amplitude
+  const tone = (level: number) => Float32Array.from({ length: 4096 }, (_, i) => level * Math.sin((2 * Math.PI * 220 * i) / 48_000));
+  const run = (level: number, ms: number) => { for (let t = 0; t < ms; t += 85) { now += 85; feed!(tone(level), 48_000); } };
   run(0.3, 400);
   run(0, 1400);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(recorders.length, 0, 'muted: no take started');
   assert.ok(levels.length > 0 && levels.every((level) => level === 0), 'the call view sees silence');
   muted = false;
-  run(0.3, 300);
+  run(0.3, 1200);
   run(0, 1400);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(utterances, ['file_1']);

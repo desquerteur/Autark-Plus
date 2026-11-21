@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { RepairState } from '../../shared/model/repair.ts';
-import { redactText } from '../feedback/redact.ts';
+import { redactText } from '../../shared/secrets/redact-text.ts';
 import { stamp } from '../portability/backup.ts';
 
 const LOG_BYTES = 64 * 1024;

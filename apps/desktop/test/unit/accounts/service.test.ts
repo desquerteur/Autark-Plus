@@ -1,12 +1,14 @@
 // AccountService (PR5) with the account harness: CLI accounts get their own home and the official
-// sign-in there, sign-out and remove touch only that account (homes deleted only as exactly
-// <accounts>/<provider>/<id>), a sign-in that cannot start never piles up accounts, typed keys go
+// sign-in there, sign-out and remove touch only that account (16.11.2026: remove deletes no home – a home is the
+// login's, which other companies on this PC may use), a sign-in that cannot start never piles up accounts, typed keys go
 // to the vault, and a key from the environment is used by its variable's name only – read
 // in-process, never stored, logged or sent (also through the RPC handlers); paid like a typed key.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
+import os from 'node:os';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { DismissedLogins } from '../../../src/runtime/accounts/dismissed.ts';
 import { signedOut } from '../../../src/runtime/accounts/cli-homes.ts';
 import { chargeOf } from '../../../src/runtime/models/pricing.ts';
@@ -23,12 +25,15 @@ import { ACCOUNTS, ENV_KEY, harness, row } from './harness.ts';
 
 const refusal = (pattern: RegExp) => (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request' && pattern.test(error.message);
 
-test('a Codex account gets its own home and the official sign-in there; sign-out and remove touch only that account', async () => {
-  const h = harness({ env: { OPENAI_API_KEY: ENV_KEY, PATH: '/usr/bin' } });
+test('a Codex account gets its own home and the official sign-in there; sign-out and remove touch only that account', async (t) => {
+  const accounts = mkdtempSync(path.join(os.tmpdir(), 'accounts-service-'));
+  t.after(() => rmSync(accounts, { recursive: true, force: true }));
+  const h = harness({ env: { OPENAI_API_KEY: ENV_KEY, PATH: '/usr/bin' }, accounts });
   const added = await h.service.add({ provider: 'codex', label: '  Work  ' });
-  const home = path.join(ACCOUNTS, 'codex', added.id);
+  const home = path.join(accounts, 'codex', added.id);
   assert.deepEqual([added.auth, added.state, added.label, added.home], ['cli', 'needs_login', 'Work', home]);
   assert.deepEqual(h.made, [home]);
+  mkdirSync(home, { recursive: true }); // the recorded mkdir, on disk: the sign-out mark is the home's note
   const [signIn] = h.signIns;
   assert.deepEqual(signIn.args, ['login']);
   assert.equal(signIn.options.env?.CODEX_HOME, home);
@@ -42,26 +47,22 @@ test('a Codex account gets its own home and the official sign-in there; sign-out
   assert.equal(signOut?.options.env?.CODEX_HOME, home);
   const out = h.service.get(added.id)!;
   assert.deepEqual([out.state, out.plan, out.limits], ['needs_login', undefined, undefined]);
-  assert.equal(signedOut.has(h.db, added.id), true, 'signed out here: a login from a linked PC stays out (devices/sync/logins.ts)');
+  const marked = { id: added.id, home };
+  assert.equal(signedOut.has(h.db, marked), true, 'signed out on this PC: a login from a linked PC stays out (devices/sync/logins.ts)');
 
   await h.service.remove(added.id);
-  assert.deepEqual(h.removed, [home]);
+  assert.deepEqual(readdirSync(path.join(accounts, 'codex')), [added.id], 'the home stays: it is the login\'s, not the row\'s');
   assert.equal(h.service.get(added.id), undefined);
-  assert.deepEqual(new DismissedLogins(h.db, () => 0).list(), [], 'an own-home account is never "dismissed" – detection does not find it');
+  assert.deepEqual(new DismissedLogins(h.db, () => 0).list(), [`codex:${added.id}`], 'dismissed here: the next detect does not adopt its home again');
 });
 
-test('remove deletes exactly <accounts>/<provider>/<its id> – never the default home, a provider folder or another account\'s home', async () => {
+test('remove drops only the row – no home is deleted, whatever its path', async () => {
   const h = harness();
   const codex = path.join(ACCOUNTS, 'codex');
   h.repo.save(row('acc_default', { provider: 'codex', auth: 'cli' }));
   h.repo.save(row('acc_folder', { provider: 'codex', auth: 'cli', home: codex }));
-  h.repo.save(row('acc_other', { provider: 'codex', auth: 'cli', home: path.join(codex, 'acc_victim') }));
-  h.repo.save(row('acc_nested', { provider: 'codex', auth: 'cli', home: path.join(codex, 'acc_nested', 'deeper') }));
-  h.repo.save(row('acc_cross', { provider: 'claude', auth: 'cli', home: path.join(codex, 'acc_cross') }));
-  h.repo.save(row('acc_outside', { provider: 'codex', auth: 'cli', home: path.resolve('elsewhere', 'codex', 'acc_outside') }));
   h.repo.save(row('acc_own', { provider: 'codex', auth: 'cli', home: path.join(codex, 'acc_own') }));
   for (const account of h.service.list()) await h.service.remove(account.id);
-  assert.deepEqual(h.removed, [path.join(codex, 'acc_own')]);
   assert.equal(h.service.list().length, 0);
 });
 

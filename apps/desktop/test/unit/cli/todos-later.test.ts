@@ -15,8 +15,8 @@ const M = 60_000;
 const H = 60 * M;
 
 const sign = task({ id: 'task_s', title: 'Sign the form', assigneeKind: 'human', status: 'open', dueAt: AT + H });
-const nap = task({ id: 'task_n', title: 'Take the bread out', assigneeKind: 'human', status: 'waiting', widget: { type: 'timer', label: 'Bread', at: new Date(AT - 5 * M).toISOString() }, waitingOn: { kind: 'schedule', reason: 'Snoozed', since: AT, until: AT + 30 * M } });
-const older = task({ id: 'task_o', title: 'Stretch', assigneeKind: 'human', status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Snoozed', since: AT } });
+const nap = task({ id: 'task_n', title: 'Take the bread out', assigneeKind: 'human', status: 'waiting', widget: { type: 'timer', label: 'Bread', at: new Date(AT - 5 * M).toISOString() }, waitingOn: { on: 'outside', why: 'Snoozed', since: AT, until: AT + 30 * M } });
+const older = task({ id: 'task_o', title: 'Stretch', assigneeKind: 'human', status: 'waiting', waitingOn: { on: 'outside', why: 'Snoozed', since: AT } });
 const dentist = task({ id: 'task_d', title: 'Dentist', assigneeKind: 'human', status: 'open', widget: { type: 'timer', label: 'Dentist', at: new Date(new Date(2026, 9, 23, 9, 0).getTime()).toISOString() }, dueAt: new Date(2026, 9, 23, 9, 0).getTime() });
 
 test('formatTodos: what is due now, then "Later (n):" with when each rings', () => {

@@ -1,10 +1,9 @@
 // "+ Chat" (B-050 K9): one searchable multi-select of the organisation's agents and people (people round,
-// agents square – the avatars' shapes) and an optional topic. Exactly one member and no topic opens the
-// pair's default 1:1 (chat/direct.ts – the chat that is named after the other member, K1/K2); with a topic
-// or several members it creates a chat (chats.create with agents, people and the topic as its title) –
-// repeated topic chats with the same member stay possible (new-chat.ts decides). The 16.10. rule "never
-// names chats after agents" is revised by K1/K2: the default 1:1 is named after the other member, and a
-// room started without a topic shows its other members' names per viewer until its first message names it.
+// agents square – the avatars' shapes) and an optional topic. "Start chat" always creates a new chat
+// (chats.create with agents, people and the topic as its title – new-chat.ts decides); without a topic it
+// shows its other members' names per viewer until its first message names it (K1/K2). Revised 12.11.2026:
+// one member without a topic used to open the pair's default 1:1 instead – the person saw no new chat; that
+// 1:1 is reached by "Message" (chat/direct.ts).
 // Owns: the dialog. Never: invents titles or fills the topic.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -15,7 +14,6 @@ import { rpc } from '../lib/rpc.ts';
 import { navigate } from '../lib/router.ts';
 import { newChatOpen } from '../lib/shell-state.ts';
 import { toastError } from '../lib/toasts.ts';
-import { directReachable, openDirect } from './direct.ts';
 import { newChatPlan } from './new-chat.ts';
 
 interface Choice { id: string; name: string; line: string; search: string }
@@ -54,13 +52,8 @@ export function NewChatDialog() {
     if (!plan || busy) return;
     setBusy(true);
     try {
-      if (plan.kind === 'direct' && directReachable(plan.memberId)) {
-        if (await openDirect(plan.memberId)) close();
-        return;
-      }
-      const made = plan.kind === 'direct' ? { agentIds: [plan.memberId], people: [] } : plan; // an agent without chats.direct (an older runtime): a new chat
       const chat = await rpc.call('chats.create', {
-        ...('title' in made && made.title ? { title: made.title } : {}), agentIds: made.agentIds, ...(made.people.length ? { people: made.people } : {}),
+        ...(plan.title ? { title: plan.title } : {}), agentIds: plan.agentIds, ...(plan.people.length ? { people: plan.people } : {}),
       });
       // The summary arrives via conversation.upserted; fetch it now so the row exists at once.
       const summary = await rpc.call('chats.get', { id: chat.id }).catch(() => null);

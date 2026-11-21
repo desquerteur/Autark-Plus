@@ -17,18 +17,6 @@ function setup() {
   return { ...f, chat, theirs, owner: new TestClient(f.server, OWNER), phone: new TestClient(f.server, PHONE) };
 }
 
-test('tasks.create without a chat makes a chat-free task the owner and her phone see and change', async (t) => {
-  const f = setup();
-  t.after(f.cleanup);
-  const before = f.chats.list({ includeHidden: true }).length;
-  const task = await f.phone.call<TaskView>('tasks.create', { title: 'Summarise the Travel Desk items', assigneeKind: 'agent', assigneeId: 'ag_ava' });
-  assert.equal(task.conversationId, undefined);
-  assert.equal(task.messageId, undefined, 'no anchor card');
-  assert.equal(f.chats.list({ includeHidden: true }).length, before, 'no chat was made for it');
-  assert.ok((await f.owner.call<TaskView[]>('tasks.list')).some((entry) => entry.id === task.id));
-  assert.equal((await f.phone.call<TaskView>('tasks.get', { id: task.id })).id, task.id);
-  assert.equal((await f.phone.call<TaskView>('tasks.update', { id: task.id, patch: { title: 'Summarise the items' } })).title, 'Summarise the items');
-});
 
 test('a client cannot set the origin – it is runtime-written', async (t) => {
   const f = setup();

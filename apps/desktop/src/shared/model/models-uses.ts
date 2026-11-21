@@ -72,7 +72,7 @@ export const USE_ABOUT: Readonly<Record<ModelUse, string>> = {
   video: 'Makes videos',
   music: 'Makes music and songs',
   sound: 'Makes sound effects',
-  embeddings: 'Makes files and memory searchable by meaning (this PC\'s small model comes first)',
+  embeddings: 'Searches files and memory by meaning with the model chosen here – without one, finding goes by words',
 };
 
 /** The uses as stored (settings.json routing.<use>). */

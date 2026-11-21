@@ -34,7 +34,7 @@ test('checking off stops the timer at the finish', async () => {
     const [kitchen] = (await f.day.add({ text: 'Küche aufräumen' }, HUMAN_ID)).tasks;
     f.day.focus(kitchen.id, 'start', HUMAN_ID);
     f.clock.advance(minutes * MIN);
-    f.s.tasks.complete(kitchen.id, done, HUMAN_ID);
+    f.s.tasks.finish(kitchen.id, { status: 'done' as const, ...done }, HUMAN_ID);
     const finished = f.s.tasks.get(kitchen.id)!;
     assert.deepEqual([finished.status, finished.spentMs, finished.timerStartedAt], ['done', minutes * MIN, undefined]);
     f.bus.emit('task.upserted', finished); // the same view again teaches nothing more
@@ -50,31 +50,7 @@ test("only the person's own to-dos: an agent's task, an unknown id and a finishe
   assert.throws(() => f.day.setEstimate(work.id, 30, HUMAN_ID), { code: 'bad_request' });
   assert.throws(() => f.day.focus('task_missing00000', 'start', HUMAN_ID), { code: 'not_found' });
   const [wash] = (await f.day.add({ text: 'Wäsche waschen' }, HUMAN_ID)).tasks;
-  f.s.tasks.complete(wash.id, done, HUMAN_ID);
+  f.s.tasks.finish(wash.id, { status: 'done' as const, ...done }, HUMAN_ID);
   assert.throws(() => f.day.focus(wash.id, 'start', HUMAN_ID), { code: 'conflict' });
 });
 
-test('given to an agent from Work while the timer runs: it stops at once and nothing is learned; stop works whoever owns it', async () => {
-  const f = dayFixture();
-  f.org.add(agent('ag_mara', 'Mara'));
-  const [taxes] = (await f.day.add({ text: 'Steuern erledigen' }, HUMAN_ID)).tasks;
-  f.day.focus(taxes.id, 'start', HUMAN_ID);
-  f.clock.advance(10 * MIN);
-  f.s.tasks.assign(taxes.id, { kind: 'agent', id: 'ag_mara' }, HUMAN_ID); // Work's owner field (tasks.update → assign)
-  const handed = f.s.tasks.get(taxes.id)!;
-  assert.deepEqual([handed.timerStartedAt, handed.spentMs], [undefined, 10 * MIN], 'stopped at the hand-over');
-  f.clock.advance(2 * 24 * 60 * MIN);
-  f.s.tasks.assign(taxes.id, { kind: 'human' }, HUMAN_ID); // back to the person two days later
-  assert.equal(f.s.tasks.get(taxes.id)!.spentMs, 10 * MIN, 'the days with Mara are not focus time');
-  assert.equal(f.s.estimates!.estimateFor({ ownerId: HUMAN_ID, title: 'Steuern erledigen' }).source, 'default', 'nothing learned');
-
-  // A timer left running from before (no listener heard the hand-over): day.focus stop still clears it.
-  f.day.stop();
-  const [mail] = (await f.day.add({ text: 'Post holen' }, HUMAN_ID)).tasks;
-  f.day.focus(mail.id, 'start', HUMAN_ID);
-  f.s.tasks.assign(mail.id, { kind: 'agent', id: 'ag_mara' }, HUMAN_ID);
-  assert.notEqual(f.s.tasks.get(mail.id)!.timerStartedAt, undefined);
-  f.clock.advance(MIN);
-  const stopped = f.day.focus(mail.id, 'stop', HUMAN_ID);
-  assert.deepEqual([stopped.timerStartedAt, stopped.spentMs], [undefined, MIN], 'a running timer stops whoever owns the task now');
-});

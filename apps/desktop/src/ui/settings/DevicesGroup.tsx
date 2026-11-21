@@ -1,36 +1,43 @@
-// Settings › Devices – the one connect surface: this PC's Remote ID (Copy); a PC or my phone asking here with its code
-// (Accept / Decline); "Connect a phone" with its QR code in a fixed box – for me (B-078, D5: the QR carries only this PC's
-// Remote ID as the pair link, phone.pairLink; the Android app scans or types it, both screens show the same code) or for
-// an employee (that person's invite: people.invite, its 6-digit code in the hint) –; the PCs on this network with
-// Connect; "Connect my other device" by
-// Remote ID or address – B-078: my own devices carry no role, the same company on both; joining a company as an employee
-// lives in the company menu's "+" (those PC rows are connect-rows.tsx, shared with the first run's Connect card); and one
-// row per device with a right-click menu: Rename, Remove.
-// On a phone or a person's browser: this browser's install (not inside a phone app) and notifications; inside the
-// iPhone web app also the honest line that iOS lets no app use other apps
-// (pwa.pushConfig / pwa.pushSubscribe – a person has their own variants, so their page subscribes like the owner's phone);
-// no Remote ID row there (it is the PC's own). Under it, on the PC, the connection rows (devices-connection.tsx).
-// Owns: the group, the phone and device rows. Never: shows keys or a link's secret as text (the 6-digit codes are meant to be typed).
+// Settings › Devices – the one connect surface, the same on the PC and – B-084 (D6) – on my phone (its secure tunnel
+// reaches remote.* / devices.* / phone.pairLink / people.invite; every row is gated by can(), never by the platform),
+// three groups with few rows:
+// "This phone" (a phone or a person's browser only): this browser's install (not inside a phone app), notifications
+// (pwa.pushConfig / pwa.pushSubscribe – a person has their own variants; inside the Android app one line that the app
+// shows them itself), inside the iPhone web app the honest line that iOS lets no app use other apps, and inside a phone
+// app "Forget this phone" (native.ts forgetThisPhone – the app asks first).
+// "Add a device": a PC or a phone asking here with its code (Accept / Decline) first; the PC's Remote ID (Copy);
+// "Connect a phone" with its QR code in a fixed box – for me (B-078, D5: the QR carries only the PC's Remote ID as the
+// pair link, phone.pairLink; the Android app scans or types it, both screens show the same code) or for an employee
+// (that person's invite: people.invite, its 6-digit code in the hint – a person-scoped join, whoever opened it); the PCs
+// on the PC's network with Connect; "Connect my other device" by Remote ID or address – B-078: my own devices carry no
+// role; joining a company as an employee lives in the company menu's "+" (those rows are connect-rows.tsx, shared with
+// the first run's Connect card).
+// "Devices": one row per device with a right-click / long-press menu (Rename, Remove); on touch a visible Remove in the
+// row's fixed slot; a PC's line ends with the app version it runs (F25, device-version.ts: "0.3.6 – behind <PC> 0.3.8").
+// Under it the connection rows (devices-connection.tsx), on the PC and my phone alike.
+// Owns: the groups, the phone and device rows. Never: shows keys or a link's secret as text (the 6-digit codes are meant to be typed).
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Device } from '../../shared/model/devices.ts';
 import type { Person } from '../../shared/model/people.ts';
+import type { RelayState } from '../../shared/model/relay.ts';
 import type { RemoteState } from '../../shared/model/remote.ts';
 import { confirm } from '../lib/dialog.tsx';
 import { listTime } from '../lib/format.ts';
 import { isPersonSession } from '../lib/people.ts';
-import { platform } from '../lib/platform.ts';
+import { isMobile, platform } from '../lib/platform.ts';
 import { errorText, rpc } from '../lib/rpc.ts';
 import { can, holds } from '../lib/session.ts';
 import { pushToast } from '../lib/toasts.ts';
 import { groupCode } from '../team/people-model.ts';
 import { disablePush, enablePush, installAvailable, isStandalone, promptInstall, pushStatus } from '../pwa/install.ts';
 import { act, Group, Row, Toggle, useAsync, useBusy } from './controls.tsx';
-import { inHostedApp, isPhoneApp } from '../pwa/native.ts';
+import { forgetThisPhone, inHostedApp, isAndroidApp, isPhoneApp } from '../pwa/native.ts';
 import { IOS_PHONE_USE } from '../pwa/hosted.ts';
-import { deviceHint, groupDigits, phoneDot, phoneQrHint, pushHint } from './connect-text.ts';
+import { deviceHint, FORGET_HINT, groupDigits, phoneDot, phoneQrHint, pushHint } from './connect-text.ts';
 import { ConnectRow, IncomingRow, NearbyRows, PersonSelect, RemoteIdRow, useConnectState, usePeople } from './connect-rows.tsx';
 import { ConnectionGroup } from './devices-connection.tsx';
+import { updateOffered, versionHint } from './device-version.ts';
 
 function useDevices() {
   const list = useAsync(() => (can('devices.list') ? rpc.call('devices.list') : Promise.resolve<Device[]>([])), []);
@@ -47,14 +54,16 @@ function useDevices() {
 
 // ------------------------------------------------------------------ phones
 
-/** `code`: the 6 digits an employee types under "I was invited"; for me the QR carries only this PC's Remote ID. */
-type Qr = { qrDataUrl: string; expiresAt?: number; code?: string };
+/** `code`: the 6 digits an employee types under "I was invited"; for me the QR carries only this PC's own Remote ID (`remoteId`). */
+type Qr = { qrDataUrl: string; expiresAt?: number; code?: string; remoteId?: string };
 /** As a person's invite says it with `reachable: false`. */
 const UNREACHABLE = 'Phones can’t reach this PC yet – ask the AI to open it to the same network or to set up Tailscale (skill phone-access).';
 
 /**
  * "Connect a phone": for me the QR of this PC's pair link (phone.pairLink – only the Remote ID; the Remote ID itself
  * first in the hint, so typing works as well), for an employee their invite with its 6-digit code, renewed at expiry.
+ * F17: the pair link's ID is this PC's own (not the person code the Remote ID row shows), so the phone's request comes
+ * to the PC whose screen shows the QR; the hint's digits are that same ID.
  */
 function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
   const [person, setPerson] = useState('');
@@ -69,7 +78,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
           if (!invite.reachable) throw new Error(UNREACHABLE);
           return { qrDataUrl: invite.qrDataUrl, expiresAt: invite.codeExpiresAt, code: invite.code };
         })
-        : can('phone.pairLink') ? await rpc.call('phone.pairLink').then((link) => ({ qrDataUrl: link.qrDataUrl })) : null;
+        : can('phone.pairLink') ? await rpc.call('phone.pairLink').then((link) => ({ qrDataUrl: link.qrDataUrl, remoteId: link.remoteId })) : null;
       if (mine === seq.current) { setQr(next); setError(undefined); }
     } catch (cause) {
       if (mine === seq.current) { setQr(null); setError(errorText(cause)); }
@@ -83,7 +92,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
   }, [qr]);
   const remoteId = props.remote?.self.remoteId;
   const text = error ?? phoneQrHint(Boolean(person));
-  const digits = !error ? (person ? qr?.code ?? '' : remoteId ?? '') : '';
+  const digits = !error ? (person ? qr?.code ?? '' : qr?.remoteId ?? '') : '';
   const code = digits && <><span class="remote-slot-code" aria-label={`${person ? 'Code' : 'Remote ID'} ${digits.split('').join(' ')}`}>{person ? groupCode(digits) : groupDigits(digits)}</span> · </>;
   const hint = <span title={digits ? `${digits} · ${text}` : text}>{code}{text}</span>;
   return (
@@ -98,7 +107,7 @@ function PhoneQr(props: { remote?: RemoteState; people: Person[] }) {
 
 // ------------------------------------------------------------------ the device list
 
-function DeviceRow(props: { device: Device; people: Person[] }) {
+function DeviceRow(props: { device: Device; people: Person[]; devices: Device[] }) {
   const { device } = props;
   const [renaming, setRenaming] = useState(false);
   const field = useRef<HTMLInputElement>(null);
@@ -113,26 +122,38 @@ function DeviceRow(props: { device: Device; people: Person[] }) {
   };
   const dot = device.kind === 'pc' ? device.status : phoneDot(device);
   const personName = (id: string) => props.people.find((person) => person.id === id)?.name;
+  const removable = !device.self && can('devices.revoke');
+  // Feedback 1b136d01 (19.11.2026): a PC behind the others updates from here with one click – its own Update button, pressed remotely
+  const updatable = updateOffered(device, props.devices) && can('system.update');
+  const update = () => act(async () => {
+    await rpc.call('system.update', device.self ? {} : { device: device.id });
+    pushToast({ title: `${device.name} is updating`, body: 'It closes, installs the new version and starts again by itself.' });
+  }, 'Could not update');
   const label = renaming
     ? <input ref={field} class="set-input" aria-label="Device name" maxLength={60} defaultValue={device.name}
       onBlur={(event) => finish(event.currentTarget.value)}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { event.currentTarget.value = device.name; event.currentTarget.blur(); } }} />
     : <><span class={`dot ${dot}`} aria-hidden="true" /> {device.name}</>;
+  // B-084: on touch Remove is a visible button – always there on a removable row, so nothing shifts; Rename stays in the long-press menu
   return (
-    <Row class="device-row" label={label} hint={deviceHint(device, personName, listTime)} reserve
+    <Row class="device-row" label={label} hint={[deviceHint(device, personName, listTime), versionHint(device, props.devices)].filter(Boolean).join(' · ')} reserve
       menu={() => [{ items: [
         ...(can('devices.rename') ? [{ label: 'Rename', onSelect: () => setRenaming(true) }] : []),
-        ...(!device.self && can('devices.revoke') ? [{ label: 'Remove', danger: true, onSelect: () => void remove() }] : []),
-      ] }]} />
+        ...(removable ? [{ label: 'Remove', danger: true, onSelect: () => void remove() }] : []),
+      ] }]}>
+      {updatable && <button type="button" class="button small" title={`Update ${device.name} to the newest version`} onClick={() => void update()}>Update</button>}
+      {isMobile.value && removable ? <button type="button" class="button ghost small danger" onClick={() => void remove()}>Remove</button> : undefined}
+    </Row>
   );
 }
 
 // ------------------------------------------------------------------ on a phone
 
-/** This browser's install and notifications ("On" = the PC holds its subscription). */
+/** This browser's install and notifications ("On" = the PC holds its subscription), Forget inside a phone app. */
 function BrowserRows() {
   const [busy, run] = useBusy();
-  const status = useAsync(() => pushStatus(), []);
+  const androidApp = isAndroidApp(); // the app shows notifications itself: no web push switch there
+  const status = useAsync(() => (androidApp ? Promise.resolve(undefined) : pushStatus()), []);
   const change = (on: boolean) => void run(async () => {
     const result = await (on ? enablePush() : disablePush());
     pushToast({ title: result.message, tone: result.ok ? 'info' : 'error' });
@@ -140,9 +161,9 @@ function BrowserRows() {
   });
   const current = status.data;
   const iosTab = (inHostedApp() || /iPhone|iPad|iPod/.test(navigator.userAgent)) && !isStandalone();
-  const hint = pushHint(current, { person: isPersonSession(), chat: holds('chat'), iosTab });
+  const hint = pushHint(current, { person: isPersonSession(), chat: holds('chat'), iosTab, androidApp });
   return (
-    <>
+    <Group title={isMobile.value || isPhoneApp() ? 'This phone' : 'This browser'} id="settings-this-phone">
       {!isStandalone() && !isPhoneApp() && (
         <Row label="Install app" hint={installAvailable.value ? undefined : 'Use “Add to Home Screen” in the browser menu'}>
           {installAvailable.value && <button type="button" class="button ghost small" onClick={() => void promptInstall()}>Install</button>}
@@ -153,7 +174,28 @@ function BrowserRows() {
         {(current === 'off' || current === 'blocked') && <button type="button" class="button ghost small" disabled={busy} onClick={() => change(true)}>Turn on</button>}
       </Row>
       {inHostedApp() && <Row label="Phone use" hint={IOS_PHONE_USE} />}
-    </>
+      {isPhoneApp() && (
+        <Row label="Forget this phone" hint={FORGET_HINT}>
+          <button type="button" class="button ghost small danger" onClick={forgetThisPhone}>Forget</button>
+        </Row>
+      )}
+    </Group>
+  );
+}
+
+/** "Add a device": requests waiting here first, then the PC's Remote ID, the phone QR, PCs nearby and Connect by ID. */
+function AddRows(props: { people: Person[]; remote?: RemoteState; relay?: RelayState }) {
+  const [error, setError] = useState<string | null>(null);
+  const incoming = props.remote?.incoming ?? [];
+  if (!incoming.length && !can('remote.state') && !can('remote.nearby') && !can('remote.connect')) return null;
+  return (
+    <Group title="Add a device" id="settings-add-device">
+      {incoming.map((request) => <IncomingRow key={request.id} request={request} people={props.people} />)}
+      {can('remote.state') && <RemoteIdRow remote={props.remote} relay={props.relay} />}
+      {can('remote.state') && <PhoneQr remote={props.remote} people={props.people} />}
+      {can('remote.nearby') && <NearbyRows role="ceo" onError={setError} />}
+      {can('remote.connect') && <ConnectRow remote={props.remote} role="ceo" error={error} onError={setError} />}
+    </Group>
   );
 }
 
@@ -163,21 +205,19 @@ export function DevicesGroup() {
   const devices = useDevices();
   const people = usePeople();
   const { remote, relay } = useConnectState();
-  const [error, setError] = useState<string | null>(null);
   const list = (devices.data ?? []).filter((device) => device.status !== 'revoked' && device.status !== 'pairing')
     .sort((a, b) => Number(b.self) - Number(a.self) || Number(b.kind === 'pc') - Number(a.kind === 'pc') || a.name.localeCompare(b.name));
   return (
     <>
-      <Group title="Devices" id="settings-devices" hint={devices.error ?? undefined}>
-        {platform !== 'desktop' && <BrowserRows />}
-        {platform === 'desktop' && can('remote.state') && <RemoteIdRow remote={remote.data} relay={relay.data} />}
-        {(remote.data?.incoming ?? []).map((request) => <IncomingRow key={request.id} request={request} people={people} />)}
-        {platform === 'desktop' && can('remote.state') && <PhoneQr remote={remote.data} people={people} />}
-        {can('remote.nearby') && <NearbyRows role="ceo" onError={setError} />}
-        {can('remote.connect') && <ConnectRow remote={remote.data} role="ceo" error={error} onError={setError} />}
-        {list.map((device) => <DeviceRow key={device.id} device={device} people={people} />)}
-      </Group>
-      {platform === 'desktop' && can('settings.update') && can('remote.relay') && <ConnectionGroup relay={relay.data} findable={remote.data?.self.findable} />}
+      {platform !== 'desktop' && <BrowserRows />}
+      <AddRows people={people} remote={remote.data} relay={relay.data} />
+      {can('devices.list') && (
+        <Group title="Devices" id="settings-devices" hint={devices.error ?? undefined}>
+          {list.map((device) => <DeviceRow key={device.id} device={device} people={people} devices={list} />)}
+        </Group>
+      )}
+      {/* my phone too: a secure 'settings' device writes the 'devices' section (handlers/system.ts) – remote.relay needs that transport */}
+      {can('settings.update') && can('remote.relay') && <ConnectionGroup relay={relay.data} findable={remote.data?.self.findable} />}
     </>
   );
 }

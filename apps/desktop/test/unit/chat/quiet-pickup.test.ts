@@ -6,15 +6,14 @@
 // in a group only by the agents a normal line would address (lead, reply mode 'all', the replied agent),
 // never for a line that @mentions anyone. Round 3: a delayed pickup (an agent with nothing to do) merges a burst
 // into one wake, the idle moment makes a waiting one due now, lines read meanwhile withdraw it; which arriving
-// lines count (quietPickupLine). Live run A: a colleague's quiet answer to the agent's normal line in a room of two
-// agents is the agent's to pick up (quietAnswerPeer) – a quiet line after a quiet one still closes; round 4: within
-// seconds (QUIET_ANSWER_DELAY_MS), while a person's quiet lines keep the two-minute bundling.
+// lines count (quietPickupLine). 13.11.2026: an agent's quiet line is nobody's to
+// pick up (it is for the record).
 // Owns: these assertions only. Never: real engines, timers or network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID } from '../../../src/shared/ids.ts';
-import { MAX_QUIET_CHATS, QUIET_ANSWER_DELAY_MS, QUIET_DELAY_MS, QUIET_NOTE, QUIET_WINDOW_MS, pickUpQuiet, quietAnswerPeer, quietPickupLine, quietWakeKey } from '../../../src/runtime/chat/quiet-pickup.ts';
+import { MAX_QUIET_CHATS, QUIET_DELAY_MS, QUIET_NOTE, QUIET_WINDOW_MS, pickUpQuiet, quietPickupLine, quietWakeKey } from '../../../src/runtime/chat/quiet-pickup.ts';
 import { agent, harness } from './harness.ts';
 
 function setup() {
@@ -139,61 +138,6 @@ test('round 3: a delayed pickup is due later and merges a burst; the idle moment
   h.db.run(`UPDATE members SET read_seq = 100 WHERE conversation_id = ? AND member_id = 'ag_tom'`, [b.id]); // another turn read it
   assert.deepEqual(h.pickUp('ag_tom', QUIET_DELAY_MS), []);
   assert.deepEqual(due().map((row) => row[1]), [a.id], 'the waiting pickup of the read lines is withdrawn');
-});
-
-test("live run A: in a room of two agents a colleague's quiet answer to the agent's normal line is its to pick up – not one after a quiet line, one that mentions, one in a larger room, nor by its author", () => {
-  const h = setup();
-  const room = h.chats.create({ agentIds: ['ag_tom', 'ag_mara'], humans: false, createdBy: 'ag_tom' });
-  const post = (authorId: string, body: string, extra: Record<string, unknown> = {}) => h.chats.send({ conversationId: room.id, authorId, authorKind: 'agent', body, ...extra });
-  const ask = post('ag_tom', 'My shortlist: Notelo, Jotnest. What would you suggest?');
-  assert.deepEqual(h.wakeRows().map((row) => row.agent_id), ['ag_mara'], 'K3: his normal line wakes her');
-  h.db.run('DELETE FROM wakes');
-  const vote = post('ag_mara', 'My vote is Notelo – let us choose it.', { silent: true });
-  assert.deepEqual(h.wakeRows(), [], 'the quiet answer wakes nobody now');
-  assert.equal(quietAnswerPeer(h.chats, vote), 'ag_tom', 'delivery tells the dispatcher: the asker picks it up when free');
-  assert.equal(quietAnswerPeer(h.chats, ask), undefined, 'a normal line is delivered as usual');
-  assert.deepEqual(h.pickUp('ag_mara'), [], 'never by its author');
-  assert.deepEqual(h.pickUp(), [room.id], 'the asker – before, it never learned the answer');
-  assert.deepEqual(h.wakeRows().map((row) => [row.agent_id, row.reason, row.note]), [['ag_tom', 'review', QUIET_NOTE]]);
-  assert.deepEqual(h.pickUp(), [], 'once');
-
-  // [[silent]] still closes: a quiet line after a quiet one, or one that mentions (it woke at once), is nobody's to pick up.
-  const closing = post('ag_tom', 'Notelo it is.', { silent: true });
-  assert.equal(quietAnswerPeer(h.chats, closing), undefined);
-  assert.deepEqual(h.pickUp('ag_mara'), []);
-  post('ag_tom', 'And a tagline?');
-  const mentioned = post('ag_mara', '@Tom Quick to capture.', { silent: true, mentions: ['ag_tom'] });
-  assert.equal(quietAnswerPeer(h.chats, mentioned), undefined);
-
-  // A larger room, or a room of an agent and the person: no pickup of an agent's line.
-  const group = h.chats.create({ agentIds: ['ag_tom', 'ag_mara'], createdBy: HUMAN_ID });
-  h.chats.send({ conversationId: group.id, authorId: 'ag_tom', authorKind: 'agent', body: 'Mara, your pick?' });
-  const inGroup = h.chats.send({ conversationId: group.id, authorId: 'ag_mara', authorKind: 'agent', body: 'Notelo', silent: true });
-  assert.equal(quietAnswerPeer(h.chats, inGroup), undefined);
-  const withOwner = h.chats.create({ agentIds: ['ag_tom'], createdBy: HUMAN_ID });
-  h.chats.send({ conversationId: withOwner.id, authorId: HUMAN_ID, body: 'Which one?' });
-  const toOwner = h.chats.send({ conversationId: withOwner.id, authorId: 'ag_tom', authorKind: 'agent', body: 'Notelo', silent: true });
-  assert.equal(quietAnswerPeer(h.chats, toOwner), undefined);
-  h.db.run('DELETE FROM wakes');
-  assert.deepEqual([h.pickUp(), h.pickUp('ag_mara')], [[], []]);
-});
-
-test("round 4: a delayed pickup of a colleague's quiet answer is due within seconds – a person's quiet line keeps QUIET_DELAY_MS", () => {
-  const h = setup();
-  const due = () => h.wakeRows().map((row) => [row.conversation_id, row.due_at - h.clock.now()]);
-  const room = h.chats.create({ agentIds: ['ag_tom', 'ag_mara'], humans: false, createdBy: 'ag_tom' });
-  h.chats.send({ conversationId: room.id, authorId: 'ag_tom', authorKind: 'agent', body: 'Notelo or Jotnest?' });
-  h.db.run('DELETE FROM wakes');
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mara', authorKind: 'agent', body: 'Notelo.', silent: true });
-  assert.ok(QUIET_ANSWER_DELAY_MS > 0 && QUIET_ANSWER_DELAY_MS <= 5_000, 'a few seconds');
-  assert.deepEqual(h.pickUp('ag_tom', QUIET_DELAY_MS), [room.id]);
-  assert.deepEqual(due(), [[room.id, QUIET_ANSWER_DELAY_MS]], 'live run A3: 2 of 2:34 min were this wait');
-  const solo = h.chat();
-  h.clock.advance(1000);
-  h.quiet(solo.id, 'For later: the client prefers blue');
-  assert.deepEqual(h.pickUp('ag_tom', QUIET_DELAY_MS), [solo.id], 'the answer is not picked up twice');
-  assert.deepEqual(due(), [[room.id, QUIET_ANSWER_DELAY_MS - 1000], [solo.id, QUIET_DELAY_MS]], "a person's quiet lines still bundle for two minutes");
-  assert.deepEqual(h.pickUp(), [solo.id, room.id], 'the agent is done: both are due now (newest first)');
 });
 
 test('round 3: quietPickupLine – only a person\'s final quiet text or answer that mentions nobody and is no call line', () => {

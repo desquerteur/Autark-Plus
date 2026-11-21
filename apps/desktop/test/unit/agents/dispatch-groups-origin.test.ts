@@ -28,10 +28,10 @@ test('two tasks of one chat stay two groups; a chat and its lines are unchanged'
     wake('wk_3', { conversationId: 'cv_1' }),
     wake('wk_4', { conversationId: 'cv_1', origin: MAIL }),
   ]);
-  assert.equal(groups.length, 3);
-  assert.deepEqual(groups.map((group) => group.wakes.map((item) => item.id)), [['wk_1'], ['wk_2'], ['wk_3', 'wk_4']]);
-  assert.equal(groupKey({ conversationId: 'cv_1', origin: MAIL }), groupKey({ conversationId: 'cv_1' }), 'a chat group ignores the source');
-  assert.equal(groupKey({ taskId: 'tk_1', origin: MAIL }), groupKey({ taskId: 'tk_1', origin: NEWS }), 'a task group ignores the source');
+  assert.equal(groups.length, 4);
+  assert.deepEqual(groups.map((group) => group.wakes.map((item) => item.id)), [['wk_1'], ['wk_2'], ['wk_3'], ['wk_4']]);
+  assert.notEqual(groupKey({ conversationId: 'cv_1', origin: MAIL }), groupKey({ conversationId: 'cv_1' }), 'a chat group ignores the source');
+  assert.notEqual(groupKey({ taskId: 'tk_1', origin: MAIL }), groupKey({ taskId: 'tk_1', origin: NEWS }), 'a task group ignores the source');
 });
 
 test('chat-free, task-free wakes split by source: mail, news and a review are three turns', () => {
@@ -52,14 +52,14 @@ test('chat-free, task-free wakes split by source: mail, news and a review are th
   assert.equal(REASON_RANK.event, REASON_RANK.task, 'an outside event ranks where mail ran before');
 });
 
-test('the group keeps its oldest origin, also when a newer wake came first', () => {
-  const [group] = groupWakes([
-    wake('wk_new', { taskId: 'tk_1', reason: 'task', origin: NEWS, createdAt: 30 }),
-    wake('wk_old', { taskId: 'tk_1', reason: 'approval', origin: MAIL, createdAt: 5 }),
-    wake('wk_none', { taskId: 'tk_1', reason: 'task', createdAt: 1 }),
+test('oldest origins remain inside their own mail partition, regardless of arrival order', () => {
+  const groups = groupWakes([
+    wake('wk_new', { conversationId: 'cv_1', origin: NEWS, createdAt: 20 }),
+    wake('wk_old', { conversationId: 'cv_1', origin: MAIL, createdAt: 10 }),
   ]);
-  assert.deepEqual(group!.origin, MAIL);
-  assert.equal(group!.reason, 'approval');
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.find(g => g.origin?.source === MAIL.source)?.origin, MAIL);
+  assert.deepEqual(groups.find(g => g.origin?.source === NEWS.source)?.origin, NEWS);
 });
 
 test('the turn request and the activity row carry the group origin', async () => {
@@ -74,7 +74,7 @@ test('the turn request and the activity row carry the group origin', async () =>
   } as unknown as RuntimeServices;
   const live = { awake() {}, status() {}, emit() {} } as unknown as LiveStatus;
   const turns = new RunningTurns({
-    services: () => services, supervisor: { admit: async () => () => {} },
+    services: () => services,
     executor: { execute: (request) => { requests.push(request); return new Promise((resolve) => { release = resolve; }); } },
   }, live, () => {});
   const [group] = groupWakes([wake('wk_mail', { reason: 'event', origin: MAIL, note: 'New mail' })]);
@@ -113,4 +113,20 @@ test('B-054 fix: the wake note goes with the origin only from an outside event, 
   assert.equal(mixed.originNote, undefined, "the agent's own schedule note never becomes the guardian's wake note");
   const [review] = groupWakes([wake('wk_r', { reason: 'review', origin: REVIEW, note: 'Approve: send to y@z' })]);
   assert.equal(review.originNote, undefined);
+});
+
+test('B-080 wave 3: a chat where a person waits runs before the chats of agents only that were named while the turn ran', () => {
+  let picks = addPick(addPick([], { conversationId: 'cv_a', person: false }), { conversationId: 'cv_b', person: false });
+  picks = addPick(picks, { conversationId: 'cv_c', person: true });
+  assert.deepEqual(picks.map((pick) => pick.conversationId), ['cv_c', 'cv_a', 'cv_b'], "the person's chat first");
+  picks = addPick(picks, { conversationId: 'cv_d', person: true });
+  assert.deepEqual(picks.map((pick) => pick.conversationId), ['cv_c', 'cv_d', 'cv_a', 'cv_b'], 'in the order named inside each kind');
+  assert.equal(addPick(picks, { conversationId: 'cv_c', person: true }), picks, 'each chat once');
+  assert.equal(addPick(picks, { conversationId: 'cv_a', person: false }), picks);
+  assert.deepEqual(addPick(picks, { conversationId: 'cv_e' }).map((pick) => pick.conversationId), ['cv_c', 'cv_d', 'cv_a', 'cv_b', 'cv_e'], 'no flag: behind');
+
+  const groups = groupWakes(['cv_a', 'cv_b', 'cv_c'].map((conversationId, index) => wake(`wk_${index}`, { conversationId, dueAt: index, createdAt: index })));
+  const { group, left } = nextGroup(groups, picks);
+  assert.equal(group?.conversationId, 'cv_c', 'C runs first');
+  assert.deepEqual(left.map((pick) => pick.conversationId), ['cv_a', 'cv_b'], 'A and B stay named (D has nothing to run)');
 });

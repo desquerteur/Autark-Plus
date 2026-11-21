@@ -1,6 +1,6 @@
-// Tool interface: what agents can do, exposed identically to every engine
-// (Codex dynamic tools, Claude/ACP agents via the MCP hub, HTTP engines via function calling).
-// Owns: tool definition, call context and output shape.
+// Tool interface: what agents can do, exposed identically to every engine (Codex dynamic tools, Claude/ACP agents
+// via the MCP hub, HTTP engines via function calling); an engine gets its core set directly (core-sets.ts), the rest via tools.call.
+// Owns: tool definition, call context, output shape and the argument schemas several tools share.
 
 import type { Agent } from '../../shared/model/org.ts';
 import type { RuntimeServices } from '../contracts.ts';
@@ -12,7 +12,7 @@ export type JsonSchema = Record<string, unknown>;
 
 export interface ToolSpec {
   name: string; // dotted lowercase, e.g. "tasks.create", "computer.click"
-  description: string; // one or two sentences: what + when
+  description: string; // first sentence verb-first, standing alone (≤ 90 chars, the More tools line); then first person
   inputSchema: JsonSchema;
 }
 
@@ -35,8 +35,33 @@ export interface ToolOutput {
 export const DEVICE_ARG = 'device';
 export const DEVICE_PROPERTY: JsonSchema = Object.freeze({
   type: 'string', minLength: 1, maxLength: 120,
-  description: "PC to run on: a name or id from devices.list, or 'this'. Default: the PC I work on.",
+  description: "A PC from devices.list or 'this'; default the PC I work on.",
 });
+
+/** Shared argument schemas: one text per meaning, used by every tool that takes that argument. */
+export const CHAT_ID_PROPERTY: JsonSchema = Object.freeze({ type: 'string', description: 'Default this chat.' });
+/** A chat message by its number; tools taking it also take messageId. */
+export const SEQ_PROPERTY: JsonSchema = Object.freeze({ type: 'integer', minimum: 1, description: "The message's number as chat.read shows it, or messageId." });
+/** A stored file (media/): its 64-character hash, or a media: reference. */
+export const FILE_ID_PROPERTY: JsonSchema = Object.freeze({ type: 'string', minLength: 64, maxLength: 1000, description: 'The 64-character name at the end of the file\'s "stored at" path.' });
+/** A task by its id; the task tools that take it default to this turn's task. */
+export const TASK_ID_PROPERTY: JsonSchema = Object.freeze({ type: 'string', description: "Default this turn's task." });
+/** A time as the task tools read it (dueAt, until). */
+export const WHEN_PROPERTY: JsonSchema = Object.freeze({
+  type: 'string',
+  description: 'An ISO time ("2026-11-16T07:00", this PC\'s zone without one), a date ("2026-11-16", 00:00 here), a duration ("PT2H") or "+3h" / "in 2d"; "" clears it.',
+});
+/**
+ * The model of work whose context starts here (agents.create – a new colleague). 17.11.2026 (measured: described as "cheaper
+ * or stronger than mine", the field was used three times in 56 hand-overs, each time "strong" by a giver on the strongest
+ * model): described by what the work asks for, not relative to the one who gives it.
+ */
+export const MODEL_PROPERTY: JsonSchema = Object.freeze({
+  type: 'string', minLength: 1, maxLength: 200,
+  description: 'An id from models.list: the smallest model that does the hardest step of this work as well as the strongest would.',
+});
+/** The effort of work from its first turn on (tasks.create, tasks.give, agents.create). */
+export const EFFORT_PROPERTY: JsonSchema = Object.freeze({ type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] });
 
 export interface ToolContext {
   agent: Agent;
@@ -91,8 +116,9 @@ export interface ActionDescription {
   external: boolean;
 }
 
-/** 'device': only modes that work on a computer or browser (or name the tool). */
-export type ToolRequirement = 'device';
+/** 'device': only modes that work on a computer or browser (or name the tool). 'embeddings': only while an embedding model a
+ *  person chose can serve (services.vectors.available(), models/embeddings.ts) – without one the tool could not work. */
+export type ToolRequirement = 'device' | 'embeddings';
 
 export interface ToolDef<A = Record<string, unknown>> extends ToolSpec {
   category: ActionCategory;
@@ -101,13 +127,6 @@ export interface ToolDef<A = Record<string, unknown>> extends ToolSpec {
   requires?: ToolRequirement;
   /** Can run on a linked PC (forwarded by DeviceService); the registry adds the `device` argument. */
   remote?: boolean;
-  /**
-   * Who sees the tool (addition): 'http' = only engines without their own shell/file tools
-   * (caps.ownTools false, e.g. API/local models); 'mcp' = only through the MCP hub. Undefined = everyone.
-   */
-  audience?: 'http' | 'mcp';
-  /** Offered in every mode regardless of the mode's tool patterns (a connector's tools, runtime/apps/tools.ts; spend.note; devices.send_file). */
-  anyMode?: true;
   /** AF-005: offered to (and callable by) only the agents this answers true for – a connector's "agents" list (runtime/apps/agent-access.ts). */
   forAgent?(agent: Pick<Agent, 'id' | 'name'>): boolean;
   /** The journal's one-line summary; without it the journal shows the tool's name. */

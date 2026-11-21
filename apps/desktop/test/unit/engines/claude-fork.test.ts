@@ -1,6 +1,6 @@
 // B-057 C – the Claude Code native fork of a split over a scripted CLI: fork() reserves a new session id and the first
 // turn on it resumes the parent with `--resume <parent> --fork-session --session-id <new>` (the split's identity in the
-// user message as the <workforce-context> block); the next turn resumes the new id alone. The parent resumes by its id in
+// user message as the <live> block); the next turn resumes the new id alone. The parent resumes by its id in
 // the folder its turns ran in, else by the absolute path of the CLI's transcript (found by folder names in the account
 // home); a project: parent keeps the app home's project folder (and its ref prefix); a transcript path as it is; a
 // parent whose transcript is gone is not forked (the split falls back). A turn that never reached the CLI keeps the
@@ -76,7 +76,7 @@ test('same folder: the first turn resumes the parent with --fork-session and the
   assert.deepEqual(resumeArgs(last().args), ['--resume', parentRef, '--fork-session', '--session-id', forked.ref]);
   assert.equal(first.session?.ref, forked.ref, 'the fork is its own session');
   const user = last().child.lines.find((line: any) => line?.type === 'user') as any;
-  assert.equal(user.message.content[0].text, '<workforce-context>\nYou are split #2 of 3.\n</workforce-context>', 'the identity travels in the user message');
+  assert.equal(user.message.content[0].text, '<live>\nYou are split #2 of 3.\n</live>', 'the identity travels in the user message');
   assert.equal(user.message.content[1].text, 'Your part: count the files.');
 
   const second = await engine.run(turn({ runId: 'run_w2', session: { ref: forked.ref, generation: 1 } }));

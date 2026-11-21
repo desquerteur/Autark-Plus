@@ -1,8 +1,10 @@
 // Verification as one simple step: when an agent completes a task that has a done-condition (doneWhen) and a
 // verifier is connected (Subconscious.verify), the result is checked once against it. A real passed check marks it
-// 'verified'; a pass without a real check stays claimed with a short note; a rejection keeps the result done, notes
-// why ("Verifier disagrees: …") and tells the owner once – the owner decides whether to reopen it. A verdict that
-// arrives after a newer completion (or a reopen, removal or the person's finish) is dropped.
+// 'verified'; a pass without a real check stays claimed with a short note; a rejection keeps the result done and notes
+// why ("Verifier disagrees: …"): a failed evidence check (missing file, dead link) wakes the assignee with what failed; a model's
+// doubt stays as the note – the agent's own finish stands (B-080, live 05.–08.11.2026: 27 of 30 tasks a model's "no"
+// rejected ran again, 75 runs, adding proof each time). A verdict that arrives after a newer completion (or a reopen,
+// removal or the person's finish) is dropped.
 // Owns: which completion a running check belongs to and the verification marks. Never: reopens or blocks a task,
 // shows unchecked work as verified, or judges the person's own finish.
 
@@ -46,10 +48,10 @@ export class TaskVerification {
         draft.result = result;
       });
       this.t.emit(updated);
-      if (!verdict.ok && updated.assigneeKind === 'agent' && updated.assigneeId) {
+      if (!verdict.ok && verdict.fact && updated.assigneeKind === 'agent' && updated.assigneeId) { // B-080: a runtime fact, not a model's doubt
         this.t.s.wakes.wake({
           agentId: updated.assigneeId, reason: 'task', conversationId: updated.conversationId, taskId: updated.id, coalesceKey: `verify:${updated.id}`,
-          note: `The verifier thinks the done-condition is not met yet: ${excerpt(verdict.reason, 300)}\nIf it is right, I reopen the task (tasks.update status "working") and finish it; otherwise I leave it done.`,
+          note: `The runtime checked my result: ${excerpt(verdict.reason, 300)}\nIf it is right, what is missing becomes a new task of mine (tasks.create); otherwise I leave it done.`,
         });
       }
     } catch (error) {

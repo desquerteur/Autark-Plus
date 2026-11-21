@@ -1,7 +1,7 @@
 // B-058 G12: speech without a key – the local voice (Supertonic 3 through RuntimeServices.stt: speak and
 // pullLocal of voice/local/service.ts) when no speech model is connected or the chosen one cannot serve. The
-// person's chosen local voice speaks when it is downloaded; else the recommended one (Supertonic 3, 129 MB) is
-// downloaded on demand and chosen by that pull, waited for up to DOWNLOAD_MS (measured live 29.10.: download,
+// person's chosen local voice speaks when it is downloaded; else a downloaded one, else the recommended one (Supertonic 3,
+// 129 MB) is downloaded on demand – without becoming the person's reading voice (KI-Runde 17.11.2026) –, waited for up to DOWNLOAD_MS (measured live 29.10.: download,
 // unpack and load ~2 min; the download goes on when the call ends first: the next call joins it), then the
 // speaking has its own deadline, which grows with the text (review fix: live 29.10. the voice spoke 4 s of audio in
 // 3.2 s here, so a 4,096-character text needs ~4 min – a flat 120 s failed every text over ~1,800 characters).
@@ -9,7 +9,7 @@
 // them, and stored as one PCM16 WAV.
 // Language: the request's, else the text's own (a small stop-word guess), else the profile language
 // (service.ts modelLanguage). Voice: a speaker number 0–9; any other voice name speaks with voice 0.
-// Owns: these rules. Never: sends text anywhere, changes a setting itself (the pull chooses its model), or
+// Owns: these rules. Never: sends text anywhere, changes a setting (its pull chooses nothing), or
 // loads a second model while one is loading.
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -77,7 +77,7 @@ export function speechLines(text: string, max = LINE_CHARS): string[] {
   return lines;
 }
 
-/** The chosen local voice when it is downloaded, else a downloaded one or the recommended one pulled (the pull chooses it). */
+/** The chosen local voice when it is downloaded, else a downloaded one or the recommended one pulled (the pull leaves the person's choice as it is). */
 async function ensureVoice(s: LocalVoiceServices, until: Promise<never>, onStatus?: (note: string) => void): Promise<void> {
   const offers = s.stt.localModels().models.filter((offer) => offer.purpose === 'tts');
   let chosen: string | undefined;
@@ -86,7 +86,7 @@ async function ensureVoice(s: LocalVoiceServices, until: Promise<never>, onStatu
   const pick = offers.find((offer) => offer.installed) ?? offers.find((offer) => offer.recommended) ?? offers.find((offer) => offer.id === LOCAL_TTS);
   if (!pick) throw new WorkforceError('unavailable', 'No local voice is offered on this PC.');
   if (!pick.installed) onStatus?.(`downloading the local voice (${pick.label}, ${pick.downloadMb} MB)`);
-  const pull = s.stt.pullLocal(pick.id);
+  const pull = s.stt.pullLocal(pick.id, { choose: () => false });
   pull.catch(() => undefined);
   await Promise.race([pull, until]);
 }

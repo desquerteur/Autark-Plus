@@ -4,15 +4,20 @@
 // projects, downloads or shared skills; the first keeps <home>/Workforce.
 // B-075: callCompany reaches another company's running runtime on this PC – its loopback POST /rpc with the owner token
 // of its runtime.json – for an agent's tool call there (tools/registry.ts) and for its own facts (tools/builtin/companies.ts).
-// Owns: the list, a company's folder, another company's workspace folder and that loopback call. Never: writes into a
-// company's folder, starts a company (main does: main/companies.ts), logs, returns or keeps a token.
+// 16.11.2026: the plans' homes live once per PC beside the companies, in "<first> Companies/logins" (loginsFolder,
+// Paths.accounts – accounts/cli-homes.ts), so every company here uses one login and deleting a company takes none with it.
+// 16.11.2026: each entry names its folder ("first", "company-2"); a company with the removal mark (main/company-remove.ts)
+// is no longer listed; withOtherFacts asks each other running company for its own role and linked PCs (Settings ›
+// General › Companies, the agents' companies.list).
+// Owns: the list, a company's folder, the logins folder's place, another company's workspace folder and that loopback
+// call. Never: writes into a company's folder, starts a company (main does: main/companies.ts), logs, returns or keeps a token.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { request } from 'node:http';
 import path from 'node:path';
 import type { AppInfo } from '../../shared/api/host-bridge.ts';
 import { WorkforceError, isErrorCode } from '../../shared/errors.ts';
-import { companyLabel, isCompanyId, parseRuntimeFile, RUNTIME_FILE, type CompanyEntry } from '../../shared/model/companies.ts';
+import { companyLabel, folderOf, isCompanyId, LOGINS_FOLDER, parseRuntimeFile, REMOVED_FILE, RUNTIME_FILE, type CompanyEntry } from '../../shared/model/companies.ts';
 import { parseText } from '../settings/schema.ts';
 import { ROOT_SETTINGS } from './layout.ts';
 
@@ -35,18 +40,48 @@ export function companyFolder(app: CompanyApp, id: string | null): string | unde
   return id === null ? info.first : path.join(info.dir, id);
 }
 
-/** Every company on this PC, the first one first, the others by id; empty without AppInfo.companies (a test profile, headless). */
+/** This PC's one folder of plan logins, shared by its companies (Paths.accounts); undefined without AppInfo.companies (a test profile, headless). */
+export function loginsFolder(app: Pick<AppInfo, 'companies'>): string | undefined {
+  return app.companies ? path.join(app.companies.dir, LOGINS_FOLDER) : undefined;
+}
+
+/** Every company on this PC, the first one first, the others by id, none being removed; empty without AppInfo.companies (a test profile, headless). */
 export function listCompanies(app: CompanyApp): CompanyEntry[] {
   const info = app.companies;
   if (!info) return [];
   const here = path.resolve(app.dataDir);
-  const entry = (id: string | null, dir: string): CompanyEntry => ({ id, label: companyLabel(profileOf(dir), id), current: path.resolve(dir) === here });
+  const entry = (id: string | null, dir: string): CompanyEntry => ({ id, label: companyLabel(profileOf(dir), id), folder: folderOf({ id }), current: path.resolve(dir) === here });
   let ids: string[] = [];
   try {
     ids = readdirSync(info.dir, { withFileTypes: true }).filter((item) => item.isDirectory() && isCompanyId(item.name)).map((item) => item.name);
   } catch { /* no other company yet */ }
   ids.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-  return [entry(null, info.first), ...ids.map((id) => entry(id, path.join(info.dir, id)))];
+  const all: Array<[string | null, string]> = [[null, info.first], ...ids.map((id): [string, string] => [id, path.join(info.dir, id)])];
+  return all.filter(([, dir]) => !existsSync(path.join(dir, REMOVED_FILE))).map(([id, dir]) => entry(id, dir));
+}
+
+const ROLES = new Set(['owner', 'employee']);
+
+/**
+ * The list with each other company's own facts: whether it runs, and a running one's role and linked PCs as it names
+ * them itself (its companies.list over loopback, `timeoutMs` each). The current entry stays as it is (withOwnFacts).
+ */
+export async function withOtherFacts(app: CompanyApp, entries: CompanyEntry[], options: { signal?: AbortSignal; timeoutMs: number }): Promise<CompanyEntry[]> {
+  return Promise.all(entries.map(async (entry): Promise<CompanyEntry> => {
+    const dir = entry.current ? undefined : companyFolder(app, entry.id);
+    if (!dir) return entry;
+    try {
+      const reply = await callCompany(dir, 'companies.list', undefined, options);
+      const own = ((reply as { companies?: unknown } | null)?.companies as Array<Partial<CompanyEntry>> | undefined ?? []).find((item) => item?.current === true);
+      const linked: unknown = own?.linkedPcs;
+      const pcs = Array.isArray(linked)
+        ? (linked as Array<{ name?: unknown; online?: unknown }>).filter((pc) => typeof pc?.name === 'string' && typeof pc.online === 'boolean').map((pc) => ({ name: (pc.name as string).slice(0, 120), online: pc.online as boolean }))
+        : undefined;
+      return { ...entry, running: true, ...(own?.role && ROLES.has(own.role) ? { role: own.role } : {}), ...(pcs ? { linkedPcs: pcs } : {}) };
+    } catch {
+      return { ...entry, running: companyRuns(dir) };
+    }
+  }));
 }
 
 /** Another company's workspace: <data>/workspace; undefined for the first company (the runtime's default). */

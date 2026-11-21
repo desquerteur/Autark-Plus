@@ -1,10 +1,11 @@
 // Engine stall watchdog of one attempt (B-044, agents/turn-attempt.ts): an engine turn that sends no
 // event for STALL_IDLE_MS while none of its tool calls runs – or for STALL_TOOL_MS while one does (builds
 // and renders run long) – is cut through the engine's own interrupt (the attempt's signal) and ends
-// 'unavailable' with STALL_MESSAGE, so the failover rule applies (accounts/failure.ts: a short cooling;
-// agents/turn.ts: another account when no tool ran or every effect is known; a cut call's effect is not
-// known, so such a turn is never repeated blindly). One unref'd timer per
-// attempt, re-armed when it fires and when the last running call ends – never per event.
+// 'unavailable' with STALL_MESSAGE, so the failover rule applies (agents/turn.ts: another account when no tool ran or
+// every effect is known; a cut call's effect is not known, so such a turn is never repeated blindly; B-080: details.stalled
+// is our own engine process, so no account cools – accounts/failure.ts). One unref'd timer per
+// attempt, re-armed when it fires and when the last running call ends – never per event. B-080: quietMs is how long
+// the engine was silent at the cut (the run note says "silent 10 min", not the attempt's whole length).
 // B-059 #22: a timer that fires more than SLEEP_GAP_MS after it was due means the PC slept (or the process was
 // suspended) – the engine was not silent: the quiet time starts again instead of a cut and an account cooling.
 // B-059: overrun() – the turn grew past its ceiling (agents/repeat-watch.ts) – cuts the attempt through the same signal
@@ -60,6 +61,7 @@ export class StallWatch {
   private armedMs = 0;
   private ended = false;
   private fired = false;
+  private quiet: number | undefined;
   /** B-059: the overrun's cut, waiting for the running calls to end; `overran` once it cut. */
   private overrunError: WorkforceError | undefined;
   private overran = false;
@@ -73,6 +75,11 @@ export class StallWatch {
   /** True once the watchdog cut the attempt for silence. */
   get stalled(): boolean {
     return this.fired;
+  }
+
+  /** B-080: how long the engine was silent when the watchdog cut it (now − last activity); undefined while it has not cut. */
+  get quietMs(): number | undefined {
+    return this.quiet;
   }
 
   /** B-059: true once the attempt was cut for growing past its ceiling (overrun). */
@@ -154,6 +161,7 @@ export class StallWatch {
     const limit = this.calls.size ? this.toolMs : this.idleMs;
     const quiet = now - this.last;
     if (quiet < limit) { this.arm(limit - quiet); return; }
+    this.quiet = quiet;
     this.fired = true;
     this.ended = true;
     this.cut.abort(new WorkforceError('unavailable', STALL_MESSAGE, { details: { stalled: true } }));

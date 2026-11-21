@@ -1,7 +1,7 @@
 // CTX3: mode knowledge areas (scope 'mode', scopeId = mode key). Acceptance: a video experience
 // reaches another video agent, not a web agent. Also: every agent reads a mode area (ACL and the
 // vector index's mirror), mode items are never pinned,
-// knowledge.remember (the run's own mode area only) and recall with scope 'mode', and the RPC checks.
+// memory.write into company/modes/<mode> and knowledge.find reaching it, and the RPC checks.
 // Owns: these assertions only. Never: real models, network or timers.
 
 import { test } from 'node:test';
@@ -10,6 +10,7 @@ import { agent } from '../chat/harness.ts';
 import { fixture, VIDEO_MODE, type FixtureOptions } from '../context/fixture.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import { memoryTools } from '../../../src/runtime/tools/builtin/memory.ts';
+import { findTools } from '../../../src/runtime/tools/builtin/find.ts';
 import { HandlerTable, type HandlerContext } from '../../../src/runtime/rpc/table.ts';
 import { register } from '../../../src/runtime/rpc/handlers/knowledge.ts';
 import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
@@ -53,21 +54,19 @@ test('ACL: every agent reads mode areas – any space, a private space, no space
   assert.throws(() => f.knowledge.save({ title: 'No area', body: 'Missing key.', scope: 'mode', createdBy: 'human' }), /needs a scopeId/);
 });
 
-const tool = (name: string) => memoryTools.find((item) => item.name === name)!;
+const tool = (name: string) => [...memoryTools, ...findTools].find((item) => item.name === name)!;
 const ctxOf = (f: World, who: Agent, mode: string): ToolContext => ({ agent: who, runId: 'run_mem', mode, services: f.services, signal: new AbortController().signal, status: () => {} });
 const textOf = (out: ToolOutput) => (out.content[0] as { text: string }).text;
 
-test('knowledge.remember writes the run\'s own mode area; recall marks it', async () => {
+test('memory.write into company/modes/<mode> writes that mode area; knowledge.find reaches it from another mode', async () => {
   const f = world();
-  const saved = await tool('knowledge.remember').run({ title: 'Render preset', body: 'Render course videos with the H.264 high preset.', kind: 'procedure', scope: 'mode' }, ctxOf(f, f.vera, 'video'));
+  const saved = await tool('memory.write').run({ folder: 'company/modes/video', title: 'Render preset', text: 'Render course videos with the H.264 high preset.', kind: 'procedure' }, ctxOf(f, f.vera, 'video'));
   assert.equal(saved.isError, undefined, textOf(saved));
-  const item = f.knowledge.get((saved.structured as { id: string }).id)!;
-  assert.deepEqual([item.scope, item.scopeId, item.createdBy], ['mode', 'video', f.vera.id]);
-  const named = await tool('knowledge.remember').run({ title: 'Cut list', body: 'Keep the cut list next to the project file.', scope: 'mode', scopeId: 'video' }, ctxOf(f, f.vera, 'video'));
-  assert.equal(f.knowledge.get((named.structured as { id: string }).id)!.scopeId, 'video', 'the own mode may be named');
+  const id = (saved.structured as { path: string }).path.replace(/\//g, ':');
+  const item = f.knowledge.get(id)!;
+  assert.deepEqual([item.scope, item.scopeId], ['mode', 'video']);
 
-
-  const recall = textOf(await tool('knowledge.recall').run({ query: 'render preset for course videos' }, ctxOf(f, f.wes, 'web')));
-  assert.ok(recall.includes(`- [${item.id}] Render preset: `) && recall.includes('[video mode]'), recall);
+  const found = textOf(await tool('knowledge.find').run({ query: 'render preset for course videos', kinds: ['note'] }, ctxOf(f, f.wes, 'web')));
+  assert.ok(found.includes(`[note:${id}] memory note "Render preset"`) && found.includes('memory · mode'), found);
 });
 

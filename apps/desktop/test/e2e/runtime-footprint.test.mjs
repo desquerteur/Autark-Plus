@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const CHATS = 4;
 const ROUNDS = 3;
@@ -63,10 +63,10 @@ test('runtime footprint: start, idle, fake-engine load, idle again', { timeout: 
     await Promise.all(chats.map(async (chat, i) => {
       const body = `Round ${round + 1} in chat ${i + 1}: please answer briefly`;
       await client.call('messages.send', { conversationId: chat.id, body });
-      await client.waitFor('message.updated', (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final' && m.body.includes(`Round ${round + 1} in chat ${i + 1}`), 90_000);
+      await client.waitFor(MESSAGE_EVENTS, (m) => m.conversationId === chat.id && m.authorId === manager.id && m.state === 'final' && m.body.includes(`Round ${round + 1} in chat ${i + 1}`), 90_000);
     }));
   }
-  await Promise.all(chats.map((chat) => client.call('tasks.create', { conversationId: chat.id, title: `Load task ${chat.title}`, assigneeKind: 'agent', assigneeId: manager.id })));
+  await Promise.all(chats.map((chat) => client.call('tasks.create', { conversationId: chat.id, title: `Load task ${chat.title}`, to: manager.id })));
   await sleep(3000);
   const load = await usage(client);
   sampling = false;

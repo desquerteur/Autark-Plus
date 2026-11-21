@@ -4,6 +4,7 @@
 // and setup-notice files stay removed. About you asks the language, the name and the company (kept in the card's draft
 // over a remount), there is no permission question, and Start (the last step) calls onboarding.start without params.
 // AF-002: the AI step's Continue waits until a model can answer; skipping it is possible only on purpose (one confirm).
+// B-085: the PC access rows (now on About you) are checked in first-run.test.ts and pc-access.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

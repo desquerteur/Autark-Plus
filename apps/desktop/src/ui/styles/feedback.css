@@ -1,72 +1,123 @@
 /* Feedback (B-055 Q4): the header cell's button (feedback/FeedbackButton.tsx – where the cell sits:
-   shell.css, mobile.css), the talk pill right under it (TalkPill.tsx: a narrow live waveform), the
-   form in the menu popover and in Settings' "New report" (FeedbackPanel.tsx: the field with the mic
-   inside it, the screenshot row – thumbnail, checkbox, one muted line –, the message slot reserved
-   beside the one action) and "Paint over"
-   (PaintEditor.tsx: a fixed stage the shot is fitted into, the tool row). Every box has a fixed
-   size, so a shot arriving, an error or a running dictation moves nothing; state selectors change
-   only colour or opacity.
+   shell.css, mobile.css) and the talk pill right under it (TalkPill.tsx: a narrow live waveform).
+   Feedback 16.11.2026 (F11, F13, F15): the cell's slot that every open dialog draws at the cell's spot
+   (lib/dialog.tsx DialogSlot) and the snapshot overlay (FeedbackOverlay.tsx): the frozen screen at 1:1
+   with the marks' layer over it, and the slim dock at the bottom (FeedbackPanel.tsx) – the attachments
+   row (the screenshot box, Pen/Box/Undo, the recording and crash rows, the reserved message slot, Inbox),
+   the main row (the close arrow, the field with the mic inside it, the one action) and the privacy
+   note. Every box has a fixed size, so a shot arriving, an error or a running dictation moves nothing;
+   state selectors change only colour or opacity; only the field grows with its own text (the dock grows
+   upward, its foot stays). The team's inbox, and the paint stage "Mark a region" uses
+   (workspace/RegionDialog.tsx), at the end.
    Owns: these looks. Never: the popover/dialog primitives (base.css, overlays.css), where the cell
-   sits, the phone sheet (mobile.css) or colours outside tokens.css. */
+   sits or colours outside tokens.css. */
 
-/* ---------------------------------------------------------------- the cell and the talk pill */
+/* ---------------------------------------------------------------- the cell, its slot and the talk pill */
 /* a long press is talk: no text selection, callout or scrolling starts on the button */
 .feedback-toggle { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* the slot in an open dialog: exactly the row cell's box (inline left/top/width/height), in the dialog's top layer;
+   a window drag region under it never takes the press */
+.dialog-slot { position: fixed; -webkit-app-region: no-drag; app-region: no-drag; }
+.dialog-slot[popover] { inset: auto; margin: 0; padding: 0; overflow: visible; border: 0; background: transparent; color: var(--text); }
+.dialog-slot > .feedback-toggle { width: 100%; height: 100%; border-radius: var(--r-sm); }
 .feedback-talk {
   position: fixed; z-index: 60; display: grid; place-items: center; height: 30px; padding: 0 12px;
   border: 1px solid var(--elevated-line); border-radius: 999px; background: var(--elevated); color: var(--text);
   box-shadow: var(--shadow-popover); pointer-events: none; animation: wf-fade-in .1s ease-out;
 }
+.feedback-talk[popover] { inset: auto; margin: 0; overflow: visible; } /* above a dialog (TalkPill.tsx) */
 .feedback-talk canvas { display: block; width: 46px; height: 18px; }
 .feedback-talk.starting canvas { animation: wf-wave-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .feedback-talk.starting canvas { animation: none; } }
 
-/* ---------------------------------------------------------------- the form */
-.popover.feedback-menu { padding: 12px; overflow: visible auto; }
-/* the phone's sheet (mobile.css): the form keeps the sheet's usual 16 px sides */
-body:has(.mobile-shell) .popover.feedback-menu { padding: 6px 16px calc(16px + env(safe-area-inset-bottom)); }
-.feedback-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
-.feedback-input { position: relative; }
-.feedback-input .set-textarea { height: 104px; min-height: 104px; padding-right: 44px; resize: none; }
-.feedback-input .mic { position: absolute; right: 4px; bottom: 4px; }
+/* ---------------------------------------------------------------- the snapshot overlay */
+/* the whole window, no backdrop of its own: the frozen shot covers it (or, with no shot, the live screen shows) */
+dialog.feedback-overlay {
+  position: fixed; inset: 0; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0;
+  overflow: hidden; border: 0; background: transparent; color: var(--text); -webkit-app-region: no-drag; app-region: no-drag;
+}
+dialog.feedback-overlay::backdrop { background: transparent; -webkit-app-region: no-drag; app-region: no-drag; }
+dialog.feedback-overlay:focus-visible { outline: none; }
+/* the shot at its own size, never past the window: the window's shot fills it exactly, a picked photo sits centred */
+.feedback-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
+.feedback-frame { position: relative; line-height: 0; }
+.feedback-frame > img { display: block; max-width: 100vw; max-height: 100vh; max-height: 100dvh; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.feedback-frame > .paint-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.feedback-frame > .paint-canvas.off { cursor: default; }
+.feedback-stage.off > .feedback-frame { opacity: .3; } /* the screenshot does not go */
+
+/* the dock: three fixed rows at the bottom; the field's growth lifts only its top */
+.feedback-dock {
+  position: absolute; left: 0; right: 0; bottom: 12px; display: grid; gap: 8px; width: min(760px, calc(100% - 24px));
+  margin: 0 auto; padding: 10px 12px 8px; border: 1px solid var(--elevated-line); border-radius: var(--r-lg);
+  background: var(--elevated); box-shadow: var(--shadow-popover); animation: wf-fade-in .1s ease-out;
+}
+.feedback-dock-row { display: flex; align-items: center; gap: 8px; height: 32px; min-width: 0; overflow: auto hidden; scrollbar-width: none; }
+.feedback-dock-row > * { flex: none; }
+.feedback-dock-row > .feedback-message { flex: 1 0 120px; }
+.feedback-dock-main { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.feedback-dock.done .feedback-dock-main { align-items: center; min-height: 38px; }
+.feedback-close { flex: none; width: 36px; height: 38px; }
+.feedback-send { flex: none; min-width: 96px; height: 38px; } /* "Send", "Sending…" and "Send again" take one cell */
+.feedback-tools { display: flex; align-items: center; gap: 6px; }
+.feedback-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--hover); color: var(--secondary); font-size: 13px; white-space: nowrap; }
+.feedback-photo { justify-content: center; width: 124px; cursor: pointer; } /* "Add photo" and "Other photo" take one cell */
+.feedback-paint { flex: none; padding: 2px; }
+.feedback-paint button { min-height: 24px; padding: 2px 10px; }
+
+/* the field (one line to start, it grows with its text up to about six lines, then scrolls) with the mic inside it */
+.feedback-input { position: relative; flex: 1 1 auto; min-width: 0; }
+.feedback-input .set-textarea { height: auto; min-height: 38px; max-height: 140px; padding: 8px 44px 8px 12px; overflow-y: auto; resize: none; }
+:root:not([data-platform=desktop]) .feedback-input .set-textarea { font-size: 16px; } /* a phone zooms into smaller text */
+.feedback-input .mic { position: absolute; right: 4px; bottom: 4px; width: 30px; height: 30px; }
 .feedback-input .mic.active { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .feedback-input .mic.active .icon { opacity: 1; }
 
-/* the screenshot row: thumbnail (opens "Paint over") | checkbox over one muted line */
-.feedback-shot { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; column-gap: 12px; height: 52px; }
+/* an attachment row (FeedbackRows.tsx): a 32 px thumbnail | the checkbox over one muted line */
+.feedback-shot { display: grid; grid-template-columns: 32px auto; align-items: center; column-gap: 8px; height: 32px; }
 .feedback-thumb {
-  display: grid; place-items: center; width: 80px; height: 52px; padding: 0; overflow: hidden;
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0; overflow: hidden;
   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--sidebar); color: var(--muted); cursor: pointer;
 }
-.feedback-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: left top; }
 .feedback-thumb:hover:not(:disabled) { border-color: var(--focus); }
 .feedback-thumb:disabled { cursor: default; }
-.feedback-shot.off .feedback-thumb img { opacity: .4; }
-.feedback-shot-text { display: grid; grid-template-rows: 20px 16px; row-gap: 2px; min-width: 0; }
-.feedback-shot-hint { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.feedback-shot-text { display: grid; grid-template-rows: 16px 14px; min-width: 0; }
+.feedback-shot-hint { width: 190px; margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .feedback-check { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--secondary); font-size: 13px; cursor: pointer; }
 .feedback-check input[type=checkbox] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--text); }
 .feedback-check:has(input:disabled) { cursor: default; opacity: var(--disabled-opacity); }
 
-/* the one action with the message slot beside it (two lines at most, always there) */
-.feedback-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 36px; }
-.feedback-actions > .button { flex: none; }
-.feedback-actions > .button.feedback-again { min-width: 104px; } /* "Send again" and "Sending…" take the same cell */
+/* the message slot (two lines at most, always there) and the line after Send */
 .feedback-message {
   flex: 1 1 auto; display: -webkit-box; min-width: 0; max-height: 32px; margin: 0; overflow: hidden;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--danger); font-size: 12px; line-height: 16px;
 }
-.feedback-done { margin: 0; color: var(--text); line-height: 1.6; }
-/* AF-003: the kind (Bug | Idea) above the field, "Not sent." in the danger colour with its whole reason, and the
-   delivered report's number (selectable, with Copy) */
+.feedback-done { flex: 0 1 auto; min-width: 0; margin: 0; color: var(--text); line-height: 1.5; }
+.feedback-privacy-note { min-height: 16px; margin: 0; color: var(--muted); font-size: 11px; line-height: 16px; }
+/* AF-003: the kind (Bug | Idea) of the report */
 .feedback-kind { justify-self: start; }
-.feedback-done.failed { color: var(--danger); }
-.feedback-panel.done .feedback-message { max-height: 64px; -webkit-line-clamp: 4; }
-.feedback-receipt { display: flex; align-items: center; gap: 8px; margin: -6px 0 0; color: var(--secondary); font-size: 13px; }
-.feedback-receipt-number { font-variant-numeric: tabular-nums; user-select: text; -webkit-user-select: text; }
-.feedback-privacy-note { height: 48px; margin: 0; color: var(--muted); font-size: 11px; line-height: 16px; }
 .feedback-privacy-note button { margin: 0 0 0 4px; padding: 0; border: 0; background: none; color: var(--secondary); font: inherit; text-decoration: underline; cursor: pointer; }
 .feedback-privacy-details p { margin: 0 0 14px; }
+
+/* the phone: the dock is the bottom edge, full width, above the system's gesture bar; a finger's room for the tools */
+@media (max-width: 719px) {
+  .feedback-dock { bottom: 0; width: auto; padding: 10px 12px calc(8px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 16px 16px 0 0; }
+  .feedback-dock-row { height: 40px; }
+  .feedback-chip { height: 34px; }
+  .feedback-paint button { min-height: 32px; }
+  /* feedback 16.11.2026 C2CC3D50 ("Textfeld größer … mehr Platz"): the field starts two lines tall, the recording's
+     empty hint goes (its title keeps it), the note stays one line in small type */
+  .feedback-input .set-textarea { min-height: 64px; }
+  .feedback-shot-hint { width: 120px; }
+  .feedback-shot-hint.empty { display: none; }
+  /* Mika 17.11.: a greyed icon nobody can use (no take yet) is guessing work on a phone – the label stands alone */
+  .feedback-recording:has(.feedback-thumb.empty) { grid-template-columns: auto; }
+  .feedback-thumb.empty { display: none; }
+  .feedback-send { min-width: 0; padding: 0 18px; } /* as wide as its word: the field gets the room */
+  .feedback-shot-text:has(.feedback-shot-hint.empty) { grid-template-rows: auto; }
+  .feedback-privacy-note { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .feedback-message-foot { flex: none; }
+}
 
 /* ---------------------------------------------------------------- the team's inbox */
 .feedback-inbox-entry { display: flex; align-items: center; justify-content: flex-end; height: 32px; }
@@ -91,19 +142,13 @@ body:has(.mobile-shell) .popover.feedback-menu { padding: 6px 16px calc(16px + e
   .feedback-inbox-row { height: 76px; }
 }
 
-/* ---------------------------------------------------------------- "Paint over" */
+/* ---------------------------------------------------------------- "Mark a region" (workspace/RegionDialog.tsx) */
 dialog.paint-dialog .dialog-content { display: grid; gap: 12px; }
-/* one definite track, so the canvas's max-width/max-height (100 %) fit the whole shot into the stage */
+/* one definite track, so the picture's max-width/max-height (100 %) fit it whole into the stage */
 .paint-stage {
   display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; height: min(62vh, 640px); min-height: 160px;
   overflow: hidden; border-radius: var(--r-md); background: var(--sidebar);
 }
-.paint-canvas { display: block; max-width: 100%; max-height: 100%; cursor: crosshair; touch-action: none; }
-.paint-wait { width: 100%; height: 100%; }
-.paint-tools { display: flex; align-items: center; gap: 8px; min-height: 36px; }
-.paint-tools .segmented { flex: none; }
-.paint-message { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--danger); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-
 /* Autark-Plus: the report as a GitHub issue (ui/feedback/IssuePreview.tsx; style.md "Report issue"). */
 .feedback-issue { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--sidebar); }
 .feedback-issue-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -119,3 +164,14 @@ dialog.paint-dialog .dialog-content { display: grid; gap: 12px; }
 .feedback-issue-state { padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 20px; }
 .feedback-issue-state.open { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
 .feedback-issue-state.closed { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+/* its message slot beside "Create issue" (upstream's dock dropped the shared .feedback-actions row; the preview keeps it) */
+.feedback-issue .feedback-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 36px; }
+.feedback-issue .feedback-actions > .button { flex: none; }
+
+/* ---------------------------------------------------------------- feedback 16.11.2026 (FeedbackRows.tsx, FeedbackInbox.tsx) */
+/* "Crash report attached": one fixed line */
+.feedback-check.feedback-crash { height: 20px; overflow: hidden; white-space: nowrap; }
+.feedback-inbox-client { overflow-wrap: anywhere; user-select: text; }
+.feedback-inbox-audio { display: grid; gap: 8px; margin: 0 0 12px; }
+.feedback-inbox-audio audio { width: 100%; height: 36px; }
+.feedback-inbox-audio p { margin: 0; color: var(--muted); font-size: 12px; }

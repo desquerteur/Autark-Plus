@@ -166,10 +166,24 @@ test('install: the helper gets every path as an argument, then the app quits; a 
   assert.equal(target, b.bundle);
   assert.equal(previous, path.join(b.parent, PREVIOUS_BUNDLE));
   assert.equal(failed, path.join(b.cacheDir, FAILED_FILE));
+  assert.equal(b.spawned[0][10], '', 'the first company: no company flag');
   assert.equal(b.quits(), 1);
   b.updater.quitAndInstall();
   assert.equal(b.spawned.length, 1);
   assert.equal(b.quits(), 2);
+});
+
+test('F25: another company that pressed Update hands its own --company flag to the helper, and nothing else', async () => {
+  const b = bench();
+  b.deps.args = ['--company=company-2'];
+  await b.updater.downloadUpdate();
+  b.updater.quitAndInstall();
+  assert.equal(b.spawned[0][10], '--company=company-2');
+  const odd = bench();
+  odd.deps.args = ['--company=x;open -a Calculator', '--background'];
+  await odd.updater.downloadUpdate();
+  odd.updater.quitAndInstall();
+  assert.equal(odd.spawned[0][10], '');
 });
 
 test('an update under a new product name lands beside the old bundle under its own name, unless that name is taken', async () => {
@@ -234,7 +248,7 @@ function swapBench(names: { same?: boolean } = {}) {
   const bin = path.join(parent, 'bin');
   mkdirSync(bin);
   const opened = path.join(parent, 'opened');
-  writeFileSync(path.join(bin, 'open'), `#!/bin/sh\necho "$1" >> "${unix(opened)}"\n`);
+  writeFileSync(path.join(bin, 'open'), `#!/bin/sh\necho "$*" >> "${unix(opened)}"\n`);
   chmodSync(path.join(bin, 'open'), 0o755);
   const old = path.join(parent, 'Old.app');
   const staging = path.join(parent, STAGING_DIR);
@@ -246,9 +260,9 @@ function swapBench(names: { same?: boolean } = {}) {
   const target = names.same ? old : path.join(parent, 'New.app');
   const previous = path.join(parent, PREVIOUS_BUNDLE);
   const failed = path.join(parent, FAILED_FILE);
-  const run = (pid: string, prefix = '') => spawnSync('sh', ['-c', `${prefix}PATH="${shPath(bin)}:$PATH"; export PATH\nsh -c "$SCRIPT" helper "${pid}" "$OLD" "$STAGED" "$TARGET" "$PREVIOUS" "$FAILED" 1.0.0`], {
+  const run = (pid: string, company = '') => spawnSync('sh', ['-c', `PATH="${shPath(bin)}:$PATH"; export PATH\nsh -c "$SCRIPT" helper "${pid}" "$OLD" "$STAGED" "$TARGET" "$PREVIOUS" "$FAILED" 1.0.0 "$COMPANY"`], {
     encoding: 'utf8',
-    env: { ...process.env, SCRIPT: SWAP_SCRIPT, OLD: unix(old), STAGED: unix(staged), TARGET: unix(target), PREVIOUS: unix(previous), FAILED: unix(failed) },
+    env: { ...process.env, SCRIPT: SWAP_SCRIPT, OLD: unix(old), STAGED: unix(staged), TARGET: unix(target), PREVIOUS: unix(previous), FAILED: unix(failed), COMPANY: company },
   });
   const which = (dir: string) => readFileSync(path.join(dir, 'which'), 'utf8');
   const openedList = () => (existsSync(opened) ? readFileSync(opened, 'utf8').trim().split('\n') : []);
@@ -302,6 +316,17 @@ test('helper: the new app cannot move in: the old one is restored and starts', {
   assert.ok(!existsSync(b.staging));
   assert.deepEqual(b.openedList(), [unix(b.old)]);
   assert.equal(readFileSync(b.failed, 'utf8').trim(), '1.0.0');
+});
+
+test('F25 helper: another company starts again as a new instance with its flag, after a swap and after a restore', { skip: !sh }, () => {
+  const b = swapBench({ same: true });
+  assert.equal(b.run(DEAD, '--company=company-2').status, 0);
+  assert.equal(b.which(b.old), 'new');
+  assert.deepEqual(b.openedList(), [`-n ${unix(b.old)} --args --updated --company=company-2`], 'never a plain open, which only shows a running first company');
+  const restored = swapBench();
+  fakeMv(restored, restored.target);
+  assert.equal(restored.run(DEAD, '--company=company-2').status, 1);
+  assert.deepEqual(restored.openedList(), [`-n ${unix(restored.old)} --args --updated --company=company-2`]);
 });
 
 test('helper: nothing moves while the process lives; the swap follows its end', { skip: !sh }, () => {

@@ -13,12 +13,14 @@ import { ClaudeStreamParser } from '../../../src/runtime/engines/claude/stream.t
 import { END_MARK, claudeTranscript } from '../../../src/runtime/engines/claude/transcript.ts';
 import { PROJECT_DIR_NAME, probeOutcome } from '../../../src/runtime/engines/claude/rebuild.ts';
 import { takesThinkingDisplay } from '../../../src/runtime/engines/claude/rebuilder.ts';
+import { homeRoots } from '../../../src/runtime/system/paths.ts';
 import type { EngineEvent, RebuildItem } from '../../../src/runtime/engines/types.ts';
 import { account, fakeFinder, fakeSpawn, testSupervisor, turnInput, type SpawnCall } from './fakes.ts';
 
 const DATA = path.resolve('/fake-data');
 const TRANSCRIPTS = path.join(DATA, 'engine-transcripts', 'claude');
 const ACCOUNTS = path.join(DATA, 'accounts');
+const LOGINS = path.resolve('/fake-companies/logins'); // this PC's logins folder (Paths.accounts)
 const OWN_HOME = path.join(ACCOUNTS, 'acc_claude');
 
 /** In-memory files with sizes and folder listings. */
@@ -76,7 +78,7 @@ function setup(script: CliScript = {}) {
   const engine = new ClaudeEngine({
     supervisor: testSupervisor(fake.spawn), finder: fakeFinder({ claude: '/fake-bin/claude' }), tempDir: '/fake-temp', files: fs.ops,
     env: { PATH: '/fake-bin' }, now: () => 1_800_000_000_000, uuid: () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`,
-    transcriptsDir: TRANSCRIPTS, accountsRoot: ACCOUNTS,
+    transcriptsDir: TRANSCRIPTS, accountsRoots: homeRoots({ data: DATA, accounts: LOGINS }), // OWN_HOME stayed in <data>/accounts (macOS)
   });
   return { engine, fs, calls: fake.calls, turns: () => fake.calls.filter((call) => call.args.includes('--include-partial-messages')) };
 }
@@ -110,7 +112,7 @@ test('claude transcript: the record chain, hub calls 1:1, a Codex shell call as 
     assert.equal(rec.isSidechain, false);
   });
   assert.ok(recs.every((rec) => !String(rec.type).startsWith('api-request')), 'no api-request records');
-  assert.equal(recs[0].message.content, '[Earlier work in this chat, rebuilt by the app]', 'the transcript starts with a user record');
+  assert.equal(recs[0].message.content, '[My earlier work, rebuilt from my record]', 'the transcript starts with a user record');
   assert.equal(recs[2].message.content, '[10:00] Lena: go on');
   // Signed Claude thinking of the same account and family stays a thinking block, in front of the hub call.
   assert.deepEqual(recs[3].message.content, [
@@ -163,13 +165,15 @@ test('claude transcript (B-049 neutral mapping): a Codex PowerShell line → Pow
   ];
   const context = { sessionId: 's', cwd: '/w', version: 'v', model: 'claude-opus-5-5', accountId: 'acc_claude', offered, uuid: () => 'u', now: 0 };
   const recs = claudeTranscript(items, { ...context, platform: 'win32' }).lines.map((line) => JSON.parse(line));
-  assert.deepEqual(recs.map((rec) => rec.type), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(recs.map((rec) => rec.type), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
   assert.deepEqual(recs[1].message.content, [{ type: 'tool_use', id: 'exec-1', name: 'PowerShell', input: { command: 'Get-ChildItem' } }]);
   assert.deepEqual(recs[2].message.content, [{ type: 'tool_result', tool_use_id: 'exec-1', content: 'a.ts' }]);
   assert.deepEqual(recs[3].message.content, [{ type: 'tool_use', id: 'toolu_r', name: 'Read', input: { file_path: 'C:\\w\\a.ts', offset: 5 } }]);
-  assert.deepEqual(recs[5].message.content, [{ type: 'text', text: '[ran apply_patch: a.ts]' }]);
-  assert.equal(recs[6].message.content, '[output of apply_patch]\nupdate a.ts\n-1\n+2');
-  assert.deepEqual(recs[7].message.content, [{ type: 'text', text: END_MARK }]);
+  // BEFUND §3 (17.11.2026): a call with no native counterpart is a user-side record, never assistant text to imitate
+  assert.deepEqual(recs[4].message.content.at(-1), { type: 'text', text: '[record of an earlier call, not replayable here – apply_patch: a.ts]\n[its output]\nupdate a.ts\n-1\n+2' });
+  assert.deepEqual(recs[5].message.content, [{ type: 'text', text: END_MARK }]);
+  const said = recs.filter((rec) => rec.type === 'assistant').flatMap((rec) => rec.message.content).filter((part: { type: string }) => part.type === 'text');
+  assert.ok(said.every((part: { text: string }) => !/^\[(ran|record)/.test(part.text)), 'no assistant text reads as a call');
   const linux = claudeTranscript(items.slice(0, 2), { ...context, platform: 'linux' }).lines.map((line) => JSON.parse(line));
   assert.equal(linux[1].message.content[0].name, 'Bash', 'no PowerShell tool off Windows: the whole line from Bash');
 });

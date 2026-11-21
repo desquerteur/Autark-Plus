@@ -10,15 +10,20 @@
 // B-078 (D5): a phone app asks the same way with role 'phone' and its own key (its device info has role 'client'); an
 // instance takes only the roles it is made for (`roles`: PCs here, phones in rendezvous/phone-pair.ts), and what `link`
 // returns rides in the accepted answer (a phone's device token – the answer travels sealed through the meeting server).
+// B-084: a request may name my own Remote ID or my person code (remote/code.ts); the first answer carries my chain to it.
+// F13: Accept of an employee's PC or a phone names its person – one of the people, or a new one (`newPerson`), which `link`
+// makes when the device collects the answer, so a requester that gave up leaves no person behind. My own PC (role 'ceo')
+// never becomes a person's. The first answer wins: a second one hears the request is no longer open.
 // Owns: the request lifecycle (in memory only), limits and waiters on this side.
 // Never: links without the person's answer, or keeps nonces/keys beyond the request.
 
 import { randomBytes, type KeyObject } from 'node:crypto';
-import type { JoinRole, RemoteIncoming } from '../../shared/model/remote.ts';
+import type { JoinRole, NewPerson, RemoteIncoming } from '../../shared/model/remote.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { plainLabel } from '../../shared/text/device-label.ts';
 import { b64url, fingerprintOf, fromB64url } from '../devices/keys.ts';
 import { fail, mac, macOk, parseInfo, type PeerInfo, type Reply } from '../devices/pair-proof.ts';
+import { codeFor } from './code.ts';
 import { remoteIdOf } from './id.ts';
 import { bytes, commitment, matchCode, newEphemeral, newNonce, sessionKey, signedBytes, transcript, verifySide } from './sas.ts';
 
@@ -42,7 +47,7 @@ interface Request {
   /** This PC's identity as sent in the answer to remote1 (the transcript covers exactly that). */
   mine: PeerInfo;
   eph: KeyObject; ephA: Buffer; ephB: Buffer; na: Buffer; commit: string; t?: Buffer; key?: Buffer; code?: string;
-  stage: Stage; expiresAt: number; timer?: unknown; reason?: string; personId?: string; delivered?: boolean;
+  stage: Stage; expiresAt: number; timer?: unknown; reason?: string; personId?: string; newPerson?: NewPerson; delivered?: boolean;
   /** What `link` handed back for the accepted answer (a phone's token), repeated to a requester that asks again. */
   extras?: Record<string, unknown>;
   waiters: Set<() => void>;
@@ -58,10 +63,11 @@ export interface TargetDeps {
   self(): PeerInfo;
   signer: { sign(data: Uint8Array): Buffer };
   /**
-   * Stores the accepted device with its proven key (`info.name` already plain); `personId` for an employee. Throws to
-   * refuse. Fields it returns join the accepted answer (a phone's device token).
+   * Stores the accepted device with its proven key (`info.name` already plain); `personId` for an employee's device, or
+   * `newPerson` to make that person first (F13). Throws to refuse. Fields it returns join the accepted answer (a phone's
+   * device token).
    */
-  link(info: PeerInfo, personId: string | undefined): void | Record<string, unknown>;
+  link(info: PeerInfo, personId: string | undefined, newPerson?: NewPerson): void | Record<string, unknown>;
   /** The roles this side takes (default: the CEO's own PCs and employees' PCs). */
   roles?: readonly AskRole[];
   /** A request is shown: tell the person once (a notification). */
@@ -122,13 +128,18 @@ export class TargetRequests {
     }
   }
 
-  /** The person's answer (remote.decide); an employee's PC needs the person it belongs to. */
-  decide(id: string, accept: boolean, personId?: string): void {
+  /**
+   * The person's answer (remote.decide): an employee's PC needs the person it belongs to (`personId` or `newPerson`), a
+   * phone takes either (none: my own phone), my own PC takes no new person.
+   */
+  decide(id: string, accept: boolean, personId?: string, newPerson?: NewPerson): void {
     const request = [...this.bySession.values()].find((entry) => entry.id === id && entry.stage === 'shown');
-    if (!request) throw new WorkforceError('not_found', 'This request is no longer open.');
+    if (!request) throw new WorkforceError('not_found', 'This request is no longer open: it was answered or has ended.');
     if (!accept) return this.end(request, 'declined', 'The other PC declined.');
-    if (request.role === 'employee' && !personId) throw new WorkforceError('bad_request', 'Pick the person this PC belongs to.');
-    request.personId = request.role === 'employee' ? personId : undefined;
+    if (request.role === 'ceo' && newPerson) throw new WorkforceError('bad_request', `${request.label} asks to join as your own PC, not as a person's.`);
+    if (request.role === 'employee' && !personId && !newPerson) throw new WorkforceError('bad_request', 'Pick the person this PC belongs to.');
+    request.personId = request.role === 'ceo' ? undefined : personId;
+    request.newPerson = request.role === 'ceo' || personId ? undefined : newPerson;
     const until = Math.max(request.expiresAt, this.deps.now() + DELIVERY_GRACE_MS);
     if (until !== request.expiresAt) {
       request.expiresAt = until;
@@ -155,7 +166,10 @@ export class TargetRequests {
     const self = this.deps.self();
     if (info.id === self.id) return fail('bad_request', 'A PC cannot connect to itself.');
     const target = body.target as { remoteId?: unknown } | undefined;
-    if (typeof target?.remoteId === 'string' && target.remoteId !== remoteIdOf(fingerprintOf(fromB64url(self.pub)))) return fail('not_found', 'This is not the PC that was asked for.');
+    const selfFp = fingerprintOf(fromB64url(self.pub));
+    const code = codeFor(selfFp); // B-084: I answer for my own ID and for my person code
+    if (typeof target?.remoteId === 'string' && target.remoteId !== remoteIdOf(selfFp) && target.remoteId !== code?.code()) return fail('not_found', 'This is not the PC that was asked for.');
+    const chain = code?.chain();
     const now = this.deps.now();
     if (!this.take(address || 'unknown', now)) return fail('rate_limited', 'Too many requests from this address. Try again in a few minutes.');
     const open = [...this.bySession.values()].filter(isOpen);
@@ -170,7 +184,7 @@ export class TargetRequests {
     };
     this.bySession.set(request.session, request);
     request.timer = this.deps.timers.set(() => this.expire(request), COMMIT_TTL_MS);
-    return { ok: true, session: request.session, device: self, eph: b64url(eph.pub), commit: request.commit };
+    return { ok: true, session: request.session, device: self, eph: b64url(eph.pub), commit: request.commit, ...(chain?.links.length ? { chain } : {}) };
   }
 
   private onReveal(body: Record<string, unknown>): Reply {
@@ -216,7 +230,7 @@ export class TargetRequests {
   private deliver(request: Request): Reply {
     if (!request.delivered) {
       try {
-        const extras = this.deps.link({ ...request.info, name: request.label }, request.personId);
+        const extras = this.deps.link({ ...request.info, name: request.label }, request.personId, request.newPerson);
         if (extras) request.extras = extras;
         request.delivered = true;
         this.deps.log.info('connect request linked', { id: request.id, role: request.role });

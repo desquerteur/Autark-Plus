@@ -1,12 +1,18 @@
-// The tools of the subconscious's two brains (owner 01.11.2026: "die haben Wissen und Tools"). A tool = name, its args in
-// one short form, one line, a handler; the prompt's tool list is generated from FLOW_TOOLS, so a new ability is one entry
-// here (or one more list spread into FLOW_TOOLS). Both brains share all of them; the flow's own steering (agent.tell, route,
-// done) is built the same way. vector.search only compares with what is already embedded; nothing is embedded here unless a
-// brain calls vector.embed. B-078: skills.find searches the knowledge catalog (knowledge/find.ts), thought.keep keeps the
-// run's own keyword thoughts (thoughts.ts). skills.load opens one of the agent's skills as its route resolves it, with the main AI's text
-// (tools/builtin/skills.ts). voice.words adds to the learned words of speech recognition (settings.json voice.vocabulary)
-// through the settings store and writes nothing else there.
-// Owns: these handlers and what they answer the brain. Never: talks to a model, throws past a handler's own error text,
+// The subconscious's tools (owner 01.11.2026: "die haben Wissen und Tools"). A tool = name, its args in one short form,
+// one line, a handler; the prompt's tool list is generated from FLOW_TOOLS, so a new ability is one entry here (or one
+// more list spread into FLOW_TOOLS). The flow's own steering (agent.tell, done) is built the same way. Since v1 (14.11.2026)
+// every run is the main AI's own call (service.ts ask): it waits for the answer, so what a run tells, shows and answers
+// all reaches it.
+// knowledge.find finds what the main AI's knowledge.find finds: memory files (knowledge search – by their words, by meaning
+// where a person chose an embedding model) as hits a run can show, the knowledge catalog (knowledge/find.ts) and the secrets
+// catalog's best entries with their handles (F19, secrets/metadata.ts findSecretLines – never a value).
+// vector.search and vector.embed need a chosen embedding model (requires 'embeddings'): without one a run is not offered them
+// (flow.ts), like the main AI (tools/registry.ts). vector.search only compares with what is already embedded; nothing is
+// embedded here unless the run calls vector.embed. thought.keep keeps the run's own keyword thoughts
+// (thoughts.ts), knowledge.open opens one of the agent's skills whole, memory.read pages a
+// file. voice.words adds to the learned words of speech recognition (settings.json voice.vocabulary) through the settings
+// store and writes nothing else there. How the main AI's coming turn runs is the routing call's (route-turn.ts, v1), not a tool's.
+// Owns: these handlers and what they answer the run. Never: talks to a model, throws past a handler's own error text,
 // lists memory into any agent's context, or stores a secret value.
 
 import { existsSync } from 'node:fs';
@@ -21,13 +27,11 @@ import '../contracts/open-fs.ts';
 import '../contracts/vectors.ts';
 import { folderText } from '../tools/builtin/memory.ts';
 import { loadedSkillText } from '../tools/builtin/skills.ts';
-import { contextTools, showRestored } from './context-tools.ts';
+import { contextTools } from './context-tools.ts';
 import { thoughtTool } from './thoughts.ts';
 import { catalogLine, findInCatalog, markerLines } from '../knowledge/find.ts';
+import { findSecretLines } from '../secrets/metadata.ts';
 import { knownShare, similarity } from './text.ts';
-
-export type Brain = 'decision' | 'llm';
-export type RunKind = 'before-turn' | 'after-turn' | 'asked';
 
 /** What a handler sees of the running flow. */
 export interface FlowRun {
@@ -36,14 +40,12 @@ export interface FlowRun {
   readonly conversationId?: string;
   readonly thread: string;
   readonly taskId?: string;
-  readonly kind: RunKind;
   readonly signal: AbortSignal;
-  /** A vector.search's hits by their reference (h1, h2 …): what done.show may pick. */
+  /** A search's hits by their reference (h1, h2 …): what done.show may pick. */
   readonly hits: Map<string, { search: number; hit: VectorHit }>;
-  readonly searches: Array<{ query: string; in: string[] }>;
-  /** What this run brought back to full (context.restore): what done.show may pick. */
-  readonly restored?: Set<string>;
-  /** One text from the brain that holds the flow, outside the steps (a condensation); undefined when there is none or the run has used its budget. */
+  /** Each search that numbered hits: the tool and its query and places, as the main AI is shown the call. */
+  readonly searches: Array<{ tool: string; query: string; in: string[] }>;
+  /** One text from the run's model, outside the steps (a condensation); undefined when there is none or the run has used its budget. */
   word?(system: string, prompt: string): Promise<string | undefined>;
   /** What this run knows: what happened and what its tools returned, as its last step read them. */
   saw?(): string;
@@ -51,8 +53,6 @@ export interface FlowRun {
   readonly tally?: { used: number; saved: number };
   /** Shows a call to the main AI (the trace). */
   show(call: TraceCall): void;
-  /** Hands the flow to a brain with a task. */
-  route(to: Brain, task: string): void;
   /** Ends the flow. `answer`: what it says to the one who asked; `show`: the hits that go to the main AI; `note`: what it noticed, which goes with them. */
   finish(result: { answer?: string; show?: string[]; note?: string }): void;
 }
@@ -62,14 +62,18 @@ export interface FlowTool {
   /** The args in one short form, e.g. {query, in: [places], k?}. */
   args: string;
   line: string;
+  /** 'embeddings': offered only while a chosen embedding model can serve (the main AI's tools carry the same). */
+  requires?: 'embeddings';
   run(args: Record<string, unknown>, run: FlowRun): Promise<string> | string;
 }
 
 /** Who a memory file names as its writer. */
 export const SUBCONSCIOUS_ID = 'subconscious';
-const NO_VECTORS = 'No embedder is connected, so nothing can be searched by meaning.';
 const SNIPPET_CHARS = 400;
-const READ_CHARS = 6000;
+/** Memory files and catalog entries one knowledge.find shows each (within what a step keeps of an output, flow.ts OUTPUT_CHARS). */
+const FIND_HITS = 5;
+/** One page of a memory file or a skill's text: within what a step keeps of an output (flow.ts OUTPUT_CHARS), like context.read. */
+const PAGE_CHARS = 3600;
 const BROWSE_CHARS = 3000;
 const EMBED_BUDGET_MS = 20_000;
 /** Below this share of its long words known to the run, a memory text comes from elsewhere, or is in another language than the exchange's. */
@@ -82,11 +86,18 @@ function clip(text: string, max: number): string {
 const stringOf = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 const listOf = (value: unknown): string[] => (Array.isArray(value) ? value : typeof value === 'string' ? [value] : []).filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim());
 
+/** PAGE_CHARS of `text` from the character `given`, with what follows named (memory.read, knowledge.open). */
+function page(text: string, given: unknown): string {
+  const from = Math.max(0, Math.trunc(Number(given)) || 0);
+  const rest = text.length - from - PAGE_CHARS;
+  return `${text.slice(from, from + PAGE_CHARS)}${rest > 0 ? `\n[… ${rest} more characters, from ${from + PAGE_CHARS}]` : ''}`;
+}
+
 function redacted(services: RuntimeServices, text: string): string {
   return services.secrets ? services.secrets.redact(text) : text;
 }
 
-/** A place as a brain names it: a folder or file of the workspace may be named as the main AI's tools take it; "memory…" and absolute paths are as they are. */
+/** A place as the run names it: a folder or file of the workspace may be named as the main AI's tools take it; "memory…" and absolute paths are as they are. */
 function placeOf(run: FlowRun, given: string): string {
   if (given === 'memory' || /^memory[\\/]/.test(given) || path.isAbsolute(given)) return given;
   const inWorkspace = path.resolve(run.services.paths.workspace, given);
@@ -99,27 +110,29 @@ export function hitLine(hit: VectorHit): string {
   return `${hit.path}${lines}: ${clip(hit.snippet.replace(/\s+/g, ' ').trim(), SNIPPET_CHARS)}`;
 }
 
+/** One hit of search number `search` as its line, numbered: a hit found before keeps its reference (h1, h2 …). */
+function numbered(run: FlowRun, search: number, hit: VectorHit): string {
+  const known = [...run.hits].find(([, held]) => held.hit.path === hit.path && held.hit.chunk === hit.chunk)?.[0];
+  const ref = known ?? `h${run.hits.size + 1}`;
+  if (!known) run.hits.set(ref, { search, hit });
+  return `${ref} (${hit.score.toFixed(2)}) ${hitLine(hit)}`;
+}
+
 const vectorTools: FlowTool[] = [
   {
     name: 'vector.search',
     args: '{query, in: [places], k?, hops?}',
     line: 'Like grep by meaning: compares my query text as a whole with what is already embedded under the places in "in", so the words a matching text holds (names, things) find it and a question or a list of kinds of information blurs it. A place is a file or folder path, or a path in the memory tree (memory, memory/<folder>); "catalog" is the skills, home project and public library. hops 1–2: the best hits search on, so what lies close to them comes too. Numbers its hits h1, h2 ….',
+    requires: 'embeddings',
     async run(args, run) {
-      const { vectors } = run.services;
-      if (!vectors.available()) return `${NO_VECTORS} memory.browse and memory.read still work.`;
       const query = stringOf(args.query);
       const places = listOf(args.in).map((given) => placeOf(run, given));
       if (!query || !places.length) return 'vector.search needs a query and at least one place in "in".';
       const k = Number(args.k);
       const hops = Number(args.hops);
-      const result = await vectors.search({ query, in: places, ...(Number.isInteger(k) && k > 0 ? { k } : {}), ...(Number.isInteger(hops) && hops > 0 ? { hops } : {}) });
-      const search = run.searches.push({ query, in: places }) - 1;
-      const lines = result.hits.map((hit) => {
-        const known = [...run.hits].find(([, held]) => held.hit.path === hit.path && held.hit.chunk === hit.chunk)?.[0]; // a hit keeps its reference
-        const ref = known ?? `h${run.hits.size + 1}`;
-        if (!known) run.hits.set(ref, { search, hit });
-        return `${ref} (${hit.score.toFixed(2)}) ${hitLine(hit)}`;
-      });
+      const result = await run.services.vectors.search({ query, in: places, ...(Number.isInteger(k) && k > 0 ? { k } : {}), ...(Number.isInteger(hops) && hops > 0 ? { hops } : {}) });
+      const search = run.searches.push({ tool: 'vector.search', query, in: places }) - 1;
+      const lines = result.hits.map((hit) => numbered(run, search, hit));
       return [...lines, result.note ?? '', lines.length || result.note ? '' : 'No hits.'].filter(Boolean).join('\n');
     },
   },
@@ -127,9 +140,9 @@ const vectorTools: FlowTool[] = [
     name: 'vector.embed',
     args: '{paths: [files or folders]}',
     line: 'Embeds these files or folders so they can be searched from now on (whole files; binaries, caches and secrets are skipped). I choose them deliberately.',
+    requires: 'embeddings',
     async run(args, run) {
       const { vectors } = run.services;
-      if (!vectors.available()) return NO_VECTORS;
       const paths = listOf(args.paths).map((given) => placeOf(run, given));
       if (!paths.length) return 'vector.embed needs "paths".';
       return JSON.stringify(await vectors.embed(paths, { budgetMs: EMBED_BUDGET_MS }));
@@ -166,22 +179,21 @@ const memoryTools: FlowTool[] = [
   },
   {
     name: 'memory.read',
-    args: '{path}',
-    line: 'One memory file whole.',
+    args: '{path, from?}',
+    line: `One memory file, ${PAGE_CHARS} characters from the character "from".`,
     async run(args, run) {
       const memory = run.services.knowledge;
       const path = stringOf(args.path);
       if (!path) return 'memory.read needs a path.';
       const file = memory.memoryRead(path);
-      return file ? clip(`${file.title}${file.description ? `\n${file.description}` : ''}\n${file.text}`, READ_CHARS) : `No memory file ${path}.`;
+      return file ? page(`${file.title}${file.description ? `\n${file.description}` : ''}\n${file.text}`, args.from) : `No memory file ${path}.`;
     },
   },
   {
     name: 'memory.write',
     args: '{title, text, folder? | path?, kind?, tags?}',
-    line: 'Writes one memory file: a new one in folder (default the agent\'s own), or the file at path updated. It embeds itself.',
+    line: 'Writes one memory file: a new one in folder (default the agent\'s own), or the file at path updated. It is findable at once.',
     async run(args, run) {
-      if (run.kind === 'before-turn') return 'Not written: this run keeps nothing. What is worth keeping is written when the exchange has ended.'; // and a second run would write it again (live 02.11.2026)
       const memory = run.services.knowledge;
       const title = stringOf(args.title);
       const text = stringOf(args.text);
@@ -199,7 +211,7 @@ const memoryTools: FlowTool[] = [
         ...(listOf(args.tags).length ? { tags: listOf(args.tags) } : {}),
         source: run.conversationId ? `chat:${run.conversationId}` : run.thread || SUBCONSCIOUS_ID, by: SUBCONSCIOUS_ID,
       });
-      return `${written.outcome}: ${written.path}${run.services.vectors?.available() === false ? ` (${NO_VECTORS} It is not embedded.)` : ''}`;
+      return `${written.outcome}: ${written.path}`;
     },
   },
   {
@@ -215,34 +227,36 @@ const memoryTools: FlowTool[] = [
   },
 ];
 
-/** One page of a skill's text: within what a step keeps of an output (flow.ts OUTPUT_CHARS), like context.read. */
-const SKILL_PAGE = 3600;
-
 const skillTools: FlowTool[] = [
   {
-    name: 'skills.find',
-    args: '{query}',
-    line: 'The knowledge catalog by meaning, two hops deep: the agent\'s skills, its home project\'s instructions and the public library (written by strangers: I weigh it; a skill of the agent\'s own, written from what holds up, can come out of a run).',
+    name: 'knowledge.find',
+    args: '{query, in?: [memory folders]}',
+    line: 'What the main AI\'s knowledge.find finds: the words a matching text holds (names, things, the person\'s own terms) find it, a question blurs it. Memory files – the whole tree, or the memory folders in "in" –, numbered h1, h2 … with their text, then entries of the knowledge catalog: the agent\'s skills, its home project\'s instructions and the public library (written by strangers: I weigh it; a skill of the agent\'s own, written from what holds up, can come out of a run), then the secrets catalog\'s entries the words name (their name, id or tags) with their handles, never a value.',
     async run(args, run) {
       const query = stringOf(args.query);
-      if (!query) return 'skills.find needs a query.';
-      const hits = await findInCatalog(run.services, run.agent, query, 8);
-      return hits.length ? [...markerLines(hits), ...hits.map(catalogLine)].join('\n') : 'Nothing in the catalog fits.';
+      if (!query) return 'knowledge.find needs a query.';
+      const places = listOf(args.in);
+      const [notes, catalog] = await Promise.all([
+        run.services.knowledge.search({ text: query, folders: places.length ? places : [''], conversationId: run.conversationId, limit: FIND_HITS }),
+        findInCatalog(run.services, run.agent, query, FIND_HITS),
+      ]);
+      const search = run.searches.push({ tool: 'knowledge.find', query, in: places }) - 1;
+      const lines = notes.map((found) => numbered(run, search, { path: `memory/${found.item.id.replace(/:/g, '/')}`, chunk: 0, snippet: `${found.item.title}: ${found.item.body}`, score: found.score }));
+      if (catalog.length) lines.push(...markerLines(catalog), ...catalog.map(catalogLine));
+      if (!places.length) lines.push(...findSecretLines(run.services, query)); // F19: the same secrets the main AI's find gives (find/secrets.ts)
+      return lines.length ? lines.join('\n') : 'Nothing in memory or the catalogs fits.';
     },
   },
   {
-    name: 'skills.load',
+    name: 'knowledge.open',
     args: '{name, from?}',
-    line: `One of the agent's skills, as the main AI's skills.load gives it, ${SKILL_PAGE} characters from the character "from".`,
+    line: `One of the agent's skills by name, whole, ${PAGE_CHARS} characters from the character "from".`,
     run(args, run) {
       const name = stringOf(args.name);
-      if (!name) return 'skills.load needs a name.';
+      if (!name) return 'knowledge.open needs a name.';
       const skill = run.services.skills.get(name, run.agent.id); // the main AI's call and route
       if (!skill) return `No skill ${name}.`;
-      const text = loadedSkillText(skill);
-      const from = Math.max(0, Math.trunc(Number(args.from)) || 0);
-      const rest = text.length - from - SKILL_PAGE;
-      return `${text.slice(from, from + SKILL_PAGE)}${rest > 0 ? `\n[… ${rest} more characters, from ${from + SKILL_PAGE}]` : ''}`;
+      return page(loadedSkillText(skill), args.from);
     },
   },
 ];
@@ -267,14 +281,14 @@ const voiceTools: FlowTool[] = [
   },
 ];
 
-/** Runs told once what their done would not reach: an asked run that gave no answer, another run with words nobody reads (a second one ends the run). */
+/** Runs told once that the main AI waits for an answer (an empty done; a second one ends the run). */
 const toldOnce = new WeakSet<FlowRun>();
 
 const flowTools: FlowTool[] = [
   {
     name: 'agent.tell',
     args: '{text}',
-    line: 'A short note the main AI gets as this tool\'s output before its next model turn. I send one when it really helps its work.',
+    line: 'A short note the main AI gets with my answer. I send one when it really helps its work.',
     run(args, run) {
       const text = stringOf(args.text);
       if (!text) return 'agent.tell needs a text.';
@@ -283,28 +297,13 @@ const flowTools: FlowTool[] = [
     },
   },
   {
-    name: 'route',
-    args: '{to: "llm" | "decision", task}',
-    line: 'Hands the flow to the other brain with what it should do; it goes on with the same tools and can route back.',
-    run(args, run) {
-      const to = args.to === 'llm' || args.to === 'decision' ? args.to : undefined;
-      if (!to) return 'route needs to: "llm" or "decision".';
-      run.route(to, stringOf(args.task));
-      return `routed to ${to}`;
-    },
-  },
-  {
     name: 'done',
     args: '{answer?, show?: [hit refs], note?}',
-    line: 'Ends the run. show: the hits (h1, h2 …) and restored item ids worth the main AI seeing. note: one sentence stating what I noticed about what I show that the person should hear from the main AI, no advice; it goes only with what I show. answer: my reply when the main AI asked (longer than a sentence or two, the LLM writes it: I route with what I found); in any other run nobody reads it. With nothing worth showing, just done: the main AI then sees nothing at all.',
+    line: 'Ends the run. answer: my reply to the main AI, which waits for it – also to say plainly that there is nothing. show: the hits (h1, h2 …) worth the main AI seeing; they come with my answer. note: one sentence stating what I noticed about what I show that the person should hear from the main AI, no advice.',
     run(args, run) {
       const answer = stringOf(args.answer) || undefined;
       const show = listOf(args.show);
-      if (!show.length && !toldOnce.has(run)) {
-        if (run.kind === 'asked' && !answer) { toldOnce.add(run); return 'The main AI asked and waits for my answer: I end with done and answer, also to say plainly that there is nothing.'; }
-        if (run.kind !== 'asked' && (answer || stringOf(args.note)) && run.hits.size) { toldOnce.add(run); return 'Nobody reads that: in this run only what show names reaches the main AI, with my note. I name the hits it rests on, or end with a plain done.'; }
-      }
-      showRestored(run, show);
+      if (!show.length && !answer && !toldOnce.has(run)) { toldOnce.add(run); return 'The main AI asked and waits for my answer: I end with done and answer, also to say plainly that there is nothing.'; }
       run.finish({ answer, show, note: stringOf(args.note) ? redacted(run.services, stringOf(args.note)) : undefined });
       return 'done';
     },

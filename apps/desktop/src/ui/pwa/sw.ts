@@ -1,5 +1,5 @@
 // Service worker of the Workforce PWA (served by the runtime at /sw.js, built to app/ui/sw.js).
-// Owns: app-shell caching, offline fallback for navigation, the offline "For you" snapshot
+// Owns: app-shell caching, offline (and 5xx) fallback for navigation, the offline "For you" snapshot
 // endpoint (/offline/todos.json from IndexedDB), Web Push display and notification clicks.
 // The shell it precaches at install is index.html, main.js, main.css and – filled in by the build
 // (scripts/sw-precache.mjs → esbuild define) – every chunk main.js imports statically, under a
@@ -74,10 +74,13 @@ async function offlineTodos(): Promise<Response> {
   return new Response(JSON.stringify(snapshot ?? { at: 0, items: [] }), { headers: { 'content-type': 'application/json' } });
 }
 
+/** A page load: the network's index.html (kept for later); offline or a 5xx (the Android app's local entrance answers
+ *  503 while its link to the PC is down) boots the cached one, which reconnects by itself. */
 async function networkFirstShell(request: Request): Promise<Response> {
   try {
     const response = await fetch(request);
     if (response.ok) (await caches.open(CACHE)).put('/index.html', response.clone()).catch(() => undefined);
+    if (response.status >= 500) return (await caches.match('/index.html')) ?? response;
     return response;
   } catch {
     return (await caches.match('/index.html')) ?? new Response('Offline', { status: 503 });
@@ -128,5 +131,6 @@ sw.addEventListener('message', (event) => {
   }
 });
 
-// Push, notice taps and clears (shared with the iPhone web app's worker, which always shows a notice).
-wireNotifications(sw as unknown as NotifyScope, { home: '/', icon: '/icon.png', alwaysShow: false });
+// Push, notice taps and clears (shared with the iPhone web app's worker, which always shows a notice). The badge is the
+// Autark mark, white on transparent (assets/badge.png, copied by the build), so Android's status bar shows the mark.
+wireNotifications(sw as unknown as NotifyScope, { home: '/', icon: '/icon.png', badge: '/badge.png', alwaysShow: false });

@@ -1,11 +1,18 @@
-// Owns: local human/agent reports, redaction, deduplication, whether this build can send (`status`: a receiver
-// shipped in resources/feedback/receiver.json) and explicit delivery (delivery.ts: sealed for the team, B-055), plus
-// the team side on the PC holding the team's key (inbox.ts, setup.ts).
-// AF-003: one runtime log line for every step – at start whether this build can send (and which receiver file it
-// reads), each saved report, a report that stays on the PC because sending is not set up, each delivery and each
-// failed send with its reason – ids, kinds and reasons only, never the report's text or screenshot.
-// Never: opens an issue form, publishes anything (every report is sealed for the team; `visibility` is ignored) or
-// claims delivery before the mailbox answered. Older browser drafts ('queued', with their stored url) stay readable.
+// Owns: local human/agent reports, redaction, deduplication (agents: the same text; 16.11.2026 people: the writing
+// device's clientId), the report's context (this PC's version and OS, where it was written, this company's folder),
+// whether this build can send (`status`: a receiver shipped in resources/feedback/receiver.json) and delivery
+// (delivery.ts: sealed for the team, B-055), plus the team side on the PC holding the team's key (inbox.ts, setup.ts),
+// and the feedback log lines (B-085): at start whether sending is set up, then one line per sent (id, receipt) or
+// failed (id, code, reason, status) report; AF-003 adds one per saved report and one when it stays on this PC.
+// Autark-Plus: on explicit action a report is filed as a GitHub issue (github.ts) – through the connected GitHub app,
+// else as a prefilled new-issue link for the browser.
+// 16.11.2026 (owner: "dass das Feedback verloren geht, … wäre sehr schlecht"): a person's report whose sealed letter
+// is still to go is sent again by itself – at start, after any send that went through, and once RESEND_AFTER_MS after
+// a send that found no connection or server (one unref'd timer, only while such a report waits). A letter the mailbox
+// refused and an agent's report (it waits for the person, tools/builtin/feedback.ts) never go by themselves.
+// Never: opens an issue form, publishes anything (every report is sealed for the team; `visibility` is ignored),
+// claims delivery before the mailbox answered, polls, or logs a report's text. Older browser drafts ('queued', with
+// their stored url) stay readable.
 
 import { openSync, readSync, closeSync, statSync } from 'node:fs';
 import os from 'node:os';
@@ -13,12 +20,15 @@ import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
 import type { FeedbackApi } from '../rpc/extras.ts';
 import { type FeedbackKind, type FeedbackReport, type FeedbackVisibility } from '../../shared/model/system.ts';
-import type { FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
+import { FEEDBACK_CLIENT_DIAGNOSTICS_MAX, FEEDBACK_CLIENT_MAX, type FeedbackSetupResult, type FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 import { HUMAN_ID, newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
+import { KvRepo } from '../store/kv.ts';
 import { FeedbackRepo } from '../store/feedback.ts';
-import { redactText } from './redact.ts';
-import { deliver } from './delivery.ts';
+import { FIRST_FOLDER } from '../../shared/model/companies.ts';
+import { redactText } from '../../shared/secrets/redact-text.ts';
+import { deliver, OUTBOX, resendable, type OutboxEntry } from './delivery.ts';
+import type { DropReason } from './drop.ts';
 import { FeedbackInbox } from './inbox.ts';
 import { readReceiver, receiverPath, type ReceiverConfig } from './receiver.ts';
 import { setupReceiver, type SetupInput } from './setup.ts';
@@ -29,17 +39,43 @@ const MAX_TEXT = 20_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** New reports one agent may file per 24 h (repeats of the same text only raise `count`). */
 export const AGENT_REPORTS_PER_DAY = 5;
+/** After a send that found no connection or server, the reports still to go are tried again once this much later. */
+export const RESEND_AFTER_MS = 10 * 60 * 1000;
+/** Why a send may go by itself later; 'refused' and 'not_set_up' wait for a person. */
+const PASSING: readonly DropReason[] = ['offline', 'timeout', 'server'];
+/** Stored file types a recorded take may have (the store names a file by its magic bytes: WebM sniffs as video/webm). */
+const AUDIO_FILES = ['audio/webm', 'video/webm', 'audio/mp4', 'video/mp4'];
 
 export interface FeedbackInput {
-  kind: FeedbackKind;
+  /** Agents always; a person's report may leave it out. */
+  kind?: FeedbackKind;
   text: string;
   screenshotFileId?: string;
   annotationFileId?: string;
+  audioFileIds?: string[];
   view?: string;
   conversationId?: string;
   /** The agent run that filed the report (agent reports only). */
   runId?: string;
+  /** People only: the writing device's id for the report – the same id returns the stored report. */
+  clientId?: string;
+  /** People only: where the report was written (the page's facts), kept to FEEDBACK_CLIENT_MAX. */
+  client?: string;
+  /** People only: the writing device's own diagnostics, kept to FEEDBACK_CLIENT_DIAGNOSTICS_MAX. */
+  clientDiagnostics?: string;
   author: string;
+}
+
+/** This company's data folder on this PC: 'first' (the app's own folder) or its id ('company-2'); undefined without companies (tests, headless). */
+export function companySlot(s: Pick<RuntimeServices, 'host' | 'paths'>): string | undefined {
+  const info = s.host.app.companies;
+  if (!info) return undefined;
+  return path.resolve(s.paths.data) === path.resolve(info.first) ? FIRST_FOLDER : path.basename(s.paths.data);
+}
+
+/** A failed send that may go by itself later (no connection, no answer in time, a server error). */
+export function passing(error: unknown): boolean {
+  return error instanceof WorkforceError && PASSING.includes(error.details?.reason as DropReason);
 }
 
 export interface SendOptions {
@@ -49,7 +85,7 @@ export interface SendOptions {
   reveal?: boolean;
 }
 
-/** Delay of the one inbox fetch after start (receiving PCs only), so it never competes with the start itself. */
+/** Delay of the start's resend and its one inbox fetch (receiving PCs only), so neither competes with the start itself. */
 export const START_FETCH_DELAY_MS = 15_000;
 
 export interface FeedbackDeps {
@@ -67,25 +103,30 @@ export interface FeedbackDeps {
   tokenUrl?: string;
 }
 
-/** The log fields of a failed send: the report, the error's code and reason (offline, timeout, server, refused, not_set_up) and its user-safe text. */
-export function sendFailure(id: string, error: unknown): Record<string, unknown> {
-  if (error instanceof WorkforceError) {
-    const reason = typeof error.details?.reason === 'string' ? error.details.reason : undefined;
-    const status = typeof error.details?.status === 'number' ? error.details.status : undefined;
-    return { id, code: error.code, ...(reason ? { reason } : {}), ...(status ? { status } : {}), error: error.message };
-  }
-  return { id, code: 'internal', error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) };
-}
-
 /** Comparison key for "the same report": case and whitespace do not matter. */
 function sameTextKey(text: string): string {
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** The log facts of a failed send: our own error code, reason and status – never the report or a remote body. */
+export function sendFailure(id: string, error: unknown): Record<string, unknown> {
+  const details = error instanceof WorkforceError ? error.details : undefined;
+  return {
+    id,
+    code: error instanceof WorkforceError ? error.code : 'internal',
+    ...(details?.reason !== undefined ? { reason: details.reason } : {}),
+    ...(details?.status !== undefined ? { status: details.status } : {}),
+    error: error instanceof Error ? error.message : String(error),
+  };
 }
 
 export class FeedbackService implements FeedbackApi {
   private readonly deps: FeedbackDeps;
   private repoInstance: FeedbackRepo | undefined;
   private readonly sending = new Map<string, Promise<FeedbackReport>>();
+  /** The running resend pass (one at a time) and the one timer of the next try after a failed send. */
+  private resending: Promise<number> | undefined;
+  private retry: ReturnType<typeof setTimeout> | undefined;
   /** The team inbox (owner only, RPC feedback.inbox*); empty on every PC without the team's key. */
   readonly inbox: FeedbackInbox;
 
@@ -95,14 +136,57 @@ export class FeedbackService implements FeedbackApi {
     this.inbox = new FeedbackInbox({ services: deps.services, fetch: deps.fetch, firestore: deps.firestore, tokenUrl: deps.tokenUrl });
   }
 
-  /** Once at app start: one log line whether this build can send; on the team's PC one inbox fetch shortly after (no timer after it). */
+  /**
+   * Once at app start: one line whether this build can send; shortly after, the reports still to go are sent again and,
+   * on the team's PC, the inbox is fetched once (no timer after it).
+   */
   start(): void {
-    this.logSending();
+    const s = this.deps.services();
+    const receiver = this.receiver(s);
+    if (receiver) s.log.info('feedback sending set up', { project: receiver.project });
+    else s.log.warn('feedback sending not set up: reports stay on this PC', { receiverFile: receiverPath(s) });
     const timer = setTimeout(() => {
+      void this.resendPending();
       if (!this.inbox.receiving()) return;
       this.inbox.fetch().catch((error: unknown) => this.deps.services().log.warn('feedback inbox fetch failed', { error: error instanceof Error ? error.message : String(error) }));
     }, START_FETCH_DELAY_MS);
     timer.unref?.();
+  }
+
+  /**
+   * Sends every person's report again whose sealed letter is still to go (oldest first); answers how many went. A
+   * pass that finds no connection stops there and tries once more RESEND_AFTER_MS later. One pass at a time.
+   */
+  resendPending(): Promise<number> {
+    this.resending ??= this.resendOnce()
+      .catch((error: unknown) => { this.deps.services().log.warn('feedback resend failed', { error: error instanceof Error ? error.message : String(error) }); return 0; })
+      .finally(() => { this.resending = undefined; });
+    return this.resending;
+  }
+
+  private async resendOnce(): Promise<number> {
+    const s = this.deps.services();
+    if (!this.receiver(s)) return 0;
+    const kv = new KvRepo(s.db);
+    let sent = 0;
+    for (const report of this.repo(s).byStatus(HUMAN_ID, 'local')) {
+      if (!resendable(kv.get<OutboxEntry>(OUTBOX, report.id))) continue;
+      try {
+        await this.send(report.id);
+        sent += 1;
+      } catch (error) {
+        if (passing(error)) return sent; // no connection: the timer send() armed tries again
+      }
+    }
+    if (this.retry) { clearTimeout(this.retry); this.retry = undefined; } // nothing that can go by itself waits now
+    return sent;
+  }
+
+  /** The one timer of the next resend, armed after a failed send while no other waits. */
+  private retryLater(): void {
+    if (this.retry) return;
+    this.retry = setTimeout(() => { this.retry = undefined; void this.resendPending(); }, RESEND_AFTER_MS);
+    this.retry.unref?.();
   }
 
   /** wf feedback setup (owner only). */
@@ -112,40 +196,54 @@ export class FeedbackService implements FeedbackApi {
 
   create(input: FeedbackInput): FeedbackReport {
     const s = this.deps.services();
-    if (!KINDS.includes(input.kind)) throw new WorkforceError('bad_request', 'Choose bug, idea, change or praise.');
+    const author = input.author || HUMAN_ID;
+    const human = author === HUMAN_ID;
+    if (input.kind !== undefined ? !KINDS.includes(input.kind) : !human) throw new WorkforceError('bad_request', 'Choose bug, idea, change or praise.');
+    const clientId = human ? input.clientId : undefined;
+    const known = clientId ? this.repo(s).byClientId(HUMAN_ID, clientId) : undefined;
+    if (known) return known; // the device's retry after a lost answer: no second report
     const textValue = typeof input.text === 'string' ? input.text.trim() : '';
     if (!textValue) throw new WorkforceError('bad_request', 'Describe the problem or idea.');
     if (textValue.length > MAX_TEXT) throw new WorkforceError('bad_request', `Keep the report under ${MAX_TEXT} characters.`);
     for (const id of [input.screenshotFileId, input.annotationFileId]) {
       if (id && !s.files.get(id)) throw new WorkforceError('not_found', 'The attached screenshot was not found.');
     }
+    for (const id of input.audioFileIds ?? []) {
+      const file = s.files.get(id);
+      if (!file) throw new WorkforceError('not_found', 'The attached recording was not found.');
+      if (!AUDIO_FILES.includes(file.mime)) throw new WorkforceError('bad_request', 'Attach the recording as WebM or MP4 audio.');
+    }
     const now = s.clock.now();
-    const author = input.author || HUMAN_ID;
     const text = this.redact(s, textValue);
-    if (author !== HUMAN_ID) {
+    if (!human) {
       const repeated = this.agentRepeat(s, author, text, now);
       if (repeated) return repeated;
     }
+    const client = human && input.client ? this.redact(s, input.client).replace(/\s+/g, ' ').trim().slice(0, FEEDBACK_CLIENT_MAX) : '';
+    const clientDiagnostics = human && input.clientDiagnostics?.trim() ? this.redact(s, input.clientDiagnostics.trim()).slice(0, FEEDBACK_CLIENT_DIAGNOSTICS_MAX) : '';
+    const company = companySlot(s);
     const report: FeedbackReport = {
       id: newId('fb', now),
-      kind: input.kind,
       text,
       author,
       context: {
-        view: input.view?.slice(0, 120) || undefined,
-        conversationId: input.conversationId,
-        runId: author !== HUMAN_ID ? input.runId : undefined,
         version: s.host.app.version,
         os: this.deps.os ?? `${process.platform} ${os.release()} ${process.arch}`,
+        ...(input.view?.slice(0, 120) ? { view: input.view.slice(0, 120) } : {}),
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        ...(!human && input.runId ? { runId: input.runId } : {}),
+        ...(client ? { client } : {}),
+        ...(company ? { company } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(clientDiagnostics ? { clientDiagnostics } : {}),
       },
       status: 'local',
       createdAt: now,
     };
+    if (input.kind) report.kind = input.kind;
     if (input.screenshotFileId) report.screenshotFileId = input.screenshotFileId;
     if (input.annotationFileId) report.annotationFileId = input.annotationFileId;
-    if (!report.context.view) delete report.context.view;
-    if (!report.context.conversationId) delete report.context.conversationId;
-    if (!report.context.runId) delete report.context.runId;
+    if (input.audioFileIds?.length) report.audioFileIds = [...new Set(input.audioFileIds)];
     this.repo(s).save(report);
     s.bus.emit('feedback.upserted', report);
     s.log.info('feedback saved', { id: report.id, kind: report.kind, by: author === HUMAN_ID ? 'human' : 'agent', screenshot: Boolean(report.annotationFileId ?? report.screenshotFileId) });
@@ -163,8 +261,9 @@ export class FeedbackService implements FeedbackApi {
   }
 
   /**
-   * Explicit user action: seal the report for the team and drop it into the mailbox. Concurrent clicks share one
-   * request; `visibility` is ignored (nothing is public any more).
+   * Seals the report for the team and drops it into the mailbox – a person's Send, or the resend of a person's report
+   * still to go. Concurrent calls share one request; `visibility` is ignored (nothing is public any more). A send that
+   * went through sends what else waits; one that found no connection or server arms the one resend timer.
    */
   async send(id: string, options: SendOptions = {}): Promise<FeedbackReport> {
     const s = this.deps.services();
@@ -181,9 +280,11 @@ export class FeedbackService implements FeedbackApi {
           repo.save(sent);
           s.bus.emit('feedback.upserted', sent);
           s.log.info('feedback sent', { id, receipt: sent.receiptId });
+          void this.resendPending(); // the way out works again: what else waits goes too
           return sent;
         }, (error: unknown) => {
           s.log.warn('feedback send failed', sendFailure(id, error)); // AF-003: the form shows the message, the log keeps why
+          if (report.author === HUMAN_ID && passing(error)) this.retryLater();
           throw error;
         })
         .finally(() => { this.sending.delete(id); });
@@ -289,17 +390,6 @@ export class FeedbackService implements FeedbackApi {
   /** The receiver file this app reads (for the log; tests that hand in a receiver have none). */
   private receiverFile(s: RuntimeServices): string | undefined {
     return this.deps.receiver === undefined ? receiverPath(s) : undefined;
-  }
-
-  /** AF-003: at start, one line whether reports can leave this PC – so "it does not send" is visible in the log. */
-  private logSending(): void {
-    try {
-      const s = this.deps.services();
-      const config = this.receiver(s);
-      const receiverFile = this.receiverFile(s);
-      if (config) s.log.info('feedback sending is set up', { project: config.project, ...(config.endpoint ? { endpoint: config.endpoint } : {}), receiverFile });
-      else s.log.warn('feedback sending is not set up: reports stay on this PC (no valid receiver.json)', { receiverFile });
-    } catch { /* logging never blocks the start */ }
   }
 
   private repo(s: RuntimeServices): FeedbackRepo {

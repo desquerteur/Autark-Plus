@@ -1,12 +1,18 @@
 // Pane tab › Media without a file: the stored media as one list with a search over names, descriptions and tags (media.list
 // with `text`), newest first and fresh through media.upserted. A row opens that file in a tab of its own in this
-// surface's space (space.ts).
-// Owns: the search field, a short debounce and the list. Never: edits or deletes files (an agent does that on request).
+// surface's space (space.ts). B-084: one fixed "Add files" button at the end of the search row stores picked files
+// (media-add.ts; tagged 'from phone' inside a phone app); while it works a spinner takes the same box.
+// Owns: the search field, a short debounce, the list and the add button. Never: edits or deletes files (an agent does
+// that on request).
 
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { MediaInfo } from '../../shared/model/media.ts';
+import { uploadRef } from '../lib/files.ts';
 import { errorText, rpc } from '../lib/rpc.ts';
+import { toastError } from '../lib/toasts.ts';
 import { EmptyState, Icon, Spinner, type IconName } from '../lib/ui.tsx';
+import { isPhoneApp } from '../pwa/native.ts';
+import { addFiles } from './media-add.ts';
 import { mediaFacts } from './media-facts.ts';
 import { Row } from './NewTabPage.tsx';
 import { openPanel } from './pages.ts';
@@ -34,6 +40,7 @@ export function MediaLibrary() {
       <div class="pane-search">
         <Icon name="magnifying-glass" size={14} />
         <input type="search" class="pane-search-field" aria-label="Search media" placeholder="Search media" value={text} onInput={(event) => setText(event.currentTarget.value)} />
+        <AddFiles />
       </div>
       <div class="new-tab">
         {failed ? <EmptyState>{failed}</EmptyState>
@@ -42,5 +49,31 @@ export function MediaLibrary() {
           : <ul class="new-tab-list">{files.map((file) => <Row key={file.fileId} icon={MEDIA_ICON[file.kind]} label={file.name} hint={mediaFacts(file)} onClick={() => openPanel({ kind: 'media', fileId: file.fileId, name: file.name }, undefined, space)} />)}</ul>}
       </div>
     </div>
+  );
+}
+
+/** The plus button and its hidden file field; the new rows arrive through media.upserted. */
+function AddFiles() {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const picked = async (field: HTMLInputElement) => {
+    const files = [...(field.files ?? [])];
+    field.value = ''; // the same file can be picked again
+    if (!files.length) return;
+    setBusy(true);
+    const deps = { upload: (file: File) => uploadRef(file), describe: (params: { fileId: string; tags?: string[] }) => rpc.call('media.describe', params), phone: isPhoneApp() };
+    try {
+      for (const { name, error } of await addFiles(files, deps)) toastError(error, `Couldn't add ${name}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" class="icon-button small" aria-label="Add files" title="Add files" aria-busy={busy} disabled={busy} onClick={() => input.current?.click()}>
+        {busy ? <Spinner size={16} label="Adding files" /> : <Icon name="plus" size={16} />}
+      </button>
+      <input ref={input} type="file" multiple hidden onChange={(event) => void picked(event.currentTarget)} />
+    </>
   );
 }

@@ -1,7 +1,8 @@
 // Settings › Feedback: the person's own reports ("Reports"), the reports agents filed ("From agents", unverified, with Dismiss),
 // on the one PC that holds the team's key the "Inbox" (ui/feedback/FeedbackInbox.tsx: what people sent, fetched when it opens).
 // B-078: no "Include recent warnings" switch – the redacted lines always go with Send. A report opens in full in Review, which also sends it;
-// "New report" opens the feedback menu under the header cell, "Watch how it works" the tour. The group hint is always there, so
+// "New report" opens the feedback menu under the header cell, "Watch how it works" the tour video, "Show the tour" the
+// AF-002 spotlight tour through the app (tour/spotlight.ts startTour – it opens the Manager's chat itself where a step needs it). The group hint is always there, so
 // the answer of feedback.status moves nothing.
 // Autark-Plus: Review also offers the report as a GitHub issue (IssuePreview); a filed report's line shows its issue
 // (#number · open/closed) and "Check GitHub" reads the issues' current state.
@@ -21,6 +22,7 @@ import { can } from '../lib/session.ts';
 import { agentName } from '../lib/store.ts';
 import { Button } from '../lib/ui.tsx';
 import { openTour } from '../tour/open.ts';
+import { startTour } from '../tour/spotlight.ts';
 import { act, ActionButton, Group, Row, useAsync, useBusy } from './controls.tsx';
 import { reportLine, reportsHint, sendable } from './feedback-text.ts';
 
@@ -78,6 +80,7 @@ export function FeedbackPage() {
       <Group title="Reports" id="settings-feedback" hint={reportsHint(sending, pc())} actions={(
         <>
           <button type="button" class="button ghost small" onClick={() => openTour()}>Watch how it works</button>
+          <button type="button" class="button ghost small" onClick={() => startTour()}>Show the tour</button>
           {can('feedback.issueRefresh') && mine.concat(fromAgents).some((report) => report.issue) && (
             <button type="button" class="button ghost small" onClick={() => void act(async () => { await rpc.call('feedback.issueRefresh'); await list.reload(); }, 'Could not check GitHub')}>Check GitHub</button>
           )}
@@ -96,7 +99,7 @@ export function FeedbackPage() {
       )}
       {status.data?.receiving === true && (
         <Group title="Inbox" id="feedback-inbox">
-          <Row label="What people sent" hint="Opened on this PC with the team key; fetched when it opens" reserve>
+          <Row label="What people sent" hint={`Opened with the team key on ${pc()}; fetched when it opens`} reserve>
             <span class="account-slot"><ActionButton label="Open" onClick={() => setInbox(true)} /></span>
           </Row>
         </Group>

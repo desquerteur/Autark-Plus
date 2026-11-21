@@ -52,16 +52,16 @@ a short note is found by its whole text, and a long one I can give a `descriptio
 
 - `memory.browse {folder}` - a folder: its description, subfolders, newest files.
 - `memory.read {path}` - one file.
-- `memory.write {folder or path, title, text, description, kind, tags, source, validFrom, validTo}` - creates or updates. The
-  same title in a folder updates that file; the old state stays as a version for a while.
+- `memory.write {folder or path, title, text, description, kind, tags, source, pinned, validFrom, validTo}` - creates or updates. The
+  same title (or clearly the same content) in a folder updates that file; the old state stays as a version for a while.
+  `pinned` moves it into or out of the folder's `pinned/`, which stands in its readers' prompt.
 - `memory.forget {path}` - deletes a file for good.
-- `vector.search {query, in: ["memory/company", "memory/agents/<me>"]}` - finds by meaning. Memory is always embedded: whatever
-  is written or edited here is findable at once. I name the folders that fit, or `"memory"` for all of it.
-- No embedder available: `vector.search` says so. Then `files.search` over the folder (words) finds it.
-- `skills.find {query}` and `knowledge.find {query}` search the whole knowledge catalog – skills, my home project's
-  instructions, the public library – by meaning, with two hops, so what lies close to a good hit comes too.
+- `knowledge.find {query, in: ["memory/company", "memory/agents/<me>"]}` - finds notes by their words: whatever is written or
+  edited here is findable at once. The names and words a note itself would carry find it best. I name the folders that
+  fit, or leave `in` out for all of it. Without `in` it searches the whole knowledge catalog too – skills and my home
+  project's instructions. Where a person chose an embedding model, it finds by meaning as well.
 
-Memory, skills and the public library are one knowledge system: Markdown with a little front matter. What is small and
+Memory and skills are one knowledge system, the public library (`library.find`) its shared shelf: Markdown with a little front matter. What is small and
 factual goes to memory; a way of working I read before a kind of work is a skill (skill writing-skills); what helps
 everyone outside this company can go public (`library.publish`).
 

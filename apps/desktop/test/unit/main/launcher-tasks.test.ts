@@ -132,37 +132,45 @@ test('Windows: one task, created once, again when the installation moved, the ol
   assert.deepEqual(h.lines, []);
 });
 
-test('Windows: a deliberate quit writes the one time trigger at the next due work – only when that time changed', async () => {
+test('Windows: an update quit writes the one time trigger at the next due work, a quit by the person removes it – only when that time changed', async () => {
   const h = harness('win32', 'win-due');
   await applyLauncher(true, h.deps);
   const creates = () => h.calls.filter((call) => call[1] === '/Create').length;
   h.due(NOW + 120 * MIN);
-  await armDueStart(true, 'person', h.deps);
+  await armDueStart(true, 'update', h.deps);
   assert.equal(creates(), 2);
   assert.match(h.xmls[1], /<StartBoundary>2026-10-25T14:00:00Z<\/StartBoundary>/);
   assert.equal(h.timeouts.at(-1), 5000, 'a quit waits at most 5 s');
   assert.equal(h.marker().due, NOW + 120 * MIN);
   await armDueStart(true, 'update', h.deps);
   assert.equal(creates(), 2, 'the same time: no schtasks process');
-  await applyLauncher(true, h.deps);
-  assert.equal(creates(), 2, 'the next start keeps it (only a query)');
-  h.due(NOW + 30 * 1000);
   await armDueStart(true, 'person', h.deps);
+  assert.equal(creates(), 3);
+  assert.doesNotMatch(h.xmls.at(-1)!, /<TimeTrigger>/, 'the person closed it: no start for due work (14.11.2026)');
+  assert.equal(h.marker().due, null);
+  await armDueStart(true, 'person', h.deps);
+  assert.equal(creates(), 3, 'nothing to remove: no schtasks process');
+  await armDueStart(true, 'update', h.deps);
+  assert.equal(creates(), 4);
+  await applyLauncher(true, h.deps);
+  assert.equal(creates(), 4, 'the next start keeps it (only a query)');
+  h.due(NOW + 30 * 1000);
+  await armDueStart(true, 'update', h.deps);
   assert.match(h.xmls.at(-1)!, /<StartBoundary>2026-10-25T12:01:00Z<\/StartBoundary>/, 'due within the minute: one minute after the quit');
   h.due(null);
-  await armDueStart(true, 'person', h.deps);
+  await armDueStart(true, 'update', h.deps);
   assert.doesNotMatch(h.xmls.at(-1)!, /<TimeTrigger>/, 'nothing due: the old time trigger goes');
   const before = creates();
   h.due(NOW - 60 * MIN);
-  await armDueStart(true, 'person', h.deps);
+  await armDueStart(true, 'update', h.deps);
   assert.equal(creates(), before, 'overdue work waits for the next start (no trigger, unchanged)');
   h.due(NOW + 240 * MIN);
-  for (const [enabled, by, patch] of [[true, 'system', {}], [true, undefined, {}], [false, 'person', {}], [true, 'person', { packaged: false }],
-    [true, 'person', { testMode: true }], [true, 'person', { platform: 'darwin' }]] as const) await armDueStart(enabled, by, { ...h.deps, ...patch });
+  for (const [enabled, by, patch] of [[true, 'system', {}], [true, undefined, {}], [false, 'update', {}], [true, 'update', { packaged: false }],
+    [true, 'update', { testMode: true }], [true, 'update', { platform: 'darwin' }]] as const) await armDueStart(enabled, by, { ...h.deps, ...patch });
   assert.equal(creates(), before, 'no due start for an ending session, when turned off, in development, test mode or elsewhere');
   const failing = harness('win32', 'win-due-fail', { 'schtasks /Create': 1 });
   failing.due(NOW + 120 * MIN);
-  await armDueStart(true, 'person', failing.deps);
+  await armDueStart(true, 'update', failing.deps);
   assert.match(failing.lines[0], /launcher task not created: failed/);
   assert.ok(!existsSync(path.join(failing.deps.dataDir, 'launcher.json')), 'not recorded: the next quit tries again');
 });

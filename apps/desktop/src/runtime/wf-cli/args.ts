@@ -5,8 +5,12 @@
 
 import { CliError } from './errors.ts';
 
-const VALUE_OPTIONS = new Set(['data', 'limit', 'status', 'timeout', 'count', 'dir', 'project', 'api-key', 'service-account']); // B-055: the last three for wf feedback setup
-const FLAG_OPTIONS = new Set(['json', 'all', 'important', 'silent', 'wait', 'help', 'version', 'rotate']); // B-055: --rotate for wf feedback setup
+const VALUE_OPTIONS = new Set(['data', 'limit', 'status', 'timeout', 'count', 'dir', 'project', 'api-key', 'service-account', 'file']); // B-055: the last three for wf feedback setup; 17.11.2026: --file for wf send
+const FLAG_OPTIONS = new Set(['json', 'all', 'important', 'silent', 'wait', 'help', 'version', 'rotate', 'open']); // B-055: --rotate for wf feedback setup; 16.11.2026: --open for wf feedback list
+/** 17.11.2026 (BEFUND-RUNTIME-JAN §4): options that may repeat (`--file a --file b`); their values stay in order. */
+const REPEATED = new Set(['file']);
+/** Other spellings agents tried (7 times `--attach`); they mean the option named here. */
+const ALIASES: Record<string, string> = { attach: 'file', files: 'file' };
 /** Options every command accepts. */
 const GLOBAL = new Set(['data', 'json', 'help', 'version']);
 
@@ -29,14 +33,16 @@ export function parseArgs(argv: readonly string[]): Parsed {
       continue;
     }
     const eq = arg.indexOf('=');
-    const name = arg.slice(2, eq > 0 ? eq : undefined);
+    const given = arg.slice(2, eq > 0 ? eq : undefined);
+    const name = ALIASES[given] ?? given;
     if (FLAG_OPTIONS.has(name)) {
       if (eq > 0) throw new CliError('bad_request', `--${name} takes no value.`);
       options.set(name, true);
     } else if (VALUE_OPTIONS.has(name)) {
       const value = eq > 0 ? arg.slice(eq + 1) : argv[++index];
       if (value === undefined || (eq < 0 && value.startsWith('--'))) throw new CliError('bad_request', `--${name} needs a value.`);
-      options.set(name, value);
+      const before = options.get(name);
+      options.set(name, REPEATED.has(name) && typeof before === 'string' ? `${before}\u0000${value}` : value);
     } else {
       throw new CliError('bad_request', `Unknown option --${name}.`);
     }
@@ -49,6 +55,12 @@ export function checkOptions(parsed: Parsed, allowed: readonly string[]): void {
   for (const name of parsed.options.keys()) {
     if (!GLOBAL.has(name) && !allowed.includes(name)) throw new CliError('bad_request', `wf ${parsed.command} does not take --${name}.`);
   }
+}
+
+/** All values of a repeatable option, in order (none: []). */
+export function values(parsed: Parsed, name: string): string[] {
+  const value = parsed.options.get(name);
+  return typeof value === 'string' ? value.split('\u0000').filter((entry) => entry.trim()) : [];
 }
 
 export function flag(parsed: Parsed, name: string): boolean {

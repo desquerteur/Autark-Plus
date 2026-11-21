@@ -5,7 +5,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dropSealed } from '../../../src/runtime/feedback/drop.ts';
+import { LETTER_TTL_MS, dropSealed } from '../../../src/runtime/feedback/drop.ts';
+import type { WorkforceError } from '../../../src/shared/errors.ts';
 import { FEEDBACK_SEALED_LIMIT } from '../../../src/shared/model/feedback-delivery.ts';
 import { API_KEY, PROJECT, fakeMailbox } from './fakes.ts';
 
@@ -13,9 +14,10 @@ const config = { publicKey: 'A'.repeat(43), project: PROJECT, apiKey: API_KEY };
 const id = '6f9619ff-8b86-4011-b42d-00cf4fc964ff';
 const sealed = Buffer.from('WFB1-sealed-bytes');
 
-test('create request: POST …/documents/feedback?documentId=<id>&mask.fieldPaths=v&key=…, body {v:1, sealed:bytes}', async () => {
+test('create request: POST …/documents/feedback?documentId=<id>&mask.fieldPaths=v&key=…, body {v:1, sealed:bytes, exp}', async () => {
   const box = fakeMailbox();
-  assert.equal(await dropSealed(config, id, sealed, box.fetch), 'created');
+  const now = Date.UTC(2026, 10, 16, 12);
+  assert.equal(await dropSealed(config, id, sealed, box.fetch, () => now), 'created');
   const [call] = box.calls;
   assert.equal(call.method, 'POST');
   assert.equal(`${call.url.origin}${call.url.pathname}`, `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/feedback`);
@@ -27,8 +29,22 @@ test('create request: POST …/documents/feedback?documentId=<id>&mask.fieldPath
   assert.equal(call.init?.redirect, 'error');
   assert.equal(call.init?.credentials, 'omit');
   assert.ok(call.init?.signal, 'a timeout');
-  assert.deepEqual(JSON.parse(call.body!), { fields: { v: { integerValue: '1' }, sealed: { bytesValue: sealed.toString('base64') } } });
+  assert.deepEqual(JSON.parse(call.body!), { fields: { v: { integerValue: '1' }, sealed: { bytesValue: sealed.toString('base64') }, exp: { timestampValue: new Date(now + LETTER_TTL_MS).toISOString() } } });
   assert.deepEqual(box.docs.get(id), sealed);
+});
+
+test('feedback 16.11.: a mailbox with rules before v2 refuses exp – the same letter goes once more without it', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const oldRules: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { fields: Record<string, unknown> };
+    bodies.push(body.fields);
+    return new Response('{}', { status: 'exp' in body.fields ? 403 : 200 });
+  };
+  assert.equal(await dropSealed(config, id, sealed, oldRules), 'created');
+  assert.deepEqual(bodies.map((fields) => Object.keys(fields)), [['v', 'sealed', 'exp'], ['v', 'sealed']]);
+  const refuseAll: typeof fetch = async () => new Response('{}', { status: 403 });
+  await assert.rejects(dropSealed(config, id, sealed, refuseAll), (error: WorkforceError) => error.details?.reason === 'refused');
+  assert.equal(LETTER_TTL_MS, 30 * 24 * 60 * 60 * 1000);
 });
 
 test('409 ALREADY_EXISTS means the letter arrived earlier (idempotent retry)', async () => {

@@ -71,7 +71,7 @@ export function peopleRig(options: { modules?: HandlerModule[] } = {}) {
     const asked = request.result as { ticket: string; id: string };
     const todo = (await owner.call<Array<{ id: string; title: string }>>('todos.list')).find((entry) => entry.title.includes(name));
     if (!todo) throw new Error('no decision to-do');
-    await owner.call('tasks.complete', { id: todo.id, answer: { choice: 'Allow' } });
+    await owner.call('tasks.finish', { id: todo.id, answer: { choice: 'Allow' } });
     await settle();
     const waited = await f.server.handleHttp({ id: 2, method: 'people.awaitJoin', params: { ticket: asked.ticket } }, { remote: '10.0.0.9' });
     const result = waited.result as { status: string; token: string };

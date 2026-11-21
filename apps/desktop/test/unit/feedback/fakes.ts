@@ -1,5 +1,5 @@
 // Test helpers for B-055 feedback: a fake Firestore mailbox and Google token endpoint behind a fake `fetch` (create,
-// list, get, delete with the real REST shapes; the token endpoint verifies the service account's JWT), a throw-away
+// list with createTime where a test set one, get, delete with the real REST shapes; the token endpoint verifies the service account's JWT), a throw-away
 // service account (a fresh RSA key) and runtime services with a real vault, a temp data dir and a temp resources dir.
 // Owns: these fakes. Never: contacts Google or Firebase, or reads real keys.
 
@@ -43,6 +43,8 @@ export function verifyJwt(jwt: string, publicKey: KeyObject): { header: Record<s
 export function fakeMailbox(options: { accountKey?: KeyObject; origin?: string } = {}) {
   const origin = options.origin ?? 'https://firestore.googleapis.com';
   const docs = new Map<string, Buffer>();
+  /** When Google stored a letter (ms) – the listing's createTime; letters without one list without it. */
+  const created = new Map<string, number>();
   const calls: Call[] = [];
   const log: string[] = [];
   const state = { create: null as number | 'throw' | 'lose' | null, token: null as number | null, tokens: 0, onDelete: (_id: string) => {} };
@@ -71,7 +73,9 @@ export function fakeMailbox(options: { accountKey?: KeyObject; origin?: string }
       const fields = JSON.parse(String(init?.body)).fields;
       log.push(`create ${docId}`);
       if (docs.has(docId)) return json({ error: { code: 409, status: 'ALREADY_EXISTS' } }, 409);
-      if (Object.keys(fields).sort().join() !== 'sealed,v' || fields.v.integerValue !== '1') return json({ error: { status: 'PERMISSION_DENIED' } }, 403);
+      // As firestore.rules v2 (16.11.2026): v = 1 and sealed, optionally exp (a timestamp).
+      const keys = Object.keys(fields).sort().join();
+      if ((keys !== 'sealed,v' && keys !== 'exp,sealed,v') || fields.v.integerValue !== '1' || (fields.exp && typeof fields.exp.timestampValue !== 'string')) return json({ error: { status: 'PERMISSION_DENIED' } }, 403);
       docs.set(docId, Buffer.from(fields.sealed.bytesValue, 'base64'));
       if (state.create === 'lose') throw new TypeError('connection reset'); // stored, but the answer never arrives
       return json({ name: `projects/${PROJECT}/databases/(default)/documents/feedback/${docId}`, fields: { v: { integerValue: '1' } } });
@@ -84,7 +88,10 @@ export function fakeMailbox(options: { accountKey?: KeyObject; origin?: string }
       const size = Number(url.searchParams.get('pageSize') ?? 20);
       const page = all.slice(0, size);
       log.push(`list ${after || 'start'}`);
-      return json({ documents: page.map((doc) => ({ name: `projects/${PROJECT}/databases/(default)/documents/feedback/${doc}`, fields: { v: { integerValue: '1' } } })),
+      return json({ documents: page.map((doc) => ({
+        name: `projects/${PROJECT}/databases/(default)/documents/feedback/${doc}`, fields: { v: { integerValue: '1' } },
+        ...(created.has(doc) ? { createTime: new Date(created.get(doc)!).toISOString(), updateTime: new Date(created.get(doc)!).toISOString() } : {}),
+      })),
         ...(all.length > size ? { nextPageToken: page[page.length - 1] } : {}) });
     }
     if (method === 'GET') {
@@ -96,11 +103,12 @@ export function fakeMailbox(options: { accountKey?: KeyObject; origin?: string }
       log.push(`delete ${id}`);
       state.onDelete(id);
       docs.delete(id);
+      created.delete(id);
       return json({});
     }
     return json({}, 400);
   }) as typeof fetch;
-  return { fetch: run, docs, calls, log, state };
+  return { fetch: run, docs, created, calls, log, state };
 }
 
 export interface Env {
@@ -112,6 +120,8 @@ export interface Env {
   shot: { id: string; name: string; mime: string; size: number; createdAt: number };
   bytes: { value: Uint8Array };
   events: Array<{ event: string; data: unknown }>;
+  /** Another stored file (a recorded take): `files.get` names it with this mime, `files.read` gives these bytes. */
+  addFile(id: string, mime: string, data: Uint8Array): void;
   setPackaged(value: boolean): void;
   setDiagnostics(value: boolean): void;
   cleanup(): void;
@@ -136,18 +146,20 @@ export function feedbackEnv(): Env {
   const vault = new SecretVault({ db, clock, host: { encrypt: async (plain) => new TextEncoder().encode(`enc:${plain}`), decrypt: async (cipher) => new TextDecoder().decode(cipher).slice(4) } });
   const shot = { id: 'a'.repeat(64), name: 'screenshot.png', mime: 'image/png', size: 12, createdAt: 1 };
   const bytes = { value: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]) };
+  const extra = new Map<string, { ref: { id: string; name: string; mime: string; size: number; createdAt: number }; data: Uint8Array }>();
   const app = { version: '0.2.0', packaged: false, resourcesDir: resources, dataDir: data, executable: process.execPath };
   let diagnostics = false;
   const s = {
     db, bus, clock, log: new MemoryLogger(), secrets: vault,
     paths: { data, resources, logs, temp: path.join(data, 'tmp') },
     host: { app, openExternal: async () => { throw new Error('no browser in feedback'); }, openPath: async () => { throw new Error('no file manager in feedback'); } },
-    files: { get: (id: string) => (id === shot.id ? shot : undefined), read: async () => bytes.value },
+    files: { get: (id: string) => (id === shot.id ? shot : extra.get(id)?.ref), read: async (id: string) => extra.get(id)?.data ?? bytes.value },
     settings: { get: () => ({ feedback: { includeDiagnostics: diagnostics } }) },
     org: { get: (id: string) => (id === 'ag_1' ? { id, name: 'Mira' } : undefined) },
   } as unknown as RuntimeServices;
   return {
     s, clock, vault, data, resources, shot, bytes, events,
+    addFile: (id, mime, data) => { extra.set(id, { ref: { id, name: 'take', mime, size: data.length, createdAt: 1 }, data }); },
     setPackaged: (value) => { app.packaged = value; },
     setDiagnostics: (value) => { diagnostics = value; },
     cleanup: () => rmSync(root, { recursive: true, force: true }),

@@ -1,5 +1,5 @@
-// The native turn of each run on a session (B-049 F7): Codex names every turn (turn/start's id); a rebuild for marks
-// can then cut the thread before the turn that holds the first changed ledger item (thread/revert keeps the prefix
+// The native turn of each run on a session (B-049 F7): Codex names every turn (turn/start's id); a rebuild that only sheds
+// work (past the fit, after a rest past the cache) can then cut the thread before the turn that holds the first changed ledger item (thread/revert keeps the prefix
 // and its prompt cache – measured 28.10.: 15,488 of 15,705 input tokens cached after revert + inject, 0 on a fresh
 // thread holding the same items) instead of starting a new thread (agents/rebuild-revert.ts).
 // Owns: kv 'native-turns' – per (agent, chat, engine) the bound ref and its runs' turn ids in order, at most

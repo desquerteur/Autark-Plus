@@ -3,7 +3,8 @@
 // token-like query/fragment are kept (a credential link or a token in the path: the site only),
 // in order, at most MAX_TABS (B-055: 30) per space; unreadable entries are dropped; the old flat file moves over once; a change from outside is taken over;
 // the file is written only when order or addresses change; a closed window parks live tabs as
-// entries again. The address rule is shared/api/workspace-browser.ts keptAddress.
+// entries again. The address rule is shared/api/workspace-browser.ts keptAddress. B-081: a close may name another PC's
+// website (remote:<pc>:web-…); what a close keeps out is in workspace-tabs-close.test.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -137,6 +138,16 @@ test("an agent's area is a space of its own (agent:<id>): the file keeps it, the
   });
   assert.equal(browserCommand({ action: 'open', id: 'web-t', url: 'https://t.example/', space: 'agent:ag_ada' }).action, 'open');
   assert.throws(() => browserCommand({ action: 'open', id: 'web-t', url: 'https://t.example/', space: 'agent:../x' }), /Invalid browser space/);
+});
+
+test("B-081: the window closes another PC's website through main; every other action keeps the web-id check", () => {
+  assert.equal(browserCommand({ action: 'close', id: 'remote:dev_b:web-x' }).action, 'close');
+  for (const action of ['open', 'show', 'keep', 'hide', 'reload']) {
+    assert.throws(() => browserCommand({ action, id: 'remote:dev_b:web-x', url: 'https://x.example/', bounds: { x: 0, y: 0, width: 10, height: 10 } }), /Invalid browser tab/, action);
+  }
+  for (const bad of ['remote::web-x', 'remote:a b:web-x', 'remote:dev_b:file-x', 'remote:dev_b:web-', 'remote:a:b:web-x', 7]) {
+    assert.throws(() => browserCommand({ action: 'close', id: bad }), /Invalid browser tab/, String(bad));
+  }
 });
 
 test('the old flat file moves over once', () => {

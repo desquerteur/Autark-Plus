@@ -12,7 +12,7 @@ import { WorkforceError } from '../../../src/shared/errors.ts';
 const FILE_ID = 'c'.repeat(64);
 
 function account(patch: Partial<Account> = {}): Account {
-  return { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/openai/v1/', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch } as Account;
+  return { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/openai/v1/', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch } as Account;
 }
 
 /** Catalog entry of a speech-to-text specialist served by the account. */
@@ -50,7 +50,7 @@ function setup(options: { account?: Account | undefined; model?: string; functio
 test('builds the multipart request like the legacy dictation: model, json, language, vocabulary, no redirects', async () => {
   const { transcriber, requests } = setup({ functions: { stt: 'compatible:whisper-large-v3' } });
   const result = await transcriber.transcribe({ fileId: FILE_ID, language: 'de-DE' });
-  assert.deepEqual(result, { text: 'Hello Workforce' });
+  assert.deepEqual(result, { text: 'Hello Workforce', by: 'service' }, 'F27: the answer names who heard it');
   assert.equal(requests.length, 1);
   const { url, init } = requests[0];
   assert.equal(url, 'https://api.groq.example/openai/v1/audio/transcriptions');
@@ -80,7 +80,7 @@ test('builds the multipart request like the legacy dictation: model, json, langu
 
 test('the key never comes back in the text; errors are clear and user-safe', async () => {
   const echo = setup({ respond: () => new Response(JSON.stringify({ text: 'my key is sk-test-key-123' })) });
-  assert.deepEqual(await echo.transcriber.transcribe({ fileId: FILE_ID }), { text: 'my key is [redacted]' });
+  assert.deepEqual(await echo.transcriber.transcribe({ fileId: FILE_ID }), { text: 'my key is [redacted]', by: 'service' });
 
   const code = async (options: Parameters<typeof setup>[0], input = { fileId: FILE_ID }) => {
     try { await setup(options).transcriber.transcribe(input); return 'ok'; } catch (error) { assert.ok(error instanceof WorkforceError, String(error)); return `${error.code}: ${error.message}`; }
@@ -136,7 +136,7 @@ test('format, language and vocabulary helpers', () => {
 test('a failing key lookup sends no Authorization header', async () => {
   const { transcriber, requests, services } = setup();
   (services.accounts as { apiKey: unknown }).apiKey = () => { throw new Error('vault locked'); };
-  for (let i = 0; i < 3; i++) assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce' });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce', by: 'service' });
   assert.equal(requests.length, 3);
   assert.deepEqual(requests[0].init.headers, {});
 });
@@ -145,7 +145,7 @@ test('SM9: a dictation without words is empty text, not a failure; agent hearing
   const answers = [{ text: '' }, { text: ' \n ' }];
   let next = 0;
   const { transcriber, requests } = setup({ respond: () => new Response(JSON.stringify(answers[next++])) });
-  for (const answer of answers) assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: '' }, JSON.stringify(answer));
+  for (const answer of answers) assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: '', by: 'service' }, JSON.stringify(answer));
   assert.equal(requests.length, 2, 'every take reached the service; no dictation slot was left taken');
 
   // An answer without a text string is a broken or misconfigured server, never silence.
@@ -179,8 +179,8 @@ test('SM9: a heard dictation take goes to the blob clean-up after a hold; a fail
   let next = 0;
   const { transcriber, services } = setup({ respond: () => answers[next++]() });
   const { queued, clock } = withReclaimer(services);
-  assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello' });
-  assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: '' });
+  assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello', by: 'service' });
+  assert.deepEqual(await transcriber.transcribe({ fileId: FILE_ID }), { text: '', by: 'service' });
   const due = clock.at + HEARD_TAKE_HOLD_MS;
   assert.deepEqual(queued, [{ ids: [FILE_ID], notBefore: due }, { ids: [FILE_ID], notBefore: due }],
     'words or none: the take only carried its words – due after the hold, since the answer may never arrive');
@@ -192,7 +192,7 @@ test('SM9: a heard dictation take goes to the blob clean-up after a hold; a fail
   const library = setup();
   const old = withReclaimer(library.services);
   old.clock.at = 1 + FRESH_TAKE_MS + 1;
-  assert.deepEqual(await library.transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce' });
+  assert.deepEqual(await library.transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce', by: 'service' });
   assert.deepEqual(old.queued, [], 'only the caller\'s own fresh take goes to the clean-up');
 
   const agent = setup();
@@ -203,7 +203,7 @@ test('SM9: a heard dictation take goes to the blob clean-up after a hold; a fail
 
   const broken = setup();
   withReclaimer(broken.services, () => { throw new Error('queue unavailable'); });
-  assert.deepEqual(await broken.transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce' }, 'a failing clean-up never costs the text');
+  assert.deepEqual(await broken.transcriber.transcribe({ fileId: FILE_ID }), { text: 'Hello Workforce', by: 'service' }, 'a failing clean-up never costs the text');
 });
 
 test('other errors are not retried: a rate limit and a refused take keep their clear errors', async () => {

@@ -1,5 +1,6 @@
 // SecretService: encrypted secret store (OS keychain via host.encrypt/decrypt) with handles.
-// Owns: the `secrets` table, last-use tracking, the redaction
+// Owns: the `secrets` table, last-use tracking and the use count (F19, migration 103: use() counts the field and its login;
+// no metadata change is told for it, so the device sync never carries it), the redaction
 // matcher that turns leaked values into `secret://<id>`, generated passwords (crypto.randomInt) and the host helpers
 // (hostOf, registrableDomain, domainAllowed – used to NAME where a value came from or goes, never to restrict it).
 // Owner 29.10.2026 (secrets as a catalog like skills, with its Nachtrag): the store is a
@@ -276,8 +277,8 @@ export class SecretVault implements SecretService {
     if (!row.cipher) throw new WorkforceError('bad_request', `The secret '${name}' has no stored value.`);
     const now = this.options.clock.now();
     const value = await this.options.host.decrypt(row.cipher);
-    this.options.db.run('UPDATE secrets SET last_used_at = ? WHERE id = ?', [now, id]);
-    if (group) this.options.db.run('UPDATE secret_groups SET last_used_at = ? WHERE id = ?', [now, group.id]);
+    this.options.db.run('UPDATE secrets SET last_used_at = ?, uses = uses + 1 WHERE id = ?', [now, id]);
+    if (group) this.options.db.run('UPDATE secret_groups SET last_used_at = ?, uses = uses + 1 WHERE id = ?', [now, group.id]);
     this.teach(id, row.kind, value);
     this.options.log?.info('secret used', { id, agentId, domain }); // never the value (nor a code)
     return row.kind === 'totp' ? this.code(value, now) : value;

@@ -1,6 +1,6 @@
 // A sign-out becomes work (B-047 D10). accounts/failure.ts reports a plan account agents use that was just found
-// signed out (once per sign-out – by an agent turn, or by a helper call through the account service this one is
-// attached to, watch()); then
+// signed out (once per sign-out – by an agent turn, by a helper call or, B-091, by the account check itself through
+// the account service this one is attached to, watch()); then
 // - while another account can still run an agent: ONE task "Sign in to <label> again" for the origin Manager
 //   (else any manager, else an agent in computer mode), chat-free (B-054: a task needs no chat; no 1:1, no hidden
 //   work chat – the run is on the task, origin system "Account signed out"):
@@ -14,7 +14,8 @@
 // State: kv namespace 'relogin', per account { taskId, times } (the open work and the creation times of the day).
 // Owns: choosing who does the sign-in, creating and closing that work, the cap. Never: types a password, reads
 // tokens or CLI homes, starts a sign-in itself (accounts.sign_in does, on the agent's call), creates a second
-// open task for the same account, creates a chat for the work, or throws into the turn that found the sign-out.
+// open task for the same account (also none beside one a linked CEO PC made – B-091: each PC's check finds the
+// sign-out), creates a chat for the work, or throws into the turn that found the sign-out.
 
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { ORIGINS, type Origin } from '../../shared/model/origin.ts';
@@ -31,7 +32,7 @@ export const RELOGIN_NS = 'relogin';
 /** Sign-in tasks for one account within DAY_MS before the person gets the to-do instead. */
 export const MAX_PER_DAY = 3;
 const DAY_MS = 24 * 3600_000;
-const OPEN: ReadonlySet<TaskView['status']> = new Set(['open', 'working', 'waiting', 'needs_you', 'blocked']);
+const OPEN: ReadonlySet<TaskView['status']> = new Set(['open', 'waiting']);
 /** Why the sign-in work exists (both the agent's task and the person's to-do). */
 export const RELOGIN_ORIGIN: Origin = { source: ORIGINS.system.source, label: 'Account signed out' };
 
@@ -50,7 +51,7 @@ export function agentNotes(account: Account): string {
   return [
     `${labelOf(account)} (${providerName(account)}) was signed out, so agents cannot use it until it is signed in again.`,
     `accounts.sign_in with accountId "${account.id}" starts the official ${providerName(account)} sign-in on this PC; it opens the sign-in page in this PC's default browser. I finish what I can there myself (screen tools, or a colleague in browser or computer mode).`,
-    'I type no password myself; a password, a 2FA code or another check only the person can pass becomes a short, prepared to-do for them (human.ask, humanReason credential).',
+    'I type no password myself; a password, a 2FA code or another check only the person can pass becomes a short, prepared task for them (tasks.create to the person) – they can also finish it from their phone in Settings › Models.',
     'This task closes itself as soon as the account works again.',
   ].join('\n');
 }
@@ -59,7 +60,7 @@ export function humanNotes(account: Account, why: 'no_account' | 'no_agent' | 'c
   const reason = why === 'no_account' ? 'No other model account can run the team right now, so the agents wait for it.'
     : why === 'capped' ? `The team tried to sign it in again ${MAX_PER_DAY} times today without success.`
       : 'No agent can take over the sign-in right now.';
-  return `${labelOf(account)} (${providerName(account)}) was signed out. ${reason} Sign in again in Settings › Models – it takes a minute. This to-do closes itself once the account works again.`;
+  return `${labelOf(account)} (${providerName(account)}) was signed out. ${reason} Sign in again in Settings › Models – from your phone too; it takes a minute. This to-do closes itself once the account works again.`;
 }
 
 export class Relogin implements ReloginService {
@@ -100,7 +101,10 @@ export class Relogin implements ReloginService {
   }
 
   private create(s: RuntimeServices, account: Account): void {
-    if (this.openWork(account.id)) return; // one open sign-in task per account
+    // one open sign-in task per account – also one a linked CEO PC made (its monitor finds the same sign-out; tasks travel, this kv not)
+    const linked = s.db.get(`SELECT 1 FROM tasks WHERE source_label = ? AND title = ? AND status IN (${[...OPEN].map(() => '?').join(', ')})`,
+      [RELOGIN_ORIGIN.label, signInTaskTitle(account), ...OPEN]);
+    if (this.openWork(account.id) || linked) return;
     const now = s.clock.now();
     const times = (this.entry(s, account.id)?.times ?? []).filter((at) => now - at < DAY_MS);
     const otherUsable = s.accounts.list().some((other) => other.id !== account.id && isHealthy(other, now));
@@ -122,7 +126,7 @@ export class Relogin implements ReloginService {
     // The task lifecycle notifies the person of a new to-do (kind 'todo', naming it) – no second notification.
     return s.tasks.create({
       origin: RELOGIN_ORIGIN, title: signInTaskTitle(account), notes: humanNotes(account, why),
-      assigneeKind: 'human', humanReason: 'credential', createdBy: SYSTEM_ID, clientId,
+      assigneeKind: 'human', createdBy: SYSTEM_ID, clientId,
     });
   }
 
@@ -133,10 +137,9 @@ export class Relogin implements ReloginService {
       if (!isHealthy(account, s.clock.now())) return;
       const task = this.openWork(account.id);
       if (!task) return;
-      s.tasks.complete(task.id, {
-        summary: `${labelOf(account)} works again.`,
+      s.tasks.finish(task.id, {
+        status: 'done', summary: `${labelOf(account)} works again.`,
         evidence: [{ kind: 'check', label: `Account state: ${account.state}` }],
-        verification: 'verified',
       }, SYSTEM_ID);
       this.save(s, account.id, { times: this.entry(s, account.id)?.times ?? [] });
     } catch (error) {
@@ -148,7 +151,7 @@ export class Relogin implements ReloginService {
     const s = this.services();
     try {
       const task = this.openWork(accountId);
-      if (task) s.tasks.setStatus(task.id, 'cancelled', SYSTEM_ID, note);
+      if (task) s.tasks.finish(task.id, { status: 'dropped', summary: note }, SYSTEM_ID);
       if (task) this.save(s, accountId, { times: this.entry(s, accountId)?.times ?? [] });
     } catch (error) {
       s.log.warn('cancelling the sign-in work failed', { accountId, error: String(error) });

@@ -81,3 +81,16 @@ test('a forwarded pull keeps the linked PC\'s caller slot and travels in parts o
   await assert.rejects(r.call('side.pullPart', { tab: TAB, at: reply.frame!.at, index: 1 }, 'dev_ceo'), (error: unknown) => code(error) === 'not_found', 'the PC\'s owner has a slot of its own');
   await assert.rejects(r.call('side.pull', { tab: TAB, via: 'not a caller!' }, 'dev_ceo'), (error: unknown) => code(error) === 'bad_request');
 });
+
+test('side.open from a CEO PC opens the page in this PC\'s pane; from anyone else nothing opens', async () => {
+  const r = rig();
+  const opened: Array<{ url?: string; space?: string }> = [];
+  (r.services as unknown as { host: Record<string, unknown> }).host.sideBrowser = async (args: { url?: string; space?: string }) => { opened.push(args); return { ok: true, tab: 'web-5555' }; };
+  for (const from of ['dev_emp', 'dev_boss', 'dev_gone', 'dev_unknown']) {
+    await assert.rejects(r.call('side.open', { url: 'https://a.example/' }, from), (error: unknown) => code(error) === 'forbidden', from);
+  }
+  assert.equal(opened.length, 0);
+  assert.deepEqual(await r.call('side.open', { url: 'https://a.example/' }, 'dev_ceo'), { ok: true, tab: 'web-5555' });
+  assert.deepEqual([opened[0].url, opened[0].space], ['https://a.example/', 'global']);
+  await assert.rejects(r.call('side.open', { url: 'file:///c:/x' }, 'dev_ceo'), (error: unknown) => code(error) === 'bad_request');
+});

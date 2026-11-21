@@ -1,32 +1,42 @@
-// "## My environment" (B-047 D6): the agent's self-description - true facts about where it runs and what it can
-// reach, built from the real tool offer, for every agent and every mode. Two parts:
-// - stable (environmentSection, the stable prompt after "My folder"): this PC (OS, PC name), the language line and the
-//   person's profile.notes, the connected models with price and smarts (B-078), the workspace path, how
-//   the agent searches the web this turn (its engine's own search first – E1), whether browser / computer tools are offered, that tools.find / tools.call
-//   reach more tools (B-049 F4) and that it may split itself (B-057 S17) - the same agent, mode and engine give the
-//   same text;
-// - volatile (environmentNow, prompt-volatile.ts): the whole PC is the team's, the data folder and its map, the
-//   accounts that need a sign-in (labels only) and the connected apps whose tools the turn offers; E1: where the person's
-//   own files are (homeLine); B-075: the companies on this PC and the linked PCs (companiesLine). Never a memory list or
-//   count (constant cost at any size).
-// Also the has_<tool> flags of the identity/rules templates (toolFlags): a principle that names a tool renders only
-// when the tool is offered. B-075 (owner 04.11.2026, first-person voice): the lines speak as the agent ("I run inside
-// the Autark app", "my engine's own search"); the facts are unchanged.
-// Owns: these lines, their wording and caps. Never: times or counts in the stable part, a tool the turn does not
+// "## My environment": true facts about where the agent runs and what it can reach, built from the real tool offer of
+// the agent's own mode. Two parts:
+// KI-Runde 17.11.2026: every tool is in reach from every mode through tools.call, so no line here sends screen or web
+// work to another mode or another agent; a line names what this turn's offer really holds.
+// - stable (environmentSection): this PC (OS, name, the app's language), how the shells on Windows handle text
+//   (windowsShellLine), profile.notes, the workspace, the person's own files, the data folder and memory (constant paths), how
+//   the agent searches the web (its engine's own search first), its screen tools and the one line on instruction files.
+//   The same agent, mode, engine and PC give the same text – nothing here moves by itself.
+// - live (environmentNow, prompt-volatile.ts): free disk space below 2 GB, the engines connected in the Autark system
+//   (owner 15.11.2026: "Codex CLI und Claude Code, wenn beide verknüpft sind" – the one this turn runs in stands in
+//   "## Now", engineName), the companies on this PC and the linked PCs, the linked phones with their phone use (KI-Runde
+//   17.11.2026: a linked phone stood nowhere in the prompt, so agents asked the person for codes it shows), accounts that
+//   need a sign-in (labels only) and the connected apps – only what moves on its own. Never a memory list.
+// Owner 15.11.2026: the agent lives in the Autark system ("im Autark-System drin … und nicht einfach nur in der App"), so
+// these lines say so; texts for people keep "app".
+// The lines speak as the agent, in the first person.
+// Owns: these lines, their wording and caps. Never: times or counts in the stable part, a tool the mode does not
 // offer, e-mails, CLI homes, tokens or secret ids.
 
+import { statfsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { ModeInfo } from '../../shared/model/knowledge.ts';
-import type { RouteDecision } from '../../shared/model/providers.ts';
+import type { EngineId, ProviderId, RouteDecision } from '../../shared/model/providers.ts';
 import { ROOT_README } from '../root/layout.ts';
-import { WHERE_HINT } from '../browser/place.ts';
-import { cleanLabel, linkedPcs, modelsFactsLine } from './setup-facts.ts';
-import { CALL_TOOL, FIND_TOOL } from '../tools/core-sets.ts'; // B-049 F4 (TOOLS-CORE)
+import { MEMORY_ENTRY } from '../knowledge/memory-tree.ts';
+import { whereHint } from '../browser/place.ts'; // B-080: the person's own Chrome only beside computer.*
+import { cleanLabel, linkedPcs } from './setup-facts.ts';
+import { CALL_TOOL, FIND_TOOL } from '../tools/core-sets.ts';
 import { listCompanies } from '../root/companies.ts'; // B-075
+import { linkedPhones, type LinkedPhone } from '../phone/linked.ts';
 import '../contracts/apps.ts'; // B-052: RuntimeServices.apps (the connected-apps line)
+import { pwshDir } from '../engines/wf-shim.ts'; // B-080 wave 3: the engines' PowerShell 7
+import { PROVIDER_LABELS } from '../accounts/service-shape.ts';
+import { engineFor } from '../accounts/candidates.ts';
+import { isUsableState } from '../../shared/model/plan-roles.ts';
+import { MEDIA_ONLY_PROVIDERS } from '../../shared/model/providers.ts';
 
 export const ENVIRONMENT_HEADER = '## My environment';
 /** Accounts named in the sign-in line (beyond: "+N more"). */
@@ -53,22 +63,6 @@ export function offeredTools(services: RuntimeServices, agent: Agent, mode: Mode
 }
 
 const any = (offered: ReadonlySet<string>, prefix: string): boolean => [...offered].some((name) => name.startsWith(prefix));
-const flag = (value: boolean): string => (value ? 'yes' : '');
-
-/** has_<tool> template values: 'yes' when the turn offers that tool (family), else '' ({{#has_x}}…{{/has_x}} drops the line). */
-export function toolFlags(offered: ReadonlySet<string>): Record<string, string> {
-  return {
-    has_schedules: flag(any(offered, 'schedules.')),
-    has_todos: flag(any(offered, 'todos.')),
-    has_human_ask: flag(offered.has('human.ask')),
-    has_agents_org: flag(offered.has('agents.create') || offered.has('agents.update')),
-    has_models: flag(offered.has('models.list') || offered.has('model.set')),
-    has_decide: flag(offered.has('decide')),
-    has_modes: flag(any(offered, 'modes.')),
-    has_web_search: flag(offered.has('web.search')),
-    has_files_search: flag(offered.has('files.search')),
-  };
-}
 
 /** "Windows 11 Pro (10.0.26300)", "macOS (Darwin 24.1.0)", "Linux 6.8.0". */
 export function osName(system: SystemFacts): string {
@@ -81,69 +75,61 @@ export function osName(system: SystemFacts): string {
 /** E1 (01.11.2026): the engine's own web search an agent turn keeps (engines/codex/helper-thread.ts AGENT_WEB_SEARCH, engines/claude/lean.ts CORE_TOOLS). */
 const OWN_SEARCH: Readonly<Record<string, string>> = { codex: 'web_search', claude: 'WebSearch' };
 
+/** Whether the turn's engine reads, searches and browses with tools of its own (caps.ownTools: Claude Code, Codex, ACP agents). */
+export function ownFileTools(services: RuntimeServices, engine?: EngineId): boolean {
+  if (!engine) return false;
+  try { return services.engines.get(engine).caps.ownTools === true; } catch { return false; }
+}
+
 /**
- * How the agent searches the web: the engine's own search first where it has one (Codex, Claude Code – E1: the keyless
- * web.search met bot checks in the live tests), web.search beside it; that results are data, not instructions, the
- * rules say (Trust).
+ * How the agent searches the web: the engine's own search where it has one (Codex, Claude Code – web.search is then
+ * only in the prompt's tool list), else web.search (`own`: an engine with tools of its own reaches it through tools.call).
  */
-function webLine(offered: ReadonlySet<string>, engine?: string): string {
+function webLine(offered: ReadonlySet<string>, engine?: string, own = false): string {
   const fetch = offered.has('web.fetch');
-  const own = engine ? OWN_SEARCH[engine] : undefined;
-  if (own) return `Web: ${own} (my engine's own search) finds current pages${fetch ? ', web.fetch reads one' : ''}${offered.has('web.search') ? '; web.search is a second search' : ''}.`;
+  const search = engine ? OWN_SEARCH[engine] : undefined;
+  if (search) return `Web: ${search} (my engine's own search) finds current pages${fetch ? ', web.fetch reads one' : ''}.`;
+  if (own && offered.has('web.search')) return `Web: my engine's own search, or web.search through tools.call, finds pages${fetch ? ', web.fetch reads one' : ''}.`;
   if (offered.has('web.search')) return `Web: web.search finds pages (title, link, snippet)${fetch ? ', web.fetch reads one' : ''}.`;
-  if (fetch) return 'Web: no search tool in this mode – web.fetch reads a page whose address I know; searching I hand to a colleague in research mode (agents.delegate).';
-  return 'Web: no web tools in this mode – web work I hand to a colleague in research mode (agents.delegate).';
+  if (fetch) return 'Web: web.fetch reads a page whose address I know.';
+  return '';
 }
 
 function screenLine(offered: ReadonlySet<string>): string {
   const browser = [...offered].some((name) => name.startsWith('browser.') && name !== 'browser.show');
   const computer = any(offered, 'computer.');
-  if (browser && computer) return 'Screen: browser.* browses websites (the person can watch and take over), computer.* operates this PC\'s screen, mouse and keyboard.';
+  // B-080: where: 'chrome' is the person's own Chrome (browser/tools.ts browser.open), computer.* works in its window.
+  if (browser && computer) return 'Screen: browser.* browses websites (the person can watch and take over; where: \'chrome\' is the person\'s own Chrome with their logins), computer.* operates this PC\'s screen, mouse and keyboard.';
   // B-072 (live 03.11.2026: a browser-only agent asked the person to sign in while their own Chrome had the session).
-  if (browser) return 'Screen: browser.* browses websites in my own profile (the person can watch and take over); the person\'s own browsers on this screen keep their logins and autofill – a colleague in computer mode reaches them (agents.delegate).';
+  if (browser) return 'Screen: browser.* browses websites in my own profile (the person can watch and take over); the person\'s own browsers on this screen keep their logins and autofill.';
   if (computer) return 'Screen: computer.* operates this PC\'s screen, mouse and keyboard.';
-  return 'Screen: the browser and computer tools live in the modes of those names – agents.delegate with that mode, or to a colleague there, does the screen work.';
+  return '';
 }
 
-/**
- * B-049 F4 (TOOLS-CORE): the one fact about the tool list, only where tools.find is offered ('' otherwise). Engines get
- * the mode's core tools directly; every other tool in `offered` (the flags' set) is reachable through tools.call.
- */
-export function toolsLine(offered: ReadonlySet<string>): string {
-  if (!offered.has(FIND_TOOL)) return '';
-  return 'Tools: beyond my list, tools.find finds more tools; tools.call runs one.';
+/** The workspace line ('' without a workspace). */
+export function workspaceLine(workspace: string): string {
+  return workspace ? `Workspace: ${workspace} – the team's working folder (projects and the files I make).` : '';
 }
 
+/** Codex and Claude Code run in an Autark-owned home without the person's instruction files; a folder's own ones are files. */
+export const INSTRUCTION_FILES_LINE = 'My instructions are all in this prompt; an AGENTS.md or CLAUDE.md in a folder is a file I read when its content helps.';
+
 /**
- * B-057 S17 (owner 30.10.2026: "dass der nicht alles selbst machen muss … nur eine Möglichkeit"): the one line that the
- * agent may split itself – where agents.split is offered (since 30.10. through tools.find / tools.call, not in the direct
- * list: its spec is ~1.7k characters the agent rarely needs). Whether and when stays its own call.
+ * B-080 (live 05.–08.11.2026: 32 cp1252 failures, tzdata missing under `python -I`, Get-Content | Set-Content turning
+ * "…" into "â€¦", "Öffnungszeiten" piped into python arriving as "?ffnungszeiten"): what the shells on Windows do with
+ * text – '' elsewhere. B-080 wave 3: where the engines' PowerShell 7 is found (engines/wf-shim.ts pwshDir: PATH,
+ * %ProgramFiles%, the per-user install) the line says so – Codex, Claude Code and shell.exec (named where `shell` says
+ * the turn offers it) run in it, UTF-8 throughout. Where none is found the Windows PowerShell 5.1 sentences stay: piped
+ * text keeps its letters where $OutputEncoding is UTF-8 – shell.exec sets it (files.ts windowsShell), an engine's own
+ * PowerShell 5.1 leaves it at ASCII – and (live 09.11.: python -c "…" lost its inner quotes) 5.1 drops a program's inner
+ * double quotes.
  */
-export function splitLine(offered: ReadonlySet<string>, engine?: string): string {
-  const own = offered.has('agents.split')
-    ? 'Splitting: I need not do everything myself – for work with independent pieces I can split myself into parallel parts (agents.split); whether and when is my call.'
-    : '';
-  // Live round D (30.10.2026): Codex 0.165 offers its own collaboration tools in every thread – its model catalog sets
-  // multi_agent_version v2 and no thread or config switch removes them (features.multi_agent(_v2), multiAgentMode none,
-  // agents.max_threads tried). Asked to split, Codex used them: no split group, its sub-agents' commands, tokens and costs
-  // never reached the app's journal. So a Codex agent's line says plainly that it works without them.
-  const codex = engine === 'codex'
-    ? `Codex's own collaboration tools (spawn_agent, followup_task, send_message, wait_agent, interrupt_agent, list_agents) stay outside this app's journal and costs, so I leave them unused${own ? ' – my parallel work goes through agents.split' : ''}.`
-    : '';
-  return [own, codex].filter(Boolean).join(' ');
+export function windowsShellLine(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env, shell = false): string {
+  if (platform !== 'win32') return '';
+  const python = 'Shells here: Python runs in UTF-8 (PYTHONUTF8=1) and finds the person\'s packages (tzdata …); `python -I` leaves both out, so my own scripts run as plain python and with -I I add -X utf8.';
+  if (pwshDir(env)) return `${python} My shell${shell ? ' and shell.exec are' : ' is'} PowerShell 7: text piped into programs and written by Set-Content stays UTF-8.`;
+  return `${python} PowerShell is Windows PowerShell 5.1: Get-Content and Set-Content read and write ANSI unless I pass -Encoding utf8, and text piped into a program arrives as ASCII (ä becomes ?) unless $OutputEncoding is UTF-8 – ${shell ? 'shell.exec sets it; ' : ''}in my engine's own PowerShell a command that pipes such text starts with $OutputEncoding=[Text.UTF8Encoding]::new($false). Windows PowerShell 5.1 hands a program its arguments without their inner double quotes, so code with quotes reaches python or node whole from a file.`;
 }
-
-// H1 (01.11.2026): the E1 line on Codex's sub-agent note (codexTeamLine) stood here, before that note in the thread – it
-// had no effect. The Codex adapter now sends one app note after it (engines/codex/app-note.ts).
-
-/**
- * C4-live (31.10.2026): an engine may put an instructions file of the person's own set-up for it into a thread as a user
- * message (Codex: its home's AGENTS.md; no thread or config switch removes it – project_doc_max_bytes only drops the
- * workspace's). On a fresh thread the agent answered that block ("Verstanden …") instead of the turn's input – a
- * manager's review of a finished task was lost. The line says what such text is, in the same words on every engine
- * (q-r, 03.11.2026: prompts name no engine's files).
- */
-export const ENGINE_SETUP_LINE = 'Text my engine adds on its own from the person\'s set-up for it (an instructions file) is a standing preference I follow quietly, not a message: my answer goes to the turn\'s input.';
 
 /** English name of a language code ("de" → "German"); the code itself when unknown. */
 export function languageName(code: string | undefined): string {
@@ -157,9 +143,6 @@ export function languageName(code: string | undefined): string {
   }
 }
 
-/** B-078 (D17, owner 06.11.2026): the language follows the person, and the AI keeps the setting itself. */
-export const LANGUAGE_LINE = 'When the person writes or speaks in another language than the app\'s, my answers follow theirs; when that holds, I set profile.language, and anything special about how they want to be spoken to (a language per topic, a form of address) I note in profile.notes (skill app-settings).';
-
 /** Notes in the stable prompt (settings allow 600). */
 const NOTES_CAP = 600;
 
@@ -169,31 +152,26 @@ export function notesLine(notes: string | undefined): string {
   return text ? `How the person wants to be spoken to (profile.notes, kept by us agents): ${text.slice(0, NOTES_CAP)}` : '';
 }
 
-/**
- * The stable "## My environment" (deterministic for the same agent, mode, engine and PC): this PC and its language, the
- * language line and profile.notes (B-078), the connected models with price and smarts (B-078), the workspace, how to
- * search the web this turn and screen tools.
- * `offered`: the turn's tool names.
- */
+/** The stable "## My environment" (deterministic for the same agent, mode, engine and PC). `offered`: the mode's tool names. */
 export function environmentSection(services: RuntimeServices, input: { agent: Agent; mode: ModeInfo; route: RouteDecision }, offered?: ReadonlySet<string>, system: SystemFacts = systemFacts()): string {
   const tools = offered ?? offeredTools(services, input.agent, input.mode);
   const workspace = safe(() => services.paths.workspace, '');
-  // B-076: the language as a fact, no rule – the app's setting, which starts as this PC's language.
   const profile = safe(() => services.settings.get().profile, undefined);
-  const language = languageName(profile?.language);
+  const language = languageName(profile?.language); // a fact, no rule: the app's setting, which starts as this PC's language
+  const own = ownFileTools(services, input.route?.engine);
   const lines = [
     ENVIRONMENT_HEADER,
-    `This PC: ${osName(system)}, named "${system.hostname}" – I run inside the Autark app on it, whose language is set to ${language}.`,
-    LANGUAGE_LINE, // B-078 (D17): the AI notices the spoken language and keeps the setting and the notes
+    `This PC: ${osName(system)}, named "${system.hostname}" – I run inside the Autark system on it, whose language is set to ${language}.`,
+    windowsShellLine(system.platform, process.env, tools.has('shell.exec')), // B-080: what the shells on Windows do with text
     notesLine(profile?.notes),
-    modelsFactsLine(services), // B-078 (D16): the connected models with price, smarts and how a turn is paid
-    workspace ? `Workspace: ${workspace} – the team's working folder (projects and the files I make).` : '',
-    webLine(tools, input.route?.engine), // E1: the engine's own search first
+    workspaceLine(workspace),
+    homeLine(tools, os.homedir(), own),
+    dataLine(services, tools, own),
+    memoryLine(services, tools),
+    webLine(tools, input.route?.engine, own), // E1: the engine's own search first
     screenLine(tools),
-    [...tools].some((name) => name.startsWith('browser.') && name !== 'browser.show') ? `Browser, where: ${WHERE_HINT}` : '',
-    toolsLine(tools), // B-049 F4 (TOOLS-CORE)
-    splitLine(tools, input.route?.engine), // B-057 S17: splitting is the agent's own choice (Codex: not with its own sub-agents)
-    ENGINE_SETUP_LINE, // C4-live: an instructions block the engine adds is no message to answer
+    [...tools].some((name) => name.startsWith('browser.') && name !== 'browser.show') ? `Browser, where: ${whereHint(any(tools, 'computer.'))}` : '',
+    INSTRUCTION_FILES_LINE,
   ];
   return lines.filter(Boolean).join('\n');
 }
@@ -210,21 +188,29 @@ function fileTools(offered: ReadonlySet<string>): string {
  * (F2/G1) that files.search without a path covers the workspace and then that folder – a fact, only where a file tool is
  * offered.
  */
-export function homeLine(offered: ReadonlySet<string>, home: string = os.homedir()): string {
-  if (!home || !fileTools(offered)) return '';
-  const search = offered.has('files.search') ? ' – files.search without a path searches the workspace, then this folder' : '';
+export function homeLine(offered: ReadonlySet<string>, home: string = os.homedir(), own = false): string {
+  if (!home || !(own || fileTools(offered))) return '';
+  const search = !own && offered.has('files.search') ? ' – files.search without a path searches the workspace, then this folder' : '';
   return `The person's own files: ${home} and its folders${search}.`;
 }
 
-function reachLines(services: RuntimeServices, offered: ReadonlySet<string>): string[] {
-  const tools = fileTools(offered);
+/** G1 (01.11.2026): the data folder as a fact, no instruction – where a file tool is offered or the engine has its own. */
+function dataLine(services: RuntimeServices, offered: ReadonlySet<string>, own: boolean): string {
   const data = safe(() => services.paths.data, '');
-  const lines = [`PC reach: the whole PC – it belongs to the AI team${tools ? ` (${tools})` : ''}. I look wherever it helps.`];
-  const home = homeLine(offered);
-  if (home) lines.push(home);
-  // G1 (01.11.2026): a fact, no instruction ("Change them to change the app" framed a first request as configuring the app).
-  if (tools && data) lines.push(`Data folder: ${data} – this app's own files (settings.json, theme.css, agents' SYSTEM.md, skills, prompts); ${path.join(data, ROOT_README)} maps them.`);
-  return lines;
+  if (!data || !(own || fileTools(offered))) return '';
+  return `Data folder: ${data} – the Autark system's own files (settings.json, theme.css, agents' SYSTEM.md, skills, prompts); ${path.join(data, ROOT_README)} maps them.`;
+}
+
+/**
+ * Lane find 14.11.2026 (E4b live A/B: every Autark arm, Sol too, missed the rules stored in memory – "prices only in NOK",
+ * "no calls before 10:00" – while plain Codex found them through one AGENTS.md line saying what its notes hold and where):
+ * where memory is and what it holds, as a fact – never a list of it.
+ */
+export function memoryLine(services: RuntimeServices, offered: ReadonlySet<string>): string {
+  const data = safe(() => services.paths.data, '');
+  if (!data) return '';
+  const find = offered.has('knowledge.find') ? ' knowledge.find finds a note by the names and words of a job.' : '';
+  return `Memory: ${path.join(data, MEMORY_ENTRY)} – what we have learned and saved: people, partners, places, their rules and wishes, and how work is done here; one Markdown note per subject, in folders.${find}`;
 }
 
 /** Names in the companies line (beyond: "+N more"). */
@@ -250,6 +236,54 @@ export function companiesLine(services: RuntimeServices, offered: ReadonlySet<st
   return `${parts.join(' · ')}.`;
 }
 
+/** An app phone's phone use in a few words. */
+const PHONE_USE: Readonly<Record<NonNullable<LinkedPhone['use']>, string>> = {
+  on: 'phone use on', off: 'phone use off – the app shows the person how to turn it on', away: 'not connected right now',
+};
+
+/** Phones named in the phones line (beyond: "+N more"). */
+const MAX_PHONES = 3;
+
+/**
+ * "Linked phones: samsung SM-S918B (the person's, Autark app, phone use on) – phone.* works on a phone whose phone use is
+ * on (an ADB phone always); phone.say with ask: true asks the person for a moment of theirs." – '' without a linked phone
+ * or where phone.* is not offered. A phone attached to another PC of mine names that PC: phone.* reaches it with `device`.
+ */
+export function phonesLine(services: RuntimeServices, offered: ReadonlySet<string>): string {
+  const phones = offered.has('phone.ui_tree') ? safe(() => linkedPhones(services), []) : [];
+  if (!phones.length) return '';
+  const names = phones.slice(0, MAX_PHONES).map((phone) => {
+    const where = phone.pc ? `, on ${cleanLabel(phone.pc)}` : '';
+    if (phone.via === 'adb') return `${cleanLabel(phone.name)} (over ADB${where || ' on this PC'})`;
+    return `${cleanLabel(phone.name)} (the person's, Autark app${where || `, ${PHONE_USE[phone.use ?? 'away']}`})`;
+  });
+  const more = phones.length > MAX_PHONES ? ` +${phones.length - MAX_PHONES} more` : '';
+  const ask = phones.some((phone) => phone.via === 'app') ? '; phone.say with ask: true asks the person for a moment of theirs' : '';
+  const elsewhere = phones.some((phone) => phone.pc) ? '; one on another PC with device: that PC' : '';
+  return `Linked phones: ${names.join(', ')}${more} – phone.* works on a phone whose phone use is on (an ADB phone always)${elsewhere}${ask}.`;
+}
+
+/** The name an engine goes by for the person: its account's provider ("Claude Code", "Codex", "OpenAI API"), else the engine's. */
+export function engineName(services: RuntimeServices, route: Pick<RouteDecision, 'engine' | 'accountId'>): string {
+  const account = safe(() => services.accounts.list(), []).find((entry) => entry.id === route.accountId);
+  return (account && PROVIDER_LABELS[account.provider]) || PROVIDER_LABELS[route.engine as ProviderId] || route.engine; // codex, claude … name a provider too
+}
+
+/**
+ * "Engines connected in this Autark system: Claude Code (2 accounts), Codex." – the signed-in accounts that run turns,
+ * by provider in the order they were added ('' when none). A sign-in that lapses moves the account to signInLine.
+ */
+export function enginesLine(services: RuntimeServices): string {
+  const counts = new Map<string, number>();
+  for (const account of safe(() => services.accounts.list(), [])) {
+    if (!isUsableState(account) || !engineFor(account.provider) || MEDIA_ONLY_PROVIDERS.includes(account.provider)) continue;
+    const name = PROVIDER_LABELS[account.provider] ?? account.provider;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  if (!counts.size) return '';
+  return `Engines connected in this Autark system: ${[...counts].map(([name, count]) => (count > 1 ? `${name} (${count} accounts)` : name)).join(', ')}.`;
+}
+
 /** "Accounts needing sign-in: …" (labels only; '' when none). */
 export function signInLine(services: RuntimeServices, offered: ReadonlySet<string>): string {
   const waiting = safe(() => services.accounts.list(), []).filter((account) => account.enabled !== false && account.state === 'needs_login');
@@ -269,27 +303,48 @@ export function appsLine(services: RuntimeServices, agent: Agent, offered: Reado
   const ids = new Set([...offered].map((name) => name.split('.')).filter((parts) => parts[0] === 'app' && parts.length >= 3).map((parts) => parts[1]));
   const usable = new Set(ids.size ? safe(() => services.apps?.usableBy(agent.id) ?? [], [] as string[]) : []);
   const apps = usable.size ? safe(() => services.apps?.list() ?? [], []).filter((app) => ids.has(app.id) && usable.has(app.id)) : [];
-  if (!apps.length) {
-    return services.apps ? 'Connected apps: none.' : '';
-  }
+  if (!apps.length) return '';
   const names = apps.slice(0, MAX_APPS).map((app) => `${cleanLabel(app.name)} (app.${app.id}.*)`);
   const more = apps.length > MAX_APPS ? ` +${apps.length - MAX_APPS} more` : '';
   const find = offered.has(FIND_TOOL) ? ' – tools.find finds their tools' : '';
   return `Connected apps: ${names.join(', ')}${more}${find}${find ? ';' : ' –'} another service: skill connect-apps.`;
 }
 
+const GB = 1024 ** 3;
+const DISK_TELL_BYTES = 2 * GB;
+
+/** Free space is context for the agent, independent of whether a turn starts. */
+function freeBytes(dir: string): number | undefined {
+  try { const stats = statfsSync(dir); return Number(stats.bavail) * Number(stats.bsize); } catch { return undefined; }
+}
+
 /**
- * The volatile part (prompt-volatile.ts): PC reach, the data folder when readable, the companies and linked PCs,
- * accounts needing sign-in and connected apps. `mode`: the turn's mode (its tool offer).
+ * B-080 (live 08.11.2026: the team stood still for hours on a nearly full disk until a person made room): below
+ * DISK_TELL_BYTES the free space of the data folder's disk as a fact, in my own voice – rounded down to 0.1 GB, so the
+ * volatile delta changes only in those steps. '' when it is more or cannot be read. One statfs per turn, no timer.
  */
-export function environmentNow(services: RuntimeServices, input: { agent: Agent; mode?: ModeInfo; conversationId?: string }): string {
+export function diskLine(services: RuntimeServices, read: (dir: string) => number | undefined = freeBytes): string {
+  const dir = safe<string | undefined>(() => services.paths?.data, undefined);
+  const free = dir ? read(dir) : undefined;
+  if (free === undefined || free >= DISK_TELL_BYTES) return '';
+  const gb = (Math.floor((free / GB) * 10) / 10).toFixed(1);
+  return `This PC's disk has only ${gb} GB free. I make room before it is full – temp files, caches and build output that rebuilds itself – and keep everyone's work and data.`;
+}
+
+/**
+ * The live part (prompt-volatile.ts): the free disk space when low (B-080), the companies and linked PCs, the linked phones, accounts
+ * needing sign-in and connected apps. `mode`: the agent's own mode (its tool offer); `disk`: the free-space probe (tests
+ * pass their own).
+ */
+export function environmentNow(services: RuntimeServices, input: { agent: Agent; mode?: ModeInfo }, disk: (dir: string) => number | undefined = freeBytes): string {
   const offered = input.mode ? offeredTools(services, input.agent, input.mode) : new Set<string>();
   const lines = [
-    `${ENVIRONMENT_HEADER} now`,
-    ...reachLines(services, offered),
+    diskLine(services, disk), // B-080: the agent can make room while it keeps working
+    enginesLine(services), // owner 15.11.2026: which engines the system has (the turn's own: "## Now")
     companiesLine(services, offered), // B-075
+    phonesLine(services, offered), // KI-Runde 17.11.2026
     signInLine(services, offered),
     appsLine(services, input.agent, offered), // B-052 M6
-  ];
-  return lines.filter(Boolean).join('\n');
+  ].filter(Boolean);
+  return lines.length ? [`${ENVIRONMENT_HEADER} now`, ...lines].join('\n') : '';
 }

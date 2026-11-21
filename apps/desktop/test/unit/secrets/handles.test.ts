@@ -1,11 +1,12 @@
-// Secret handles in commands and requests (B-044, secrets/handles.ts, tools/builtin/{command,files,secret-run,web}.ts):
-// shell.exec and secrets.run take secret://<id> in env values – resolved at spawn (the child gets the value, the agent's
+// Secret handles in commands and requests (B-044, secrets/handles.ts, tools/builtin/{command,files,web}.ts):
+// shell.exec takes secret://<id> in env values – resolved at spawn (the child gets the value, the agent's
 // arguments and the action never do); owner 29.10.2026 (a catalog with zero restrictions, card
 // data included): every secret works in a command and in a header to any host – a password, a login's field, a card,
-// a 2FA key (its current code); what comes back has each value the call received masked by its handle (4+ characters,
-// raw and encoded); only a value under 4 characters and a secret out of scope are refused; web.fetch sends a handle
-// only to the request's host and follows no redirect then. secrets.run comes only
-// through the MCP hub, with shell.exec. Owns: these assertions only. Never: a real shell,
+// a 2FA key (its current code); what comes back has each value the call received masked by its handle (raw and encoded
+// forms of 4+ characters); a value of any length works – a short one that shows up withholds the output (B-080, live
+// 07.11.2026: a refused CVC went over the clipboard instead); only a secret out of the catalog is refused; web.fetch sends a handle
+// only to the request's host and follows no redirect then. shell.exec reaches every engine in every mode (Claude
+// through the hub, Codex and API models through tools.call). Owns: these assertions only. Never: a real shell,
 // keychain or network.
 
 import { test } from 'node:test';
@@ -18,10 +19,11 @@ import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { SecretVault } from '../../../src/runtime/secrets/service.ts';
 import { maskValues } from '../../../src/runtime/secrets/handles.ts';
 import { fileTools, type ShellSpawn } from '../../../src/runtime/tools/builtin/files.ts';
-import { secretRunTool } from '../../../src/runtime/tools/builtin/secret-run.ts';
 import { webTools, type FetchFn } from '../../../src/runtime/tools/builtin/web.ts';
 import { handlesIn } from '../../../src/runtime/secrets/handles.ts';
-import { EVERY_MODE } from '../../../src/runtime/tools/registry.ts';
+import { Registry } from '../../../src/runtime/tools/registry.ts';
+import { ModeLibrary } from '../../../src/runtime/modes/service.ts';
+import { agent } from '../chat/harness.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
 import { tempDir } from '../store/helpers.ts';
@@ -65,9 +67,8 @@ function setup(t: { after(fn: () => void): void }) {
     agent: { id: agentId, name: 'Mira' } as ToolContext['agent'], runId: 'run_1', mode: 'coding', services, signal: new AbortController().signal, status() {},
   });
   const exec = fileTools({ shell }).find((tool) => tool.name === 'shell.exec')!;
-  const run = secretRunTool({ shell });
   const [web] = webTools({ fetch });
-  return { vault, spawned, fetched, ctx, exec, run, web, answer: (next: () => Response) => { answer = next; } };
+  return { vault, spawned, fetched, ctx, exec, web, answer: (next: () => Response) => { answer = next; } };
 }
 
 const text = (out: ToolOutput) => out.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
@@ -122,15 +123,27 @@ test('29.10.2026: a password saved from a website and a login\'s field work in a
   assert.equal(f.vault.list().find((info) => info.id === site.id)!.source, 'shop.example', 'the source stays information');
 });
 
-test('secrets.run: through the MCP hub only, in every mode; it needs a handle', async (t) => {
+test('shell.exec: every engine in every mode, a stored secret in its env (Codex in browser and writing mode had none)', async (t) => {
   const f = setup(t);
-  assert.equal(f.run.audience, 'mcp');
-  assert.ok(EVERY_MODE.has('secrets.run'));
+  const registry = new Registry({ services: () => ({}) as RuntimeServices });
+  registry.register(f.exec);
+  const modes = new ModeLibrary({ resources: path.resolve('resources'), clock: new ManualClock() });
+  const engines = { codex: { ownTools: true, via: 'native' as const }, claude: { ownTools: true, via: 'mcp' as const }, api: { ownTools: false, via: 'native' as const } };
+  for (const key of ['browser', 'writing', 'general']) {
+    for (const [name, engine] of Object.entries(engines)) {
+      assert.ok(registry.specsFor(agent('ag_mira', 'Mira', { mode: key }), modes.get(key), engine).some((spec) => spec.name === 'shell.exec'), `${key} on ${name}`);
+    }
+  }
   const token = await f.vault.save({ label: 'npm token', kind: 'token', value: TOKEN });
   const args = { command: 'npm whoami', env: { NPM_TOKEN: `secret://${token.id}` } };
-  assert.equal((await f.run.run(args, f.ctx())).isError, false);
+  assert.equal((await f.exec.run(args, f.ctx())).isError, false);
   assert.equal(f.spawned[0].env?.NPM_TOKEN, TOKEN);
-  assert.match(text(await f.run.run({ command: 'npm whoami', env: { A: 'b' } }, f.ctx())), /is for commands that need a stored secret/);
+  // The env argument names how a PowerShell command reads it – a bash-style $TOKEN is empty there.
+  const env = (f.exec.inputSchema.properties as Record<string, { description?: string }>).env.description!;
+  assert.match(env, /on Windows the command reads it as \$env:NAME/i);
+  assert.match(env, /never reaches me and output showing it is masked/);
+  assert.match(f.exec.description, /^Runs a shell command on this PC or a linked PC, with stored secrets in its env if needed\./);
+  assert.ok(f.exec.description.includes('I chain with ";" and write cmd syntax as cmd /c "…"'));
 });
 
 test('web.fetch headers: sent to the request\'s host only, no redirect followed; any host – nobody restricts a secret to sites (owner 29.10.2026)', async (t) => {
@@ -172,7 +185,7 @@ test('web.fetch: no part of a secret reaches the model through an error – a li
   assert.ok(!text(failed).includes('tok_bbbb'), 'not even the start of the value');
 });
 
-test('owner 29.10.2026: a 2FA key works in a command and a header as its current code, masked in what comes back; a value under 8 characters that shows up withholds the output, under 4 it is refused', async (t) => {
+test('owner 29.10.2026: a 2FA key works in a command and a header as its current code, masked in what comes back; a value under 8 characters that shows up withholds the output, any length works', async (t) => {
   const f = setup(t);
   const seed = await f.vault.save({ label: 'Shop 2FA', kind: 'totp', value: 'JBSWY3DPEHPK3PXP' });
   const login = await f.vault.saveGroup({ label: 'Mail login', kind: 'login', fields: [
@@ -188,10 +201,27 @@ test('owner 29.10.2026: a 2FA key works in a command and a header as its current
   const pin = await f.vault.save({ label: 'Door PIN', kind: 'password', value: '4711' });
   const out = await f.exec.run({ command: 'print P', env: { P: `secret://${pin.id}` } }, f.ctx());
   assert.ok(!text(out).includes('4711') && text(out).includes('Output withheld'), 'a printed 4-character value withholds the output');
-  const tiny = await f.vault.save({ label: 'Lock code', kind: 'password', value: '471' });
-  await assert.rejects(f.exec.run({ command: 'print P', env: { P: `secret://${tiny.id}` } }, f.ctx()), /"Lock code" is shorter than 4 characters.*only in a browser field/);
-  await assert.rejects(f.web.run({ url: 'https://echo.example/', headers: { 'X-Pin': `secret://${tiny.id}` } }, f.ctx()), /shorter than 4 characters/);
-  assert.equal(f.fetched.length, 0, 'nothing too short was sent');
+  // B-080 (live 07.11.2026: a refused CVC went over the clipboard instead): a 3-character value works too
+  const tiny = await f.vault.save({ label: 'Card CVC', kind: 'password', value: '471' });
+  const printed = await f.exec.run({ command: 'print P', env: { P: `secret://${tiny.id}` } }, f.ctx());
+  assert.equal(f.spawned.at(-1)!.env?.P, '471', 'the child gets the short value');
+  assert.ok(!text(printed).includes('471') && text(printed).includes('Output withheld'), 'a printed short value withholds the output');
+  f.answer(() => new Response('pin 471 accepted', { status: 200, headers: { 'content-type': 'text/plain' } }));
+  const sent = await f.web.run({ url: 'https://echo.example/', headers: { 'X-Pin': `secret://${tiny.id}` } }, f.ctx());
+  assert.equal(f.fetched.length, 1, 'the header was sent');
+  assert.equal(f.fetched[0].headers['X-Pin'], '471');
+  assert.ok(!text(sent).includes('471') && text(sent).includes('Output withheld'), 'an echoing response is withheld');
+  // B-080: a card's 3-digit CVC field reaches the command's child too
+  const card = await f.vault.saveGroup({ label: 'Visa', kind: 'card', fields: [{ field: 'number', kind: 'card', value: '4111111111111234' }, { field: 'cvc', kind: 'card', value: '123' }] });
+  const cvc = card.fields.find((entry) => entry.field === 'cvc')!;
+  const run = await f.exec.run({ command: 'print CV', env: { CV: `secret://${cvc.id}` } }, f.ctx());
+  assert.equal(f.spawned.at(-1)!.env?.CV, '123', 'the child gets the CVC');
+  assert.ok(!text(run).includes('123') && text(run).includes('Output withheld'), 'a printed CVC withholds the output');
+});
+
+test('maskValues: an empty value masks nothing', () => {
+  assert.equal(maskValues('abc', new Map([['x', '']])), 'abc');
+  assert.equal(maskValues('Basic dXNlcjpwYXNzd29yZA==', new Map([['x', '']])), 'Basic dXNlcjpwYXNzd29yZA==');
 });
 
 test('maskValues: raw, base64, URL and hex forms, longest first; a short value only withholds when it shows', () => {
@@ -214,4 +244,15 @@ ${card.slice(8)}`, values);
   const basic = `Authorization: Basic ${Buffer.from(`mira:${pass}`).toString('base64')}`;
   assert.equal(maskValues(basic, values), 'Authorization: Basic secret://pw');
   assert.equal(maskValues('nothing to see here', values), 'nothing to see here');
+});
+
+test('maskValues (BEFUND §6, 17.11.2026): a word that shares a short piece with a password stays whole; halves and grouped card numbers are masked', () => {
+  const pass = 'Xk9-acmeco-Q2!pw77';
+  const card = '4242424242424242';
+  const values = new Map([['pw', pass], ['card', card]]);
+  assert.equal(maskValues('Login: hello@acmecolab.com auf acmecolab.com', values), 'Login: hello@acmecolab.com auf acmecolab.com', 'before: hello@secret://pw…lab.com');
+  assert.equal(maskValues(`erste Hälfte ${pass.slice(0, 9)}, zweite ${pass.slice(9)}`, values), 'erste Hälfte secret://pw, zweite secret://pw');
+  assert.equal(maskValues(`Passwort: ${pass}`, values), 'Passwort: secret://pw');
+  assert.equal(maskValues('Karte 4242 4242 4242 4242, gültig', values), 'Karte secret://card, gültig');
+  assert.equal(maskValues('Karte 4242-4242-4242-4242', values), 'Karte secret://card');
 });

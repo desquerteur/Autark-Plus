@@ -7,7 +7,7 @@
 // Every handler runs as its caller (rpc/caller.ts: the scope, and the address of a tokenless
 // call) so code further down can narrow what that caller's answer may do (DEV5B).
 // Owns: dispatch, per-connection state (topics, abort signal, in-flight cap), event fan-out
-// (incl. `run.item` → `runs:<agentId>`) and closing connections of revoked devices. The
+// (incl. `run.item` → `runs:<agentId>`, and `agent.activity` with the other PCs' runs added – F10) and closing connections of revoked devices. The
 // tokenless `POST /rpc` route is served by rpc/tokenless.ts on this server's table.
 // Roles: the owner and the owner's paired phones (scope kind 'device', the CEO's) see everything their
 // tier allows (scopes.ts); an employee's device (scope kind 'person') gets only what
@@ -25,15 +25,17 @@ import type { ClientScope, RpcEvent, RpcRequest, RpcResponse, Topic } from '../.
 import { WorkforceError, toErrorData } from '../../shared/errors.ts';
 import type { WorkforceErrorData } from '../../shared/errors.ts';
 import type { Device } from '../../shared/model/devices.ts';
-import type { Run, RunItem } from '../../shared/model/runs.ts';
+import type { AgentActivity, Run, RunItem } from '../../shared/model/runs.ts';
 import type { Logger, RuntimeServices } from '../contracts.ts';
+import { allActivity } from '../chat/live.ts';
 import { withCaller } from './caller.ts';
 import { parseFrame } from './connection.ts';
 import type { RpcConnection } from './connection.ts';
 import type { RpcExtras } from './extras.ts';
 import { createHandlerTable } from './handlers/index.ts';
 import { gateParams, gateResult, gatedAgent } from './project-gate.ts'; // AF-026
-import { mayReceive, visibleData } from './scopes.ts';
+import { deviceAgent, mayReceive, visibleData } from './scopes.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { scopeDenial, secureScope } from './table.ts';
 import { serveTokenless, type HttpCallMeta } from './tokenless.ts';
 import { personMayReceive, personRemoval, personRights, personView } from '../people/events.ts';
@@ -62,6 +64,8 @@ interface Client {
   closed: boolean;
   /** F-52: a person's rights when the connection was attached (people/events.ts personRights). */
   rights?: string;
+  /** A device's agents as last sent on this connection (scopes.ts deviceAgent). */
+  agents?: Map<string, string>;
   detach(): void;
 }
 
@@ -233,11 +237,17 @@ export class RpcServer {
     } else {
       topic = topicOf(event, data);
     }
+    // F10 (16.11.2026): windows and phones hear this PC's running runs with those of the person's other PCs (chat/live.ts).
+    if (event === 'agent.activity') data = { active: allActivity(this.deps.services().bus, (data as { active: AgentActivity[] }).active) };
     let frame: RpcEvent | undefined;
     for (const client of this.clients) {
       if (client.closed || !client.topics.has(topic)) continue;
       if (client.scope.kind === 'person') { this.forwardPerson(client, topic, event, data); continue; }
       if (!mayReceive(client.scope, topic, event, data)) continue;
+      if (event === 'agent.upserted' && client.scope.kind === 'device') { // a phone: no SYSTEM.md again for a status change
+        this.send(client, { event, data: deviceAgent(client.agents ??= new Map(), data as Agent) });
+        continue;
+      }
       const visible = visibleData(client.scope, event, data); // per-scope payload (an external agent's messages)
       this.send(client, visible === data ? (frame ??= { event, data }) : { event, data: visible });
     }

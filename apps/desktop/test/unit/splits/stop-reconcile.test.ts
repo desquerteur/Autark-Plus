@@ -36,11 +36,11 @@ test('the parent agent stops its own group: it ends normally and gets the partia
   assert.equal(w.splits.stop({ groupId }, 'ag_ava'), 1);
   const group = w.splits.list({ groupId })[0];
   assert.equal(group.status, 'settled');
-  assert.equal(group.splits[1].error, 'Stopped by its main self.');
+  assert.equal(group.splits[1].error, 'Stopped by its agent.');
   assert.equal(w.wakes.list('ag_ava').length, 1);
   const text = w.splits.pendingResults('ag_ava', CHAT)!.text;
   assert.match(text, /A is done/);
-  assert.match(text, /### #2 B – stopped – Stopped by its main self\./);
+  assert.match(text, /### #2 B – stopped – Stopped by its agent\./);
 });
 
 test("the person's stop of one part: the others go on and the group ends normally", () => {

@@ -11,10 +11,17 @@
 // Phone apps paired through the server (rendezvous/phone-pair.ts; B-078: also the ones the roster brings from my other
 // PCs) are pinned the same way for as long as their device row exists; their tunnels go to the phone bridge, never into
 // the PC mesh. A phone's connect request (role 'phone') takes the same route as a PC's; the old `phone` code message of
-// 0.3.x apps gets one line asking for the app update.
+// 0.3.x apps gets one line asking for the app update. F29 stage 1: the Android app's channel goes straight to the peer
+// listener whenever one of my addresses answers; the state names each phone's bytes direct and through the server today
+// (phone-traffic.ts), and a removed phone's direct channels end after the same drain as its pin.
+// B-084: it opens my person code (remote/code.ts – it holds my key and database) and sends my chain with my pins, so
+// the server finds me under the code as well.
 // Owns: the mesh hook, the request route, the relay client and its state.
 // Never: links a PC, or talks to a server the person did not configure.
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Bus } from '../../bus.ts';
 import type { Clock, Logger } from '../../contracts.ts';
 import type { Db } from '../../db/database.ts';
@@ -22,6 +29,7 @@ import type { RelayState } from '../../../shared/model/relay.ts';
 import { relayAddress } from '../../../shared/model/relay.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { MEETING_OFF, MEETING_UNREACHABLE, type Found } from '../../remote/find.ts';
+import { openCode, watchCode, type PersonCode } from '../../remote/code.ts';
 import { remoteIdOf } from '../../remote/id.ts';
 import type { SocketLike } from '../channel.ts';
 import type { DeviceIdentity } from '../identity.ts';
@@ -29,6 +37,7 @@ import { fingerprintOf, fromB64url } from '../keys.ts';
 import type { DeviceMesh, Timers } from '../mesh.ts';
 import { DevicesRepo, type DeviceRecord } from '../repo.ts';
 import { relayPhone, type PhoneBridge } from './phone.ts';
+import { PcRtc, pcOffer } from './pc-rtc.ts';
 import { RelayClient, type RelayClientDeps } from './relay-client.ts';
 import type { RelayTunnel } from './tunnel.ts';
 
@@ -62,8 +71,11 @@ export interface MeetingDeps {
   port(): number | undefined;
   timers?: Timers;
   socket?: RelayClientDeps['socket'];
-  /** Phone apps over the server: their tunnels. */
-  phones?: Pick<PhoneBridge, 'accept' | 'closeAll'>;
+  /** Phone apps over the server: their tunnels (F29: and their traffic, direct and through the server). */
+  phones?: Pick<PhoneBridge, 'accept' | 'closeAll'> & Partial<Pick<PhoneBridge, 'counts' | 'onChange' | 'prune'>>;
+  /** 18.11.2026: the STUN servers for PC ↔ PC over WebRTC (settings.devices.stun; undefined while devices.rtc is off).
+   * Absent: linked PCs in other networks go through a tunnel only. */
+  stun?(): readonly string[] | undefined;
 }
 
 const linkedPc = (record: DeviceRecord | undefined): record is DeviceRecord =>
@@ -82,10 +94,24 @@ export class Meeting {
   private readonly leaving = new Map<string, string>();
   /** Lookups waiting for the server connection (woken by its state changes). */
   private readonly waiters = new Set<() => void>();
+  /** My person code (B-084): the server also finds me under it while my chain proves it. */
+  private readonly code: PersonCode;
+
+  /** 18.11.2026: PC ↔ PC over WebRTC (rendezvous/pc-rtc.ts). */
+  private readonly pcRtc?: PcRtc;
 
   constructor(deps: MeetingDeps) {
     this.deps = deps;
+    const stun = deps.stun;
+    if (stun) {
+      this.pcRtc = new PcRtc({
+        log: deps.log, stun,
+        tunnel: (fp) => (this.relay.online(fp) ? this.relay.open(fp) : undefined),
+        accept: (socket, fp) => deps.mesh.accept(socket, fp),
+      });
+    }
     this.repo = new DevicesRepo(deps.db);
+    this.code = openCode(deps.db, deps.identity, () => deps.clock.now());
     this.relay = new RelayClient({
       identity: deps.identity, log: deps.log, timers: deps.timers, socket: deps.socket,
       events: {
@@ -101,12 +127,15 @@ export class Meeting {
     const { bus, mesh } = this.deps;
     mesh.setMeeting({
       addresses: (record) => this.relay.addresses(record.fingerprint),
+      rtc: (record) => this.pcRtc?.dial(record.fingerprint),
       tunnel: (record) => (this.relay.online(record.fingerprint) ? this.relay.open(record.fingerprint) : undefined),
     });
     this.offs.push(
+      watchCode(this.deps.identity.fingerprint, () => this.syncPeers()),
       bus.on('settings.updated', () => { this.syncPeers(); this.configure(); }),
       bus.on('device.upserted', () => this.syncPeers()),
       bus.on('device.removed', () => this.syncPeers()),
+      this.deps.phones?.onChange?.(() => this.changed()) ?? (() => undefined),
     );
     this.syncPeers();
     this.configure();
@@ -127,9 +156,14 @@ export class Meeting {
   state(): RelayState {
     const relay = this.relay.state();
     const ids = (fps: string[]) => fps.map((fp) => this.repo.byFingerprint(fp)).filter(linkedPc).map((record) => record.id);
+    const phones = (this.deps.phones?.counts?.() ?? []).flatMap((count) => {
+      const record = this.repo.get(count.deviceId);
+      return relayPhone(record) ? [{ ...count, name: record.name }] : [];
+    });
     return {
-      status: relay.status, ...(relay.url ? { url: relay.url } : {}), ...(relay.error && relay.status !== 'connected' ? { error: relay.error } : {}),
-      peersOnline: ids(relay.online).length, relayed: ids(relay.tunnels),
+      status: relay.status, ...(relay.url ? { url: relay.url } : {}), ...(relay.error && relay.status !== 'connected' ? { error: relay.error } : {}), ...(relay.held ? { held: relay.held } : {}),
+      peersOnline: ids(relay.online).length, relayed: ids(relay.tunnels), ...(phones.length ? { phones } : {}),
+      ...(meet() ? { meet: meet() } : {}),
     };
   }
 
@@ -144,7 +178,7 @@ export class Meeting {
       this.boxes.set(entry.fp, entry.box);
       const who = await this.relay.request(entry.fp, entry.box, { op: 'wellKnown' }, { timeoutMs: WHO_TIMEOUT_MS, signal }).catch(() => undefined) as Record<string, unknown> | undefined;
       if (!who || who.ok !== true || who.fingerprint !== entry.fp || typeof who.deviceId !== 'string' || !/^dev_[0-9a-z]{10,40}$/.test(who.deviceId)) continue;
-      out.push({ deviceId: who.deviceId, name: typeof who.name === 'string' ? who.name.slice(0, 60) : '', fingerprint: entry.fp, addresses: [`${RELAY_PREFIX}${entry.fp}`] });
+      out.push({ deviceId: who.deviceId, name: typeof who.name === 'string' ? who.name.slice(0, 60) : '', fingerprint: entry.fp, addresses: [`${RELAY_PREFIX}${entry.fp}`], ...(entry.chain ? { chain: entry.chain } : {}) });
     }
     return out;
   }
@@ -211,9 +245,22 @@ export class Meeting {
       });
       return;
     }
-    void this.deps.mesh.accept(tunnel as SocketLike).catch((error: unknown) => {
+    const accept = (socket: SocketLike) => void this.deps.mesh.accept(socket).catch((error: unknown) => {
       this.deps.log.debug('meeting tunnel refused', { error: String((error as Error)?.message ?? error) });
       tunnel.close();
+    });
+    const rtc = this.pcRtc;
+    if (!rtc) { accept(tunnel); return; }
+    // 18.11.2026: the first frame decides – an offer for a direct path (pc-rtc.ts), else the handshake of a tunnel link
+    const held = new HeldSocket(tunnel);
+    let first = true;
+    tunnel.onMessage((data, isText) => {
+      if (!first) return;
+      first = false;
+      const offer = pcOffer(data, isText);
+      if (offer) { rtc.answer(tunnel, tunnel.peer, offer); return; }
+      held.start(data, isText);
+      accept(held);
     });
   }
 
@@ -229,12 +276,13 @@ export class Meeting {
     for (const [fp, pub] of leaving) this.leaving.set(fp, pub);
     for (const [fp, pub] of this.leaving) if (!phones.has(fp)) peers.push({ fp, pub });
     if (leaving.length) {
-      const done = () => { for (const [fp] of leaving) this.leaving.delete(fp); this.syncPeers(); };
+      const done = () => { for (const [fp] of leaving) this.leaving.delete(fp); this.deps.phones?.prune?.(); this.syncPeers(); };
       if (this.deps.timers) this.deps.timers.set(done, PHONE_DRAIN_MS); else setTimeout(done, PHONE_DRAIN_MS).unref?.();
     }
     let port: number | undefined;
     try { port = this.deps.port(); } catch { port = undefined; }
-    this.relay.setPeers(peers.slice(0, MAX_PEERS), this.findable(), port);
+    const chain = this.code.chain();
+    this.relay.setPeers(peers.slice(0, MAX_PEERS), this.findable(), port, chain.links.length ? chain : undefined);
     this.changed();
   }
 
@@ -284,4 +332,48 @@ function keyOf(pub: unknown, fp: string): boolean {
   if (typeof pub !== 'string' || pub.length > 64) return false;
   const raw = fromB64url(pub);
   return raw.length === 32 && fingerprintOf(raw) === fp;
+}
+
+let shipped: { program: string; file: string } | null | undefined;
+/** 18.11.2026: app/meet.mjs beside this runtime bundle (app.asar.unpacked when packaged) and the program that runs it
+ * as Node (ELECTRON_RUN_AS_NODE) – the own meeting server Settings offers; undefined when the build has none. */
+function meet(): { program: string; file: string } | undefined {
+  if (shipped === undefined) {
+    let file = '';
+    try { file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'meet.mjs').replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2'); } catch { /* no file URL */ }
+    shipped = file && existsSync(file) ? { program: process.execPath, file } : null;
+  }
+  return shipped ?? undefined;
+}
+
+/** An incoming tunnel whose first frame was read already: it hands that frame and every later one to the handshake. */
+class HeldSocket implements SocketLike {
+  private readonly inner: SocketLike;
+  private readonly listeners: Array<(data: Buffer, isText: boolean) => void> = [];
+  private queue: Array<[Buffer, boolean]> = [];
+  private started = false;
+
+  constructor(inner: SocketLike) { this.inner = inner; }
+
+  start(data: Buffer, isText: boolean): void {
+    this.queue.push([data, isText]);
+    this.started = true;
+    this.inner.onMessage((more, text) => this.deliver(more, text));
+  }
+
+  private deliver(data: Buffer, isText: boolean): void {
+    if (!this.listeners.length) { this.queue.push([data, isText]); return; }
+    for (const listener of this.listeners) listener(data, isText);
+  }
+
+  send(data: Buffer | string): void { this.inner.send(data); }
+  close(code?: number, reason?: string): void { this.inner.close(code, reason); }
+  onClose(listener: (code?: number) => void): void { this.inner.onClose(listener); }
+  onMessage(listener: (data: Buffer, isText: boolean) => void): void {
+    this.listeners.push(listener);
+    if (!this.started) return;
+    const queued = this.queue;
+    this.queue = [];
+    for (const [data, isText] of queued) listener(data, isText);
+  }
 }

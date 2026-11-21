@@ -6,9 +6,9 @@
 // mode, call/CallHeader.tsx); Chat tabs (opens and closes the chat's area above the messages, ChatArea.tsx; pressed
 // while open, a dot while an agent's new tab waits there – workspace/attention.ts) is the frame's one browser cell at the row's right end (shell/WindowBar.tsx), so nothing moves when the title, the
 // live line, the area or a panel changes; the open details panel's name and its X sit in the row above that panel (no
-// second header inside it). Phone: Back as the lead and the cells [call][chat tabs] at the row's end (the details sheet
-// keeps its own top line). B-075: who works and what comes from the chat's rows (the summary's live runs, live-text.ts
-// liveRuns) – the same line on every device –, a running split group as one entry (B-057, splits/split-model.ts).
+// second header inside it). Phone: Back as the lead and the cells [call][chat tabs][feedback] at the row's end (the
+// feedback cell as on every phone row, feedback/cell.tsx; the details sheet keeps its own top line). Who works and what comes from the chat's live bar (the summary's live runs, live-text.ts
+// liveRuns) – the same line on every device –, a running split group as one entry (B-057).
 // AF-018: a project chip after the name when an agent of the chat works in a project (ProjectChip.tsx).
 // Owns: the chat header's data and title markup. Never: shows provider logos or invented titles.
 
@@ -25,8 +25,6 @@ import { LiveLine } from './LiveLine.tsx';
 import { WorkingPopover, useWorkingPanel } from './WorkingPopover.tsx';
 import { clock12 } from '../lib/format.ts';
 import { liveNames, liveRuns, liveShort, liveStatus, type LiveEntry } from './live-text.ts';
-import { liveGroupsOf } from '../splits/split-model.ts';
-import { groupWorking } from '../splits/split-text.ts';
 import { useCallCell } from './call/CallHeader.tsx';
 import { chatMenu } from './chat-actions.ts';
 import { chatAttention } from '../workspace/attention.ts';
@@ -44,6 +42,7 @@ function agentChatSubtitle(chat: ConversationSummary, agentId: string): string |
   const chip = !isMobile.value && !!chatProject(chat, projectList.value);
   return agentChatLine({ role: agent.role, project: project?.name, chipShown: chip, hiredBy: creatorName(agent.createdBy, (id) => knownAgentMap.value.get(id)?.name) });
 }
+import { feedbackCell } from '../feedback/cell.tsx';
 
 export const PANEL_TITLES: Record<ChatPanel, string> = { details: 'Chat details', thread: 'Thread' };
 
@@ -56,13 +55,14 @@ function ChatTitle(props: { chat: ConversationSummary }) {
   const { chat } = props;
   const partner = chatPartner(chat);
   const solo = partner?.kind === 'agent' ? partner.memberId : undefined; // a 1:1 names only what its agent does
-  const entries: LiveEntry[] = [...liveRuns(chat), ...liveGroupsOf(chat.id).map((group) => ({ agentId: group.agentId, conversationId: chat.id, note: groupWorking(group) }))];
+  const entries: LiveEntry[] = liveRuns(chat);
   const live = chat.working.length > 0 || entries.length > 0;
   const nameOf = (id: string) => knownAgentMap.value.get(id)?.name;
   const status = live ? liveStatus(chat, solo, entries, nameOf) : '';
   const resting = status ? '' : (solo ? agentChatSubtitle(chat, solo) : undefined) ?? chatSubtitle(chat); // AF-017: which agent, its project, who hired it
   const open = chatPanel.value === 'details';
   const working = useWorkingPanel(chat.id);
+  // F21 (16.11.2026): each agent's Stop sits at its line in the live bar above the composer (LiveBar.tsx) and in the popover's rows – one Stop per run in view.
   const menu = useContextMenu(() => chatMenu(chat));
   const page = partnerPage(partner);
   const onAvatar = page ? () => (page.kind === 'agent' ? go.agent(page.id) : go.person(page.id)) : () => toggleChatPanel(chat.id, 'details');
@@ -99,7 +99,7 @@ export function useChatHeader(chat: ConversationSummary): HeaderProps {
   const tabs = (id: string): HeaderCell => ({
     id, icon: 'globe', label: 'Chat tabs', pressed: open, expanded: open, badge: !open && chatAttention.value === chat.id ? 'dot' : undefined, onClick: () => toggleChatArea(chat.id),
   });
-  if (isMobile.value) return { zone: 'main', class: 'chat-header', lead: chatLead(), title, cells: [call, tabs('workspace')] };
+  if (isMobile.value) return { zone: 'main', class: 'chat-header', lead: chatLead(), title, cells: [call, tabs('workspace'), feedbackCell()] };
   return {
     zone: 'main', class: 'chat-header', title, near: [call], cells: [], // Chat tabs: the frame's one browser cell (shell/WindowBar.tsx)
     panel: panel ? { title: PANEL_TITLES[panel], onClose: () => setChatPanel(chat.id, null) } : undefined,

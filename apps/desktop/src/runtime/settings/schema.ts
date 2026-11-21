@@ -13,11 +13,12 @@ import { DEFAULT_RETENTION, MAX_RETENTION_DAYS } from '../../shared/model/lifecy
 import { localSpeechIds } from '../../shared/model/local-speech-models.ts';
 import { MODEL_USES, OFFABLE_USES, USE_ABOUT, USE_AUTO, USE_LABELS, type ModelUse } from '../../shared/model/models-uses.ts';
 import { KEY_HANDLE, PROVIDER_ID, PROVIDER_PROTOCOLS, providerNotes } from '../../shared/model/provider-entries.ts';
-import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
+import { DEFAULT_RELAY, DEFAULT_STUN } from '../../shared/model/relay.ts';
 import { MAX_WORDS } from '../../shared/voice/vocabulary.ts';
 import { APPEARANCE_SECTION } from './appearance-schema.ts';
 import { PERSONALITY_SECTION } from '../personality/settings-section.ts'; // AF-006
 import { FALLBACK_USES, MAX_FALLBACK_STEPS } from '../../shared/model/account-fallback.ts'; // AF-023
+import { humanDefault, MAX_HUMAN_MD } from '../../shared/model/agent-core.ts';
 
 type Plain = Record<string, unknown>;
 type Literal = string | number | boolean;
@@ -79,6 +80,7 @@ export const PATTERNS = {
   googleClientId: '^[A-Za-z0-9._-]{1,200}$',
   /** AF-002: a tour step or area id (onboarding.tourStep, onboarding.hints). */
   tourStep: '^[a-z0-9-]{0,40}$',
+  stun: '^stun:([A-Za-z0-9.-]{1,253}|\\[[0-9A-Fa-f:.]{2,45}\\])(:[0-9]{1,5})?$',
 } as const;
 
 /** AF-002: the most area hints onboarding.hints keeps. */
@@ -115,9 +117,15 @@ export const SECTIONS: readonly SectionDef[] = [
     text('name', 'Your name; agents address you by it', 'text up to 120 characters', { maxLength: 120, default: '' }),
     text('company', 'Your company\'s name (also the name of the company space)', 'text up to 200 characters', { maxLength: 200, default: '' }),
     text('avatarFileId', 'Your picture: the id of a stored file', 'a file id, or null (none)', { maxLength: 80 }),
-    text('language', 'The language the agents speak with you (starts as this PC\'s; the AI sets it when you speak another)', 'a language code such as "en" or "de"', { pattern: PATTERNS.language, default: fromPc('language') }),
+    // Owner 18.11.2026: nothing in the app defaults to German, on no PC – profile.language and forEveryAgent start English.
+    text('language', 'The language the agents speak with you (starts English on every PC; the AI sets it when you speak another)', 'a language code such as "en" or "de"', { pattern: PATTERNS.language, default: 'en' }),
     text('timezone', 'Your time zone', 'an IANA time zone such as "Europe/Berlin"', { maxLength: 64, default: fromPc('timezone') }),
     text('notes', 'How you want to be spoken to, kept by the AI (a language per topic, a form of address) – every agent reads it', `text up to ${NOTES_MAX} characters`, { maxLength: NOTES_MAX, default: '' }),
+    // B-085: chosen on the first run's About card; absent = whole. New hires read it into their SYSTEM.md; nothing enforces it.
+    { key: 'pcAccess', about: 'How far the team goes on its own on this PC: whole = anywhere, careful = freely in its own folders and checks with you before changes elsewhere (null: whole)', type: 'string', options: ['whole', 'careful'] },
+    // Owner 16.11.2026 (Settings › Security): one text for every agent, after each agent's own HUMAN.md (context/prompt-stable.ts).
+    text('forEveryAgent', 'Your lines to every agent: the last part of each agent\'s instructions, after what you wrote to that agent alone (its HUMAN.md); you and the agents change it here or in Settings › Security', `text up to ${MAX_HUMAN_MD} characters, "" = none`,
+      { maxLength: MAX_HUMAN_MD, default: () => humanDefault('en') }),
   ] },
   PERSONALITY_SECTION, // AF-006: Settings › Personality (runtime/personality/settings-section.ts)
   { key: 'preferences', title: 'Window and app', keys: [
@@ -137,6 +145,7 @@ export const SECTIONS: readonly SectionDef[] = [
   { key: 'notifications', title: 'Notifications (to-dos for you, blockers and important messages always arrive)', keys: [
     flag('enabled', 'Desktop notifications for replies and finished work (the ones that always arrive are not affected)', true),
     flag('sound', 'A sound with each notification (one for a burst, also while the window has focus)', true),
+    flag('computerUse', 'A line at the bottom while an agent uses the screen, mouse or keyboard of this PC, with Watch to open the screen (off: it stays quiet, the screen tab opens from an agent or the chat)', false),
     { key: 'quietHours', about: 'No replies or finished work in these hours (the ones that always arrive are not affected)', type: 'object', allowed: '{ "from": "HH:MM", "to": "HH:MM" }, or null (none)',
       schema: { properties: { from: { type: 'string', pattern: PATTERNS.clock }, to: { type: 'string', pattern: PATTERNS.clock } }, required: ['from', 'to'], additionalProperties: false } },
     { key: 'pushFor', about: 'What else interrupts you: finished work, replies (todo, blocker and important always do)', type: 'array',
@@ -178,6 +187,8 @@ export const SECTIONS: readonly SectionDef[] = [
     int('peerPort', 'Port for linked PCs (with a router forward of it, PCs connect directly over the internet)', 0, 65535, 47812, '0 = any free port'),
     flag('findable', 'Other PCs may find this PC and ask to connect (you accept each)', true),
     text('relay', 'Meeting server where PCs in other networks find each other by Remote ID (it only passes addresses)', '"wss://host", or "" (off); null = Autark\'s own', { default: DEFAULT_RELAY }),
+    flag('rtc', 'Phone apps reach this PC directly over WebRTC, set up through the meeting server (also on mobile data); false = only through the meeting server or a direct socket on the same network', true),
+    { key: 'stun', about: 'STUN servers the phone and this PC ask for their public address for WebRTC', type: 'array', allowed: 'up to 4 "stun:host:port" addresses; [] = none (then direct only on the same network or tailnet)', default: DEFAULT_STUN, schema: { maxItems: 4, items: { type: 'string', pattern: PATTERNS.stun } } },
   ] },
   { key: 'pwa', title: 'Browsers on this network or the tailnet (the phone app comes through the meeting server; skill phone-access)', keys: [
     flag('enabled', 'Unused since B-078: a phone or browser gets in while its accepted row in Settings › Devices exists', false),
@@ -193,8 +204,8 @@ export const SECTIONS: readonly SectionDef[] = [
     flag('includeDiagnostics', 'Unused since B-078: every report carries the end of the app\'s log, redacted', true),
     text('githubRepo', 'Autark-Plus: the GitHub repository Report issue files into (absent = desquerteur/Autark-Plus)', 'owner/name', { maxLength: 140 }),
   ] },
-  { key: 'library', title: 'Public skill library (library/ in github.com/teydra/OpenAutark)', keys: [
-    flag('publish', 'Skills worth sharing go to the public library as a pull request with your own GitHub sign-in, after the secret check finds nothing', true),
+  { key: 'library', title: 'Public skill library (library.openautark.com)', keys: [
+    flag('publish', 'Skills and notes worth sharing go to the public library (free for everyone, no sign-in), after the checks find nothing internal or secret', true),
   ] },
   { key: 'onboarding', title: 'First run', keys: [
     flag('completed', 'Whether the first run is finished', false),

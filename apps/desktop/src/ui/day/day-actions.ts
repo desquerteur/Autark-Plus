@@ -1,6 +1,7 @@
 // My day's calls (B-041 contract §3), each with its calm failure toast: tick a to-do off, snooze it, hand it to the
-// team, add text through the My day input (day.add) or into a calendar slot (calendar.add) and move or unplan a
-// block. A fresh view goes into the store and the task cache at once; the events follow anyway.
+// team, add text through the My day input (day.add) or into a calendar slot (calendar.add), move or unplan a
+// block, and give a to-do whose planned time passed the new time the person picked (moveTodo). A fresh view goes
+// into the store and the task cache at once; the events follow anyway.
 // Owns: these calls. Never: decides groups, renders, or retries a refused call.
 
 import type { CalendarEvent } from '../../shared/model/calendar.ts';
@@ -9,6 +10,7 @@ import { newId } from '../../shared/ids.ts';
 import { onForYouList } from '../../shared/model/todo-later.ts';
 import { calendarWindow, withEvent, withoutEvent } from '../lib/day-store.ts';
 import { rpc } from '../lib/rpc.ts';
+import { can } from '../lib/session.ts';
 import { removeById, todos, upsertById } from '../lib/store.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
 import { putTask } from '../tasks/task-cache.ts';
@@ -27,7 +29,7 @@ export async function checkTodo(task: TaskView): Promise<boolean> {
   const check = checkAnswer(task);
   if (!check) return false;
   try {
-    applyTodo(await rpc.call('tasks.complete', { id: task.id, clientId: newId('up'), ...(check.answer === undefined ? {} : { answer: check.answer }) }));
+    applyTodo(await rpc.call('tasks.finish', { id: task.id, clientId: newId('up'), ...(check.answer === undefined ? {} : { answer: check.answer }) }));
     return true;
   } catch (error) {
     toastError(error, 'Could not complete');
@@ -56,12 +58,13 @@ export async function removeTodo(task: TaskView): Promise<boolean> {
   }
 }
 
+/** An own to-do goes to the one owner Autark picks now (tasks.give "team"). */
 export async function sendToTeam(task: TaskView): Promise<void> {
   try {
-    applyTodo(await rpc.call('day.sendToTeam', { id: task.id }));
-    pushToast({ title: 'Sent to the team' }, 3000);
+    applyTodo(await rpc.call('tasks.give', { id: task.id, to: 'team' }));
+    pushToast({ title: 'Given on – Autark picked its owner' }, 3000);
   } catch (error) {
-    toastError(error, 'Could not send it to the team');
+    toastError(error, 'Could not give it on');
   }
 }
 
@@ -107,6 +110,22 @@ export async function moveBlock(event: CalendarEvent, startAt: number, endAt: nu
     toastError(error, 'Could not move it');
     return false;
   }
+}
+
+/**
+ * The new time the person picked for a to-do whose plan passed (its row's answers, DayStale.tsx): its block moves
+ * there with its length, and a due time before it moves along (tasks.update) – the agents' to-dos are due when their
+ * block starts, so the row would otherwise call the time the person just chose overdue. True when the block moved.
+ */
+export async function moveTodo(task: TaskView, block: CalendarEvent, startAt: number): Promise<boolean> {
+  if (!(await moveBlock(block, startAt, startAt + (block.endAt - block.startAt)))) return false;
+  if (task.dueAt === undefined || task.dueAt >= startAt || !can('tasks.update')) return true;
+  try {
+    applyTodo(await rpc.call('tasks.update', { id: task.id, patch: { dueAt: startAt } }));
+  } catch (error) {
+    toastError(error, 'Could not move its due time');
+  }
+  return true;
 }
 
 /** Takes a to-do's block out of the calendar (the to-do stays). */

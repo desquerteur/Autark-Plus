@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -28,7 +28,7 @@ test('the quote of a reply, an edit and a delete reach the agent', { timeout: 30
   /** Sends as the person and resolves with the manager's next final answer in that chat. */
   const answer = async (params) => {
     const sent = await client.call('messages.send', params);
-    const reply = await client.waitFor('message.updated', (message) => message.conversationId === params.conversationId
+    const reply = await client.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === params.conversationId
       && message.authorId === manager.id && message.state === 'final' && message.seq > sent.seq, 120_000);
     return { sent, reply };
   };

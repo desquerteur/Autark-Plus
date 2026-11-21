@@ -19,6 +19,8 @@ import { startRepairWatch } from './repair/repair-state.ts';
 import { rememberLastChat } from './shell/navigation.ts';
 import { theme, watchTheme } from './blocks/host.ts';
 import { readTodoSnapshot, startPwa } from './pwa/install.ts';
+import { startNativePort } from './pwa/native-port.ts';
+import { startPhoneShell } from './pwa/phone-companies.ts';
 import { startDesktopBridge } from './boot/desktop.ts';
 import { App, offlineSnapshot } from './App.tsx';
 
@@ -52,6 +54,7 @@ async function boot(): Promise<void> {
   watchTheme();
   syncThemeColor();
   startRouter();
+  startNativePort(); startPhoneShell(); // the Android app's port (B-084, before any await: its hello comes at page load)
   watchLayout();
   // The first paint shows the boot state; nothing in it calls the runtime before rpc.start().
   const root = document.getElementById('app');

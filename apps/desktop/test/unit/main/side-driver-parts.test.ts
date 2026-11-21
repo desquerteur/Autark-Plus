@@ -147,7 +147,7 @@ function pageWorld() {
 
 test('page script: compiles, exposes its API, reports only trusted person input, moves at most every 100 ms', () => {
   const page = pageWorld();
-  assert.deepEqual(Object.keys(page.win.__wfSide).sort(), ['cursor', 'facts', 'passwords', 'state', 'text', 'watch']);
+  assert.deepEqual(Object.keys(page.win.__wfSide).sort(), ['cursor', 'editing', 'facts', 'passwords', 'pick', 'state', 'text', 'watch']); // pick: B-081, side-pick-script.test.ts; editing: B-081 T9, side-cast-editing.test.ts
   const move = page.listeners.get('mousemove')!;
   move({ isTrusted: false, movementX: 3, movementY: 0, clientX: 1, clientY: 1, target: null });
   move({ isTrusted: true, movementX: 0, movementY: 0, clientX: 2, clientY: 2, target: null }); // a synthetic move after a scroll

@@ -1,5 +1,5 @@
 // Secret handles in more sinks (B-044 decision 11): besides a browser field (browser/secret-fill.ts) an agent may put
-// `secret://<id>` into the env of a command (shell.exec, secrets.run – tools/builtin/secret-run.ts), into a header
+// `secret://<id>` into the env of a command (shell.exec – tools/builtin/command.ts), into a header
 // value of web.fetch ("Bearer secret://<id>"), into a connector's call and its file (runtime/apps). The handle is
 // replaced by the value at the last moment – at spawn or send – through the vault (SecretService.use), so the value
 // never reaches the model.
@@ -8,13 +8,14 @@
 // * Every secret works in every sink and for every host: a password, a login's field, a card's
 //   field, a key, a token, a note, a 2FA key (its current code); the summary says a command can read it.
 // * The value is protected instead of refused: what comes back from a call that received values (a command's output,
-//   a response, an error) is masked (`maskValues`) – each value and its base64, URL and hex forms, every piece of
-//   PIECE_CHARS or more characters of it (a value printed in parts), and every base64 word that decodes to text holding
+//   a response, an error) is masked (`maskValues`) – each value and its base64, URL and hex forms, a card number also
+//   in digit groups, every run of it covering at least half of the value (a value printed in parts; 17.11.2026: no
+//   longer every 6-character piece, which broke addresses and pointed out parts of passwords), and every base64 word that decodes to text holding
 //   it (an "Authorization: Basic …" line of user:password) become its handle; a value shorter than SHORT_CHARS (a PIN,
 //   a 2FA code) that shows up at all withholds the whole text, so no line of a listing can point it out. The general
-//   leak redactor (tools/outputs.ts) runs after it. Only a value shorter than MIN_MASK_CHARS is refused in a command or
-//   header – it works in a browser field and in a sink that returns nothing (an app sign-in, `resolveHandles`).
-//   The summary says honestly what is not covered: a command can write the value elsewhere or print it changed.
+//   leak redactor (tools/outputs.ts) runs after it. A value of any length works in every sink; a short one (a CVC, a PIN,
+//   a code) that shows up withholds the whole text (B-080, live 07.11.2026: a CVC refused in a command went over the
+//   clipboard instead). The summary says honestly what is not covered: a command can write the value elsewhere or print it changed.
 // * Typing on a screen (review regress #2 – the leak guard turns a known value into its handle, so typing needs the
 //   handle too): computer.type, computer.act set_value and phone.type take secret://<id> in their text, on this PC
 //   only (`judgeTyped`/`typedText`): the summary says a screenshot can
@@ -33,10 +34,17 @@ const HANDLE = /secret:\/\/([A-Za-z0-9_-]{1,128})/g;
 /** Environment variable names a command may get (no '=' or NUL, at most 64 characters). */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 export const MAX_ENV = 32;
-/** The shortest value a command or header takes: shorter ones cannot be masked in what comes back. */
+/** Encoded forms shorter than this are not searched on their own; a value under SHORT_CHARS that shows withholds the whole text. */
 export const MIN_MASK_CHARS = 4;
-/** Pieces of a value this long or longer are masked wherever they show (a value printed in parts). */
+/** Pieces of a value this long or longer are matched wherever they show (a value printed in parts) – see runOf. */
 const PIECE_CHARS = 6;
+/**
+ * 17.11.2026 (BEFUND-RUNTIME-JAN §6): a run of pieces is masked only when it covers at least half of the value (and at
+ * least SHORT_CHARS characters). Before, every 6-character piece was masked wherever it stood: a password holding
+ * "acmeco" turned hello@acmecolab.com into hello@secret://…lab.com – 114 broken addresses and domains in the journal,
+ * and each one told the reader which part of the password it was. A value printed in two halves is still masked.
+ */
+const runOf = (value: string): number => Math.min(value.length, Math.max(SHORT_CHARS, Math.ceil(value.length / 2)));
 /** A value shorter than this that shows up withholds the whole text (masking one line would point it out). */
 const SHORT_CHARS = 8;
 const WITHHELD = '[Output withheld: it contained the value of a stored secret this call used.]';
@@ -80,14 +88,14 @@ function forms(value: string): string[] {
     .filter((form) => form.length >= MIN_MASK_CHARS);
 }
 
-/** True when `text` holds a piece of PIECE_CHARS or more of `value` (or the whole of a shorter value). */
+/** True when `text` holds a run of `value` at least runOf(value) long (the whole of a short value). */
 function holdsPiece(text: string, value: string): boolean {
-  if (value.length <= PIECE_CHARS) return text.includes(value);
-  for (let at = 0; at + PIECE_CHARS <= value.length; at++) if (text.includes(value.slice(at, at + PIECE_CHARS))) return true;
+  const run = runOf(value);
+  for (let at = 0; at + run <= value.length; at++) if (text.includes(value.slice(at, at + run))) return true;
   return false;
 }
 
-/** `text` with every run made of pieces (PIECE_CHARS long) of `value` replaced by `handle`. */
+/** `text` with every run made of pieces (PIECE_CHARS long) of `value` and at least runOf(value) long replaced by `handle`. */
 function maskPieces(text: string, value: string, handle: string): string {
   const pieces = new Set<string>();
   for (let at = 0; at + PIECE_CHARS <= value.length; at++) pieces.add(value.slice(at, at + PIECE_CHARS));
@@ -97,13 +105,22 @@ function maskPieces(text: string, value: string, handle: string): string {
     if (pieces.has(text.slice(at, at + PIECE_CHARS))) { covered.fill(1, at, at + PIECE_CHARS); any = true; }
   }
   if (!any) return text;
+  const run = runOf(value);
   let out = '';
   for (let at = 0; at < text.length;) {
     if (!covered[at]) { out += text[at++]; continue; }
+    const from = at;
     while (at < text.length && covered[at]) at++;
-    out += handle;
+    out += at - from >= run ? handle : text.slice(from, at); // a short piece inside a word stays (see runOf)
   }
   return out;
+}
+
+/** BEFUND §6: a card number (12–19 digits) also as printed or typed in groups – "4242 4242 …", "4242-4242-…". */
+function maskDigits(text: string, value: string, handle: string): string {
+  if (!/^\d{12,19}$/.test(value)) return text;
+  const grouped = new RegExp(`(?<!\\d)${[...value].join('[ \\u00a0\\u202f.-]?')}(?!\\d)`, 'g');
+  return text.replace(grouped, handle);
 }
 
 /** Base64 words (8+ characters) whose decoded text holds a value or a piece of it, e.g. Basic auth of "user:password". */
@@ -117,7 +134,8 @@ function maskDecoded(text: string, values: ReadonlyMap<string, string>): string 
 }
 
 /** Masks every given value in `text` (see the header): withheld when a short one shows, else whole forms, base64 words, pieces. */
-export function maskValues(text: string, values: ReadonlyMap<string, string>): string {
+export function maskValues(text: string, given: ReadonlyMap<string, string>): string {
+  const values = new Map([...given].filter(([, value]) => value)); // an empty value is in every text and shows nothing
   if (!text || !values.size) return text;
   for (const value of values.values()) if (value.length < SHORT_CHARS && text.includes(value)) return WITHHELD;
   const pairs: Array<[string, string]> = [];
@@ -125,6 +143,7 @@ export function maskValues(text: string, values: ReadonlyMap<string, string>): s
   pairs.sort((a, b) => b[0].length - a[0].length);
   let out = text;
   for (const [form, handle] of pairs) if (out.includes(form)) out = out.split(form).join(handle);
+  for (const [id, value] of values) out = maskDigits(out, value.replace(/[   .-]/g, ''), handleFor(id));
   out = maskDecoded(out, values);
   for (const [id, value] of values) if (value.length >= SHORT_CHARS) out = maskPieces(out, value, handleFor(id));
   return out;
@@ -137,21 +156,13 @@ export interface Resolved {
   mask(text: string): string;
 }
 
-/** `values` with every handle replaced by its value, decrypted now by the vault (`host`: where it goes, for the log;
- * `anyLength`: a sink that returns nothing the agent reads also takes values shorter than MIN_MASK_CHARS). */
-export async function resolveMasked(ctx: ToolContext, values: Record<string, string>, host?: string, anyLength = false): Promise<Resolved> {
+/** `values` with every handle replaced by its value of any length, decrypted now by the vault (`host`: where it goes, for the log). */
+export async function resolveMasked(ctx: ToolContext, values: Record<string, string>, host?: string): Promise<Resolved> {
   const ids = handlesIn(Object.values(values));
   const judged = judgeHandles(ctx, ids, host);
   if ('problem' in judged) throw new WorkforceError('forbidden', judged.problem);
   const plain = new Map<string, string>();
-  for (const id of ids) {
-    const value = await ctx.services.secrets.use(id, ctx.agent.id, host);
-    if (value.length < MIN_MASK_CHARS && !anyLength) {
-      const info = judged.infos.find((entry) => entry.id === id);
-      throw new WorkforceError('forbidden', `"${quoted(info ? nameOf(info) : id)}" is shorter than ${MIN_MASK_CHARS} characters – too short to keep it out of what comes back, so it works only in a browser field (browser.act).`);
-    }
-    plain.set(id, value);
-  }
+  for (const id of ids) plain.set(id, await ctx.services.secrets.use(id, ctx.agent.id, host));
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) out[key] = value.replace(HANDLE, (_match, id: string) => plain.get(id) ?? '');
   return { values: out, mask: (text) => maskValues(text, plain) };
@@ -167,14 +178,14 @@ export function judgeTyped(ctx: ToolContext, action: ActionDescription, text: st
   return withHandles(action, judged, 'typed on screen – a screenshot can show it where the field does not hide it');
 }
 
-/** A typing step's text with its handles resolved now (any length: nothing typed is printed back) and the step's mask. */
+/** A typing step's text with its handles resolved now and the step's mask. */
 export async function typedText(ctx: ToolContext, text: string): Promise<{ text: string; mask(text: string): string }> {
   if (!handlesIn([text]).length) return { text, mask: (out) => out };
-  const resolved = await resolveMasked(ctx, { text }, undefined, true);
+  const resolved = await resolveMasked(ctx, { text });
   return { text: resolved.values.text, mask: resolved.mask };
 }
 
 /** `values` with every handle replaced by its value (a sink that returns nothing the agent reads – e.g. an app sign-in). */
 export async function resolveHandles(ctx: ToolContext, values: Record<string, string>, host?: string): Promise<Record<string, string>> {
-  return (await resolveMasked(ctx, values, host, true)).values;
+  return (await resolveMasked(ctx, values, host)).values;
 }

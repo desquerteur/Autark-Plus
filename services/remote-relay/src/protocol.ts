@@ -2,8 +2,8 @@
 // relay itself makes. The relay never decrypts anything – it checks that a device holds the
 // Ed25519 key it registers with (a signed challenge), derives its routing key (fingerprint) and,
 // for devices that accept connection requests, its Remote ID (the same derivation as the desktop
-// app: apps/desktop/src/runtime/remote/id.ts).
-// Owns: constants, validation of client frames, signature/fingerprint/Remote ID helpers.
+// app: apps/desktop/src/runtime/remote/id.ts) – and (B-084) the person code its signature chain proves (chainCode).
+// Owns: constants, validation of client frames, signature/fingerprint/Remote ID/chain helpers.
 // Never: sockets, state or logging.
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
@@ -63,6 +63,29 @@ export function remoteIdOf(fingerprint: string): string {
   const digest = createHash('sha256').update(`wf-remote-id-v1|${fingerprint.toLowerCase()}`).digest();
   const payload = String(digest.readUInt32BE(0) * 4 + (digest.readUInt8(4) & 3)).padStart(10, '0').slice(-8);
   return payload + luhnDigit(payload);
+}
+
+/** Links a person code's chain may have (apps/desktop/src/runtime/remote/code.ts MAX_LINKS). */
+export const MAX_CHAIN = 8;
+
+/**
+ * B-084: the person code a device proves with its chain {root, links:[{pub, sig}]} – each link signed by the previous key
+ * over "wf-code-v1|<member fingerprint>", the last one the device's own key `fp` – and the chain as checked; else undefined.
+ */
+export function chainCode(value: unknown, fp: string): { code: string; chain: { root: string; links: Array<{ pub: string; sig: string }> } } | undefined {
+  const chain = value as { root?: unknown; links?: unknown } | null;
+  if (!chain || typeof chain !== 'object' || !Array.isArray(chain.links) || chain.links.length < 1 || chain.links.length > MAX_CHAIN) return undefined;
+  const rootKey = key32(chain.root);
+  if (!rootKey) return undefined;
+  let prev = rootKey;
+  const links: Array<{ pub: string; sig: string }> = [];
+  for (const link of chain.links as Array<{ pub?: unknown; sig?: unknown }>) {
+    const pub = key32(link?.pub);
+    if (!pub || !signed(prev, `wf-code-v1|${fingerprintOf(pub)}`, link.sig)) return undefined;
+    links.push({ pub: b64url(pub), sig: link.sig as string });
+    prev = pub;
+  }
+  return fingerprintOf(prev) === fp ? { code: remoteIdOf(fingerprintOf(rootKey)), chain: { root: b64url(rootKey), links } } : undefined;
 }
 
 /** What a device signs to register: proves it holds the key for this connection's challenge. */

@@ -1,6 +1,6 @@
 // B-057 S12 dispatcher lanes (agents/dispatch-lanes.ts, dispatch-runs.ts): a split runs on its own lane beside the
-// agent's main lane; per-agent cap and global slots ('busy'); haltAll, stopSplit and the person's Stop in a chat end
-// lanes; the agent shows idle only after its last lane; activity rows of split lanes carry `split`; onLaneFree fires
+// agent's main lane; the agent's own cap ('busy' – B-080: no global slots); haltAll, stopSplit and the person's Stop in
+// a chat end lanes; the agent shows idle only after its last lane; activity rows of split lanes carry `split`; onLaneFree fires
 // after a lane ends and when turns may start again. Real chats, wakes and scheduler; a controllable fake executor and
 // a recording split service. Owns: these assertions only. Never: real engines.
 
@@ -11,7 +11,6 @@ import { flush, setup } from './fakes.ts';
 import type { SplitService } from '../../../src/runtime/contracts.ts';
 import type { SplitRunEnd } from '../../../src/runtime/contracts/splits.ts';
 import type { SplitTurn } from '../../../src/shared/model/splits.ts';
-import { splitSlots } from '../../../src/runtime/agents/dispatch-lanes.ts';
 import { HandlerTable, type HandlerContext } from '../../../src/runtime/rpc/table.ts';
 import { register as registerChats } from '../../../src/runtime/rpc/handlers/chats.ts';
 
@@ -22,8 +21,8 @@ function split(id: string, extra: Partial<SplitTurn> = {}): SplitTurn {
   };
 }
 
-function withSplits(options: { maxConcurrent?: number } = {}) {
-  const h = setup(options);
+function withSplits() {
+  const h = setup();
   h.org.add(agent('ag_tom', 'Tom'));
   h.org.add(agent('ag_lea', 'Lea'));
   const turns = new Map<string, SplitTurn>();
@@ -55,7 +54,7 @@ function withSplits(options: { maxConcurrent?: number } = {}) {
 const tomCalls = (h: ReturnType<typeof withSplits>) => h.executor.calls.filter((call) => call.request.agentId === 'ag_tom');
 
 test('a split runs on its own lane beside the main turn of the same agent', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   h.dispatcher.start();
   h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
@@ -91,7 +90,7 @@ test('a split runs on its own lane beside the main turn of the same agent', asyn
 });
 
 test('a retry asked for while the split\'s ending turn still holds its lane is busy, then starts when the lane frees', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   h.dispatcher.start();
   h.add(split('sp_1'));
   assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_1' }), 'started');
@@ -111,56 +110,38 @@ test('a retry asked for while the split\'s ending turn still holds its lane is b
   await flush();
 });
 
-test('per-agent cap and global slots: busy, never queued; a freed lane fires onLaneFree', async () => {
-  const h = withSplits({ maxConcurrent: 6 });
+test('B-080, one capacity rule: no global limit – with five agents at work an agent starts four parts at once, its fifth waits for one of its own', async () => {
+  const h = withSplits();
+  for (const [id, name] of [['ag_max', 'Max'], ['ag_nora', 'Nora'], ['ag_jonas', 'Jonas']]) h.org.add(agent(id, name));
+  const chats = ['ag_tom', 'ag_lea', 'ag_max', 'ag_nora', 'ag_jonas'].map((id) => h.chats.create({ agentIds: [id], createdBy: 'human' }));
   h.dispatcher.start();
-  for (let i = 1; i <= 5; i++) h.add(split(`sp_${i}`));
-  const results = [1, 2, 3, 4, 5].map((i) => h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: `sp_${i}` }));
-  assert.deepEqual(results, ['started', 'started', 'started', 'started', 'busy'], 'SPLIT_LIMITS.runningPerAgent = 4');
+  for (const chat of chats) h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
   await flush();
+  assert.equal(h.executor.calls.length, 5, 'five main turns run');
+  for (const id of ['sp_1', 'sp_2', 'sp_3', 'sp_4', 'sp_5', 'sp_lea']) h.add(split(id));
+  const results = ['sp_1', 'sp_2', 'sp_3', 'sp_4', 'sp_5'].map((id) => h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: id }));
+  assert.deepEqual(results, ['started', 'started', 'started', 'started', 'busy'], 'SPLIT_LIMITS.runningPerAgent = 4 – whatever else runs');
+  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_lea', splitId: 'sp_lea' }), 'started', 'Lea\'s part starts at once beside Tom\'s four');
+  await flush();
+  assert.equal(h.executor.maxRunning, 10, 'five main turns and five parts at once');
+  const tomMain = tomCalls(h).find((call) => !call.request.split)!;
+  tomMain.finish(); // a main lane's end frees nothing for his fifth part
+  await flush();
+  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_5' }), 'busy', 'his four parts still run');
+  h.chats.send({ conversationId: chats[0].id, body: 'and now?', authorId: 'human' });
+  await flush();
+  assert.equal(tomCalls(h).filter((call) => !call.request.split && !call.done).length, 1, 'his own turn starts at once beside his four parts');
   const before = h.freed();
-  h.executor.calls[0].finish();
+  tomCalls(h).find((call) => call.request.split?.splitId === 'sp_1')!.finish();
   await flush();
-  assert.equal(h.freed(), before + 1);
+  assert.equal(h.freed(), before + 1, 'his part\'s end fires onLaneFree');
   assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_5' }), 'started');
   for (const call of h.executor.calls) call.finish();
-  await flush();
-
-  // Two global slots: a main turn and one split lane take them; the next split is busy.
-  const small = withSplits({ maxConcurrent: 2 });
-  const chat = small.chats.create({ agentIds: ['ag_lea'], createdBy: 'human' });
-  small.dispatcher.start();
-  small.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
-  await flush();
-  small.add(split('sp_a'));
-  small.add(split('sp_b'));
-  assert.equal(small.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_a' }), 'started');
-  assert.equal(small.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_b' }), 'busy', 'no global slot free now');
-  for (const call of small.executor.calls) call.finish();
-  await flush();
-});
-
-test('a freed split lane serves the slot FIFO first; then waiting splits get onLaneFree', async () => {
-  const h = withSplits({ maxConcurrent: 1 });
-  const chat = h.chats.create({ agentIds: ['ag_lea'], createdBy: 'human' });
-  h.dispatcher.start();
-  h.add(split('sp_1'));
-  h.add(split('sp_2'));
-  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_1' }), 'started');
-  h.chats.send({ conversationId: chat.id, body: 'hello', authorId: 'human' }); // Lea waits in the FIFO
-  await flush();
-  assert.equal(h.executor.calls.length, 1);
-  h.executor.last().finish();
-  await flush();
-  assert.equal(h.executor.calls.length, 2);
-  assert.equal(h.executor.last().request.agentId, 'ag_lea', 'the waiting agent gets the slot');
-  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_2' }), 'busy');
-  h.executor.last().finish();
   await flush();
 });
 
 test('the agent shows idle only after its last lane; a split lane keeps the main lane\'s status line', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   h.dispatcher.start();
   h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
@@ -189,7 +170,7 @@ test('the agent shows idle only after its last lane; a split lane keeps the main
 });
 
 test('haltAll stops every lane; under the work-stop a split is refused; lifting it fires onLaneFree', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   h.dispatcher.start();
   h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
@@ -216,7 +197,7 @@ test('haltAll stops every lane; under the work-stop a split is refused; lifting 
 });
 
 test('stopSplit aborts that lane only; an archived agent is refused, a paused one busy until resumed', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   h.dispatcher.start();
   h.add(split('sp_1'));
   h.add(split('sp_2'));
@@ -249,7 +230,7 @@ test('stopSplit aborts that lane only; an archived agent is refused, a paused on
 });
 
 test('interrupt (a task\'s end or take-back) stops the main turn only; the person\'s Stop in a chat (messages.stop) ends that chat\'s splits, others run on', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   h.dispatcher.start();
   h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' });
@@ -278,32 +259,8 @@ test('interrupt (a task\'s end or take-back) stops the main turn only; the perso
   await flush();
 });
 
-test('split lanes hold at most maxConcurrent − 1 global slots: one always stays for main lanes (a reply to the person)', async () => {
-  assert.deepEqual([1, 2, 3, 6].map(splitSlots), [1, 1, 2, 5], 'a cap of one still lets one split run');
-  const h = withSplits({ maxConcurrent: 3 });
-  const chat = h.chats.create({ agentIds: ['ag_lea'], createdBy: 'human' });
-  h.dispatcher.start();
-  for (const id of ['sp_1', 'sp_2', 'sp_3']) h.add(split(id));
-  const results = ['sp_1', 'sp_2', 'sp_3'].map((id) => h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: id }));
-  assert.deepEqual(results, ['started', 'started', 'busy'], 'below the per-agent cap, but the third slot is kept');
-  await flush();
-  h.chats.send({ conversationId: chat.id, body: 'hello', authorId: 'human' });
-  await flush();
-  assert.equal(h.executor.last().request.agentId, 'ag_lea', 'the reply runs at once on the kept slot');
-  assert.equal(h.executor.maxRunning, 3);
-  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_3' }), 'busy', 'every slot is taken now');
-  h.executor.last().finish(); // Lea's reply ends: still two split lanes – the freed slot stays for main lanes
-  await flush();
-  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_3' }), 'busy');
-  h.executor.calls[0].finish(); // a split lane ends: the third split may take its slot
-  await flush();
-  assert.equal(h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_3' }), 'started');
-  for (const call of h.executor.calls) call.finish();
-  await flush();
-});
-
 test('a split turn that plans no run or is stopped before it starts tells the split service', async () => {
-  const h = withSplits({ maxConcurrent: 4 });
+  const h = withSplits();
   h.dispatcher.start();
   h.add(split('sp_1'));
   h.dispatcher.startSplit({ agentId: 'ag_tom', splitId: 'sp_1' });

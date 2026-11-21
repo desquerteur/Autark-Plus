@@ -1,7 +1,8 @@
 // The live view's picture and toolbar in the side pane (workspace-chrome.css, B-076 review): the cascade is read like
-// the browser does (the matching rules of the file, highest specificity, then the later one) – zoomed (2x), the picture of
-// a remote tab and of an agent's tab in the pane's sized column is twice the view's width with no cap, so one finger
-// pans it; at 1x it is letterboxed into the view. Under a touch pointer the pane's live toolbar is as tall as every other
+// the browser does (the matching rules of the file, highest specificity, then the later one) – the picture of a remote
+// tab and of an agent's tab in the pane's sized column is letterboxed into the view, and B-081 T9 zooms it with a
+// transform around its top-left (no scrolling box any more: every gesture is the surface's, touch-action none, the box
+// clips); the touchpad's cursor is an overlay that takes no room. Under a touch pointer the pane's live toolbar is as tall as every other
 // tab's address row (48 px), and the PC's mark narrows with the pane's own width (a container query), not the screen's.
 // Owns: these static checks of workspace-chrome.css. Never: renders (test/ui does).
 
@@ -61,18 +62,25 @@ const REMOTE = ['div.workspace-pane', 'div.workspace-body.tab-browser.remote-bro
 const AGENT = ['div.workspace-pane', 'div.workspace-body.tab-browser.agent-browser', 'div.workspace-screen', 'div.workspace-screen-view'];
 const TODO = ['div.workspace-screen', 'div.workspace-screen-view'];
 
-test('zoomed, the picture is twice the view wide with no cap (one finger pans it); at 1x it is letterboxed into the view', () => {
+test('the picture stays letterboxed into the view and zooms by a transform around its top-left; the surface owns every gesture', () => {
+  assert.doesNotMatch(bare, /browser-zoom/, 'no native scrolling zoom box any more');
   for (const [name, around] of [['remote tab', REMOTE], ['agent tab', AGENT], ['to-do', TODO]] as const) {
-    const zoomed = pathOf(...around, 'div.browser-touch.browser-zoom', 'img');
-    assert.equal(winner(zoomed, 'width'), '200%', name);
-    assert.equal(winner(zoomed, 'max-width'), 'none', name);
-    assert.equal(winner(zoomed, 'max-height'), 'none', name);
+    const picture = pathOf(...around, 'div.browser-touch', 'img');
+    assert.equal(winner(picture, 'transform-origin'), '0 0', name);
+    assert.equal(winner(picture, 'width'), 'auto', `${name}: its laid-out box stays the fitted one`);
+    const surface = pathOf(...around, 'div.browser-touch');
+    assert.equal(winner(surface, 'touch-action'), 'none', `${name}: pinch, pan and scroll are the surface's own`);
+    assert.equal(winner(surface, 'overflow'), 'hidden', `${name}: the zoomed picture is clipped by the box`);
+    assert.equal(winner(surface, 'place-items'), 'start center', `${name}: top-aligned like a page, zoomed or not`);
   }
   for (const around of [REMOTE, AGENT]) {
     const fit = pathOf(...around, 'div.browser-touch', 'img');
     assert.equal(winner(fit, 'max-width'), 'min(100cqw, var(--frame-w))');
     assert.equal(winner(fit, 'max-height'), 'min(100cqh, var(--frame-h))');
   }
+  const cursor = pathOf(...REMOTE, 'div.browser-touch', 'span.browser-pad-cursor');
+  assert.equal(winner(cursor, 'position'), 'absolute', 'the touchpad cursor takes no room');
+  assert.equal(winner(cursor, 'pointer-events'), 'none', 'and no touches');
 });
 
 test('the pane\'s live toolbar is the address row\'s height under a touch pointer; the PC mark narrows with the pane, not the screen', () => {

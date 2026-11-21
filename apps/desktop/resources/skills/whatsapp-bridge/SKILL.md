@@ -9,7 +9,7 @@ metadata:
 # WhatsApp: one script next to the app
 
 There is no WhatsApp button in the app – I set it up. The bridge is the template script
-`whatsapp-bridge.mjs` in this skill's folder (skills.load answers the folder). It uses the person's
+`whatsapp-bridge.mjs` in this skill's folder (knowledge.open answers the folder). It uses the person's
 own WhatsApp as a linked device (like WhatsApp Web) and talks to one chat through that chat's
 connector token: WhatsApp contacts appear in the chat as external members, the chat's final messages
 go back to WhatsApp.

@@ -6,9 +6,11 @@
 //   dictation: lib/dictation.ts (recorded, uploaded, voice.transcribe – the runtime picks who hears it), editable
 //              text into the draft (the profile language as the hint; a chat's next take waits for its text).
 //              Where nothing can hear right now (dictationNote) the take is attached as audio with the note as
-//              the hint; a longer take whose transcription failed is attached instead of lost, and a take without
-//              words adds nothing. A field that cannot take an attachment (My day: stopDictation({ attach: false }))
-//              gets a note instead of the recording. Send waits for the text and does not send a take that came
+//              the hint. B-082: the pieces' text goes in once with its marks hidden beside it (draft-marks.ts); a piece
+//              whose hearing failed becomes an audio chip (play, "Transcribe again" = retryTake, delete), one held
+//              while the link is down too (take-store.ts; uploaded when it is back); a take without words adds
+//              nothing. A field that cannot take an attachment (My day: stopDictation({ attach: false })) gets a
+//              lasting toast with "Transcribe again" instead (offerRetry). Send waits for the text and does not send a take that came
 //              back as a recording or failed (dictateIntoDraft says so). D13: the text goes where the caret or
 //              selection was when the mic was pressed (startDictation's target; a field that was not focused
 //              appends), edits while recording move that place along (dictation-insert.ts) and the composer gets the
@@ -21,16 +23,21 @@ import { effect, signal } from '@preact/signals';
 import type { Attachment } from '../../../shared/model/chat.ts';
 import type { VoiceSessionEntry, VoiceSessionView } from '../../../shared/voice/conversation.ts';
 import { voiceChats, voiceSession, voiceSessions, type VoiceChat } from '../../lib/shell-state.ts';
-import { activeConversationId, conversationMap, settings } from '../../lib/store.ts';
+import { activeConversationId, conversationMap, loaded, settings } from '../../lib/store.ts';
 import { chatTitle } from '../../lib/chat-naming.ts';
 import { can } from '../../lib/session.ts';
 import { pushToast, toastError } from '../../lib/toasts.ts';
-import { toAttachment } from '../../lib/files.ts';
-import { DictationCancelled, TakeNotTranscribed, dictation, dictationNote, recordingProblem } from '../../lib/dictation.ts';
+import { toAttachment, uploadRef } from '../../lib/files.ts';
+import { rpc } from '../../lib/rpc.ts';
+import { DictationCancelled, TakeNotTranscribed, dictation, dictationNote, recordingProblem, type KeptPiece } from '../../lib/dictation.ts';
+import { heldAttachment, heldKey, HELD_PREFIX, takeStore, type HeldTake } from '../../lib/take-store.ts';
+import type { MarkedText, TextMarks } from '../../../shared/voice/marks.ts';
 import { draftFor, updateDraft } from './draft.ts';
 import { markDictated } from './draft-speech.ts';
-import { insertDictation, shiftTarget, type DictationTarget } from './dictation-insert.ts';
+import { insertMarked } from './draft-marks.ts';
+import { shiftTarget, type DictationTarget } from './dictation-insert.ts';
 import { primeSpeech } from './conversation-audio.ts';
+import { setCallMuted } from '../call/mute.ts';
 import { ConversationCancelled, createBrowserConversation } from './pwa-conversation.ts';
 import type { PageConversation } from './pwa-conversation.ts';
 
@@ -70,12 +77,16 @@ function conversation(): PageConversation {
   return made;
 }
 
-/** Starts (or focuses) the conversation in `conversationId`; false when it could not start (shown as a toast). Call from the tap. */
-export async function startVoice(conversationId: string): Promise<boolean> {
+/**
+ * Starts (or focuses) the conversation in `conversationId`; false when it could not start (shown as a toast). Call from
+ * the tap. B-081: `callId` takes that call (an agent's ring, or a call on another device).
+ */
+export async function startVoice(conversationId: string, callId?: string): Promise<boolean> {
   primeSpeech();
   if (dictating.peek() || dictationStarting.peek()) await cancelDictation(); // one microphone at a time
+  if (!voiceSessions.peek().length) setCallMuted(false); // B-085: a new call starts unmuted, however the last one ended
   try {
-    await conversation().start(conversationId);
+    await conversation().start(conversationId, callId);
     return true;
   } catch (error) {
     if (!(error instanceof ConversationCancelled)) toastError(error, 'Conversation could not start');
@@ -87,6 +98,11 @@ export async function startVoice(conversationId: string): Promise<boolean> {
 export function focusVoice(conversationId: string): void {
   const chat = voiceSessions.peek().find((entry) => entry.conversationId === conversationId);
   if (page && chat && !chat.listening) void page.start(conversationId).catch((error: unknown) => toastError(error));
+}
+
+/** B-081: a pin from the browser as a line of the voice conversation in `conversationId`; false when that chat does not talk here. */
+export function addToCall(conversationId: string, text: string): boolean {
+  return page?.add(conversationId, text) ?? false;
 }
 
 /** Ends the conversation in `conversationId` – by default the open chat's, else the listening one. */
@@ -113,9 +129,10 @@ let carets = 0;
 
 /**
  * Starts dictation into `conversationId`'s draft. `at`: the field's caret/selection now (read in
- * the mic's pointer-down, before focus could move); without it the text is appended at Stop.
+ * the mic's pointer-down, before focus could move); without it the text is appended at Stop. B-082: `attach: false`
+ * (a field without chips): a piece held while the link is down is offered as a toast once uploaded, not as a chip.
  */
-export async function startDictation(conversationId: string, at?: DictationTarget): Promise<void> {
+export async function startDictation(conversationId: string, at?: DictationTarget, options: StopDictationOptions = {}): Promise<void> {
   // A take of this chat still being transcribed comes first: its text lands in the draft before a new one.
   if (dictating.value || dictationStarting.value || transcribing.value.has(conversationId)) return;
   dictationStarting.value = conversationId;
@@ -133,7 +150,8 @@ export async function startDictation(conversationId: string, at?: DictationTarge
     };
     const kind = dictationNote() ? 'recording' : 'take';
     targets.set(conversationId, { before: draftFor(conversationId).peek().text, at: at ?? null });
-    await dictation.start(ended);
+    // B-082: pieces are heard while recording (the language and chat as hints), held ones belong to this draft.
+    await dictation.start(ended, { language: settings.peek()?.profile.language, chatId: conversationId, hear: kind === 'take', ...(options.attach === false ? {} : { owner: conversationId }) });
     started = true;
     if (endedEarly) { targets.delete(conversationId); return; }
     take = kind;
@@ -146,14 +164,15 @@ export async function startDictation(conversationId: string, at?: DictationTarge
   }
 }
 
-/** Puts a take's text into the draft at the take's target. */
-function insertTake(conversationId: string, text: string): void {
-  const draft = draftFor(conversationId).peek().text;
+/** Puts a take's text (its marks beside it, hidden) into the draft at the take's target. */
+function insertTake(conversationId: string, piece: MarkedText): void {
+  const draft = draftFor(conversationId).peek();
   const taken = targets.get(conversationId) ?? null;
   targets.delete(conversationId);
-  const at = taken?.at ? shiftTarget(taken.before, draft, taken.at) : null;
-  const inserted = insertDictation(draft, at, text);
-  updateDraft(conversationId, { text: inserted.text });
+  const at = taken?.at ? shiftTarget(taken.before, draft.text, taken.at) : null;
+  // A part spoken into a draft that already holds text gets a dictated span, so the agent knows what was said and what typed.
+  const inserted = insertMarked(draft.text, draft.marks, at, piece, draft.text.trim() !== '');
+  updateDraft(conversationId, { text: inserted.text, marks: inserted.marks });
   markDictated(conversationId);
   if (taken?.at?.focused) dictationCaret.value = { conversationId, caret: inserted.caret, seq: ++carets };
 }
@@ -161,21 +180,37 @@ function insertTake(conversationId: string, text: string): void {
 /** Chats whose stopped dictation is still being uploaded or transcribed (seconds on a phone). */
 export const transcribing = signal<ReadonlySet<string>>(new Set());
 
+/** Feedback 08604667 (18.11.2026, "kein abbrechen button beim transkribiren"): the stopped take each chat waits for. */
+const awaited = new Map<string, symbol>();
+
+/**
+ * Stops waiting for a chat's take that is still being transcribed: the spinner goes at once, the draft stays as it is,
+ * and the text that comes later is dropped (the next take of the chat may start right away).
+ */
+export function cancelTranscribing(conversationId: string): void {
+  if (!awaited.delete(conversationId)) return;
+  targets.delete(conversationId);
+  setTranscribing(conversationId, false);
+}
+
 function setTranscribing(conversationId: string, on: boolean): void {
   const next = new Set(transcribing.value);
   if (on) next.add(conversationId); else next.delete(conversationId);
   transcribing.value = next;
 }
 
-/** What a stopped take gave: its text, the recording as an attachment, or `failed` (a toast said why). */
-export interface DictationOutcome { text?: string; attachment?: Attachment; failed?: boolean }
+/**
+ * What a stopped take gave: its text (marks beside it), its unheard pieces as audio chips (`kept`, `error`: why), or
+ * `failed` (a toast said why).
+ */
+export interface DictationOutcome { text?: string; marks?: TextMarks; kept?: Attachment[]; error?: string; failed?: boolean }
 
 export interface StopDictationOptions {
-  /** false: the field cannot take an attachment – a take without text is dropped with a note, never attached. */
+  /** false: the field cannot take an attachment – unheard pieces come back in `kept` for a toast, not as chips. */
   attach?: boolean;
 }
 
-/** Stops dictation: the transcript text, an uploaded audio attachment, or a failure; {} when nothing was heard. */
+/** Stops dictation: the transcript text, unheard pieces as audio chips, or a failure; {} when nothing was heard. */
 export async function stopDictation(options: StopDictationOptions = {}): Promise<DictationOutcome> {
   const attach = options.attach !== false;
   const conversationId = dictating.value;
@@ -184,36 +219,44 @@ export async function stopDictation(options: StopDictationOptions = {}): Promise
   const kind = take === 'recording' && !dictationNote() ? 'take' : take;
   dictating.value = null;
   take = null;
+  const ticket = Symbol(conversationId);
+  awaited.set(conversationId, ticket);
   setTranscribing(conversationId, true);
+  const cancelled = () => awaited.get(conversationId) !== ticket; // cancelTranscribing: failed, so Send leaves the draft alone
   try {
     if (kind === 'recording') return attach ? await recordingOnly() : dropRecording();
-    const { text } = await dictation.finish(settings.value?.profile.language, { attachable: attach }); // the language: a hint
-    return text ? { text } : {};
+    const heard = await dictation.finish(settings.value?.profile.language, { chatId: conversationId }); // the language: a hint
+    if (cancelled()) return { failed: true };
+    return keptOutcome(heard.text ? { text: heard.text, ...(heard.marks ? { marks: heard.marks } : {}) } : {}, heard.kept ?? [], attach);
   } catch (error) {
-    // A take worth keeping comes back as its recording when its transcription failed.
-    const recording = error instanceof TakeNotTranscribed ? error.recording : undefined;
-    if (recording && !attach) {
-      pushToast({ title: 'Dictation not transcribed', body: (error as Error).message, tone: 'error' }, 10_000);
-      return { failed: true };
-    }
-    if (recording) {
-      pushToast({ title: 'Dictation not transcribed', body: `${(error as Error).message} The recording was attached instead.`, tone: 'error' }, 10_000);
-      return { attachment: toAttachment(recording) };
-    }
+    if (cancelled()) return { failed: true };
+    // Pieces worth keeping come back as recordings when their transcription failed.
+    if (error instanceof TakeNotTranscribed && error.kept.length) return keptOutcome({}, error.kept, attach);
     toastError(error, 'Dictation failed');
     return { failed: true };
   } finally {
-    setTranscribing(conversationId, false);
+    if (!cancelled()) { awaited.delete(conversationId); setTranscribing(conversationId, false); }
   }
 }
 
-/** Nothing can transcribe here: the take becomes an audio attachment, with the reason as a hint. */
-async function recordingOnly(): Promise<{ attachment?: Attachment }> {
+const keptAttachment = (piece: KeptPiece): Attachment => (piece.ref ? toAttachment(piece.ref) : heldAttachment(piece.held as HeldTake));
+
+/** The unheard pieces as chips (a toast says why); a field without chips gets them back to offer "Transcribe again". */
+function keptOutcome(outcome: DictationOutcome, pieces: KeptPiece[], attach: boolean): DictationOutcome {
+  if (!pieces.length) return outcome;
+  const error = pieces.find((piece) => piece.error)?.error;
+  const title = outcome.text ? 'Part of the dictation was not transcribed' : 'Dictation not transcribed';
+  if (attach) pushToast({ title, body: `${error ? `${error} ` : ''}The recording was attached instead.`, tone: 'error' }, 10_000);
+  return { ...outcome, kept: pieces.map(keptAttachment), ...(error ? { error } : {}) };
+}
+
+/** Nothing can transcribe here: the take becomes audio attachments, with the reason as a hint. */
+async function recordingOnly(): Promise<DictationOutcome> {
   const hint = dictationNote();
-  const ref = await dictation.keep();
-  if (!ref) return {};
+  const kept = (await dictation.keep()).map(keptAttachment);
+  if (!kept.length) return {};
   pushToast({ title: 'Dictation attached as a recording', ...(hint ? { body: hint } : {}) }, 10_000);
-  return { attachment: toAttachment(ref) };
+  return { kept };
 }
 
 /** Nothing can transcribe here and the field cannot attach: the take is dropped, with the reason as a hint. */
@@ -235,10 +278,12 @@ export async function dictateIntoDraft(): Promise<boolean> {
   const conversationId = dictating.value;
   if (!conversationId) return true;
   const result = await stopDictation();
-  if (result.text) insertTake(conversationId, result.text);
+  if (result.text) insertTake(conversationId, { text: result.text, ...(result.marks ? { marks: result.marks } : {}) });
   else targets.delete(conversationId);
-  if (result.attachment) updateDraft(conversationId, { attachments: [...draftFor(conversationId).peek().attachments, result.attachment] });
-  return !result.attachment && !result.failed;
+  const list = draftFor(conversationId).peek().attachments;
+  const chips = (result.kept ?? []).map(uploadedChip).filter((chip) => !list.some((entry) => entry.fileId === chip.fileId));
+  if (chips.length) updateDraft(conversationId, { attachments: [...list, ...chips] });
+  return !result.kept?.length && !result.failed;
 }
 
 /** Discards the running (or starting) take. */
@@ -249,4 +294,87 @@ export async function cancelDictation(): Promise<void> {
   dictating.value = null;
   take = null;
   dictation.cancel(); // a start still opening the microphone gives up, too
+}
+
+// ------------------------------------------------------------------ kept takes (B-082: nothing is lost)
+
+/**
+ * "Transcribe again" on a draft's audio chip: hears the file again, puts its text at `at` (the field's caret when the
+ * chip was clicked; appended without it) and the chip goes. A held chip (not uploaded yet) tries its upload first.
+ */
+export async function retryTake(conversationId: string, attachment: Attachment, at?: DictationTarget): Promise<void> {
+  if (heldKey(attachment.fileId)) { flushHeld(); pushToast({ title: 'Not uploaded yet', body: 'The recording uploads once the connection is back.' }); return; }
+  if (dictating.peek() === conversationId || transcribing.peek().has(conversationId)) return;
+  setTranscribing(conversationId, true);
+  targets.set(conversationId, { before: draftFor(conversationId).peek().text, at: at ?? null });
+  try {
+    const heard = await dictation.hear(attachment.fileId, { language: settings.peek()?.profile.language, chatId: conversationId });
+    if (!heard.text.trim()) { targets.delete(conversationId); pushToast({ title: 'Nothing heard in the recording' }); return; }
+    insertTake(conversationId, heard);
+    updateDraft(conversationId, { attachments: draftFor(conversationId).peek().attachments.filter((entry) => entry.fileId !== attachment.fileId) });
+  } catch (error) {
+    targets.delete(conversationId);
+    toastError(error, 'Dictation not transcribed');
+  } finally {
+    setTranscribing(conversationId, false);
+  }
+}
+
+/** A field without chips (My day): a kept recording as a lasting toast whose "Transcribe again" gives `onText` its words. */
+export function offerRetry(attachment: Attachment, onText: (text: string) => void, error?: string): void {
+  const held = heldKey(attachment.fileId) !== undefined;
+  if (held) heldFields.set(heldKey(attachment.fileId) as string, onText); // its words still go to this field once uploaded
+  const run = () => void dictation.hear(attachment.fileId, { language: settings.peek()?.profile.language }).then(
+    (heard) => { if (heard.text.trim()) onText(heard.text.trim()); else pushToast({ title: 'Nothing heard in the recording' }); },
+    (failed: unknown) => offerRetry(attachment, onText, failed instanceof Error ? failed.message : undefined));
+  // `action`: the toast's button (lib/toasts.ts) – a held recording has none until it is uploaded.
+  const toast = { title: 'Dictation not transcribed', tone: 'error' as const, body: `${error ? `${error} ` : ''}${held ? 'The recording waits in this page.' : 'The recording is kept.'}`, ...(held ? {} : { action: { label: 'Transcribe again', run } }) };
+  pushToast(toast, 0);
+}
+
+/** Held pieces uploaded before their chip reached the draft (the take was still running or finishing): their uploads. */
+const uploadedHeld = new Map<string, Attachment>();
+/** A held piece of a field without chips (offerRetry): where its words go. */
+const heldFields = new Map<string, (text: string) => void>();
+
+/** A kept piece's chip as it goes into the draft: the uploaded file when its held piece was uploaded meanwhile. */
+function uploadedChip(attachment: Attachment): Attachment {
+  const key = heldKey(attachment.fileId);
+  const uploaded = key ? uploadedHeld.get(key) : undefined;
+  if (key && uploaded) uploadedHeld.delete(key);
+  return uploaded ?? attachment;
+}
+
+/** Uploads the pieces held while the link was down; each one's chip becomes the uploaded file (a field's: a toast). */
+function flushHeld(): void {
+  void takeStore.flush((blob, name) => uploadRef(blob, name), (held, ref) => {
+    const attachment = toAttachment(ref);
+    if (!held.owner) {
+      const onText = heldFields.get(held.key);
+      heldFields.delete(held.key);
+      offerRetry(attachment, onText ?? ((text) => pushToast({ title: 'Dictation', body: text }, 0)));
+      return;
+    }
+    const id = HELD_PREFIX + held.key;
+    const list = draftFor(held.owner).peek().attachments;
+    const chip = list.some((entry) => entry.fileId === id);
+    // No chip yet: its take may still be finishing – dictateIntoDraft then puts the uploaded file in (uploadedChip, once).
+    if (!chip) uploadedHeld.set(held.key, attachment);
+    if (!chip && (dictating.peek() === held.owner || transcribing.peek().has(held.owner))) return;
+    updateDraft(held.owner, { attachments: chip ? list.map((entry) => (entry.fileId === id ? attachment : entry)) : [...list, attachment] });
+  });
+}
+
+/** After a reload the held pieces are chips of their drafts again (once the drafts are loaded), then they upload. */
+async function restoreHeld(): Promise<void> {
+  for (const held of await takeStore.list()) {
+    const draft = held.owner ? draftFor(held.owner).peek() : null;
+    if (held.owner && draft && !draft.attachments.some((entry) => entry.fileId === HELD_PREFIX + held.key)) updateDraft(held.owner, { attachments: [...draft.attachments, heldAttachment(held)] });
+  }
+  if (rpc.status.peek() === 'open') flushHeld();
+}
+
+if (typeof window !== 'undefined') {
+  effect(() => { if (loaded.value) void restoreHeld(); });
+  rpc.onOpen(() => { if (loaded.peek()) flushHeld(); });
 }

@@ -6,20 +6,25 @@
 // (RecordDevice.tsx); an unsent take from an earlier visit comes back with "Resume unsent
 // recording" (or Discard) before anything else. Until the recorder really records (recorder.ts:
 // started) the status says "Starting…" with a still dot; the red dot and the time come after.
+// F23: while recording, the words heard so far stand under the time (live-words.ts, the same microphone) with the
+// speaker's words per minute; with a script the last script word they reached is marked (CSS Custom Highlight
+// 'prompter-heard': colour only, the Markdown's DOM untouched) and the scroll follows their pace (prompter.ts).
 // Answer: {file: fileId, name, mime, seconds, size}. Owns: the recording UI and upload.
 // Never: records without a click, or keeps the camera/mic on after a take.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Button, IconButton } from '../../lib/ui.tsx';
 import { toastError } from '../../lib/toasts.ts';
 import { duration } from '../ask.ts';
 import { uploadBlob } from '../host.ts';
 import { Markdown } from '../markdown.tsx';
 import type { AskWidgetProps } from './ask-types.ts';
-import { PROMPTER_SPEEDS, prompterScrolls, prompterStep } from './prompter.ts';
+import { LIVE_TITLE, liveLine, useLiveWords } from './live-words.ts';
+import { PROMPTER_SPEEDS, READ_AT, followScript, followSpeed, prompterPace, prompterScrolls, prompterStep, wordSpans, wordsOf } from './prompter.ts';
 import { canRecordLive, useRecorder } from './recorder.ts';
 import type { RecordMode } from './recorder.ts';
 import { RecordDevice } from './RecordDevice.tsx';
+import { VoiceoverWidget, canVoiceover } from './Voiceover.tsx';
 import { s, strings } from './util.ts';
 
 const START_LABEL: Record<RecordMode, string> = { audio: 'Start microphone', video: 'Start camera', screen: 'Choose screen' };
@@ -33,15 +38,40 @@ function extensionOf(mime: string): string {
   return 'webm';
 }
 
-/** Script text: as tall as it is (min three lines); a long one scrolls while `running`, tap pauses. */
-function Teleprompter(props: { script: string; bullets: string[]; running: boolean }) {
+/** A script word in the box: its text node and place there, and the word as compared. */
+interface Spot { node: Text; start: number; end: number; word: string }
+
+const HEARD_MARK = 'prompter-heard';
+const highlights = (): HighlightRegistry | undefined =>
+  (typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight === 'function' ? CSS.highlights : undefined);
+
+function spotsIn(root: HTMLElement): Spot[] {
+  const spots: Spot[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    for (const span of wordSpans((node as Text).data)) spots.push({ node: node as Text, ...span });
+  }
+  return spots;
+}
+
+/**
+ * Script text: as tall as it is (min three lines); a long one scrolls while `running`, tap pauses. `heard`: the words
+ * heard so far – the last script word they reached is marked, and once one is, the scroll follows the speaker (`wpm`).
+ */
+function Teleprompter(props: { script: string; bullets: string[]; running: boolean; heard: string; wpm?: number }) {
   const box = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = useState(1);
   const [paused, setPaused] = useState(false);
   const [scrolls, setScrolls] = useState(false);
+  const [spots, setSpots] = useState<Spot[]>([]);
+  /** Following the speaker: their pace (px/s) and the scroll that puts their last word on the reading line (null: none yet). */
+  const follow = useRef<{ pace: number; target: number | null }>({ pace: 0, target: null });
+  const script = useMemo(() => spots.map((spot) => spot.word), [spots]);
+  const at = useMemo(() => followScript(script, wordsOf(props.heard)), [script, props.heard]);
+  const following = at >= 0;
 
-  // Does the script fit the box at its maximum height? Re-checked when text or sizes change.
+  // Does the script fit the box at its maximum height? Re-checked when text or sizes change (its words with it).
   useLayoutEffect(() => {
     const el = box.current;
     const text = content.current;
@@ -50,6 +80,7 @@ function Teleprompter(props: { script: string; bullets: string[]; running: boole
       const style = getComputedStyle(el);
       const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       setScrolls(prompterScrolls(text.offsetHeight, parseFloat(style.maxHeight), paddingY));
+      setSpots(spotsIn(text));
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -58,6 +89,26 @@ function Teleprompter(props: { script: string; bullets: string[]; running: boole
     observer.observe(el);
     return () => observer.disconnect();
   }, [props.script, props.bullets.join('\n')]);
+
+  // The last heard script word: marked, and the place the scroll follows.
+  useLayoutEffect(() => {
+    const marks = highlights();
+    const spot = following ? spots[at] : undefined;
+    const el = box.current;
+    const text = content.current;
+    if (!spot || !el || !text || !spot.node.isConnected) {
+      marks?.delete(HEARD_MARK);
+      follow.current = { pace: 0, target: null };
+      return;
+    }
+    const range = document.createRange();
+    range.setStart(spot.node, spot.start);
+    range.setEnd(spot.node, spot.end);
+    marks?.set(HEARD_MARK, new Highlight(range));
+    const top = range.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    follow.current = { pace: prompterPace(props.wpm ?? 0, text.offsetHeight / spots.length), target: top - el.clientHeight * READ_AT };
+  }, [at, spots, props.wpm]);
+  useEffect(() => () => { highlights()?.delete(HEARD_MARK); }, []);
 
   useEffect(() => {
     if (!props.running || paused || !scrolls) return;
@@ -69,7 +120,8 @@ function Teleprompter(props: { script: string; bullets: string[]; running: boole
       if (!el) return;
       if (Math.abs(el.scrollTop - position) > 2) position = el.scrollTop; // the human scrolled
       const end = el.scrollHeight - el.clientHeight;
-      position = prompterStep(position, PROMPTER_SPEEDS[speed], now - last, end);
+      const { pace, target } = follow.current;
+      position = prompterStep(position, target === null ? PROMPTER_SPEEDS[speed] : followSpeed(pace, target - position), now - last, end);
       el.scrollTop = position;
       last = now;
       if (position < end) frame = requestAnimationFrame(step); // stops at the end (no idle frames)
@@ -89,10 +141,10 @@ function Teleprompter(props: { script: string; bullets: string[]; running: boole
         {scrolls && <div class="w-prompter-end" aria-hidden="true" />}
       </div>
       {scrolls && (
-        <div class="w-prompter-controls" role="group" aria-label="Scroll speed">
-          <IconButton icon="caret-down" label="Slower" size="small" disabled={speed === 0} onClick={() => setSpeed(Math.max(0, speed - 1))} />
+        <div class="w-prompter-controls" role="group" aria-label="Scroll speed" title={following ? 'The script follows your pace' : undefined}>
+          <IconButton icon="caret-down" label="Slower" size="small" disabled={following || speed === 0} onClick={() => setSpeed(Math.max(0, speed - 1))} />
           <span class="tabular">{speed + 1}</span>
-          <IconButton icon="caret-up" label="Faster" size="small" disabled={speed === PROMPTER_SPEEDS.length - 1} onClick={() => setSpeed(Math.min(PROMPTER_SPEEDS.length - 1, speed + 1))} />
+          <IconButton icon="caret-up" label="Faster" size="small" disabled={following || speed === PROMPTER_SPEEDS.length - 1} onClick={() => setSpeed(Math.min(PROMPTER_SPEEDS.length - 1, speed + 1))} />
           {props.running && <button type="button" class="text-button" onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</button>}
         </div>
       )}
@@ -111,7 +163,13 @@ function Preview(props: { stream: MediaStream | null; mirrored: boolean }) {
   return <video ref={ref} class={`w-record-preview${props.mirrored ? ' is-mirrored' : ''}`} muted playsInline autoplay />;
 }
 
+/** A block with a `video` is a voice-over (Voiceover.tsx) where this page can tape the microphone itself; else the plain recorder. */
 export function RecordWidget(props: AskWidgetProps) {
+  const voiceover = (s(props.block.video) || s(props.block.fileId)) && canVoiceover();
+  return voiceover ? <VoiceoverWidget {...props} /> : <PlainRecordWidget {...props} />;
+}
+
+function PlainRecordWidget(props: AskWidgetProps) {
   const { block } = props;
   const mode: RecordMode = s(block.mode) === 'video' || s(block.mode) === 'screen' ? (s(block.mode) as RecordMode) : 'audio';
   const maxSeconds = typeof block.maxSeconds === 'number' && block.maxSeconds > 0 ? block.maxSeconds : undefined;
@@ -124,6 +182,7 @@ export function RecordWidget(props: AskWidgetProps) {
   const live = canRecordLive(mode);
   const recording = rec.state === 'recording';
   const starting = recording && !rec.started;
+  const words = useLiveWords(live ? rec.stream : null, recording && rec.started);
   const resumable = rec.state === 'idle' ? rec.resumable : null;
   const showPrompter = (script || bullets.length > 0) && rec.state !== 'recorded' && !resumable;
   // A selfie view is mirrored; a camera facing away (or asked for as 'back') is not.
@@ -157,7 +216,7 @@ export function RecordWidget(props: AskWidgetProps) {
     <div class={`w-record mode-${mode}`}>
       {block.instructions !== undefined && rec.state === 'idle' && <Markdown text={s(block.instructions)} class="w-details" />}
       {resumable && <p class="w-record-resume tabular" role="status">Unsent recording · {duration(resumable.seconds)}</p>}
-      {showPrompter && <Teleprompter script={script} bullets={bullets} running={recording && rec.started} />}
+      {showPrompter && <Teleprompter script={script} bullets={bullets} running={recording && rec.started} heard={words.text} wpm={words.wpm} />}
       {mode !== 'audio' && (rec.state === 'ready' || recording) && <Preview stream={rec.stream} mirrored={mirrored} />}
       {rec.state === 'recorded' && rec.take && (
         mode === 'audio' || rec.take.mime.startsWith('audio/')
@@ -165,10 +224,14 @@ export function RecordWidget(props: AskWidgetProps) {
           : <video class="w-record-playback" src={rec.take.url} controls playsInline preload="metadata" />
       )}
       {(recording || rec.state === 'recorded') && (
-        <div class="w-record-status tabular" role="status">
-          {recording && <span class={`w-record-dot${starting ? ' is-starting' : ''}`} aria-hidden="true" />}
-          <span>{starting ? 'Starting…' : duration(recording ? rec.elapsed : rec.take?.seconds ?? 0)}</span>
-          {recording && rec.started && maxSeconds && <span class="muted"> / {duration(maxSeconds)}</span>}
+        <div class="w-record-head">
+          <div class="w-record-status tabular" role="status">
+            {recording && <span class={`w-record-dot${starting ? ' is-starting' : ''}`} aria-hidden="true" />}
+            <span>{starting ? 'Starting…' : duration(recording ? rec.elapsed : rec.take?.seconds ?? 0)}</span>
+            {recording && rec.started && maxSeconds && <span class="muted"> / {duration(maxSeconds)}</span>}
+            {recording && words.wpm && <span class="muted" title="Words per minute"> · {words.wpm} wpm</span>}
+          </div>
+          {recording && <div class="w-live-words" title={LIVE_TITLE}><span>{liveLine(words, rec.started)}</span></div>}
         </div>
       )}
       {rec.error && <p class="w-record-error" role="alert">{rec.error}</p>}

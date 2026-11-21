@@ -4,7 +4,7 @@
 
 import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
-import { useValue, USE_AUTO } from '../../shared/model/models-uses.ts';
+import { useValue } from '../../shared/model/models-uses.ts';
 import { embeddingChoice } from '../models/embeddings.ts';
 import { HttpEmbedder, type Embedder } from './embedders.ts';
 import { LocalEmbedder } from './local-model.ts';
@@ -34,7 +34,7 @@ export function createVectors(s: RuntimeServices): VectorSystem {
   };
   const choice = () => useValue(s.settings.get().routing, 'embeddings');
   const system = new VectorSystem({
-    db: s.db, memoryRoot: path.join(s.paths.data, 'memory'), embedder, choice, standIn: () => choice() === USE_AUTO && local.gaveUp(), log: s.log,
+    db: s.db, memoryRoot: path.join(s.paths.data, 'memory'), embedder, choice, log: s.log,
     redact: (text) => s.secrets.redact(text), now: () => s.clock.now(), release: () => { local.stop(); spend.flush(); },
   });
   if (!process.env.WORKFORCE_TEST_DATA) system.start();

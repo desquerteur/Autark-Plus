@@ -7,22 +7,30 @@
 // work-stop.ts), the hidden video-keyframe windows (hidden-windows.ts) and graceful quit. Speech runs in the
 // page and the runtime: main only opens the microphone (security.ts MediaArm). B-072: another company (companies.ts)
 // keeps its workspace and downloads in its own folder, has its own launcher task, names itself in the window title
-// and tray tooltip ("Autark – <label>") and leaves updates to the first company; the emergency stop reaches them all.
+// and tray tooltip ("Autark – <label>"), and – F25, 16.11.2026 – updates itself like the first (the relaunch helper starts it
+// again; a linked own PC on a newer version asks for a check, a start whose install did not land keeps that version from
+// installing by itself again: siblingUpdates); the emergency stop reaches them all; a company taken off this PC goes to
+// the recycle bin once it has ended (company-remove.ts, 16.11.2026).
+// B-080: the host op app.install reaches the updater wiring (installFile), and a start with a window sets up the desktop
+// broker where it is missing (broker-setup.ts). B-081: the side tabs' Pin picker and the AI cursor over the screen (screen-cursor.ts).
+// 18.11.2026: the floating to-do button (float-bar*.ts; the first company only).
 // Owns: constructing and connecting the main-side modules. Never: business logic (runtime),
 // UI decisions (renderer), long work on the main thread.
 
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  BaseWindow, Menu, MessageChannelMain, Notification, Tray, app, autoUpdater as nativeUpdater, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor,
+  BaseWindow, BrowserWindow, Menu, MessageChannelMain, Notification, Tray, app, autoUpdater as nativeUpdater, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor,
   powerSaveBlocker, protocol, safeStorage, screen, session, shell, utilityProcess,
 } from 'electron';
 import type { MessagePortMain } from 'electron';
 import { IPC } from '../shared/api/desktop.ts';
 import { appInfo, appPaths } from './app-paths.ts';
 import { Capture, windowLayers } from './capture.ts';
-import { openCompany, spawnApp, startFlag, stopOtherCompanies } from './companies.ts';
+import { callCompany, companyArgs, openCompany, spawnApp, startFlag, stopOtherCompanies } from './companies.ts';
+import { removeCompany, sweepRemoved } from './company-remove.ts';
 import { desktopIpcDeps } from './desktop-ipc.ts';
 import { hiddenWindows } from './hidden-windows.ts';
 import { HostServices } from './host-services.ts';
@@ -30,8 +38,10 @@ import { registerIpc } from './ipc.ts';
 import { ensureExplorerMenu, explorerMenuAction, type MenuDeps } from './explorer-menu.ts'; // AF-014
 import { runCommand } from './launcher-tasks.ts'; // AF-014: reg.exe for the Explorer entry
 import { applyLauncher, launcherDeps } from './launcher-tasks.ts';
+import { setupBroker } from './broker-setup.ts'; // B-080
 import { armDueStart } from './launcher-windows.ts';
 import { RunStateMarks } from './launcher.ts';
+import { guardMainErrors } from './crash-guard.ts'; // 17.11.2026: an uncaught error is a main.log line, never Electron's dialog
 import { openMainLog } from './main-log.ts';
 import { ProtocolHandlers, registerProtocolHandlers } from './protocols/handlers.ts';
 import { RendererLink } from './renderer-link.ts';
@@ -39,12 +49,12 @@ import { RuntimeHost } from './runtime-host.ts';
 import type { RuntimeChild } from './runtime-host.ts';
 import { RuntimeLink, runtimeEnv } from './runtime-link.ts';
 import { MediaArm } from './security.ts';
-import { watchSessionEnd } from './session-end.ts';
+import { sessionEnded, watchSessionEnd } from './session-end.ts';
 import { guardAllContents, installSessionGuards } from './session-guards.ts';
 import { SettingsView, changedPreferences } from './settings-view.ts';
 import { quitSteps, runShutdown } from './shutdown.ts';
 import { AppTray } from './tray.ts';
-import { DesktopUpdates, inactiveUpdater, loadUpdater, settleAfterStart } from './updates-wiring.ts';
+import { DesktopUpdates, inactiveUpdater, loadUpdater, settleAfterStart, siblingUpdates, updateFromElsewhere } from './updates-wiring.ts';
 import { loadUpdateSource, saveUpdateSource } from './updates/source-store.ts'; // AF-019
 import { MainWindow } from './window.ts';
 import { WorkspaceBrowser } from './workspace-browser.ts';
@@ -56,7 +66,9 @@ import { companyLabel } from '../shared/model/companies.ts';
 import type { AppInfo } from '../shared/api/host-bridge.ts';
 import { personalDownloads } from './workspace-downloads.ts';
 import { WorkStopControl, type WorkStopRpc } from './work-stop.ts';
+import { ScreenCursor, electronCursorOverlays } from './screen-cursor.ts'; // B-081
 import { loadWindowState, saveWindowState } from './window-state.ts';
+import { startFloatBar } from './float-bar-window.ts'; // owner 18.11.2026: the floating to-do button
 
 export interface DesktopOptions {
   background: boolean; // started at sign-in or by the launcher: tray + runtime, no window
@@ -87,6 +99,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   // AF-014: the Explorer entry starts this executable (unpackaged: Electron plus the app folder) with the folder.
   const explorerDeps: MenuDeps = { platform, exe: process.execPath, prefix: app.isPackaged ? [] : [app.getAppPath()], run: runCommand, dir: app.getPath('userData') };
   const log = openMainLog(paths.logs, !app.isPackaged);
+  guardMainErrors(process, line => log.line(line));
   const runMarks = new RunStateMarks(paths.data, line => log.line(line)); // B-044: every deliberate quit is marked (launcher.ts)
   log.line(`starting ${app.getVersion()}${app.isPackaged ? '' : ' (development)'}${testMode ? ' (test data)' : ''}`);
 
@@ -105,14 +118,14 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     onLoaded: () => {
       renderer.send(IPC.runtimeStatus, link.status);
       if (updates) renderer.send(IPC.updateState, updates.state());
-      retitle(); // the page's <title> replaced the window's
+      retitle(); startFloat(); // the page's <title> replaced the window's; 18.11.: the float bar after the main page (it is the first window)
     },
   });
 
   // ---------------------------------------------------------------- capture
   let appWindow: MainWindow | null = null;
   // MM4 video keyframes run in a hidden window – never the person's window.
-  const hidden = hiddenWindows({ blobsDir: paths.blobs });
+  const hidden = hiddenWindows({ blobsDir: paths.blobs, previewDir: paths.previews, previewScript: () => readFileSync(paths.previewPage, 'utf8') });
   const capture = new Capture({
     screen,
     getSources: sourceOptions => desktopCapturer.getSources(sourceOptions),
@@ -163,6 +176,24 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     },
     log: line => log.line(line),
   });
+  // 16.11.2026: a removed company's folder goes to the recycle bin once it has ended (company-remove.ts) – at this start,
+  // after a removal asked here, and at a second start (a removed company's window handed over to this one)
+  const companyNotices: object[] = [];
+  const sweepCompanies = () => (companies ? sweepRemoved({
+    companies, now: Date.now, trash: folder => shell.trashItem(folder), log: line => log.line(line),
+    unregister: (id, dir) => applyLauncher(false, launcherDeps(app, { platform, testMode, name: productName, company: id, dataDir: dir, log: line => log.line(line) })),
+    notify: (title, body) => {
+      if (!Notification.isSupported()) return;
+      const notice = new Notification({ title, body, ...(platform === 'darwin' ? {} : { icon: paths.icon }) });
+      companyNotices.splice(0, companyNotices.length, notice); // kept until the next one, like the stop notice
+      notice.show();
+    },
+  }) : Promise.resolve([]));
+  if (companies) app.on('second-instance', () => { void sweepCompanies(); });
+  // B-081: the AI cursor over this PC's screen while an agent moves the real pointer (computer use; Windows)
+  const screenCursor = new ScreenCursor({
+    rpc: link.rpc, platform, displays: () => screen.getAllDisplays(), toDip: point => screen.screenToDipPoint(point), open: electronCursorOverlays({ BrowserWindow, log: line => log.line(line) }),
+  });
   let workspaceBrowser: WorkspaceBrowser | null = null; // B-055 F1: agents in the person's side browser (main/side-driver)
   const sideDriver = new SideDriver({
     browser: () => workspaceBrowser,
@@ -172,6 +203,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   // B-076: a side tab watched from another PC or a phone – its picture goes to the runtime, its input comes back
   const caster = new SideCaster({
     tab: id => sideDriver.side(id), keep: id => workspaceBrowser?.sideKeep(id), release: id => workspaceBrowser?.sideRelease(id), send: update => link.sideView(update),
+    size: (id, box) => workspaceBrowser?.sideSize(id, box) ?? false, // B-081: the watched page takes the watcher's box
   });
   const host = new HostServices({
     safeStorage,
@@ -181,7 +213,11 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     createNotification: notification => (Notification.isSupported() ? new Notification({ ...notification, ...(platform === 'darwin' ? {} : { icon: paths.icon }) }) : null),
     setBadgeCount: count => app.setBadgeCount(count),
     capture,
-    media: hidden.mediaAnalyzer,
+    media: {
+      analyze: (request) => hidden.mediaAnalyzer.analyze(request), audio: (request) => hidden.mediaAnalyzer.audio(request),
+      image: (request) => hidden.mediaAnalyzer.image(request), preview: (request) => hidden.mediaPreview.preview(request), // 17.11.2026
+    },
+    voiceRtc: hidden.voiceRtc, // owner 07.11.2026: dictation heard by the Codex plan over WebRTC
     sideBrowser: call => sideDriver.call(call), // B-055 F1: checks every field itself
     sideView: { cast: args => caster.cast(args), input: args => caster.input(args), nav: args => caster.nav(args) }, // B-076
     window: {
@@ -192,15 +228,32 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     onBadge: count => { badge = count; tray.setBadge(count); },
     // B-072: switching companies (companies.ts): that company's window opens, this one goes to the tray
     openCompany: companies ? args => openCompany(args, { dir: companies.dir, current: company, spawn: spawnApp, show: () => appWindow?.show(), hide: () => appWindow?.browserWindow?.hide() }) : undefined,
+    // 16.11.2026: taking a company off this PC (company-remove.ts); this one quits after the answer where it goes itself
+    removeCompany: companies ? args => removeCompany(args, {
+      companies, current: company, now: Date.now, visible: () => appWindow?.browserWindow?.isVisible() ?? false, spawn: spawnApp, quit: () => app.quit(),
+      call: (dir, id) => callCompany(dir, 'companies.remove', { id }), sweep: () => { void sweepCompanies(); },
+    }) : undefined,
+    update: () => updateFromElsewhere(updates, line => log.line(line)), // 19.11.2026: app.update / system.update {device}
+    // B-080: app.install / system.install – a build installed the way an update installs (updates-wiring.ts installFile)
+    install: async installer => {
+      try {
+        if (!updates) throw new Error('the updater wiring is not ready');
+        await updates.installFile(installer);
+      } catch (error) {
+        log.line(`install from a file failed: ${errorText(error)}`);
+        // installFile's own refusals told the runtime already (cancelInstall); without the wiring this does.
+        if (!updates) void link.rpc.call('system.prepareRestart', { cancel: true }).catch(() => undefined);
+      }
+    },
   });
   const runtimeHost = new RuntimeHost<MessagePortMain>({
     // UtilityProcess.stdout is typed as NodeJS.ReadableStream; it is a stream.Readable at runtime.
     fork: (modulePath, args, forkOptions) => utilityProcess.fork(modulePath, args, forkOptions) as unknown as RuntimeChild,
     createChannel: () => new MessageChannelMain(),
     modulePath: paths.runtime,
-    env: runtimeEnv(process.env, paths.data),
+    env: runtimeEnv(process.env, paths.data, app.getPreferredSystemLanguages()[0]), // F07: the display language, not the regional format
     token: randomBytes(32).toString('hex'),
-    app: { ...appInfo({ version: app.getVersion(), packaged: app.isPackaged, paths, executable: process.execPath, companies }), ...(start ? { start } : {}) },
+    app: { ...appInfo({ version: app.getVersion(), packaged: app.isPackaged, paths, executable: process.execPath, companies }), ...(start ? { start } : {}), pid: process.pid }, // B-080: pid – install records
     handle: request => host.handle(request),
     onStatus: status => link.handleStatus(status),
     log: log.sink,
@@ -211,15 +264,16 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     renderer.send(IPC.runtimeStatus, status);
     if (status.state === 'up') void settings.start().catch(error => log.line(`settings not loaded: ${errorText(error)}`));
     if (status.state === 'up') void workStop.start().catch(error => log.line(`agent work stop state not loaded: ${errorText(error)}`));
+    if (status.state === 'up') void screenCursor.start().catch(error => log.line(`screen cursor not started: ${errorText(error)}`)); // B-081
     if (status.state === 'restarting' || status.state === 'stopped') { host.releaseAll(); workStop.reset(); caster.stopAll(); }
   });
 
   // ---------------------------------------------------------------- updates
   let updater = inactiveUpdater();
   let updaterLoaded = false;
-  if (app.isPackaged && !testMode && !company) { // one updater: the first company's (the installer replaces the shared app)
+  if (app.isPackaged && !testMode) { // F25: every company has its updater (one install for all; the helper starts the one that pressed Update again)
     try {
-      updater = await loadUpdater(line => log.line(line));
+      updater = await loadUpdater(line => log.line(line), companyArgs(company));
       updaterLoaded = true;
     } catch (error) {
       log.line(`updater not available: ${errorText(error)}`); // the app still starts, without updates
@@ -238,12 +292,13 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     idleSeconds: () => powerMonitor.getSystemIdleTime(),
     runtime: {
       readiness: () => link.rpc.call('system.restartReadiness'),
-      prepareRestart: async cancel => { await link.rpc.call('system.prepareRestart', cancel ? { cancel: true } : {}, 30_000); },
+      prepareRestart: async (cancel, to) => { await link.rpc.call('system.prepareRestart', cancel ? { cancel: true } : to ? { to } : {}, 30_000); },
       stop: reason => link.stop(reason),
       start: () => link.start(),
     },
     source: await loadUpdateSource(paths.data), // AF-019: Settings › Updates (update-source.json)
     saveSource: source => saveUpdateSource(paths.data, source),
+    install: { pid: process.pid, exe: process.execPath, appImage: process.env.APPIMAGE, logs: paths.logs, quit: () => app.quit(), args: companyArgs(company) }, // B-080: installFile
     publish: state => {
       renderer.send(IPC.updateState, state);
       link.event('update.state', state);
@@ -252,9 +307,14 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     log: line => log.line(line),
   });
   updates = desktopUpdates;
+  const updatesHearRuntime = siblingUpdates(link.rpc, desktopUpdates); // F25: a linked own PC's version, a not-landed install
+  link.onChange(status => { if (status.state === 'up') updatesHearRuntime(); });
+  if (link.isUp) updatesHearRuntime(); // it came up while the updater loaded
 
   // ---------------------------------------------------------------- settings reactions
   const launcher = launcherDeps(app, { platform, testMode, name: productName, company, dataDir: paths.data, log: line => log.line(line) });
+  // B-080: where the desktop broker is still missing, a start with a window asks Windows once for it (broker-setup.ts)
+  setupBroker({ platform, packaged: app.isPackaged, testMode, background: options.background, root: paths.root, exe: process.execPath, log: line => log.line(line), report: setup => link.event('broker.setup', setup) }); // F03: how it ended, for the computer tools
   settings.onChange((next, previous) => {
     const changed = changedPreferences(next, previous);
     const prefs = settings.preferences();
@@ -287,6 +347,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   workspaceBrowser = new WorkspaceBrowser(() => mainWindow.browserWindow, { // tabs and panels survive restarts
     onTab: (id, contents) => sideDriver.tab(id, contents), // B-055 F1
     keep: id => caster.watched(id), // B-076: a page watched from another PC or a phone stays loaded
+    pick: (id, on) => void sideDriver.pick(id, on), // B-081: the Pin button – the tab's element picker (side-driver/pick-script.ts)
     tabsFile: path.join(paths.data, 'side-tabs.json'),
     oldTabsFile: path.join(paths.data, 'workspace-tabs.json'),
     historyFile: path.join(paths.data, 'browser-history.json'),
@@ -334,6 +395,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     openExternal: url => shell.openExternal(url),
     titleBarLayout: layout => mainWindow.setTitleBarLayout(layout),
     explorerMenu: action => explorerMenuAction(action, explorerDeps), // AF-014
+    titleBarDim: dim => mainWindow.setTitleBarDim(dim),
     log: line => log.line(line),
   }));
 
@@ -343,7 +405,7 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
   powerMonitor.on('lock-screen', () => link.power('lock'));
   powerMonitor.on('unlock-screen', () => link.power('unlock'));
   // B-044: the system ends the session (also with the window closed to the tray) – not an unexpected close.
-  watchSessionEnd({ platform, app, powerMonitor, BaseWindow }, () => runMarks.quit('system'), line => log.line(line));
+  watchSessionEnd({ platform, app, powerMonitor, BaseWindow }, sessionEnded(runMarks, log), line => log.line(line)); // B-080 wave 3: and one main.log line at once
 
   // ---------------------------------------------------------------- graceful quit
   let quitDone = false;
@@ -366,9 +428,10 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
     if (quitting) return;
     quitting = true;
     runMarks.quit(desktopUpdates.draining ? 'update' : 'person'); // tray Quit, menu, window close and the update install alike
-    workStop.dispose();
-    hidden.dispose();
-    workspaceBrowser?.dispose();
+    // 18.11.2026: one step that throws (a window already gone) left `quitting` set and the app unable to quit or update
+    for (const step of [() => workStop.dispose(), () => screenCursor.dispose(), () => floatBar?.close(), () => hidden.dispose(), () => workspaceBrowser?.dispose()]) {
+      try { step(); } catch (error) { log.line(`quit step failed: ${(error as Error).message}`); }
+    }
     log.line('quitting');
     const keepRunning = settings.preferences().openAtLogin;
     void runShutdown(shutdownSteps(), { log: line => log.line(line) })
@@ -382,9 +445,12 @@ export async function startDesktop(options: DesktopOptions): Promise<Desktop> {
 
   nativeUpdater.on('before-quit-for-update', () => desktopUpdates.markUpdateQuit());
 
+  let floatBar: ReturnType<typeof startFloatBar> | null = null; // one per PC: the first company's (not in a test profile: its global shortcut, one window); after the main page (background: at once)
+  function startFloat(): void { if (!company && !testMode && !floatBar) floatBar = startFloatBar({ BrowserWindow, session, screen, globalShortcut, nativeImage }, { rpc: link.rpc, capture, file: path.join(paths.data, 'float-bar.json'), log: line => log.line(line), open: request => { mainWindow.show(); renderer.sendWhenLoaded(IPC.navigate, request); } }); } if (options.background) startFloat();
   // ---------------------------------------------------------------- go
   runtimeHost.start();
   tray.create();
+  void sweepCompanies(); // a company removed before this start
   desktopUpdates.setVisible(!options.background); // tray only: the rarer check interval
   desktopUpdates.start();
   if (!company) settleAfterStart({ dataDir: paths.data, version: app.getVersion(), launcher, log: line => log.line(line) }); // the rename's and updates' leftovers

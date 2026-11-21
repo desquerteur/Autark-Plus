@@ -1,38 +1,61 @@
-// The team inbox (B-055 Q2/Q3) on the one PC whose vault holds the team's private key: a fetch lists the mailbox,
-// opens each letter (seal.ts), stores it as <data>/feedback-inbox/<id>.json (+ <id>.png|jpg|webp) and only then
-// deletes the letter in the mailbox – feedback ends up only with the team. No new table: plain files.
+// The team inbox (B-055 Q2/Q3) on every PC and company whose vault holds the team's private key: a fetch lists the
+// mailbox, opens each letter it does not have yet (seal.ts, checked by letter.ts) and stores it as
+// <data>/feedback-inbox/<id>.json (+ <id>.png|jpg|webp, + <id>.a<n>.webm|m4a recordings). No new table: plain files.
+// 16.11.2026: a fetch no longer deletes a readable letter. The team key travels to the owner's linked PCs, and every
+// company of a PC can hold it, so whoever fetched first took the letters away from all the others (three reports of the
+// morning sat on the notebook only). Now every team PC sees every letter; a letter leaves the mailbox when the team
+// removes the report or its mark's keep time passes (remove/purge), or – checked at every fetch by Google's createTime,
+// whatever its id – once it is older than LETTER_TTL_MS (no TTL policy or rules v2 needed, the listing stays bounded);
+// an old letter this PC does not have yet is opened and stored first.
+// A removed report leaves a 0-byte <id>.gone beside the reports, so a letter whose mailbox delete failed (offline)
+// does not come back; it goes LETTER_TTL_MS + 1 day later, when the age deletion took the letter for sure.
 // A fetch runs once at app start (receiving PCs only), when the inbox opens (Settings › Feedback › Inbox) and on Refresh / wf feedback
 // receive – never on a timer. A letter this key cannot open (an earlier key, damaged) is kept as it came under
-// unreadable/ and counted, so it never blocks the mailbox; ids no sender of ours makes are left alone.
-// Owns: the fetch order (open → write → delete), checking each opened letter (untrusted input), the local files.
-// Never: deletes a letter before its file is written, logs a key, a token or a letter's text, or polls.
+// unreadable/ (that copy marks it seen) and stays in the mailbox, where a team PC with the newer key still opens it;
+// ids no sender of ours makes are left alone until the age deletion.
+// Feedback 16.11.2026 (owner): the team marks a report done or not relevant (mark); a marked report goes by itself
+// FEEDBACK_HANDLED_KEEP_MS later – checked whenever the inbox is listed or fetched (start, open, Refresh), still no timer.
+// Marks stay per PC.
+// Spam guard: at most UNREADABLE_KEEP letters are kept under unreadable/ (each lives UNREADABLE_KEEP_MS); a flood of
+// letters nobody of ours sealed beyond that is counted and deleted in the mailbox instead of filling this PC.
+// Owns: the fetch order (open → attachments → JSON last), the local files, the tombstones, deleting a removed report's
+// letter and the age deletion. Never: deletes a readable young letter at a fetch, logs a key, a token or a letter's
+// text, or polls.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
-import type { FeedbackKind } from '../../shared/model/system.ts';
-import { FEEDBACK_IMAGE_TYPES, type FeedbackImageType, type FeedbackInboxFetch, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
+import { FEEDBACK_AUDIO_EXT, FEEDBACK_AUDIO_MAX, FEEDBACK_HANDLED_KEEP_MS, FEEDBACK_IMAGE_EXT, INBOX_DIR, type FeedbackAudioType, type FeedbackHandled, type FeedbackImageType, type FeedbackInboxFetch, type FeedbackInboxItem } from '../../shared/model/feedback-delivery.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { KvRepo } from '../store/kv.ts';
-import { DOCUMENT_ID } from './drop.ts';
+import { DOCUMENT_ID, LETTER_TTL_MS } from './drop.ts';
 import { Mailbox, parseServiceAccount } from './google.ts';
+import { itemOf } from './letter.ts';
 import { readReceiver } from './receiver.ts';
 import { openReport } from './seal.ts';
 import { TOKEN_URL } from './transport.ts';
 
 export const RECEIVER_KEY_ID = 'feedback-receiver-key';
 export const SERVICE_ACCOUNT_ID = 'feedback-service-account';
-export const INBOX_DIR = 'feedback-inbox';
 /** Letters this PC's key cannot open, kept as they came (<data>/feedback-inbox/unreadable/<id>.wfb). */
 export const UNREADABLE_DIR = 'unreadable';
 /** kv feedback/receiver: { project, publicKey, apiKey } of the last `wf feedback setup` (public values only). */
 export const SETUP_KEY = { ns: 'feedback', key: 'receiver' } as const;
 /** Letters one fetch takes at most (the mailbox is writable by anyone with the build: a flood must not stall the PC). */
 export const MAX_PER_FETCH = 200;
+/** Unopenable letters kept on this PC at most, and how long each stays (a rotated key's last letters, not a flood). */
+export const UNREADABLE_KEEP = 20;
+export const UNREADABLE_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+/** A removed report's tombstone (<id>.gone); swept TOMBSTONE_KEEP_MS after it was written. */
+export const GONE = '.gone';
+export const TOMBSTONE_KEEP_MS = LETTER_TTL_MS + 24 * 60 * 60 * 1000;
 const LIST_MAX = 500;
-const KINDS: readonly FeedbackKind[] = ['bug', 'idea', 'change', 'praise'];
-const EXT: Record<FeedbackImageType, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+/** Every attachment file a report may have beside its JSON. */
+const ATTACHED = [
+  ...Object.values(FEEDBACK_IMAGE_EXT),
+  ...Array.from({ length: FEEDBACK_AUDIO_MAX }, (_, index) => Object.values(FEEDBACK_AUDIO_EXT).map((ext) => `a${index + 1}.${ext}`)).flat(),
+];
 
 export interface InboxDeps {
   services: () => RuntimeServices;
@@ -42,41 +65,8 @@ export interface InboxDeps {
   tokenUrl?: string;
 }
 
-/** The image really is what its type says (a letter is untrusted). */
-function imageMatches(mime: FeedbackImageType, bytes: Buffer): boolean {
-  if (mime === 'image/png') return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (mime === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  return bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP';
-}
-
-const str = (value: unknown, max: number): string | undefined => (typeof value === 'string' && value.trim() ? value.slice(0, max) : undefined);
-
-/** An opened letter as an inbox item, its screenshot apart; undefined when it is no v1 report. */
-export function itemOf(id: string, value: unknown, receivedAt: number): { item: FeedbackInboxItem; image?: Buffer } | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const o = value as Record<string, unknown>;
-  const text = str(o.text, 20_000);
-  if (o.v !== 1 || !text) return undefined;
-  const item: FeedbackInboxItem = {
-    id, receivedAt, text,
-    createdAt: typeof o.createdAt === 'number' && Number.isFinite(o.createdAt) ? o.createdAt : receivedAt,
-    appVersion: str(o.appVersion, 120) ?? '', os: str(o.os, 120) ?? '',
-  };
-  if (KINDS.includes(o.kind as FeedbackKind)) item.kind = o.kind as FeedbackKind;
-  const view = str(o.view, 120);
-  if (view) item.view = view;
-  if (o.fromAgent === true) item.fromAgent = true;
-  const diagnostics = str(o.diagnostics, 12_000);
-  if (diagnostics) item.diagnostics = diagnostics;
-  const shot = o.screenshot as { mime?: unknown; base64?: unknown } | undefined;
-  if (shot && (FEEDBACK_IMAGE_TYPES as readonly unknown[]).includes(shot.mime) && typeof shot.base64 === 'string') {
-    const image = Buffer.from(shot.base64, 'base64');
-    if (image.length && imageMatches(shot.mime as FeedbackImageType, image)) {
-      item.screenshot = { mime: shot.mime as FeedbackImageType, size: image.length };
-      return { item, image };
-    }
-  }
-  return { item };
+function countFiles(dir: string, ext: string): number {
+  try { return readdirSync(dir).filter((name) => name.endsWith(ext)).length; } catch { return 0; }
 }
 
 function writeAtomic(file: string, data: string | Buffer): void {
@@ -107,8 +97,13 @@ export class FeedbackInbox {
     return path.join(this.deps.services().paths.data, INBOX_DIR);
   }
 
-  /** The stored reports, newest first. */
+  /** The stored reports, newest first; marked reports past their keep time go first (purge). */
   list(): FeedbackInboxItem[] {
+    this.purge();
+    return this.stored();
+  }
+
+  private stored(): FeedbackInboxItem[] {
     let names: string[];
     try { names = readdirSync(this.dir()); } catch { return []; }
     const items: FeedbackInboxItem[] = [];
@@ -134,17 +129,83 @@ export class FeedbackInbox {
     const item = this.read(checkId(id));
     if (!item?.screenshot) throw new WorkforceError('not_found', 'This report has no screenshot.');
     try {
-      return { mime: item.screenshot.mime, dataBase64: readFileSync(path.join(this.dir(), `${id}.${EXT[item.screenshot.mime]}`)).toString('base64') };
+      return { mime: item.screenshot.mime, dataBase64: readFileSync(path.join(this.dir(), `${id}.${FEEDBACK_IMAGE_EXT[item.screenshot.mime]}`)).toString('base64') };
     } catch {
       throw new WorkforceError('not_found', 'This report has no screenshot.');
     }
   }
 
-  /** Deletes a stored report and its screenshot on this PC. */
+  /** Recorded take `index` (0 = the first) of a stored report. */
+  audio(id: string, index: number): { mime: FeedbackAudioType; dataBase64: string } {
+    const take = this.read(checkId(id))?.audio?.[index];
+    const missing = () => new WorkforceError('not_found', 'This report has no such recording.');
+    if (!take || !ATTACHED.some((ext) => take.file === `${id}.${ext}`)) throw missing(); // a name this inbox wrote, nothing else
+    try {
+      return { mime: take.mime, dataBase64: readFileSync(path.join(this.dir(), take.file)).toString('base64') };
+    } catch {
+      throw missing();
+    }
+  }
+
+  /** Marks a stored report done or not relevant – or clears the mark (null). */
+  mark(id: string, as: FeedbackHandled | null): FeedbackInboxItem {
+    const item = this.read(checkId(id));
+    if (!item) throw new WorkforceError('not_found', 'This report is not in the inbox.');
+    const { handled: _old, ...rest } = item;
+    const next: FeedbackInboxItem = as ? { ...rest, handled: { as, at: this.deps.services().clock.now() } } : rest;
+    writeAtomic(path.join(this.dir(), `${id}.json`), `${JSON.stringify(next, null, 2)}\n`);
+    return next;
+  }
+
+  /**
+   * Removes marked reports whose keep time passed, unopenable letters past UNREADABLE_KEEP_MS (oldest beyond
+   * UNREADABLE_KEEP too) and tombstones past TOMBSTONE_KEEP_MS; answers how many reports went. Never touches an
+   * unmarked report.
+   */
+  purge(): number {
+    const now = this.deps.services().clock.now();
+    let removed = 0;
+    for (const item of this.stored()) {
+      if (item.handled && now - item.handled.at >= FEEDBACK_HANDLED_KEEP_MS) { this.remove(item.id); removed += 1; }
+    }
+    const aged = (dir: string, ext: string) => {
+      try {
+        return readdirSync(dir).filter((name) => name.endsWith(ext)).map((name) => ({ file: path.join(dir, name), at: statSync(path.join(dir, name)).mtimeMs }));
+      } catch { return []; }
+    };
+    const letters = aged(path.join(this.dir(), UNREADABLE_DIR), '.wfb').sort((a, b) => b.at - a.at);
+    letters.forEach((letter, index) => { if (index >= UNREADABLE_KEEP || now - letter.at >= UNREADABLE_KEEP_MS) rmSync(letter.file, { force: true }); });
+    for (const stone of aged(this.dir(), GONE)) if (now - stone.at >= TOMBSTONE_KEEP_MS) rmSync(stone.file, { force: true });
+    return removed;
+  }
+
+  /**
+   * Deletes a stored report and its attachments on this PC and its letter in the mailbox; the tombstone keeps the next
+   * fetch from bringing it back when that delete fails (offline).
+   */
   remove(id: string): { ok: true } {
     checkId(id);
-    for (const ext of ['json', ...Object.values(EXT)]) rmSync(path.join(this.dir(), `${id}.${ext}`), { force: true });
+    const dir = this.dir();
+    for (const ext of ['json', ...ATTACHED]) rmSync(path.join(dir, `${id}.${ext}`), { force: true });
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(path.join(dir, `${id}${GONE}`), '', { mode: 0o600 });
+    } catch (error) {
+      this.deps.services().log.warn('feedback tombstone not written', { error: error instanceof Error ? error.message : String(error) });
+    }
+    void this.forget(id);
     return { ok: true };
+  }
+
+  /** The letter of a removed report leaves the mailbox; offline or refused, the age deletion takes it later (the tombstone holds till then). */
+  private async forget(id: string): Promise<void> {
+    const s = this.deps.services();
+    try {
+      const { mailbox } = await this.mailbox(s);
+      await mailbox.remove(id);
+    } catch (error) {
+      s.log.warn('feedback letter not deleted in the mailbox', { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /** Fetches now; a second call while one runs shares it. */
@@ -174,39 +235,63 @@ export class FeedbackInbox {
     const { mailbox, privateKey } = await this.mailbox(s);
     const dir = this.dir();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const now = s.clock.now();
+    const here = (id: string) => ['.json', GONE].some((ext) => existsSync(path.join(dir, `${id}${ext}`))) || existsSync(path.join(dir, UNREADABLE_DIR, `${id}.wfb`));
     let added = 0;
     let unreadable = 0;
+    let expired = 0;
+    let keptUnreadable = countFiles(path.join(dir, UNREADABLE_DIR), '.wfb');
     let taken = 0;
     let more = false;
     let pageToken: string | undefined;
     do {
       const page = await mailbox.page(pageToken);
-      for (const id of page.ids) {
-        if (!DOCUMENT_ID.test(id)) { unreadable += 1; continue; } // never one of ours (senders use UUIDs): left alone
+      for (const { id, created } of page.letters) {
+        const old = created !== undefined && now - created >= LETTER_TTL_MS;
+        const ours = DOCUMENT_ID.test(id);
+        if (!ours && !old) { unreadable += 1; continue; } // never one of ours (senders use UUIDs): left alone until it is old
+        const fresh = ours && !here(id);
+        if (!fresh && !old) continue; // a stored, removed or kept unopenable letter
         if (taken >= MAX_PER_FETCH) { more = true; break; }
         taken += 1;
-        if (existsSync(path.join(dir, `${id}.json`))) { await mailbox.remove(id); continue; } // stored before, the delete did not finish
-        const sealed = await mailbox.sealed(id);
-        if (!sealed) { unreadable += 1; continue; }
-        let opened: ReturnType<typeof itemOf>;
-        try { opened = itemOf(id, JSON.parse(openReport(privateKey, sealed).toString('utf8')), s.clock.now()); } catch { opened = undefined; }
-        if (!opened) {
-          // Sealed for another (an earlier) key or damaged: kept on this PC as it came, so it never blocks the mailbox.
-          mkdirSync(path.join(dir, UNREADABLE_DIR), { recursive: true, mode: 0o700 });
-          writeAtomic(path.join(dir, UNREADABLE_DIR, `${id}.wfb`), sealed);
-          await mailbox.remove(id);
-          unreadable += 1;
-          continue;
-        }
-        if (opened.image && opened.item.screenshot) writeAtomic(path.join(dir, `${id}.${EXT[opened.item.screenshot.mime]}`), opened.image);
-        writeAtomic(path.join(dir, `${id}.json`), `${JSON.stringify(opened.item, null, 2)}\n`);
-        await mailbox.remove(id); // only now: the report is on this PC
-        added += 1;
+        // A letter not on this PC yet is opened first – an old one too, so a PC away for a month still gets it; then an
+        // old letter leaves the mailbox whatever it is, and an unopenable one beyond the cap (a flood) as well. A
+        // readable young letter stays: the team's other PCs and companies fetch it too.
+        const outcome = fresh ? await this.take(mailbox, privateKey, id, keptUnreadable < UNREADABLE_KEEP) : undefined;
+        if (outcome === 'added') added += 1;
+        else if (outcome) unreadable += 1;
+        if (outcome === 'kept') keptUnreadable += 1;
+        if (old || outcome === 'flood') await mailbox.remove(id);
+        if (old) expired += 1;
       }
       pageToken = more ? undefined : page.next;
     } while (pageToken);
-    const total = this.list().length;
-    s.log.info('feedback inbox fetched', { added, unreadable, more }); // counts only
+    const total = this.list().length; // list() purges marked reports past their keep time
+    s.log.info('feedback inbox fetched', { added, unreadable, expired, more }); // counts only
     return { added, unreadable, more, total };
+  }
+
+  /**
+   * Opens letter `id` and stores it here ('added'). One this key cannot open (an earlier key, damaged) is kept as it
+   * came under unreadable/ when `keep` ('kept': the copy marks it seen), else it is a flood ('flood'); 'gone': it is no
+   * longer there or is no v1 letter.
+   */
+  private async take(mailbox: Mailbox, privateKey: string, id: string, keep: boolean): Promise<'added' | 'kept' | 'flood' | 'gone'> {
+    const dir = this.dir();
+    const sealed = await mailbox.sealed(id);
+    if (!sealed) return 'gone';
+    let opened: ReturnType<typeof itemOf>;
+    try { opened = itemOf(id, JSON.parse(openReport(privateKey, sealed).toString('utf8')), this.deps.services().clock.now()); } catch { opened = undefined; }
+    if (!opened) {
+      if (!keep) return 'flood';
+      mkdirSync(path.join(dir, UNREADABLE_DIR), { recursive: true, mode: 0o700 });
+      writeAtomic(path.join(dir, UNREADABLE_DIR, `${id}.wfb`), sealed);
+      return 'kept';
+    }
+    const { item, image, audio } = opened;
+    if (image && item.screenshot) writeAtomic(path.join(dir, `${id}.${FEEDBACK_IMAGE_EXT[item.screenshot.mime]}`), image);
+    audio?.forEach((bytes, index) => writeAtomic(path.join(dir, item.audio![index].file), bytes));
+    writeAtomic(path.join(dir, `${id}.json`), `${JSON.stringify(item, null, 2)}\n`); // last: it marks the letter stored
+    return 'added';
   }
 }

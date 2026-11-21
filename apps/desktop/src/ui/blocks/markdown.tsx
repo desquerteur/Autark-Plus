@@ -1,14 +1,18 @@
 // Hardened Markdown for agent text: marked (GFM) → DOMPurify → innerHTML, plus a delegated
 // click handler so links open through the host, '#…' links navigate in the app (never by their
 // URL) and remote images load
-// only on click.
+// only on click. B-081: an absolute path as a link target or code span carries `data-path`, and a
+// click or Enter on it opens it in the side pane (path-links.ts; the message body's `data-author`
+// names whose PC to try first) – not while text is selected, so selecting still copies. Inside a
+// button or label (<Inline> in an option or card) the control keeps its click: the path is plain text.
 // Owns: the sanitizer config, the small render cache, <Markdown> and <Inline>.
-// Never: lets raw HTML, scripts, styles, forms, iframes or non-http(s)/mailto links through,
-// or fetches remote images without a click (no exfiltration beacons from agent text).
+// Never: lets raw HTML, scripts, styles, forms, iframes or non-http(s)/mailto links through (a path
+// is never an href), or fetches remote images without a click (no exfiltration beacons from agent text).
 
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { navigate, parseRoute } from '../lib/router.ts';
+import { openPathLink, pathRenderer, pathTokenizer, plainInControl } from '../workspace/path-links.ts';
 import { openLink } from './host.ts';
 
 const marked = new Marked({ gfm: true, breaks: false, async: false });
@@ -19,6 +23,8 @@ marked.use({
     html(token) { return escapeHtml(token.text); },
   },
 });
+// Links and code spans that hold an absolute path get data-path instead of an href.
+marked.use({ renderer: pathRenderer, tokenizer: pathTokenizer });
 
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string));
@@ -53,6 +59,10 @@ function purifier(): typeof DOMPurify {
         el.removeAttribute('src');
       }
     }
+    if (el.hasAttribute('data-path')) { // set here: the URI check above drops tabindex="0"
+      el.setAttribute('role', 'link');
+      el.setAttribute('tabindex', '0');
+    }
     if (el.tagName === 'INPUT' && el.getAttribute('type') !== 'checkbox') el.remove();
     if (el.tagName === 'INPUT') el.setAttribute('disabled', '');
   });
@@ -63,7 +73,7 @@ const CONFIG = {
   FORBID_TAGS: ['style', 'form', 'button', 'textarea', 'select', 'iframe', 'object', 'embed', 'svg', 'math', 'video', 'audio', 'source', 'link', 'meta', 'base'],
   FORBID_ATTR: ['style', 'class', 'id', 'srcset', 'action', 'formaction'],
   ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|#|data:image\/)/i,
-  ADD_ATTR: ['data-remote-src'],
+  ADD_ATTR: ['data-remote-src', 'data-path'],
 };
 
 const cache = new Map<string, string>();
@@ -93,7 +103,7 @@ export function renderInline(text: string): string {
   return remember(key, purifier().sanitize(html, CONFIG) as unknown as string);
 }
 
-/** Delegated clicks: links via the host, remote images load on click. */
+/** Delegated clicks: links via the host, paths in the side pane, remote images load on click. */
 function onClick(event: MouseEvent): void {
   const target = event.target as HTMLElement | null;
   const image = target?.closest?.('img[data-remote-src]') as HTMLImageElement | null;
@@ -105,6 +115,13 @@ function onClick(event: MouseEvent): void {
     image.removeAttribute('role');
     return;
   }
+  const path = target?.closest?.('[data-path]') as HTMLElement | null;
+  if (path) {
+    event.preventDefault();
+    if (getSelection()?.isCollapsed === false) return; // a selection is for copying
+    void openPathLink(path.dataset.path ?? '', (path.closest('[data-author]') as HTMLElement | null)?.dataset.author);
+    return;
+  }
   const link = target?.closest?.('a') as HTMLAnchorElement | null;
   if (!link) return;
   const href = link.getAttribute('href') ?? '';
@@ -114,7 +131,9 @@ function onClick(event: MouseEvent): void {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if ((event.key === 'Enter' || event.key === ' ') && (event.target as HTMLElement).matches?.('img[data-remote-src]')) {
+  const target = event.target as HTMLElement;
+  const enter = event.key === 'Enter';
+  if (((enter || event.key === ' ') && target.matches?.('img[data-remote-src]')) || (enter && target.matches?.('[data-path]'))) {
     onClick(event as unknown as MouseEvent);
   }
 }
@@ -130,10 +149,10 @@ export function Markdown(props: { text: string; class?: string }) {
   );
 }
 
-/** Inline Markdown in a span (block titles, cells, option labels). */
+/** Inline Markdown in a span (block titles, cells, option labels); in a button or label a path is plain text. */
 export function Inline(props: { text: string | undefined; class?: string }) {
   if (!props.text) return null;
   // Plain strings skip the parser entirely (most cells and labels).
   if (!/[*_`[~<&\\]/.test(props.text)) return <span class={props.class}>{props.text}</span>;
-  return <span class={props.class} onClick={onClick} dangerouslySetInnerHTML={{ __html: renderInline(props.text) }} />;
+  return <span ref={(span) => plainInControl(span)} class={props.class} onClick={onClick} onKeyDown={onKeyDown} dangerouslySetInnerHTML={{ __html: renderInline(props.text) }} />;
 }

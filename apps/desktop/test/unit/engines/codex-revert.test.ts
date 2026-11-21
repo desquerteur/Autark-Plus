@@ -98,7 +98,7 @@ test('revert on a loaded thread: thread/revert before the turn, the tail injecte
 
   const next = await e.run(turnInput({ runId: 'run_3', session: { ref: 'thr_1', generation: 3 } }).input);
   assert.equal(next.stop, 'done');
-  assert.equal(fake.sent('turn/start').at(-1).params.input[0].text, '<workforce-context>\nVOLATILE\n</workforce-context>', 'not fresh: the volatile block travels');
+  assert.equal(fake.sent('turn/start').at(-1).params.input[0].text, '<live>\nVOLATILE\n</live>', 'not fresh: the volatile block travels');
   await e.dispose();
 });
 

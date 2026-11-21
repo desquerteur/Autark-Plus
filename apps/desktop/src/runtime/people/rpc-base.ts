@@ -8,6 +8,9 @@
 // directory and the 1:1 chat with another human, and notifications on their device (pwa.push*: the subscription
 // is bound to that device; pwa/person-push.ts sends a new message of their chats). Every call first checks that
 // the person's token and access still hold (PeopleService.caller).
+// F13: a CEO's session names their role, and their agents and people come whole – they edit agents and manage members
+// (rpc-ceo.ts); the people list then holds everyone, as the owner's does. The owner's own agents come without their
+// SYSTEM.md (access.ts ownersOwnAgent).
 // Owns: these person variants (table.addPerson). Never: runs the owner's handler for a person.
 
 import type { MethodName, SessionInfo } from '../../shared/api/methods.ts';
@@ -17,7 +20,7 @@ import type { Person } from '../../shared/model/people.ts';
 import { bad, id, input, onlyKeys, optBool, optText } from '../rpc/params.ts';
 import { isTopic } from '../rpc/scopes.ts';
 import { allowedScope, type HandlerContext, type HandlerTable } from '../rpc/table.ts';
-import { maySeeSpace, mayUseAgent, visibleAgents } from './access.ts';
+import { maySeeSpace, mayUseAgent, ownersOwnAgent, visibleAgents } from './access.ts';
 import { directChat } from './direct-chat.ts';
 import { personActivity, personMaySubscribe } from './events.ts';
 import { personSettings, personSystemInfo, realId, viewAgent, viewPerson } from './perspective.ts';
@@ -55,7 +58,7 @@ export function registerPersonBase(table: HandlerTable): void {
     }) as MethodName[];
     const info: SessionInfo = {
       kind: 'person', capabilities: ['todo', 'chat', 'tasks'], secure: ctx.scope.kind === 'person' && ctx.scope.secure === true, allowedMethods,
-      person: { id: person.id, name: person.name, title: person.title, scopes: person.scopes },
+      person: { id: person.id, name: person.name, title: person.title, scopes: person.scopes, role: person.role === 'ceo' ? 'ceo' : 'member' },
     };
     return info;
   });
@@ -90,7 +93,9 @@ export function registerPersonBase(table: HandlerTable): void {
     const person = caller(ctx);
     const archived = optBool(input(params), 'includeArchived') ?? false;
     const sees = visibleAgents(ctx.services.db, person); // their spaces' agents, those of their chats, their manager and reports
-    return ctx.services.org.list({ includeArchived: archived }).filter((agent) => sees({ ...agent, archivedAt: undefined })).map((agent) => viewAgent(person.id, agent));
+    const ceo = person.role === 'ceo';
+    return ctx.services.org.list({ includeArchived: archived }).filter((agent) => sees({ ...agent, archivedAt: undefined }))
+      .map((agent) => viewAgent(person.id, agent, ceo, ceo && ownersOwnAgent(ctx.services.org, person.id, agent)));
   });
   table.addPerson('agents.activity', (_params, ctx) => personActivity(ctx.services, caller(ctx).id, ctx.services.dispatcher.activity()));
   table.addPerson('spaces.list', (_params, ctx) => {
@@ -99,7 +104,8 @@ export function registerPersonBase(table: HandlerTable): void {
   });
   table.addPerson('people.list', (_params, ctx) => {
     const person = caller(ctx);
-    return (ctx.services.people?.list() ?? []).filter((entry) => entry.status !== 'revoked').map((entry) => viewPerson(person.id, entry));
+    const ceo = person.role === 'ceo';
+    return (ctx.services.people?.list() ?? []).filter((entry) => ceo || entry.status !== 'revoked').map((entry) => viewPerson(person.id, entry, ceo));
   });
   table.addPerson('people.directChat', (params, ctx) => {
     const person = caller(ctx);

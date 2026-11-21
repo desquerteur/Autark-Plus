@@ -3,7 +3,8 @@
 // are on the frame as drawn (the picture keeps its aspect ratio inside its box, object-fit:
 // contain), keys carry CDP modifiers (Alt 1, Ctrl 2, Meta 4, Shift 8). Esc is not forwarded (it
 // returns the keyboard to the app); Ctrl/Cmd+V arrives as the paste's text instead. The sender
-// keeps the order, has one call in flight and merges moves and wheel turns that pile up.
+// keeps the order, has one call in flight (B-081: up to `window`, a remote tab's 8) and merges moves and wheel turns
+// that pile up.
 // Owns: these pure helpers. Never: renders, logs input or keeps it after it was sent.
 
 import type { BrowserButton, BrowserInput } from '../../shared/model/browser.ts';
@@ -89,29 +90,37 @@ interface Queued { tab: string; input: BrowserInput }
 const isMove = (input: BrowserInput | undefined): boolean => input?.kind === 'mouse' && input.type === 'move';
 
 /**
- * Sends inputs in order, one call at a time, each for the tab it was made on. A move waiting
- * behind another move on the same tab replaces it, a wheel turn adds to a waiting one. A failed
- * input drops what waits behind it (keys meant for a page that is gone) and is reported once; a
- * failed move is not reported.
+ * Sends inputs in order, each for the tab it was made on, with up to `window` calls unanswered (default 1: one at a
+ * time). A move waiting behind another move on the same tab replaces it, a wheel turn adds to a waiting one. B-081: with
+ * a wider window a move also waits while another move is unanswered (the newest replaces it), and a press, key or
+ * text behind it sends it first. The first failure drops what waits (keys meant for a page that is gone) and is
+ * reported once – inputs already on their way that fail with it are not reported again; a failed move is not reported.
  */
-export function createInputSender(send: (tab: string, input: BrowserInput) => Promise<unknown>, onError: (error: unknown) => void): InputSender {
+export function createInputSender(send: (tab: string, input: BrowserInput) => Promise<unknown>, onError: (error: unknown) => void, options: { window?: number } = {}): InputSender {
+  const most = Math.max(1, Math.floor(options.window ?? 1));
   let queue: Queued[] = [];
-  let busy = false;
-  const pump = async () => {
-    if (busy) return;
-    busy = true;
-    try {
-      while (queue.length) {
-        const next = queue.shift()!;
-        try {
-          await send(next.tab, next.input);
-        } catch (error) {
-          queue = [];
-          if (!isMove(next.input)) onError(error);
-        }
-      }
-    } finally {
-      busy = false;
+  let open = 0; // calls unanswered
+  let moving = 0; // moves among them
+  let round = 0; // a failure starts the next round; one report per round
+  let said = -1;
+  const settle = (sent: Queued, at: number, error?: unknown) => {
+    open--;
+    if (isMove(sent.input)) moving--;
+    if (error !== undefined) {
+      if (at === round) { round++; queue = []; }
+      if (!isMove(sent.input) && at !== said) { said = at; onError(error); }
+    }
+    pump();
+  };
+  const pump = () => {
+    while (queue.length && open < most) {
+      if (moving && queue.length === 1 && isMove(queue[0]!.input)) return; // the newest move waits for the one on its way
+      const next = queue.shift()!;
+      const at = round;
+      open++;
+      if (isMove(next.input)) moving++;
+      new Promise<unknown>((resolve) => { resolve(send(next.tab, next.input)); })
+        .then(() => settle(next, at), (error: unknown) => settle(next, at, error ?? new Error('The page did not take that input.')));
     }
   };
   return {
@@ -126,7 +135,7 @@ export function createInputSender(send: (tab: string, input: BrowserInput) => Pr
         if (!isMove(input)) onError(new Error('Too much input at once. Wait a moment.'));
         return;
       } else queue.push({ tab, input });
-      void pump();
+      pump();
     },
     clear() { queue = []; },
     pending() { return queue.length; },

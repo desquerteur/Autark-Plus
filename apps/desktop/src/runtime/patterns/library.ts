@@ -17,6 +17,7 @@ import path from 'node:path';
 import { WorkforceError } from '../../shared/errors.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import type { PatternProvenance, PatternSource, PatternSummary, ProposedAgent, TeamPattern } from '../../shared/model/team-start.ts';
+import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import '../contracts/team-start.ts';
 import { guessMode, importedMode, modeTiers } from '../importers/modes.ts';
@@ -149,7 +150,7 @@ export class PatternLibrary {
       if (role.reportsTo && !parent) dropped.push(`${role.name}: reports to "${role.reportsTo}", who is not in this pattern – reports to the chosen manager`);
       return {
         key: `p${index + 1}`, name: role.name, role: role.role ?? template?.role ?? role.name,
-        instructions: [template?.instructions ?? '', role.body].filter((part) => part.trim()).join('\n\n').slice(0, 20_000),
+        instructions: [template?.instructions ?? '', role.body].filter((part) => part.trim()).join('\n\n').slice(0, MAX_SYSTEM_MD),
         mode, skills: [...new Set(wanted.filter((skill) => skills.has(skill)))], include: !role.optional,
         ...(template ? { template: template.key } : {}), ...(parent && parent !== `p${index + 1}` ? { reportsTo: parent } : {}),
         ...(partner && partner !== `p${index + 1}` ? { companionOf: partner } : {}),

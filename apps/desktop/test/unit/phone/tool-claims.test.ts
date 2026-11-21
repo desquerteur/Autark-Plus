@@ -20,6 +20,8 @@ test('reversible claims: only looking, listing, disconnecting and moving keys', 
   const tools = new Map(phoneTools({} as never).map((tool) => [tool.name, tool]));
   const claim = (name: string, args: Record<string, unknown> = {}) => tools.get(name)!.describe!(args as never, ctx).reversible;
   for (const name of ['phone.devices', 'phone.screenshot', 'phone.ui_tree']) assert.equal(claim(name), true, name);
+  assert.equal(claim('phone.say', { text: 'Sending Anna the photo' }), true, 'a bubble line changes nothing on the phone');
+  assert.equal(tools.get('phone.say')!.describe!({ text: 'May I?', ask: true } as never, ctx).summary, 'Ask on the phone: "May I?"');
   assert.equal(claim('phone.disconnect', { serial: '192.168.1.20:37099' }), true);
   assert.equal(claim('phone.pair', { address: '192.168.1.30:37005', code: '123456' }), false, 'a pairing stays on the phone');
   assert.equal(claim('phone.connect', { address: 'evil.example.com:5555' }), false);
@@ -32,6 +34,30 @@ test('reversible claims: only looking, listing, disconnecting and moving keys', 
     assert.equal(claim('phone.key', { key }), false, key);
   }
   assert.equal(movingKey(undefined as never), false);
+});
+
+// Feedback 16.11.2026 F16: phone.say names the agent, and each answer reads as a fact with what I do next.
+test('phone.say passes the agent and the run, and each answer of a question reads as its own fact', async () => {
+  const calls: Array<{ text: string; ask: boolean; job?: string; by?: string }> = [];
+  let answer: 'yes' | 'no' | 'none' = 'yes';
+  const driver = { say: async (_serial: string | undefined, text: string, ask: boolean, step?: { job?: string; by?: string }) => { calls.push({ text, ask, job: step?.job, by: step?.by }); return { serial: 'dev_phone', ...(ask ? { answer } : {}) }; } };
+  const say = phoneTools(driver as never).find((tool) => tool.name === 'phone.say')!;
+  const run = { ...ctx, runId: 'run_1', agent: { name: 'Felix' } } as unknown as ToolContext;
+  const text = (output: unknown) => (output as { content: Array<{ text: string }> }).content[0].text;
+  assert.match(text(await say.run({ text: 'Sending Anna the photo' }, run)), /bubble shows my line/);
+  assert.deepEqual(calls[0], { text: 'Sending Anna the photo', ask: false, job: 'run_1', by: 'Felix' });
+  assert.match(text(await say.run({ text: 'May I?', ask: true }, run)), /answered ✓: the phone is mine/);
+  answer = 'no';
+  assert.match(text(await say.run({ text: 'May I?', ask: true }, run)), /answered ✕ – not now/);
+  answer = 'none';
+  assert.match(text(await say.run({ text: 'May I?', ask: true }, run)), /No answer within 60 s/);
+  assert.equal(calls[1].ask, true);
+  assert.ok(say.description.length < 500);
+});
+
+test('AdbPhone has no bubble: phone.say over ADB says so', async () => {
+  const { phone } = fakeAdb();
+  await assert.rejects(phone.say(), /only through the Autark app/);
 });
 
 test('phone.disconnect believes the device list: a phone adb did not let go is still reported as connected', async () => {

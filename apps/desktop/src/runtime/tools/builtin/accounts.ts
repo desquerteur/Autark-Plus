@@ -43,10 +43,10 @@ function chosen(ctx: ToolContext, args: SignInArgs): Account | undefined {
 
 const signIn = defineTool<SignInArgs>({
   name: 'accounts.sign_in',
-  description: 'Start the official sign-in of a signed-out model account (e.g. a Codex or Claude Code plan) on this PC. It opens the provider\'s sign-in page in this PC\'s default browser (some CLIs open a terminal window); finish it there with screen tools. I type no password: a password or 2FA code becomes a short to-do for the person. Without accountId: the one account that needs a sign-in.',
+  description: "Starts the official sign-in of a signed-out model account on this PC. It opens in this PC's browser, where I finish it with screen tools; a password or code becomes a to-do for the person.",
   inputSchema: {
     type: 'object',
-    properties: { accountId: { type: 'string', minLength: 1, maxLength: 80, description: 'the account id (the "Accounts needing sign-in" line, app.status)' } },
+    properties: { accountId: { type: 'string', minLength: 1, maxLength: 80, description: 'Default the one that needs it.' } },
     additionalProperties: false,
   },
   category: 'account',
@@ -65,7 +65,7 @@ const signIn = defineTool<SignInArgs>({
       return failure(`The sign-in of ${label(pick)} could not start: ${(error as Error).message.slice(0, 200)}`);
     }
     if (!started.started) {
-      return failure(`${label(pick)} (${pick.provider}) has no sign-in this app can start. The person signs in in Settings › Models – I prepare that as a short to-do (human.ask, humanReason credential).`);
+      return failure(`${label(pick)} (${pick.provider}) has no sign-in this app can start. The person signs in in Settings › Models – I prepare that as a short task for them (tasks.create to the person).`);
     }
     return text([
       `Started the official ${pick.provider} sign-in for ${label(pick)} on this PC.`,

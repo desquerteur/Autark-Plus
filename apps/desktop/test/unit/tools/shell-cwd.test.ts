@@ -1,4 +1,4 @@
-// B-061: where a command runs without `cwd` – shell.exec and secrets.run use the folder of a split part (its own
+// B-061: where a command runs without `cwd` – shell.exec uses the folder of a split part (its own
 // worktree, else its group's: ToolContext.split.cwd), else the workspace; an explicit cwd still wins.
 // Owns: these assertions only. Never: a real shell.
 

@@ -13,12 +13,15 @@
 //   AGENTS.md of the workspace or a task worktree becomes project instructions (agents can write
 //   them; Workforce's own instructions come through the thread); `shell_environment_policy.set`
 //   gives every agent shell the safe git env (I02: git/safe-env.ts – Codex's default KEY/SECRET/TOKEN
-//   excludes would drop GIT_CONFIG_KEY_n, `set` applies after them); ignore_default_excludes is never
+//   excludes would drop GIT_CONFIG_KEY_n, `set` applies after them) and – B-085 – AUTARK_AGENT of the agent whose
+//   thread it is (the shared server env carries none); ignore_default_excludes is never
 //   set, so secrets in the server's env stay out of shells;
-// - every turn sets its own sandbox and approval policy ('never': Codex asks nobody), so no config file
-//   changes them. An agent's turn (Workforce tools or our MCP hub) outside the server's own folder runs with
-//   full access – the PC belongs to the AI team; a turn marked readOnly and a runtime helper
-//   call (decisions, compaction) run read-only, so a helper cannot plant files in the folder it runs in;
+// - every turn sets its own sandbox and approval policy, so no config file changes them. An agent's turn (Workforce
+//   tools or our MCP hub) outside the server's own folder runs with full access – the PC belongs to the AI team; B-080:
+//   an agent's turn runs on-request with full access: Codex's own command guard asks the app and the app accepts at once
+//   (approvals.ts; under 'never' the guard refused forced deletes and URL launches as "blocked by policy"); a read turn runs
+//   never. A turn marked readOnly and a runtime helper call (decisions, compaction) run read-only, so a helper cannot plant
+//   files in the folder it runs in;
 // - the server turns off two features that act on workspace files even in an untrusted folder
 //   (skills still load there): installing a skill's MCP dependencies and importing other agents'
 //   configs (.claude/, .mcp.json …).
@@ -28,11 +31,16 @@
 import * as path from 'node:path';
 import type { EngineTurnInput } from '../types.ts';
 import { agentIdentityEnv } from '../agent-token.ts'; // AF-001
+import { AGENT_ENV } from '../../../shared/api/protocol.ts';
 
 /** Turned off with `-c features.<name>=false` when the app-server starts (server.ts). */
 export const WORKSPACE_FEATURES = ['skill_mcp_dependency_install', 'external_migration'];
 
-/** Server-wide `-c` overrides (server.ts): the server's own config takes no `.codex/` layer from a parent of its folder. */
+/**
+ * Server-wide `-c` overrides (server.ts): the server's own config takes no `.codex/` layer from a parent of its folder.
+ * B-080: no compaction threshold of ours – the owner rejected a fixed one (08.11.2026, "it has to be completely dynamic");
+ * Codex keeps its own limit at the edge of the window, as in the plain CLI.
+ */
 export const SERVER_CONFIG = ['project_root_markers=[]'];
 
 const UNTRUSTED = { trust_level: 'untrusted' } as const;
@@ -69,8 +77,9 @@ export function trustKeys(cwd: string, real?: string, platform: NodeJS.Platform 
 
 /**
  * thread/start and thread/resume settings: read-only until a turn sets its sandbox; the cwd untrusted
- * and the project root; no project docs; `shellSet` (the safe git env) in every shell. AF-001: with `agentId` (a thread is
- * one agent's) its shells also get the agent's wf identity (engines/agent-token.ts), so its `wf send` writes as the agent.
+ * and the project root; no project docs; `shellSet` (the safe git env) in every shell. B-085: `agentId` – the agent
+ * whose thread it is – as AUTARK_AGENT in every shell of it (its `wf` writes as that agent); AF-001: with it the agent's
+ * signed wf identity (AUTARK_AGENT_TOKEN, engines/agent-token.ts).
  */
 export function threadIsolation(keys: string[], shellSet: Record<string, string> = {}, agentId?: string): {
   sandbox: 'read-only'; approvalsReviewer: typeof REVIEWER;
@@ -83,7 +92,7 @@ export function threadIsolation(keys: string[], shellSet: Record<string, string>
     sandbox: 'read-only', approvalsReviewer: REVIEWER,
     config: {
       projects: Object.fromEntries(keys.map((key) => [key, UNTRUSTED])), project_root_markers: [], project_doc_max_bytes: 0,
-      shell_environment_policy: { set: { ...shellSet, ...agentIdentityEnv(agentId) } },
+      shell_environment_policy: { set: { ...shellSet, ...(agentId ? { [AGENT_ENV]: agentId } : {}), ...agentIdentityEnv(agentId) } },
     },
   };
 }
@@ -112,10 +121,10 @@ export function turnAccess(input: Pick<EngineTurnInput, 'tools' | 'mcp' | 'cwd' 
   return foldersOverlap(input.cwd, serverCwd, platform) ? 'read' : 'full';
 }
 
-/** turn/start settings: the sandbox, approval policy and approval reviewer every turn runs with. */
+/** turn/start settings: the sandbox, approval policy (B-080: 'on-request' with full access, 'never' for a read turn) and approval reviewer every turn runs with. */
 export function turnPermissions(access: TurnAccess = 'full'): Record<string, unknown> {
   return {
-    approvalPolicy: 'never',
+    approvalPolicy: access === 'read' ? 'never' : 'on-request',
     approvalsReviewer: REVIEWER,
     sandboxPolicy: access === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'dangerFullAccess' },
   };

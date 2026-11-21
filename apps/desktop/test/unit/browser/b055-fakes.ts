@@ -57,9 +57,15 @@ export class ScriptPage implements PageLike {
   evaluated: string[] = [];
   loadStates: string[] = [];
   onLoadState: (state: string) => Promise<void> = async () => {};
+  /** B-080: the headers of the navigation answer goto() gives (a Playwright Response), when the test sets them. */
+  responseHeaders?: Record<string, string>;
   url() { return this.urlValue; }
   async title() { return this.titleValue; }
-  async goto(url: string) { this.urlValue = url; this.titleValue = 'Example'; }
+  async goto(url: string) {
+    this.urlValue = url; this.titleValue = 'Example';
+    const headers = this.responseHeaders;
+    return headers ? { headers: () => headers } : null;
+  }
   async goBack() {} async goForward() {} async reload() {}
   async ariaSnapshot() { return this.snapshot; }
   locator(selector: string) { return new ScriptLocator(this, selector); }

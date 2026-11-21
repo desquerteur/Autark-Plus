@@ -12,7 +12,7 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { StartProblem, StartProblemCode } from '../../shared/model/repair.ts';
-import { redactText } from '../feedback/redact.ts';
+import { redactText } from '../../shared/secrets/redact-text.ts';
 import { isUpgradeError } from '../db/upgrade.ts';
 
 /** Failed or crashed starts in a row before the next one shows the repair screen. */

@@ -1,7 +1,8 @@
 // media.segments: the marked parts of a stored file – a span of a recording or video, a region of a picture, each with a line of
 // description – and what a cut or crop needs (seconds, pixels, ffmpeg arguments, a media: reference). They live in one memory
 // note per file, one line per part ("- 0:12.0–0:18.0 [0.1,0.2,0.5,0.5] He laughs"), so anyone can read and change them by hand and
-// memory search and vector.search find them by meaning; the note lies with the file's chat, so it reaches who reads that chat.
+// vector.search finds them where a person chose an embedding model (the main AI's knowledge.find leaves kind "reference" outside
+// references/ out); the note lies with the file's chat, so it reaches who reads that chat.
 // Owns: this tool and that line format. Never: shows or marks media of chats the agent is not a member of, or presents
 // descriptions as instructions (they are data about the file).
 
@@ -12,7 +13,7 @@ import type { MediaInfo, MediaRegion } from '../../../shared/model/media.ts';
 import { mediaRef, parseSpan, parseTimecode, spanText } from '../../../shared/text/media-ref.ts';
 import { folderOfScope, MEMORY_ENTRY } from '../../knowledge/memory-tree.ts';
 import { writeAtomic } from '../../root/text-doc.ts';
-import { failure, json } from '../types.ts';
+import { FILE_ID_PROPERTY, failure, json } from '../types.ts';
 import { DATA_NOTE, mediaFileId, readableMedia } from './media-common.ts';
 import { clip, defineTool, internal } from './util.ts';
 
@@ -90,18 +91,18 @@ const noteHead = (info: MediaInfo, by: string) => [
 
 const segments = defineTool<{ fileId: string; text?: string; start?: string; end?: string; region?: MediaRegion; remove?: number }>({
   name: 'media.segments',
-  description: 'The marked parts of a stored file, with seconds, pixels and ffmpeg arguments for a cut or crop. With text: mark a part (start and end, a region of the picture, or both). remove: drop part n. They are found later with vector.search.',
+  description: 'Lists, marks or removes the marked parts of a stored file. Each part comes with ffmpeg arguments to cut or crop; the parts stay in a memory note with the file\'s chat.',
   inputSchema: {
     type: 'object',
     properties: {
-      fileId: { type: 'string', minLength: 64, maxLength: 1000 }, text: { type: 'string', minLength: 1, maxLength: 600 },
-      start: { type: 'string', maxLength: 20, description: 'a time code "0:12" or seconds "12.5"' }, end: { type: 'string', maxLength: 20 },
+      fileId: FILE_ID_PROPERTY, text: { type: 'string', minLength: 1, maxLength: 600, description: 'What the part shows; marks a new part.' },
+      start: { type: 'string', maxLength: 20, description: '"0:12" or seconds.' }, end: { type: 'string', maxLength: 20 },
       region: {
-        type: 'object', description: 'from the top left, in pixels of the file or fractions 0–1',
+        type: 'object', description: 'From the top left, in pixels or fractions 0–1.',
         properties: { x: { type: 'number', minimum: 0 }, y: { type: 'number', minimum: 0 }, width: { type: 'number', minimum: 0 }, height: { type: 'number', minimum: 0 } },
         required: ['x', 'y', 'width', 'height'], additionalProperties: false,
       },
-      remove: { type: 'integer', minimum: 1 },
+      remove: { type: 'integer', minimum: 1, description: 'Number of a part to drop.' },
     },
     required: ['fileId'], additionalProperties: false,
   },

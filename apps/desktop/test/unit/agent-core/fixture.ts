@@ -39,10 +39,12 @@ export function coreFixture(options: { watch?: WatchFn | false } = {}) {
   // recursive: the one tree watch on every system, so the fake sees one handle on <data> (root/watcher-folders.test.ts covers the other mode).
   const root = options.watch ? new RootWatcher({ root: data, clock: time, log, watch: options.watch, debounceMs: 1, recursive: true }) : undefined;
   root?.start();
+  const owned = new Map<string, string>(); // B-087: kept across restart() like compose's kv
   const deps: AgentCoreDeps = {
     dataDir: data, org: () => org, skills: () => library, bus: events.bus, clock: time, log,
     ...(root ? { root } : {}), defer: (run) => { deferred.push(run); },
     paths,
+    own: { get: (agentId) => owned.get(agentId), set: (agentId, sig) => { if (sig === undefined) owned.delete(agentId); else owned.set(agentId, sig); } },
   };
   const core = new AgentCore(deps);
   return {

@@ -1,7 +1,6 @@
-// RPC contract part (B-041): My day – the person's own input, planning, the morning briefing, handing an own to-do
-// to the team and what the person handed off. Handlers: runtime/rpc/handlers/day.ts, delegating to services.day
-// ('unavailable' while it is missing). Tiers: 'todo' (a To-do-only phone runs its day), day.sendToTeam 'tasks' (it
-// gives work to the team). No person variants in this build. Merged into Methods by module augmentation.
+// RPC contract part: My day – the person's own input, planning, the morning briefing and what the person gave others
+// (handing an own to-do on is tasks.give). Handlers: runtime/rpc/handlers/day.ts, delegating to services.day
+// ('unavailable' while it is missing). Tier 'todo' (a To-do-only phone runs its day). Merged into Methods by module augmentation.
 // Owns: these method shapes. Never: behaviour.
 
 import type { Briefing, DayPlanResult } from '../model/calendar.ts';
@@ -16,9 +15,7 @@ declare module '../api/methods.ts' {
     'day.plan': { params: { date: string; mode: 'plan' | 'replan' }; result: DayPlanResult };
     /** 'todo': the morning briefing of `date`, or null when there is none. */
     'day.briefing': { params: { date: string }; result: Briefing | null };
-    /** 'tasks': an own to-do goes to the team (the responsible manager decides who does it). */
-    'day.sendToTeam': { params: { id: string }; result: TaskView };
-    /** 'todo': open and recently done tasks the person created that others own. */
+    /** 'todo': open and recently done tasks the person gave that others own ("Given by me"). */
     'day.handedOff': { params: { since?: number }; result: TaskView[] };
   }
 }

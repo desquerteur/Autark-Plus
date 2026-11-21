@@ -36,7 +36,7 @@ function wav(salt: number): Uint8Array {
 async function setup(f: Fixture, count = 1) {
   if (!f.org.get('ag_ava')) f.org.add(agent('ag_ava', 'Ava'));
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`).id, { body: APP, state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`, { body: APP, state: 'final' });
   const [todo] = f.tasks.ingestBlocks(message, [], []);
   assert.ok(todo, 'the fence is a to-do');
   const takes: FileRef[] = [];
@@ -61,27 +61,12 @@ test("an agent cancelling its mini-app to-do drops the registry entry and queues
   const reclaimed = spyReclaim(f);
   const { message, todo, takes, entry } = await setup(f, 2);
   assert.deepEqual(appFileIds(f.db, message.id, 0), takes.map((take) => take.id));
-  f.tasks.setStatus(todo.id, 'cancelled', 'ag_ava', 'Not needed any more');
-  assert.equal(f.tasks.get(todo.id)?.status, 'cancelled');
+  f.tasks.finish(todo.id, { status: 'dropped' as const, summary: 'Not needed any more' }, 'ag_ava');
+  assert.equal(f.tasks.get(todo.id)?.status, 'dropped');
   assert.equal(entry(), undefined, 'the registry entry is gone');
   assert.deepEqual(reclaimed, [takes.map((take) => take.id)], 'the takes go to the clean-up');
 });
 
-test('deleting the message or removing the to-do releases the takes too', async (t) => {
-  const f = rpcFixture();
-  t.after(f.cleanup);
-  const reclaimed = spyReclaim(f);
-  const deleted = await setup(f);
-  f.chats.removeMessage(deleted.message.id, HUMAN_ID);
-  assert.equal(f.tasks.get(deleted.todo.id)?.status, 'cancelled', 'its app cannot run any more');
-  assert.equal(deleted.entry(), undefined);
-  assert.deepEqual(reclaimed, [[deleted.takes[0].id]]);
-
-  const removed = await setup(f);
-  f.tasks.remove(removed.todo.id, HUMAN_ID);
-  assert.equal(removed.entry(), undefined);
-  assert.deepEqual(reclaimed.slice(1), [[removed.takes[0].id]]);
-});
 
 test('deleting the chat drops its takes and queues them; a take already queued keeps its due time', async (t) => {
   const f = rpcFixture();

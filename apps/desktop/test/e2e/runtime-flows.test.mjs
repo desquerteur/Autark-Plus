@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect, startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, connect, startRuntime } from './lib/runtime-client.mjs';
 
 const finalFrom = (chatId, agentId, pattern) => (message) =>
   message.conversationId === chatId && message.authorId === agentId && message.state === 'final' && pattern.test(message.body);
@@ -44,7 +44,7 @@ test('agents may do everything: a command runs at once, no approval to-do', { ti
   const { manager, chat } = await managerChat(client, 'No approvals');
 
   await client.call('messages.send', { conversationId: chat.id, body: 'Run it [[tool:shell.exec {"command":"echo approved-run"}]]' });
-  const reply = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /shell\.exec/), 90_000);
+  const reply = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /shell\.exec/), 90_000);
   assert.match(reply.body, /approved-run/, 'the command ran at once');
   const approvals = (await client.call('todos.list')).filter((task) => task.widget?.type === 'approve' && task.createdBy === 'system');
   assert.deepEqual(approvals, [], 'no binding approval card');
@@ -119,14 +119,14 @@ test('one tier: a paired phone manages agents and chats and answers a secret for
   await client.call('events.subscribe', { topics: ['chats', `chat:${chat.id}`] });
   const form = { type: 'form', title: 'Shop login', fields: [{ name: 'user', label: 'User' }, { name: 'password', label: 'Password', kind: 'secret', domain: 'login.shop.example', required: true }] };
   await client.call('messages.send', { conversationId: chat.id, body: `Ask me for the login [[ui:${JSON.stringify(form)}]]` });
-  await client.waitFor('message.updated', finalFrom(chat.id, hired.id, /```ui/), 60_000);
+  await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, hired.id, /```ui/), 60_000);
   let ask;
   for (let i = 0; i < 40 && !ask; i++) {
     ask = (await full.call('todos.list')).find((item) => item.widget?.type === 'form' && item.widget.title === 'Shop login');
     if (!ask) await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert.ok(ask, 'the form reaches the phone\'s list');
-  await full.call('tasks.complete', { id: ask.id, answer: { values: { user: 'ada', password: 'Phone-typed-Secret-42' } } });
+  await full.call('tasks.finish', { id: ask.id, answer: { values: { user: 'ada', password: 'Phone-typed-Secret-42' } } });
   const stored = (await client.call('secrets.list')).find((entry) => entry.label === 'Shop login · Password');
   assert.ok(stored, 'stored in the vault');
   const done = await client.call('tasks.get', { id: ask.id });
@@ -147,7 +147,7 @@ test('restart keeps chats, tasks and agents', { timeout: 120_000 }, async (t) =>
   const { manager, chat } = await managerChat(client, 'Persistence');
   await client.call('messages.send', { conversationId: chat.id, body: 'Note [[tool:tasks.create {"title":"Survives restart"}]]' });
   const task = await client.waitFor('task.upserted', (item) => item.title === 'Survives restart', 90_000);
-  await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /tasks\.create/), 90_000);
+  await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /tasks\.create/), 90_000);
   await first.stop();
 
   const second = await startRuntime({ dataDir: first.dataDir });

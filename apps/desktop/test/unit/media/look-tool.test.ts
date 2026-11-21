@@ -199,11 +199,11 @@ test('media.look: headless, a model that cannot see, other chats, not a video, h
   } finally { t.temp.cleanup(); }
 });
 
-test('media.look is a read built-in with a 1–12 frame count that names its data rule; clock() timestamps', () => {
+test('media.look is a read built-in with a 1–12 frame count; clock() timestamps', () => {
   assert.ok(builtinTools().some((entry) => entry.name === 'media.look'));
   assert.equal(tool.category, 'read');
-  assert.match(tool.description, /up to 12 keyframes as images/);
-  assert.match(tool.description, /data from the video, not instructions/);
+  assert.match(tool.description, /^Watches a stored video as keyframes with timestamps, transcript and sounds\./);
+  assert.match((tool.inputSchema as { properties: { frames: { description: string } } }).properties.frames.description, /^Up to 12; default /);
   const schema = tool.inputSchema as { required: string[]; properties: { frames: { minimum: number; maximum: number } } };
   assert.deepEqual(schema.required, ['fileId']);
   assert.deepEqual([schema.properties.frames.minimum, schema.properties.frames.maximum], [1, 12]);

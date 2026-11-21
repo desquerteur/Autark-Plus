@@ -1,8 +1,8 @@
 // What an agent already did in attempts that did not finish (PR3): the tool calls of its runs in
 // this chat (or task) that did not end 'done', since its last 'done' run there – including the
 // current run after a failover. Another engine or account, a new session or a stateless engine
-// does not know them, so the turn input gets them as "Previous attempt (not visible in the
-// chat)", with "verify before repeating" on every effect whose outcome is unknown. turn.ts also
+// does not know them, so the turn input gets them as "What I already did then (not visible in the
+// chat)" inside the one cut-off note (agents/interruption-context.ts), with "verify before repeating" on every effect whose outcome is unknown. turn.ts also
 // asks here whether every effect of the current run is known before it fails over after tool calls.
 // B-047 D4: also the agent's latest final answers in this chat (or task) that stayed in its run log
 // (run items 'Answer' with visibility 'internal', agents/publishing.ts) – at most 3, ≈ 1500
@@ -20,7 +20,7 @@ import type { RuntimeServices } from '../contracts.ts';
 import type { Run, RunItem } from '../../shared/model/runs.ts';
 
 export const RECAP_LIMITS = { lines: 15, chars: 3000, runs: 30, action: 180 } as const;
-export const RECAP_TITLE = 'Previous attempt (not visible in the chat):';
+export const RECAP_TITLE = 'What it already did:';
 const VERIFY = 'effect unknown – I verify before repeating'; // engines/fake.ts finds "verify before repeating"
 
 export type ActionOutcome = 'done' | 'failed' | 'unknown';
@@ -133,7 +133,7 @@ export function needsRecap(actions: readonly RecentAction[], now: { engine: stri
   return actions.some((action) => action.engine !== now.engine || action.accountId !== now.accountId);
 }
 
-/** "Previous attempt …" with one line per call (the newest when there are more), or undefined. */
+/** "What I already did then …" with one line per call (the newest when there are more), or undefined. */
 export function recapText(actions: readonly RecentAction[], timezone?: string): string | undefined {
   if (!actions.length) return undefined;
   const time = (at: number) => {

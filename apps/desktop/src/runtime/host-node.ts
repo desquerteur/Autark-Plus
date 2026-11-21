@@ -2,7 +2,7 @@
 // Owns: file-key secret encryption (AES-256-GCM, key file 0600 in the data dir), opening
 // URLs/paths with the OS opener, and inert notification/power/idle answers.
 // Never: pretends to have a screen – `capture` is absent, so computer use reports
-// "unavailable" honestly on a headless host.
+// "unavailable" honestly on a headless host; B-080: nor `install` – app.install and system.install say so there.
 
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';

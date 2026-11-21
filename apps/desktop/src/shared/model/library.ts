@@ -1,61 +1,46 @@
-// The public library's shapes (B-078 D13): sources of skills and notes written by others – a git repository cloned shallow
-// into <data>/library/<id>, or an index-only list (name, description, URL) – and what publishing one of mine gives back.
-// The library itself is the folder library/ of the public repository teydra/OpenAutark.
-// Owns: the shapes. Never: logic (runtime/library/).
+// The public library's shapes (owner 14.11.2026: skills and notes anyone shares, found by their words, rated by those who
+// used them, no sign-in): one server for every Autark, services/library (https://library.openautark.com).
+// Owns: the shapes and the address. Never: logic (runtime/library/).
 
-export type LibrarySourceKind = 'git' | 'index';
+export type LibraryKind = 'skill' | 'note';
 
-export interface LibrarySource {
-  /** Folder and key name: lowercase letters, digits and hyphens. */
+/** One entry as a find lists it. */
+export interface LibraryHit {
   id: string;
-  kind: LibrarySourceKind;
-  /** owner/name on GitHub (kind 'git'). */
-  repo?: string;
-  /** The subfolder of the repository that holds the entries ('' = all of it). */
-  folder?: string;
-  /** Where an index-only list lives (kind 'index'): a JSON list or a Markdown list of links. */
-  url?: string;
-  /** Shipped with the app (the rest were added on this PC). */
-  builtin?: boolean;
-}
-
-export interface LibraryEntry {
-  source: string;
+  kind: LibraryKind;
   name: string;
   description: string;
-  /** The entry's SKILL.md (or note) on this PC – a cloned source. */
-  file?: string;
-  /** Where it lives on the web – an index-only entry, or the cloned file's page. */
-  url?: string;
-  size?: number;
-  sha256?: string;
-  /** The description stands in from the text's heading and first sentence (nobody wrote one). */
-  fallback?: true;
+  /** CC0-1.0 for what people share; a seeded entry keeps its own open license. */
+  license: string;
+  /** Where a seeded entry came from (its repository folder); '' for a shared one. */
+  source: string;
+  author: string;
+  rev: string;
+  /** The average of its ratings (null: none yet). */
+  rating: number | null;
+  votes: number;
+  uses: number;
+  /** YYYY-MM-DD. */
+  updated: string;
 }
 
-export interface LibrarySourceState {
-  source: LibrarySource;
-  /** When this PC last fetched it (absent: never). */
-  syncedAt?: number;
-  entries: number;
-  problem?: string;
+/** One entry opened: its text, the files beside its SKILL.md and the newest notes of its ratings. */
+export interface LibraryItem extends LibraryHit {
+  body: string;
+  files: Record<string, string>;
+  notes: Array<{ stars: number; note: string; day: string }>;
 }
-
-export type PublishKind = 'skill' | 'note';
 
 export interface PublishInput {
-  kind: PublishKind;
+  kind: LibraryKind;
   name: string;
   /** The whole Markdown text (front matter included for a skill). */
   text: string;
-  /** Public entries mine is derived from (front matter derived-from). */
-  derivedFrom?: string[];
 }
 
 export type PublishResult =
-  | { ok: true; url: string; branch: string; path: string }
-  | { ok: false; reason: 'off' | 'secret' | 'internal' | 'no-gh' | 'signed-out' | 'failed' | 'no-check'; text: string };
+  | { ok: true; id: string; rev: string; url: string }
+  | { ok: false; reason: 'off' | 'secret' | 'internal' | 'no-check' | 'failed'; text: string };
 
-/** The public repository whose library/ folder is the shared library. */
-export const LIBRARY_REPO = 'teydra/OpenAutark';
-export const LIBRARY_FOLDER = 'library';
+/** The library server; AUTARK_LIBRARY_URL points a test or a local copy elsewhere. */
+export const LIBRARY_URL = 'https://library.openautark.com';

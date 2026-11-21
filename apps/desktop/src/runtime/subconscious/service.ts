@@ -1,18 +1,37 @@
-// SubconsciousImpl: one service around the agents' turns. Its runs (flow.ts: two brains, one loop, the same tools):
-// beforeTurn() – a person's message with content (the cheap check, wake.ts) that the main AI has not answered yet, "direkt am Anfang des
-// Prompts" (owner 15.10.2026): the turn waits for it, at most BEFORE_WAIT_MS, and what the run finds later waits for the next turn;
-// afterTurn() – a finished turn, behind the cheap wake check, debounced per chat (after-turn.ts); ask() – the main AI's own call
-// (the subconscious tool), its answer is the tool output. A run's trace waits in kv for the agent's next turn on that thread; beforeTurn()
-// hands it over (a note or hit older than a day goes; a turn that never reached its engine puts its
-// trace back); a note or hit shown in this thread within the last hour is not shown again (the brains do not see what they showed before). Also verify()
-// (a task result against its done-condition) and widgetFor()/fillWidget() (the person's to-do widgets). The decision model is
-// the Decisions use, the cheap one; the LLM the strongest model the Work use allows (a route as a working agent, not as the
-// runtime). Both are the engines' structured runner, created on first use – none while no model is connected.
-// toolTimeout() uses the decision hub directly: seconds suggestions also work on choice-only decision connections.
-// Owns: which run happens with which budget, the pending trace and failure isolation. Never: makes a turn wait longer than BEFORE_WAIT_MS,
-// starts a run while a tool call waits for its output (one begun before it goes on), judges an agent's answer, or turns memory into instructions.
+// SubconsciousImpl: one service around the agents' turns, on the cheap decision model (the Decisions use); the good model
+// is the main AI itself. Unterbewusstsein v1 (14.11.2026, measured .local/unterbewusstsein-20261113), v2 (15.11.2026): the job
+// before a turn is one call (route-turn.ts routeTurn) – on a person's message, on a colleague's when only colleagues woke the
+// turn, else on the turn's task (a task, schedule, retry, review or handoff wake), each with content (the cheap check, wake.ts):
+// it sets the turn's effort – not while that is decided already (route-turn.ts requestHolds, which first ends a step the call set
+// for an earlier message) – and opens the hits of the word search it chooses (they come first in the turn's trace).
+// 17.11.2026 (measured 15.–17.11.: 1,367 calls held their turns 9.5 s on average, 30 % were cut at the wait and gave the turn
+// nothing; the cause is the lane – 3.9 s on Luna through the running Codex app-server, 10.8 s on Haiku through a process per
+// call): the turn waits for the call, at most ROUTE_WAIT_MS, only while the recent median of the lane that answers (the last
+// RECENT_CALLS calls of that model, kept in process memory) is under FAST_MS; otherwise it starts at once at its settled
+// effort, and the call runs beside it only to open what the work needs – those entries reach the thread's next turn
+// (putBack). A slow lane is measured again by itself: on every PROBE_TURNS-th turn the call beside it runs even with
+// nothing to open, its time is the lane's, and one answer under FAST_MS – a recovered lane, or another model answering –
+// ends the slow stretch; no turn waits for a slow lane. The model stays the router's.
+// FIXES-3 D2 (real calls 18.11.2026: a line the call voice handed over waited 2.2–5.9 s for the call): a turn of a running
+// call (BeforeTurn.callId, agents/turn-prepare.ts – a task's turn too) starts at once the same way, whatever the lane's pace.
+// Beside it a second call on the same model and system prompt says which context items have done their job and condenses those
+// (route-turn.ts condenseTurn, look.ts); nobody waits for that one.
+// F26 (16.11.2026): condensePart() – the same call on a forked part's own copy of the record at its first start, with its brief as
+// what wakes it; that part waits for it (at most LOOK_MS), as it starts from what the call leaves (splits/fork.ts).
+// Each call leaves one info event with the model that answered and its tokens. Nothing runs after a turn: what the calls leave, code condenses at the rebuild once its run is
+// finished (context/ledger/window.ts leanText). ask() – the main AI's own call (the subconscious tool):
+// the loop (flow.ts), its answer is the tool output. A trace kept in kv – put back by a turn that never reached its engine,
+// the timeout decisions a native turn could not take in (agents/native-timeout.ts), or left by runs before v1 – is handed to
+// the agent's next turn on that thread by beforeTurn() (a note or hit older than a day goes). Also verify() (a task result
+// against its done-condition), toolTimeout() (the decision hub directly, for a tool call past its deadline) and
+// widgetFor()/fillWidget() (the person's to-do widgets). The model is the engines' structured runner, one per call, its use
+// booked on the agent it works for (a widget fill on the subconscious itself) – none while no model is connected.
+// Owns: which call happens with which budget, whether a turn waits for it, the kept trace and failure isolation. Never: makes
+// a turn wait longer than ROUTE_WAIT_MS (a forked part's first start: LOOK_MS), judges an agent's answer, or turns memory into
+// instructions.
 
-import type { RouteRequest, RuntimeServices, Router, Subconscious } from '../contracts.ts';
+import { MAIN_THREAD } from '../../shared/model/origin.ts';
+import type { RuntimeServices, Subconscious } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { Task, TaskResult } from '../../shared/model/tasks.ts';
 import type { UiBlock } from '../../shared/blocks/catalog.ts';
@@ -21,13 +40,13 @@ import { createEngineRunner, type EngineRunnerDeps } from '../decision/engine-ru
 import { bookTurnCost, priceTurn } from '../agents/turn-cost.ts';
 import '../contracts/vectors.ts';
 import type { StructuredRunner } from '../decision/types.ts';
-import { AfterTurnRuns, type TurnEnd } from './after-turn.ts';
-import { WORTH_TOKENS } from './context-tools.ts';
 import { askContext, type AskContext } from './exchange.ts';
-import { runFlow, type FlowBrains, type FlowInput } from './flow.ts';
+import { runFlow, type FlowInput } from './flow.ts';
+import { condenseTurn, requestHolds, routeTurn, type CallUse } from './route-turn.ts';
+import { cachedInput } from '../engines/shared.ts';
 import { SUBCONSCIOUS_ID } from './tools.ts';
-import { verifyResult } from './verify.ts';
-import { hasContent, toolWaiting } from './wake.ts';
+import { verifyResult, type Verdict } from './verify.ts';
+import { hasContent } from './wake.ts';
 import { chooseWidget, fillWidget } from './widget.ts';
 import { chooseToolTimeout } from './tool-timeout.ts';
 import type { ToolTimeoutInput } from '../tools/timeout.ts';
@@ -37,84 +56,69 @@ const CALL_MS = 180_000;
 /** The main AI's own call. Each step of a CLI that starts a process per call took 20–70 s on the 8 GB reference PC (Claude Code, measured 02.11.2026); the steps bound a run, this only catches a hang. */
 export const ASK_MS = 300_000;
 const ASK_STEPS = 12;
-/** How long a person's message waits for its run: a run that does not look ends in 3–7 s, look and pick took 9–21 s, 10 of 12 within this (Codex on the loaded 8 GB reference PC, q1 02.11.2026; at 10 s the person did not hear a rule the run had found). What comes later waits for the next turn. */
-const BEFORE_WAIT_MS = 25_000;
-/** The run goes on after the turn stopped waiting and keeps what it finds: like ASK_MS only a hang is caught here (a look and a pick at 24–84 s per step on Claude Code ran into 120 s and the find was lost: q2m, live 02.11.2026). */
-const BEFORE_MS = ASK_MS;
-const BEFORE_STEPS = 4;
-const AFTER_TURN_MS = 300_000;
-/** Tidying is one or two steps (the items listed, one call for all of them), keeping a look and a write: more only goes round in circles (live 02.11.2026: 9 of 11 steps saved nothing). */
-const AFTER_TURN_STEPS = 8;
+/** How long a turn waits at most for the call before it (one small structured call: 2.7–4.3 s measured on Luna/low, E4 arm NEW 14.11.2026). */
+export const ROUTE_WAIT_MS = 12_000;
+/**
+ * A turn waits for the call before it while the lane's recent median is under this (measured 15.–17.11.2026: on Luna through the
+ * running Codex app-server p50 3.9 s and no call cut; on Haiku through a Claude Code process per call p50 10.8 s, 37 % cut at the
+ * 12 s wait – 1.5 hours of turns waiting for nothing).
+ */
+export const FAST_MS = 5_000;
+/** The lane's calls the median is taken over, per model that answers. */
+export const RECENT_CALLS = 20;
+/**
+ * On a slow lane the call beside every PROBE_TURNS-th turn runs even with nothing to open, so the lane is measured by itself:
+ * a turn with no hits runs no call at all, so a lane that recovered would otherwise never be measured again (review
+ * 17.11.2026). The turn does not wait for it (review 2: a probe that waited cost the lane's full time on every fifth turn).
+ * A probe that answers under FAST_MS ends the slow stretch – the lane's earlier times were another lane's speed.
+ */
+export const PROBE_TURNS = 5;
+/** The limit of the call beside the turn that condenses its context (v2: the turn does not wait for it – 15.11. in codex exec up to ~28 s with 12 items). */
+export const LOOK_MS = 60_000;
 const PENDING_NS = 'subconscious_trace';
-/** A note or hit is not shown again in a thread for this long (a renewed context may need it again later). */
-const SHOWN_MS = 60 * 60_000;
 /** A kept note or hit older than this is about something else by now: it is dropped, not shown. */
 const KEPT_MS = 24 * 60 * 60_000;
-/** The calls that age and are not shown twice: what the flow told or found for the main AI. */
-const ABOUT_NOW: ReadonlySet<string> = new Set([NOTE_CALL, 'agent.tell', 'vector.search']); // agent.tell: rows kept before the name changed
-const SHOWN_THREADS = 200;
-const SHOWN_LINES = 100;
-/**
- * What a run with the transcript before it is for. Without these words the cheap model listed the items and ended at once at every turn, also at
- * the limit, so the chat grew to the 64k renewal (q-r1b, 03.11.2026: 21k to 64k in 9 turns, no mark); with them it marked (q1b). No threshold: every run.
- */
-const TRANSCRIPT_TASK = "My first step lists the older items of the main AI's transcript: I condense those the current work no longer needs, in one call with their ids (hiding is for what nothing can depend on); what the person said about the transcript comes first.";
-/** How many of the lines shown lately a run that keeps things is told, and how much of each: to it they are not new. */
-const SHOWN_TOLD = 5;
-const SHOWN_LINE_CHARS = 300;
-/** The id the LLM's route runs under: an agent's turn for routing (the Work use), not the runtime's (the Decisions use). */
-const LLM_AGENT_ID = 'subconscious';
-
-/**
- * The LLM's route: what the runner asks for the decision model, as a working agent that wants the strongest model it may have – the Work model chosen in
- * Settings, else the best of the account (live 02.11.2026: at economy, both brains were the same small model and a route changed nothing). Unless the person chose the cheaper cost mode.
- */
-function llmRoute(request: RouteRequest, costMode: string | undefined): RouteRequest {
-  return { ...request, mode: { ...request.mode, category: 'chat' }, agent: { ...request.agent, id: LLM_AGENT_ID, modelPolicy: { costMode: costMode === 'economy' ? 'economy' : 'best' } } };
-}
+/** F26: what the condense call of a forked part reads before its brief – the piece is all its coming work. */
+const PART_WAKE = 'The main AI split itself: this part starts now with the context so far and works on its one piece alone, so an item this piece will not read again has done its job here.';
+/** The calls that age: what a run told or found for the main AI, and what the call before a turn opened for it (put back by a turn that never ran). */
+const ABOUT_NOW: ReadonlySet<string> = new Set([NOTE_CALL, 'agent.tell', 'vector.search', 'knowledge.open']); // agent.tell: rows kept before the name changed
 
 export interface SubconsciousDeps {
   services: () => RuntimeServices;
   /** The decision model, also of widget fills (tests); false = none; absent = the engines' runner. */
   runner?: StructuredRunner | false;
-  /** The LLM (tests); absent = `runner` when one is given, else the engines' runner on the Work use. */
-  llm?: StructuredRunner | false;
-  /** How long a chat stays quiet before its run (tests: 0). */
-  settleMs?: number;
-  /** The longest a chat that never goes quiet waits for its run (tests). */
-  maxWaitMs?: number;
-  /** How soon a run that met a waiting tool call looks again (tests). */
-  toolRetryMs?: number;
-  /** How long a turn waits for the run before it (tests). */
-  beforeWaitMs?: number;
+}
+
+type BeforeTurn = Parameters<NonNullable<Subconscious['beforeTurn']>>[0];
+
+/** What the call before a turn weighs: the person's lines when a person wrote, else a colleague's with content, else the turn's task; undefined without content. */
+function wakeOf(input: BeforeTurn): { said: string; from: 'person' | 'colleague' | 'task' } | undefined {
+  const wake = input.said ? { said: input.said, from: 'person' as const }
+    : input.woke && hasContent(input.woke) ? { said: input.woke, from: 'colleague' as const }
+      : { said: input.taskText ?? '', from: 'task' as const };
+  return hasContent(wake.said) ? wake : undefined;
 }
 
 export class SubconsciousImpl implements Subconscious {
   private readonly deps: SubconsciousDeps;
-  private engineRunner?: StructuredRunner;
-  private llmRunner?: StructuredRunner;
-  private readonly after: AfterTurnRuns;
-  /** Per agent and thread: the lines of notes and hits shown lately, with their time. */
-  private readonly shown = new Map<string, Map<string, number>>();
-  /** The agent the newest flow runs for (its model use is booked on it). */
-  private running?: string;
+  /** The calls before a turn in flight (settle waits for them at the app's stop). */
+  private readonly routing = new Set<Promise<unknown>>();
+  /** How long the last calls before a turn took, newest last, per model that answered (process memory: a new start measures anew). */
+  private readonly recent = new Map<string, number[]>();
+  /** The model that answered the newest call: the lane whose times decide whether a turn waits. */
+  private lane = '';
+  /** Turns since the last call on a slow lane, for the probe that measures it again. */
+  private waited = 0;
 
   constructor(deps: SubconsciousDeps) {
     this.deps = deps;
-    this.after = new AfterTurnRuns({
-      services: deps.services, settleMs: deps.settleMs, maxWaitMs: deps.maxWaitMs, toolRetryMs: deps.toolRetryMs,
-      keep: (agentId, thread, trace) => this.keepTrace(agentId, thread, trace),
-      run: ({ turn, thread, why, context, transcript }) => this.flow({
-        kind: 'after-turn', agent: turn.agent, conversationId: turn.conversationId, thread, taskId: turn.taskId, ...(turn.mode ? { mode: turn.mode } : {}),
-        task: `woken by ${why.join(', ')}${turn.contextTokens ? `; the main AI's context holds about ${turn.contextTokens} tokens` : ''}${transcript ? `. ${TRANSCRIPT_TASK}` : ''}`,
-        context: [context, this.shownLately(`${turn.agent.id}:${thread}`)].filter(Boolean).join('\n\n'), maxSteps: AFTER_TURN_STEPS, budgetMs: AFTER_TURN_MS,
-        ...(transcript ? { firstStep: { tool: 'context.list', args: { minTokens: WORTH_TOKENS } } } : {}),
-      }),
-    });
   }
 
-  verify(task: Task, result: TaskResult): Promise<{ ok: boolean; reason: string; checked: boolean }> {
-    return verifyResult(this.deps.services(), task, result);
+  /** A task result against its done-condition, on the decision model, its use booked on the agent whose result it is. */
+  verify(task: Task, result: TaskResult): Promise<Verdict> {
+    const services = this.deps.services();
+    const owner = task.assigneeKind === 'agent' && task.assigneeId ? task.assigneeId : SUBCONSCIOUS_ID;
+    return verifyResult(services, task, result, this.decisionRunner(services, owner));
   }
 
   toolTimeout(input: ToolTimeoutInput & { agent: Agent; signal: AbortSignal }) {
@@ -127,43 +131,149 @@ export class SubconsciousImpl implements Subconscious {
 
   fillWidget(block: UiBlock, text: string): Promise<UiBlock> {
     const services = this.deps.services();
-    return fillWidget(services, this.decisionRunner(services), block, text);
+    return fillWidget(services, this.decisionRunner(services, SUBCONSCIOUS_ID), block, text);
   }
 
-  afterTurn(input: TurnEnd): void {
-    this.after.note(input);
+  /** What the agent's turn gets: the entries the call before it opened, then the trace kept for this thread. Never throws. */
+  async beforeTurn(input: BeforeTurn): Promise<SubconsciousTrace | undefined> {
+    const opened = await this.lookFirst(input);
+    const kept = this.takeTrace(input.agent.id, input.thread);
+    return opened.length ? { calls: [...opened, ...(kept?.calls ?? [])] } : kept;
   }
 
-  /** What the agent's turn gets: the trace kept for this thread, after the look at a person's message. Never throws. */
-  async beforeTurn(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; signal?: AbortSignal }): Promise<SubconsciousTrace | undefined> {
-    await this.lookFirst(input);
-    const calls = this.fresh(`${input.agent.id}:${input.thread}`, this.takeTrace(input.agent.id, input.thread)?.calls ?? []);
-    return calls.length ? capTrace({ calls }) : undefined;
+  /**
+   * How the call before a turn runs: 'wait' while the median of the last RECENT_CALLS calls the answering lane took is under
+   * FAST_MS (none measured yet, or a model nobody measured yet: it waits), else 'beside' – on every PROBE_TURNS-th such turn
+   * 'probe', a call beside the turn that runs even with nothing to open, so the lane is measured.
+   */
+  private pace(): 'wait' | 'beside' | 'probe' {
+    const times = this.recent.get(this.lane);
+    if (!times?.length) return 'wait';
+    const sorted = [...times].sort((a, b) => a - b);
+    if (sorted[Math.floor(sorted.length / 2)] < FAST_MS) return 'wait';
+    this.waited += 1;
+    if (this.waited < PROBE_TURNS) return 'beside';
+    this.waited = 0;
+    return 'probe';
   }
 
-  /** The run before a turn: only on a person's message with content. The turn goes on after BEFORE_WAIT_MS; the run does too and keeps what it finds. The turn's stop ends it, with what it showed until then. */
-  private async lookFirst(input: { agent: Agent; thread: string; conversationId?: string; taskId?: string; mode?: string; said?: string; signal?: AbortSignal }): Promise<void> {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+  /** One more call took `ms` on the lane of the model that answered it (`by`; a cut call: the lane it was sent on). */
+  private took(ms: number, by?: string): void {
+    this.lane = by ?? this.lane;
+    const times = this.recent.get(this.lane) ?? [];
+    // A call under FAST_MS on a lane whose median was slow starts its count anew: the times before are not this lane's speed.
+    const sorted = [...times].sort((a, b) => a - b);
+    const slow = times.length > 0 && sorted[Math.floor(sorted.length / 2)] >= FAST_MS;
+    const next = ms < FAST_MS && slow ? [ms] : [...times, ms];
+    this.recent.set(this.lane, next.slice(-RECENT_CALLS));
+  }
+
+  /**
+   * The call before a turn (route-turn.ts routeTurn), with the effort left out while it is decided already. While the lane
+   * answers fast (pace()) the turn waits for it: the turn's stop or ROUTE_WAIT_MS ends the wait and the call, and a late answer
+   * sets and opens nothing. While it is slow the turn starts at once at its settled effort and the call runs beside it (LOOK_MS,
+   * the turn's stop ends it) only to open what the work needs – those entries reach the thread's next turn (putBack); on the
+   * probe turn it runs with nothing to open too, and its time measures the lane. Beside
+   * either, not waited for, condenseTurn marks the context (its own limit LOOK_MS, the turn's stop ends it). Each call leaves
+   * one info event: agent, what woke the turn, the effort it set (or 'same effort', 'held by request', 'beside', cut / failed)
+   * with how many entries it opened, or 'condensed' with how many items, the model that answered with its tokens, and its time
+   * in ms (runtime.log). Returns the opened entries' calls. Never throws.
+   */
+  private async lookFirst(input: BeforeTurn): Promise<TraceCall[]> {
     try {
       const services = this.deps.services();
-      if (input.signal?.aborted || !input.said || !hasContent(input.said) || toolWaiting(services, input.agent.id, input.conversationId)) return;
-      const run = this.flow({
-        kind: 'before-turn', agent: input.agent, conversationId: input.conversationId, thread: input.thread, taskId: input.taskId, ...(input.mode ? { mode: input.mode } : {}),
-        context: askContext(services, { agentId: input.agent.id, conversationId: input.conversationId }) || input.said, maxSteps: BEFORE_STEPS, budgetMs: BEFORE_MS,
-        ...(input.signal ? { signal: input.signal } : {}),
-      }).then((result) => { if (hasTrace(result.trace)) this.keepTrace(input.agent.id, input.thread, result.trace); }, (error) => this.log('subconscious look failed', error));
-      await Promise.race([run, new Promise<void>((resolve) => { timeout = setTimeout(resolve, this.deps.beforeWaitMs ?? BEFORE_WAIT_MS); (timeout as { unref?: () => void }).unref?.(); })]);
+      if (input.signal?.aborted) return [];
+      const held = requestHolds(services, input.agent, input.taskId); // first on every turn: it ends a step set for an earlier message
+      const wake = wakeOf(input);
+      if (!wake) return []; // re-review 14.11.: no wait on a tool call in the chat – the main lane runs one turn at a time, only my parts' calls showed there
+      const runner = this.decisionRunner(services, input.agent.id);
+      if (!runner) return [];
+      const started = Date.now();
+      const asked = { agent: input.agent, conversationId: input.conversationId, thread: input.thread, ...wake, ...(input.mode ? { mode: input.mode } : {}), ...(held ? { held: true } : {}) };
+      const tidy = condenseTurn(services, this.decisionRunner(services, input.agent.id) ?? runner, { agent: input.agent, conversationId: input.conversationId, thread: input.thread, ...wake, ...(input.signal ? { signal: input.signal } : {}), deadlineMs: LOOK_MS });
+      this.track(tidy);
+      void tidy.then((done) => { if (done.condensed) this.logRoute(input.agent.id, wake.from, 'condensed', Date.now() - started, { condensed: done.condensed }, done); });
+      const pace = input.callId ? 'beside' : this.pace(); // FIXES-3 D2: a turn a running call hands over starts at once, as on a slow lane
+      if (pace !== 'wait') {
+        const beside = routeTurn(services, runner, { ...asked, beside: true, ...(pace === 'probe' ? { probe: true } : {}), ...(input.signal ? { signal: input.signal } : {}), deadlineMs: LOOK_MS });
+        this.track(beside);
+        void beside.then((look) => {
+          if (!look) return; // nothing to open, or it failed
+          const ms = Date.now() - started;
+          this.took(ms, look.by);
+          if (look.calls.length && !input.signal?.aborted) this.putBack(input.agent.id, input.thread, { calls: look.calls });
+          this.logRoute(input.agent.id, wake.from, 'beside', ms, { opened: look.calls.length }, look);
+        });
+        return [];
+      }
+      const wait = new AbortController();
+      const timer = setTimeout(() => wait.abort(), ROUTE_WAIT_MS);
+      (timer as { unref?: () => void }).unref?.();
+      const signal = input.signal ? AbortSignal.any([input.signal, wait.signal]) : wait.signal;
+      const call = routeTurn(services, runner, { ...asked, signal, deadlineMs: ROUTE_WAIT_MS });
+      this.track(call);
+      const cut = new Promise<'cut'>((resolve) => signal.addEventListener('abort', () => resolve('cut'), { once: true }));
+      const look = await Promise.race([call.then((done) => done ?? (signal.aborted ? 'cut' as const : held ? 'held by request' as const : 'failed' as const)), cut]).finally(() => clearTimeout(timer));
+      const ms = Date.now() - started;
+      if (typeof look !== 'string' || (look === 'cut' && wait.signal.aborted)) this.took(ms, typeof look === 'string' ? undefined : look.by); // an answer, or a call the wait cut: how the lane runs now
+      const outcome = typeof look === 'string' ? look : look.line ?? (held ? 'held by request' : 'same effort');
+      this.logRoute(input.agent.id, wake.from, outcome, ms, typeof look === 'string' ? {} : { opened: look.calls.length }, typeof look === 'string' ? {} : look);
+      return typeof look === 'string' ? [] : look.calls;
     } catch (error) {
       this.log('subconscious look failed', error);
-    } finally {
-      if (timeout) clearTimeout(timeout);
+      return [];
     }
   }
 
-  /** A turn that never reached its engine: its trace waits for the next turn on the thread and counts as not shown. Never throws. */
+  /**
+   * F26 (owner 16.11.2026: "das Unterbewusstsein vom neuen Agent … komprimiert alles weg, dann braucht er nur das, was er wirklich
+   * braucht"): a forked part's first start – condenseTurn on the part's own copy of its record (`thread`, splits/fork.ts), with its
+   * brief as what wakes it. The part starts from what this call leaves, so it waits for it: at most LOOK_MS, its turn's stop ends it.
+   * One info event, like the calls before a turn. Returns how many items it condensed. Never throws.
+   */
+  async condensePart(input: { agent: Agent; thread: string; conversationId?: string; brief: string; signal?: AbortSignal }): Promise<number> {
+    try {
+      const services = this.deps.services();
+      if (input.signal?.aborted || !hasContent(input.brief)) return 0;
+      const runner = this.decisionRunner(services, input.agent.id);
+      if (!runner) return 0;
+      const started = Date.now();
+      const wait = new AbortController();
+      const timer = setTimeout(() => wait.abort(), LOOK_MS);
+      (timer as { unref?: () => void }).unref?.();
+      const signal = input.signal ? AbortSignal.any([input.signal, wait.signal]) : wait.signal;
+      const call = condenseTurn(services, runner, {
+        agent: input.agent, ...(input.conversationId ? { conversationId: input.conversationId } : {}), thread: input.thread,
+        said: `${PART_WAKE}\n${input.brief}`, from: 'task', signal, deadlineMs: LOOK_MS,
+      });
+      this.track(call);
+      const done = await call.finally(() => clearTimeout(timer));
+      this.logRoute(input.agent.id, 'part', 'condensed', Date.now() - started, { condensed: done.condensed }, done);
+      return done.condensed;
+    } catch (error) {
+      this.log('subconscious part condense failed', error);
+      return 0;
+    }
+  }
+
+  /** A call in flight until it settles (settle waits for them at the app's stop). */
+  private track(call: Promise<unknown>): void {
+    this.routing.add(call);
+    void call.finally(() => this.routing.delete(call));
+  }
+
+  /**
+   * One info event of a call: what it did, the model that answered and its tokens (all input, the cached part of it, output), its time.
+   * The counts sit under `use` with keys the log's safety net leaves alone: a key with "token" in its name is written as
+   * '[redacted]' (system/log.ts SECRET_KEY) – measured 18.11.2026 on the first real run, every count of this line was.
+   */
+  private logRoute(agentId: string, wake: string, outcome: string, ms: number, did: { opened?: number; condensed?: number }, use: Partial<CallUse>): void {
+    const tokens = use.usage ? { use: { input: use.usage.inputTokens, cached: cachedInput(use.usage), output: use.usage.outputTokens } } : {};
+    try { this.deps.services().log.info('subconscious route', { agentId, wake, outcome, ...did, ...(use.by ? { model: use.by } : {}), ...tokens, ms }); } catch { /* nothing to report to */ }
+  }
+
+  /** A turn that never reached its engine: its trace waits for the next turn on the thread. Never throws. */
   putBack(agentId: string, thread: string, trace: SubconsciousTrace): void {
-    const seen = this.shown.get(`${agentId}:${thread}`);
-    for (const call of trace.calls) for (const line of call.output.split('\n')) seen?.delete(line);
     this.keepTrace(agentId, thread, trace);
   }
 
@@ -174,18 +284,17 @@ export class SubconsciousImpl implements Subconscious {
       for (const row of db.all<{ key: string; value: string }>('SELECT key, value FROM kv WHERE ns = ?', [PENDING_NS])) {
         if (match(row.value)) db.run('DELETE FROM kv WHERE ns = ? AND key = ?', [PENDING_NS, row.key]);
       }
-      this.shown.clear();
     } catch (error) {
       this.log('subconscious trace not cleared', error);
     }
   }
 
-  /** The main AI's own call: the same loop with `ask` as the task; the answer is its tool output. Never throws. */
+  /** The main AI's own call: the loop with `ask` as the task; the answer is its tool output. Never throws. */
   async ask(input: { agent: Agent; conversationId?: string; thread?: string; taskId?: string; mode?: string; ask: string; context?: AskContext; signal?: AbortSignal }): Promise<string> {
     try {
       const services = this.deps.services();
       const result = await this.flow({
-        kind: 'asked', agent: input.agent, conversationId: input.conversationId, thread: input.thread ?? input.conversationId ?? '', taskId: input.taskId, ...(input.mode ? { mode: input.mode } : {}),
+        agent: input.agent, conversationId: input.conversationId, thread: input.thread ?? MAIN_THREAD, taskId: input.taskId, ...(input.mode ? { mode: input.mode } : {}),
         task: input.ask, context: askContext(services, { agentId: input.agent.id, conversationId: input.conversationId, context: input.context }),
         maxSteps: ASK_STEPS, budgetMs: ASK_MS, signal: input.signal,
       });
@@ -199,45 +308,14 @@ export class SubconsciousImpl implements Subconscious {
     }
   }
 
-  /** Runs the waiting runs now and resolves when they ended (tests, shutdown). */
-  settle(): Promise<void> {
-    return this.after.settle();
+  /** Resolves when the calls before a turn in flight ended – at once when none runs (the app's stop, compose/lifecycle.ts; tests). */
+  async settle(): Promise<void> {
+    await Promise.allSettled([...this.routing]);
   }
 
   private flow(input: FlowInput) {
     const services = this.deps.services();
-    this.running = input.agent.id;
-    return runFlow(services, this.brains(services), input);
-  }
-
-  private brains(services: RuntimeServices): FlowBrains {
-    return { decision: this.decisionRunner(services), llm: this.workRunner(services) };
-  }
-
-  /** The notes and hits this thread was shown lately, for a run that keeps things: it would take them for new (the main AI's answer repeats them). */
-  private shownLately(key: string): string {
-    const lines = [...(this.shown.get(key)?.keys() ?? [])].slice(-SHOWN_TOLD).map((line) => (line.length > SHOWN_LINE_CHARS ? `${line.slice(0, SHOWN_LINE_CHARS)} …` : line));
-    return lines.length ? `Shown to the main AI from memory before its answer, not new:\n${lines.join('\n')}` : '';
-  }
-
-  /** The calls without the note lines and hits this thread was shown lately; a call with nothing new left goes. */
-  private fresh(key: string, calls: readonly TraceCall[]): TraceCall[] {
-    if (!calls.length) return [];
-    let now: number;
-    try { now = this.deps.services().clock.now(); } catch { return [...calls]; }
-    const seen = this.shown.get(key) ?? new Map<string, number>();
-    this.shown.delete(key);
-    this.shown.set(key, seen);
-    if (this.shown.size > SHOWN_THREADS) this.shown.delete(this.shown.keys().next().value!);
-    for (const [line, at] of seen) if (now - at > SHOWN_MS) seen.delete(line);
-    const out = calls.flatMap((call) => {
-      if (!ABOUT_NOW.has(call.tool)) return [call];
-      const lines = call.output.split('\n').filter((line) => !seen.has(line));
-      for (const line of lines) seen.set(line, now);
-      return lines.length ? [{ ...call, output: lines.join('\n') }] : [];
-    });
-    while (seen.size > SHOWN_LINES) seen.delete(seen.keys().next().value!);
-    return out;
+    return runFlow(services, this.decisionRunner(services, input.agent.id), input);
   }
 
   private keepTrace(agentId: string, thread: string, trace: SubconsciousTrace): void {
@@ -275,45 +353,33 @@ export class SubconsciousImpl implements Subconscious {
     try { return services.catalog.list().some((model) => model.available); } catch { return false; }
   }
 
-  private runnerDeps(services: () => RuntimeServices, router: () => Router) {
+  private runnerDeps(services: () => RuntimeServices, agentId: string) {
     return {
       get engines() { return services().engines; },
-      get router() { return router(); },
+      get router() { return services().router; },
       get accounts() { return services().accounts; },
       get catalog() { return services().catalog; },
       get paths() { return services().paths; },
       get clock() { return services().clock; },
       get notifications() { return services().notifications; },
       timeoutMs: CALL_MS, // the widget fill brings its own shorter signal (widget.ts WIDGET_FILL_MS)
-      onUsage: (entry: Parameters<NonNullable<EngineRunnerDeps['onUsage']>>[0]) => this.bookBrain(entry),
+      onUsage: (entry: Parameters<NonNullable<EngineRunnerDeps['onUsage']>>[0]) => this.bookUse(entry, agentId),
     };
   }
 
-  /** A brain's model use on a pay-per-use account, like an agent turn's (nothing for a plan or a local model). */
-  private bookBrain(entry: Parameters<NonNullable<EngineRunnerDeps['onUsage']>>[0]): void {
+  /** The model's use on a pay-per-use account, like an agent turn's, on the agent the call works for (nothing for a plan or a local model). */
+  private bookUse(entry: Parameters<NonNullable<EngineRunnerDeps['onUsage']>>[0], agentId: string): void {
     const services = this.deps.services();
     const cost = priceTurn(services, entry, { usage: entry.usage }, '').run;
-    bookTurnCost(services, this.running ?? SUBCONSCIOUS_ID, 'subconscious', cost);
+    bookTurnCost(services, agentId, 'subconscious', cost);
   }
 
-  /** The decision model (the Decisions use): none when nothing is connected (checked on every call). */
-  private decisionRunner(services: RuntimeServices): StructuredRunner | undefined {
+  /** The decision model (the Decisions use), one runner per call so its use is booked on `agentId`: none when nothing is connected. */
+  private decisionRunner(services: RuntimeServices, agentId: string): StructuredRunner | undefined {
     if (this.deps.runner === false) return undefined;
     if (this.deps.runner) return this.deps.runner;
     if (!this.connected(services)) return undefined;
-    this.engineRunner ??= createEngineRunner(this.runnerDeps(this.deps.services, () => this.deps.services().router));
-    return this.engineRunner;
-  }
-
-  /** The LLM: the same runner on the LLM's route (llmRoute) – the router then takes the Work use, not the Decisions use. */
-  private workRunner(services: RuntimeServices): StructuredRunner | undefined {
-    if (this.deps.llm === false) return undefined;
-    if (this.deps.llm) return this.deps.llm;
-    if (this.deps.runner !== undefined) return this.deps.runner || undefined;
-    if (!this.connected(services)) return undefined;
-    const router: Router = { route: (request) => { const now = this.deps.services(); return now.router.route(llmRoute(request, now.settings.get().routing.costMode)); } };
-    this.llmRunner ??= createEngineRunner(this.runnerDeps(this.deps.services, () => router));
-    return this.llmRunner;
+    return createEngineRunner(this.runnerDeps(this.deps.services, agentId));
   }
 
   private log(message: string, error: unknown): void {

@@ -3,7 +3,7 @@
 // environment (connect.ts, env-keys.ts – read in-process when needed, never stored); detection and
 // adoption (adoption.ts; removed detected logins stay dismissed until "Add again", dismissed.ts),
 // official-CLI login/logout (sign-in.ts – Copilot CLI and Kimi Code in a terminal window), limits, candidates per
-// engine and model, usage, turn-reported states, and a restored account's home (rehome; reanchor.ts).
+// engine and model, usage and turn-reported states.
 // PR8: Copilot CLI is an ACP plan, one per PC in the CLI's default home (acp-plans.ts); Kimi Code (B-044)
 // and – AF-024 – Gemini CLI are ACP plans with their own homes like Codex (cli-homes.ts, KIMI_CODE_HOME, GEMINI_CLI_HOME;
 // a Gemini CLI login found in ~/.gemini stays the one account without a home);
@@ -20,12 +20,24 @@
 // B-066: API connections live in settings.json's `providers` section (provider-file.ts): an entry is an account with its
 // id, the table keeps its state and limits; add, rename and remove go through the file. Plans stay detected.
 // Its input and dependency shapes and the provider labels: service-shape.ts.
-// 04.11.2026: a plan's login files travel between the CEO's own PCs in devices/sync/logins.ts (not here); a sign-out
-// here marks the plan (cli-homes.ts signedOut), so no login from a linked PC signs it in again.
+// A plan's login files travel between the CEO's own PCs in devices/sync/logins.ts (not here); a sign-out here marks the
+// plan (cli-homes.ts signedOut), so no login from a linked PC – nor the default home's (retake) – signs it in again.
+// Every Codex account runs in a home of its own: one found in the default home runs on a copy of that login (cli-homes.ts
+// found – also, once, for an account from before), and when that copy is signed out while the default home holds a newer
+// login of the same person, it takes that one again before it counts as signed out.
+// B-091: a check that finds a working Codex/Claude Code plan signed out reports it like a turn would (failure.ts
+// reportSignedOut → the sign-in work, relogin.ts); login/add `away` and loginCode let the person finish it on the phone.
+// 16.11.2026: a plan's home lives once per PC in its logins folder, shared by every company there (cli-homes.ts): a login
+// made in another company is adopted at the next detect (adoption.ts), remove drops only this company's row, a sign-out
+// signs the login out for all of them (the mark is the home's, so another company's check does not report it as
+// unexpected); the homes of before move there once at the start (bridge/logins-1611.ts).
 // Owns: the accounts table (via AccountRepo) and account.upserted / account.removed / usage.updated.
-// Never: reads/copies provider tokens, stores key values (SecretService does), or rotates mid-turn.
+// Never: reads provider tokens itself (cli-homes.ts and logins.ts copy login files), stores key values (SecretService does),
+// deletes a plan's home, or rotates mid-turn.
 
 import os from 'node:os';
+import path from 'node:path';
+import { moveLoginHomes } from '../bridge/logins-1611.ts';
 import type { AccountService as AccountServiceContract } from '../contracts.ts';
 import { DECISION_PROVIDER, MEDIA_ONLY_PROVIDERS, type InstallableCli, type Account, type AccountLimits, type DetectionReport, type EngineId, type ProviderId, type UsageSummary } from '../../shared/model/providers.ts';
 import { AccountRepo } from './repo.ts';
@@ -39,7 +51,7 @@ import { SignIns } from './sign-in.ts';
 import { planBlocked } from './cli.ts';
 import { envKey } from './env-keys.ts';
 import { connection, handleId, vaultId } from './connect.ts';
-import { DismissedLogins, dismissalKey, serverKey } from './dismissed.ts';
+import { DismissedLogins, dismissalKeys, serverKey } from './dismissed.ts';
 import { ProviderFile } from './provider-file.ts';
 import { Adoption, CLI_PROVIDERS } from './adoption.ts';
 import { AcpPlans } from './acp-plans.ts';
@@ -48,12 +60,15 @@ import { AcpLaunches, acpProvider } from '../engines/acp/providers.ts';
 import { Resets } from './resets.ts';
 import { testEndpoint, type EndpointTestInput } from './endpoint-test.ts';
 import { mediaKeyState } from '../media/providers/key-check.ts'; // B-058 i1
+import { reportSignedOut } from './failure.ts';
+import { isPlanProvider } from '../../shared/model/plan-roles.ts';
 import { PROVIDER_LABELS, type AccountServiceDeps, type AddAccountInput } from './service-shape.ts';
-import type { ResetOutcome } from '../../shared/api/methods-providers.ts';
+import type { AwaySignIn, ResetOutcome } from '../../shared/api/methods-providers.ts';
 import type { AcpLaunch } from '../engines/acp/process.ts';
 import { engineCwd } from '../system/paths.ts';
 import { newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
+import { creditsPossible, extraUsageOf } from '../../shared/model/charge.ts';
 
 export type { SecretPort } from './connect.ts';
 export type { AccountServiceDeps, AddAccountInput } from './service-shape.ts';
@@ -75,6 +90,10 @@ export class AccountServiceImpl implements AccountServiceContract {
   /** Throwaway account id → the typed key while an endpoint test runs (endpoint-test.ts). */
   private readonly testKeys = new Map<string, string>();
   private disposed = false; // set by dispose(): a check that ends during shutdown stores nothing
+  /** Accounts the person is signing out of right now (logout()). */
+  private readonly signingOut = new Set<string>();
+  /** Accounts that took the default home's newer login and wait for the check that reads it: their sign-out reports are stale. */
+  private readonly retaking = new Set<string>();
   /** Keeps plan readings current (started by the runtime; explicit calls work without it). */
   readonly monitor: AccountMonitor;
 
@@ -95,15 +114,19 @@ export class AccountServiceImpl implements AccountServiceContract {
     const store = {
       repo: this.repo, dismissed: this.dismissed, save: (account: Account) => this.save(account), blank: (provider: ProviderId, patch: Partial<Account>) => this.blank(provider, patch),
     };
+    this.homes = new CliHomes({ ...store, accounts: deps.paths.accounts, env: deps.env, homeDir: deps.homeDir, login: (id, away) => this.login(id, { page: true, away }), require: (id) => this.require(id), mkdir: deps.mkdir });
+    // bridge: this company's homes of before (<data>/accounts) move into this PC's logins folder, before anything uses them
+    if (deps.paths.data) void moveLoginHomes({ db: deps.db, repo: this.repo, legacy: path.join(deps.paths.data, 'accounts'), logins: deps.paths.accounts, log: deps.log });
+    // once: a Codex account from before that runs in the default home moves into a home of its own with a copy of its login
+    for (const account of this.repo.list()) if (account.provider === 'codex' && account.auth === 'cli' && !account.home) this.repo.save(this.homes.found(account));
     this.adoption = new Adoption({
-      ...store, checkOnce: (id) => this.monitor.checkOnce(id), env: () => this.env(), now: () => this.now(), demo: deps.demo,
+      ...store, found: (account) => this.homes.found(account), shared: () => this.homes.shared(), checkOnce: (id) => this.monitor.checkOnce(id), env: () => this.env(), now: () => this.now(), demo: deps.demo,
       scan: () => scan({ finder: deps.finder, supervisor: deps.supervisor, env: deps.env, now: () => this.now(), cwd, launches: this.launches, version: deps.version, ...deps.detectDeps }),
     });
     this.acp = new AcpPlans({
       ...store, check: (id) => this.monitor.checkNow(id), signIns: this.signIns, engine: () => this.deps.engines().get('acp'),
       failed: (id, message) => this.deps.bus.emit('account.sign_in_failed', { id, message }), // #24
     });
-    this.homes = new CliHomes({ ...store, accounts: deps.paths.accounts, login: (id) => this.login(id, { page: true }), require: (id) => this.require(id), mkdir: deps.mkdir, rmdir: deps.rmdir });
     this.resets = new Resets({ get: (id) => this.repo.get(id), engine: () => this.deps.engines().get('codex'), check: (id) => this.monitor.checkNow(id) });
     if (deps.settings) {
       this.file = new ProviderFile({
@@ -134,6 +157,7 @@ export class AccountServiceImpl implements AccountServiceContract {
   }
 
   private save(account: Account): Account {
+    this.homes.note(account); // the home's note names the login's e-mail: another company adopts it by that
     this.repo.save(account);
     this.deps.bus.emit('account.upserted', account);
     return account;
@@ -145,6 +169,12 @@ export class AccountServiceImpl implements AccountServiceContract {
     return this.adoption.detect(force);
   }
 
+  /** 17.11.2026: "Use" for a plan login on offer (DetectionReport.found) – only now it is an account here, used and shared to this company's PCs. */
+  useFound(key: string, options: { thisPcOnly?: boolean } = {}): Promise<Account> { return this.adoption.useFound(key, options.thisPcOnly ?? true); }
+
+  /** "Not here": the offered plan login stays on the PC and unused in this company. */
+  declineFound(key: string): Promise<void> { return this.adoption.declineFound(key); }
+
   /** The last detection's report without a new scan (RT7: readers that follow every rescan), dismissed entries marked; undefined before the first. */
   lastDetection(): DetectionReport | undefined { return this.adoption.cached(); }
 
@@ -153,12 +183,12 @@ export class AccountServiceImpl implements AccountServiceContract {
     const samePriority = accounts.filter((a) => a.provider === provider).length;
     return {
       id: newId('acc', this.now()), provider, label: PROVIDER_LABELS[provider] ?? provider, auth: 'none', state: 'unknown',
-      priority: samePriority, rotation: false, enabled: true, detected: false, createdAt: this.now(), ...patch,
+      priority: samePriority, enabled: true, detected: false, createdAt: this.now(), ...patch,
     };
   }
 
-  /** `signInUrl` (Codex, Claude Code): the sign-in page the CLI printed within a few seconds – handed back, never stored. */
-  async add(input: AddAccountInput): Promise<Account & { signInUrl?: string }> {
+  /** `signInUrl` (Codex, Claude Code): the sign-in page the CLI printed within a few seconds – handed back, never stored; `away`: see login(). */
+  async add(input: AddAccountInput, options: { away?: boolean } = {}): Promise<Account & { signInUrl?: string } & AwaySignIn> {
     const provider = input.provider;
     if (!PROVIDER_LABELS[provider]) throw new WorkforceError('bad_request', 'Choose a supported provider.');
     if (input.detected) return this.adoption.addAgain(provider, PROVIDER_LABELS[provider]!);
@@ -169,19 +199,20 @@ export class AccountServiceImpl implements AccountServiceContract {
     if (CLI_PROVIDERS.has(provider) && input.envVar === undefined) {
       if (provider === 'codex' || provider === 'claude' || provider === 'gemini-cli') await this.ensureCli(provider); // B-051 L3 (AF-024: Gemini CLI too): install first, else nothing is created
       if (this.deps.demo) throw new WorkforceError('unavailable', SIGN_IN_OFF_IN_DEMO); // #24: an installed CLI must not start a real sign-in in the demo
-      return this.homes.add(provider, input.label?.trim() ? label : undefined, label, input.rotation ?? false);
+      return this.homes.add(provider, input.label?.trim() ? label : undefined, label, options.away === true);
     }
     const connected = await connection({ ...input, label }, { env: this.env(), secrets: this.deps.secrets });
     const found = connected.auth === 'env' ? same.find((a) => a.auth === 'env' && a.envVar === connected.envVar) : undefined;
     if (found) return found; // one account per environment variable
     if (connected.auth === 'local' && connected.baseUrl) this.dismissed.delete(serverKey(provider, connected.baseUrl)); // added by hand again
-    if (this.file && connected.auth !== 'env' && !input.demoEngine) return this.file.add({ provider, label, rotation: input.rotation }, connected);
-    const account = this.save(this.blank(provider, { ...connected, label, rotation: input.rotation ?? false, ...(input.demoEngine ? { detected: true } : {}) }));
+    if (this.file && connected.auth !== 'env' && !input.demoEngine) return this.file.add({ provider, label }, connected);
+    const account = this.save(this.blank(provider, { ...connected, label, ...(input.demoEngine ? { detected: true } : {}) }));
     void this.monitor.checkNow(account.id); // in the monitor's serial queue
     return account;
   }
 
-  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'rotation' | 'enabled'>>): Account {
+  /** `credits` (B-083): the account holds a plan's monthly API credits – charged and routed like a plan (shared/model/charge.ts). */
+  update(id: string, patch: Partial<Pick<Account, 'label' | 'priority' | 'enabled' | 'credits' | 'extraUsage' | 'thisPcOnly'>>): Account {
     const account = this.require(id);
     const next: Account = { ...account };
     if (typeof patch.label === 'string' && patch.label.trim()) {
@@ -189,7 +220,22 @@ export class AccountServiceImpl implements AccountServiceContract {
       if (this.file?.has(id)) this.file.rename(id, next.label);
     }
     if (typeof patch.priority === 'number' && Number.isFinite(patch.priority)) next.priority = Math.round(patch.priority);
-    if (typeof patch.rotation === 'boolean') next.rotation = patch.rotation;
+    if (patch.credits === true) {
+      // a mark elsewhere would book real pay-per-use spend as "plan, no charge"
+      if (!creditsPossible(account)) throw new WorkforceError('bad_request', 'Plan credits come with an Anthropic or OpenAI key.');
+      next.credits = true;
+    } else if (patch.credits === false) delete next.credits;
+    // 17.11.2026: a plan may go on past its limit on the provider's extra usage (billed by the provider) – the person's switch, off by default
+    if (patch.extraUsage === true) {
+      const can = extraUsageOf(account);
+      if (!can.ok) throw new WorkforceError('bad_request', can.why);
+      next.extraUsage = true;
+    } else if (patch.extraUsage === false) delete next.extraUsage;
+    // 17.11.2026: a plan login stays on this PC, or goes to all PCs of the company (the other PCs drop it when it comes back here only)
+    if (typeof patch.thisPcOnly === 'boolean') {
+      if (account.auth !== 'cli') throw new WorkforceError('bad_request', 'Only a plan login can stay on this PC.');
+      if (patch.thisPcOnly) next.thisPcOnly = true; else delete next.thisPcOnly;
+    }
     if (typeof patch.enabled === 'boolean') { next.enabled = patch.enabled; if (!patch.enabled) next.state = 'disabled'; else if (next.state === 'disabled') next.state = 'unknown'; }
     const saved = this.save(next);
     // switched back on: checked again at once ('unknown' until the check answers – Settings says "Checking…")
@@ -201,38 +247,50 @@ export class AccountServiceImpl implements AccountServiceContract {
    * Starts the official sign-in under the account's home (Codex/Claude/Gemini CLI open the browser, Copilot CLI/Kimi Code a terminal).
    * `page` (B-051 L4, only for the person's own UI – accounts.login/add): also the sign-in page the CLI printed. Agent tools
    * never ask for it: their output is stored with the run, and the page must stay in memory.
+   * B-091 `away`: the person started it on their phone and finishes it there (Codex: `code`, Claude Code: `paste` → loginCode).
    */
-  async login(id: string, options: { page?: boolean } = {}): Promise<{ started: boolean; url?: string }> {
+  async login(id: string, options: { page?: boolean; away?: boolean } = {}): Promise<{ started: boolean; url?: string } & AwaySignIn> {
     const account = this.require(id);
-    const result = AcpPlans.handles(account.provider) ? await this.acp.login(account) : await this.signIns.login(account, options.page === true);
+    const result = AcpPlans.handles(account.provider) ? await this.acp.login(account) : await this.signIns.login(account, options.page === true, options.away === true);
     this.homes.started(account);
     return result;
   }
 
-  /** Signs out through the CLI (Codex, Claude Code); ACP plans have none Workforce could start. It stays signed out here: no login from a linked PC comes back. */
+  /** B-091: the code the Claude sign-in page showed the person, into the running away sign-in; ok = the account works now. */
+  async loginCode(id: string, code: string): Promise<{ ok: boolean }> {
+    this.require(id);
+    return this.signIns.code(id, code);
+  }
+
+  /**
+   * Signs out through the CLI (Codex, Claude Code); ACP plans have none Workforce could start. A home of its own is the
+   * login's on this PC, so this signs it out for every company using it; it stays signed out: no login from a linked PC comes back.
+   */
   async logout(id: string): Promise<void> {
     const account = this.require(id);
     if (AcpPlans.handles(account.provider)) this.acp.logout(account);
-    if (await this.signIns.logout(account) === 'window') return;
-    signedOut.mark(this.deps.db, id, this.now());
-    this.save({ ...this.require(id), state: 'needs_login', limits: undefined, email: undefined, plan: undefined });
+    this.signingOut.add(id); // a check meanwhile sees the CLI signed out: the person's own, no sign-in work (check)
+    try {
+      if (await this.signIns.logout(account) === 'window') return;
+      signedOut.mark(this.deps.db, account, this.now());
+      this.save({ ...this.require(id), state: 'needs_login', limits: undefined, email: undefined, plan: undefined });
+    } finally { this.signingOut.delete(id); }
   }
 
+  /** Drops this company's row; a plan's home stays – it is the login's, which other companies on this PC may use (it is dismissed here). */
   async remove(id: string): Promise<void> {
     const account = this.require(id);
     if (this.file?.has(id)) { this.file.remove(id); return; } // the file's sync takes the account out; its key stays in the catalog
     await this.signIns.cancel(id);
     // the account's own typed key goes with it; a catalog entry it only names (a handle) stays the person's
     if (account.secretId && !handleId(account.secretId)) { try { this.deps.secrets.remove(account.secretId); } catch { /* already gone */ } }
-    await this.homes.remove(account); // only exactly <accounts>/<its provider>/<its id>
     this.forget(account);
   }
 
   private forget(account: Account): void {
     this.resets.forget(account.id);
     this.repo.remove(account.id);
-    const dismissal = dismissalKey(account);
-    if (dismissal) this.dismissed.add(dismissal); // detection must not add it back; "Add again" undoes this
+    for (const key of dismissalKeys(account)) this.dismissed.add(key); // detection must not add it back; "Add again" undoes this
     this.deps.bus.emit('account.removed', { id: account.id });
   }
 
@@ -272,15 +330,11 @@ export class AccountServiceImpl implements AccountServiceContract {
   markUnavailable(id: string, state: 'needs_login' | 'error'): boolean {
     const account = this.repo.get(id);
     if (!account || !account.enabled || account.state === state) return false;
+    if (state === 'needs_login' && this.retaking.has(id)) return false; // the newer login is in place; its check decides
+    if (state === 'needs_login' && this.retake(account)) { this.retaking.add(id); void this.monitor.checkNow(id); return false; } // the default home's newer login
     this.save({ ...account, state });
     this.monitor.publish();
     return true;
-  }
-
-  /** MM7 (portability/reanchor.ts): a restored account's CLI home on this PC; `signedOut` → needs_login (kept 'disabled' when off). */
-  rehome(id: string, home: string, signedOut: boolean): Account {
-    const account = this.require(id);
-    return this.save({ ...account, home, ...(signedOut && account.enabled ? { state: 'needs_login' as const, coolingUntil: undefined } : {}) });
   }
 
   updateLimits(id: string, limits: AccountLimits): void {
@@ -313,7 +367,9 @@ export class AccountServiceImpl implements AccountServiceContract {
     if (!engine) return env || (account.provider === DECISION_PROVIDER && account.enabled) ? this.save({ ...account, state: 'ok', checkedAt: this.now() }) : account;
     const result = await this.deps.engines().get(engine).checkAccount(account, { details });
     if (this.disposed) return account; // shutdown: a check whose process was stopped stores nothing
+    this.retaking.delete(id);
     const fresh = this.require(id);
+    if (result.state === 'needs_login' && this.retake(fresh)) { this.retaking.add(id); void this.monitor.checkNow(id); return fresh; } // the default home's newer login, checked next
     if (background && result.state === 'error' && !planBlocked(result)) return fresh; // a plan that cannot run agents is a reading (B-051 L5)
     const cooling = fresh.coolingUntil !== undefined && fresh.coolingUntil > this.now();
     const next: Account = {
@@ -322,16 +378,28 @@ export class AccountServiceImpl implements AccountServiceContract {
       limits: result.limits ? mergeLimits(fresh.limits, result.limits) : fresh.limits,
       coolingUntil: cooling ? fresh.coolingUntil : undefined, checkedAt: this.now(),
     };
-    return this.save(next);
+    const saved = this.save(next);
+    if (result.state === 'ok') signedOut.clear(this.deps.db, saved); // a login works here again: the sign-out mark ends
+    // B-091: a plan that worked and is signed out now – the sign-in work, like a turn that met the sign-out (failure.ts);
+    // not when the person signed it out (here, or in another company using the same home)
+    const usable = fresh.state === 'ok' || fresh.state === 'cooling';
+    const unexpected = !this.signingOut.has(id) && !signedOut.has(this.deps.db, saved);
+    if (usable && saved.state === 'needs_login' && saved.auth === 'cli' && isPlanProvider(saved.provider) && unexpected) reportSignedOut({ accounts: this }, saved);
+    return saved;
+  }
+
+  /** A found Codex login whose copy is signed out takes the default home's newer one (cli-homes.ts retake) – never after the person signed out here. */
+  private retake(account: Account): boolean {
+    return !this.signingOut.has(account.id) && !signedOut.has(this.deps.db, account) && this.homes.retake(account);
   }
 
   /** A check in the monitor's queue whose result shows – a login that arrived from a linked PC (devices/sync/logins.ts). */
   checkNow(id: string): Promise<void> { return this.monitor.checkNow(id); }
 
-  /** Quota summaries; explicit refresh and activity share the automatic provider cadence. */
+  /** Quota summaries; explicit refresh and activity share the automatic provider cadence (a window brought to the front is the person back: the working cadence, also while no turn runs). */
   async usage(refresh = false): Promise<UsageSummary[]> {
     if (refresh) await this.monitor.refreshAll();
-    else this.monitor.activity();
+    else this.monitor.activity(true);
     return this.monitor.summaries();
   }
 

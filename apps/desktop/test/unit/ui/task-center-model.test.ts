@@ -26,7 +26,7 @@ const nameOf = (id: string) => names[id] ?? 'Former member';
 
 const view = (patch: Partial<TaskView> = {}): TaskView => ({
   id: 'task_1', conversationId: 'ch_inbox', messageId: 'msg_1', title: 'Cut the intro', notes: '', status: 'open', assigneeKind: 'team',
-  createdBy: 'human', priority: 0, ledger: {}, attempts: 0, sort: 0, rev: 1, createdAt: 10, updatedAt: 10,
+  createdBy: 'human', priority: 0, ledger: {}, sort: 0, rev: 1, createdAt: 10, updatedAt: 10,
   steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'Inbox', running: false, ...patch,
 });
 
@@ -88,22 +88,12 @@ test('"Me" (B-041): a recipient right after Auto that names the person, its labe
   assert.equal(isMine({ assigneeKind: 'agent', assigneeId: 'ag_vic' }), false);
 });
 
-test('progress line: wait or block first, then the live note, the next step, the latest own report', () => {
-  const step = (title: string, status: Task['status'], sort: number) => ({ ...view({ id: `st_${sort}`, title, status, sort }), parentId: 'task_1' }) as Task;
-  assert.equal(progressLine(view({ status: 'blocked', assigneeKind: 'agent', assigneeId: 'ag_vic', waitingOn: { kind: 'external', reason: 'API down', since: Date.UTC(2026, 9, 23, 9) } }), { nameOf })?.startsWith('Stuck since '), true);
-  const working = view({ status: 'working', assigneeKind: 'agent', assigneeId: 'ag_vic', running: true, steps: [step('Cut', 'done', 1), step('Color', 'open', 2)] });
-  assert.equal(progressLine(working, { note: 'rendering intro (2/5)', nameOf }), 'rendering intro (2/5)');
-  assert.equal(progressLine({ ...working, running: false }, { nameOf }), 'Next: Color');
-  assert.equal(progressLine(view({ assigneeKind: 'agent', assigneeId: 'ag_vic', ledger: { facts: ['Draft is in the shared folder', 'Verifier: missing the outro'] } }), { nameOf }), 'Draft is in the shared folder', 'the verifier\'s notes are not the owner\'s report');
-  assert.equal(progressLine(view({ assigneeKind: 'agent', assigneeId: 'ag_vic' }), { nameOf }), null, 'nothing invented');
-  assert.equal(progressLine(view({ status: 'done', result: { summary: 'Done: **intro** cut', verification: 'verified' } as TaskView['result'] }), { nameOf }), 'Done: intro cut');
-});
 
 test('questions answered in the detail: open human steps with a catalog widget, not mini-apps', () => {
-  const human = (id: string, widget: Task['widget'], status: Task['status'] = 'needs_you', sort = 0) => ({ ...view({ id, assigneeKind: 'human', status, widget, sort }), parentId: 'task_1' }) as Task;
+  const human = (id: string, widget: Task['widget'], status: Task['status'] = 'open', sort = 0) => ({ ...view({ id, assigneeKind: 'human', status, widget, sort }), parentId: 'task_1' }) as Task;
   const steps = [
-    human('st_choice', { type: 'choice', question: 'Red or blue?', options: [] } as unknown as Task['widget'], 'needs_you', 2),
-    human('st_app', { type: 'app' } as unknown as Task['widget'], 'needs_you', 1),
+    human('st_choice', { type: 'choice', question: 'Red or blue?', options: [] } as unknown as Task['widget'], 'open', 2),
+    human('st_app', { type: 'app' } as unknown as Task['widget'], 'open', 1),
     human('st_done', { type: 'confirm' } as unknown as Task['widget'], 'done'),
     human('st_plain', undefined),
     { ...view({ id: 'st_agent', assigneeKind: 'agent', assigneeId: 'ag_vic', widget: { type: 'confirm' } as unknown as Task['widget'] }), parentId: 'task_1' } as Task,
@@ -113,7 +103,7 @@ test('questions answered in the detail: open human steps with a catalog widget, 
 
 test('Unassigned: open or waiting top-level team work without an owner', () => {
   assert.equal(isUnassigned(view({})), true);
-  assert.equal(isUnassigned(view({ status: 'working' })), false, 'a team task someone works on is not unassigned');
+  
   assert.equal(isUnassigned(view({ status: 'waiting' })), true, 'waiting for other tasks first, still without an owner (the router routes it too)');
   assert.equal(isUnassigned(view({ status: 'waiting', parentId: 'task_0' })), false, 'a step is never unassigned work');
   assert.equal(isUnassigned(view({ status: 'done' })), false);

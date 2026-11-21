@@ -5,6 +5,8 @@
 // acts on one space: pressed in the app, the surface the keyboard is in (`data-space` of its .workspace-pane) – not in an
 // agent's browser taken over, but in the picture of a page on another PC (B-076, `data-app-keys`) as in a page here –;
 // pressed inside a page, that page's space, from main (the bridge's onKey) – like the page menu's "Send page to chat".
+// B-081: a pin from the Pin button comes the same way and goes to its chat (pin.ts); Escape in a surface whose shown
+// page is picking ends the picker (the keyboard is still in the app after the button's click).
 // Owns: that dispatch. Never: keys outside the surfaces (lib/hotkeys.ts has the app's own) or page content.
 
 import { GLOBAL_SPACE, type BrowserKeyAction, type WorkspaceBrowserCommand } from '../../shared/api/workspace-browser.ts';
@@ -13,10 +15,11 @@ import { bridge, os } from '../lib/platform.ts';
 import { toastError } from '../lib/toasts.ts';
 import { isAppTab, tabFor } from './browser-model.ts';
 import { addPage, addressFocus, askFor, browserPages, closePage, command, historyAsk, openFind, pathFocus, reopenTab, selectPage, shownEntry, tabsOf } from './pages.ts';
+import { pinToChat } from './pin.ts';
 import { sendPageToChat } from './send-page.ts';
 
 /** Runs a shortcut in `space`; false when it does nothing here (Ctrl+F without a website tab keeps its other meaning). */
-function run(shortcut: Exclude<BrowserKeyAction, 'send-page'>, space: string): boolean {
+function run(shortcut: Exclude<BrowserKeyAction, 'send-page' | 'pick'>, space: string): boolean {
   const shown = shownEntry(space);
   if (shortcut === 'new-tab') addPage(space);
   else if (shortcut === 'find') return openFind(space);
@@ -55,6 +58,15 @@ function sendPage(url: string | undefined, space: string): void {
   if (id) void sendPageToChat(id).catch((error) => toastError(error));
 }
 
+/** Escape ends the picker of the page shown in `space`; false when it does not pick. */
+function endPick(space: string): boolean {
+  const shown = shownEntry(space);
+  const page = shown?.kind === 'website' ? browserPages.peek().find((item) => item.id === shown.id) : undefined;
+  if (!page?.picking) return false;
+  void command({ action: 'pick', id: page.id, on: false });
+  return true;
+}
+
 let watching = false;
 
 /** Starts both paths (idempotent; the desktop app's surfaces). */
@@ -65,6 +77,7 @@ export function watchBrowserKeys(): void {
   native.onKey?.((event) => {
     const space = browserPages.peek().find((page) => page.id === event.id)?.space ?? GLOBAL_SPACE;
     if (event.action === 'send-page') sendPage(event.url, space);
+    else if (event.action === 'pick') { if (event.pick) pinToChat(event.id, event.pick); }
     else run(event.action, space);
   });
   window.addEventListener('keydown', (event) => { // capture: before lib/hotkeys.ts, so in a surface Ctrl+Shift+T reopens a tab as in Chrome (elsewhere it stays Quick task)
@@ -72,6 +85,7 @@ export function watchBrowserKeys(): void {
     const surface = target?.closest?.('.workspace-pane') as HTMLElement | null | undefined;
     if (event.defaultPrevented || event.isComposing || !target || !surface || target.closest('.browser-touch:not([data-app-keys])')) return;
     const space = surface.dataset.space ?? GLOBAL_SPACE;
+    if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && endPick(space)) { event.preventDefault(); return; }
     const key = pageKey({ type: 'keyDown', key: event.key, control: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey, alt: event.altKey }, os === 'mac', false);
     if (key && ('app' in key ? run(key.app, space) : 'main' in key && runMain(key.main, space))) event.preventDefault();
   }, true);

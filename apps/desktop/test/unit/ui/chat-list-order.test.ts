@@ -3,7 +3,10 @@
 // by name; pinned stays first, a new chat that is not a default 1:1 keeps its place by creation, and a default 1:1
 // moves up with its first line – and Team's "Most used" (src/ui/team/model.ts interactionScores) counts no empty chat.
 // The New task picker (byActivity) keeps the same rule – after the start-up backfill an empty default 1:1 sat above
-// older real chats there.
+// older real chats there. F24 (owner 16.11.2026): the person's 1:1s with sub-agents nest under their top manager's 1:1
+// (list-order.ts orgParent, one level), a chat's own parent wins, groups stay where they were placed. In the list a parent
+// starts closed (owner 16.11.2026) and its caret opens it; under a closed parent the unread, the open and the lately
+// opened sub-chats show.
 // Owns: these assertions. Never: renders (the row's look: ChatRow.tsx, checked in the window).
 
 import { test } from 'node:test';
@@ -72,4 +75,44 @@ test('interactionScores: an empty default 1:1 is no interaction ("Most used" sta
   ], NOW);
   assert.equal(scores.get('ag_new'), undefined, 'hired today, never written to');
   assert.ok((scores.get('ag_used') ?? 0) > 0);
+});
+
+test('F24: the person\'s 1:1s with sub-agents sit under their top manager\'s 1:1; the chat\'s own parent wins; one level', async () => {
+  const { directAgent, nestChats, orgParent } = await import('../../../src/ui/chat/list-order.ts');
+  // Konrad (reports to the person) ← Nora ← Ida; Lukas on top too; Tom reports to a person (per_anna)
+  const org = new Map([
+    ['ag_konrad', { id: 'ag_konrad' }], ['ag_nora', { id: 'ag_nora', managerId: 'ag_konrad' }], ['ag_ida', { id: 'ag_ida', managerId: 'ag_nora' }],
+    ['ag_lukas', { id: 'ag_lukas', managerId: 'human' }], ['ag_tom', { id: 'ag_tom', managerId: 'per_anna' }], ['ag_loop', { id: 'ag_loop', managerId: 'ag_loop' }],
+  ]);
+  const one = (name: string, lastMessageAt?: number) => direct(name, NOW - 5 * HOUR, lastMessageAt);
+  const group = row('launch', { lastMessageAt: NOW - HOUR, members: [member('human'), member('ag_nora'), member('ag_ida')] });
+  const placed = row('nora-topic', { settings: { parentId: 'nora' }, lastMessageAt: NOW - 2 * HOUR }); // put under Nora's 1:1 by the AI
+  const list = orderChats([one('konrad', NOW - 3 * HOUR), one('nora', NOW - 30 * 60_000), one('ida'), one('lukas', NOW - 4 * HOUR), one('tom', NOW - 6 * HOUR), one('loop'), group, placed]);
+  assert.equal(directAgent(one('nora'), org), 'ag_nora');
+  assert.equal(directAgent(group, org), undefined, 'a group is no 1:1');
+  const directs = new Map([['ag_konrad', 'konrad'], ['ag_nora', 'nora']]);
+  assert.equal(orgParent(one('ida'), org, directs), 'konrad', 'the top-most agent manager with a 1:1 here');
+  assert.equal(orgParent(one('ida'), org, new Map([['ag_nora', 'nora']])), 'nora', 'without the top one\'s 1:1: the next one up');
+  assert.equal(orgParent(one('tom'), org, directs), undefined, 'a person ends the chain');
+  assert.equal(orgParent(one('loop'), org, directs), undefined, 'its own manager: no loop');
+  assert.equal(orgParent({ ...one('ida'), settings: { ...one('ida').settings, parentId: 'launch' } }, org, directs), 'launch', 'the chat\'s own parent wins');
+
+  const nodes = nestChats(list, org);
+  assert.deepEqual(nodes.map((node) => [node.chat.id, node.children.map((child) => child.id)]), [
+    ['launch', []], // a group stays on its level, whoever is in it
+    ['konrad', ['nora', 'nora-topic', 'ida']], // the activity order; the empty default 1:1 last; Nora's own sub-chat goes where her 1:1 went
+    ['lukas', []], ['tom', []], ['loop', []],
+  ]);
+  assert.deepEqual(nestChats(list).map((node) => [node.chat.id, node.children.map((child) => child.id)]), [
+    ['nora', ['nora-topic']], ['launch', []], ['konrad', []], ['lukas', []], ['tom', []], ['ida', []], ['loop', []],
+  ], 'without the org: only the chat\'s own parent nests (B-078)');
+});
+
+test('F24 in the list: the org goes in, a parent starts closed until its caret opens it; unread, open and lately opened sub-chats show', async () => {
+  const { readFileSync } = await import('node:fs');
+  const list = readFileSync(new URL('../../../src/ui/chat/ChatList.tsx', import.meta.url), 'utf8');
+  assert.match(list, /<Rows nodes=\{nestChats\(main, agentMap\.value\)\}/);
+  assert.match(list, /const open = children\.length > 0 && \(Boolean\(mark\) \|\| treeChoice\.value\[chat\.id\] === true\);/);
+  assert.match(list, /children\.filter\(\(child\) => child\.unread > 0 \|\| child\.id === activeId \|\| keptChildren\.has\(child\.id\) \|\| lately\(child\.id\)\)/);
+  assert.match(list, /const RECENT_MS = 3 \* 24 \* 60 \* 60 \* 1000;/);
 });

@@ -3,6 +3,7 @@
 // port, and the ledger wired like compose/services.ts does (start(): bus listeners).
 // Owns: fixtures only. Never imported by src/.
 
+import type { Db } from '../../../src/runtime/db/database.ts';
 import { agent, harness } from '../chat/harness.ts';
 import { tempDir } from '../store/helpers.ts';
 import { Blobs } from '../../../src/runtime/files/store.ts';
@@ -41,7 +42,7 @@ export function ledgerSetup(options: { budget?: number } = {}) {
   const turn = (seenSeq = 0, engine = 'codex', model = 'openai:gpt-5.5') => {
     const runId = `run_${++runs}`;
     journal.start({ id: runId, agentId: tom.id, conversationId: chat.id, trigger: 'message' });
-    ledger.capture({ runId, agentId: tom.id, conversationId: chat.id, engine, model, seenSeq });
+    ledger.capture({ runId, agentId: tom.id, thread: 'main', fromSeq: 0, conversationId: chat.id, engine, model, seenSeq });
     return runId;
   };
   /** One of our tool calls as the registry journals it (tool_call, then the result through tools/journal.ts). */
@@ -53,4 +54,9 @@ export function ledgerSetup(options: { budget?: number } = {}) {
   const say = (body: string) => h.chats.send({ conversationId: chat.id, authorId: 'human', body });
   const done = (runId: string) => journal.finish(runId, { status: 'done' });
   return { ...h, tom, chat, files, journal, ledger, reclaimed, turn, ourCall, say, done, cleanup: () => { stop(); dir.cleanup(); } };
+}
+
+/** 13.11.2026: the ledger id of a chat message (messages count apart per thread – m1, m2 …), found by its ref. */
+export function mid(db: Pick<Db, 'get'>, message: { id: string }): string {
+  return db.get<{ item_id: string }>('SELECT item_id FROM context_items WHERE ref = ? ORDER BY "order" LIMIT 1', [`msg:${message.id}`])?.item_id ?? `m?${message.id}`;
 }

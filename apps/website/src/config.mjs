@@ -3,10 +3,11 @@
 // Renaming the product or moving the site = edit this file (or set SITE_URL) and rebuild.
 
 // Where the finished site lives: origin plus base path, no trailing slash.
-// 'https://metajarvis.teydralab.com/autark' builds into dist/autark/ with base '/autark/' (today's host),
-// 'https://autark.example.com' builds into dist/ with base '/' (an own domain). Every canonical URL,
+// A shared host with a base path builds into the matching dist/ subfolder;
+// 'https://openautark.com' builds into dist/ with base '/' (today's own domain). Every canonical URL,
 // internal link, sitemap entry, redirect and social card follows it; nothing else needs changing.
-const SITE_URL = (process.env.SITE_URL || 'https://metajarvis.teydralab.com/autark').trim().replace(/\/+$/, '');
+// B-084 (08.11.2026, owner): the one public site is openautark.com; the Meta Jarvis address only forwards there.
+const SITE_URL = (process.env.SITE_URL || 'https://openautark.com').trim().replace(/\/+$/, '');
 
 export const site = {
   name: 'Autark',
@@ -24,12 +25,15 @@ export const site = {
 // and the sentences about the working name and the coming release leave the site. README.md, "Beim Release".
 export const RENAMED = true;
 
-// The release channel before OpenAutark. Its releases stay in the changelog; the bridge release 0.3.3 is published to both.
+// The release channel before OpenAutark, private since 07.11.2026 (after the bridge release 0.3.3), so its releases are gone from the changelog.
 const OLD_REPO = 'teydra/proactive-agent-workforce-releases';
 
 const NAMES = RENAMED ? {
   // Since the bridge release 0.3.3 (B-078) the one public home is teydra/OpenAutark. These equal
   // apps/desktop/package.json (productName, artifactName, publish.repo) and apps/android (autark-android.apk).
+  // Autark-Plus: this build's home is desquerteur/Autark-Plus. Upstream's site offers the Lite APK since 0.3.6 (Play
+  // Protect blocks a sideloaded app that asks for Accessibility); switch android to 'autark-android-lite.apk' once the
+  // Autark-Plus releases carry it (apps/android/build.ps1 -Release builds both).
   repo: 'desquerteur/Autark-Plus',
   app: 'Autark',
   files: { windows: 'autark-windows-x64.exe', macDmg: 'autark-mac-universal.dmg', macZip: 'autark-mac-universal.zip', linux: 'autark-linux-x64.AppImage', android: 'autark-android.apk' },
@@ -49,8 +53,8 @@ export const release = {
   releasesUrl: `https://github.com/${repo}/releases`,
   latestUrl: `https://github.com/${repo}/releases/latest`,
   api: `https://api.github.com/repos/${repo}/releases`,
-  // Older channels whose releases still belong in the changelog (newest channel first).
-  historyApis: [...new Set([repo, OLD_REPO])].map((r) => `https://api.github.com/repos/${r}/releases`),
+  // The channels the changelog lists (newest channel first); only the public one, since the old repo is private.
+  historyApis: [`https://api.github.com/repos/${repo}/releases`],
   asset: (file) => `https://github.com/${repo}/releases/latest/download/${file}`,
   files: NAMES.files,
   // What the installed app is called on the person's PC. The data folder follows the product name;
@@ -70,11 +74,11 @@ export const release = {
   // Shown before the live check answers, and to crawlers. Refreshed by the
   // build from the GitHub API when the network is available.
   fallback: {
-    windows: { version: '0.3.2', date: '2026-11-05', sizeMb: 132 },
-    mac: { version: '0.3.2', date: '2026-11-05', sizeMb: 272 },
-    linux: { version: '0.3.2', date: '2026-11-05', sizeMb: 158 },
+    windows: { version: '0.3.9', date: '2026-11-16', sizeMb: 133 },
+    mac: { version: '0.3.9', date: '2026-11-16', sizeMb: 272 },
+    linux: { version: '0.3.9', date: '2026-11-16', sizeMb: 158 },
     // The phone app is a small shell that shows the PC's own interface; its version runs on its own.
-    android: { version: '0.2.0 preview', date: '2026-11-05', sizeMb: 4 },
+    android: { version: '0.3.15', date: '2026-11-08', sizeMb: 4 },
   },
 };
 
@@ -108,20 +112,19 @@ export const maker = {
   founder: 'Stanislaus Hees',
   founderUrl: 'https://stanislaushees.com/',
   founderProject: 'https://stanislaushees.com/projekte/agent-workforce/',
-  location: 'Salzburg, Austria',
+  location: 'Austria',
   // The family Autark grew up in. Only the About page tells that story; nav, footer and home stay on Autark.
   umbrella: 'Meta Jarvis',
-  umbrellaUrl: 'https://metajarvis.teydralab.com/',
-  telecodingUrl: 'https://metajarvis.teydralab.com/telecoding',
   bookTitle: 'KI ins eigene Produkt',
   bookUrl: 'https://stanislaushees.com/b/1/',
   pressUrl: 'https://stanislaushees.com/presse/',
   award: 'Startup category winner, Beyond Optimization Crowd in Motion Challenge, 16th Austrian Innovation Forum (2026)',
   awardUrl: 'https://stanislaushees.com/notizen/austrian-innovation-forum-2026/',
-  imprintUrl: 'https://teydralab.com/impressum',
+  imprintUrl: 'https://openautark.com/impressum/', // this site's own imprint (pages/impressum.mjs), 16.11.2026
   privacyUrl: 'https://teydralab.com/privacy-policy',
   contactUrl: 'https://teydralab.com/kontakt',
   feedbackUrl: `https://github.com/${repo}/issues`,
+  discordUrl: 'https://discord.gg/2MXxH8c3ee', // permanent invitation to the Teydra Lab Discord (17.11.2026)
   social: [
     { name: 'X', url: 'https://x.com/teydralab' },
     { name: 'LinkedIn', url: 'https://www.linkedin.com/company/teydralab-chatbot/' },
@@ -163,7 +166,7 @@ export function appOriginProblem(url, siteUrl = site.url) {
   let app;
   try { app = new URL(`${url}/`); } catch { return `APP_URL is no address: ${url}`; }
   if (app.protocol !== 'https:' && app.hostname !== 'localhost' && app.hostname !== '127.0.0.1') return 'The iPhone app needs https.';
-  const shared = [new URL(`${siteUrl}/`).host, new URL(maker.umbrellaUrl).host, new URL(maker.telecodingUrl).host];
+  const shared = [new URL(`${siteUrl}/`).host, 'metajarvis.teydralab.com'];
   if (shared.includes(app.host)) return `The iPhone app cannot share ${app.host} with the site or Meta Jarvis: storage and keys belong to the origin.`;
   if (app.pathname === '/') return 'The iPhone app needs a folder of its own (e.g. https://app.example.com/app).';
   const base = new URL(`${siteUrl}/`).pathname;

@@ -55,6 +55,6 @@ test('what the start\'s reconciliation stops or removes reaches a linked PC with
   assert.equal(a.h.chats.reconcileStreaming(), 2);
   net.up = true;
   assert.equal(await a.sync.catchUp('dev_b', cursor), true);
-  assert.equal(b.h.chats.message('msg_cut')?.state, 'stopped', 'the cut answer is stopped there too');
+  assert.equal(b.h.chats.message('msg_cut'), undefined, 'B-080: the cut row is gone there too');
   assert.equal(b.h.chats.message('msg_quiet'), undefined, 'the silent live row is gone there too');
 });

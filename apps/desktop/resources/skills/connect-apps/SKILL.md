@@ -1,6 +1,6 @@
 ---
 name: connect-apps
-description: I read this before I connect, change, sign in to or remove a connected app or mailbox, or call a REST API. The person's services (Notion, GitHub, Linear, Slack, Google, Zapier, a database, any MCP server) and mailboxes become agent tools when I edit the connector files in <data>/connectors - mcp.json for MCP servers, mail.json for mailboxes - with keys kept in the secrets catalog.
+description: I read this before I send or read email through a mailbox, or connect, change, sign in to or remove a connected app or mailbox, or call a REST API. The person's services (Notion, GitHub, Linear, Slack, Google, Zapier, a database, any MCP server) and mailboxes become agent tools when I edit the connector files in <data>/connectors - mcp.json for MCP servers, mail.json for mailboxes - with keys kept in the secrets catalog.
 ---
 
 # Connecting apps: two files and the secrets catalog
@@ -22,7 +22,7 @@ The data folder is the folder of `runtime.json` (Windows: `%APPDATA%\Autark`).
 - I search the official registry: `https://registry.modelcontextprotocol.io/v0/servers?search=<name>`,
   or the vendor's docs ("<vendor> MCP server"). The vendor's own remote server (an `https://` address) is my first pick.
 - No MCP server? I call the REST API directly with `web.fetch` (header `Authorization: Bearer secret://<id>`)
-  or a small script with `secrets.run` – no connector needed.
+  or a small script with `shell.exec` and the token in its `env` – no connector needed.
 
 ## 2. Keys go into the secrets catalog
 
@@ -47,6 +47,9 @@ Local server (stdio) – started on first use, stopped after 10 idle minutes:
 }}
 ```
 
+A pasted Claude Desktop, Claude Code or Cursor `mcpServers` block: its entries go beside the ones already in
+`mcp.json`; keys and tokens in it I save with `secrets.save` and replace by their `secret://<id>` handles.
+
 Mailbox (the password is usually an app password; servers are looked up from the address when I leave
 them out; `agent` is the agent – id or name – that new mail wakes, default the person's assistant):
 ```json
@@ -57,6 +60,11 @@ them out; `agent` is the agent – id or name – that new mail wakes, default t
             "smtp": {"host": "smtp.provider.de", "port": 587, "tls": "starttls"}}
 }}
 ```
+
+With a mailbox connected:
+- I send with `app.<name>.send`, one message per call.
+- Before a new mail I look in Sent: `search {folder: "sent", to: "<domain>"}`.
+- Bounces I find with `search {from: "mailer-daemon"}` in INBOX and in the folders the server's rules fill; `read` shows the delivery report.
 
 I keep the JSON valid (read the file, change it, write it whole). The key of an entry becomes the tool
 prefix (`app.notion.*`); `"disabled": true` turns an entry off without deleting it; removing the

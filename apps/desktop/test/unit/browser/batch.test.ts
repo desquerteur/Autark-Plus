@@ -1,7 +1,8 @@
 // browser.batch and browser.find, and the change lists of browser.act: a batch runs its steps in order and
 // stops at the first failure (done count + one change list), a step with submit makes the call an outside effect,
 // stored secrets fill in a batch too; find returns only matching snapshot lines with refs; act answers with the lines
-// that changed (the whole snapshot on a new page, with full, or when most of the page changed).
+// that changed (the whole snapshot on a new page, with full, or when most of the page changed). B-081: a batch glides
+// to a pointed step by default like act; instant jumps when the agent passes it.
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,18 +41,32 @@ test('batch: steps run in order with one change list; it stops at the first fail
     if (selector === 'aria-ref=e9') throw new Error('Timeout 10000ms exceeded. waiting for locator(\'aria-ref=e9\')');
     if (name === 'check') page.snapshot = FORM.replace('checkbox "Terms" [ref=e4]', 'checkbox "Terms" [checked] [ref=e4]');
   };
+  page.boxes.set('aria-ref=e4', { x: 100, y: 200, width: 20, height: 20 }); // a pointed step with a box: instant still jumps
   const output = await tool(tools, 'browser.batch').run({ steps: [
     { action: 'fill', ref: 'e2', value: 'Ada' }, { action: 'fill', ref: 'e3', value: 'ada@example.com' }, { action: 'check', ref: 'e4' },
     { action: 'click', ref: 'e9' }, { action: 'click', ref: 'e5', submit: true },
-  ] }, ctx);
+  ], motion: 'instant' }, ctx);
   const text = textOf(output);
   assert.match(text, /^Batch: 3 of 5 steps done – step 4 \(click element e9\) failed: Could not act on element e9: it was not found/);
   assert.match(text, /\+ checkbox "Terms" \[checked\] \[ref=e4\]\n− checkbox "Terms" \[ref=e4\]/);
   assert.ok(!text.includes('link "Help"'), 'only what changed, not the whole snapshot');
   assert.deepEqual(page.actions.map((entry) => `${entry.name} ${entry.selector}`), ['fill aria-ref=e2', 'fill aria-ref=e3', 'check aria-ref=e4', 'click aria-ref=e9']);
-  assert.deepEqual(page.moves, [], 'instant: the mouse jumps (no glide moves of ours)');
+  assert.deepEqual(page.moves, [], 'instant (when I pass it): the mouse jumps');
   assert.deepEqual(output.structured, { done: 3, total: 5, changed: true, url: 'https://shop.test/signup', tab: 't1', full: false });
   assert.equal(output.effect?.status, 'failed', 'the sending last step never ran');
+  await browser.close();
+});
+
+test('batch: my mouse glides to a pointed step by default (B-081), and the text says so', async () => {
+  const { tools, page, ctx, browser } = await formPage();
+  page.boxes.set('aria-ref=e4', { x: 100, y: 200, width: 20, height: 20 });
+  await tool(tools, 'browser.batch').run({ steps: [{ action: 'click', ref: 'e4' }] }, ctx);
+  assert.ok(page.moves.length > 3, 'glide: real mouse moves on the way');
+  assert.deepEqual(page.moves.at(-1), { x: 110, y: 210 }, "it ends on the element's centre");
+  const batch = tool(tools, 'browser.batch');
+  const motion = (batch.inputSchema.properties as Record<string, { description: string }>).motion!.description;
+  assert.equal(motion, 'glide (default, at most 300 ms), human or instant.');
+  assert.doesNotMatch(`${batch.description} ${motion}`, /default for batch|jumps unless/);
   await browser.close();
 });
 

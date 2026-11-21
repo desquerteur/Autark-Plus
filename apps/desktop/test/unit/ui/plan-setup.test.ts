@@ -15,7 +15,7 @@ import {
 } from '../../../src/ui/onboarding/plan-setup.ts';
 
 const account = (id: string, provider: string, extra: Partial<Account> = {}): Account =>
-  ({ id, provider, label: `${provider} ${id}`, auth: 'cli', enabled: true, state: 'ok', priority: 0, rotation: false, detected: false, createdAt: 1, ...extra }) as Account;
+  ({ id, provider, label: `${provider} ${id}`, auth: 'cli', enabled: true, state: 'ok', priority: 0, detected: false, createdAt: 1, ...extra }) as Account;
 const report = (clis: DetectionReport['clis']): DetectionReport => ({ clis, localServers: [], envKeys: [], checkedAt: 1 });
 const missing = (provider: PlanProvider) => report([{ provider }]);
 const installed = (provider: PlanProvider) => report([{ provider, path: `C:/bin/${provider}.exe` }]);
@@ -37,7 +37,7 @@ function harness(options: { accounts?: Account[]; report?: DetectionReport | nul
   const record = <T>(name: string, arg: unknown, answer: () => Promise<T>) => { calls.push([name, arg]); return answer(); };
   const rpc: PlanRpc = {
     install: (provider) => record('install', provider, () => options.rpc?.install?.(provider) ?? Promise.resolve({ ok: true })),
-    add: (provider) => record('add', provider, () => options.rpc?.add?.(provider) ?? Promise.resolve({ ...account('acc_new', provider, { state: 'needs_login' }), signInUrl: SIGN_IN_URL })),
+    add: (provider) => record<Awaited<ReturnType<PlanRpc['add']>>>('add', provider, () => options.rpc?.add?.(provider) ?? Promise.resolve({ ...account('acc_new', provider, { state: 'needs_login' }), signInUrl: SIGN_IN_URL })),
     recheck: () => record('recheck', undefined, () => Promise.resolve({})),
   };
   const env: PlanEnv = {
@@ -255,7 +255,7 @@ test('the model setup retains the plan buttons and the reserved sign-in link cel
   const link = read('onboarding/sign-in-link.tsx');
   assert.ok(link.includes('class={`first-run-link inert${extra}`} aria-hidden="true">{OPEN_SIGN_IN}'), 'the placeholder holds the same text');
   const card = read('onboarding/AiCard.tsx');
-  assert.ok(card.includes('disabled={silent || '), 'Continue waits for a usable model'); // AF-002: "Skip for now" is the one deliberate way past it
+  assert.ok(card.includes('disabled={silent || busy !== null}'), 'Continue waits for a usable model'); // AF-002: "Skip for now" is the one deliberate way past it
   assert.ok(card.includes('<ModelSetup />'), 'first run and Settings share the setup');
   assert.doesNotMatch(setup, /uses=|\bdecision\b|\bembeddings\b/i);
   assert.ok(setup.includes('<ConnectionForm '));

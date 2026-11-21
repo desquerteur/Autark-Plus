@@ -185,14 +185,12 @@ test('sweep: a turn the person stopped before any text counts as answered; a lat
   h.chats.send({ conversationId: other.id, authorId: HUMAN_ID, body: 'Lost one' });
   h.db.run('DELETE FROM wakes WHERE conversation_id = ?', [other.id]); // the crash took this wake
 
-  // The turn starts, the person presses Stop before any text: the empty bubble is removed, the
+  // The turn starts, the person presses Stop before any text: the
   // cursor stays, the run ends 'interrupted' and its wake is done (agents/turn-finish.ts, dispatcher).
   h.clock.advance(1000);
   const claimed = h.wakes.claim('ag_tom');
   assert.equal(claimed.length, 1);
   runs.start({ id: 'run_stopped', agentId: 'ag_tom', conversationId: chat.id, trigger: 'message' });
-  const bubble = h.chats.beginAgentMessage(chat.id, 'ag_tom', 'run_stopped');
-  h.chats.removeMessage(bubble.id, 'ag_tom');
   runs.finish('run_stopped', { status: 'interrupted', endedAt: h.clock.now() });
   h.wakes.done(claimed.map((wake) => wake.id));
   assert.equal(h.wakeRows().length, 0);

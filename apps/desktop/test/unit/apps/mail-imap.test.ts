@@ -222,7 +222,7 @@ test('IDLE watcher: new mail wakes onNewMail with sender and subject, IDLE is re
     await until(() => fake.idling() === 1);
     fake.deliver('INBOX', eml('mail-alternative.eml'));
     await until(() => seen.length === 1);
-    assert.deepEqual(seen[0], { count: 1, from: 'Anna Müller <anna@example.org>', subject: 'Grüße aus München and more' });
+    assert.deepEqual(seen[0], { count: 1, from: 'Anna Müller <anna@example.org>', subject: 'Grüße aus München and more', messageIds: ['INBOX/7000/1'] });
     await until(() => fake.log.filter((l) => l === 'IDLE').length >= 3);
     for (const s of [...fake.sockets]) s.destroy(); // the server drops everyone
     await until(() => fake.idling() === 1 && fake.log.filter((l) => l === 'EXAMINE INBOX').length >= 2);

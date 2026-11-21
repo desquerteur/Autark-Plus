@@ -7,7 +7,8 @@
 // A caller may ask for a sample rate (dictation: 16 kHz – the browser resamples with proper
 // filtering); a device that refuses it gets its own rate (the caller's encoder resamples). The
 // node outputs silence (muted gain), so nothing is played back. Blocks are pushed by the audio
-// clock – there is no timer here.
+// clock – there is no timer here. F23: given a stream that is already open (a recorder's, for the live words of
+// blocks/ui/live-words.ts) it only listens to it – one microphone for both – and leaves its tracks to their owner.
 // Owns: getUserMedia, the audio graph and their teardown. Never: encodes or sends audio
 // (callers do, see lib/pcm.ts), never keeps the microphone open after close().
 
@@ -27,6 +28,8 @@ export interface MicrophoneOptions {
   sampleRate?: number;
   /** Block length in milliseconds (default: 4096 frames). */
   blockMs?: number;
+  /** An open stream to listen to instead of opening the microphone; close() leaves its tracks running. */
+  stream?: MediaStream;
 }
 
 const BLOCK = 4096;
@@ -37,15 +40,20 @@ export async function openMicrophone(onSamples?: SampleListener, options: Microp
   // the moment it opens is not lost in a gap before the tap (0.4–5.8 s measured on a busy PC).
   const early = onSamples ? readyGraph(onSamples, options, options.sampleRate) : null;
   early?.catch(() => undefined); // awaited below
+  const given = options.stream;
   let stream: MediaStream;
   try {
-    await bridge?.armMedia(['audio']).catch(() => undefined);
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    if (given) stream = given;
+    else {
+      await bridge?.armMedia(['audio']).catch(() => undefined);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    }
   } catch (error) {
     void early?.then((graph) => graph.dispose(), () => undefined);
     throw error;
   }
-  if (!onSamples || !early) return { stream, close: () => stopTracks(stream) };
+  const release = () => { if (!given) stopTracks(stream); };
+  if (!onSamples || !early) return { stream, close: release };
   let graph: Graph | null = null;
   try {
     graph = await early;
@@ -71,12 +79,12 @@ export async function openMicrophone(onSamples?: SampleListener, options: Microp
       close: () => {
         tap.stop();
         try { source.disconnect(); tap.node.disconnect(); mute.disconnect(); } catch { /* already gone */ }
-        stopTracks(stream);
+        release();
         void context.close().catch(() => undefined);
       },
     };
   } catch (error) {
-    stopTracks(stream);
+    release();
     graph?.dispose();
     throw error;
   }

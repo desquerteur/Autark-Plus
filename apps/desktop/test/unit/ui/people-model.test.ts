@@ -4,6 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { groupCode, managerOptions, statusLabel } from '../../../src/ui/team/people-model.ts';
 import { ownerOf } from '../../../src/ui/tasks/model.ts';
 import { onForYouList } from '../../../src/shared/model/todo-later.ts';
@@ -24,6 +25,79 @@ test('People: labels, manager choices, scopes and reports', () => {
   const agents = [agent('ag_1', 'Research'), agent('ag_2', 'Old', { archivedAt: 1 })];
   assert.deepEqual(managerOptions('per_a', people, agents).map((option) => option.value), ['', 'human', 'ag_1']);
   assert.equal(groupCode('482913'), '482 913');
+});
+
+test('F14: invited people are not in the org chart until they join; the owner always is', async () => {
+  const { peopleOrg, splitInvited } = await import('../../../src/ui/team/people-model.ts');
+  const people = [
+    person('human', 'Mara', { title: 'CEO' }), person('per_a', 'Anna', { joinedAt: 5, managerId: 'human' }),
+    person('per_h', 'huhu', { status: 'invited', managerId: 'human' }), person('per_r', 'Rex', { status: 'revoked' }),
+    person('per_g', 'Gone', { status: 'revoked', joinedAt: 3 }), person('per_o', 'Old', { status: 'active' }),
+  ];
+  const { members, invited } = splitInvited(people);
+  assert.deepEqual(members.map((entry) => entry.id), ['human', 'per_a', 'per_g', 'per_o'], 'joined (also one whose access ended; an active row without a date)');
+  assert.deepEqual(invited.map((entry) => entry.id), ['per_h', 'per_r'], 'never joined: invited, or their invite ended before');
+  const chart = peopleOrg(members, []);
+  const ids = (entries: typeof chart.people): string[] => entries.flatMap((entry) => [entry.person.id, ...ids(entry.people)]);
+  assert.ok(!ids(chart.people).includes('per_h'), 'huhu is no node and no report of the owner');
+  assert.deepEqual(chart.people[0].people.map((entry) => entry.person.id), ['per_a']);
+});
+
+test('F13: Add person – the person Accept makes, the request slot\'s line, a link a browser elsewhere can open', async () => {
+  const { browserReachable, newPersonOf, requestSlotHint } = await import('../../../src/ui/team/people-model.ts');
+  assert.equal(newPersonOf({ name: '  ', title: 'Designer', managerId: 'human' }), undefined, 'no name, nothing to accept');
+  assert.deepEqual(newPersonOf({ name: ' Anna Berg ', title: ' ', managerId: '' }), { name: 'Anna Berg' }, 'top of the org: no manager');
+  assert.deepEqual(newPersonOf({ name: 'Anna', title: 'Designer ', managerId: 'ag_1' }), { name: 'Anna', title: 'Designer', managerId: 'ag_1' });
+  assert.equal(requestSlotHint({ named: false, waiting: 0 }), 'Enter their name above; their device’s request shows here');
+  assert.equal(requestSlotHint({ named: false, waiting: 2 }), '2 devices ask to connect · enter their name above to accept');
+  assert.equal(requestSlotHint({ named: true, waiting: 0 }), 'Waiting for their phone or PC to ask');
+  assert.match(requestSlotHint({ named: true, waiting: 0, accepted: 'Anna' }), /^Accepted · Anna is added as their device connects/);
+  assert.equal(browserReachable(['http://localhost:7300', 'http://127.0.0.1:7300']), false, 'only this PC');
+  assert.equal(browserReachable(['http://localhost:7300', 'http://192.168.1.20:7300']), true, 'the network');
+  assert.equal(browserReachable(['https://pc.tailnet.ts.net']), true, 'the tailnet');
+});
+
+test('F13: a second CEO – the role choice, its line for either role, and the role Accept and Copy link carry', async () => {
+  const { newPersonOf, ROLE_OPTIONS, roleHint } = await import('../../../src/ui/team/people-model.ts');
+  assert.deepEqual(newPersonOf({ name: 'Anna', title: '', managerId: '', role: 'ceo' }), { name: 'Anna', role: 'ceo' });
+  assert.deepEqual(newPersonOf({ name: 'Anna', title: '', managerId: 'human', role: 'member' }), { name: 'Anna', managerId: 'human' }, 'a member is the default: no role sent');
+  assert.deepEqual(ROLE_OPTIONS.map((option) => option.value), ['member', 'ceo']);
+  assert.match(roleHint('ceo'), /^Like you: .*not your plans, keys, secrets, Settings or 1:1s$/);
+  assert.ok(roleHint('ceo').length <= 110 && roleHint('member').length <= 110, 'two lines at phone width at most (the hint keeps two lines\' room)');
+  const read = (file: string) => readFileSync(new URL(`../../../src/ui/${file}`, import.meta.url), 'utf8');
+  assert.match(read('team/PersonNew.tsx'), /newPersonOf\(\{ name, title, managerId: manager, role \}\)/);
+  assert.match(read('team/PersonNew.tsx'), /\{isOwner\(\) && \(/, 'only the owner gives the role');
+  assert.match(read('team/PersonDialog.tsx'), /const roles = isOwner\(\) && !owner;/);
+  assert.match(read('styles/people.css'), /\.person-role-hint \{[^}]*min-height: calc\(2 \* 1\.4em\)/);
+});
+
+test('F13/F14 wiring: Add › Person is a page (a pushed screen on the phone), a never-joined person offers Remove, the tree leaves invited people out', () => {
+  const read = (file: string) => readFileSync(new URL(`../../../src/ui/${file}`, import.meta.url), 'utf8');
+  assert.match(read('team/TeamNav.tsx'), /label: 'Person', onSelect: \(\) => go\.addPerson\(\)/);
+  assert.doesNotMatch(read('team/person-dialogs.tsx'), /'new'/, 'no Add person dialog any more');
+  const views = read('shell/views.ts');
+  assert.match(views, /if \(current\.addPerson\) return \{ key: 'person-new', body: h\(PersonNew, null\) \};/);
+  assert.match(views, /current\.agentId \|\| current\.personId \|\| current\.addPerson/, 'pushed on the phone, with its own Back row');
+  const menus = read('team/menus.ts');
+  assert.match(menus, /!joined \? \[\{ label: 'Remove', danger: true, onSelect: \(\) => void removePerson\(person\) \}\]/);
+  assert.match(menus, /rpc\.call\('people\.remove', \{ id: person\.id \}\)/);
+  assert.match(read('team/org-state.ts'), /peopleOrg\(split\.value\.members, /);
+  assert.match(read('team/PersonNew.tsx'), /<IncomingRow key=\{request\.id\} request=\{request\} people=\{\[\]\} newPerson=\{fresh\}/);
+  assert.match(read('lib/people.ts'), /rpc\.on\('person\.removed', \(\{ id \}\) => dropPerson\(id\)\)/);
+});
+
+test('17.11.2026 (F13 Pop-up, Mika draft 3+4): the invite is a card on the person page, no modal; without an address it says why and offers Devices', () => {
+  const read = (file: string) => readFileSync(new URL(`../../../src/ui/${file}`, import.meta.url), 'utf8');
+  const invite = read('team/PersonInvite.tsx');
+  assert.doesNotMatch(invite, /<Dialog/, 'no modal dialog');
+  assert.match(invite, /<section ref=\{card\} class="person-invite person-invite-card"/);
+  assert.match(invite, /if \(event\.key === 'Escape'\) \{ event\.stopPropagation\(\); props\.onClose\(\); \}/);
+  assert.match(invite, /go\.settings\('devices'\)/, 'Open Devices');
+  assert.match(invite, /hasJoined\(person\) \? 'Withdraw invite' : 'Withdraw and remove'/);
+  assert.match(invite, /Right now this link only opens on this PC, because other devices can't reach it yet\./);
+  assert.doesNotMatch(read('team/person-dialogs.tsx'), /<PersonInvite/, 'not mounted as a dialog');
+  assert.match(read('team/PersonView.tsx'), /\{person && inviteOpen\(personId\) && <PersonInvite person=\{person\} /);
+  assert.match(read('team/menus.ts'), /onSelect: \(\) => inviteDevice\(person\) \}/);
 });
 
 test('a task owner can be a person; For you holds only your own to-dos', () => {

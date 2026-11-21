@@ -2,8 +2,8 @@
 // services record. The person's own input (day/intake.ts: one plain to-do per line, the assistant hears of them),
 // planning a day (day/plan.ts over calendar/planner.ts), the person's estimates and the focus timer
 // (day/focus.ts – its task.upserted listener stops a finished to-do's timer and learns its time), the stored
-// morning briefing (day/briefing.ts; the morning run, day/morning.ts, builds it), the work the person handed off
-// and handing an own to-do to the team (day/handed-off.ts). The personal assistant is day/assistant.ts.
+// morning briefing (day/briefing.ts; the morning run, day/morning.ts, builds it) and the work the person gave others
+// (day/handed-off.ts). The personal assistant is day/assistant.ts.
 // start() subscribes the one listener; stop() drops it and ends the input's background passes.
 // Owns: these flows. Never: completes, cancels or moves a person's to-do for an agent, or calls a model inside
 // a request.
@@ -15,7 +15,7 @@ import type { DayService } from '../contracts/calendar.ts';
 import type { HelperDeps } from './helper.ts';
 import { Briefings } from './briefing.ts';
 import { FocusTimer } from './focus.ts';
-import { handedOff, sendToTeam } from './handed-off.ts';
+import { handedOff } from './handed-off.ts';
 import { DayIntake, type DayAddInput } from './intake.ts';
 import { planFor } from './plan.ts';
 
@@ -52,5 +52,4 @@ export class DayServiceImpl implements DayService {
   focus(taskId: string, action: FocusAction, by: string): TaskView { return this.timer.focus(taskId, action, by); }
   briefing(ownerId: string, date: string): Briefing | null { return this.briefings.get(ownerId, date); }
   handedOff(ownerId: string, since?: number): TaskView[] { return handedOff(this.s, ownerId, since); }
-  sendToTeam(taskId: string, by: string): Promise<TaskView> { return sendToTeam(this.s, taskId, by, (task) => { this.timer.focus(task.id, 'stop', by); }); }
 }

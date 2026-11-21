@@ -2,12 +2,15 @@
 // first frame must be a Hello within 10 s; its token decides the scope (owner/device, else an
 // external agent's token through `external` – bridges/external-agents.ts, which also judges the
 // transport) or the socket closes with 4401 (4403 for a removed device or external agent);
-// whether the socket's peer is on a secure transport is passed along for device scopes. AF-001: an owner Hello may carry
-// `agent` (the identity of the agent whose wf it is): the scope stays owner with that agent's id, a refused one closes 4406. The authenticated
+// whether the socket's peer is on a secure transport is passed along for device scopes. AF-001: an owner Hello's `agent` may
+// be an identity token (the agent whose wf it is, engines/agent-token.ts): the scope stays owner with that agent's id, a
+// refused token closes 4406. The authenticated
 // socket is adapted to an RpcConnection (B-050 K8 d: `view` may wrap it) and attached to the RPC server. External
 // agents hold ≤ 2 sockets each, ≤ 8 together (more close with 1013); one closes with 4403 once its
 // access ends (`external.watch`, armed with the first external socket); a device's sockets close when its row is
 // revoked or removed (closeDevice – B-078 D5: no phone switch any more).
+// B-085: an owner Hello may name `agent` (an agent's own wf, wf-cli/discover.ts): the owner scope then carries agentId;
+// on any other scope it closes with 4400, for an agent that is gone or archived (agentLive) with 4403.
 // Owns: the Hello handshake and client limits and the socket → RpcConnection adapter (the shared
 // 30 s ping keepalive is http/keepalive.ts, re-exported here).
 // Never: dispatches RPC itself, logs tokens, or keeps a slow client's backlog in RAM.
@@ -120,9 +123,33 @@ function parseHello(text: string): Hello | 'protocol' | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const hello = value as Record<string, unknown>;
   if (typeof hello.token !== 'string' || hello.token.length > 512) return undefined;
-  if (hello.agent !== undefined && (typeof hello.agent !== 'string' || !hello.agent || hello.agent.length > 512)) return undefined; // AF-001
+  // B-085: a plain agent id (≤ 128, checked in withAgent); AF-001: or an identity token (base64url parts, ≤ 512)
+  if (hello.agent !== undefined && (typeof hello.agent !== 'string' || !/^[\w.:-]{1,512}$/.test(hello.agent))) return undefined;
   if (hello.protocol !== undefined && hello.protocol !== PROTOCOL_VERSION) return 'protocol';
-  return { token: hello.token, client: typeof hello.client === 'string' ? hello.client.slice(0, 20) : undefined, ...(typeof hello.agent === 'string' ? { agent: hello.agent } : {}) };
+  return { token: hello.token, client: typeof hello.client === 'string' ? hello.client.slice(0, 20) : undefined, ...(hello.agent ? { agent: hello.agent } : {}) };
+}
+
+/** AF-001: Hello `agent` as an identity token this runtime issued (engines/agent-token.ts `wfa1.<id>.<mac>`), not B-085's plain id. */
+const isAgentToken = (agent: string): boolean => agent.startsWith('wfa1.');
+
+/**
+ * B-085: the scope with the Hello's `agent` – only on an owner scope, and only for an agent `live` knows (exists, not
+ * archived; without `live` the handlers check it: rpc/handlers/chats.ts). AF-001: an identity token is checked by
+ * `token` (actingAgent) instead – one it did not issue, or of an archived agent, is 'refused' (4406). A string is the close reason.
+ */
+function withAgent(
+  scope: ClientScope, agent: string | undefined, live: ((agentId: string) => boolean) | undefined, token: ((agent: string) => string | undefined) | undefined,
+): ClientScope | 'not-owner' | 'gone' | 'refused' {
+  if (!agent) return scope;
+  if (scope.kind !== 'owner' || scope.main) return isAgentToken(agent) ? 'refused' : 'not-owner';
+  if (isAgentToken(agent)) {
+    let agentId: string | undefined;
+    try { agentId = token?.(agent); } catch { agentId = undefined; }
+    return agentId ? { ...scope, agentId } : 'refused';
+  }
+  if (agent.length > 128) return 'not-owner';
+  if (live && !live(agent)) return 'gone';
+  return { ...scope, agentId: agent };
 }
 
 /** C8: the second token kind on `/ws` – external agents docked into one chat (bridges/external-agents.ts). */
@@ -146,6 +173,8 @@ export interface ClientSocketDeps {
   /** AF-001: Hello `agent` (an agent's wf, engines/agent-token.ts) → that agent's id; undefined refuses the socket (4406). Owner Hellos only. */
   agent?(token: string): string | undefined;
   view?(connection: RpcConnection, scope: ClientScope, client: string | undefined): RpcConnection; // B-050 K8 (d): by scope and Hello `client` (other programs' message view)
+  /** B-085: the agent exists and is not archived (an owner Hello's `agent`); absent: the handlers check it. */
+  agentLive?(agentId: string): boolean;
   keepalive: Keepalive;
   log: () => Logger;
   helloTimeoutMs?: number;
@@ -215,13 +244,12 @@ export class ClientSockets {
         if (removed) ws.close(CLOSE.revoked, 'revoked'); else ws.close(CLOSE.unauthorized, 'unauthorized');
         return;
       }
-      if (hello.agent !== undefined) {
-        // AF-001: wf run by an agent – owner access, but its chat lines are the agent's; never silently the person's.
-        let agentId: string | undefined;
-        try { agentId = scope.kind === 'owner' && !scope.main ? this.deps.agent?.(hello.agent) : undefined; } catch { agentId = undefined; }
-        if (!agentId || scope.kind !== 'owner') { ws.close(CLOSE.agentRefused, 'agent refused'); return; }
-        scope = { kind: 'owner', agentId };
-      }
+      let agentScope: ReturnType<typeof withAgent>;
+      try { agentScope = withAgent(scope, hello.agent, this.deps.agentLive, this.deps.agent); } catch { agentScope = 'gone'; }
+      if (agentScope === 'not-owner') { ws.close(CLOSE.badHello, 'agent only with the owner token'); return; }
+      if (agentScope === 'gone') { ws.close(CLOSE.revoked, 'agent gone'); return; }
+      if (agentScope === 'refused') { ws.close(CLOSE.agentRefused, 'agent refused'); return; } // AF-001: never silently the person's
+      scope = agentScope;
       if (scope.kind === 'external') {
         if (!this.externalRoom(scope.memberId)) { ws.close(CLOSE.busy, 'too many connections'); return; }
         this.watchExternal();

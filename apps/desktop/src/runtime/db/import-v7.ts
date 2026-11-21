@@ -164,7 +164,7 @@ export async function importV7(deps: ImportV7Deps, options: { path?: string } = 
       const agent: Agent = {
         id, name, role: isManager ? 'Chief of staff' : '', avatar: defaultAvatar(id, name),
         instructions: template?.instructions ?? '', mode: isManager ? 'manager' : 'general', skills: template?.skills ?? [],
-        modelPolicy: template?.effort ? { effort: template.effort } : {}, status: 'idle',
+        modelPolicy: {}, status: 'idle',
         createdBy: HUMAN_ID, createdAt: now, updatedAt: now,
       };
       if (isManager) agent.template = 'manager';

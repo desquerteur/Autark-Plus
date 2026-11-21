@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: the preview build's own package for its home-screen shortcuts (res/xml/shortcuts.xml). Never: other names. -->
+<resources>
+    <string name="shortcut_package" translatable="false">com.teydralab.autark.android.preview</string>
+</resources>

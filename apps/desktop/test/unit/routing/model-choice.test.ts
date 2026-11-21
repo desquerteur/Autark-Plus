@@ -3,14 +3,14 @@
 // has quota, never a pin) – the Work use naming a plan, by default Claude Code while its plan login is on; plain
 // conversation routed like any agent turn (the interim small-model chat default is gone, and the return
 // rule never continues from a run it routed); the chat hint's Now line and model.set note (the soft
-// guide is gone); the weak task lean.
+// guide is gone); the weak task lean; B-083: the models.list footer names the start model in my voice.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { T0, account, agent, mode, standardSetup } from '../models/harness.ts';
 import { workPlanOf } from '../../../src/runtime/routing/preference.ts';
 import { effectiveWorkPlan } from '../../../src/shared/model/model-guide.ts';
-import { OLD_CHAT_DEFAULT, returnChoice } from '../../../src/runtime/agents/next-route.ts';
+import { returnChoice } from '../../../src/runtime/agents/next-route.ts';
 import type { Run } from '../../../src/shared/model/runs.ts';
 import { WORK_PLAN_BONUS, workPlanBonus } from '../../../src/runtime/routing/score.ts';
 import { modelList } from '../../../src/runtime/routing/model-list.ts';
@@ -76,20 +76,34 @@ test('plain conversation is routed like any agent turn: no small-model default, 
   }
   h.settings.update({ routing: { work: HAIKU } });
   const settingsChat = await h.router.route(chat());
-  assert.deepEqual([settingsChat.modelId, settingsChat.reason], [HAIKU, 'set in Settings · chat']);
+  assert.deepEqual([settingsChat.modelId, settingsChat.reason], [HAIKU, 'the Work model in Settings · chat']);
   h.settings.update({ routing: { work: LUNA } });
   assert.deepEqual([(await h.router.route(chat())).modelId, (await h.router.route(chat())).by], [LUNA, 'pin'], 'the person may choose Luna for work');
 });
 
-test('a chat the removed chat default put on Luna does not stay there: the return rule skips those runs', () => {
-  const run = (id: string, model: string, reason: string, by = 'rules') => ({ id, agentId: 'ag_1', conversationId: 'ch_1', model, effort: 'low', status: 'done', route: { reason, by, category: 'chat' } }) as unknown as Run;
-  const older = run('run_1', SOL, 'chat · best fit');
-  const luna = run('run_2', LUNA, 'small model for conversation · chat', 'pin');
-  const fallback = run('run_3', LUNA, 'pinned model unavailable · small model for conversation · chat', 'fallback');
-  assert.equal(returnChoice([fallback, luna, older], 'ch_1', undefined)?.modelId, SOL);
-  assert.equal(returnChoice([fallback, luna], 'ch_1', undefined), undefined, 'nothing else to return to: the rules decide');
-  assert.equal(returnChoice([run('run_4', LUNA, 'chat · best value'), older], 'ch_1', undefined)?.modelId, LUNA, 'a Luna turn the rules chose still counts');
-  assert.ok(luna.route!.reason.includes(OLD_CHAT_DEFAULT));
+test('17.11.2026: a turn starts from the model I am on – my session\'s, else my newest done run\'s, whatever shaped it – with my settled effort there', () => {
+  const run = (id: string, model: string, effort: string, by = 'rules', effortBy?: string) => ({ id, agentId: 'ag_1', conversationId: 'ch_1', model, effort, status: 'done', route: { reason: 'chat', by, category: 'chat', ...(effortBy ? { effortBy } : {}) } }) as unknown as Run;
+  const older = run('run_1', SOL, 'high');
+  const receipt = run('run_2', LUNA, 'low', 'request', 'request');
+  // The return rule of before 17.11.2026 skipped a run a request shaped and went back to Sol, several runs old (36 switches measured).
+  assert.deepEqual(returnChoice([receipt, older], undefined), { modelId: LUNA }, 'the model I am on; its low was one message\'s, so no effort is carried');
+  assert.deepEqual(returnChoice([receipt, older], undefined, { on: SOL }), { modelId: SOL, effort: 'high', category: 'chat' }, 'the session\'s model over my newest run\'s');
+  const asked = run('run_3', SOL, 'max', 'request', 'request');
+  assert.deepEqual(returnChoice([asked, older], undefined), { modelId: SOL, effort: 'high', category: 'chat' }, 'an effort set for one turn does not carry over: my settled one returns');
+  assert.deepEqual(returnChoice([run('run_4', SOL, 'xhigh', 'request', 'previous'), older], undefined)?.effort, 'xhigh', 'a requested model at its own effort is settled');
+  assert.equal(returnChoice([run('run_5', SOL, 'max', 'request'), older], undefined)?.effort, 'high', 'a run of before B-089: by its route');
+  assert.equal(returnChoice([], undefined), undefined);
 });
 
 
+
+test('B-083 models.list: the start model is where I begin, with who set it (13.11.2026: a chat suggestion is no start model)', async () => {
+  const h = await standardSetup();
+  const own = agent('ag_1', { modelPolicy: { pin: SOL, pinBy: { name: 'Stanislaus', at: T0 } } });
+  const mine = modelList({ services: h.services, agent: own, mode: mode('chat'), category: 'chat' });
+  assert.match(mine, /\nMy start model is GPT-6\.1 Sol \(Stanislaus set it\); I run on it from my next context.\n/);
+  assert.match(mine, /^- codex:gpt-6\.1-sol .* · my start model$/m);
+  assert.doesNotMatch(mine, /pinned|cannot change/);
+  assert.match(mine, /\nI ask for one with model\.set/);
+  assert.doesNotMatch(mine, /suggested/);
+});

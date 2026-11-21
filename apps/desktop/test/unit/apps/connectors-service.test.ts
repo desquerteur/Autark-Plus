@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readConnectors, migrateRecords, slug } from '../../../src/runtime/apps/connectors.ts';
+import { readConnectors, migrateRecords, mutateConnectors, slug } from '../../../src/runtime/apps/connectors.ts';
 import { McpAuthRequired } from '../../../src/runtime/apps/types.ts';
 import { appsFixture, dataFolder, FakeKv } from './service-fakes.ts';
 
@@ -102,6 +102,24 @@ test('sign-in: a new entry that answers 401 opens the sign-in page; at start it 
   await g.apps.stop();
 });
 
+test('reconnect of a disabled or stale row conflicts before connection or sign-in side effects', async () => {
+  const f = appsFixture();
+  f.data.write('mcp.json', { mcpServers: { off: { url: 'https://off.example/mcp', disabled: true } } });
+  f.servers.add('https://off.example/mcp', ['tool']);
+  f.apps.start();
+  await settle(f);
+  const off = f.apps.list()[0];
+  await assert.rejects(f.apps.reconnect(off.id, { id: off.id, name: off.name, transport: off.transport }), (error: unknown) => (error as { code?: string }).code === 'conflict');
+  assert.deepEqual(f.servers.opened, []);
+  assert.deepEqual(f.oauth.begins, []);
+
+  f.data.write('mcp.json', { mcpServers: { other: { url: 'https://off.example/mcp' } } }); // watcher has not yet refreshed the cached row
+  await assert.rejects(f.apps.reconnect(off.id, { id: off.id, name: off.name, transport: off.transport }), (error: unknown) => (error as { code?: string }).code === 'conflict');
+  assert.deepEqual(f.servers.opened, []);
+  assert.deepEqual(f.oauth.begins, []);
+  await f.apps.stop();
+});
+
 test('cached tools: at start an unchanged entry registers its tools without starting the server', async () => {
   const f = appsFixture();
   f.data.write('mcp.json', { mcpServers: { files: { command: 'fake-server' } } });
@@ -150,23 +168,121 @@ test('migration: the old Settings › Apps records move into the files once (tok
   assert.equal(migrateRecords(data.dir, kv), 0);
 });
 
-test('new mail wakes the mailbox\'s agent (by name or id, else the assistant) at most once a minute, merged', async () => {
+test('new mail wakes the mailbox\'s agent (by name or id, else the assistant) with durable due times instead of a process-local debounce timer', async () => {
   const { MailWaker, mailAgent } = await import('../../../src/runtime/apps/mail-wake.ts');
   const { ManualTimers } = await import('./service-fakes.ts');
   const box = { id: 'work', name: 'work', transport: 'mail' as const, enabled: true, fingerprint: 'f', mail: { address: 'me@example.com', password: 'secret://pw', agent: 'Secretary' } };
   const agents = [{ id: 'ag_sec', name: 'Secretary', managerId: undefined }, { id: 'ag_old', name: 'Old', archivedAt: 1 }];
   const org = { list: () => agents, get: (id: string) => agents.find((a) => a.id === id), managers: () => [] };
   assert.equal(mailAgent({ org } as never, box), 'ag_sec');
-  const wakes: Array<{ agentId: string; note: string }> = [];
+  const wakes: Array<{ agentId: string; note: string; dueAt: number }> = [];
   let now = 1_000_000;
   const timers = new ManualTimers();
-  const waker = new MailWaker({ services: { org, wakes: { wake: (input: { agentId: string; note: string }) => { wakes.push(input); } }, clock: { now: () => now } } as never, connected: () => box, timers });
+  const waker = new MailWaker({ services: { org, wakes: { list: () => [], wake: (input: { agentId: string; note: string; dueAt: number }) => { wakes.push(input); } }, clock: { now: () => now } } as never, connected: () => box, timers });
   waker.notice('work', { count: 1, from: 'Maria <maria@client.example>', subject: 'Offer' });
   waker.notice('work', { count: 2, subject: 'Again' });
-  assert.equal(wakes.length, 1);
+  assert.equal(wakes.length, 2);
+  assert.equal(wakes[0].dueAt, now);
+  assert.equal(wakes[1].dueAt, now + 60_000);
   assert.match(wakes[0].note, /New mail in me@example\.com: 1 new message\. Newest from "Maria \(maria@client\.example\)"/);
   now += 61_000;
   timers.fireAll();
   assert.equal(wakes.length, 2);
   assert.match(wakes[1].note, /2 new messages/);
+});
+
+test('structured mutations preserve raw connector fields, DNC binding, and validate add batches before commit', () => {
+  const data = dataFolder();
+  data.write('mcp.json', { meta: { keep: true }, mcpServers: { service: { url: 'https://example.test/mcp', headers: { Authorization: 'Bearer secret://token1', 'X-Keep': 'yes' }, unknown: { keep: 7 } } } });
+  data.write('mail.json', { mailboxes: { work: { address: 'me@example.test', password: 'secret://pw', contactStopFile: 'dnc.json', disabled: true, custom: 'keep' } } });
+  const app = readConnectors(data.dir).connectors.find((item) => item.name === 'service')!;
+  mutateConnectors(data.dir, { kind: 'setToken', id: app.id, name: app.name, transport: 'http', secretId: 'token2' });
+  mutateConnectors(data.dir, { kind: 'setEnabled', id: app.id, name: app.name, transport: 'http', enabled: false });
+  const root = data.read('mcp.json') as { meta: unknown; mcpServers: Record<string, Record<string, unknown>> };
+  assert.deepEqual(root.meta, { keep: true });
+  assert.deepEqual(root.mcpServers.service.unknown, { keep: 7 });
+  assert.equal((root.mcpServers.service.headers as Record<string,string>)['X-Keep'], 'yes');
+  assert.equal((root.mcpServers.service.headers as Record<string,string>).Authorization, 'Bearer secret://token2');
+  const mail = data.read('mail.json') as { mailboxes: Record<string, Record<string,unknown>> };
+  assert.equal(mail.mailboxes.work.contactStopFile, 'dnc.json');
+  assert.equal(mail.mailboxes.work.custom, 'keep');
+  assert.equal(mail.mailboxes.work.disabled, true);
+  const mailbox = readConnectors(data.dir).connectors.find((item) => item.name === 'work')!;
+  mutateConnectors(data.dir, { kind: 'setEnabled', id: mailbox.id, name: mailbox.name, transport: 'mail', enabled: true });
+  const enabledMail = data.read('mail.json') as { mailboxes: Record<string, Record<string, unknown>> };
+  assert.equal(enabledMail.mailboxes.work.disabled, undefined);
+  assert.equal(enabledMail.mailboxes.work.contactStopFile, 'dnc.json');
+  assert.equal(enabledMail.mailboxes.work.custom, 'keep');
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'add', entries: [
+    { name: 'ok', entry: { url: 'https://ok.test/mcp' } },
+    { name: 'bad', entry: { command: 'x', contactStopFile: 'evil' } },
+  ] }));
+  assert.deepEqual(Object.keys((data.read('mcp.json') as {mcpServers: Record<string,unknown>}).mcpServers), ['service']);
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'remove', id: 'work', name: 'work', transport: 'mail' }), /mailbox removal/);
+});
+
+test('structured add accepts http:// servers, rejects credential URLs and prevents existing ids from moving', () => {
+  const data = dataFolder();
+  data.write('mcp.json', { mcpServers: { service: { url: 'https://example.test/mcp' } } });
+  data.write('mail.json', { mailboxes: { 'Foo 2': { address: 'me@example.test', password: 'secret://pw' } } });
+  mutateConnectors(data.dir, { kind: 'add', entries: [{ name: 'local', entry: { url: 'http://127.0.0.1:3000/mcp' } }] });
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'add', entries: [{ name: 'bad-auth', entry: { url: 'https://user:password@example.test/mcp' } }] }), /embedded credentials/);
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'add', entries: [{ name: 'foo-2', entry: { command: 'node' } }] }), /change another app id/);
+  const connectors = readConnectors(data.dir).connectors;
+  assert.equal(connectors.find((item) => item.name === 'Foo 2')?.id, 'foo-2');
+  assert.equal(connectors.find((item) => item.name === 'local')?.url, 'http://127.0.0.1:3000/mcp');
+});
+
+test('integer-like add names are rejected before preflight or write can reorder connector IDs', () => {
+  const data = dataFolder();
+  data.write('mcp.json', { mcpServers: { 'app 1': { url: 'https://first.example/mcp' } } });
+  data.write('mail.json', { mailboxes: {} });
+  const before = data.read('mcp.json');
+  assert.equal(readConnectors(data.dir).connectors[0].id, 'app-1');
+  const batch = [
+    { name: 'ordinary', entry: { url: 'https://ordinary.example/mcp' } },
+    { name: '1', entry: { url: 'https://numeric.example/mcp' } },
+  ];
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'add', entries: batch }, { validateOnly: true }), /Integer connector names/);
+  assert.throws(() => mutateConnectors(data.dir, { kind: 'add', entries: batch }), /Integer connector names/);
+  assert.deepEqual(data.read('mcp.json'), before);
+  assert.deepEqual(readConnectors(data.dir).connectors.map(({ name, id }) => [name, id]), [['app 1', 'app-1']]);
+});
+
+test('MCP add preflight validates without writing or starting a connector', () => {
+  const data = dataFolder();
+  data.write('mcp.json', { meta: { preserve: true }, mcpServers: {} });
+  data.write('mail.json', { mailboxes: {} });
+  mutateConnectors(data.dir, { kind: 'add', entries: [{ name: 'preflight', entry: { url: 'https://example.test/mcp' } }] }, { validateOnly: true });
+  assert.deepEqual(data.read('mcp.json'), { meta: { preserve: true }, mcpServers: {} });
+});
+
+test('structured mutation reads a prior external file edit and preserves its added fields', () => {
+  const data = dataFolder();
+  data.write('mcp.json', { mcpServers: { live: { url: 'https://example.test/mcp' } } });
+  const listed = readConnectors(data.dir).connectors[0];
+  data.write('mcp.json', { rootExtra: { latest: true }, mcpServers: { live: { url: 'https://example.test/mcp', externalEdit: { keep: true } } } });
+  mutateConnectors(data.dir, { kind: 'setEnabled', id: listed.id, name: listed.name, transport: 'http', enabled: false });
+  const latest = data.read('mcp.json') as { rootExtra: unknown; mcpServers: Record<string, Record<string, unknown>> };
+  assert.deepEqual(latest.rootExtra, { latest: true });
+  assert.deepEqual(latest.mcpServers.live.externalEdit, { keep: true });
+  assert.equal(latest.mcpServers.live.disabled, true);
+});
+
+test('remove refuses to rebind colliding MCP ids across remaining MCP and mail entries', () => {
+  const mcpData = dataFolder();
+  mcpData.write('mcp.json', { mcpServers: { 'A B': { url: 'https://a.example/mcp' }, 'A-B': { url: 'https://b.example/mcp' } } });
+  mcpData.write('mail.json', { mailboxes: {} });
+  const mcpApps = readConnectors(mcpData.dir).connectors;
+  assert.deepEqual(mcpApps.map(({ name, id }) => [name, id]), [['A B', 'a-b'], ['A-B', 'a-b-2']]);
+  assert.throws(() => mutateConnectors(mcpData.dir, { kind: 'remove', id: 'a-b', name: 'A B', transport: 'http' }), /change another app id/);
+  assert.equal(Object.keys((mcpData.read('mcp.json') as { mcpServers: Record<string, unknown> }).mcpServers).length, 2);
+
+  const crossData = dataFolder();
+  crossData.write('mcp.json', { mcpServers: { 'A B': { url: 'https://a.example/mcp' } } });
+  crossData.write('mail.json', { mailboxes: { 'A-B': { address: 'me@example.test', password: 'secret://pw' } } });
+  const all = readConnectors(crossData.dir).connectors;
+  assert.deepEqual(all.map(({ name, id }) => [name, id]), [['A B', 'a-b'], ['A-B', 'a-b-2']]);
+  assert.throws(() => mutateConnectors(crossData.dir, { kind: 'remove', id: 'a-b', name: 'A B', transport: 'http' }), /change another app id/);
+  assert.equal(Object.keys((crossData.read('mcp.json') as { mcpServers: Record<string, unknown> }).mcpServers).length, 1);
 });

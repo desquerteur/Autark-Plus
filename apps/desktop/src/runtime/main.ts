@@ -1,7 +1,7 @@
 // The runtime composition root: builds all services (compose/services.ts) and the client-
 // facing network (compose/network.ts), runs crash/restart reconciliation, starts the event-
-// driven parts (scheduler timer, dispatcher, account monitor, peer listener, sync and mesh, catalog, chat bridges,
-// the owner's default 1:1 with every agent – chat/direct.ts keepOwnerDirects)
+// driven parts (scheduler timer, account monitor, peer listener, sync and mesh, catalog, chat bridges, the owner's default
+// 1:1 with every agent – chat/direct.ts keepOwnerDirects – and, B-080, last of all the dispatcher, right before 'ready')
 // and shuts everything down in order. A staged restore is applied before the database opens. Used by the Electron utility process (entry-electron.ts) and the
 // headless CLI (cli.ts) alike. The restore call and the stop steps live in compose/lifecycle.ts.
 // Owns: the start order, what a host power event restarts (afterPower) and when the stop runs. Never: business logic; never polls.
@@ -23,10 +23,17 @@ import { keepOwnerDirects } from './chat/direct.ts';
 import { recordStart } from './tasks/recover-notes.ts';
 import { AgentRepo } from './store/agents.ts'; // B-059 #21
 import { recoveryRuns } from './splits/reconcile.ts'; // B-057
-import { startPromptUpdates } from './org/prompt-updates.ts';
+import { reviewPromptOverrides } from './context/prompt-updates.ts';
+import { startStandards } from './org/standard.ts';
+import { runKontext1311 } from './bridge/kontext-1311.ts';
+import { runCost1117 } from './bridge/cost-1117.ts';
+import { loginsFolder } from './root/companies.ts';
 import { runB078Repairs } from './system/b078-repairs.ts';
 import { startSync } from './devices/sync/service.ts';
+import { wakeWhenBack } from './devices/back-wake.ts';
 import { endCallsLeftOpen } from './calls/wiring.ts';
+import { ensurePwsh } from './accounts/install.ts'; // B-080 wave 3
+import { keepClaudeCodeCurrent } from './engines/claude/cli-update.ts'; // a provider's new Claude model comes with a new Claude Code
 
 export interface RuntimeOptions {
   host: Host;
@@ -55,7 +62,8 @@ export interface Runtime {
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const startedAt = Date.now();
-  const paths = ensurePaths(createPaths({ data: options.dataDir, resources: options.resourcesDir, workspace: options.workspaceDir }));
+  // The plans' homes: this PC's one logins folder beside its companies, shared by all of them (16.11.2026).
+  const paths = ensurePaths(createPaths({ data: options.dataDir, resources: options.resourcesDir, workspace: options.workspaceDir, accounts: loginsFolder(options.host.app) }));
   const log = new FileLogger({ dir: paths.logs, clock: systemClock, console: options.consoleLog ?? false });
   log.info('runtime starting', { version: options.version, host: options.host.kind });
   // A restore staged by system.restore replaces the data now – before createCore opens the
@@ -72,6 +80,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // the link-ups follow the mesh below.
   const watcher = s.rootWatcher;
   const sync = startSync({ s, mesh: core.mesh, tap: watcher ? (listener) => watcher.tap(listener) : undefined });
+  const offBackWake = wakeWhenBack(s); // B-080: an agent that could not reach a linked PC is woken once when it is back
 
   // ---- reconciliation after a crash, update or power loss (before anything runs)
   const stopped = s.chats.reconcileStreaming();
@@ -91,10 +100,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // First run: the Manager. B-050 K1 (Nachtrag Runde 4): the owner's default 1:1 with every active agent – the Manager's
   // is the first chat (untitled: named after the agent), so the person can start talking right away – is made now for
   // those without one (one transaction; empty, unread nothing, wakes nobody), and for a hire as the org announces it.
-  s.org.ensureSeed();
+  // F14: a company started as my other device ('mine') gets its agents with the link – no Manager of its own (a later
+  // start without the flag still seeds an empty company).
+  if (options.host.app.start !== 'mine') s.org.ensureSeed();
   const offDirects = keepOwnerDirects(s);
   runB078Repairs(s); // data from before B-078 brought to its rules once (system/b078-repairs.ts)
-  const offPromptUpdates = startPromptUpdates(s);
+  runKontext1311(s); // the one-time conversions of the 13.11.2026 context rebuild (deleted in the version after the bridge)
+  runCost1117(s); // runs priced before 17.11.2026 get their notional cost from their own tokens, once (deleted with the bridge)
+  reviewPromptOverrides(s); // an own prompt file follows the release while untouched; an edited one gets one review
+  s.prompts?.invalidate();
+  const offStandards = startStandards(s); // every SYSTEM.md keeps the team's standard as its last comment (owner 14.11.2026)
   // Demo/test mode: one account served by the deterministic fake engine, so the app works offline.
   if (options.fakeEngine && !s.accounts.list().some((account) => account.provider === 'compatible')) {
     await s.accounts.add({ provider: 'compatible', label: 'Demo engine', baseUrl: 'http://127.0.0.1:9/v1', demoEngine: true });
@@ -111,7 +126,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   // ---- start the event-driven parts
   core.scheduler.start();
-  core.dispatcher.start();
   core.accountMonitor.start(); // initial read, provider pushes and bounded automatic refreshes
   // The peer listener opens when a PC is linked or this PC accepts connect requests (a bind error shows in Settings › Devices).
   await network.peer.start();
@@ -124,6 +138,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // Detection runs CLI status commands – in the background, then the model catalog follows.
   // Adopted logins are checked by the monitor; after detection the monitor reads any plan that is due.
   void core.refreshDetection().then(() => { core.accountMonitor.activity(); return core.catalog.refresh(); }).catch((error) => log.warn('initial catalog refresh failed', { error: String(error) }));
+
+  // Claude Code learns new models with new versions: it updates itself shortly after start and every 6 h, then the catalog lists again.
+  const offClaudeUpdate = keepClaudeCodeCurrent({
+    supervisor: core.supervisor, finder: core.finder, log, demo: options.fakeEngine, cwd: paths.temp, accounts: () => s.accounts.list(),
+    onUpdated: () => void core.catalog.refresh({ force: true }).catch(() => undefined),
+  });
 
   const powerOff = options.host.onPower((event) => afterPower(event, {
     scheduler: s.scheduler, mesh: core.mesh, monitor: core.accountMonitor, refreshPeer: () => void network.peer.refresh(),
@@ -139,15 +159,27 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     shutdown: (reason) => (closing ??= (async () => {
       log.info('runtime stopping', { reason });
       powerOff();
+      offClaudeUpdate();
       offDirects();
-      offPromptUpdates();
+      offStandards();
       offPeerOpened();
       sync.stop();
+      offBackWake();
       await runStopSteps(stopSteps(core, network), log);
       log.info('runtime stopped', { reason });
     })()),
   };
+  // B-080: turns start only now, right before 'ready' – the host's boot watchdog (main/runtime-host.ts) never cuts one it
+  // started during the slower start steps above (the peer listener took up to 11 s); start() pumps every due agent.
+  core.dispatcher.start();
   log.info('runtime ready', { port, ms: Date.now() - startedAt });
+  // B-080 wave 3: PowerShell 7 for the engines' shells where none is found (accounts/install.ts ensurePwsh) – in the
+  // background, nothing waits for it; the engines started from now on find it on their PATH (engines/wf-shim.ts).
+  if (process.platform === 'win32') {
+    void ensurePwsh({ supervisor: core.supervisor, demo: options.fakeEngine })
+      .then((installed) => { if (installed) log.info('PowerShell 7 installed for the engines\' shells'); })
+      .catch((error: unknown) => log.warn('PowerShell 7 not installed', { error: String(error) }));
+  }
   return runtime;
 }
 

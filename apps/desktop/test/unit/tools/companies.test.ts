@@ -18,7 +18,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { setup, tool } from './helpers.ts';
-import { EVERY_MODE, Registry } from '../../../src/runtime/tools/registry.ts';
+import { Registry } from '../../../src/runtime/tools/registry.ts';
 import { callTarget, metaTools, rankTools } from '../../../src/runtime/tools/builtin/tools-meta.ts';
 import { builtinTools } from '../../../src/runtime/tools/builtin/index.ts';
 import { runCompanyTool } from '../../../src/runtime/tools/builtin/companies.ts';
@@ -137,7 +137,6 @@ test('tools.find: "companies list" and "other company" find companies.list first
 
 test('secrets.export, secrets.delete and companies.list are offered in every mode and found by their words', () => {
   for (const name of ['secrets.export', 'secrets.delete', 'companies.list']) {
-    assert.ok(EVERY_MODE.has(name), name);
     assert.ok(registryA.allowed(tool(name, 'read'), a.org.require('ag_tom'), TASKS_ONLY), `${name} in a tasks-only mode`);
   }
   const specs: ToolSpec[] = ['secrets.list', 'secrets.save', 'secrets.import', 'secrets.export', 'secrets.delete'].map((name) => ({ name, description: 'The secrets catalog.', inputSchema: {} }));

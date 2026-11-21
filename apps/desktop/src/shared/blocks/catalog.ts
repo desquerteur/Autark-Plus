@@ -125,10 +125,13 @@ export const CATALOG: readonly BlockSpec[] = [
     signature: 'timer{label,at?|duration?,repeat?:daily|weekdays|weekly}',
     props: { label: { type: 'string', required: true }, at: { type: 'string' }, duration: { type: 'string' }, repeat: { type: 'string', values: ['daily', 'weekdays', 'weekly'] } },
     answer: 'their line "Done" (or "Snoozed", "Missed")' },
-  { type: 'record', kind: 'ask', tier: 'lite', doc: 'Recorder; with "script" it becomes a teleprompter.',
-    signature: 'record{mode:audio|video|screen,script?,bullets?,instructions?,maxSeconds?,camera?:front|back|any}',
+  { type: 'record', kind: 'ask', tier: 'lite', doc: 'Recorder; with "script" a teleprompter, with "video" (+ "cues") a voice-over.',
+    signature: 'record{mode:audio|video|screen,script?,bullets?,instructions?,maxSeconds?,camera?:front|back|any,video?:path|fileId,cues?:[{text,start,end}]}',
     props: { mode: { type: 'string', required: true, values: ['audio', 'video', 'screen'] }, script: { type: 'string' }, bullets: { type: 'string[]' },
-      instructions: { type: 'string' }, maxSeconds: { type: 'number' }, camera: { type: 'string', values: ['front', 'back', 'any'] } },
+      instructions: { type: 'string' }, maxSeconds: { type: 'number' }, camera: { type: 'string', values: ['front', 'back', 'any'] },
+      video: { type: 'string', doc: 'voice-over: the video that plays silently while they speak – a workspace path or a file id' },
+      fileId: { type: 'string' },
+      cues: { type: 'object[]', doc: 'voice-over lines [{text,start,end}] in seconds or m:ss: the current one stands large with its time bar' } },
     answer: 'their line "Recorded m:ss" with the recording attached' },
   { type: 'upload', kind: 'ask', tier: 'full', doc: 'Ask the human for files.',
     signature: 'upload{label,accept?,multiple?,instructions?}',
@@ -202,7 +205,7 @@ export const LIMITS = {
 
 /**
  * Props only the host sets on a to-do widget – a device's access request `accessRequestId` (runtime/remote/todo.ts).
- * validateBlock and human.ask drop them from everything an agent writes.
+ * validateBlock and tasks.create drop them from everything an agent writes.
  */
 export const HOST_ONLY_PROPS: readonly string[] = ['accessRequestId'];
 

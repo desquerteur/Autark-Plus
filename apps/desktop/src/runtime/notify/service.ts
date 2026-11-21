@@ -12,8 +12,9 @@
 // Owns: the push filter, the per-chat filter, light de-duplication, channel fan-out with error
 // isolation. Never: decides *what* is important (callers pass the kind) or blocks on a channel.
 // Employees' devices: pwa/person-push.ts.
-// The owner's other PCs: a notification that pushes here gets an id and goes to the `relay` hook (every online CEO PC,
-// devices/sync/notify.ts); a PC that gets one (`relayed`) hands it only to its channels – its phones – and never on again.
+// The owner's other PCs: a notification that pushes here gets an id and goes to the `relay` hook (devices/sync/notify.ts:
+// the held subscriptions of my other PCs, B-078, plus the old hand-over to a CEO PC without a roster); a PC that gets one
+// (`relayed`) hands it only to its channels – its phones – and never on again.
 
 import { randomUUID } from 'node:crypto';
 import type { Bus } from '../bus.ts';
@@ -118,9 +119,10 @@ export class Notifications implements NotificationService {
     const p = (params ?? {}) as Partial<Record<keyof Pushed, unknown>>;
     if (!this.channels.size || typeof p.id !== 'string' || typeof p.title !== 'string' || typeof p.body !== 'string' || !PUSHED.has(String(p.kind))) return;
     const text = (value: unknown) => (typeof value === 'string' && value ? value.slice(0, 200) : undefined);
+    const route = text(p.route); // B-084: the notice's in-app place (pwa/push.ts checks it is a '#/' route)
     this.toChannels({
       id: p.id.slice(0, 100), kind: p.kind as Pushed['kind'], title: p.title.slice(0, 120), body: p.body.slice(0, 400),
-      conversationId: text(p.conversationId), taskId: text(p.taskId), tag: text(p.tag), silent: p.silent === true,
+      conversationId: text(p.conversationId), taskId: text(p.taskId), tag: text(p.tag), silent: p.silent === true, ...(route ? { route } : {}),
     });
   }
 

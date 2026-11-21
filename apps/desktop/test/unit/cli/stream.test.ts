@@ -19,7 +19,7 @@ test('--count n: a burst of more frames than n prints exactly n (events and watc
     'events.subscribe': (params, fake) => {
       setTimeout(() => {
         const topics = (params as { topics: string[] }).topics;
-        if (topics.includes('tasks')) for (let i = 0; i < 3; i++) fake.push('task.upserted', task({ id: `task_${i}`, title: `Step ${i}`, status: 'working' }), 'tasks');
+        if (topics.includes('tasks')) for (let i = 0; i < 3; i++) fake.push('task.upserted', task({ id: `task_${i}`, title: `Step ${i}`, status: 'open' }), 'tasks');
         if (topics.includes(topic)) for (let i = 0; i < 3; i++) fake.push('message.created', message({ id: `msg_${i}`, seq: 10 + i, conversationId: launch.id, authorId: manager.id, authorKind: 'agent', body: `Reply ${i}` }), topic);
       }, 20);
       return { ok: true };
@@ -45,7 +45,7 @@ test('terminal safety: escape sequences, lone CR and C1 controls from agents or 
   const runtime = await fakeRuntime({
     'chats.list': () => [{ ...launch, lastPreview: { authorId: manager.id, text: HOSTILE, at: launch.createdAt } }],
     'messages.list': () => [hostile],
-    'tasks.list': () => [task({ id: 'task_x', title: 'Plan\u001b[1A\u001b[2K', status: 'working' })],
+    'tasks.list': () => [task({ id: 'task_x', title: 'Plan\u001b[1A\u001b[2K', status: 'open' })],
     'events.subscribe': (_params, fake) => { setTimeout(() => fake.push('message.created', { ...hostile, id: 'msg_y', seq: 10 }, topic), 20); return { ok: true }; },
   });
   t.after(() => runtime.stop());

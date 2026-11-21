@@ -2,17 +2,16 @@
 // its pair and their open work moves into their own 1:1 with the giver (chat/direct-repair.ts); the agents' approval-era
 // to-dos close and each asking agent gets one wake with the self-check note, the host's and identity asks stay
 // (tasks/approval-close.ts); the personal manager of a lived-in organisation gets one look at the team, a fresh one
-// nothing (org/org-review.ts). Each runs once.
+// nothing (org/org-review.ts). Each runs once. B-080: steps move too, and a later pass moves once what an earlier one left.
 // Owns: these assertions only. Never: real engines.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
-import { pairOf } from '../../../src/runtime/chat/direct.ts';
+import { findDirect, pairOf } from '../../../src/runtime/chat/direct.ts';
+import { KvRepo } from '../../../src/runtime/store/kv.ts';
 import { repairDirectChats } from '../../../src/runtime/chat/direct-repair.ts';
-import { CLOSED_NOTE, closeApprovalTodos } from '../../../src/runtime/tasks/approval-close.ts';
 import { ORG_REVIEW_NOTE, wakeOrgReview } from '../../../src/runtime/org/org-review.ts';
-import { SELF_CHECK_NOTE } from '../../../src/runtime/tools/builtin/human.ts';
 import { agent, harness } from '../chat/harness.ts';
 
 function rig() {
@@ -39,27 +38,55 @@ test('a 1:1 with a third agent goes back to two; its open work moves into its ow
   assert.equal(repairDirectChats(h.services), 0, 'once');
 });
 
-test('the agents\' approval-era to-dos close with one self-check wake per agent; the host\'s, identity and the person\'s stay', () => {
+test('B-080: steps move too – one with its task, a step of another\'s task on its own to its giver', () => {
   const h = rig();
-  const chat = h.chats.create({ agentIds: ['ag_mara'], createdBy: HUMAN_ID });
-  const ask = (title: string, createdBy: string, humanReason: string, widget: Record<string, unknown>) =>
-    h.tasks.create({ conversationId: chat.id, title, assigneeKind: 'human', createdBy, humanReason: humanReason as never, widget: widget as never });
-  const vps = ask('Clean the VPS disk?', 'ag_mara', 'approval', { type: 'approve', action: 'Clean the disk' });
-  const post = ask('Publish the LinkedIn post?', 'ag_mara', 'taste', { type: 'approve', action: 'Publish' });
-  const lease = ask('Sign the lease', 'ag_mara', 'identity', { type: 'approve', action: 'Sign' });
-  const host = ask('Access request', SYSTEM_ID, 'approval', { type: 'approve', accessRequestId: 'acc_1' });
-  const own = ask('Buy milk', HUMAN_ID, 'approval', { type: 'confirm' });
-  assert.equal(closeApprovalTodos(h.services), 2);
-  assert.equal(h.tasks.get(vps.id)!.status, 'cancelled');
-  assert.equal(h.tasks.get(post.id)!.status, 'cancelled');
-  for (const kept of [lease, host, own]) assert.equal(h.tasks.get(kept.id)!.status, 'open', kept.title);
-  const wakes = h.wakeRows().filter((row) => row.agent_id === 'ag_mara' && row.reason === 'event');
-  assert.equal(wakes.length, 1);
-  assert.match(wakes[0].note!, /"Clean the VPS disk\?", "Publish the LinkedIn post\?"/);
-  assert.ok(wakes[0].note!.endsWith(SELF_CHECK_NOTE));
-  assert.ok(h.chats.messages(chat.id).some((message) => message.body.includes(CLOSED_NOTE)));
-  assert.equal(closeApprovalTodos(h.services), 0, 'once');
+  h.org.add(agent('ag_jonas', 'Jonas'));
+  const chat = h.chats.create({ agentIds: ['ag_mara', 'ag_konrad', 'ag_jonas'], createdBy: HUMAN_ID, settings: { direct: true, directPair: pairOf(HUMAN_ID, 'ag_mara') } });
+  const work = h.tasks.create({ conversationId: chat.id, title: 'Check the invoice', assigneeKind: 'agent', assigneeId: 'ag_konrad', createdBy: HUMAN_ID });
+  const own = h.tasks.create({ conversationId: chat.id, parentId: work.id, title: 'Read the PDF', assigneeKind: 'agent', assigneeId: 'ag_konrad', createdBy: 'ag_konrad' });
+  const hers = h.tasks.create({ conversationId: chat.id, title: 'Draft the post', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: HUMAN_ID });
+  const step = h.tasks.create({ conversationId: chat.id, parentId: hers.id, title: 'Find the photo', assigneeKind: 'agent', assigneeId: 'ag_jonas', createdBy: 'ag_mara' });
+  for (const id of [work.id, own.id, step.id]) assert.equal(h.tasks.get(id)!.conversationId, chat.id, 'set up in the 1:1');
+  assert.equal(repairDirectChats(h.services), 2, 'Konrad and Jonas leave');
+  const konrads = h.tasks.get(work.id)!.conversationId;
+  assert.notEqual(konrads, chat.id);
+  assert.equal(h.tasks.get(own.id)!.conversationId, konrads, 'the step goes with its task');
+  const jonas = h.tasks.get(step.id)!.conversationId!;
+  assert.notEqual(jonas, chat.id, 'before B-080 a step stayed behind');
+  assert.deepEqual(h.chats.members(jonas).filter((member) => member.leftAt === undefined).map((member) => member.memberId).sort(), ['ag_jonas', 'ag_mara'], 'Jonas\'s 1:1 with Mara, who gave it');
+  assert.equal(h.tasks.get(hers.id)!.conversationId, chat.id, 'the pair\'s own work stays');
 });
+
+test('B-080: a step of a step goes where its chain goes – none stays in the 1:1', () => {
+  const h = rig();
+  const chat = h.chats.create({ agentIds: ['ag_mara', 'ag_konrad'], createdBy: HUMAN_ID, settings: { direct: true, directPair: pairOf(HUMAN_ID, 'ag_mara') } });
+  const top = h.tasks.create({ conversationId: chat.id, title: 'Check the invoice', assigneeKind: 'agent', assigneeId: 'ag_konrad', createdBy: HUMAN_ID });
+  const step = h.tasks.create({ conversationId: chat.id, parentId: top.id, title: 'Read the PDF', assigneeKind: 'agent', assigneeId: 'ag_konrad', createdBy: 'ag_konrad' });
+  const deeper = h.tasks.create({ conversationId: chat.id, parentId: step.id, title: 'Find page 3', assigneeKind: 'agent', assigneeId: 'ag_konrad', createdBy: 'ag_konrad' });
+  assert.equal(repairDirectChats(h.services), 1);
+  const room = h.tasks.get(top.id)!.conversationId;
+  assert.notEqual(room, chat.id);
+  assert.deepEqual([h.tasks.get(step.id)!.conversationId, h.tasks.get(deeper.id)!.conversationId], [room, room], 'the whole chain in Konrad\'s 1:1 with the owner');
+});
+
+test('B-080: work an earlier pass left in a 1:1 moves once – with the reminder set there', () => {
+  const h = rig();
+  h.org.add(agent('ag_jonas', 'Jonas'));
+  new KvRepo(h.db).set('b078', 'direct-two', { at: 0, removed: 1 }, 0); // the B-078 pass ran before B-080
+  const chat = h.chats.create({ agentIds: ['ag_mara'], createdBy: HUMAN_ID, settings: { direct: true, directPair: pairOf(HUMAN_ID, 'ag_mara') } });
+  const hers = h.tasks.create({ conversationId: chat.id, title: 'Draft the post', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: HUMAN_ID });
+  const step = h.tasks.create({ conversationId: chat.id, parentId: hers.id, title: 'Find the photo', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: 'ag_mara' });
+  h.db.run(`UPDATE tasks SET assignee_id = 'ag_jonas', assigned_by = 'ag_konrad' WHERE id = ?`, [step.id]); // Jonas's step, left behind
+  const reminder = h.scheduler.create({ ownerId: 'ag_jonas', conversationId: chat.id, taskId: step.id, kind: 'reminder', title: 'Photo', spec: { at: h.clock.now() + 3_600_000 }, payload: { note: 'Photo' } });
+  assert.equal(repairDirectChats(h.services), 1);
+  const room = h.tasks.get(step.id)!.conversationId;
+  assert.equal(room, findDirect(h.services, 'ag_konrad', 'ag_jonas'), 'into Jonas\'s 1:1 with Konrad, who gave it');
+  assert.equal(h.scheduler.get(reminder.id)!.conversationId, room, 'its reminder with it');
+  assert.equal(h.tasks.get(hers.id)!.conversationId, chat.id);
+  assert.ok(h.chats.messages(chat.id).some((message) => /Jonas continues one task from here in a 1:1 of its own/.test(message.body)));
+  assert.equal(repairDirectChats(h.services), 0, 'once');
+});
+
 
 test('the personal manager of a lived-in organisation gets one look at the team; a fresh one gets none', () => {
   const fresh = rig();

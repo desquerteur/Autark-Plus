@@ -204,3 +204,20 @@ test('bytes sent to the runtime never drag a shared buffer pool along', async ()
   const { cipher } = await h.call('encrypt', { plain: 'abc' }) as { cipher: Uint8Array };
   assert.equal(cipher.buffer.byteLength, cipher.byteLength);
 });
+
+test('storage.ready checks availability without encrypting or reading any value', async () => {
+  let backend = 'gnome_libsecret';
+  let available = true;
+  const h = harness({ safeStorage: {
+    isEncryptionAvailable: () => available,
+    getSelectedStorageBackend: () => backend,
+    encryptString: () => assert.fail('the boot probe never encrypts anything'),
+    decryptString: () => assert.fail('the boot probe never decrypts anything'),
+  } });
+  assert.deepEqual(await h.call('storage.ready', {}), { available: true });
+  backend = 'basic_text';
+  assert.deepEqual(await h.call('storage.ready', {}), { available: false });
+  backend = 'gnome_libsecret';
+  available = false;
+  assert.deepEqual(await h.call('storage.ready', {}), { available: false });
+});

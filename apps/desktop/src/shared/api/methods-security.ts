@@ -10,7 +10,7 @@ declare module '../api/methods.ts' {
     'secrets.list': { params: void; result: SecretInfo[] };
     /** `description` = its purpose (B-044); a new `id` (PC only) stores the value of a metadata file that has none yet. */
     'secrets.save': { params: { id?: string; label: string; kind: SecretInfo['kind']; value?: string; hint?: string; route?: string; tags?: string[]; description?: string }; result: SecretInfo };
-    /** PC only: deletes a secret – or the file of a metadata entry without a value – and its file <data>/secrets/<id>.md. */
+    /** The PC, or the owner's phone over a secure link (permissions): deletes a secret – or the file of a metadata entry without a value – and its file <data>/secrets/<id>.md. */
     'secrets.delete': { params: { id: string }; result: { ok: true } };
     /** 29.10.2026: imports a password export (browser or password-manager CSV, Bitwarden JSON) or the secrets of a .env or flat JSON file (plain settings skipped) into the catalog; the top Manager gets a task to describe them. Never returns a value. */
     'secrets.import': { params: { text: string; fileName?: string }; result: SecretImportSummary };

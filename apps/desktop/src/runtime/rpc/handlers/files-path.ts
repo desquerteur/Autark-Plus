@@ -5,6 +5,8 @@
 // (runtime/root/text-doc.ts) and made as an outside edit, so the data folder watcher applies a saved settings.json or
 // SYSTEM.md like any other change on disk. B-076: a tab that came from a linked CEO PC names it in `device`, and the
 // call goes on to that PC (devices/sync/paths.ts), which answers with PATH_OPS – the same rules, the same stamps.
+// B-081: a path that holds nothing answers with `near`, up to 5 similar existing paths found on the PC that holds it
+// (files/near-paths.ts) – the tabs' not-found page; a tab's look on a still missing file (`since: ''`) stays one stat.
 // Owns: these three methods, their operations and the stamp. Never: confines paths, keeps history or knows what a file
 // means.
 
@@ -16,6 +18,7 @@ import type { PathEntry, PathList, PathRead, PathWritten } from '../../../shared
 import { WorkforceError } from '../../../shared/errors.ts';
 import { selfId } from '../../devices/sync/home.ts';
 import { remotePathsOf, type PathOp } from '../../devices/sync/paths.ts';
+import { nearPaths } from '../../files/near-paths.ts';
 import { writeAtomic } from '../../root/text-doc.ts';
 import { bad, input, onlyKeys, optId, optText, text } from '../params.ts';
 import type { HandlerContext, HandlerTable } from '../table.ts';
@@ -60,7 +63,8 @@ async function readAt(target: string, since: string | undefined): Promise<PathRe
   let info: Stats;
   try { info = await stat(target); } catch (error) {
     if (!isGone(error)) throw failure(error, 'reading', target);
-    return { path: target, state: since === '' ? 'same' : 'missing', size: 0, stamp: '' };
+    if (since === '') return { path: target, state: 'same', size: 0, stamp: '' }; // a tab's look: still nothing there
+    return { path: target, state: 'missing', size: 0, stamp: '', near: await nearPaths(target) };
   }
   if (info.isDirectory()) return { path: target, state: 'folder', size: 0, stamp: '' };
   const stamp = stampOf(info);
@@ -106,7 +110,7 @@ async function listAt(o: Obj): Promise<PathList> {
   const parent = above === target ? {} : { parent: above };
   let found: Dirent[];
   try { found = await readdir(target, { withFileTypes: true }); } catch (error) {
-    if (codeOf(error) === 'ENOENT') return { path: target, ...parent, entries: [], total: 0, missing: true as const };
+    if (codeOf(error) === 'ENOENT') return { path: target, ...parent, entries: [], total: 0, missing: true as const, near: await nearPaths(target) };
     if (codeOf(error) === 'ENOTDIR') throw new WorkforceError('conflict', 'This path is not a folder.');
     throw failure(error, 'listing', target);
   }

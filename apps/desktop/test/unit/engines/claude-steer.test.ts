@@ -2,7 +2,7 @@
 // is never left unanswered – when the CLI answers it as its own (a second result) the turn waits for
 // that answer; when the CLI took it into the running turn (one result) the turn ends with the CLI;
 // either way the input ends at the first result; after the turn no line is accepted. The usage of
-// several results adds up (tokens; the cost as the CLI's running total).
+// several results adds up (tokens; the cost is the session's running total, the latest counts).
 // Owns: these assertions only. Never: a real Claude Code binary.
 
 import { test } from 'node:test';
@@ -57,7 +57,7 @@ test('claude: a steered line taken into the running turn (one result) – the ru
   assert.equal(await h.engine.steer('run_1', 'after'), false);
 });
 
-test('claude: a steered line answered as its own result – tokens add up, the cost is the running total (summed when it went down)', () => {
+test('claude: a steered line answered as its own result – tokens add up, the cost is the session’s running total (the latest)', () => {
   const usage = (input: number, output: number, cost: number) => ({ type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: { input_tokens: input, cache_read_input_tokens: 1, output_tokens: output }, total_cost_usd: cost });
   const running = new ClaudeStreamParser(() => {}, () => 0);
   running.push(usage(100, 10, 0.02));
@@ -66,7 +66,7 @@ test('claude: a steered line answered as its own result – tokens add up, the c
   const perResult = new ClaudeStreamParser(() => {}, () => 0);
   perResult.push(usage(100, 10, 0.02));
   perResult.push(usage(50, 5, 0.01));
-  assert.equal(perResult.state.usage?.costUsd, 0.03, 'a total that went down was per result: summed');
+  assert.equal(perResult.state.usage?.costUsd, 0.01, 'the latest total counts (package C: a lower one is a new count, turn-attempt.ts)');
   const single = new ClaudeStreamParser(() => {}, () => 0);
   single.push(usage(100, 10, 0.02));
   assert.deepEqual(single.state.usage, { inputTokens: 101, outputTokens: 10, costUsd: 0.02, cacheReadTokens: 1 }, 'one result: unchanged');

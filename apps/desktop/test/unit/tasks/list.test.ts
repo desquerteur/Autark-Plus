@@ -22,14 +22,14 @@ test('completedSince: only tasks finished in the window, newest finish first', (
   const b = h.make('B');
   const c = h.make('C');
   const open = h.make('Still open');
-  h.tasks.complete(old.id, RESULT, 'ag_ava');
+  h.tasks.finish(old.id, { status: 'done' as const, ...RESULT }, 'ag_ava');
   h.clock.advance(60_000);
   const since = h.clock.now();
-  h.tasks.complete(b.id, RESULT, 'ag_ava');
+  h.tasks.finish(b.id, { status: 'done' as const, ...RESULT }, 'ag_ava');
   h.clock.advance(1000);
-  h.tasks.setStatus(c.id, 'cancelled', 'human');
+  h.tasks.finish(c.id, { status: 'dropped' as const, summary: 'Dropped' }, 'human');
   h.clock.advance(1000);
-  h.tasks.complete(a.id, RESULT, 'ag_ava');
+  h.tasks.finish(a.id, { status: 'done' as const, ...RESULT }, 'ag_ava');
 
   const recent = h.tasks.list({ completedSince: since });
   assert.deepEqual(recent.map((task) => task.title), ['A', 'C', 'B'], 'old finished and open tasks are left out');
@@ -44,16 +44,16 @@ test('reopening a finished task clears completedAt (it leaves the recently-done 
   const h = setup();
   const done = h.make('Export');
   const cancelled = h.make('Draft');
-  h.tasks.complete(done.id, RESULT, 'ag_ava');
-  h.tasks.setStatus(cancelled.id, 'cancelled', 'human');
+  h.tasks.finish(done.id, { status: 'done' as const, ...RESULT }, 'ag_ava');
+  h.tasks.finish(cancelled.id, { status: 'dropped' as const, summary: 'Dropped' }, 'human');
   assert.ok(h.tasks.get(done.id)!.completedAt);
   assert.ok(h.tasks.get(cancelled.id)!.completedAt);
   const since = h.clock.now();
 
   h.clock.advance(1000);
-  assert.equal(h.tasks.setStatus(done.id, 'open', 'human').completedAt, undefined);
-  assert.equal(h.tasks.setStatus(cancelled.id, 'working', 'human').completedAt, undefined); // B-054 fix: only the person reopens what they cancelled
+  assert.equal(h.tasks.update(done.id, { status: 'open' as const }, 'human').completedAt, undefined);
+  assert.equal(h.tasks.update(cancelled.id, { status: 'open' as const }, 'human').completedAt, undefined); // B-054 fix: only the person reopens what they cancelled
   assert.equal(h.tasks.list({ completedSince: since }).length, 0);
-  h.tasks.setStatus(cancelled.id, 'cancelled', 'human');
+  h.tasks.finish(cancelled.id, { status: 'dropped' as const, summary: 'Dropped' }, 'human');
   assert.equal(h.tasks.get(cancelled.id)!.completedAt, h.clock.now(), 'cancelling again stamps the new time');
 });

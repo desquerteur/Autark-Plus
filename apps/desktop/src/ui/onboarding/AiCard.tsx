@@ -24,7 +24,8 @@ export function AiCard() {
   const silent = noUsableModel(models.value, accounts.value);
   const move = (kind: 'next' | 'skip' | 'back') => {
     setBusy(kind);
-    goStep(kind === 'back' ? previousStep('ai') : nextStep('ai')).catch((error) => toastError(error, 'Could not continue')).finally(() => setBusy(null));
+    goStep(kind === 'back' ? previousStep('ai') : nextStep('ai'))
+      .catch((error) => toastError(error, kind === 'back' ? 'Could not go back' : 'Could not continue')).finally(() => setBusy(null));
   };
   const skip = async () => {
     const ok = await confirm({

@@ -12,7 +12,7 @@ import path from 'node:path';
 import type { Keyframes } from '../../../src/shared/api/host-bridge.ts';
 import type { HostMedia } from '../../../src/runtime/host.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
-import { NO_LISTENER } from '../../../src/runtime/decision/engine-runner.ts';
+import { NO_LISTENER } from '../../../src/runtime/decision/listener.ts';
 import { setSoundTagger, SoundTagger, type SoundEvent } from '../../../src/runtime/media/sounds.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
 import { mediaTools } from '../../../src/runtime/tools/builtin/media.ts';

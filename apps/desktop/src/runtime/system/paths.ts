@@ -5,7 +5,9 @@
 // Layout (data = Electron userData or the headless data dir):
 //   <data>/workforce.db        SQLite store
 //   <data>/blobs/ab/cd/<sha>   content-addressed files
-//   <data>/accounts/<id>/      isolated CLI homes (CODEX_HOME, CLAUDE_CONFIG_DIR …)
+//   <accounts>/<provider>/<id>/ isolated CLI homes (CODEX_HOME, CLAUDE_CONFIG_DIR …): with several companies on this PC
+//                              its one logins folder <Autark Companies>/logins, shared by all of them (root/companies.ts
+//                              loginsFolder, 16.11.2026); else <data>/accounts
 //   <data>/theme.css           the app's look (root/theme.ts; the old custom/ overlay folder is no longer used)
 //   <data>/logs/               rotating runtime log
 //   <data>/tmp/                scratch (cleared by its users, never relied upon)
@@ -28,6 +30,7 @@ export interface PathsInput {
   home?: string; // defaults to os.homedir()
   workspace?: string; // override (from settings later); default <home>/Workforce
   temp?: string; // default <data>/tmp
+  accounts?: string; // the plans' homes: this PC's logins folder (root/companies.ts loginsFolder); default <data>/accounts
 }
 
 export function createPaths(input: PathsInput): Paths {
@@ -38,7 +41,7 @@ export function createPaths(input: PathsInput): Paths {
     workspace: path.resolve(input.workspace ?? path.join(home, 'Workforce')),
     resources: path.resolve(input.resources),
     blobs: path.join(data, 'blobs'),
-    accounts: path.join(data, 'accounts'),
+    accounts: path.resolve(input.accounts ?? path.join(data, 'accounts')),
     logs: path.join(data, 'logs'),
     temp: path.resolve(input.temp ?? path.join(data, 'tmp')),
   };
@@ -52,6 +55,14 @@ export function engineCwd(paths: Pick<Paths, 'data'>): string {
 /** B-049 F3: the app's own folder for ACP plan CLIs' replacement system prompts (created by its writer on first use). */
 export function enginePromptDir(paths: Pick<Paths, 'data'>): string {
   return path.join(paths.data, 'engine-prompts');
+}
+
+/**
+ * Where this app's own CLI homes lie: the plans' homes (Paths.accounts) and <data>/accounts, where a home of before that
+ * does not move stays (macOS Claude Code, Kimi Code, a move refused – bridge/logins-1611.ts).
+ */
+export function homeRoots(paths: { data?: string; accounts?: string }): string[] {
+  return [paths.accounts, paths.data === undefined ? undefined : path.join(paths.data, 'accounts')].filter((dir): dir is string => dir !== undefined);
 }
 
 /** Creates every writable directory (resources is read-only and never created). */

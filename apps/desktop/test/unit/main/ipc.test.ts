@@ -70,7 +70,7 @@ function setup(overrides: Partial<IpcDeps> = {}) {
 
 test('every channel of the contract is registered', () => {
   const { ipc } = setup();
-  const pushOnly = new Set<string>([IPC.runtimePort, IPC.runtimeStatus, IPC.updateState, IPC.prepareRestart, IPC.navigate]);
+  const pushOnly = new Set<string>([IPC.runtimePort, IPC.runtimeStatus, IPC.updateState, IPC.prepareRestart, IPC.navigate, IPC.feedbackKey]);
   for (const channel of Object.values(IPC)) {
     if (pushOnly.has(channel)) continue;
     assert.ok(ipc.handlers.has(channel) || ipc.listeners.has(channel), channel);
@@ -249,6 +249,17 @@ test('title bar layout: trusted pages switch the caption height; any other value
   ipc.send(e.subFrame, IPC.titleBarLayout, 'compact');
   ipc.send(e.otherWindow, IPC.titleBarLayout, 'compact');
   assert.deepEqual(layouts, ['compact', 'columns', 'columns']);
+});
+
+test('title bar dim (feedback 16.11.2026, F13): trusted pages dim the caption controls; anything but true undims', () => {
+  const dims: boolean[] = [];
+  const { ipc, e } = setup({ titleBarDim: dim => { dims.push(dim); } });
+  ipc.send(e.app, IPC.titleBarDim, true);
+  ipc.send(e.app, IPC.titleBarDim, false);
+  ipc.send(e.app, IPC.titleBarDim, 'yes');
+  ipc.send(e.subFrame, IPC.titleBarDim, true);
+  ipc.send(e.otherWindow, IPC.titleBarDim, true);
+  assert.deepEqual(dims, [true, false, false]);
 });
 
 test('online (B-044): the app window\'s network event reaches the runtime; other senders are dropped without a refusal line', () => {

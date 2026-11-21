@@ -20,7 +20,7 @@ function setup() {
   f.org.add(agent('ag_ava', 'Ava'));
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
   const todo = f.tasks.create({
-    conversationId: chat.id, title: 'Take the bread out', assigneeKind: 'human', humanReason: 'physical', createdBy: 'ag_ava',
+    conversationId: chat.id, title: 'Take the bread out', assigneeKind: 'human', createdBy: 'ag_ava',
     widget: { type: 'timer', label: 'Bread', duration: 'PT5M' },
   });
   const end = f.clock.now() + 30 * M;
@@ -43,12 +43,12 @@ test('pausing, resuming and deleting the snooze ring keeps the recorded end in s
   await f.owner.call<Schedule>('schedules.update', { id: f.ring.id, active: true });
   const resumed = await listed();
   assert.equal(snoozedUntil(resumed), f.end, 'resumed: it rings at the snooze end again');
-  assert.deepEqual([resumed.status, resumed.waitingOn?.reason], ['waiting', 'Snoozed'], 'still snoozed');
+  assert.deepEqual([resumed.status, resumed.waitingOn?.why], ['waiting', 'Snoozed'], 'still snoozed');
 
   await f.owner.call('schedules.delete', { id: f.ring.id });
   const gone = f.tasks.get(f.todo.id)!;
   assert.equal(gone.waitingOn?.until, undefined, 'deleted: no stale "Snoozed until …"');
-  assert.deepEqual([gone.status, gone.waitingOn?.reason], ['waiting', 'Snoozed']);
+  assert.deepEqual([gone.status, gone.waitingOn?.why], ['waiting', 'Snoozed']);
 });
 
 test('other schedules and to-dos that are not snoozed are left as they are', async (t) => {
@@ -62,7 +62,7 @@ test('other schedules and to-dos that are not snoozed are left as they are', asy
   assert.equal(f.tasks.get(f.todo.id)!.rev, rev, 'a message schedule does not touch the to-do');
   assert.equal(f.tasks.get(f.todo.id)!.waitingOn?.until, f.end);
 
-  const open = f.tasks.create({ conversationId: f.chat.id, title: 'Water the plants', assigneeKind: 'human', humanReason: 'physical', createdBy: 'ag_ava', widget: { type: 'timer', label: 'Plants', duration: 'PT2H' } });
+  const open = f.tasks.create({ conversationId: f.chat.id, title: 'Water the plants', assigneeKind: 'human', createdBy: 'ag_ava', widget: { type: 'timer', label: 'Plants', duration: 'PT2H' } });
   const ring = f.scheduler.list({ taskId: open.id }).find((schedule) => schedule.kind === 'timer')!;
   const before = f.tasks.get(open.id)!.rev;
   await f.owner.call<Schedule>('schedules.update', { id: ring.id, active: false });

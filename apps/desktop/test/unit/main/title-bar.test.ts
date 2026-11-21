@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TITLE_BAR_HEIGHT } from '../../../src/shared/api/desktop.ts';
-import { overlayHeight, titleBarColors, titleBarOverlay, trafficLightPosition } from '../../../src/main/title-bar.ts';
+import { dimmedColors, overlayHeight, titleBarColors, titleBarOverlay, trafficLightPosition } from '../../../src/main/title-bar.ts';
 
 const STYLES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/ui/styles');
 const tokens = readFileSync(path.join(STYLES, 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -50,6 +50,25 @@ test('the caption glyphs have the gray of the header icons (--text at 70 % over 
     const expected = mix(token(marker, '--text'), token(marker, '--chrome'));
     rgb(titleBarColors(dark).symbolColor).forEach((value, i) => assert.ok(Math.abs(value - expected[i]) <= 3, `${dark ? 'dark' : 'light'} glyph channel ${i}`));
   }
+});
+
+test('under a modal the controls take the backdrop-dimmed colors (--backdrop over the row and the glyphs, F13)', () => {
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  /** #rgba (the backdrop token's form) → [r, g, b, alpha 0..1]. */
+  const rgba = (hex: string) => { assert.match(hex, /^#[0-9a-f]{4}$/i); return [...[1, 2, 3].map((i) => parseInt(hex[i].repeat(2), 16)), parseInt(hex[4], 16) / 15]; };
+  for (const [dark, marker] of [[false, ':root {'], [true, ':root[data-theme=dark]']] as const) {
+    const [r, g, b, alpha] = rgba(token(marker, '--backdrop'));
+    const under = (hex: string) => rgb(hex).map((value, i) => value * (1 - alpha) + [r, g, b][i] * alpha);
+    const plain = titleBarColors(dark);
+    const dimmed = dimmedColors(dark);
+    for (const part of ['color', 'symbolColor'] as const) {
+      const expected = under(plain[part]);
+      rgb(dimmed[part]).forEach((value, i) => assert.ok(Math.abs(value - expected[i]) <= 1, `${dark ? 'dark' : 'light'} ${part} channel ${i}: ${value} vs ${expected[i]}`));
+    }
+    if (dark) assert.equal(token(':root[data-theme=system]', '--backdrop'), token(marker, '--backdrop'), 'the system\'s dark theme dims the same');
+  }
+  assert.deepEqual(titleBarOverlay(true, 'compact', true), { ...dimmedColors(true), height: TITLE_BAR_HEIGHT - 1 }, 'dimming keeps the height');
+  assert.deepEqual(titleBarOverlay(false, 'columns', false), { ...titleBarColors(false), height: TITLE_BAR_HEIGHT - 1 });
 });
 
 test('macOS traffic lights sit vertically centered in the existing header row', () => {

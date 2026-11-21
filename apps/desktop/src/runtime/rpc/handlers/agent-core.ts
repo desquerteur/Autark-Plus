@@ -7,6 +7,7 @@
 // (agent-core/home.ts checks the folder; agents set their own through the agents.update tool), and
 // agents.openHome (owner) opens exactly that folder while it is usable – files.openPath only opens the
 // workspace and the data folder, and a home project usually lies elsewhere.
+// Owner 15.11.2026: agents.setHuman ('manage') – the person writes the agent's HUMAN.md on its page.
 // Owns: param checks. Never: business logic (agent-core/service.ts, skills/service.ts); a runtime
 // without the agent core answers 'unavailable'.
 
@@ -17,7 +18,7 @@ import '../../contracts/agent-core.ts';
 import '../../../shared/api/methods-agent-core.ts'; // the method shapes (module augmentation)
 import { isCoreFolderName } from '../../agent-core/layout.ts';
 import { staleBase } from '../../root/text-doc.ts';
-import { HOME_MAX_CHARS } from '../../../shared/model/agent-core.ts';
+import { HOME_MAX_CHARS, MAX_HUMAN_MD } from '../../../shared/model/agent-core.ts';
 import { bad, id, input, onlyKeys, optText, text } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
 
@@ -69,6 +70,12 @@ export function register(table: HandlerTable): void {
     const set = core(ctx.services).setHome(id(o, 'agentId'), home);
     return set ? { home: set } : {};
   }, 'owner');
+  table.add('agents.setHuman', (params, ctx) => {
+    const o = input(params);
+    onlyKeys(o, ['agentId', 'text']);
+    const human = core(ctx.services).setHuman(id(o, 'agentId'), text(o, 'text', { max: MAX_HUMAN_MD, allowEmpty: true, multiline: true }));
+    return { human };
+  }, MANAGE);
   table.add('agents.openHome', async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['agentId']);

@@ -1,5 +1,5 @@
-// A kept trace: a turn that never reached its engine gives it back and the next turn shows it, also what that turn was "shown"
-// already; a note or hit older than a day is dropped (also a row of 0.2.9 without a time), other calls stay.
+// A kept trace: a turn that never reached its engine gives it back and the next turn shows it, once; a note or hit older than a
+// day is dropped (also a row of 0.2.9 without a time), other calls stay.
 // Owns: these assertions only. Never: real models or engines.
 
 import { test } from 'node:test';
@@ -17,19 +17,19 @@ const NOTE: SubconsciousTrace = { calls: [{ tool: 'agent.tell', args: {}, output
 function world() {
   const t = ledgerSetup();
   const impl = new SubconsciousImpl({ services: () => t.services, runner: false });
-  const before = () => impl.beforeTurn({ agent: t.tom, thread: t.chat.id });
+  const before = () => impl.beforeTurn({ agent: t.tom, thread: 'main' });
   return { t, impl, before };
 }
 
-test('a trace put back reaches the next turn once, although it counted as shown', async () => {
+test('a trace put back reaches the next turn once, also after that turn failed before its engine', async () => {
   const { t, impl, before } = world();
   try {
-    impl.putBack(t.tom.id, t.chat.id, NOTE);
+    impl.putBack(t.tom.id, 'main', NOTE);
     const first = await before();
     assert.equal(first?.calls[0].output, NOTE.calls[0].output);
-    impl.putBack(t.tom.id, t.chat.id, first!); // that turn failed before its engine
+    impl.putBack(t.tom.id, 'main', first!); // that turn failed before its engine
     const second = await before();
-    assert.equal(second?.calls[0].output, NOTE.calls[0].output, 'not hidden as "shown within the hour"');
+    assert.equal(second?.calls[0].output, NOTE.calls[0].output, 'given back whole');
     assert.equal(await before(), undefined, 'taken: not a third time');
   } finally { t.cleanup(); }
 });
@@ -37,7 +37,7 @@ test('a trace put back reaches the next turn once, although it counted as shown'
 test('a note or hit older than a day is dropped, also when a turn keeps failing; another call stays', async () => {
   const { t, impl, before } = world();
   try {
-    impl.putBack(t.tom.id, t.chat.id, { calls: [
+    impl.putBack(t.tom.id, 'main', { calls: [
       ...NOTE.calls,
       { tool: 'vector.search', args: { query: 'x', in: ['memory'] }, output: 'h1 memory/a.md' },
       { tool: 'context.restore', args: { ids: ['t1'] }, output: 'restored' },
@@ -45,7 +45,7 @@ test('a note or hit older than a day is dropped, also when a turn keeps failing;
     t.clock.advance(DAY - 1000);
     const kept = await before();
     assert.equal(kept?.calls.length, 3, 'younger than a day');
-    impl.putBack(t.tom.id, t.chat.id, kept!);
+    impl.putBack(t.tom.id, 'main', kept!);
     t.clock.advance(2000);
     assert.deepEqual((await before())?.calls.map((call) => call.tool), ['context.restore'], 'putting it back does not make it young again');
   } finally { t.cleanup(); }
@@ -56,7 +56,7 @@ test('a kept row of 0.2.9 has no time per call: its row\'s time counts', async (
   try {
     const write = (at: number) => t.services.db.run(
       `INSERT INTO kv (ns, key, value, updated_at) VALUES ('subconscious_trace', ?, ?, ?) ON CONFLICT(ns, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      [`${t.tom.id}:${t.chat.id}`, JSON.stringify(NOTE), at]);
+      [`${t.tom.id}:main`, JSON.stringify(NOTE), at]);
     write(t.clock.now() - 1000);
     assert.equal((await before())?.calls.length, 1);
     t.services.db.run(`DELETE FROM kv WHERE ns = 'subconscious_trace'`);
@@ -80,7 +80,7 @@ test('routing fails before the engine: the trace goes back for the thread', asyn
   Object.assign(h.services, { router: { route: async () => { throw new WorkforceError('unavailable', 'No model is connected.'); } } });
   const outcome = await new TurnExecutor(() => h.services).execute(h.request());
   assert.equal(outcome.status, 'failed');
-  assert.deepEqual(back, [{ agentId: h.tom.id, thread: h.chat.id, trace: NOTE }]);
+  assert.deepEqual(back, [{ agentId: h.tom.id, thread: 'main', trace: NOTE }]);
 });
 
 test('preparing the turn fails before the engine: the trace goes back too; a turn that ran keeps nothing', async () => {

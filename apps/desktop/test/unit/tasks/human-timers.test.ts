@@ -15,11 +15,10 @@ import { HUMAN_ID } from '../../../src/shared/ids.ts';
 import { uiBlocksOf } from '../../../src/shared/blocks/parse.ts';
 import { countNow, isLater } from '../../../src/shared/model/todo-later.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
-import { chatTools } from '../../../src/runtime/tools/builtin/chat.ts';
-import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { canSnooze } from '../../../src/ui/blocks/snooze.ts';
 import { createHandlerTable } from '../../../src/runtime/rpc/handlers/index.ts';
 import { sessionInfo } from '../../../src/runtime/rpc/handlers/session.ts';
+import { ChatOutbox } from '../../../src/runtime/agents/chat-out.ts';
 import { agent, harness } from '../chat/harness.ts';
 
 const M = 60_000;
@@ -31,7 +30,7 @@ function setup() {
   const chat = h.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
   h.scheduler.start();
   const timer = (widget: Record<string, unknown>, title = 'Take the bread out') => h.tasks.create({
-    conversationId: chat.id, title, assigneeKind: 'human', humanReason: 'physical', createdBy: 'ag_ava', widget: { type: 'timer', label: title, ...widget },
+    conversationId: chat.id, title, assigneeKind: 'human', createdBy: 'ag_ava', widget: { type: 'timer', label: title, ...widget },
   });
   const at = (ms: number) => { h.clock.set(ms); if (h.timers.pending.length) h.timers.fire(); };
   /** Pushes for the ring of a to-do (not the 'new to-do' notice). */
@@ -48,13 +47,13 @@ test('snooze: the to-do waits, comes back after 10 minutes with a push – no re
   const start = h.clock.now();
   const todo = h.timer({ duration: 'PT5M' });
   h.at(start + 5 * M + 1000);
-  assert.equal(h.tasks.get(todo.id)?.status, 'needs_you', 'it rang');
+  assert.equal(h.tasks.get(todo.id)?.status, 'open', 'it rang');
   const first = h.rings('Take the bread out');
   assert.ok(first >= 1, 'it pushed');
 
   const snoozed = h.tasks.snooze(todo.id, h.clock.now() + 10 * M);
   assert.equal(snoozed.status, 'waiting');
-  assert.equal(snoozed.waitingOn?.reason, 'Snoozed');
+  assert.equal(snoozed.waitingOn?.why, 'Snoozed');
   assert.equal(snoozed.waitingOn?.until, h.clock.now() + 10 * M, 'the snooze records when it ends');
   const waiting = h.tasks.todos().find((entry) => entry.id === todo.id);
   assert.equal(waiting?.status, 'waiting', 'listed under Later while snoozed (F04)');
@@ -64,7 +63,7 @@ test('snooze: the to-do waits, comes back after 10 minutes with a push – no re
   assert.equal(h.answerWakes().length, 0, 'the agent is not woken');
 
   h.at(h.clock.now() + 10 * M + 1000);
-  assert.equal(h.tasks.get(todo.id)?.status, 'needs_you', 'back after 10 minutes');
+  assert.equal(h.tasks.get(todo.id)?.status, 'open', 'back after 10 minutes');
   assert.equal(h.listed(todo.id), true);
   assert.equal(countNow(h.tasks.todos(), h.clock.now()), 1, 'due now again');
   assert.equal(h.rings('Take the bread out'), first + 1, 'it pushes again');
@@ -91,7 +90,7 @@ test('done early: the reminder never pushes; cancelled: it never rings', () => {
   assert.equal(h.scheduler.list({ taskId: early.id }).length, 0, 'the one-shot ring is gone');
   const cancelled = h.timer({ duration: 'PT20M' }, 'Water the plants');
   const before = h.rings('Take the bread out') + h.rings('Water the plants');
-  h.tasks.setStatus(cancelled.id, 'cancelled', HUMAN_ID);
+  h.tasks.finish(cancelled.id, { status: 'dropped' as const, summary: 'Dropped' }, HUMAN_ID);
   h.at(start + 31 * M);
   assert.equal(h.rings('Take the bread out') + h.rings('Water the plants'), before, 'no push for finished to-dos');
 });
@@ -105,7 +104,7 @@ test('a daily timer cycles: Done waits for the next ring, the author hears only 
   assert.ok(h.scheduler.list({ taskId: todo.id }).some((schedule) => 'cron' in schedule.spec), 'a repeating ring');
 
   h.at(nine.getTime() + 1000);
-  assert.equal(h.tasks.get(todo.id)?.status, 'needs_you');
+  assert.equal(h.tasks.get(todo.id)?.status, 'open');
   assert.equal(h.tasks.get(todo.id)?.dueAt, nine.getTime());
   h.tasks.answer({ taskId: todo.id, answer: { event: 'done' }, by: HUMAN_ID });
   let current = h.tasks.get(todo.id)!;
@@ -119,7 +118,7 @@ test('a daily timer cycles: Done waits for the next ring, the author hears only 
   h.wakes.done(h.wakes.claim('ag_ava', Number.MAX_SAFE_INTEGER).map((wake) => wake.id));
 
   h.at(nine.getTime() + 24 * H + 1000);
-  assert.equal(h.tasks.get(todo.id)?.status, 'needs_you', 'it rings again the next day');
+  assert.equal(h.tasks.get(todo.id)?.status, 'open', 'it rings again the next day');
   assert.ok(h.tasks.get(todo.id)!.dueAt! > h.clock.now() - M, 'due just now, not a day ago');
   assert.deepEqual(h.scheduler.list({ taskId: todo.id }).map((schedule) => schedule.id), ringIds, 'the moved time keeps the one daily ring');
   h.tasks.answer({ taskId: todo.id, answer: { event: 'done' }, by: HUMAN_ID });
@@ -147,7 +146,7 @@ test('a timer block posted again with its id for a new time rings then – also 
   };
   const todo = post(start + H);
   h.at(start + H + 1000);
-  assert.equal(h.tasks.get(todo.id)?.status, 'needs_you', 'it rang');
+  assert.equal(h.tasks.get(todo.id)?.status, 'open', 'it rang');
   const rang = h.rings('Stretch');
 
   assert.equal(post(start + 5 * H).id, todo.id, 'the same to-do');
@@ -193,16 +192,13 @@ test('a pending snooze is not the widget\'s ring: a new timer time while snoozed
   assert.deepEqual(specs.sort((a, b) => a! - b!), [snoozeAt, start + 2 * H], 'the snooze stays, the widget gets its own ring');
 });
 
-test('an ask block an agent posts with chat.send is a to-do, so Snooze works on it; "todo": false stays in the chat only', async () => {
+test('an ask block an agent posts in a <chat> block is a to-do, so Snooze works on it; "todo": false stays in the chat only', async () => {
   const h = setup();
-  const send = chatTools.find((tool) => tool.name === 'chat.send')!;
-  const ctx = {
-    agent: h.org.get('ag_ava')!, runId: 'run_send', conversationId: h.chat.id, mode: 'general',
-    services: h.services as RuntimeServices, signal: new AbortController().signal, status: () => {},
-  } as ToolContext;
   const body = '```ui\n{"type":"timer","duration":"PT10M","label":"Bread"}\n```\n```ui\n{"type":"timer","duration":"PT10M","label":"Tea","todo":false}\n```';
-  const out = await send.run({ text: body }, ctx);
-  const { messageId } = JSON.parse((out.content[0] as { text: string }).text) as { messageId: string };
+  const out = new ChatOutbox(h.services as RuntimeServices, { agentId: 'ag_ava', runId: 'run_send' });
+  out.segment(`<chat to="${h.chat.id}">${body}</chat>`, true);
+  await out.done();
+  const messageId = h.chats.messages(h.chat.id).filter((message) => message.authorId === 'ag_ava').at(-1)!.id;
   const [todo, inline] = uiBlocksOf(body);
   const snoozed = h.tasks.snooze({ messageId, blockIndex: todo.index }, h.clock.now() + 10 * M);
   assert.equal(snoozed.status, 'waiting', 'the block\'s to-do snoozes');

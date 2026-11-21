@@ -5,108 +5,34 @@
 // when it starts – the call's row in the chat, written by this device's PC – and calls.end when it ends; a page that
 // cannot start calls, a person's, talks without one). The first reply is usually the agent's live voice, a fast small
 // model (runtime/calls/talker.ts), and the agent's own answer follows when it is done; both are read. The wait for a
+// KI-Runde 17.11.2026 (decision 7.3): the agent's live voice writes its line while it speaks, so each finished sentence of
+// such a row (meta.call.voice 'talker') is read as it completes and the rest follows when the row is final.
 // reply goes on while an agent of the chat works (a row that streams, also one synced from another PC) and ends
 // REPLY_TIMEOUT_MS after the line otherwise; an agent that starts working later opens it again. A call is this same
 // mode started from the chat header (realtime voice is the other way, ui/chat/call/realtime-call.ts).
 // Parallel voice (SM11, simplest form): up to MAX_VOICE_SESSIONS chats talk at once over the one microphone. The
 // chat started or focused last hears the next utterance; replies are read one at a time, the listening chat's
 // first, another chat's with its title in front. Speech while a reply is awaited goes out at once (that reply is
-// then not read; it stays in the chat). Nothing is taken while a reply is read (the page's echo guard), unless
-// the person talks over it (bargeIn). Talking never stops agent work.
+// then not read; it stays in the chat); speech while the last line is still heard or a reply is read waits and goes out
+// as the next line, in the order it was said. The page discards what its microphone picks up while it reads (the echo
+// guard), so a take that arrives here during a reading is the person's own words from before it. Talking
+// never stops agent work. Besides the agents' lines, a system line of the chat's own call is read (the program says
+// that no model can answer, runtime/calls/no-lane.ts).
+// B-081: start with a callId takes that call (an agent's ring, or a call on another device): from then on every new
+// agent line of the chat is read – the agent's opening line first. When the speaker changes, its name goes in front
+// (one reading voice for every agent). A chat whose call row shows another holder (another device took it over) ends
+// quietly, without calls.end. add() puts a pin from the browser in as a line of the call. Shapes, helpers: conversation-parts.ts.
 // Owns: the chats, the reading queue and the microphone's view (publish's first argument; every chat is its
 // third). Never: touches a microphone, timer or platform global (all injected), or changes what was said.
 
-import type { EventMap } from '../api/events.ts';
-import type { MethodName, ParamsOf, ResultOf } from '../api/methods.ts';
-import type { Topic } from '../api/protocol.ts';
-import type { Message, SpeechMeta } from '../model/chat.ts';
+import { callHolder, callRecord } from '../model/call.ts';
+import type { Attachment, Message } from '../model/chat.ts';
+import { MAX_VOICE_SESSIONS, REPLY_TIMEOUT_MS, REPEAT_HINT, SESSIONS_FULL, TRANSCRIBE_TIMEOUT_MS, languageHint, sentencesDone, speakable, spokenMeta } from './conversation-parts.ts';
+import type { TalkingChat as Chat, Reading, VoiceSessionEntry, VoiceSessionView, VoiceSessionsDeps } from './conversation-parts.ts';
 
-/** What the microphone does: the listening chat and its state ('speaking' while any reply is read). */
-export interface VoiceSessionView {
-  id: string;
-  conversationId: string;
-  status: 'starting' | 'listening' | 'transcribing' | 'responding' | 'speaking';
-  hint?: string;
-}
+export * from './conversation-parts.ts';
 
-/** One talking chat (the listening one first). */
-export interface VoiceSessionEntry extends VoiceSessionView {
-  listening: boolean;
-  /** Replies of this chat waiting to be read aloud. */
-  queued?: number;
-}
-
-/** The runtime surface a conversation needs (the app's rpc). */
-export interface ConversationRpc {
-  call<M extends MethodName>(method: M, params?: ParamsOf<M>, timeoutMs?: number): Promise<ResultOf<M>>;
-  on<E extends 'message.created' | 'message.updated'>(event: E, listener: (data: EventMap[E]) => void): () => void;
-  /** Holds the topic until the returned release is called. */
-  subscribe(topic: Topic): Promise<() => void>;
-}
-
-export interface VoiceSessionsDeps {
-  rpc: ConversationRpc;
-  /** The microphone's view (null: no chat talks), why a chat ended, and every talking chat. */
-  publish(mic: VoiceSessionView | null, error: string | undefined, chats: VoiceSessionEntry[]): void;
-  /** Read `text` aloud, then call spokenDone(micId). */
-  speak(micId: string, text: string): void;
-  /** Stop reading now. */
-  silence(): void;
-  newId(): string;
-  /** Runs `fn` once after `ms`; returns its cancel. */
-  after(ms: number, fn: () => void): () => void;
-  /** The transcription's language hint (the profile language). */
-  language?(): string | undefined;
-  replyTimeoutMs?: number;
-}
-
-export const MAX_VOICE_SESSIONS = 3;
-export const SESSIONS_FULL = `At most ${MAX_VOICE_SESSIONS} voice conversations run at once. End one to start another.`;
-export const REPEAT_HINT = 'I did not catch that. Please say it again.';
-export const REPLY_TIMEOUT_MS = 120_000;
-export const TRANSCRIBE_TIMEOUT_MS = 130_000;
 const MAX_TEXT = 32_000;
-/** What voice.transcribe accepts as `language`. */
-const LANGUAGE = /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/;
-
-/** A transcription language hint ("de", "en-US"), else undefined: the take goes without one. */
-export function languageHint(language: string | undefined): string | undefined {
-  return language && language.length <= 16 && LANGUAGE.test(language) ? language : undefined;
-}
-
-/** How a dictated (`live` false) or live-spoken line is marked when it is sent. */
-export function spokenMeta(live: boolean): SpeechMeta {
-  return live ? { source: 'endpoint', live: true } : { source: 'endpoint' };
-}
-
-/** Turns a Markdown answer into speakable text: no code/ui/app fences, no markup, bounded. */
-export function speakable(markdown: string, max = 4000): string {
-  return markdown
-    .replace(/```[\s\S]*?(```|$)/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[`*_#>|~]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, max);
-}
-
-interface Chat {
-  id: string;
-  conversationId: string;
-  title: string;
-  starting: boolean;
-  sentSeq: number | null;
-  awaiting: boolean;
-  sending: boolean;
-  pending: string;
-  spoken: Set<string>;
-  /** This device's call in the chat (calls.start), when the page may start calls. */
-  callId?: string;
-  release?: () => void;
-  cancelTimer?: () => void;
-}
-interface Reading { chat: Chat; text: string }
 
 export class VoiceSessions {
   private readonly deps: VoiceSessionsDeps;
@@ -115,6 +41,7 @@ export class VoiceSessions {
   private queue: Reading[] = [];
   private reading: Reading | null = null;
   private transcribing = false;
+  private held: string[] = []; // utterances said while the one before is heard or a reply is read, in order
   private hint: string | undefined;
 
   constructor(deps: VoiceSessionsDeps) {
@@ -145,12 +72,13 @@ export class VoiceSessions {
     });
   }
 
-  /** Talk in `conversationId`: a new chat that listens, or the one already talking there listens now. */
-  async start(conversationId: string): Promise<VoiceSessionView> {
+  /** Talk in `conversationId`: a new chat that listens, or the one already talking there listens now; `callId` takes that call. */
+  async start(conversationId: string, callId?: string): Promise<VoiceSessionView> {
     const running = this.chats.find((chat) => chat.conversationId === conversationId);
     if (running) { this.focus(running); return this.current(); }
     if (this.chats.length >= MAX_VOICE_SESSIONS) throw new Error(SESSIONS_FULL);
-    const chat: Chat = { id: this.deps.newId(), conversationId, title: '', starting: true, sentSeq: null, awaiting: false, sending: false, pending: '', spoken: new Set() };
+    // A call it takes: every new agent line is read from now on, the opening line first (it comes as an event).
+    const chat: Chat = { id: this.deps.newId(), conversationId, title: '', starting: true, sentSeq: callId ? 0 : null, awaiting: false, sending: false, pending: '', spoken: new Set() };
     this.chats.unshift(chat);
     this.micId ??= this.deps.newId();
     this.hint = undefined;
@@ -161,9 +89,11 @@ export class VoiceSessions {
       const release = await this.deps.rpc.subscribe(`chat:${conversationId}`);
       if (!this.chats.includes(chat)) { release(); throw new Error('Voice conversation was cancelled.'); }
       chat.release = release;
-      const call = await this.deps.rpc.call('calls.start', { conversationId }).catch(() => undefined); // a person's page talks without a call row
+      const taking = callId ? { conversationId, callId } : { conversationId };
+      const call = await this.deps.rpc.call('calls.start', taking).catch((error: unknown) => { if (callId) throw error; return undefined; }); // a person's page talks without a call row
       if (!this.chats.includes(chat)) { this.endCall(call?.callId); throw new Error('Voice conversation was cancelled.'); }
       chat.callId = call?.callId;
+      chat.holder = call?.holder;
       chat.starting = false;
       this.publish();
       return this.current();
@@ -186,27 +116,62 @@ export class VoiceSessions {
     this.publish(error);
   }
 
-  /** One utterance the page cut and uploaded: transcribed, then sent in the listening chat. */
+  /** One utterance the page cut and uploaded: transcribed, then sent in the listening chat; one said while the last is heard or a reply is read is the next line. */
   async utterance(micId: string, fileId: string): Promise<void> {
+    if (micId !== this.micId || !this.chats[0]) return;
+    if (this.transcribing || this.reading) { this.held.push(fileId); return; } // KI-Runde 17.11.: words said while the last line is heard or a reply is read are kept
+    await this.hear(micId, fileId);
+    await this.drainHeld(micId);
+  }
+
+  /** The takes that waited, in the order they were said, until a reply is read again (then the reading's end drains them). */
+  private async drainHeld(micId: string): Promise<void> {
+    while (micId === this.micId && !this.reading && this.held.length) await this.hear(micId, this.held.shift()!); // looked at before a take leaves the list
+  }
+
+  private async hear(micId: string, fileId: string): Promise<void> {
     const chat = this.chats[0];
-    if (micId !== this.micId || !chat || this.reading || this.transcribing) return;
+    if (!chat) return;
     this.transcribing = true;
     this.hint = undefined;
     this.publish();
     try {
       const language = languageHint(this.deps.language?.());
-      const heard = await this.deps.rpc.call('voice.transcribe', language ? { fileId, language } : { fileId }, TRANSCRIBE_TIMEOUT_MS);
+      const heard = await this.deps.rpc.call('voice.transcribe', { fileId, live: true, ...(language ? { language } : {}) }, TRANSCRIBE_TIMEOUT_MS);
       if (micId !== this.micId) return;
       const text = typeof heard?.text === 'string' ? heard.text.trim() : '';
       this.transcribing = false;
       const target = this.chats.includes(chat) ? chat : this.chats[0];
       if (!text || !target) { this.hint = REPEAT_HINT; this.publish(); return; } // no words heard: say it again
       this.submit(target, text);
-    } catch (error) {
-      if (micId === this.micId) this.stopAll((error as Error).message);
+    } catch {
+      if (micId !== this.micId) return;
+      this.transcribing = false;
+      const target = this.chats.includes(chat) ? chat : this.chats[0];
+      if (target) void this.sendAudio(target, fileId); // not heard here: the line goes as its recording, the call goes on
     } finally {
       if (micId === this.micId && this.transcribing) { this.transcribing = false; this.publish(); }
     }
+  }
+
+  /** B-082: a line this device could not hear goes out as its recording – the runtime hears it (with a retry beside it). */
+  private async sendAudio(chat: Chat, fileId: string): Promise<void> {
+    chat.awaiting = false;
+    this.clearTimer(chat);
+    this.publish();
+    try {
+      const speech = { ...spokenMeta(true), ...(chat.callId ? { call: chat.callId } : {}) };
+      const attachments = [{ fileId, name: 'Utterance.wav', mime: 'audio/wav', size: 0 }, ...(this.deps.shown ? await this.shown(chat) : [])]; // the runtime takes mime and size from the stored file
+      const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body: '', attachments, clientId: this.deps.newId(), speech });
+      if (!this.chats.includes(chat)) return;
+      if (message.meta?.call?.id) chat.callId = message.meta.call.id;
+      chat.sentSeq = Math.max(chat.sentSeq ?? 0, message.seq);
+      chat.awaiting = true;
+      this.armTimer(chat);
+    } catch {
+      this.hint = REPEAT_HINT; // not even sent: say it again
+    }
+    if (this.chats.includes(chat)) this.publish();
   }
 
   /** The page finished reading aloud: the next reply, or listen again. */
@@ -214,19 +179,35 @@ export class VoiceSessions {
     if (micId !== this.micId || !this.reading) return;
     this.reading = null;
     if (!this.readNext()) this.publish();
+    if (!this.reading && !this.transcribing && this.held.length) void this.drainHeld(micId);
   }
 
   /** The person talks over the reading (the page's echo-cancelled microphone): it stops, the queued replies go. */
   bargeIn(micId: string): boolean {
     if (micId !== this.micId || !this.reading) return false;
+    const over = this.reading.chat;
+    if (over.said) { over.spoken.add(over.said.id); over.said = undefined; } // the rest of a line still being written is not read either
     this.reading = null;
     this.queue = [];
     this.deps.silence();
     this.publish();
+    if (!this.transcribing && this.held.length) void this.drainHeld(micId);
     return true;
   }
 
+  /** B-081: a pin (not speech) as a line of `conversationId`'s call, sent like an utterance; false when that chat does not talk here. */
+  add(conversationId: string, text: string): boolean {
+    const chat = text.trim() ? this.chats.find((entry) => entry.conversationId === conversationId && !entry.starting) : undefined;
+    if (chat) this.submit(chat, text.trim());
+    return Boolean(chat);
+  }
+
   // ------------------------------------------------------------------ internals
+
+  /** Owner 19.11.2026: the picture this device shows on the chat's call goes with the line; one that fails stays behind, the line goes. */
+  private async shown(chat: Chat): Promise<Attachment[]> {
+    try { return (await this.deps.shown?.(chat.conversationId)) ?? []; } catch { return []; }
+  }
 
   private submit(chat: Chat, text: string): void {
     chat.pending = [chat.pending, text].filter(Boolean).join('\n');
@@ -246,7 +227,8 @@ export class VoiceSessions {
     this.publish();
     try {
       const speech = { ...spokenMeta(true), ...(chat.callId ? { call: chat.callId } : {}) };
-      const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body, clientId: this.deps.newId(), speech });
+      const attachments = this.deps.shown ? await this.shown(chat) : []; // no extra wait where nothing can be shown
+      const message = await this.deps.rpc.call('messages.send', { conversationId: chat.conversationId, body, clientId: this.deps.newId(), speech, ...(attachments.length ? { attachments } : {}) });
       if (!this.chats.includes(chat)) return;
       const call = message.meta?.call?.id;
       if (call) chat.callId = call; // the runtime's call for this line – a new one when the device's connection had closed meanwhile or calls.start failed – so the end reaches it
@@ -264,17 +246,50 @@ export class VoiceSessions {
 
   private observe(message: Message): void {
     const chat = this.chats.find((entry) => entry.conversationId === message.conversationId);
-    if (!chat || chat.sentSeq === null || message.authorKind !== 'agent' || message.seq <= chat.sentSeq || message.kind === 'status' || message.silent) return;
-    if (message.state === 'streaming') { this.working(chat); return; }
+    const record = chat?.callId ? callRecord(message) : undefined;
+    if (chat && record && record.id === chat.callId && chat.holder && callHolder(record) !== chat.holder) { chat.callId = undefined; this.end(chat); return; } // taken over
+    const voice = message.authorKind === 'agent' || (message.authorKind === 'system' && chat?.callId !== undefined && message.meta.call?.id === chat.callId); // a system line of my call: the program speaks (runtime/calls/no-lane.ts)
+    if (!chat || chat.sentSeq === null || !voice || message.seq <= chat.sentSeq || message.kind === 'status' || message.silent) return;
+    if (message.state === 'streaming') { this.piece(chat, message); this.working(chat); return; }
     if (chat.spoken.has(message.id)) return;
     chat.spoken.add(message.id);
     if (chat.spoken.size > 200) chat.spoken = new Set([...chat.spoken].slice(-100));
     chat.awaiting = false;
     this.clearTimer(chat);
     if (message.state === 'failed') { this.end(chat, message.meta.error ?? 'The voice reply failed.'); return; }
-    if (chat.pending) { void this.drain(chat); return; } // the person already spoke again
-    const text = message.state === 'final' ? speakable(message.body) : '';
-    if (text) this.enqueue({ chat, text }); else this.publish();
+    if (chat.pending) { chat.said = undefined; void this.drain(chat); return; } // the person already spoke again
+    const whole = message.state === 'final' ? speakable(message.body) : '';
+    const text = this.rest(chat, message, whole); // KI-Runde 17.11.: what of this answer was not already read while it was written
+    if (text) this.read(chat, message, text); else this.publish();
+  }
+
+  /**
+   * KI-Runde 17.11.2026 (decision 7.3): the call voice writes its line while it speaks, so each finished sentence of such
+   * a row goes to the reader at once; the rest follows when the row is final.
+   */
+  private piece(chat: Chat, message: Message): void {
+    if (message.meta.call?.voice !== 'talker' || chat.callId === undefined || message.meta.call.id !== chat.callId || chat.pending) return;
+    const done = sentencesDone(speakable(message.body));
+    const already = chat.said?.id === message.id ? chat.said.text : '';
+    if (!done || done.length <= already.length) return;
+    chat.said = { id: message.id, text: done };
+    this.read(chat, message, already && done.startsWith(already) ? done.slice(already.length).trim() : done);
+  }
+
+  /** The part of a finished answer that was not read while it was being written. */
+  private rest(chat: Chat, message: Message, whole: string): string {
+    const already = chat.said?.id === message.id ? chat.said.text : '';
+    chat.said = undefined;
+    if (!already || !whole) return whole;
+    return whole.startsWith(already) ? whole.slice(already.length).trim() : whole;
+  }
+
+  /** One piece of an agent's answer into the reading queue, with the speaker's name when it changed. */
+  private read(chat: Chat, message: Message, text: string): void {
+    const changed = chat.speaker !== undefined && chat.speaker !== message.authorId;
+    chat.speaker = message.authorId;
+    const name = changed ? speakable(this.deps.nameOf?.(message.authorId) ?? message.meta.call?.name ?? '', 60) : '';
+    this.enqueue({ chat, text, ...(name ? { name } : {}) });
   }
 
   /** The listening chat's replies go before other chats' waiting ones (never before the one being read). */
@@ -290,7 +305,7 @@ export class VoiceSessions {
     if (!next) return false;
     this.reading = next;
     const other = this.chats.length > 1 && this.chats[0] !== next.chat;
-    const name = other ? speakable(next.chat.title, 80) || 'Another chat' : '';
+    const name = [other ? speakable(next.chat.title, 80) || 'Another chat' : '', next.name ?? ''].filter(Boolean).join(', ');
     this.publish();
     this.deps.speak(this.micId, name ? `${name}: ${next.text}` : next.text);
     return true;
@@ -348,6 +363,7 @@ export class VoiceSessions {
     if (!this.chats.length) {
       this.micId = null;
       this.queue = [];
+      this.held = [];
       this.transcribing = false;
       this.hint = undefined;
     } else if (!this.reading) this.readNext();

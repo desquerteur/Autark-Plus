@@ -11,10 +11,16 @@
 // that fails says so on screen (no endless spinner, one reload at most for the worker); the code screen keeps the
 // screen awake and the wait survives a lock; Forget removes this phone on the PC first (phone.forget, ≤ 3 s); a PC that
 // refuses the token shows "This phone was removed", PCs that stop answering add Forget to the waiting screen.
+// B-087: a new channel tells the PC UI at once (window.autarkResume → lib/rpc.ts checkAlive), as the Android app's
+// 'resume' does, so its socket does not wait out rpc's backoff after the PC came back.
+// F29: with '/' comes the PC's list of its UI files' SHA-256 (UI_HASHES_PATH), over the same channel; it is kept for the
+// service worker, which hands the page only files with those bytes (ui-hashes.ts). A PC without the list gets "Update";
+// a start without a tunnel boots from the copies only while a list is kept; a file the worker refused is shown.
 // Owns: the start order and the autarkHosted object. Never: logs or shows the token, or runs the PC UI before the marker
-// check passed once.
+// check and the PC's list passed once.
 
 import { DEFAULT_RELAY } from '../../shared/model/relay.ts';
+import { UI_HASHES_PATH } from '../../shared/model/ui-hashes.ts';
 import type { AutarkHosted } from '../pwa/hosted.ts';
 import { fromUtf8, utf8 } from './bytes.ts';
 import { startBridge } from './bridge.ts';
@@ -25,9 +31,12 @@ import { pairByRemoteId, Pairing, phoneName } from './pair.ts';
 import { Screens } from './screens.ts';
 import { HostedStore, idbBackend, keepsKeys, pcEntry, type HostedUi, type Saved } from './store.ts';
 import type { StreamMux } from './streams.ts';
+import { keepUiHashes, keptUiHashes, PC_CACHE } from './ui-hashes.ts';
 import { StreamSocket } from './ws.ts';
 
 const BASE = new URL('./', location.href).pathname;
+/** The app's folder as a URL: the service worker's scope, where the PC's list is kept. */
+const SCOPE = new URL('./', location.href).href;
 /** The meeting server the site was built for (<meta name="autark-relay">, apps/website config.mjs), else the default. */
 const RELAY = ((value) => (value && /^wss?:\/\/[^\s"'<>]+$/.test(value) ? value : DEFAULT_RELAY))(document.querySelector<HTMLMetaElement>('meta[name="autark-relay"]')?.content);
 const TOKEN_KEY = 'wf.token';
@@ -37,6 +46,8 @@ const RELOADED_KEY = 'hs.reloaded';
 const NOTE_KEY = 'hs.note';
 const QUICK_MS = 4_000;
 const FORGET_MS = 3_000;
+/** F29: the worker refused a file of the PC's UI; its screen stays. */
+let fileRefused = false;
 
 const standalone = () => matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true;
 const ios = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
@@ -164,7 +175,7 @@ async function run(screens: Screens, store: HostedStore, saved: Saved): Promise<
     connection.stop();
     await store.clear().catch(() => undefined);
     try { localStorage.removeItem(TOKEN_KEY); } catch { /* blocked */ }
-    await caches.delete('autark-pc').catch(() => false);
+    await caches.delete(PC_CACHE).catch(() => false);
     if (note) session.set(NOTE_KEY, note);
     location.replace(BASE);
   };
@@ -176,7 +187,7 @@ async function run(screens: Screens, store: HostedStore, saved: Saved): Promise<
   };
   const connection = new Connection({
     saved,
-    status: (text) => screens.status(text),
+    status: (text, connected) => { screens.status(text); if (connected) (window as { autarkResume?: () => void }).autarkResume?.(); },
     pcsChanged: (pcs) => void store.savePcs(pcs),
     refused: () => { gone = true; connection.stop(); screens.removed(() => void clearHere()); },
     unanswered: (on) => screens.offerForget(on),
@@ -192,7 +203,9 @@ async function run(screens: Screens, store: HostedStore, saved: Saved): Promise<
   startBridge(navigator.serviceWorker, (ms) => connection.awaitMux(ms));
   startEdgeBack(document);
   navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
-    if ((event.data as { type?: string } | null)?.type === 'wf.wake') connection.nudge();
+    const data = event.data as { type?: string; file?: unknown } | null;
+    if (data?.type === 'wf.wake') connection.nudge();
+    if (data?.type === 'hosted.refused' && typeof data.file === 'string') { fileRefused = true; screens.fileRefused(data.file.slice(0, 160)); }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
@@ -205,37 +218,43 @@ async function run(screens: Screens, store: HostedStore, saved: Saved): Promise<
   connection.start();
   try { if (localStorage.getItem(TOKEN_KEY) !== saved.token) localStorage.setItem(TOKEN_KEY, saved.token); } catch { /* blocked */ }
   const mux = await connection.awaitMux(QUICK_MS);
-  let ui = await store.ui();
+  // The copies boot only together with the list they are checked against.
+  let ui = (await keptUiHashes(caches, SCOPE)) ? await store.ui() : undefined;
   if (gone) return;
-  if (mux) {
-    const index = await httpFetch(mux, { method: 'GET', path: '/', headers: [['Accept', 'text/html']] }).catch(() => undefined);
-    if (index && index.head.status === 200) {
-      const entry = pcEntry(fromUtf8(index.body));
-      if (!entry) { screens.update(() => void forget()); return; }
-      ui = entry;
-      await store.saveUi(entry);
-    }
-  }
+  const fresh = mux ? await fromPc(mux, store) : undefined;
+  if (fresh === 'old') { screens.update(() => void forget()); return; }
+  if (fresh) ui = fresh;
   if (gone) return;
   if (!ui) {
-    // First start and no tunnel yet: wait for one (the status line says why), then check the marker.
-    const late = await new Promise<HostedUi | undefined>((resolve) => {
+    // First start and no tunnel yet: wait for one (the status line says why), then check the marker and the list.
+    const late = await new Promise<HostedUi | 'old'>((resolve) => {
       const tryAgain = async () => {
         const next = await connection.awaitMux(60_000);
         if (gone) return; // stopped: awaitMux answers at once, so no loop
-        if (!next) { void tryAgain(); return; }
-        const index = await httpFetch(next, { method: 'GET', path: '/' }).catch(() => undefined);
-        if (!index || index.head.status !== 200) { void tryAgain(); return; }
-        resolve(pcEntry(fromUtf8(index.body)));
+        const got = next ? await fromPc(next, store) : undefined;
+        if (got) resolve(got); else setTimeout(() => void tryAgain(), next ? 1_000 : 0); // a PC that answered: not in a tight loop
       };
       void tryAgain();
     });
     if (gone) return;
-    if (!late) { screens.update(() => void forget()); return; }
+    if (late === 'old') { screens.update(() => void forget()); return; }
     ui = late;
-    await store.saveUi(late);
   }
   mount(screens, ui);
+}
+
+/**
+ * The PC's '/' and its list of UI file hashes, both over the channel: the entry files (kept with the list), 'old' for a
+ * PC without the hosted marker or the list, undefined when either did not come.
+ */
+async function fromPc(mux: StreamMux, store: HostedStore): Promise<HostedUi | 'old' | undefined> {
+  const get = (path: string) => httpFetch(mux, { method: 'GET', path }).catch(() => undefined);
+  const [index, list] = await Promise.all([get('/'), get(UI_HASHES_PATH)]);
+  if (index?.head.status !== 200 || !list || (list.head.status !== 200 && list.head.status !== 404)) return undefined;
+  const entry = pcEntry(fromUtf8(index.body));
+  if (!entry || list.head.status !== 200 || !(await keepUiHashes(caches, SCOPE, list.body))) return 'old';
+  await store.saveUi(entry);
+  return entry;
 }
 
 /**
@@ -252,12 +271,12 @@ function mount(screens: Screens, ui: HostedUi): void {
   style.rel = 'stylesheet';
   style.href = `${BASE}${ui.css}`;
   document.head.append(style);
-  const watch = new MutationObserver(() => { if (app.childElementCount) { watch.disconnect(); screens.remove(); } });
+  const watch = new MutationObserver(() => { if (app.childElementCount) { watch.disconnect(); if (!fileRefused) screens.remove(); } });
   watch.observe(app, { childList: true });
   const script = document.createElement('script');
   script.type = 'module';
   script.src = `${BASE}${ui.js}`;
-  script.onerror = () => screens.status('Your PC’s interface did not load. Check that Autark runs there, then open this app again.');
+  script.onerror = () => { if (!fileRefused) screens.status('Your PC’s interface did not load. Check that Autark runs there, then open this app again.'); };
   document.head.append(script);
 }
 

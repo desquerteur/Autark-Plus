@@ -16,7 +16,7 @@ test('workOwners: every agent and person with open work, most first, then by nam
   const open = [
     task({ assigneeId: TOM }), task({ assigneeId: TOM }), task({ assigneeId: MARA }), task({ assigneeKind: 'human', assigneeId: ANNA }),
     task({ assigneeId: 'ag_zoe', status: 'done' }), task({ assigneeId: 'ag_zoe', parentId: 'task_x' }), // finished work and steps: no row
-    unowned(), unowned({ status: 'waiting', waitingOn: { kind: 'task', reason: 'After', since: NOW } }), todo(), todo({ status: 'needs_you' }),
+    unowned(), unowned({ status: 'waiting', waitingOn: { on: 'task', ids: [], why: 'After', since: NOW } }), todo(), todo({ status: 'waiting' }),
   ];
   const { owners, unassigned } = workOwners(open, nameOf);
   assert.deepEqual(owners.map((owner) => [owner.id, owner.kind, owner.count]), [[TOM, 'agent', 2], [ANNA, 'person', 1], [MARA, 'agent', 1]]);

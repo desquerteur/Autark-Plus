@@ -3,10 +3,15 @@
 // side, and AES-256-GCM framing with strictly increasing counters (replay/reorder rejected).
 // Messages that arrive before anyone listens (frames right behind the client's auth, delivered
 // in the same tick – common through a relay) wait for the first listener instead of being lost.
+// B-080: the close code reaches the channel's close listeners (the mesh logs it); a socket its keepalive cut after a
+// minute without any frame (markSilent) reports SILENT_CLOSE instead of the plain 1006 of a network error.
+// B-087: a message whose frame would pass MAX_FRAME is refused in send() before its counter is used (the other PC would
+// drop the whole link for it); a hello with this PC's own key – its own dial come back – closes with 4000, never as a refusal.
 // Never: decides which devices are trusted (callers pass `trust`) or interprets payloads.
 
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 import type { WebSocket } from 'ws';
+import { WorkforceError } from '../../shared/errors.ts';
 import { clientFinish, clientHello, serverWelcome, type AuthMessage, type HelloMessage, type SessionKeys, type Signer, type WelcomeMessage } from './handshake.ts';
 import { fingerprintOf } from './keys.ts';
 
@@ -20,6 +25,13 @@ export interface SocketLike {
 
 /** The close code a PC sends when it does not accept the other (unknown device, bad key or signature). */
 export const REFUSED_CLOSE = 4003;
+/** B-080: the code a socket reports when this PC's keepalive cut it for silence (never sent: the socket is cut, not closed). */
+export const SILENT_CLOSE = 4008;
+
+/** Sockets a keepalive cut for silence (compose/peer-dial.ts, http/peer.ts). */
+const silenced = new WeakSet<object>();
+/** Marks `ws` as cut for silence: its close reports SILENT_CLOSE. */
+export function markSilent(ws: object): void { silenced.add(ws); }
 
 /** Adapts a `ws` WebSocket to SocketLike. */
 export function wrapWs(ws: WebSocket): SocketLike {
@@ -27,7 +39,7 @@ export function wrapWs(ws: WebSocket): SocketLike {
     send: (data) => ws.send(data),
     close: (code, reason) => ws.close(code, reason),
     onMessage: (listener) => ws.on('message', (data, isBinary) => listener(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer), !isBinary)),
-    onClose: (listener) => { ws.on('close', (code: number) => listener(code)); ws.on('error', () => listener(1006)); },
+    onClose: (listener) => { ws.on('close', (code: number) => listener(silenced.has(ws) ? SILENT_CLOSE : code)); ws.on('error', () => listener(1006)); },
   };
 }
 
@@ -55,7 +67,10 @@ export function socketPair(): [SocketLike, SocketLike] {
   return [make(a, b), make(b, a)];
 }
 
+/** The largest encrypted frame a PC takes (a dialed socket's maxPayload, compose/peer-dial.ts); a larger one ends the link. */
 const MAX_FRAME = 8 * 1024 * 1024;
+/** The counter (8 bytes) and the GCM tag (16) around a message's bytes. */
+const FRAME_OVERHEAD = 8 + 16;
 
 export class SecureChannel {
   readonly peerId: string;
@@ -67,7 +82,10 @@ export class SecureChannel {
   private listeners: Array<(message: unknown) => void> = [];
   /** Messages opened before the first listener registered (bounded). */
   private backlog: unknown[] = [];
-  private closeListeners: Array<() => void> = [];
+  /** 18.11.2026: the backlog goes out in a microtask, to every listener registered by then (phone.ts registers the
+   * streams and then the WebRTC signalling – a phone's early rtc hello must reach the second one too). */
+  private flushing = false;
+  private closeListeners: Array<(code?: number) => void> = [];
   closed = false;
 
   constructor(socket: SocketLike, keys: SessionKeys, peerId: string, peerPub: Buffer) {
@@ -79,15 +97,22 @@ export class SecureChannel {
       if (isText) return this.close(); // after the handshake only encrypted binary frames are valid
       this.receive(data);
     });
-    socket.onClose(() => this.markClosed());
+    socket.onClose((code) => this.markClosed(code));
   }
 
+  /** Throws 'bad_request' (details.reachable false: nothing left this PC) for a message too large for one frame. */
   send(message: unknown): void {
     if (this.closed) throw new Error('Channel closed');
+    const plain = Buffer.from(JSON.stringify(message), 'utf8');
+    // B-087: measured before the counter is used, so a refused message never costs or reuses a nonce
+    if (plain.length + FRAME_OVERHEAD > MAX_FRAME) {
+      const mb = (plain.length / 1024 / 1024).toFixed(1);
+      throw new WorkforceError('bad_request', `Too large for the link between PCs: ${mb} MB (at most 8 MB per message).`, { details: { reachable: false, bytes: plain.length } });
+    }
     const nonce = Buffer.alloc(12);
     nonce.writeBigUInt64BE(this.sendCounter, 4);
     const cipher = createCipheriv('aes-256-gcm', this.keys.send, nonce);
-    const body = Buffer.concat([cipher.update(JSON.stringify(message), 'utf8'), cipher.final(), cipher.getAuthTag()]);
+    const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
     const counter = Buffer.alloc(8);
     counter.writeBigUInt64BE(this.sendCounter);
     this.sendCounter++;
@@ -103,7 +128,7 @@ export class SecureChannel {
     if (this.closed) return;
     const message = this.open(frame);
     if (message === undefined) return this.close();
-    if (!this.listeners.length) {
+    if (!this.listeners.length || this.flushing) { // while the backlog waits for its flush, newer ones queue behind it
       if (this.backlog.length >= 256) return this.close();
       this.backlog.push(message);
       return;
@@ -113,19 +138,25 @@ export class SecureChannel {
 
   onMessage(listener: (message: unknown) => void): void {
     this.listeners.push(listener);
-    for (const message of this.backlog.splice(0)) listener(message); // in order, before anything newer
+    if (!this.backlog.length || this.flushing) return;
+    this.flushing = true;
+    queueMicrotask(() => { // in order, before anything newer, to all listeners of this synchronous run
+      this.flushing = false;
+      for (const message of this.backlog.splice(0)) for (const each of [...this.listeners]) each(message);
+    });
   }
-  onClose(listener: () => void): void { this.closeListeners.push(listener); }
+  /** `code`: the socket's close code (1000 when this side closed it). */
+  onClose(listener: (code?: number) => void): void { this.closeListeners.push(listener); }
 
   close(): void {
     this.socket.close(1000, 'bye');
-    this.markClosed();
+    this.markClosed(1000);
   }
 
-  private markClosed(): void {
+  private markClosed(code?: number): void {
     if (this.closed) return;
     this.closed = true;
-    for (const listener of this.closeListeners) listener();
+    for (const listener of this.closeListeners) listener(code);
   }
 
   private open(frame: Buffer): unknown {
@@ -187,6 +218,11 @@ export async function connectSecure(socket: SocketLike, self: Signer, expectFing
 export async function acceptSecure(socket: SocketLike, self: Signer, trust: (peerPub: Buffer, claimedId: string) => string | undefined, timeoutMs = 10_000): Promise<SecureChannel> {
   const hello = (await nextText(socket, timeoutMs)) as HelloMessage;
   const server = serverWelcome(self, hello);
+  if (server.peerPub.equals(self.publicKey)) {
+    // B-087: my own dial came back (an address of another PC that leads here) – 4000, so my dial falls through, unrefused
+    socket.close(4000, 'self');
+    throw new Error('A dial of this PC reached this PC itself');
+  }
   const deviceId = trust(server.peerPub, server.peerId);
   if (!deviceId) {
     socket.close(REFUSED_CLOSE, 'unknown device');

@@ -1,6 +1,7 @@
 // calendar.* (B-041 My day, shared/api/methods-calendar.ts): the owner's calendar rows for the window and phones
 // holding 'todo' (list, add, move, remove – a To-do-only phone plans its day), the connected calendars for
-// 'settings' (read) and the owner (add, change, remove, sync, Google). Everything delegates to services.calendar /
+// 'settings' (read) and 'settings' on a secure transport (add, change, remove, sync, Google – the owner's own phone
+// reaches every setting, 16.11.2026; Google's consent then opens in this PC's pane, side.open). Everything delegates to services.calendar /
 // services.calendarSources and answers 'unavailable' while one is missing. Devices act as the owner ('human').
 // People (B-078 D20): calendar.sources, addIcs and removeSource for their own calendars (people/rpc-calendar.ts);
 // external agents have none. B-078 (D20): calendar.person (owner) – a person's
@@ -24,6 +25,8 @@ import { registerPersonCalendar } from '../../people/rpc-calendar.ts';
 
 const TODO = { capability: 'todo' } as const;
 const SETTINGS = { capability: 'settings' } as const;
+/** The owner's own phone on a secure transport (its app tunnel, HTTPS or the tailnet) changes the calendars too. */
+const SECURE_SETTINGS = { capability: 'settings', secure: true } as const;
 const DAY_MS = 24 * 60 * 60_000;
 /** The widest window calendar.list answers (a month view plus its edges). */
 export const MAX_LIST_RANGE_MS = 62 * DAY_MS;
@@ -128,7 +131,7 @@ export function register(table: HandlerTable): void {
     // a room's name labels the calendar; a bare room:… id leaves the label to the calendar's own name
     const roomName = named && !named.toLowerCase().startsWith('room:') ? named : undefined;
     return sourcesOf(ctx).addIcs({ url: icsUrl(o), label: label(o) ?? roomName, ...(room ? { room } : {}) }, HUMAN_ID);
-  });
+  }, SECURE_SETTINGS);
 
   table.add('calendar.updateSource', (params, ctx) => {
     const o = input(params);
@@ -136,24 +139,24 @@ export function register(table: HandlerTable): void {
     const color = optText(o, 'color', { max: 32 });
     if (color !== undefined && !/^[#A-Za-z0-9_-]{1,32}$/.test(color)) bad('color', 'a colour name or #hex value');
     return sourcesOf(ctx).update(id(o), { label: label(o), visible: optBool(o, 'visible'), color }, HUMAN_ID);
-  });
+  }, SECURE_SETTINGS);
 
   table.add('calendar.removeSource', async (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id']);
     await sourcesOf(ctx).remove(id(o), HUMAN_ID);
-  });
+  }, SECURE_SETTINGS);
 
   table.add('calendar.sync', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id']);
     return sourcesOf(ctx).sync(optId(o, 'id'), 'button');
-  });
+  }, SECURE_SETTINGS);
 
   table.add('calendar.google', (params, ctx) => {
     onlyKeys(input(params), []);
     return sourcesOf(ctx).google();
-  });
+  }, SECURE_SETTINGS);
 
   table.add('calendar.connectGoogle', (params, ctx) => {
     const o = input(params);
@@ -161,5 +164,5 @@ export function register(table: HandlerTable): void {
     const clientId = optText(o, 'clientId', { max: 200 })?.trim();
     if (clientId !== undefined && !/^[A-Za-z0-9._-]{1,200}$/.test(clientId)) bad('clientId', 'a Google OAuth client id');
     return sourcesOf(ctx).connectGoogle(clientId || undefined);
-  });
+  }, SECURE_SETTINGS);
 }

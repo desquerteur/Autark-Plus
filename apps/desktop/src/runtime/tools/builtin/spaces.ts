@@ -12,7 +12,7 @@ const SPACE_KINDS = ['company', 'brand', 'private', 'custom'] as const;
 
 const listSpaces = defineTool<Record<string, never>>({
   name: 'spaces.list',
-  description: 'List the active spaces (areas such as the company, the personal brand or private life) with id, name, kind and number of agents.',
+  description: "Lists the spaces – the separate areas of the person's work and life – with their agents.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => internal('List spaces'),
@@ -28,10 +28,10 @@ const listSpaces = defineTool<Record<string, never>>({
 
 const saveSpace = defineTool<{ id?: string; name: string; kind?: typeof SPACE_KINDS[number] }>({
   name: 'spaces.save',
-  description: 'Create a space (name and kind: company, brand, private or custom) or rename an active one by id (its kind stays). Hiring from a template creates its company/brand/private space by itself.',
+  description: 'Creates a space or renames an active one. Hiring from a template creates its space by itself.',
   inputSchema: {
     type: 'object',
-    properties: { id: { type: 'string' }, name: { type: 'string', minLength: 1, maxLength: 80 }, kind: { type: 'string', enum: [...SPACE_KINDS] } },
+    properties: { id: { type: 'string', description: 'A space to rename.' }, name: { type: 'string', minLength: 1, maxLength: 80 }, kind: { type: 'string', enum: [...SPACE_KINDS], description: 'For a new one.' } },
     required: ['name'], additionalProperties: false,
   },
   category: 'agents',

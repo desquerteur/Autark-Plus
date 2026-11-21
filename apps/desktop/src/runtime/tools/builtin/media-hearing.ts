@@ -8,7 +8,7 @@
 
 import { hearable, hostDecodes, pcmOf, type HeardPcm } from '../../media/hear-any.ts';
 import { soundsText, soundTagger, spanText, timeText, type SoundReport, type SoundTagger } from '../../media/sounds.ts';
-import { NO_LISTENER } from '../../decision/engine-runner.ts';
+import { NO_LISTENER } from '../../decision/listener.ts';
 import { audioExtension } from '../../voice/transcribe.ts';
 import { FileRepo } from '../../store/files.ts';
 import { AUDIO_TAGGER } from '../../../shared/model/local-speech-models.ts';

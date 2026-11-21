@@ -32,17 +32,17 @@ test('chat.read and chat.search mark the person\'s Telegram line like the contex
   const output = await read.run({}, ctx) as ToolOutput;
   const lines = (output.content[0] as { text: string }).text.split('\n');
   assert.equal(lines.length, 4, lines.join('\n'));
-  assert.match(lines[0], /^#\d+ \[[^\]]+\] Sam: yes send it$/);
+  assert.match(lines[0], /^\[[^\]]* · Sam \(CEO\) · [^\]]*\] yes send it$/);
   assert.equal(lines[1], BRIDGE_OWNER_NOTE, 'the note follows the line from Telegram, as in the context');
   assert.match(BRIDGE_OWNER_NOTE, /^\(via Telegram\)$/);
-  assert.match(lines[2], /^#\d+ \[[^\]]+\] Sam: yes send it$/, 'the same words from the app get no note');
-  assert.match(lines[3], /^#\d+ \[[^\]]+\] sam \(external contact\): hello from Telegram$/, 'a Telegram contact is no owner');
+  assert.match(lines[2], /^\[[^\]]* · Sam \(CEO\) · [^\]]*\] yes send it$/, 'the same words from the app get no note');
+  assert.match(lines[3], /^\[[^\]]* · sam \(external contact\) · [^\]]*\] hello from Telegram$/, 'a Telegram contact is no owner');
 
   // chat.search, the other explicit read, marks the same line.
   const search = chatTools.find((item) => item.name === 'chat.search')!;
-  const found = await search.run({ text: 'send' }, ctx) as ToolOutput;
+  const found = await search.run({ query: 'send' }, ctx) as ToolOutput;
   const hits = (found.content[0] as { text: string }).text.split('\n');
-  assert.equal(hits.filter((line) => line.startsWith(`${chat.id} #`)).length, 2, hits.join('\n'));
+  assert.equal(hits.filter((line) => line.startsWith(`[${chat.id} `)).length, 2, hits.join('\n'));
   assert.equal(hits.filter((line) => line === BRIDGE_OWNER_NOTE).length, 1, 'only the line from the linked Telegram account');
   assert.equal(hits.length, 3, 'the same words from the app get no note');
 });

@@ -6,18 +6,17 @@
 import { WorkforceError } from '../../shared/errors.ts';
 import type { UiBlock } from '../../shared/blocks/catalog.ts';
 import { excerpt } from '../../shared/text/chat-names.ts';
-import type { HumanReason } from '../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../contracts.ts';
 
 /** The parts of a human to-do typed as free text. */
-export interface TodoDraft { title: string; notes: string; widget: UiBlock; humanReason: HumanReason; dueAt?: number }
+export interface TodoDraft { title: string; notes: string; widget: UiBlock; dueAt?: number }
 
 /** The draft of a typed to-do (`s` kept for callers; nothing is read from it). */
 export function quickDraft(_s: Pick<RuntimeServices, 'clock'>, text: string): TodoDraft {
   const trimmed = text.trim();
   if (!trimmed) throw new WorkforceError('bad_request', 'A to-do needs text.');
   const title = excerpt(trimmed.split(/\r?\n/)[0], 120);
-  return { title, notes: notesFor(trimmed, title), widget: { type: 'confirm', instructions: title }, humanReason: 'physical' };
+  return { title, notes: notesFor(trimmed, title), widget: { type: 'confirm', instructions: title } };
 }
 
 /**

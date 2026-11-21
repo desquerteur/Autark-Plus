@@ -387,6 +387,7 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 | `apps/android/` | The Android app, a thin client that shows the PC's phone interface through the encrypted device link |
 | `apps/website/` | The product website, a dependency-free static site generator |
 | `services/remote-relay/` | The meeting server for devices in different networks |
+| `services/library/` | The public library service behind `library.openautark.com`: a Cloudflare Worker with a D1 database ([its README](services/library/README.md)) |
 | `services/feedback/` | A discontinued feedback-receiver prototype, kept for reference only; the app does not use it ([its README](services/feedback/README.md)) |
 | `scripts/desktop-release/` | Release-environment scripts for Linux and macOS builds |
 | `library/` | The public library of skills and notes Autark's agents share ([library/README.md](library/README.md)) |

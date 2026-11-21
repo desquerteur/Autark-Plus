@@ -51,10 +51,11 @@ export function fromRpcError(data: WorkforceErrorData | undefined, method: strin
 export function closeError(code: number): CliError {
   switch (code) {
     case 4401:
-    case 4403:
       return new CliError('forbidden', 'The runtime did not accept the owner token in runtime.json. Restart the app, then try again.');
     case 4406: // AF-001 (http/ws.ts CLOSE.agentRefused)
       return new CliError('forbidden', 'The runtime did not accept this agent\'s identity (AUTARK_AGENT_TOKEN): it is from an earlier start of the app or names no active agent here. Run wf from the agent\'s current work.');
+    case 4403:
+      return new CliError('forbidden', 'The runtime closed this connection: the agent running wf is archived or no longer on the team.');
     case 4400:
       return new CliError('bad_request', 'The runtime does not speak this client\'s protocol version. Use the wf client of the same app version.');
     case 4408:

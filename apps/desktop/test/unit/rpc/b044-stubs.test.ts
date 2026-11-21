@@ -1,5 +1,7 @@
-// B-044 methods that change or read this PC (an account reset, PCs nearby, the data folder) are registered
-// owner-only (B-078: an account reset also for the owner's phone with 'settings' on a secure transport); a phone hears
+// B-044 methods that change or read this PC (an account reset, PCs nearby, the data folder) were registered
+// owner-only (B-078: an account reset also for the owner's phone with 'settings' on a secure transport; B-084: PCs nearby
+// too, for Settings > Devices on the phone; 16.11.2026: the data folder for whoever reads this PC's paths – the owner and
+// the phone's pane, 'manage' on a secure transport); a phone hears
 // the chat-visible provider events, and account changes only with 'settings' on a secure transport.
 
 import { test } from 'node:test';
@@ -8,12 +10,10 @@ import { createHandlerTable } from '../../../src/runtime/rpc/handlers/index.ts';
 import { mayReceive } from '../../../src/runtime/rpc/scopes.ts';
 import type { ClientScope } from '../../../src/shared/api/protocol.ts';
 
-const OWNER_ONLY = ['remote.nearby', 'system.root'];
-
-test('the B-044 methods are registered owner-only; accounts.useReset also for a secure settings phone (B-078)', () => {
+test('the B-044 methods: accounts.useReset (B-078) and remote.nearby (B-084) for a secure settings phone, system.root for the pane\'s paths', () => {
   const table = createHandlerTable();
-  for (const method of OWNER_ONLY) assert.equal(table.get(method)?.scope, 'owner', method);
-  assert.deepEqual(table.get('accounts.useReset')?.scope, { capability: 'settings', secure: true });
+  assert.deepEqual(table.get('system.root')?.scope, { capability: 'manage', secure: true });
+  for (const method of ['accounts.useReset', 'remote.nearby']) assert.deepEqual(table.get(method)?.scope, { capability: 'settings', secure: true }, method);
 });
 
 test('provider events: a phone hears usage and models; accounts only with settings on a secure transport (B-078)', () => {

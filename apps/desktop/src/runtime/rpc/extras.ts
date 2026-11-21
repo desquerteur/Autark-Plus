@@ -11,10 +11,11 @@ import type { Device, PushConfig, PwaState } from '../../shared/model/devices.ts
 import type { ModelPolicy } from '../../shared/model/providers.ts';
 import type { FeedbackKind, FeedbackReport, FeedbackVisibility, FileRef, ResourceState, Settings, SystemInfo } from '../../shared/model/system.ts';
 import type { HeardSegment, HeardWord } from '../../shared/api/methods-app.ts';
+import type { SpanMark } from '../../shared/voice/marks.ts';
 import type { CatalogStatus } from '../models/catalog.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
-import type { FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackIssueInclude, FeedbackIssuePreview, FeedbackIssueResult, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
+import type { FeedbackAudioType, FeedbackHandled, FeedbackImageType, FeedbackInboxFetch, FeedbackInboxItem, FeedbackIssueInclude, FeedbackIssuePreview, FeedbackIssueResult, FeedbackSetupResult, FeedbackStatus } from '../../shared/model/feedback-delivery.ts';
 
 export interface PwaApi {
   state(): Promise<PwaState>;
@@ -41,7 +42,10 @@ export interface MeshApi {
 }
 
 export interface FeedbackApi {
-  create(input: { kind: FeedbackKind; text: string; screenshotFileId?: string; annotationFileId?: string; view?: string; conversationId?: string; author: string }): FeedbackReport;
+  create(input: {
+    kind?: FeedbackKind; text: string; screenshotFileId?: string; annotationFileId?: string; audioFileIds?: string[]; view?: string; conversationId?: string;
+    clientId?: string; client?: string; clientDiagnostics?: string; author: string;
+  }): FeedbackReport;
   list(): FeedbackReport[];
   /**
    * B-055: seals the report for the team and drops it into the write-only mailbox after an explicit user action;
@@ -61,7 +65,11 @@ export interface FeedbackApi {
     list(): FeedbackInboxItem[];
     fetch(): Promise<FeedbackInboxFetch>;
     remove(id: string): { ok: true };
+    /** Feedback 16.11.2026: done / not relevant (null clears); removed FEEDBACK_HANDLED_KEEP_MS later. */
+    mark(id: string, as: FeedbackHandled | null): FeedbackInboxItem;
     screenshot(id: string): { mime: FeedbackImageType; dataBase64: string };
+    /** 16.11.2026: one recorded take (`index` into the item's `audio`). */
+    audio(id: string, index: number): { mime: FeedbackAudioType; dataBase64: string };
   };
   /** B-055: wf feedback setup (owner only; runtime/feedback/setup.ts). */
   setup?(input: { project: string; apiKey: string; serviceAccountPath: string; rotate?: boolean }): Promise<FeedbackSetupResult>;
@@ -79,8 +87,8 @@ export interface SystemApi {
   resources(): ResourceState;
   /** May the app restart for an update now without losing work? */
   restartReadiness(): { ready: boolean; reasons: string[] };
-  /** Pause new wakes, checkpoint runs, flush WAL (cancel resumes). */
-  prepareRestart(cancel?: boolean): Promise<void>;
+  /** Pause new wakes, checkpoint runs, flush WAL (cancel resumes). B-080: `to` – the update's version, answered at the next start. */
+  prepareRestart(cancel?: boolean, to?: string): Promise<void>;
 }
 
 export interface ComputerPreviewApi {
@@ -88,8 +96,8 @@ export interface ComputerPreviewApi {
 }
 
 export interface VoiceApi {
-  /** The text (a local model also gives segment and word times). */
-  transcribe(input: { fileId: string; language?: string }): Promise<{ text: string; segments?: HeardSegment[]; words?: HeardWord[] }>;
+  /** The plain text with its unsure places as spans (B-082; a local model also gives segment and word times). `before`: context, `live`: a conversation line. */
+  transcribe(input: { fileId: string; language?: string; chatId?: string; before?: string; live?: boolean }): Promise<{ text: string; marks?: SpanMark[]; segments?: HeardSegment[]; words?: HeardWord[] }>;
   /** Local speech (voice/local/service.ts through the Transcriber). */
   localModels(): LocalSpeechModels;
   pullLocal(id: string): Promise<{ ok: true }>;
@@ -149,7 +157,8 @@ export interface RemoteApi {
   state(): import('../../shared/model/remote.ts').RemoteState;
   connect(input: { target: string; role?: import('../../shared/model/remote.ts').JoinRole }): Promise<import('../../shared/model/remote.ts').RemoteOutgoing>;
   cancel(): void;
-  decide(id: string, accept: boolean, personId?: string): void;
+  /** F17: a request waiting on another of my PCs is decided there (the promise); one waiting here at once. */
+  decide(id: string, accept: boolean, personId?: string, newPerson?: import('../../shared/model/remote.ts').NewPerson): void | Promise<void>;
   /** PCs on this network that accept requests; `refresh` asks the network again. */
   nearby(refresh: boolean): Promise<import('../../shared/model/remote.ts').NearbyPc[]>;
 }

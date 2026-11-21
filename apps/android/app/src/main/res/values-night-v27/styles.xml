@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: light navigation icons on dark bars on Android 8.1+ in dark mode. Never: applies newer style IDs on Android 8.0. -->
+<resources>
+    <style name="AppTheme" parent="AppThemeBase">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

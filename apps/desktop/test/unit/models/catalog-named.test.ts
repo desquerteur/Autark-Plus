@@ -14,9 +14,9 @@ import { modelOwner } from '../../../src/shared/model/provider-entries.ts';
 import { functionCandidates, type Account, type ModelInfo, type ProviderId } from '../../../src/shared/model/providers.ts';
 import type { Priors } from '../../../src/runtime/models/priors.ts';
 
-const priors = { forModel: () => undefined } as unknown as Priors;
+const priors = { forModel: () => undefined, forNewer: () => undefined } as unknown as Priors;
 const account = (id: string, provider: ProviderId): Account => ({
-  id, provider, label: id, auth: 'api_key', baseUrl: 'https://x.test/v1', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1,
+  id, provider, label: id, auth: 'api_key', baseUrl: 'https://x.test/v1', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1,
 });
 const routing = (patch: object) => ({ work: 'auto', decision: 'auto', voice: 'auto', stt: 'auto', tts: 'auto', image: 'auto', video: 'auto', music: 'auto', sound: 'auto', embeddings: 'auto', costMode: 'balanced', allowPaidFallback: false, ...patch }) as never;
 

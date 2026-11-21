@@ -1,6 +1,6 @@
 ---
 name: browser-accounts
-description: I read this for sign-up, sign-in, password resets and connecting services - creating and signing in to online accounts in my own browser profile, email verification, authenticator 2FA for my own accounts (browser.save_totp) or codes from the human through prepared to-dos, and credentials kept in the secret store, out of chat.
+description: I read this for sign-up, sign-in, password resets and connecting services - creating and signing in to online accounts in my own browser profile, email verification, authenticator 2FA for my own accounts (browser.save_totp), codes from a mailbox or phone I can open or else from the person, and credentials kept in the secret store, out of chat.
 metadata:
   modes:
     - browser
@@ -13,11 +13,13 @@ My browser profile is persistent: once signed in, I usually stay signed in.
 
 ## Before creating an account
 - Is there already one? I check knowledge, the secret store and the person's own browsers (below)
-  for the service; when nothing turns up and they likely have one, I ask the human.
-- Whose account is it? Company (company email), brand, or the human's personal one. I use the
-  email address the human designated for that purpose.
+  for the service; when nothing turns up, I try the app's tabs, where their logins made in the app
+  hold, then their own Chrome, or reset the password through the company mailbox, with a new one
+  from `secrets.generate` kept in the catalog.
+- Whose account is it? Company (company email), brand, or the person's personal one. I use the
+  email address the person designated for that purpose.
 - I read the terms briefly for anything unusual (paid after trial, real-name requirement).
-  Accounts that need the human's identity (bank, government, KYC) the human creates, with
+  Accounts that need the person's identity (bank, government, KYC) the person creates, with
   my preparation.
 
 ## Logins the person already has
@@ -39,7 +41,7 @@ logins. Their own browsers on this PC usually have them.
   tools (`computer.type` takes `secret://` handles too).
 - The person fills a catalog login in the app's integrated browser themselves with right-click ›
   Fill login or Ctrl+Shift+L, the site's own logins first – that is where I point them.
-- No computer tools in my mode: a colleague in computer mode has them (`agents.delegate` with
+- No computer tools in my mode: a colleague in computer mode has them (`tasks.create` to them with
   `to: "computer"`, or the Manager).
 - A first sign-in from my fresh profile can send a code: the connected mailbox has it, else one
   `form` to the person (below).
@@ -47,8 +49,8 @@ logins. Their own browsers on this PC usually have them.
 ## Sign-up procedure
 1. I open the official site (typing the domain is safest; an ad or a link in an email I cannot
    verify can lead somewhere else).
-2. I fill the form. For the password I call `secrets.generate` with the site (e.g.
-   `{"site":"accounts.example.com","label":"Example – support account"}`): it stores a strong
+2. I fill the form. For the password I call `secrets.generate` with the site as its source (e.g.
+   `{"source":"accounts.example.com","name":"Example – support account"}`): it stores a strong
    random password in the secrets catalog (saved from that site, usable everywhere) and returns
    just its handle. I fill the
    password and confirmation fields with `browser.act` value `"secret://<id>"` and record the
@@ -63,12 +65,12 @@ logins. Their own browsers on this PC usually have them.
   1. In the site's security settings I choose the authenticator app, then open its
      "enter key manually" / "can't scan the QR code" option – the key shows as
      `•••• (2FA setup key – save it with browser.save_totp)`; its value stays hidden from me.
-  2. I call `browser.save_totp` (optionally `{"label":"Example – support account"}`). It saves
+  2. I call `browser.save_totp` (optionally `{"name":"Example – support account"}`). It saves
      the key into my login for this site (or a new one) and returns a handle.
   3. I fill the site's confirmation code field with `browser.act` value `"secret://<handle id>"`:
      every fill types the current one-time code. Later sign-ins use the same handle.
   - Several keys on the page, or just a QR code: I ask the person with a `confirm` to-do.
-  - `secrets.generate {"site":…,"username":…}` creates my own login (username + password
+  - `secrets.generate {"source":…,"username":…}` creates my own login (username + password
     handles) in one step; `secrets.list` shows logins with one handle per field.
 - The person's personal accounts keep the person's own authenticator: I ask for a code with a
   `form` as below; their 2FA stays with them.
@@ -83,9 +85,11 @@ logins. Their own browsers on this PC usually have them.
  "why":"So I can sign in to the shop's support account with its 2FA."}
 ```
 
-## When the human is needed
-- SMS or app codes on their phone, passkeys on their device, ID checks, captchas, phone
-  number verification:
+## When the person is needed
+A code that reaches a mailbox I can open or a phone I use through Autark (skill phone-access) I read there myself, and
+a login in the catalog I fill myself. What stays with the person alone I ask for in our chat, in one form:
+- SMS or app codes on a phone I cannot use, passkeys on their device, ID checks, phone number
+  verification:
 ```ui
 {"type":"form","id":"insta-code","title":"Instagram login code",
  "fields":[{"name":"code","label":"6-digit code sent to your phone","kind":"secret","required":true}],
@@ -94,8 +98,10 @@ logins. Their own browsers on this PC usually have them.
   A `secret` field goes straight into the secrets catalog; I receive a handle, not the value.
   `"domain":"instagram.com"` on a secret field notes the site it came from – information
   only: every secret works everywhere, and nobody limits it to sites.
-- Captchas: a page asking for a human check says so in its result. I try it, or ask the person
-  once with a `confirm` that opens the page, or use the service's API instead.
+- A page or sign-in that turns the app's browser away: their own Chrome is the other way –
+  `browser.open` with `where: 'chrome'`, their profile and logins – where I go on with the page's work
+  with `computer.ui_tree` and `computer.act` (a password as its `secret://` handle), or I use the
+  service's API/CLI; `feedback.report` tells the makers what the app's browser lacked.
 - I sign in to my accounts in my own browser (the default). The app's tabs the person sees
   (`where: 'chat'` or `'global'`) share one sign-in: a login the person makes once in the app's
   browser holds in all of them, my side tabs included, so there I work as them without a password.
@@ -104,14 +110,14 @@ logins. Their own browsers on this PC usually have them.
 ## When the person takes over my browser
 The person can watch my browser live (my own tab in the workspace, marked with my avatar) and take it over: Take over,
 clicking or typing in the view, or Show window. A `confirm` to-do from me gets an
-"Open browser" button that opens *my* browser taken over, so a sign-in, passkey prompt or
-captcha is done right in my profile – no password has to be shared with me. This works from
+"Open browser" button that opens *my* browser taken over, so a sign-in or passkey prompt
+is done right in my profile – no password has to be shared with me. This works from
 the person's phone too: while that to-do is open they can do the sign-in there in my own
 browser, opened at the to-do's `url` – so I ask with one `confirm` to-do that carries the login URL.
 ```ui
-{"type":"confirm","id":"site-captcha","title":"Solve the captcha on example.com",
- "instructions":"Click Open browser, solve the captcha, then Hand back.",
- "url":"https://www.example.com/login","confirmLabel":"Done","why":"The page wants a human check."}
+{"type":"confirm","id":"site-passkey","title":"Confirm the sign-in with your passkey",
+ "instructions":"Click Open browser, confirm the sign-in with your passkey, then Hand back.",
+ "url":"https://www.example.com/login","confirmLabel":"Done","why":"The site asks for the passkey on your device."}
 ```
 - While they have it, every `browser.*` step answers "The person has taken over my browser":
   I do other work; I am woken when they hand it back.
@@ -146,7 +152,7 @@ the id are chosen for me; I name a route or suggest an id when it helps).
 - While the password field is filled (the snapshot shows `•••• (password field)` or the person's
   `•••• (typed by the person)`) and before I press Sign in – the field is empty afterwards –
   I call `browser.save_secret` with the field's ref, a name and a description, e.g.
-  `{"ref":"e7","label":"Example – support login","purpose":"Password of support@… on example.com"}`.
+  `{"ref":"e7","name":"Example – support login","description":"Password of support@… on example.com"}`.
   The login's username or email goes into that description – it is part of the catalog entry.
   A password, username, key or card number lives in the catalog rather than in notes, memory, rules,
   knowledge, files or messages – the app replaces a stored value there by its handle anyway.

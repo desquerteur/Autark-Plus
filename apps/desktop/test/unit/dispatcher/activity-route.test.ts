@@ -31,7 +31,7 @@ function rig() {
   let request!: TurnRequest;
   let release!: (outcome: TurnOutcome) => void;
   const execute = (next: TurnRequest) => { request = next; return new Promise<TurnOutcome>((resolve) => { release = resolve; }); };
-  turns = new RunningTurns({ services: () => services, executor: { execute }, supervisor: { admit: async () => () => {} } }, live, () => {});
+  turns = new RunningTurns({ services: () => services, executor: { execute } }, live, () => {});
   const wake: Wake = { id: 'wk_1', agentId: 'ag_tom', reason: 'message', conversationId: 'cv_a', dueAt: 10, createdAt: 10, attempts: 0 };
   turns.start(services, { id: 'ag_tom' } as Agent, groupWakes([wake])[0]!);
   return { turns, emits, request: () => request, release: (status: TurnOutcome['status'] = 'done') => release({ runId: request.runId, status }) };

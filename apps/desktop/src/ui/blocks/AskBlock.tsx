@@ -23,6 +23,8 @@ export interface AskBlockProps {
   /** Hide the title row (the To-do list already shows the title in its row). */
   bare?: boolean;
   onAnswered?: (summary: string) => void;
+  /** Who asked (a to-do's creator), handed to the widget (AskWidgetProps.authorId). */
+  authorId?: string;
 }
 
 export function AskBlock(props: AskBlockProps) {
@@ -91,7 +93,7 @@ export function AskBlock(props: AskBlockProps) {
         </header>
       )}
       {whyOpen && block.why && <p class="ask-why">{block.why}</p>}
-      <Widget block={block} draftKey={key} submit={submit} busy={busy} snooze={canSnooze(block, target) ? snooze : undefined} />
+      <Widget block={block} draftKey={key} submit={submit} busy={busy} snooze={canSnooze(block, target) ? snooze : undefined} authorId={props.authorId} />
     </section>
   );
 }

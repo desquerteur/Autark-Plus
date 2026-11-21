@@ -84,6 +84,14 @@ test('pushTarget: a tap opens the chat, My day (to-dos, blockers) or Home; the t
   assert.deepEqual(pushTarget({ kind: 'important' }), { url: '/#/home', tag: 'workforce:important' });
 });
 
+test('pushTarget (B-084): a notice\'s own app route wins; anything that is not a \'#/\' route is ignored', () => {
+  assert.deepEqual(pushTarget({ kind: 'important', route: '#/settings/devices' }), { url: '/#/settings/devices', tag: 'workforce:important' });
+  assert.deepEqual(pushTarget({ kind: 'reply', conversationId: 'ch_1', route: '#/settings/devices' }), { url: '/#/settings/devices', tag: 'chat:ch_1' });
+  for (const route of ['', '#/', 'https://evil.example/#/x', '//evil.example', '#/a b', '#/x"y', 'javascript:alert(1)', `#/${'x'.repeat(201)}`]) {
+    assert.equal(pushTarget({ kind: 'important', route }).url, '/#/home', route);
+  }
+});
+
 test('the encrypted payload carries url and tag; unsubscribe removes only the caller\'s rows', async () => {
   const db = memoryDb();
   const host = fakeHost();

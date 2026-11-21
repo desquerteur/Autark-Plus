@@ -15,14 +15,14 @@ with the bot the person's Telegram account counts as the person automatically.
 ## Steps
 
 1. **Bot.** I open `https://t.me/BotFather` (or Telegram Web) in my browser; when it needs the person's
-   Telegram sign-in, I ask them to sign in once in my browser (`human.ask`, takes a minute). I send
+   Telegram sign-in, I ask them to sign in once in my browser (a task for them, `tasks.create`, takes a minute). I send
    `/newbot` and choose a name and a username ending in `bot`. BotFather answers with the token.
 2. **Token.** I save it at once: `secrets.save` {name: "Telegram bot @<username>", description: "Bot token
    for the team's Telegram bridge", value: <token>, kind: "token"} – from then on I use the handle.
 3. **First message.** I ask the person to open `https://t.me/<username>` and send the bot "hi" (a Telegram
    bot can write only to people who wrote to it first).
 4. **Connect.** `telegram.connect` {botToken: "secret://<id>"} – it mirrors the chat I am in and takes
-   the newest private chat that wrote to the bot. Another chat: `conversationId`; for a
+   the newest private chat that wrote to the bot. Another chat: `chatId`; for a
    group, I add the bot to the group, send a message there and pass the group's id as `externalChatId`
    (a negative number, e.g. `-100…`).
 5. **Check.** I write one short line into the chat ("Telegram is connected") and see it arrive in Telegram.

@@ -17,8 +17,8 @@ import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { DEVICE_ARG, json, text } from '../types.ts';
 import { validate } from '../validate.ts';
 import { META_TOOLS } from '../core-sets.ts';
-import { folderOf, resolveDevice, safeSelfId } from '../placement.ts';
-import { callCompany, companyFolder, companyRuns, listCompanies } from '../../root/companies.ts';
+import { resolveDevice, safeSelfId } from '../placement.ts';
+import { listCompanies, withOtherFacts } from '../../root/companies.ts';
 import { links } from '../../devices/sync/home.ts';
 import { linkedPcs } from '../../context/setup-facts.ts';
 import { defineTool, internal } from './util.ts';
@@ -48,25 +48,16 @@ const NOTE = 'A tool runs in another of these companies through tools.call with 
 
 const list = defineTool<Record<string, never>>({
   name: 'companies.list',
-  description: 'List the companies on this PC – this one and the person\'s others: name, folder, the person\'s role there (owner or employee), whether it runs and its linked PCs. Act in one with tools.call and company.',
+  description: "Lists the companies on this PC: this one and the person's others. Each with the person's role there and its linked PCs; I act in one with tools.call and company.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the companies on this PC'),
   async run(_args, ctx) {
     const app = ctx.services.host.app;
-    const entries = withOwnFacts(ctx.services, listCompanies(app));
+    const entries = await withOtherFacts(app, withOwnFacts(ctx.services, listCompanies(app)), { signal: ctx.signal, timeoutMs: FACTS_MS });
     if (!entries.length) return text('This app has no company folders here (a test profile or headless), so this company is the only one.');
-    const companies = await Promise.all(entries.map(async (entry) => {
-      const row = { name: entry.label, folder: folderOf(entry), ...(entry.current ? { current: true } : {}) };
-      if (entry.current) return { ...row, running: true, role: entry.role, linkedPcs: entry.linkedPcs };
-      const dir = companyFolder(app, entry.id)!;
-      try {
-        const reply = await callCompany(dir, 'companies.list', undefined, { signal: ctx.signal, timeoutMs: FACTS_MS });
-        const own = ((reply as { companies?: CompanyEntry[] } | null)?.companies ?? []).find((item) => item?.current);
-        return { ...row, running: true, role: own?.role, linkedPcs: own?.linkedPcs };
-      } catch {
-        return { ...row, running: companyRuns(dir) };
-      }
+    const companies = entries.map((entry) => ({
+      name: entry.label, folder: entry.folder, ...(entry.current ? { current: true } : {}), running: entry.current || entry.running === true, role: entry.role, linkedPcs: entry.linkedPcs,
     }));
     return json({ companies, note: NOTE });
   },

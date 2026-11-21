@@ -1,8 +1,8 @@
 // X02 touch on a taken-over agent browser (src/ui/workspace/browser-touch.ts): a tap is a left
 // click at the frame point (down + up, clicks 1), a second tap close by is a double click, jitter
-// stays a tap, a drag at 1x scrolls the page in frame units, a drag at 2x sends nothing, more
-// fingers are ignored; the hidden key field's proxy turns text, the deleted sentinel and Enter
-// into page input and always goes back to the sentinel.
+// stays a tap, a drag at 1x scrolls the page in frame units, two fingers never click or scroll
+// (B-081 T9: they pinch – zoomed panning and pinching are in browser-touch-zoom.test.ts); the hidden
+// key field's proxy turns text, the deleted sentinel and Enter into page input and always goes back to the sentinel.
 // Owns: these assertions only. Never: a DOM or a runtime.
 
 import { test } from 'node:test';
@@ -11,12 +11,13 @@ import { KEY_SENTINEL, keyProxy, touchGestures, type TouchLike, type TouchMap } 
 import type { BrowserInput } from '../../../src/shared/model/browser.ts';
 
 /** The picture drawn 640 px wide for a 1280 × 720 frame at the top left: frame point = 2 × client point. */
-function rig(zoom: 1 | 2 = 1) {
+function rig() {
   const sent: BrowserInput[] = [];
   const map: TouchMap = {
     point: (x, y) => (x >= 0 && y >= 0 && x <= 640 && y <= 360 ? { x: x * 2, y: y * 2, width: 1280, height: 720 } : undefined),
     scale: () => 2,
-    zoom: () => zoom,
+    pan: (dx, dy) => ({ x: dx, y: dy }), // not zoomed: all of it scrolls the page
+    pinch: () => {},
   };
   const gestures = touchGestures(map, (input) => sent.push(input));
   const at = (points: Array<[number, number]>, timeStamp: number): TouchLike => ({ touches: points.map(([clientX, clientY]) => ({ clientX, clientY })), timeStamp });
@@ -55,28 +56,22 @@ test('jitter under 8 px stays a tap; a long press and a tap outside the picture 
   assert.deepEqual(r.sent, []);
 });
 
-test('a 120 px upward drag at 1x scrolls down by 240 frame px (wheel at the start point); at 2x it sends nothing', () => {
-  const r = rig(1);
+test('a 120 px upward drag at 1x scrolls down by 240 frame px (wheel at the start point)', () => {
+  const r = rig();
   const handled = r.finger(300, 300, 1000, 200, [[300, 290], [300, 240], [300, 180]]);
   assert.equal(handled, true);
   assert.ok(r.sent.every((input) => input.kind === 'wheel' && input.x === 600 && input.y === 600), 'at the start point');
   assert.equal(r.sent.reduce((sum, input) => sum + (input.kind === 'wheel' ? input.deltaY : 0), 0), 240, 'positive deltaY in frame units');
   assert.ok(!r.sent.some((input) => input.kind === 'mouse'), 'a drag is no click');
-
-  const zoomed = rig(2);
-  assert.equal(zoomed.finger(300, 300, 1000, 200, [[300, 240], [300, 180]]), false, 'the zoom box pans natively');
-  assert.equal(zoomed.sent.length, 0);
-  zoomed.finger(100, 50, 3000);
-  assert.deepEqual(zoomed.sent.map((input) => input.kind === 'mouse' && input.type), ['down', 'up'], 'at 2x a tap still clicks');
 });
 
-test('two fingers are ignored until all are lifted', () => {
+test('two fingers never click and never scroll the page until all are lifted (they pinch the picture)', () => {
   const r = rig();
   r.gestures.start(r.at([[100, 100]], 1000));
   r.gestures.start(r.at([[100, 100], [200, 200]], 1010));
   r.gestures.move(r.at([[100, 40], [200, 140]], 1020));
-  assert.equal(r.gestures.end(r.at([[200, 140]], 1030)), false);
-  assert.equal(r.gestures.end(r.at([], 1040)), false);
+  assert.equal(r.gestures.end(r.at([[200, 140]], 1030)), true, 'handled');
+  assert.equal(r.gestures.end(r.at([], 1040)), true);
   assert.deepEqual(r.sent, []);
   r.finger(100, 50, 2000);
   assert.equal(r.sent.length, 2, 'the next single tap clicks again');

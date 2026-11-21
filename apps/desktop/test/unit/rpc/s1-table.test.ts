@@ -15,6 +15,7 @@ import { register as providers } from '../../../src/runtime/rpc/handlers/provide
 import { register as chatFiles } from '../../../src/runtime/rpc/handlers/chat-files.ts';
 import { register as filesPath } from '../../../src/runtime/rpc/handlers/files-path.ts';
 import { register as skillLinks } from '../../../src/runtime/rpc/handlers/skill-links.ts';
+import { register as skillEditor } from '../../../src/runtime/rpc/handlers/skill-editor.ts';
 import type { ClientScope, DeviceCapability } from '../../../src/shared/api/protocol.ts';
 import { s1Table } from './s1-helpers.ts';
 
@@ -23,7 +24,8 @@ const S1_GROUPS = ['system', 'events', 'settings', 'ui', 'spaces', 'agents', 'ru
 
 const SHARED_DIR = path.resolve(import.meta.dirname, '../../../src/shared');
 /** A module augmentation of Methods in another shared file (methods.ts is at its size limit – O5). */
-const AUGMENTATION = /^declare module '[^']*api\/methods\.ts' \{([\s\S]*?)^\}/m;
+// an augmentation names the contract file from anywhere in src/shared, or as './methods.ts' from inside shared/api (methods-skills.ts)
+const AUGMENTATION = /^declare module '(?:[^']*api\/|\.\/)methods\.ts' \{([\s\S]*?)^\}/m;
 
 /** Method names of methods.ts and of every shared file that augments its Methods. */
 function contractMethods(): string[] {
@@ -46,6 +48,7 @@ function portabilityMethods(): Set<string> {
   chatFiles(table); // chats.direct/export live with the default 1:1 and the chat folders
   filesPath(table); // files.readPath/writePath/listPath live with the pane's file tab
   skillLinks(table); // AF-007: skills.previewLink/installLink/linked/checkUpdate/applyUpdate/linkTargets live with the links
+  skillEditor(table); // skills.catalog/open/edit/create live with the Settings skill editor
   return new Set(table.methods());
 }
 
@@ -65,7 +68,7 @@ test('device scope rules follow the capability matrix', () => {
   const device = (capabilities: DeviceCapability[]): ClientScope => ({ kind: 'device', deviceId: 'dev_x', capabilities, secure: true });
   const may = (method: string, scope: ClientScope) => allowedScope(table.get(method)!.scope, scope);
   const todo = device(['todo']);
-  for (const method of ['todos.list', 'todos.add', 'todos.changeWidget', 'tasks.complete', 'blocks.answer', 'blocks.state', 'blocks.event',
+  for (const method of ['todos.list', 'todos.add', 'todos.changeWidget', 'tasks.finish', 'blocks.answer', 'blocks.state', 'blocks.event',
     'files.upload', 'files.uploadChunk', 'files.get', 'files.read', 'events.subscribe', 'events.unsubscribe', 'system.info', 'settings.get', 'agents.list', 'ui.state']) {
     assert.ok(may(method, todo), `${method} for 'todo'`);
   }
@@ -85,7 +88,7 @@ test('device scope rules follow the capability matrix', () => {
     assert.ok(!may(method, chat), `${method} not for 'chat'`);
   }
   const tasks = device(['todo', 'tasks']);
-  for (const method of ['tasks.list', 'tasks.get', 'tasks.create', 'tasks.update', 'tasks.setStatus', 'tasks.reorder', 'tasks.delete', 'tasks.share', 'schedules.list']) {
+  for (const method of ['tasks.list', 'tasks.get', 'tasks.create', 'tasks.update', 'tasks.give', 'tasks.reorder', 'tasks.delete', 'tasks.share', 'schedules.list']) {
     assert.ok(may(method, tasks), `${method} for 'tasks'`);
   }
   for (const method of ['schedules.create', 'schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.items', 'runs.cancel', 'agents.update', 'spaces.save', 'system.resources']) {
@@ -94,10 +97,10 @@ test('device scope rules follow the capability matrix', () => {
   assert.ok(may('settings.update', device(['settings'])));
   const manage = device(['manage']);
   for (const method of ['schedules.create', 'schedules.update', 'schedules.delete', 'schedules.runNow', 'runs.cancel', 'agents.runs', 'agents.create', 'agents.update',
-    'agents.archive', 'spaces.save', 'spaces.archive', 'skills.save']) {
+    'agents.archive', 'spaces.save', 'spaces.archive', 'skills.save', 'skills.delete' /* W2-PH: the owner's secure phone */]) {
     assert.ok(may(method, manage), `${method} for 'manage'`);
   }
-  for (const method of ['system.resources', 'skills.delete', 'chats.delete', 'files.open']) {
+  for (const method of ['system.resources', 'chats.delete', 'files.open']) {
     assert.ok(!may(method, device(['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'])), `${method} owner-only`);
   }
 });

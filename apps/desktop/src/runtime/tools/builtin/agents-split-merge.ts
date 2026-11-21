@@ -20,7 +20,7 @@ type Args = { groupId: string; idx: number; action: 'merge' | 'discard' };
 
 /** The caller's own part with its branch record; refused in a split's turn and for another agent's group. */
 function partOf(ctx: ToolContext, args: Args): { split: SplitView; rec: WorktreeRecord } {
-  if (ctx.split) throw new WorkforceError('forbidden', 'A split does not merge or discard parts: my main self does that once the group has ended.');
+  if (ctx.split) throw new WorkforceError('forbidden', 'My origin merges or discards the parts\' branches once the group has ended.');
   const splits = ctx.services.splits;
   if (!splits) throw new WorkforceError('unavailable', 'Splits are not available here.');
   const group = splits.list({ groupId: args.groupId, agentId: ctx.agent.id, limit: 1 }).find((item) => item.id === args.groupId);
@@ -36,13 +36,13 @@ function partOf(ctx: ToolContext, args: Args): { split: SplitView; rec: Worktree
 
 const splitMergeTool = defineTool<Args>({
   name: 'agents.split_merge',
-  description: 'After my splits ended: merge the branch of a part that had its own worktree (worktree: true) into my working folder, or discard it. I commit my own changes first.',
+  description: 'Merges or discards the branch of a split part that worked in its own worktree. It merges into my committed branch.',
   inputSchema: {
     type: 'object',
     properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64, description: 'The split group (from agents.split or the split results).' },
-      idx: { type: 'integer', minimum: 1, maximum: SPLIT_LIMITS.partsPerCall, description: 'The part number (#k).' },
-      action: { type: 'string', enum: ['merge', 'discard'], description: 'merge: into the branch of my folder; discard: delete the branch and its folder.' },
+      groupId: { type: 'string', minLength: 1, maxLength: 64 },
+      idx: { type: 'integer', minimum: 1, maximum: SPLIT_LIMITS.partsPerCall },
+      action: { type: 'string', enum: ['merge', 'discard'], description: "merge into my folder's branch, or discard branch and folder." },
     },
     required: ['groupId', 'idx', 'action'], additionalProperties: false,
   },

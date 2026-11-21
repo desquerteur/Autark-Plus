@@ -110,7 +110,7 @@ test('without a chat of the agent the generated file stays private: not linked, 
       const row = new MediaRepo(t.h.db).get(result.fileId)!;
       assert.equal(row.conversationId, undefined);
       assert.equal(row.describedBy, undefined, 'an agent-described global row would be visible to every agent');
-      const found = await tool('media.search').run({ text: 'generated' }, t.ctx('ag_bo', t.other.id));
+      const found = await tool('media.search').run({ query: 'generated' }, t.ctx('ag_bo', t.other.id));
       assert.equal((found.structured as { count: number }).count, 0, 'another agent cannot find it');
     }
   } finally { fake.server.close(); t.temp.cleanup(); }

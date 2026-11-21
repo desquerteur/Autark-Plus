@@ -9,6 +9,10 @@
 // the person's perspective (people/perspective.ts). B-050 K4: they post at a level too – normal,
 // important or silent (never important and silent). B-050 K1: chats.direct opens their default 1:1
 // with an agent, a colleague or the owner (runtime/chat/direct.ts), as the owner's does.
+// F13: a CEO lists and reads every company chat from its start (people/access.ts chatAccess), changes its members like
+// the owner – the owner himself stays in it –, and writing in one they are not in makes them a member first – never
+// the owner's own 1:1s.
+// 18.11.2026: they search the chats they read (chats.search) and stop the agents' replies there (messages.stop).
 // Owns: these person variants. Never: the owner's handlers, drafts, chat settings or files a person may not read.
 
 import { WorkforceError } from '../../shared/errors.ts';
@@ -17,11 +21,12 @@ import type { ConversationSummary, Message, SendMessageInput } from '../../share
 import { isPersonId, type Person } from '../../shared/model/people.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import { findDirect, findOrCreateDirect } from '../chat/direct.ts';
-import { attachmentsOf, levelOf } from '../rpc/handlers/chats.ts';
+import { attachmentsOf, levelOf, runningIn } from '../rpc/handlers/chats.ts';
+import { chatTitleFor } from '../chat/titles.ts';
 import { bad, id, ids, input, num, onlyKeys, optBool, optId, optIds, optMemberIds, optNum, optText, text } from '../rpc/params.ts';
 import type { HandlerContext, HandlerTable } from '../rpc/table.ts';
 import { activePerson } from './repo.ts';
-import { mayReadFile, membership, personUnreadCounts, uploadedBy, visibleFrom } from './access.ts';
+import { chatAccess, chatIdsOf, companyChat, companyChatIds, mayReadFile, membership, personUnreadCounts, uploadedBy } from './access.ts';
 import { realId, viewMember, viewMessage, viewSummary } from './perspective.ts';
 import { caller, usableAgent } from './rpc-base.ts';
 import { uploadNameIn } from './uploads.ts';
@@ -31,18 +36,18 @@ const MAX_BODY = 100_000;
 /** Display names for re-worded member lines (people and agents). */
 const names = (ctx: HandlerContext) => (id: string) => ctx.services.people?.nameOf(id) ?? ctx.services.org.get(id)?.name;
 
-/** The chat and the person's membership; 'not_found' for chats the person is not in (no hint that it exists). */
+/** The chat and how the person reads it (their membership, if any); 'not_found' for chats they do not read (no hint that it exists). */
 function ownChat(s: RuntimeServices, person: Person, conversationId: string) {
   const chat = s.chats.get(conversationId);
-  const member = chat ? membership(s.db, person.id, conversationId) : undefined;
-  if (!chat || !member) throw new WorkforceError('not_found', 'Chat not found.', { details: { conversationId } });
-  return { chat, member, from: visibleFrom(chat, member.joinedAt) };
+  const reads = chat ? chatAccess(s.db, person.id, chat) : undefined;
+  if (!chat || !reads) throw new WorkforceError('not_found', 'Chat not found.', { details: { conversationId } });
+  return { chat, member: reads.member, from: reads.from };
 }
 
 export function personSummary(s: RuntimeServices, person: Person, summary: ConversationSummary): ConversationSummary {
-  const member = membership(s.db, person.id, summary.id);
-  const from = member ? visibleFrom(summary, member.joinedAt) : 0;
-  return viewSummary(person.id, summary, { ...(member ? personUnreadCounts(s.db, person.id, summary.id, member.readSeq, from) : { unread: 0 }), from });
+  const reads = chatAccess(s.db, person.id, summary);
+  const from = reads?.from ?? 0;
+  return viewSummary(person.id, summary, { ...(reads?.member ? personUnreadCounts(s.db, person.id, summary.id, reads.member.readSeq, from) : { unread: 0 }), from });
 }
 
 /** Members a person adds: agents of their spaces, active people, the owner ('owner' in their view). */
@@ -66,8 +71,10 @@ function addable(ctx: HandlerContext, person: Person, viewIds: readonly string[]
 export function registerPersonChats(table: HandlerTable): void {
   table.addPerson('chats.list', (_params, ctx) => {
     const person = caller(ctx);
-    return ctx.services.chats.list({ forMember: person.id, includeHidden: true })
-      .filter((chat) => !chat.settings.system)
+    const ceo = person.role === 'ceo'; // F13: their own chats and every company chat
+    const reads = ceo ? new Set([...chatIdsOf(ctx.services.db, person.id), ...companyChatIds(ctx.services.db)]) : undefined;
+    return ctx.services.chats.list(ceo ? { includeHidden: true } : { forMember: person.id, includeHidden: true })
+      .filter((chat) => !chat.settings.system && (!reads || reads.has(chat.id)))
       .map((chat) => personSummary(ctx.services, person, chat));
   });
   table.addPerson('chats.get', (params, ctx) => {
@@ -118,7 +125,9 @@ export function registerPersonChats(table: HandlerTable): void {
     // The one who started it changes its members; once they left it (or lost access) every member still in it may.
     const starterIn = chat.createdBy === HUMAN_ID || isPersonId(chat.createdBy)
       ? ctx.services.chats.members(chat.id).some((member) => member.memberId === chat.createdBy) : true;
-    if (!leaving && chat.createdBy !== person.id && starterIn) throw new WorkforceError('forbidden', 'Only the one who started this chat changes its members. You can leave it.');
+    const ceoChat = person.role === 'ceo' && companyChat(ctx.services.db, chat.id); // F13: a CEO changes a company chat's members like the owner
+    if (!leaving && !ceoChat && chat.createdBy !== person.id && starterIn) throw new WorkforceError('forbidden', 'Only the one who started this chat changes its members. You can leave it.');
+    if (ceoChat && chat.createdBy !== person.id && remove.includes(HUMAN_ID)) throw new WorkforceError('forbidden', 'The owner leaves chats only by himself.');
     const members = addable(ctx, person, add);
     const lead = optId(o, 'lead');
     if (lead !== undefined && !usableAgent(ctx, person, lead)) throw new WorkforceError('forbidden', 'You may not work with this agent.');
@@ -130,8 +139,40 @@ export function registerPersonChats(table: HandlerTable): void {
   table.addPerson('chats.markRead', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
-    const { chat } = ownChat(ctx.services, person, id(o));
-    ctx.services.chats.markRead(chat.id, person.id, num(o, 'seq', { min: 0 }));
+    const { chat, member } = ownChat(ctx.services, person, id(o));
+    if (member) ctx.services.chats.markRead(chat.id, person.id, num(o, 'seq', { min: 0 })); // F13: a CEO reading a company chat they are not in keeps no cursor there
+    return { ok: true };
+  });
+  // 18.11.2026: a person searches the chats they read and stops the agents' replies in them, as the owner does.
+  table.addPerson('chats.search', (params, ctx) => {
+    const person = caller(ctx);
+    const o = input(params);
+    const query = text(o, 'text', { max: 200 });
+    const conversationId = optId(o, 'conversationId');
+    if (conversationId) ownChat(ctx.services, person, conversationId);
+    const limit = optNum(o, 'limit', { min: 1, max: 100 }) ?? 30;
+    const readable = new Map<string, { title: string; from: number } | null>();
+    const reads = (chatId: string) => {
+      if (!readable.has(chatId)) {
+        const chat = ctx.services.chats.get(chatId);
+        const access = chat ? chatAccess(ctx.services.db, person.id, chat) : undefined;
+        readable.set(chatId, access ? { title: chatTitleFor(ctx.services, chatId, person.id), from: access.from } : null);
+      }
+      return readable.get(chatId);
+    };
+    return ctx.services.chats.search(query, { conversationId, limit: limit * 4 })
+      .filter(({ message }) => { const chat = reads(message.conversationId); return !!chat && message.createdAt >= chat.from; })
+      .slice(0, limit)
+      .map(({ message, snippet }) => ({ message: viewMessage(person.id, message, names(ctx)), conversationTitle: reads(message.conversationId)!.title, snippet }));
+  });
+  table.addPerson('messages.stop', async (params, ctx) => {
+    const person = caller(ctx);
+    const o = input(params);
+    onlyKeys(o, ['conversationId', 'agentId']);
+    const { chat } = ownChat(ctx.services, person, id(o, 'conversationId'));
+    const only = optId(o, 'agentId');
+    await Promise.all(runningIn(ctx.services, chat.id, only).map((agentId) => ctx.services.dispatcher.interrupt(agentId, chat.id)));
+    try { ctx.services.splits?.stop({ conversationId: chat.id, ...(only ? { agentId: only } : {}) }, person.id); } catch { /* the splits log their own failures */ }
     return { ok: true };
   });
   table.addPerson('messages.list', (params, ctx) => {
@@ -145,8 +186,8 @@ export function registerPersonChats(table: HandlerTable): void {
   table.addPerson('messages.send', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
-    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'clientId', 'speech', 'ultra']);
-    const { chat } = ownChat(ctx.services, person, id(o, 'conversationId'));
+    onlyKeys(o, ['conversationId', 'body', 'attachments', 'mentions', 'priority', 'silent', 'replyTo', 'clientId', 'speech', 'ultra', 'marks']);
+    const { chat, member, from } = ownChat(ctx.services, person, id(o, 'conversationId'));
     if (chat.archivedAt !== undefined) throw new WorkforceError('conflict', 'This chat is archived.');
     const body = text(o, 'body', { max: MAX_BODY, allowEmpty: true, multiline: true });
     const attachments = attachmentsOf(ctx.services, o.attachments);
@@ -158,14 +199,16 @@ export function registerPersonChats(table: HandlerTable): void {
       if (own && !named[index]) file.name = uploadNameIn(ctx.services.db, person.id, file.fileId, chat.id) ?? file.name;
     });
     if (!body.trim() && !attachments.length) bad('body', 'text or an attachment');
+    if (!member) ctx.services.chats.setMembers(chat.id, { add: [person.id] }, person.id); // F13: a CEO writing in a company chat joins it
     const replyTo = optId(o, 'replyTo');
     const quoted: Message | undefined = replyTo ? ctx.services.chats.message(replyTo) : undefined;
     const message = ctx.services.chats.send({
       conversationId: chat.id, body, attachments,
       mentions: (optMemberIds(o, 'mentions', 50) ?? []).map((memberId) => realId(person.id, memberId)),
-      ...levelOf(o), replyTo: quoted && quoted.createdAt >= visibleFrom(chat, membership(ctx.services.db, person.id, chat.id)!.joinedAt) ? replyTo : undefined,
+      ...levelOf(o), replyTo: quoted && quoted.conversationId === chat.id && quoted.createdAt >= from ? replyTo : undefined,
       clientId: optText(o, 'clientId', { max: 100 }), authorId: person.id, authorKind: 'human',
       speech: o.speech as SendMessageInput['speech'], // validated and capped by the chat service
+      marks: o.marks as SendMessageInput['marks'], // B-082: hidden marks, checked against the body there (cleanMarks)
       ...(optBool(o, 'ultra') ? { meta: { ultra: true as const } } : {}), // B-057: Ultra suggested for this message (a hint)
     });
     return viewMessage(person.id, message, names(ctx));

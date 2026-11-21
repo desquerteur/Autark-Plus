@@ -20,6 +20,7 @@ export function createDecisionHub(services: () => RuntimeServices): DecisionHub 
     get paths() { return s().paths; },
     get clock() { return s().clock; },
     get notifications() { return s().notifications; }, // a helper call that finds a plan signed out: the one sign-in to-do
+    get log() { return s().log; }, // B-089: the runner's own line when another way answered a helper call
   } as Parameters<typeof createEngineRunner>[0]);
   return new DecisionHub({
     backends: [

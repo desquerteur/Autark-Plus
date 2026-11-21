@@ -24,7 +24,7 @@ import { Button, Spinner, type MenuSection } from '../lib/ui.tsx';
 import { mediaFacts } from './media-facts.ts';
 import { focusComposer } from './send-page.ts';
 import { joinPointer, pointerText, pointLabel, type PointerClip } from './video-pointer.ts';
-import { pickAfter, shownVideo, videoRenders } from './video-versions.ts';
+import { pickAfter, playbackId, shownVideo, videoRenders } from './video-versions.ts';
 
 /** Adds "[name @ 0:12.4] " to the chat's draft and brings the keyboard there. Never sends. */
 function commentAt(chatId: string, clip: PointerClip, ms: number, all: readonly PointerClip[]): void {
@@ -36,7 +36,7 @@ function commentAt(chatId: string, clip: PointerClip, ms: number, all: readonly 
 function CommentButton(props: { chatId: string; clip: PointerClip; all: readonly PointerClip[]; playhead: Signal<number> }) {
   return (
     <span class="pane-comment-cell">
-      <Button icon="chat-text" class="tabular" onClick={() => commentAt(props.chatId, props.clip, props.playhead.peek(), props.all)}>Comment at {pointLabel(props.playhead.value)}</Button>
+      <Button icon="chat-text" class="tabular" aria-label={`Comment at ${pointLabel(props.playhead.value)}`} onClick={() => commentAt(props.chatId, props.clip, props.playhead.peek(), props.all)}><span class="pane-comment-word">Comment at </span>{pointLabel(props.playhead.value)}</Button>
     </span>
   );
 }
@@ -52,15 +52,24 @@ export function VideoView(props: { conversationId: string; fileId?: string }) {
   useEffect(() => { setPicked(props.fileId ?? null); }, [props.fileId]);
   useEffect(() => {
     let alive = true;
+    let extra: MediaInfo | undefined; // the opened file when it belongs to another chat's library row (same bytes sent twice)
+    const withExtra = (list: MediaInfo[]) => (extra && !list.some((row) => row.fileId === extra!.fileId) ? [...list, extra] : list);
     const load = () => rpc.call('media.list', { conversationId, kind: 'video', limit: 200 })
-      .then((list) => { if (alive) { setRows(list); setFailed(''); } }, (error: unknown) => { if (alive) setFailed(errorText(error)); });
+      .then((list) => { if (alive) { setRows(withExtra(list)); setFailed(''); } }, (error: unknown) => { if (alive) setFailed(errorText(error)); });
     void load();
+    if (props.fileId) {
+      rpc.call('media.list', { fileIds: [props.fileId], limit: 1 }).then((found) => {
+        if (!alive || !found[0]) return;
+        extra = found[0];
+        setRows((list) => withExtra(list ?? []));
+      }, () => undefined);
+    }
     const offRow = rpc.on('media.upserted', (info) => {
-      if (info.conversationId === conversationId && info.kind === 'video') setRows((list) => [...(list ?? []).filter((row) => row.fileId !== info.fileId), info]);
+      if ((info.conversationId === conversationId || info.fileId === props.fileId) && info.kind === 'video') setRows((list) => [...(list ?? []).filter((row) => row.fileId !== info.fileId), info]);
     });
     const offOpen = rpc.onOpen(() => void load());
     return () => { alive = false; offRow(); offOpen(); };
-  }, [conversationId]);
+  }, [conversationId, props.fileId]);
 
   const renders = videoRenders(rows ?? []);
   const shown = shownVideo(renders, picked);
@@ -79,7 +88,8 @@ export function VideoView(props: { conversationId: string; fileId?: string }) {
     { title: 'Videos', items: renders.filter((render) => render !== shown?.render).slice(0, 12).map((render) => ({ label: render.title, onSelect: () => pick(render.versions.at(-1)!.fileId) })) },
   ]);
 
-  const url = clip ? streamUrl(clip.fileId) : null;
+  const playId = clip ? playbackId(clip) : undefined; // 17.11.2026: the light preview copy when there is one
+  const url = playId ? streamUrl(playId) : null;
   let stage;
   if (!clip) stage = rows === null && !failed ? <Spinner label="Loading videos" /> : <p class="pane-note">{failed || 'The videos agents make in this chat show up here.'}</p>;
   else if (url) {
@@ -87,7 +97,7 @@ export function VideoView(props: { conversationId: string; fileId?: string }) {
     stage = <video ref={player} key={clip.fileId} class="pane-video-player" src={url} controls preload="metadata" playsInline {...playerGuard(url)}
       onTimeUpdate={track} onSeeked={track}
       onLoadedMetadata={(event) => { const at = resumeAt.current; resumeAt.current = null; if (at !== null) event.currentTarget.currentTime = Math.min(at, event.currentTarget.duration || at); track(event); }} />;
-  } else stage = <MediaPlayer key={clip.fileId} src={clip.fileId} fileId={clip.fileId} kind="video" />; // no stream route here (the relay's phone app)
+  } else stage = <MediaPlayer key={clip.fileId} src={playId ?? clip.fileId} fileId={playId ?? clip.fileId} kind="video" />; // no stream route here (the relay's phone app): the light copy fits what it can read
 
   const versions = shown?.render.versions ?? [];
   return (

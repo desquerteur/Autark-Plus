@@ -1,7 +1,7 @@
 // B-078 D12: one knowledge catalog (knowledge/catalog.ts, describe.ts, find.ts, always.ts): skills of every root and the
-// public library as entries with a description (given, generated, else heading + first sentence); the sync embeds them as
+// home project as entries with a description (given, generated, else heading + first sentence); the sync embeds them as
 // virtual entries and removes the gone ones; a generated description goes into an own SKILL.md's front matter, into kv for a
-// read-only one; a find by meaning (two hops) or by words, each skill as the viewer's copy; skills.save without a
+// read-only one; a find by words (the word index) and, with an embedding model, by meaning (two hops), each skill as the viewer's copy; skills.save without a
 // description; one always set under one cap.
 // Owns: these assertions only. Never: real models or network.
 
@@ -17,7 +17,7 @@ import { VectorSystem } from '../../../src/runtime/vectors/service.ts';
 import { SkillLibrary } from '../../../src/runtime/skills/service.ts';
 import { catalogEntries, describeSome, syncCatalog } from '../../../src/runtime/knowledge/catalog.ts';
 import { describedText, withDescription } from '../../../src/runtime/knowledge/describe.ts';
-import { catalogLine, findInCatalog, lexicalCatalog, searchCatalog } from '../../../src/runtime/knowledge/find.ts';
+import { findInCatalog, searchCatalog, wordCatalog } from '../../../src/runtime/knowledge/find.ts';
 import { ALWAYS_CHARS, alwaysLines } from '../../../src/runtime/knowledge/always.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
@@ -51,7 +51,7 @@ function setup(options: { embedder?: boolean } = {}) {
   skill(path.join(workspace, 'skills'), 'invoices', 'description: "I use this when an invoice goes out."\n', '# Invoices\nSend on the 3rd.');
   skill(path.join(workspace, 'skills'), 'deploy-steps', '', '# Deploy steps\nRun the smoke tests before a deploy.');
   skill(path.join(resources, 'skills'), 'captions', '', '# Captions\nBurn captions into a video export.');
-  // A cloned library source with one entry.
+  // A folder the old cloned library left on a PC: no longer part of the catalog (the library is library.find now).
   const lib = path.join(data, 'library', 'anthropics-skills', 'skills', 'soup');
   mkdirSync(lib, { recursive: true });
   writeFileSync(path.join(lib, 'SKILL.md'), '---\nname: soup\ndescription: Cooking soup for a team lunch.\n---\n# Soup\nBoil it.');
@@ -66,20 +66,19 @@ function setup(options: { embedder?: boolean } = {}) {
 
 const viewer = { id: 'ag_v', name: 'Vic' } as Agent;
 
-test('the catalog: skills of every root and the library, each with a description – given, else heading + first sentence', () => {
+test('the catalog: skills of every root (not an old library folder), each with a description – given, else heading + first sentence', () => {
   const t = setup();
   try {
     const entries = catalogEntries(t.services, viewer);
     const by = (title: string) => entries.find((entry) => entry.title === title)!;
-    assert.deepEqual(entries.map((entry) => entry.title).sort(), ['captions', 'deploy-steps', 'invoices', 'soup']);
+    assert.deepEqual(entries.map((entry) => entry.title).sort(), ['captions', 'deploy-steps', 'invoices']);
     assert.deepEqual([by('invoices').description, by('invoices').given, by('invoices').writable], ['I use this when an invoice goes out.', true, true]);
     assert.deepEqual([by('deploy-steps').description, by('deploy-steps').given], ['Deploy steps: Run the smoke tests before a deploy.', false]);
     assert.equal(by('captions').writable, false, 'a built-in skill is read-only');
-    assert.deepEqual([by('soup').origin, by('soup').kind, by('soup').key], ['public', 'library', 'catalog/public/anthropics-skills/soup']);
   } finally { t.done(); }
 });
 
-test('sync embeds the catalog; a find by meaning maps hits to entries with the library marker; a gone skill leaves', async () => {
+test('sync embeds the catalog; a find by meaning maps hits to entries; an old library folder is not found; a gone skill leaves', async () => {
   const t = setup();
   try {
     await syncCatalog(t.services, viewer);
@@ -87,7 +86,7 @@ test('sync embeds the catalog; a find by meaning maps hits to entries with the l
     assert.equal(hits?.[0].entry.title, 'invoices');
     assert.equal(hits?.[0].by, 'meaning');
     const soup = await searchCatalog(t.services, viewer, 'soup');
-    assert.match(catalogLine(soup![0]), /^- soup \(public library anthropics-skills\) – Cooking soup for a team lunch\. · library\.read anthropics-skills soup$/);
+    assert.ok(!(soup ?? []).some((hit) => hit.entry.title === 'soup'), 'the old cloned library is not searched');
     rmSync(path.join(t.workspace, 'skills', 'deploy-steps'), { recursive: true, force: true });
     t.advance(10_000);
     await syncCatalog(t.services, viewer);
@@ -95,13 +94,15 @@ test('sync embeds the catalog; a find by meaning maps hits to entries with the l
   } finally { t.done(); }
 });
 
-test('without an embedder the find goes by words', async () => {
+test('without an embedder the find goes by words: the word index over title, description and text', async () => {
   const t = setup({ embedder: false });
   try {
     assert.equal(await searchCatalog(t.services, viewer, 'deploy'), undefined);
     const words = await findInCatalog(t.services, viewer, 'deploy smoke tests');
-    assert.deepEqual(words.map((hit) => [hit.entry.title, hit.by]), [['deploy-steps', 'words']]);
-    assert.deepEqual(lexicalCatalog(t.services, viewer, 'xyz nothing'), []);
+    assert.deepEqual(words.map((hit) => [hit.entry.title, hit.by, hit.score]), [['deploy-steps', 'words', 1]]);
+    assert.deepEqual(wordCatalog(t.services, viewer, 'xyz nothing'), []);
+    assert.deepEqual(wordCatalog(t.services, viewer, 'Videoexport').map((hit) => hit.entry.title), ['captions'], 'a compound found by its parts in the text');
+    assert.deepEqual(wordCatalog(t.services, viewer, 'Suppe kochen').map((hit) => hit.entry.title), [], 'words, not meaning: another language finds nothing');
   } finally { t.done(); }
 });
 
@@ -111,7 +112,11 @@ test('generated descriptions: an own SKILL.md gets it in its front matter, a rea
     const asked: string[] = [];
     const runner: StructuredRunner = async (call) => { asked.push(call.prompt.split('\n')[0]); return { text: '', structured: { description: `I use this when ${call.prompt.includes('Captions') ? 'video captions' : 'a deploy'} are the work.` }, by: 'fake' }; };
     const entries = catalogEntries(t.services, viewer);
-    assert.equal(await describeSome(t.services, entries, runner), 2, 'deploy-steps and captions: invoices and soup have a written one');
+    const readOnly = entries.find((entry) => entry.title === 'captions')!;
+    assert.equal(await describeSome(t.services, [readOnly], runner), 1);
+    // No file was written, so no mtime can incidentally refresh the catalog cache.
+    assert.equal(catalogEntries(t.services, viewer).find((entry) => entry.title === 'captions')?.description, 'I use this when video captions are the work.');
+    assert.equal(await describeSome(t.services, entries, runner), 1, 'only deploy-steps still needs a description');
     const own = readFileSync(path.join(t.workspace, 'skills', 'deploy-steps', 'SKILL.md'), 'utf8');
     assert.match(own, /^---\nname: deploy-steps\ndescription: "I use this when a deploy are the work\."\n---\n/);
     const captions = entries.find((entry) => entry.title === 'captions')!;
@@ -142,8 +147,18 @@ test('one always set: always-skills and pinned notes, short ones whole, long one
   assert.equal(lines[0], '- money (skill): Above 20 EUR I check what is bought and why.');
   assert.match(lines[1], /^- Name: Alex Weber \(/);
   assert.match(lines[2], /^- Long – The long one in a line\. \(memory\.read company\/pinned\/Long; /);
-  assert.ok(lines.length < 8 && lines.join('\n').length <= ALWAYS_CHARS, 'what does not fit the one cap is left out');
+  // B-080 (live 07.11.2026: the newest pinned note was missing from all five agents' prompts): a line past the cap stands by its pointer
+  assert.equal(lines.length, 8, 'every member of the set stands');
+  const pointers = lines.filter((line) => !line.includes('m'.repeat(1100)) && /^- Mid\d \(memory\.read company\/pinned\/Mid\d; /.test(line));
+  assert.ok(pointers.length >= 1, lines.map((line) => line.slice(0, 50)).join(' | '));
+  assert.ok(lines.filter((line) => !pointers.includes(line)).join('\n').length <= ALWAYS_CHARS, 'whole and described lines stay within the one cap');
+  for (const index of [1, 2, 3, 4, 5]) assert.ok(lines.some((line) => line.startsWith(`- Mid${index}`)), `Mid${index} stands`);
   const huge = alwaysLines(services, viewer, { skills: [], notes: [note('Huge', 'z'.repeat(ALWAYS_CHARS * 2), 'The huge one.'), note('After', 'Still here.')] }, 'UTC');
   assert.match(huge[0], /^- Huge – The huge one\. \(memory\.read /, 'a note above the cap stands by its description');
   assert.match(huge[1], /^- After: Still here\./, 'it counts at its line\'s size, so later notes still fit');
+  const longSkill = { info: always, body: 's'.repeat(1100) };
+  const skills = ['alpha', 'beta', 'gamma', 'delta'].map((name) => ({ ...always, name }));
+  const many = alwaysLines({ ...services, skills: { get: () => longSkill } } as unknown as RuntimeServices, viewer, { skills, notes: [] }, 'UTC');
+  assert.equal(many.length, 4);
+  assert.equal(many[3], '- delta (skill – knowledge.open delta)', 'an always-skill past the cap stands by its name and how to load it');
 });

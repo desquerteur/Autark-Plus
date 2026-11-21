@@ -4,7 +4,8 @@
 // sees this PC on) and the fingerprints of its linked PCs; learns which of them are online there and
 // the addresses the server saw them on (only PCs that pinned this one too); opens and accepts tunnels
 // (rendezvous/tunnel.ts – the last fallback) and passes sealed connect requests for PCs found by
-// Remote ID. Reconnects with backoff after a failure (1 s … 5 min, one-shot timers); a host resume
+// Remote ID (B-084: also by my person code – my chain goes with hello and update, and a found entry counts when its
+// own ID or its chain proves the ID). Reconnects with backoff after a failure (1 s … 1 min, one-shot timers); a host resume
 // probes the connection once (nudge). The server pings every 30 s; no ping or message for 90 s ends
 // the connection (one watchdog timer, re-armed by traffic – no polling).
 // A malicious server can drop traffic or hand out wrong addresses (the pinned-key handshake refuses
@@ -16,14 +17,14 @@
 import WebSocket from 'ws';
 import type { Logger } from '../../contracts.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
-import { remoteIdOf } from '../../remote/id.ts';
+import { belongs, type Chain } from '../../remote/code.ts';
 import { b64url, fingerprintOf, fromB64url, verifyEd25519 } from '../keys.ts';
 import type { Timers } from '../mesh.ts';
 import { PAIR_INFO, TUNNEL_INFO, boxSigned, boxText, fromSender, helloText, newBox, openJson, sealJson, toBox, tunnelText, type Box } from './seal.ts';
 import { RelayTunnel } from './tunnel.ts';
 
 export interface RelayPeer { fp: string; pub: string }
-export interface RelayEntry { fp: string; pub: string; box: string }
+export interface RelayEntry { fp: string; pub: string; box: string; chain?: unknown }
 export type RelayStatus = 'off' | 'connecting' | 'connected' | 'error';
 
 export interface RelayEvents {
@@ -44,9 +45,10 @@ export interface RelayClientDeps {
   timers?: Timers;
   random?: () => number;
   socket?: (url: string) => WebSocket;
+  now?: () => number;
 }
 
-const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+const BACKOFF_MS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
 const WATCHDOG_MS = 90_000;
 const PROBE_MS = 5_000;
 const OPEN_TIMEOUT_MS = 10_000;
@@ -82,6 +84,9 @@ export class RelayClient {
   private ready = false;
   private status: RelayStatus = 'off';
   private error?: string;
+  /** 18.11.2026: the server refused or closed a tunnel today – its daily byte budget is used up ('quota') or tunnels are
+   * switched off ('off', the emergency stop). Only the fallback is gone; meeting and direct links go on. */
+  private held?: { why: 'quota' | 'off'; day: string };
   private attempt = 0;
   private retry?: unknown;
   private watchdog?: unknown;
@@ -89,6 +94,8 @@ export class RelayClient {
   private peers = new Map<string, string>();
   private findable = false;
   private port?: number;
+  /** My chain to my person code's root (B-084), when I am not the root. */
+  private chain?: Chain;
   /** Pinned PCs online at the server: their box key and the addresses the server saw them on. */
   private present = new Map<string, { box: string; addrs: string[] }>();
   private pending = new Map<number, Pending>();
@@ -106,8 +113,9 @@ export class RelayClient {
     this.timers = deps.timers ?? realTimers;
   }
 
-  state(): { status: RelayStatus; url?: string; error?: string; online: string[]; tunnels: string[] } {
-    return { status: this.status, ...(this.url ? { url: this.url } : {}), ...(this.error ? { error: this.error } : {}), online: [...this.present.keys()], tunnels: [...new Set([...this.tunnels.values()].map((tunnel) => tunnel.peer))] };
+  state(): { status: RelayStatus; url?: string; error?: string; held?: 'quota' | 'off'; online: string[]; tunnels: string[] } {
+    const held = this.held?.day === today(this.deps.now?.() ?? Date.now()) ? this.held.why : undefined;
+    return { status: this.status, ...(this.url ? { url: this.url } : {}), ...(this.error ? { error: this.error } : {}), ...(held ? { held } : {}), online: [...this.present.keys()], tunnels: [...new Set([...this.tunnels.values()].map((tunnel) => tunnel.peer))] };
   }
 
   /** Relay address from settings (undefined/empty = off). A change reconnects at once. */
@@ -122,14 +130,16 @@ export class RelayClient {
     if (next) this.connect();
   }
 
-  /** The linked PCs this PC pins (fingerprint + device key), whether it accepts requests here, and its peer port. */
-  setPeers(peers: RelayPeer[], findable: boolean, port?: number): void {
+  /** The linked PCs this PC pins (fingerprint + device key), whether it accepts requests here, its peer port and its chain. */
+  setPeers(peers: RelayPeer[], findable: boolean, port?: number, chain?: Chain): void {
     const next = new Map(peers.map((peer) => [peer.fp, peer.pub]));
-    const same = findable === this.findable && port === this.port && next.size === this.peers.size && [...next].every(([fp, pub]) => this.peers.get(fp) === pub);
+    const same = findable === this.findable && port === this.port && JSON.stringify(chain) === JSON.stringify(this.chain)
+      && next.size === this.peers.size && [...next].every(([fp, pub]) => this.peers.get(fp) === pub);
     if (same) return; // device events fire often; the server hears only real changes
     this.peers = next;
     this.findable = findable;
     this.port = port;
+    this.chain = chain;
     for (const fp of [...this.present.keys()]) if (!this.peers.has(fp)) this.gone(fp);
     for (const tunnel of [...this.tunnels.values()]) if (!this.peers.has(tunnel.peer)) tunnel.close();
     if (this.ready) this.announce();
@@ -159,12 +169,13 @@ export class RelayClient {
     const { e, cipher } = toBox(box, TUNNEL_INFO);
     const es = b64url(this.deps.identity.sign(Buffer.from(tunnelText(e, box), 'utf8')));
     const reply = await this.ask({ t: 'open', to: fp, e, es }, 'opened', OPEN_TIMEOUT_MS);
+    if (reply.held === 'quota' || reply.held === 'off') this.hold(reply.held); else this.held = undefined; // held: a signalling tunnel
     const tid = reply.tid;
     if (!Number.isInteger(tid)) throw unavailable('The meeting server did not open a tunnel.');
     return this.track(new RelayTunnel(tid as number, fp, this.link(tid as number), cipher));
   }
 
-  /** Devices accepting requests under this Remote ID (box key signed by the registered key). */
+  /** Devices accepting requests under this Remote ID (box key signed by the registered key; own ID or a chain proving it). */
   async find(remoteId: string, signal?: AbortSignal): Promise<RelayEntry[]> {
     const reply = await this.ask({ t: 'find', id: remoteId }, 'found', OPEN_TIMEOUT_MS, signal);
     const entries = Array.isArray(reply.entries) ? reply.entries.slice(0, 4) as Array<Record<string, unknown>> : [];
@@ -172,7 +183,7 @@ export class RelayClient {
     for (const entry of entries) {
       if (typeof entry.pub !== 'string' || !boxSigned(entry.pub, entry.box, entry.boxSig)) continue;
       const fp = fingerprintOf(fromB64url(entry.pub));
-      if (remoteIdOf(fp) === remoteId) out.push({ fp, pub: entry.pub, box: entry.box as string });
+      if (belongs(remoteId, fp, entry.chain)) out.push({ fp, pub: entry.pub, box: entry.box as string, ...(entry.chain ? { chain: entry.chain } : {}) });
     }
     return out;
   }
@@ -224,7 +235,7 @@ export class RelayClient {
         if (typeof frame.n !== 'string' || frame.n.length > 64) { ws.close(); return; }
         const sign = (text: string) => b64url(this.deps.identity.sign(Buffer.from(text, 'utf8')));
         this.announced = this.pins();
-        this.sendJson({ t: 'hello', v: 1, pub: b64url(this.deps.identity.publicKey), sig: sign(helloText(frame.n)), box: this.box.pub, boxSig: sign(boxText(this.box.pub)), peers: [...this.peers.keys()], findable: this.findable, ...(this.port ? { port: this.port } : {}) });
+        this.sendJson({ t: 'hello', v: 1, pub: b64url(this.deps.identity.publicKey), sig: sign(helloText(frame.n)), box: this.box.pub, boxSig: sign(boxText(this.box.pub)), peers: [...this.peers.keys()], findable: this.findable, ...(this.port ? { port: this.port } : {}), ...(this.chain ? { chain: this.chain } : {}) });
         return;
       }
       case 'ready':
@@ -240,13 +251,17 @@ export class RelayClient {
         else if (typeof frame.fp === 'string') this.gone(frame.fp);
         return;
       case 'incoming': return this.incoming(frame);
-      case 'closed': if (Number.isInteger(frame.tid)) this.tunnels.get(frame.tid as number)?.ended(); return;
+      case 'closed':
+        if (frame.code === 'quota') this.hold('quota');
+        if (Number.isInteger(frame.tid)) this.tunnels.get(frame.tid as number)?.ended();
+        return;
       case 'pair': return this.pairIn(frame);
       default: {
         const pending = typeof frame.ref === 'number' ? this.pending.get(frame.ref) : undefined;
         if (!pending || (frame.t !== pending.expect && frame.t !== 'error')) return;
         this.pending.delete(frame.ref as number);
         this.timers.clear(pending.handle);
+        if (frame.t === 'error' && (frame.code === 'quota' || frame.code === 'off')) this.hold(frame.code);
         if (frame.t === 'error') pending.reject(unavailable(`The meeting server refused this (${String(frame.code).slice(0, 20)}).`));
         else pending.resolve(frame);
       }
@@ -321,14 +336,14 @@ export class RelayClient {
     };
   }
 
-  private pins(): string { return JSON.stringify([[...this.peers.keys()].sort(), this.findable, this.port ?? 0]); }
+  private pins(): string { return JSON.stringify([[...this.peers.keys()].sort(), this.findable, this.port ?? 0, this.chain ?? null]); }
 
   /** Tells the server the current pins, findable and port when they differ from what it has. */
   private announce(): void {
     const now = this.pins();
     if (now === this.announced) return;
     this.announced = now;
-    this.sendJson({ t: 'update', peers: [...this.peers.keys()], findable: this.findable, ...(this.port ? { port: this.port } : {}) });
+    this.sendJson({ t: 'update', peers: [...this.peers.keys()], findable: this.findable, ...(this.port ? { port: this.port } : {}), ...(this.chain ? { chain: this.chain } : {}) });
   }
 
   private ask(frame: Record<string, unknown>, expect: string, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
@@ -361,6 +376,8 @@ export class RelayClient {
   }
 
   /** The socket ended: everything on it ends, and (still configured) a reconnect is scheduled. */
+  private hold(why: 'quota' | 'off'): void { this.held = { why, day: today(this.deps.now?.() ?? Date.now()) }; }
+
   private closed(code: number): void {
     const wasReady = this.ready;
     this.drop();
@@ -412,6 +429,9 @@ export class RelayClient {
     this.deps.events.changed();
   }
 }
+
+/** The server's UTC day (its budgets start at 0 each day). */
+const today = (at: number) => new Date(at).toISOString().slice(0, 10);
 
 function socketError(error: unknown): string {
   const code = (error as { code?: unknown })?.code;

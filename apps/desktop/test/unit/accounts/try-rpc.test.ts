@@ -25,7 +25,7 @@ test('accounts.try: owner and a secure settings phone, only an id; one turn on e
   registerProviders(table);
   const temp = await mkdtemp(path.join(os.tmpdir(), 'wf-b051-try-'));
   const runs: Array<[string, string, number]> = [];
-  const account = { id: 'acc_codex0000001', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  const account = { id: 'acc_codex0000001', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
   const services = {
     accounts: { get: (id: string) => (id === account.id ? account : undefined), markLimited: () => {}, markUnavailable: () => false, updateLimits: () => {} },
     catalog: { list: () => [{ id: 'codex:gpt-mini', provider: 'codex', model: 'gpt-mini', name: 'mini', engine: 'codex', efforts: ['low'], caps: {}, tier: 'small', relCost: 0.1, strengths: {}, available: true, accounts: [account.id] }] },

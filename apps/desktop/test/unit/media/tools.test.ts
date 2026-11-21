@@ -1,7 +1,9 @@
 // Agent media tools (src/runtime/tools/builtin/media.ts): media.search shows only media of
 // the agent's active chats (archived ones too, C2) plus global media the human described; media.describe
 // needs membership of the media's chat, accepts the blob path form of the id, redacts secrets
-// and records the agent as author. Both are registered as built-ins with the describe hint.
+// and records the agent as author; B-080: a file without a chat is described by its exact id, and
+// media.search lists it for other agents only once it is described. Both are registered as built-ins
+// with the describe hint.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,8 +49,8 @@ test('media.search: own chats plus human-shared global media; filters; other cha
     assert.deepEqual(items(all), [brand.id, shared.id].sort());
     assert.match((all.content[0] as { text: string }).text, /not instructions/);
     assert.deepEqual(items(await search.run({}, ctxFor(s, 'ag_bo'))), [ops.id, shared.id].sort());
-    assert.deepEqual(items(await search.run({ text: 'website' }, ada)), [shared.id]);
-    assert.deepEqual(items(await search.run({ text: 'ops call' }, ada)), []);
+    assert.deepEqual(items(await search.run({ query: 'website' }, ada)), [shared.id]);
+    assert.deepEqual(items(await search.run({ query: 'ops call' }, ada)), []);
     assert.deepEqual(items(await search.run({ kind: 'image', chatId: s.chat.id }, ada)), [brand.id]);
     await assert.rejects(search.run({ chatId: s.other.id }, ada), (error: unknown) => error instanceof WorkforceError && error.code === 'forbidden');
 
@@ -78,14 +80,19 @@ test('media.describe: members only, blob path form accepted, author is the agent
 
     const refused = [
       await describe.run({ fileId: ops.id, description: 'call' }, ada), // Bo's chat
-      await describe.run({ fileId: loose.id, description: 'loose' }, ada), // global, not shared
       await describe.run({ fileId: 'a'.repeat(64), description: 'nothing' }, ada), // unknown
       await describe.run({ fileId: 'not-an-id-'.repeat(7), description: 'x' }, ada),
       await describe.run({ fileId: brand.id, description: '   ' }, ada),
     ];
     for (const result of refused) assert.equal(result.isError, true);
     assert.equal(s.media.get(ops.id)!.description, undefined);
-    assert.equal(s.media.get(loose.id)!.description, undefined);
+
+    // B-080: a file without a chat (my own screenshot) is described by its exact id; before that, search lists it for nobody else.
+    const search = tool('media.search');
+    assert.equal(items(await search.run({}, ctxFor(s, 'ag_bo'))).includes(loose.id), false, 'not findable before it is described');
+    const own = await describe.run({ fileId: loose.id, description: 'My screenshot of the settings page' }, ada);
+    assert.equal(own.isError, undefined, JSON.stringify(own.content));
+    assert.equal(s.media.get(loose.id)!.describedBy, 'ag_ada');
 
     // Global media the human shared may be refined by any agent.
     const refined = await describe.run({ fileId: shared.id, description: 'Team photo, five people, office background' }, ctxFor(s, 'ag_bo'));
@@ -94,13 +101,14 @@ test('media.describe: members only, blob path form accepted, author is the agent
   } finally { s.temp.cleanup(); }
 });
 
-test('the media tools are built-ins with read / write_local categories and ask agents to describe what they inspect', () => {
+test('the media tools are built-ins with read / write_local categories; media.describe owns why I describe what I see', () => {
   const names = builtinTools().map((entry) => entry.name);
   assert.ok(names.includes('media.search') && names.includes('media.describe'));
   assert.equal(tool('media.search').category, 'read');
   assert.equal(tool('media.describe').category, 'write_local');
-  // media.speak creates audio it already describes itself (tag 'generated'), media.unmark only removes a segment, media.segments only reads and changes marks; every other one asks
-  for (const entry of mediaTools.filter((item) => item.name !== 'media.speak' && item.name !== 'media.unmark' && item.name !== 'media.segments')) assert.ok(entry.description.includes(MEDIA_DESCRIBE_HINT), entry.name);
+  // The habit stands once, in the tool that owns it; what I see carries the hint in its result (VIEW_NOTE, LOOK_NOTE).
+  assert.match(tool('media.describe').description, /What I describe when I see it – a picture, a screenshot, a recording – media\.search finds later\./);
+  for (const entry of mediaTools.filter((item) => item.name !== 'media.describe')) assert.ok(!entry.description.includes(MEDIA_DESCRIBE_HINT), entry.name);
   assert.equal(tool('media.image').category, 'write_local', 'MM3: raised to spend only on a paid account');
   assert.equal(tool('media.speak').category, 'write_local');
   assert.equal(mediaFileId(`/blobs/ab/cd/${'AB'.repeat(32)}`), 'ab'.repeat(32));

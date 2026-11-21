@@ -3,7 +3,7 @@
 // the whole queue. How a message goes out while an agent works (`sendMode`): the person's default
 // (preferences.whileWorking: 'now' – it reaches the running agent at once, the way it always did – or 'queue'), Ctrl+Enter
 // (Ctrl+Shift+Enter when Enter does not send) the other one. With nothing at work and nothing queued, a message always goes now.
-// Lining up the draft takes all of it – text, files, secret handles, level, reply, Ultra – and empties the composer like Send.
+// Lining up the draft takes all of it – text, files, secret handles, level, reply – and empties the composer like Send.
 // Owns: these signals, calls, the send-mode rule and the list's pure helpers (pause line, drop place). Never: when a queued prompt goes out (the runtime decides).
 
 import { signal, type Signal } from '@preact/signals';
@@ -60,7 +60,7 @@ export async function queueDraft(conversationId: string, body: string, mentions:
       conversationId, body: text,
       ...(saved.attachments.length ? { attachments: saved.attachments } : {}), ...(saved.secrets?.length ? { secrets: saved.secrets } : {}),
       mentions: mentions(text), ...(saved.level === 'important' ? { priority: 'important' as const } : {}), ...(saved.level === 'silent' ? { silent: true } : {}),
-      ...(saved.replyTo ? { replyTo: saved.replyTo } : {}), ...(saved.ultra ? { ultra: true } : {}),
+      ...(saved.replyTo ? { replyTo: saved.replyTo } : {}), // B-083: no Ultra any more (the agent splits itself)
     });
     return true;
   } catch (error) {

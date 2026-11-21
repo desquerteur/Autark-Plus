@@ -4,19 +4,37 @@
 //                   home project – the ONE place it is stored, so a disk edit counts as the person's edit
 //   SYSTEM.md       the agent's instructions: the ONE text the runtime prompt and the agent editor use
 //   skills/<name>/SKILL.md  its Main Skills (agentskills.io front matter name + description, like every skill)
-// Shapes for agents.core / agents.saveMainSkill / agents.setHome and the 'agentCore.changed' event, and the limits.
+//   HUMAN.md        (owner 15.11.2026) the person's lines to this agent, near the end of its system prompt (only the
+//                   person's lines to every agent, settings profile.forEveryAgent, come after them); the person writes
+//                   it on the agent page or as a file, and the agent may change it too (owner 16.11.2026: "die dürfen
+//                   alles in unserem System") – no standard or update ever rewrites it
+// Shapes for agents.core / agents.saveMainSkill / agents.setHome and the 'agentCore.changed' event, the limits and the
+// default line of profile.forEveryAgent.
 // Owns: these shapes and constants. Never: behaviour (runtime/agent-core).
 
 import type { SkillInfo } from './knowledge.ts';
 
 export const AGENT_CORE_DIR = 'agents';
 export const SYSTEM_FILE = 'SYSTEM.md';
+/** The longest SYSTEM.md, one number for hiring, agents.update and the RPC. */
+export const MAX_SYSTEM_MD = 60_000;
 export const CORE_MANIFEST = 'agent.json';
+export const HUMAN_FILE = 'HUMAN.md';
+/** The longest HUMAN.md the prompt and the agent page take (a longer one is cut in the prompt); profile.forEveryAgent too. */
+export const MAX_HUMAN_MD = 4_000;
+
+/**
+ * Owner 15./16.11.2026: the line the person's text for every agent (settings profile.forEveryAgent) starts with, by the
+ * app's language (German, else English). Until 0.3.9 each new HUMAN.md started with it (bridge/kontext-1311.ts).
+ */
+export function humanDefault(language: string | undefined): string {
+  return language?.trim().toLowerCase().startsWith('de')
+    ? '„Ich bin kein Roboter“-Prüfungen (CAPTCHAs) löse ich nicht.'
+    : 'I don\'t solve "I\'m not a robot" checks (CAPTCHAs).';
+}
 export const MAIN_SKILLS_DIR = 'skills';
-/** Same cap as an agent's instructions (org/patch.ts). */
-export const SYSTEM_MAX_CHARS = 20_000;
-/** Larger files are not read at all (20 000 characters are at most 80 KB in UTF-8). */
-export const SYSTEM_MAX_BYTES = 128 * 1024;
+/** Larger files are not read at all (MAX_SYSTEM_MD characters are at most four bytes each in UTF-8). */
+export const SYSTEM_MAX_BYTES = 4 * MAX_SYSTEM_MD;
 /** Main Skills listed in the agent's prompt (name + description); beyond, skills.list names them. */
 export const MAIN_SKILLS_IN_PROMPT = 40;
 /** A SKILL.md in the Main Skills folder larger than this is named as a problem (agents.saveMainSkill stays below it). */
@@ -77,6 +95,8 @@ export interface AgentCoreInfo {
   notice?: AgentCoreNotice;
   /** The agent's Main Skills, alphabetical (also ones waiting for review: `disabled`); `path` is '' outside the owner scope. */
   mainSkills: SkillInfo[];
+  /** HUMAN.md's text ('' when missing or empty) – the person's own lines, last in the agent's prompt. */
+  human?: string;
   /** SKILL.md files in its skills folder that need a fix (folder relative to skills/); absent = none. */
   skillProblems?: Array<{ folder: string; problem: MainSkillProblem }>;
 }

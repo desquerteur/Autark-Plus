@@ -2,12 +2,12 @@
 // whether a report can still be sent, what the last start did with a restore.
 // Owns: these texts. Never: RPC or rendering.
 
-import { reportNumber } from '../../shared/model/feedback-delivery.ts';
+import { AUDIO_DROPPED, reportNumber } from '../../shared/model/feedback-delivery.ts';
 import type { RestoreStatus } from '../../shared/model/restore.ts';
-import type { FeedbackReport } from '../../shared/model/system.ts';
+import type { FeedbackKind, FeedbackReport } from '../../shared/model/system.ts';
 import { fullDate, listTime } from '../lib/format.ts';
 
-const KIND: Readonly<Record<FeedbackReport['kind'], string>> = { bug: 'Bug', idea: 'Idea', change: 'Change', praise: 'Praise' };
+const KIND: Readonly<Record<FeedbackKind, string>> = { bug: 'Bug', idea: 'Idea', change: 'Change', praise: 'Praise' };
 /** Keeps a hint line's height while its text is unknown. */
 const HOLD = ' ';
 
@@ -19,11 +19,12 @@ export function reportsHint(sending: boolean | undefined, where = 'this PC'): st
 
 /** A report's line: kind, who, how often, state (AF-003: with the number of a delivered report), time. */
 export function reportLine(report: Pick<FeedbackReport, 'kind' | 'author' | 'status' | 'sentAt' | 'createdAt' | 'count' | 'deliveryWarning' | 'url'> & Partial<Pick<FeedbackReport, 'receiptId' | 'issue'>>, who: (id: string) => string, when: (at: number) => string = listTime, where = 'this PC'): string {
+  const without = report.deliveryWarning === AUDIO_DROPPED ? 'the recording' : 'the screenshot';
   const state = report.issue ? `GitHub ${report.issue.commented ? 'added to ' : ''}#${report.issue.number} · ${report.issue.state}`
-    : report.status === 'sent' ? (report.url ? 'Published on GitHub' : report.deliveryWarning ? 'Sent to the team without the screenshot' : 'Sent to the team')
+    : report.status === 'sent' ? (report.url ? 'Published on GitHub' : report.deliveryWarning ? `Sent to the team without ${without}` : 'Sent to the team')
     : report.status === 'received' ? 'Received earlier' : report.status === 'local' || report.status === 'draft' ? `Saved on ${where}` : '';
   return [
-    KIND[report.kind], report.author === 'human' ? '' : `${who(report.author)} · Unverified`, report.count && report.count > 1 ? `Reported ${report.count} times` : '',
+    report.kind ? KIND[report.kind] : '', report.author === 'human' ? '' : `${who(report.author)} · Unverified`, report.count && report.count > 1 ? `Reported ${report.count} times` : '',
     state, report.status === 'sent' && !report.url && report.receiptId ? `No. ${reportNumber(report.receiptId)}` : '', when(report.sentAt ?? report.createdAt),
   ].filter(Boolean).join(' · ');
 }

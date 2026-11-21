@@ -16,8 +16,10 @@
 // them out. `metadata.always: true` (few, important skills) puts name and description into every prompt that route
 // reaches (alwaysFor). invalidate() makes the next read check the folders again. B-078: a description is optional – a skill
 // without one shows its heading and first sentence (shared/text/external.ts) until knowledge/describe.ts writes one.
-// Owns: discovery with an mtime-validated cache, routes, load, save (with the skill's modes), import of an agent file's
-// skills, remove, the per-mode index, the folder a new skill gets (folderFor – skills from a link, links/). Never: puts skill bodies into the index (descriptions only; bodies load on
+// B-085: save writes `derived-from` (skill-file.ts) and keeps it on a re-save.
+// Owns: discovery with an mtime-validated cache, routes, load, save (with the skill's modes and derived-from), import of an agent file's
+// skills, remove, the per-mode index, the folder a new skill gets (folderFor – skills from a link, links/). Never: puts skill
+// bodies into the index (descriptions only; bodies load on
 // demand), treats a skill text as a permission, or writes into builtin/imported folders.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -28,11 +30,12 @@ import type { Agent } from '../../shared/model/org.ts';
 import type { ModeInfo, SkillInfo } from '../../shared/model/knowledge.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { parseFrontMatter } from './frontmatter.ts';
-import { modeKeys, oneLine, skillAlways, skillModes, skillText } from './skill-file.ts';
+import { derivedFromOf, mergeDerived, modeKeys, oneLine, skillAlways, skillModes, skillText } from './skill-file.ts';
+import { createSkill, editSkill, isEditorFile, openSkill, skillId } from './editor.ts';
 import { fallbackDescription } from '../../shared/text/external.ts';
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const INDEX_CAP = 30; // skill descriptions per prompt (beyond: skills.find)
+export const INDEX_CAP = 30; // skill descriptions per prompt (beyond: knowledge.find)
 const CACHE_MS = 3000;
 
 interface Root {
@@ -93,6 +96,34 @@ export class SkillLibrary implements SkillService {
     }
   }
 
+  /** Settings always resolves a copy against fresh discovery, never a client path or a name route. */
+  catalog(): SkillInfo[] {
+    this.cache = undefined;
+    return this.entries().filter(entry => isEditorFile(entry.file)).map(entry => entry.info).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  open(id: string) { return openSkill(this.editorEntry(id)); }
+
+  edit(id: string, revision: string, body: string) {
+    const result = editSkill(this.editorEntry(id), revision, body);
+    this.invalidate();
+    return { ...result, info: this.editorEntry(id).info };
+  }
+
+  create(name: string, description: string) {
+    if (this.catalog().some(info => info.name === name)) throw new WorkforceError('conflict', 'A skill with this name exists already. Choose another name.');
+    const id = createSkill(path.join(this.options.paths.workspace, 'skills'), name, description);
+    this.invalidate();
+    return this.open(id);
+  }
+
+  private editorEntry(id: string): Entry {
+    this.cache = undefined;
+    const entry = this.entries().find(entry => entry.info.id === id);
+    if (!entry) throw new WorkforceError('conflict', 'This skill is missing or its location changed. Keep your text and reopen it.');
+    return entry;
+  }
+
   save(input: SkillSaveInput): SkillInfo {
     const name = input.name.trim();
     if (!SKILL_NAME.test(name)) throw new WorkforceError('bad_request', 'Skill names are lowercase letters, digits and hyphens.');
@@ -109,8 +140,10 @@ export class SkillLibrary implements SkillService {
     const dir = inPlace ? existing.info.path : path.join(input.main ? this.mainBase(viewer) : viewer
       ? path.join(this.agentDir(viewer), 'skills')
       : path.join(this.options.paths.workspace, 'skills'), name);
+    const kept = existing ? derivedFromFile(existing.file) : []; // B-085: a re-save keeps where the skill came from
+    const derived = input.derivedFrom ? mergeDerived(kept, input.derivedFrom.map(oneLine).filter(Boolean)) : kept;
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, 'SKILL.md'), skillText(name, description, input.body, chosen ?? existing?.info.modes ?? [], existing?.info.always === true), 'utf8');
+    writeFileSync(path.join(dir, 'SKILL.md'), skillText(name, description, input.body, chosen ?? existing?.info.modes ?? [], existing?.info.always === true, derived), 'utf8');
     return this.reread(name, viewer);
   }
 
@@ -149,7 +182,7 @@ export class SkillLibrary implements SkillService {
   indexFor(agent: Agent, mode: ModeInfo): SkillInfo[] {
     const explicit = new Set([...mode.skills, ...agent.skills]);
     // No `modes` front matter = useful in every mode; otherwise only in the listed modes (`modes: [none]`, a key no mode
-    // has: in no mode's index – G1, the app's own skills; skills.find with a query and skills.load still reach it). Skills of
+    // has: in no mode's index – G1, the app's own skills; knowledge.find with a query and knowledge.open still reach it). Skills of
     // agents outside the viewer's chain stay out (they are still loadable by name); own Main Skills have their own section (mainFor).
     const usable = this.routed(agent).filter(info => explicit.has(info.name) || info.modes.length === 0 || info.modes.includes(mode.key));
     // list() is alphabetical and sort() is stable: every tier stays alphabetical (stable prompt prefix).
@@ -281,7 +314,7 @@ export class SkillLibrary implements SkillService {
         const given = typeof data.description === 'string' ? data.description.replace(/\s+/g, ' ').trim() : '';
         const description = given || fallbackDescription(body); // B-078: a hand-written SKILL.md without one is still found
         const info: SkillInfo = {
-          name, description, source: root.source, ownerAgentId: root.ownerAgentId,
+          id: skillId(file), readOnly: root.readOnly, name, description, source: root.source, ownerAgentId: root.ownerAgentId,
           path: path.dirname(file), modes: skillModes(data), updatedAt: Math.round(mtime),
         };
         if (root.main) info.main = true;
@@ -307,4 +340,9 @@ function safeReaddir(dir: string): string[] {
 
 function safeMtime(file: string): number | undefined {
   try { return statSync(file).mtimeMs; } catch { return undefined; }
+}
+
+/** The derived-from items of a SKILL.md ([] when it has none or cannot be read). */
+export function derivedFromFile(file: string): string[] {
+  try { return derivedFromOf(parseFrontMatter(readFileSync(file, 'utf8')).data); } catch { return []; }
 }

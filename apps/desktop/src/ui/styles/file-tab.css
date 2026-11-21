@@ -1,10 +1,11 @@
 /* The pane's file tab (workspace/FileView.tsx) and the memory tree and clickable rows of Settings › Skills & memory
-   (settings/SkillsPage.tsx, settings/MemoryTree.tsx). The field fills the page area; the dot has its own cell in the
-   fixed line under it, and only its colour changes.
+   (settings/SkillsPage.tsx, settings/MemoryTree.tsx). The field fills the page area and (B-080) wraps a long line at
+   its width – a word longer than the field breaks anywhere; the dot has its own cell in the fixed line under it, and
+   only its colour changes.
    Owns: `file-*`. Never: the pane's line (`pane-foot`, workspace-tabs.css) or a settings row's text (settings.css). */
 
 .file-field {
-  overflow: auto; white-space: pre; overflow-wrap: normal; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4;
+  overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; line-height: 1.5; tab-size: 4;
   scrollbar-gutter: stable;
 }
 .file-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: transparent; }

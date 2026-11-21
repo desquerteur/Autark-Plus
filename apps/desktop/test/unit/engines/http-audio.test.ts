@@ -39,6 +39,7 @@ test('compatible: a WAV or MP3 recording goes out as input_audio next to the que
   assert.equal(result.text, 'Heard.');
   const [request] = server.hits('/v1/chat/completions');
   assert.deepEqual(request.body.messages[1].content, [
+    { type: 'text', text: '<live>' + String.fromCharCode(10) + 'VOLATILE' + String.fromCharCode(10) + '</live>' },
     { type: 'text', text: 'What plays?' },
     { type: 'input_audio', input_audio: { format: 'mp3', data: Buffer.from(SONG).toString('base64') } },
     { type: 'text', text: 'The chorus starts at 0:40.' },

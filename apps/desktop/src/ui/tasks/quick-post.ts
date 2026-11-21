@@ -46,7 +46,7 @@ export interface PostDeps {
 
 /** The default accept: into the open-task store, unless task.upserted already put a (newer) view there. */
 export function acceptIntoStore(view: TaskView): void {
-  if (view.status === 'done' || view.status === 'cancelled') return;
+  if (view.status === 'done' || view.status === 'dropped') return;
   if (tasks.peek().some((task) => task.id === view.id)) return; // task.upserted came first and is newer
   upsertById(tasks, view);
 }

@@ -1,12 +1,16 @@
 // Texts of Settings › Devices (DevicesGroup.tsx, connect-rows.tsx – also the first run's Connect card): Remote IDs in
 // groups of three, the Remote ID row's hint, what this PC's own connect request shows (the line under "Connect"), the
-// hint of each device row, a phone's dot, the hint of a browser's Notifications row and – B-078 – the "Connect a phone"
-// hint and the words of a phone's request (role 'phone').
+// hint of each device row, a phone's dot, the hint of a browser's Notifications row (B-084: inside the Android app the
+// app's own notifications) and "Forget this phone", and – B-078 – the "Connect a phone" hint and the words of a phone's
+// request (role 'phone'). F09: the PCs on this network grouped by PC (nearbyGroups: a PC's companies under it). F17: a
+// request waiting on another of my PCs names that PC; the QR hint says the digits are this PC's. F29: a phone's
+// connection row (direct or via the meeting server, bytes of each today) and the iPhone web app's line.
 // Owns: these pure formatters (test/unit/devices/connect-text.test.ts, test/unit/ui/push-hint.test.ts). Never: RPC or rendering.
 
 import type { Device } from '../../shared/model/devices.ts';
-import type { RemoteIncoming, RemoteOutgoing } from '../../shared/model/remote.ts';
-import type { RelayState } from '../../shared/model/relay.ts';
+import type { NearbyPc, RemoteIncoming, RemoteOutgoing } from '../../shared/model/remote.ts';
+import type { PhoneLink, RelayState } from '../../shared/model/relay.ts';
+import { fileSize } from '../lib/format.ts';
 import type { PushStatus } from '../pwa/install.ts';
 
 /** How long after its last request a paired phone still counts as in use (its dot is green). */
@@ -63,29 +67,70 @@ export function phoneDot(device: { lastSeenAt?: number }, now = Date.now()): 'on
   return device.lastSeenAt !== undefined && now - device.lastSeenAt < PHONE_IN_USE_MS ? 'online' : 'offline';
 }
 
-/** The hint beside the "Connect a phone" QR: my phone (the Android app) or an employee's invite. */
+/**
+ * The hint beside the "Connect a phone" QR: my phone (the Android app, or the iPhone web app from the website on the Home
+ * Screen – chat sweep 16.11.2026: no App Store, no Apple account; F17: the digits before it are this PC's own, so the
+ * phone's request lands here) or an employee's invite.
+ */
 export function phoneQrHint(employee: boolean): string {
   return employee
     ? 'Scan with the phone camera, or type the code under “I was invited”: it joins as this employee'
-    : 'In the Autark app on Android: scan this or type the Remote ID, then accept here when both show the same code';
+    : 'This PC · in the Autark app on Android scan this or type these digits – on an iPhone in the web app from openautark.com, added to the Home Screen from Safari – then accept here when both show the same code';
 }
 
 /** A request is the owner's phone app (B-078; shared/model/remote.ts types the PC roles). */
 export const isPhoneRequest = (request: Pick<RemoteIncoming, 'role'>): boolean => request.role === 'phone';
 
-/** The label and hint of a request waiting here: a PC (as an employee, maybe) or my phone. */
-export function incomingText(request: Pick<RemoteIncoming, 'role' | 'name' | 'code'>): { label: string; hint: string } {
-  if (isPhoneRequest(request)) return { label: `Phone ${request.name} asks to connect`, hint: `Accept only if the phone shows the code ${request.code}` };
-  return { label: `${request.name} wants to connect${request.role === 'employee' ? ' as an employee' : ''}`, hint: `Accept only if ${request.name} shows the code ${request.code}` };
+/** The label and hint of a request: a PC (as an employee, maybe) or my phone – waiting here or (F17) on `via`, another of my PCs. */
+export function incomingText(request: Pick<RemoteIncoming, 'role' | 'name' | 'code' | 'via'>): { label: string; hint: string } {
+  const to = request.via ? ` ${request.via.name}` : '';
+  if (isPhoneRequest(request)) return { label: `Phone ${request.name} asks${to} to connect`, hint: `Accept only if the phone shows the code ${request.code}` };
+  return { label: `${request.name} wants to connect${request.via ? ` to ${request.via.name}` : ''}${request.role === 'employee' ? ' as an employee' : ''}`, hint: `Accept only if ${request.name} shows the code ${request.code}` };
 }
+
+/** F09: one PC on this network with the companies on it that answered (each its own key and Remote ID). */
+export interface NearbyGroup { key: string; name: string; pcs: NearbyPc[] }
+
+const hostOf = (address: string): string | undefined => {
+  try { return new URL(address).hostname || undefined; } catch { return undefined; }
+};
+
+/**
+ * F09: the PCs on this network, one group per PC: answers with the same name that share an address host are one PC's
+ * companies (two PCs that happen to share a name never merge); an answer without a company (an older PC) stays alone.
+ */
+export function nearbyGroups(list: readonly NearbyPc[]): NearbyGroup[] {
+  const groups: Array<NearbyGroup & { hosts: Set<string> }> = [];
+  for (const pc of list) {
+    const hosts = new Set(pc.addresses.map(hostOf).filter((host): host is string => Boolean(host)));
+    const same = pc.company ? groups.find((group) => group.name === pc.name && group.pcs[0].company && [...hosts].some((host) => group.hosts.has(host))) : undefined;
+    if (same) { same.pcs.push(pc); for (const host of hosts) same.hosts.add(host); continue; }
+    groups.push({ key: `${pc.deviceId}:${pc.fingerprint}`, name: pc.name, pcs: [pc], hosts });
+  }
+  return groups.map(({ key, name, pcs }) => ({ key, name, pcs }));
+}
+
+/** The hint of a nearby row: a PC alone ("On this network · Teydra Lab · Remote ID …"), or one company under its PC. */
+export function nearbyHint(pc: Pick<NearbyPc, 'company' | 'remoteId'>, underPc: boolean): string {
+  const id = `Remote ID ${groupDigits(pc.remoteId)}`;
+  return underPc ? id : ['On this network', pc.company, id].filter(Boolean).join(' · ');
+}
+
+/** B-084: the Notifications row inside the Android app (the app shows them; Android's own settings turn them off). */
+export const ANDROID_APP_NOTIFY = 'The Autark app shows new messages itself · turn them off in Android’s settings for Autark';
+
+/** B-084: the "Forget this phone" row (Settings › Devices › This phone). */
+export const FORGET_HINT = 'Signs this phone out of this company · connecting again needs Accept on the PC';
 
 /**
  * The hint under "Notifications" on a phone or browser: what reaches it once on (a person of the organisation: the new
  * messages of their chats – pwa/person-push.ts; the owner's phone: to-dos and blockers, replies when it may chat), or why it
  * cannot be turned on. Undefined while off or not yet read. `iosTab`: the iPhone app opened in a Safari tab, where iOS
- * gives web pages no notifications – they work in the Home Screen app, which keeps its own pairing.
+ * gives web pages no notifications – they work in the Home Screen app, which keeps its own pairing. `androidApp`: B-084 –
+ * inside the Android app the app itself shows them (its WebView has no web push), whatever the browser status says.
  */
-export function pushHint(status: PushStatus | undefined, who: { person: boolean; chat: boolean; iosTab?: boolean }): string | undefined {
+export function pushHint(status: PushStatus | undefined, who: { person: boolean; chat: boolean; iosTab?: boolean; androidApp?: boolean }): string | undefined {
+  if (who.androidApp) return ANDROID_APP_NOTIFY;
   if (status === 'on') return who.person ? 'New messages in your chats reach this phone' : who.chat ? 'To-dos, blockers and replies reach this phone' : 'To-dos and blockers reach this phone';
   if (status === 'blocked') return 'Blocked for this site in the browser settings';
   if (status === 'unsupported' && who.iosTab) return 'On iPhone: Share › Add to Home Screen, open Autark there and connect again; notifications work in the Home Screen app';
@@ -103,4 +148,45 @@ export function deviceHint(device: Device, personName: (id: string) => string | 
   const employee = device.personId ? `Employee · ${personName(device.personId) ?? 'a person'}` : '';
   const status = STATUS_TEXT[device.status] ?? device.status;
   return ['PC', employee, status, device.status !== 'online' && device.lastSeenAt ? `Last seen ${time(device.lastSeenAt)}` : ''].filter(Boolean).join(' · ');
+}
+
+/** F29: "Direct · 12.4 MB direct, 310 KB via the meeting server today" – a phone's way to this PC now and its bytes. */
+export function phoneLinkHint(link: PhoneLink, now: number, clock: (at: number) => string): string {
+  const way = link.via === 'direct' || link.via === 'rtc' ? 'Direct' : link.via === 'relay' ? 'Via the meeting server' : 'Not connected'; // F25: WebRTC is direct too
+  const midnight = new Date(now).setHours(0, 0, 0, 0);
+  const period = link.since <= midnight ? 'today' : `since ${clock(link.since)}`;
+  return `${way} · ${fileSize(link.direct + link.rtc)} direct, ${fileSize(link.relay)} via the meeting server ${period}`;
+}
+
+/** The iPhone web app's connection row (18.11.2026, F25 P3: the web app goes direct over WebRTC too, ui/hosted/rtc.ts). */
+export const IPHONE_LINK = 'Directly to the PC when the network allows, else via the meeting server – encrypted end to end either way';
+
+/** 18.11.2026: the one line on how devices connect, over the Connection rows, and where the privacy notice is. */
+export const CONNECTION_LINE = 'End-to-end encrypted, directly device to device. The meeting server only helps your devices find each other.';
+export const PRIVACY_URL = 'https://openautark.com/privacy/#meeting-server';
+
+/** The meeting server's fallback today: its daily limit is used up, or its operator paused it (RelayState.held). */
+export function heldLine(held: RelayState['held']): string {
+  if (held === 'quota') return ' · fallback at today’s limit, direct only';
+  if (held === 'off') return ' · fallback paused, direct only';
+  return '';
+}
+
+/** "Your own meeting server": the line that starts the server shipped with this app (PowerShell on Windows, else sh). */
+export function ownServerCommand(meet: { program: string; file: string }): string {
+  if (/^[A-Za-z]:\\|\\/.test(meet.program)) return `$env:ELECTRON_RUN_AS_NODE=1; $env:RELAY_PORT=8787; & "${meet.program}" "${meet.file}"`;
+  const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
+  return `ELECTRON_RUN_AS_NODE=1 RELAY_PORT=8787 ${quote(meet.program)} ${quote(meet.file)}`;
+}
+
+/** The same server as a container, built straight from the public source. */
+export const OWN_SERVER_DOCKER = 'docker build -t autark-meet https://github.com/teydra/OpenAutark.git#main:services/remote-relay && docker run -d --restart unless-stopped -p 127.0.0.1:8787:8787 autark-meet';
+
+/** The meeting server's state in a few words (pure). */
+export function relayLine(relay: RelayState | undefined, address: string): string {
+  // 'off' with an address: the runtime keeps it unused (as the Remote ID row says) – never "Connecting…" forever
+  if (!address || relay?.status === 'off') return 'Off · PCs in other networks find each other there by Remote ID';
+  if (relay?.status === 'connected') return `Connected · ${relay.peersOnline} linked ${relay.peersOnline === 1 ? 'PC' : 'PCs'} online there${heldLine(relay.held)}`;
+  if (relay?.status === 'error') return `Not connected${relay.error ? `: ${relay.error}` : ''}`;
+  return 'Connecting…';
 }

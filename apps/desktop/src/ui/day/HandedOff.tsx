@@ -13,7 +13,7 @@ import { revealTodo } from './day-state.ts';
 
 /** Who owns a handed-off task: its agent, the colleague, else undefined (no owner yet). */
 export function ownerName(task: Pick<TaskView, 'assigneeKind' | 'assigneeId'>): string | undefined {
-  if (!task.assigneeId) return task.assigneeKind === 'team' ? 'the team' : undefined;
+  if (!task.assigneeId) return undefined;
   if (task.assigneeKind === 'agent') return agentName(task.assigneeId);
   return personName(task.assigneeId) ?? agentName(task.assigneeId);
 }

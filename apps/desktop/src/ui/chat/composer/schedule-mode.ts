@@ -1,7 +1,7 @@
 // The composer's schedule mode (replaces the small "Send later" dialog): per chat, whether the composer is in it and the
 // settings block's form (schedule-form.ts), kept in memory across chat navigation. "Schedule…" in the Plus menu and the
 // Send button's right-click menu opens it; Esc or × leaves it. Scheduling posts the draft through messages.schedule
-// (the draft's loudness and Ultra hint go along; the runtime writes the chat's quiet "Scheduled · …" line). Edit (the
+// (the draft's loudness goes along; the runtime writes the chat's quiet "Scheduled · …" line). Edit (the
 // Chat details list's right-click menu) opens the mode on a scheduled message of the person: the draft shows its text
 // while it is edited – what was in the field is kept aside and comes back when the mode ends – and Schedule changes it
 // through schedules.update (the rule is sent only when the person changed it).
@@ -21,7 +21,7 @@ import { mentionsIn } from './target.ts';
 export interface ScheduleMode {
   form: ScheduleForm;
   /** Set while a scheduled message is edited: its id, the rule as it was opened, and the draft that was in the field. */
-  edit?: { id: string; original: string; stash: { text: string; level: MessageLevel; ultra?: boolean } };
+  edit?: { id: string; original: string; stash: { text: string; level: MessageLevel } };
 }
 
 const modes = new Map<string, Signal<ScheduleMode | null>>();
@@ -47,7 +47,7 @@ export function leaveScheduleMode(conversationId: string): void {
   const mode = entry.peek();
   if (!mode) return;
   entry.value = null;
-  if (mode.edit) updateDraft(conversationId, { text: mode.edit.stash.text, level: mode.edit.stash.level, ultra: mode.edit.stash.ultra });
+  if (mode.edit) updateDraft(conversationId, { text: mode.edit.stash.text, level: mode.edit.stash.level });
 }
 
 export function patchForm(conversationId: string, patch: Partial<ScheduleForm>): void {
@@ -66,9 +66,9 @@ export function editSchedule(schedule: Schedule, now = Date.now()): boolean {
   if (!form) return false;
   const entry = scheduleModeFor(conversationId);
   const draft = draftFor(conversationId).peek();
-  const stash = entry.peek()?.edit?.stash ?? { text: draft.text, level: draft.level, ultra: draft.ultra };
+  const stash = entry.peek()?.edit?.stash ?? { text: draft.text, level: draft.level };
   entry.value = { form, edit: { id: schedule.id, original: formKey(form), stash } };
-  updateDraft(conversationId, { text: schedule.payload.body ?? schedule.title, level: levelOf(schedule), ultra: schedule.payload.ultra ? true : undefined });
+  updateDraft(conversationId, { text: schedule.payload.body ?? schedule.title, level: levelOf(schedule) });
   return true;
 }
 
@@ -76,7 +76,7 @@ export function editSchedule(schedule: Schedule, now = Date.now()): boolean {
  * Schedules the chat's draft (a new message) or saves the edited one. True when it went through; a failure says why in
  * a notice and leaves the mode and the draft as they are.
  */
-export async function scheduleDraft(chat: ConversationSummary, ultra: boolean): Promise<boolean> {
+export async function scheduleDraft(chat: ConversationSummary): Promise<boolean> {
   const mode = scheduleModeFor(chat.id).peek();
   if (!mode) return false;
   const draft = draftFor(chat.id).peek();
@@ -93,10 +93,10 @@ export async function scheduleDraft(chat: ConversationSummary, ultra: boolean): 
     } else {
       await rpc.call('messages.schedule', {
         conversationId: chat.id, body, spec: built.spec, mentions,
-        ...(draft.level !== 'normal' ? { priority: draft.level } : {}), ...(ultra ? { ultra: true } : {}),
+        ...(draft.level !== 'normal' ? { priority: draft.level } : {}),
       });
       scheduleModeFor(chat.id).value = null;
-      updateDraft(chat.id, { text: '', level: 'normal', ultra: undefined });
+      updateDraft(chat.id, { text: '', level: 'normal' });
       setReply(chat.id, null); // a scheduled message is not a reply
     }
     return true;

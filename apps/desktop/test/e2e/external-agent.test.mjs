@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
-import { connect, startRuntime, waitForNew } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, connect, startRuntime, waitForNew } from './lib/runtime-client.mjs';
 
 /** Opens /ws, sends a Hello with `token` and resolves with the close code. */
 async function closeCode(port, token) {
@@ -56,7 +56,7 @@ test('an external agent docks into one chat with limited rights and leaves when 
   const mention = waitForNew(outside, 'external.mention', (event) => event.memberId === memberId, 30_000);
   const asked = await live.client.call('messages.send', { conversationId: chat.id, body: '@Research-Bot please summarize the numbers' });
   assert.equal((await mention).messageId, asked.id);
-  const reply = waitForNew(live.client, 'message.updated', (message) => message.conversationId === chat.id
+  const reply = waitForNew(live.client, MESSAGE_EVENTS, (message) => message.conversationId === chat.id
     && message.authorId === agentId && message.state === 'final', 90_000);
   const plain = await live.client.call('messages.send', { conversationId: chat.id, body: 'Thanks, team' });
   const answer = await reply;

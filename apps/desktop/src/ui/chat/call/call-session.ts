@@ -20,6 +20,7 @@ import { holdChatTopic } from '../composer/pwa-conversation.ts';
 import { realtimeAnswering, realtimeChat, realtimeOpened, stopRealtime } from './realtime-call.ts';
 import { callLevels, micGate, reportMicMeter, reportOutputLevel, resetLevels } from './call-levels.ts';
 import { playTone } from './call-tones.ts';
+import { setCallMuted } from './mute.ts';
 import { MockCall } from './call-mock.ts';
 import { captionOf, engineGone, realtimePhase, voicePhase } from './call-model.ts';
 import type { CallCaption, CallPhase, CallViewMode } from './call-model.ts';
@@ -90,6 +91,7 @@ export function openCall(conversationId: string, options: { mock?: boolean } = {
   if (callUi.peek()) closeView();
   resetLevels();
   micGate.muted = false;
+  setCallMuted(false);
   playTone('start');
   const now = Date.now();
   callUi.value = { conversationId, mock: options.mock === true, view: 'full', muted: false, captions: captionsWanted(), startedAt: now };
@@ -134,6 +136,7 @@ export function setMuted(muted: boolean): void {
   const ui = callUi.peek();
   if (!ui || ui.muted === muted) return;
   micGate.muted = muted;
+  setCallMuted(muted); // B-085: the capture paths read mute.ts too (realtime silence, the voice conversation drops blocks)
   if (muted) callLevels.mic.reset();
   mock?.setMuted(muted);
   callUi.value = { ...ui, muted };
@@ -204,6 +207,7 @@ function closeView(): void {
   timer = null;
   goneSince = null;
   micGate.muted = false;
+  setCallMuted(false);
   callUi.value = null;
   callCaption.value = null;
   resetLevels();

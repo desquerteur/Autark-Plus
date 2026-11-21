@@ -26,7 +26,7 @@ export const answer = (text: string, extra: Record<string, unknown> = {}) => (re
   sendSse(res, [chunk({ role: 'assistant', content: '' }), chunk({ content: text }), chunk({}, 'stop'), usage(900, 12, extra), '[DONE]']);
 
 export function account(id: string, provider: Account['provider'], auth: Account['auth'], baseUrl: string): Account {
-  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  return { id, provider, label: id, auth, baseUrl, state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
 }
 
 /** A catalog entry "<provider>:<model>" on one account (engine as the catalog assigns it). */
@@ -48,7 +48,10 @@ export interface ListenSetup {
 }
 
 export async function listenSetup(options: ListenSetup) {
+  // Since 10.11. an OpenRouter turn first reads GET /models for the model's reasoning efforts (compatible.ts); the listed
+  // models carry no reasoning metadata, so the engine sends no effort.
   const server = await serve((req, res) => {
+    if (req.method === 'GET' && req.path === '/v1/models') { sendJson(res, 200, { data: options.models(base).map((entry) => ({ id: entry.model })) }); return; }
     if (!req.path.startsWith(CHAT_PATH)) { sendJson(res, 404, { error: { message: 'not here' } }); return; }
     (options.respond ?? ((_req, out) => answer('A calm solo piano.')(out)))(req, res);
   });

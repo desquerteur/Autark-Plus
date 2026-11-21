@@ -45,7 +45,7 @@ test('a reply stays with the draft until it is sent or cancelled, and is never s
   assert.deepEqual(Object.keys(saves[0]).sort(), ['attachments', 'conversationId', 'text'], 'the saved draft carries no reply');
 
   setReply('cv_a', null);
-  assert.equal('replyTo' in draftFor('cv_a').value, false, 'cancelled');
+  assert.equal('replyTo' in draftFor('cv_a').value, false, 'dropped');
   assert.equal(draftFor('cv_b').value.replyTo, undefined, 'per chat');
 });
 

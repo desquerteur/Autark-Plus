@@ -83,7 +83,7 @@ export function fakeFinder(map: Record<string, string | null>): ExecutableFinder
 export const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 export function account(patch: Record<string, unknown> = {}): any {
-  return { id: 'acc_test', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch };
+  return { id: 'acc_test', provider: 'codex', label: 'Codex', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch };
 }
 
 export function turnInput(patch: Record<string, unknown> = {}): any {

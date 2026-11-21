@@ -9,7 +9,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID } from '../../../src/shared/ids.ts';
 import { stopRuns } from '../../../src/runtime/tasks/owners.ts';
-import { makeMine } from '../../../src/runtime/tasks/human.ts';
 import { quickCreate } from '../../../src/runtime/tasks/quick.ts';
 import type { RuntimeServices, SplitService } from '../../../src/runtime/contracts.ts';
 import type { TaskServiceImpl } from '../../../src/runtime/tasks/service.ts';
@@ -70,26 +69,3 @@ test('tasks/owners.ts stopRuns: the person ending a task stops its splits; an ag
   assert.doesNotThrow(() => stopRuns(broken, task({ id: 'task_B' }), HUMAN_ID));
 });
 
-test('the person cancelling a task and "Give to me" both stop that task\'s splits (tasks/lifecycle.ts, tasks/human.ts)', () => {
-  const h = harness();
-  h.org.add(agent('ag_mara', 'Mara', { mode: 'manager', createdAt: 1 }));
-  const services = h.services as RuntimeServices;
-  const stops: Array<{ q: Parameters<SplitService['stop']>[0]; by: string }> = [];
-  services.splits = { stop: (q, by) => { stops.push({ q, by }); return 0; } } as SplitService;
-  Object.assign(services.dispatcher, { interrupt: async () => {} });
-
-  const cancelled = quickCreate(services, { text: 'Write the newsletter for Friday' }, HUMAN_ID).task;
-  stops.length = 0;
-  h.tasks.setStatus(cancelled.id, 'cancelled', HUMAN_ID);
-  assert.deepEqual(stops, [{ q: { taskId: cancelled.id }, by: HUMAN_ID }]);
-
-  const taken = quickCreate(services, { text: 'Draft a blog post about the launch' }, HUMAN_ID).task;
-  stops.length = 0;
-  makeMine(services, taken.id);
-  assert.deepEqual(stops, [{ q: { taskId: taken.id }, by: HUMAN_ID }]);
-
-  // A failing split service never fails "Give to me".
-  services.splits = { stop: () => { throw new Error('db gone'); } } as unknown as SplitService;
-  const other = quickCreate(services, { text: 'Draft the summer post' }, HUMAN_ID).task;
-  assert.equal(makeMine(services, other.id).assigneeKind, 'human');
-});

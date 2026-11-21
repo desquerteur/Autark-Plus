@@ -82,7 +82,7 @@ function service(signedIn: { gemini: boolean; copilot: boolean }, copilotSignedO
   let registry: EngineRegistry | undefined;
   const accounts = new AccountServiceImpl({
     db, bus: new Bus((error) => { throw error; }), clock: new ManualClock(), paths: PATHS, env, finder, supervisor, version: '1.0.0',
-    engines: () => registry!, terminal: { platform: 'win32' }, rmdir: async () => { throw new Error('no home may be deleted'); },
+    engines: () => registry!, terminal: { platform: 'win32' }, // 16.11.2026: the service deletes no home at all
     mkdir: async (dir) => { folders.push(dir); },
     secrets: { save: async () => ({ id: 'none' }), read: async () => undefined, remove: () => {} },
     detectDeps: { fetch: async () => { throw new Error('offline'); }, probeTimeoutMs: 1 },
@@ -104,9 +104,12 @@ test('acp providers: the ACP flag comes from the CLI\'s --help; the sign-in is t
   assert.equal(signInMethod(ACP_PROVIDERS.copilot, GEMINI_METHODS), undefined, 'Copilot CLI signs in in its own window');
 });
 
-test('acp providers: a Gemini CLI signed in on this PC is adopted; every CLI starts in the engine folder without provider keys', async () => {
+test('acp providers: a Gemini CLI signed in on this PC is adopted after "Use"; every CLI starts in the engine folder without provider keys', async () => {
   const h = service({ gemini: true, copilot: false });
   const report = await h.accounts.detect();
+  await h.settle();
+  assert.deepEqual([h.accounts.list().length, report.found?.map((login) => login.key)], [0, ['gemini-cli:default']], '17.11.2026: only offered until the person says Use');
+  await h.accounts.useFound('gemini-cli:default');
   await h.settle();
   assert.deepEqual(report.clis.filter((cli) => cli.provider === 'gemini-cli' || cli.provider === 'copilot'), [
     { provider: 'gemini-cli', path: '/bin/gemini', version: '0.9.0', loggedIn: true },
@@ -179,8 +182,11 @@ test('acp providers: Gemini CLI signs in through ACP authenticate, Copilot CLI w
   assert.equal(h.accounts.get(copilot.id)?.state, 'ok');
 
   await assert.rejects(h.accounts.logout(copilot.id), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request');
-  await h.accounts.remove(second.id); // its own folder only (the harness' rmdir refuses every delete: removal goes on)
+  await h.accounts.remove(second.id); // AF-024: the second Google account goes; its folder stays (the service deletes no home)
   assert.equal(h.accounts.get(second.id), undefined);
+  await h.accounts.remove(gemini.id); // its home is never deleted either (the service deletes no home)
+  await h.accounts.detect(true);
+  assert.deepEqual(h.accounts.list().filter((account) => account.provider === 'gemini-cli'), [], 'detection does not add them back (AF-024: their own folders are dismissed)');
   await h.accounts.dispose();
   await h.registry.dispose();
 });
@@ -203,7 +209,7 @@ test('acp providers: a Copilot CLI that answers a missing sign-in with another e
 
 test('acp providers: the "On this PC" row and the plan group in Settings', () => {
   const found = { provider: 'gemini-cli' as const, path: '/bin/gemini', version: '0.9.0', loggedIn: true };
-  const own: Account = { id: 'acc_g', provider: 'gemini-cli', label: 'Gemini CLI', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  const own: Account = { id: 'acc_g', provider: 'gemini-cli', label: 'Gemini CLI', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
   assert.deepEqual(cliRowView(found, [own]), { name: 'Gemini CLI', hint: 'Signed in · 0.9.0', action: undefined, account: own });
   assert.equal(cliRowView(found, [{ ...own, state: 'needs_login' }])?.action, 'sign-in', 'the account\'s live state wins over the scan');
   assert.equal(cliRowView({ ...found, dismissed: true }, [])?.action, 'add-again');
@@ -243,7 +249,8 @@ test('acp providers: routing reaches a Gemini CLI plan; its turn runs through th
   const argon = h.catalog.get('gemini-cli:gemini-4-argon');
   assert.deepEqual([argon?.engine, argon?.tier, argon?.accounts, argon?.available], ['acp', 'frontier', ['acc_gemini'], true], 'listed by the agent, Gemini priors applied');
   try {
-    const decision = await h.router.route({ agent: agent('ag_1'), mode: mode('research'), text: 'Compare the three vendor reports.' });
+    // a lead runs on the frontier tier's first choice (17.11.2026: the model settles by kind); an executor would take Flash
+    const decision = await h.router.route({ agent: agent('ag_1', { template: 'head' }), mode: mode('research'), text: 'Compare the three vendor reports.' });
     assert.deepEqual([decision.engine, decision.accountId, decision.modelId], ['acp', 'acc_gemini', 'gemini-cli:gemini-4-argon']);
     const { input } = turnInput({ account: gemini, model: h.catalog.get(decision.modelId)!.model, effort: decision.effort, cwd: WORKSPACE });
     const result = await engine.run(input);

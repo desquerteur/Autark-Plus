@@ -24,7 +24,7 @@ function setup(seed: Array<Partial<Account> & { id: string; provider: ProviderId
   const settings = new SettingsStore({ bus, clock, env: { locale: 'en', timezone: 'UTC' } });
   const repo = new AccountRepo(db);
   const row = (provider: ProviderId, patch: Partial<Account>): Account => ({
-    id: 'x', provider, label: provider, auth: 'none', state: 'unknown', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch,
+    id: 'x', provider, label: provider, auth: 'none', state: 'unknown', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch,
   });
   for (const account of seed) repo.save(row(account.provider, account));
   const checked: string[] = [];
@@ -60,9 +60,8 @@ test('accounts.add writes an entry: the id comes from the service, then the name
   const first = file.add({ provider: 'compatible', label: 'DeepInfra' }, { auth: 'api_key', baseUrl: 'https://api.deepinfra.com/v1/openai', secretId: 'sec_9', detected: false });
   assert.equal(first.id, 'deepinfra');
   assert.deepEqual(settings.get().providers?.deepinfra, { name: 'DeepInfra', protocol: 'openai-chat', url: 'https://api.deepinfra.com/v1/openai', key: 'secret://sec_9' });
-  const second = file.add({ provider: 'compatible', label: 'DeepInfra 2', rotation: true }, { auth: 'api_key', baseUrl: 'https://api.deepinfra.com/v1/openai', secretId: 'secret://sec_8', detected: false });
+  const second = file.add({ provider: 'compatible', label: 'DeepInfra 2' }, { auth: 'api_key', baseUrl: 'https://api.deepinfra.com/v1/openai', secretId: 'secret://sec_8', detected: false });
   assert.equal(second.id, 'deepinfra-2');
-  assert.equal(second.rotation, true);
   const other = file.add({ provider: 'compatible', label: 'llm.example.test' }, { auth: 'none', baseUrl: 'https://llm.example.test/v1', detected: false });
   assert.equal(other.id, 'llm-example-test');
   assert.equal(settings.get().providers?.['llm-example-test'].key, undefined);

@@ -33,6 +33,7 @@ test('a fresh database has the media, media_fts and bridges tables and agents.ba
     'file_id', 'conversation_id', 'kind', 'mime', 'name', 'width', 'height', 'duration_ms', 'pages',
     'description', 'tags', 'described_by', 'described_at', 'created_at', 'updated_at',
     'colors', 'peak_db', 'rms_db', 'silent', 'loudness_partial', 'measured_at', // MM5 (migration 031)
+    'preview_file_id', 'preview_state', // 17.11.2026 (migration 106): a heavy video's light preview copy
   ]);
   assert.deepEqual(columns(db, 'bridges'), [
     'id', 'kind', 'conversation_id', 'secret_id', 'external_chat_id', 'cursor', 'status', 'error', 'created_at', 'updated_at',

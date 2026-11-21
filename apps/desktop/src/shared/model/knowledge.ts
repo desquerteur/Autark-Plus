@@ -83,6 +83,9 @@ export interface KnowledgeHit {
 
 /** A skill in the agentskills.io format (SKILL.md with name + description front matter). */
 export interface SkillInfo {
+  /** Concrete library copy, not its name. Present in the settings catalog. */
+  id?: string;
+  readOnly?: boolean;
   name: string; // lowercase-hyphen, matches folder
   description: string; // what + when (shown in the skills index)
   source: 'builtin' | 'user' | 'agent';

@@ -1,7 +1,11 @@
 // Account and quota monitor: provider pushes reach AccountService.updateLimits immediately;
-// one cancellable timer also reads Codex every 15 s and Claude Code every 60 s, even without
-// runs or UI activity (usage in other apps). Startup always checks again. All checks share
-// one serial queue; failures back off to 5 min. Signed-out/disabled accounts have no timer.
+// one cancellable timer also reads Codex every 15 s and Claude Code every 60 s while an agent turn
+// is queued or running and for WORK_TAIL_MS after the last one ended; with no turn it reads every
+// QUIET_MS (usage in other apps still shows; owner 09.11.2026: the app stays light while it does not
+// work – a Claude read starts two CLI processes of ~120 MB, measured). A turn that starts, and the
+// window brought to the front (usage.list), read what is older than the working cadence at once. Startup always checks
+// again. All checks share one serial queue; failures back off to 5 min. Signed-out/disabled accounts
+// have no timer.
 // B-044: these background reads ask Codex for its banked resets' count only (excludeResetCreditDetails);
 // the credit details come with the reads the person asks for – checkNow (a sign-in, a used reset) and
 // refreshAll (the quota details or Settings › Models opened), which also reads a Codex plan
@@ -20,7 +24,11 @@ import { PROVIDER_LABELS } from './service-shape.ts';
 
 const MINUTE = 60_000;
 export const REFRESH_MS = { codex: 15_000, claude: MINUTE } as const;
-/** Failed reads become visibly stale instead of looking current for half an hour. */
+/** The cadence while no agent turn is queued or running. */
+export const QUIET_MS = 10 * MINUTE;
+/** After the last turn ended the working cadence holds this long (a person's next message often follows). */
+export const WORK_TAIL_MS = 2 * MINUTE;
+/** Failed reads become visibly stale instead of looking current for half an hour (while quiet: past QUIET_MS plus this). */
 export const STALE_MS = 2 * MINUTE;
 
 const ENDED = new Set(['done', 'failed', 'interrupted']);
@@ -44,19 +52,23 @@ export interface AccountMonitorDeps {
   schedule?: (run: () => void, delayMs: number) => () => void;
 }
 
-/** Older than two minutes, or a window's reset has passed. */
-export function isStale(limits: AccountLimits, now: number): boolean {
-  return now - limits.readAt > STALE_MS || limits.windows.some((window) => window.resetsAt !== undefined && window.resetsAt <= now);
+/** Older than `staleMs` (two minutes while working), or a window's reset has passed. */
+export function isStale(limits: AccountLimits, now: number, staleMs = STALE_MS): boolean {
+  return now - limits.readAt > staleMs || limits.windows.some((window) => window.resetsAt !== undefined && window.resetsAt <= now);
 }
 
-/** Quota rail entries: every plan with its short name (B-078, shared/model/plan-names.ts), weekly headroom, all windows and the stale flag. */
-export function usageSummaries(accounts: Account[], now: number): UsageSummary[] {
+/**
+ * Quota rail entries: every enabled plan with its short name (B-078, shared/model/plan-names.ts), weekly headroom, all
+ * windows and the stale flag. Feedback 16.11.2026 (F24): a switched-off plan runs no turn here, so its last reading
+ * (headroom it cannot give) is not shown – the rail said "plenty left" while every turn here waited.
+ */
+export function usageSummaries(accounts: Account[], now: number, staleMs = STALE_MS): UsageSummary[] {
   const active = new Set<string>();
   for (const engine of ['codex', 'claude'] as EngineId[]) {
     const first = selectCandidates(accounts, engine, now)[0];
     if (first) active.add(first.id);
   }
-  const plans = accounts.filter((account) => isPlanProvider(account.provider));
+  const plans = accounts.filter((account) => account.enabled && isPlanProvider(account.provider));
   const names = planNames(plans, PROVIDER_LABELS);
   return plans.map((account) => {
     const weekly = weeklyWindow(account.limits, now);
@@ -64,7 +76,7 @@ export function usageSummaries(accounts: Account[], now: number): UsageSummary[]
     return {
       accountId: account.id, provider: account.provider, label: account.label, ...(name ? { name } : {}), active: active.has(account.id),
       weeklyRemainingPercent: weekly ? Math.max(0, 100 - weekly.usedPercent) : undefined, weeklyResetsAt: weekly?.resetsAt,
-      limits: account.limits && { ...account.limits, stale: isStale(account.limits, now) },
+      limits: account.limits && { ...account.limits, stale: isStale(account.limits, now, staleMs) },
     };
   });
 }
@@ -84,6 +96,11 @@ export class AccountMonitor {
   private off: (() => void) | undefined;
   private stopped = false;
   private cancelTimer: (() => void) | undefined;
+  /** Agent turns queued or running now, and when the last one ended. */
+  private readonly turns = new Set<string>();
+  private lastTurnAt = 0;
+  /** When the working cadence began (its first STALE_MS still judge readings by the quiet cadence: their reads are on the way). */
+  private workingSince = 0;
 
   constructor(deps: AccountMonitorDeps) {
     this.deps = deps;
@@ -96,6 +113,11 @@ export class AccountMonitor {
     if (this.off) return;
     this.stopped = false;
     const runOff = this.deps.bus.on('run.upserted', (run) => {
+      if (run.status === 'queued' || run.status === 'running') {
+        if (!this.working()) this.workingSince = this.now();
+        this.turns.add(run.id);
+      }
+      else if (this.turns.delete(run.id) || ENDED.has(run.status)) this.lastTurnAt = this.now();
       if (run.accountId && ENDED.has(run.status)) this.afterTurn(run.accountId);
       this.activity();
     });
@@ -126,12 +148,13 @@ export class AccountMonitor {
     return new Promise((resolve) => this.enqueue(id, false, resolve, true));
   }
 
-  /** Activity and timer use the same cadence; pushes never postpone the independent read. */
-  activity(): void {
+  /** Activity and timer use the same cadence; pushes never postpone the independent read. `back`: the person is back (working cadence once). */
+  activity(back = false): void {
     const now = this.now();
+    const working = back || this.working();
     for (const account of this.plans()) {
       if (account.state === 'needs_login') continue; // sign-in, detection or the quota details check it
-      if (now >= this.dueAt(account)) this.enqueue(account.id, true);
+      if (now >= this.dueAt(account, working)) this.enqueue(account.id, true);
     }
     if (!this.busy && staleKey(this.summaries()) !== this.published) this.publish();
     this.arm();
@@ -139,14 +162,14 @@ export class AccountMonitor {
 
   /** Power resume or unlock (the person is back) or the host is online again (B-044). */
   resume(): void {
-    this.activity();
+    this.activity(true);
   }
 
   /** A turn ended on this account. */
   afterTurn(accountId: string): void {
     const account = this.deps.accounts.get(accountId);
     if (!account || !this.watched(account)) return;
-    if (this.now() >= this.dueAt(account)) this.enqueue(account.id, true);
+    if (this.now() >= this.dueAt(account, true)) this.enqueue(account.id, true);
   }
 
   /** Quota details share the provider cadence and serial queue with automatic reads (with the reset details; a Codex plan without them is read at once). */
@@ -155,7 +178,7 @@ export class AccountMonitor {
     for (const account of this.plans()) {
       const resets = account.limits?.resets;
       const missing = account.provider === 'codex' && resets !== undefined && resets.available > 0 && resets.credits === undefined;
-      if (now >= this.dueAt(account) || (missing && account.state !== 'needs_login')) this.enqueue(account.id, true, undefined, true);
+      if (now >= this.dueAt(account, true) || (missing && account.state !== 'needs_login')) this.enqueue(account.id, true, undefined, true);
     }
     await this.idle();
   }
@@ -166,7 +189,8 @@ export class AccountMonitor {
   }
 
   summaries(): UsageSummary[] {
-    return usageSummaries(this.deps.accounts.list(), this.now());
+    const now = this.now();
+    return usageSummaries(this.deps.accounts.list(), now, this.working() && now - this.workingSince > STALE_MS ? STALE_MS : QUIET_MS + STALE_MS);
   }
 
   /** Emits usage.updated with the current summaries (also used by the account service). */
@@ -188,7 +212,13 @@ export class AccountMonitor {
     return Math.max(account.checkedAt ?? 0, this.attempted.get(account.id) ?? 0);
   }
 
-  private dueAt(account: Account): number {
+  /** A turn is queued or running, or the last one ended less than WORK_TAIL_MS ago. */
+  private working(): boolean {
+    return this.turns.size > 0 || this.now() - this.lastTurnAt < WORK_TAIL_MS;
+  }
+
+  private dueAt(account: Account, working = this.working()): number {
+    if (!working) return this.lastCheck(account) + QUIET_MS;
     const gap = REFRESH_MS[account.provider === 'codex' ? 'codex' : 'claude'];
     return this.lastCheck(account) + Math.min(5 * MINUTE, gap * 2 ** (this.failures.get(account.id) ?? 0));
   }
@@ -196,8 +226,11 @@ export class AccountMonitor {
   private arm(): void {
     this.cancelTimer?.(); this.cancelTimer = undefined;
     if (!this.off || this.stopped || this.busy) return;
-    const due = this.plans().filter((account) => account.state !== 'needs_login').map((account) => this.dueAt(account));
+    const working = this.working();
+    const due = this.plans().filter((account) => account.state !== 'needs_login').map((account) => this.dueAt(account, working));
     if (!due.length) return;
+    // The working tail ends: the timer wakes then to switch to the quiet cadence.
+    if (working && !this.turns.size) due.push(Math.max(this.lastTurnAt + WORK_TAIL_MS, this.now() + 1));
     const delay = Math.max(1, Math.min(...due) - this.now());
     const run = () => { this.cancelTimer = undefined; this.activity(); };
     if (this.deps.schedule) this.cancelTimer = this.deps.schedule(run, delay);

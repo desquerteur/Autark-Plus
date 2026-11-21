@@ -21,7 +21,7 @@ import { clip, defineTool, internal } from './util.ts';
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
-const ENTRY = { type: 'string', minLength: 1, maxLength: 100, description: 'The entry\'s id from calendar.list.' };
+const ENTRY = { type: 'string', minLength: 1, maxLength: 100, description: 'From calendar.list.' };
 
 /** The person's entry `id` when this agent may change it (with its to-do for a block), else why not. */
 function ownEntry(ctx: ToolContext, id: string): { row: CalendarEvent; task?: TaskView } | string {
@@ -36,8 +36,8 @@ function ownEntry(ctx: ToolContext, id: string): { row: CalendarEvent; task?: Ta
 
 const moveEntry = defineTool<{ eventId: string; startAt: string; endAt?: string }>({
   name: 'calendar.move',
-  description: 'Move an appointment I put into the person\'s calendar, or the time block of one of their to-dos (same length unless endAt is given). Not over their appointments or blocks they set; an entry the person set stays.',
-  inputSchema: { type: 'object', properties: { eventId: ENTRY, startAt: TIME, endAt: TIME }, required: ['eventId', 'startAt'], additionalProperties: false },
+  description: "Moves an appointment I set, or a to-do's block, to a new time. An entry the person set stays.",
+  inputSchema: { type: 'object', properties: { eventId: ENTRY, startAt: TIME, endAt: { ...TIME, description: 'Default same length.' } }, required: ['eventId', 'startAt'], additionalProperties: false },
   category: 'think',
   describe: (args) => internal(`Move calendar entry ${args.eventId}`, args.eventId),
   async run(args, ctx) {
@@ -69,7 +69,7 @@ const moveEntry = defineTool<{ eventId: string; startAt: string; endAt?: string 
 
 const removeEntry = defineTool<{ eventId: string }>({
   name: 'calendar.remove',
-  description: 'Remove an appointment I put into the person\'s calendar, or the time block of one of their to-dos (the to-do stays, unplanned). An entry the person set stays.',
+  description: "Removes an appointment I set, or a to-do's block; the to-do stays. An entry the person set stays.",
   inputSchema: { type: 'object', properties: { eventId: ENTRY }, required: ['eventId'], additionalProperties: false },
   category: 'think',
   describe: (args) => internal(`Remove calendar entry ${args.eventId}`, args.eventId),

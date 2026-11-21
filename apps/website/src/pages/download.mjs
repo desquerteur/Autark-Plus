@@ -17,14 +17,14 @@ export default function downloadPage(rel) {
     mac: 'macOS refuses once: <em>System Settings → Privacy &amp; Security → Open Anyway</em>.',
     linux: '<code>chmod +x</code> and run. Needs FUSE 2 and a system keyring.',
     android: 'Allow installs from your browser once, then type your PC’s Remote ID.',
-    iphone: 'Ask your manager on the PC to set it up, then add it to the Home Screen.',
+    iphone: 'Open the web app in Safari, <em>Share</em> → <em>Add to Home Screen</em>, type your PC’s Remote ID. No App Store, no Apple account.',
   };
 
   return page({
     slug: 'download',
     rel,
     title: `Download ${site.name}`,
-    description: `Download ${site.name} ${W.version} for Windows, macOS or Linux, and the Android app, free and without an account; on iPhone it is the web app your PC serves. One page per platform with the install steps, plus requirements, checksums and permanent links.`,
+    description: `Download ${site.name} ${W.version} for Windows, macOS or Linux, and the Android app, free and without an account; on iPhone it is a web app on the Home Screen, no App Store needed. One page per platform with the install steps, plus requirements, checksums and permanent links.`,
     ld: [{
       '@type': 'ItemList', name: `${site.name} downloads`, numberOfItems: platforms.length,
       itemListElement: platforms.map((p, i) => ({ '@type': 'ListItem', position: i + 1, name: `${site.name} for ${p.os}`, url: `${site.url}/download/${p.id}/` })),
@@ -69,16 +69,20 @@ ${pageHero({
       <div class="callout">${icon('bolt')}<div><strong>Agents have full access from the first moment.</strong> The question is how you tell them what you want. It closes nothing technically. <a href="${root}access/">What that means</a></div></div>
 
       <h2 id="verify">Check the file</h2>
-      <p>Every release publishes <a href="${release.asset('SHA256SUMS.txt')}" rel="nofollow">SHA256SUMS.txt</a> with the SHA-256 hash of each file. In PowerShell, in your Downloads folder:</p>
+${rel.sums && Object.keys(rel.sums).length ? `      <table>
+        <thead><tr><th>File</th><th>Version</th><th>SHA-256</th></tr></thead>
+        <tbody>${platforms.filter((p) => p.file && rel.sums[p.file]).map((p) => `<tr><td>${p.os}<br><span class="small muted"><code>${esc(p.file)}</code></span></td><td>${esc(rel[p.id]?.version || 'latest')}</td><td><code class="plat-hash">${esc(rel.sums[p.file])}</code></td></tr>`).join('')}</tbody>
+      </table>
+` : ''}      <p>Every release publishes <a href="${release.asset('SHA256SUMS.txt')}" rel="nofollow">SHA256SUMS.txt</a> with the SHA-256 hash of each file. In PowerShell, in your Downloads folder:</p>
       <p><code>Get-FileHash .\\${files.windows} -Algorithm SHA256</code> <button class="btn btn--sm btn--ghost" type="button" data-copy="Get-FileHash .\\${files.windows} -Algorithm SHA256" style="margin-left:8px;vertical-align:middle">Copy</button></p>
       <p>The hash must match the line for <code>${files.windows}</code> in SHA256SUMS.txt. On macOS use <code>shasum -a 256 &lt;file&gt;</code>, on Linux or Android <code>sha256sum &lt;file&gt;</code>. A match shows the file arrived as published. It does not replace a signature.</p>
 
       <h2 id="updates">Updates</h2>
       <p>${site.name} checks GitHub Releases every minute while the window is open and every 15 minutes from the tray. A small icon appears only when an update exists. On Windows and Linux one click downloads it, verifies it against the SHA-512 in the update manifest, installs it, and the app opens again by itself. Your agents, chats and settings stay where they are.</p>
-      <p>On macOS the app replaces itself where macOS allows it, and otherwise the icon leads to the download. That path is new and has not run on a real Mac yet. The Android app shows <em>Update</em> when a new APK exists; most changes need none, because the interface comes from your PC.</p>
+      <p>On macOS the app replaces itself where macOS allows it, and otherwise the icon leads to the download. That path is new and has not run on a real Mac yet. The Android app shows a line at the top when a new APK exists; <em>Update</em> downloads it in the app with its progress, and Android installs it after you confirm. Most changes need none, because the interface comes from your PC.</p>
 
       <h2 id="links">Permanent links</h2>
-      <p>Use these addresses to link to ${site.name} from anywhere: in posts, docs or from the app itself. Each one serves the newest file, even if the release channel moves. The older <code>${site.url}/download/windows</code>, <code>/mac</code> and <code>/linux</code> addresses keep working and open the platform pages.</p>
+      <p>Use these addresses to link to ${site.name} from anywhere: in posts, docs or from the app itself. Each one opens the page for that platform here, even if the release channel moves; the file itself is on <a href="${release.releasesUrl}" rel="noopener">GitHub Releases</a>. The older <code>${site.url}/download/windows</code>, <code>/mac</code> and <code>/linux</code> addresses keep working and open the platform pages.</p>
       <table>
         <thead><tr><th>File</th><th>Permanent link</th></tr></thead>
         <tbody>${stable.map((d) => `<tr><td>${d.os}<br><span class="small muted">${esc(d.detail)}</span></td><td><code>${d.url}</code> <button class="btn btn--sm btn--ghost" type="button" data-copy="${d.url}" style="margin-left:6px">Copy</button></td></tr>`).join('')}</tbody>

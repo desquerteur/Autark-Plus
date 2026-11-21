@@ -3,7 +3,7 @@
    Hand back, Show window, one status line), the picture, the touch layer and the named cursors. The
    controls row is reserved while the browser is open, so the picture never moves; a two-label button
    keeps the wider label's box (.workspace-swap). Goes with those components.
-   Owns: `browser-live-*`, `workspace-screen*`, `workspace-swap`, `browser-touch`, `browser-keys`,
+   Owns: `browser-live-*`, `workspace-screen*`, `workspace-swap`, `browser-touch`, `browser-keys`, `browser-pad-cursor`,
    `browser-pointer*`, `agent-browser*` and the `workspace-body` / `workspace-tab` boxes Team's agent
    page uses; B-076 `remote-web*`: a side tab running on another PC (workspace/RemoteWebTab.tsx), the same live
    view with a blue glow, the PC's mark and the page's dialog. Never: the browser pane (workspace.css,
@@ -57,16 +57,13 @@
 }
 .workspace-body.tab-browser .workspace-screen-view { container-type: size; }
 .workspace-screen-view:has(> :is(img, .browser-touch)) { align-items: start; }
-.workspace-screen-view .browser-touch:not(.browser-zoom) { place-items: start center; }
+.workspace-screen-view .browser-touch { place-items: start center; }
 .workspace-screen-view:not(:has(> :is(img, .browser-touch))) { border-top-color: transparent; background: var(--surface); }
 .workspace-screen-view img { display: block; width: auto; height: auto; max-width: 100%; object-fit: contain; }
 .workspace-body.tab-browser .workspace-screen-view img {
   --frame-w: 100cqw; --frame-h: 100cqh;
   max-width: min(100cqw, var(--frame-w)); max-height: min(100cqh, var(--frame-h));
 }
-/* zoomed: twice the view's width, scrolling in its box – above every cap of the picture's size (the sized column's too) */
-.workspace-screen-view .browser-zoom > img,
-.workspace-body.tab-browser .workspace-screen-view .browser-zoom > img { width: 200%; max-width: none; max-height: none; }
 /* a closed browser, or one hidden while a secret is filled in: a quiet note with an icon */
 .browser-live-empty {
   display: flex; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
@@ -76,9 +73,15 @@
 .browser-live-empty > p { margin: 0; }
 
 /* ---------------------------------------------------------------- touch screen (X02) */
-/* 1x: one finger scrolls the page (browser-touch.ts); 2x: the picture pans in its box, taps still click */
+/* every gesture is the surface's own (browser-touch.ts, browser-pad.ts): a finger scrolls the page or pans the zoomed
+   picture, two pinch it. B-081 T9: zoomed, the picture keeps its laid-out box and is drawn larger around its top-left
+   (BrowserSurface.tsx sets translate + scale, view-zoom.ts); the box clips it */
 .browser-touch { position: relative; display: grid; place-items: center; overflow: hidden; touch-action: none; }
-.browser-touch.browser-zoom { display: block; overflow: auto; touch-action: pan-x pan-y; overscroll-behavior: contain; }
+.browser-touch > img { transform-origin: 0 0; will-change: transform; }
+/* the touchpad's cursor: the person's thin arrow over the picture in the remote colour, an overlay that takes no room */
+.browser-pad-cursor { position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; will-change: transform; }
+.browser-pad-cursor > svg { display: block; filter: drop-shadow(0 1px 2px var(--backdrop)); }
+.browser-pad-cursor > svg > path { fill: var(--remote); stroke: var(--surface); }
 /* the hidden field for the on-screen keyboard: 16 px so iOS does not zoom, invisible, never in the way */
 .browser-keys {
   position: fixed; top: 0; left: 0; width: 1px; height: 1px; margin: 0; padding: 0; border: 0;
@@ -86,17 +89,30 @@
 }
 
 /* ---------------------------------------------------------------- named cursors over the picture */
+/* a person: a thin plain arrow in their avatar colours. An agent (B-081, data-agent): the AI cursor of
+   shared/model/agent-cursor.ts in its colour with a white outline and a static glow; only the arrowhead leans (--tilt,
+   around its tip, set per frame while it travels) and eases back upright on arrival; the name pill never turns. Its dark
+   lift takes the --backdrop shade (about the in-page drawer's, main/side-driver/cursor-script.ts) */
 .browser-pointers { position: absolute; inset: 0; z-index: 3; overflow: hidden; pointer-events: none; }
-.browser-pointer { --pointer: var(--focus); --pointer-on: var(--surface); /* the actor's avatar colours: PointerLayer.tsx sets them per cursor */ position: absolute; top: 0; left: 0; will-change: transform; }
+.browser-pointer { --pointer: var(--focus); --pointer-on: var(--surface); --tilt: 0deg; /* the actor's colours and an agent's lean: PointerLayer.tsx sets them per cursor */ position: absolute; top: 0; left: 0; will-change: transform; }
 .browser-pointer > svg { display: block; }
 .browser-pointer > svg > path { fill: var(--pointer); stroke: var(--pointer-on); }
+.browser-pointer[data-agent] > svg {
+  position: absolute; overflow: visible; transform: rotate(var(--tilt)); transition: transform .15s ease-out; will-change: transform;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--pointer) 55%, transparent)) drop-shadow(0 1px 2px var(--backdrop));
+}
+.browser-pointer[data-agent][data-moving] > svg { transition: none; }
 .browser-pointer-name {
   position: absolute; top: 18px; left: 12px; padding: 1px 6px; border-radius: 6px; background: var(--pointer);
   color: var(--pointer-on); font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
 }
+.browser-pointer[data-agent] > .browser-pointer-name { top: 17px; left: 15px; padding: 1px 7px; border-radius: 9px; box-shadow: 0 1px 3px var(--backdrop); }
 .browser-pointer[data-click] > svg { animation: browser-pointer-click .3s ease-out; }
 @keyframes browser-pointer-click { 50% { transform: scale(.82); } }
-@media (prefers-reduced-motion: reduce) { .browser-pointer[data-click] > svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .browser-pointer[data-click] > svg { animation: none; }
+  .browser-pointer[data-agent] > svg { transform: none; }
+}
 
 /* ---------------------------------------------------------------- B-076: a side tab running on another PC */
 /* the PC's mark: a fixed cell after Reload (Back, Forward, Reload and the menu cell stay where every tab has them), so the
@@ -119,7 +135,8 @@
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
   box-shadow: inset 0 0 0 2px var(--remote), inset 0 0 18px color-mix(in srgb, var(--remote) 45%, transparent);
 }
-/* Type and Zoom on a touch screen float over the picture's corner (no row of their own) */
+/* Type and Zoom on a touch screen float over the picture's corner (no row of their own); the touch / touchpad switch is
+   a fixed cell of the toolbar (an IconButton: pressed changes its colour only) */
 .remote-web-touch {
   position: absolute; right: 12px; bottom: 12px; z-index: 4; display: flex; align-items: center; gap: 4px; padding: 4px;
   border-radius: var(--r-md); background: var(--elevated); box-shadow: var(--shadow-popover);

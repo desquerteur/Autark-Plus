@@ -4,9 +4,10 @@
 // within 64 MB – the oldest hidden ones go first, then the oldest condensed – but never before 14 days after
 // the item was condensed or hidden: the 14-day promise wins over the size cap (a chat that hides more than 64 MB
 // within 14 days stays over it until those originals turn 14 days old). Kept items are never pruned (a rebuild
-// needs them). A pruned row keeps its title and condensed text; its blob goes back to the store's clean-up
-// (files/cleanup.ts decides – a message or memory using the same bytes keeps it), unless another unpruned ledger
-// row holds the same bytes. Runs after every mark, at start (bounded) and when a chat is removed – no timers.
+// needs them). A pruned row keeps its title and condensed text – a lean text without its values (14.11.2026, window.ts leanStart:
+// a value may have stood past what the run item still holds, where the person's Forget no longer finds it, forget.ts); its blob
+// goes back to the store's clean-up (files/cleanup.ts decides – a message or memory using the same bytes keeps it), unless
+// another unpruned ledger row holds the same bytes. Runs after every mark, at start (bounded) and when a chat is removed – no timers.
 // Owns: the budget, the floor, the order and the pruning. Never: deletes a blob itself or prunes a kept item.
 
 import type { FileStore, Logger } from '../../contracts.ts';
@@ -14,6 +15,7 @@ import { reclaimerOf } from '../../files/cleanup.ts';
 import type { Db } from '../../db/database.ts';
 import { blobIdsOf, journalRow } from './originals.ts';
 import type { LedgerRow, LedgerStore } from './store.ts';
+import { leanStart } from './window.ts';
 
 export const RETENTION_BYTES = 64 * 1024 * 1024;
 export const RETENTION_FLOOR_MS = 14 * 24 * 60 * 60_000;
@@ -57,6 +59,10 @@ export function prune(deps: RetentionDeps, agentId: string, conversationId: stri
     if (held <= budget) break;
     const blobs = rowBlobs(deps.db, row);
     deps.store.pruned(row, now);
+    const lean = row.condensed === null ? null : leanStart(row.condensed);
+    if (lean !== row.condensed) {
+      deps.db.run('UPDATE context_items SET condensed = ? WHERE agent_id = ? AND conversation_id = ? AND item_id = ?', [lean, row.agent_id, row.conversation_id, row.item_id]);
+    }
     held -= Number(row.bytes);
     count++;
     giveBack(deps, blobs, row);

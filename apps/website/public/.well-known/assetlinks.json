@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.teydralab.autark.android",
+      "sha256_cert_fingerprints": ["21:32:AC:BB:DE:F9:E4:0B:E0:76:47:B8:2C:2D:22:82:F3:AE:04:EF:51:E9:96:33:BB:9C:8D:3F:E2:00:1C:95"]
+    }
+  }
+]

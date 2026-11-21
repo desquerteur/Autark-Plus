@@ -4,7 +4,9 @@
 // use may be off, and "None" only while nothing serves it – as the answer: until models.uses has answered both cells stay
 // empty; the model select lists that provider's models for the use (a plan on Work first its pick for each turn – the
 // model it runs now, "<model> · each turn", on the plan in use – This PC its local models by name), and on a connection
-// of the file last "Other…", which swaps to a text field in the same box. A cell names a model, never a mode: Work on
+// of the file last "Other…", which swaps to a text field in the same box. B-083: a model on Work is a start model (agents
+// without their own start their turns on it and switch when the work needs another) – the row's hint says so. A cell
+// names a model, never a mode: Work on
 // the plan in use, Embeddings and Voice on this PC as models.uses names them ("This PC" only where it names none), the
 // ChatGPT plan's images their model, GPT Image. What really runs always stands among the options, even when it is
 // not listed. A pick becomes a change of settings.json
@@ -52,6 +54,8 @@ export interface UseWrite {
 const UNANSWERED: UseOption[] = [{ value: NOTHING, label: '' }];
 const SET_UP_WITH_AI = 'Set up with AI';
 const BEST_EACH_TURN = 'Best for each turn';
+/** B-083: Work holding one model – where agents without a start model of their own begin (router.ts), not one they keep to. */
+export const START_MODEL_HINT = 'The start model of agents without their own: they start their turns on it and switch when the work needs another';
 /** The ChatGPT plan's images: Codex's image tool, which runs OpenAI's GPT Image (media/codex-image.ts). */
 const PLAN_IMAGES: UseOption = { value: FREE_ROUTE_CHOICE.image, label: 'GPT Image', hint: 'On the ChatGPT plan' };
 
@@ -150,14 +154,14 @@ const providerOf = (now: UseNow | undefined): string => {
   return now.accountId ?? NOTHING;
 };
 
-/** The hint: a running download or its failure, a stored choice that cannot serve, the note, else what the use is for. */
+/** The hint: a running download or its failure, a stored choice that cannot serve, the note, Work's start model, else what the use is for. */
 function hintOf(use: ModelUse, now: UseNow | undefined, pull: LocalSpeechPull | undefined, offers: readonly LocalSpeechOffer[]): string {
   const target = now?.action?.kind === 'download-model' ? now.action.target : undefined;
   const label = offers.find((offer) => offer.id === (pull?.id ?? target))?.label;
   if (pull && running(pull)) return `${progressText(pull)}${label ? ` · ${label}` : ''}`;
   if (pull?.state === 'failed') return pull.error || `${label ?? 'The model'} could not be downloaded.`;
   if (now?.gone) return `${now.gone} is not available now`;
-  return now?.note ?? USE_ABOUT[use];
+  return now?.note ?? (use === 'work' && now?.kind === 'model' && now.stored !== USE_AUTO ? START_MODEL_HINT : USE_ABOUT[use]);
 }
 
 /** One row (`now` undefined: models.uses has not answered). `pull`: the last event of the local model this row is about. */

@@ -14,9 +14,26 @@ export function viewKind(mime: string, name: string): ViewKind {
   return 'file';
 }
 
-/** "0:42", "3:05", "1:02:09". */
+/** 17.11.2026 (the owner: an agent's .md attachment would not open on the phone): a stored text file the Media tab
+ *  shows as its text – Markdown rendered, any other text as it is. By its type or its name; a viewKind 'file' first. */
+export type TextKind = 'markdown' | 'plain';
+const MARKDOWN_EXT = ['md', 'markdown', 'mdx'];
+const PLAIN_EXT = ['txt', 'log', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'xml', 'ts', 'tsx', 'js', 'mjs', 'py', 'ps1', 'sh', 'sql', 'css', 'html', 'htm', 'srt', 'vtt'];
+export function textKind(mime: string, name: string): TextKind | null {
+  if (viewKind(mime, name) !== 'file') return null;
+  const type = mime.toLowerCase().split(';')[0]!.trim();
+  const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]?.toLowerCase() ?? '';
+  if (type === 'text/markdown' || type === 'text/x-markdown' || MARKDOWN_EXT.includes(ext)) return 'markdown';
+  if (type.startsWith('text/') || PLAIN_EXT.includes(ext)) return 'plain';
+  if (['application/json', 'application/xml', 'application/x-yaml', 'application/yaml', 'application/x-ndjson'].includes(type)) return 'plain';
+  return null;
+}
+/** The most of a text file the Media tab reads (files.read); a longer one says so and offers Save. */
+export const TEXT_VIEW_MAX = 2 * 1024 * 1024;
+
+/** "0:42", "3:05", "1:02:09". Whole seconds rounded down, as a player's own clock shows them (14.9 s is 0:14 there and here). */
 export function durationLabel(ms: number): string {
-  const total = Math.max(0, Math.round(ms / 1000));
+  const total = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = String(total % 60).padStart(2, '0');

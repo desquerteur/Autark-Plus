@@ -1,8 +1,8 @@
-// Migration 94 (official 0.3.5): a task's model request is kept per (agent, task), no longer per (agent, chat, task) –
-// kv 'next_route_task' keys 'agent:chat:task' become 'agent:task' (the newest wins), the old keys go (agents/next-route.ts).
-// Taken over unchanged from the official Autark 0.3.5 (teydra/OpenAutark, Apache-2.0, release build of 09.11.2026),
-// whose public source stopped at 091: a profile that official build migrated must open in this fork (AF-022).
-// Owns: those kv keys. Never: edits of shipped migrations.
+// Migration 94 (08.11.2026, B-080 model-set B): an agent's own model request for a task holds for every turn on that
+// task, in whichever chat it runs – kv 'next_route_task' is keyed `<agent>:<task>` (agents/next-route.ts). Rows of the
+// older key `<agent>:<chat>:<task>` (the chat empty for a run without one) get the new key; when two of one task
+// meet, the newest (updated_at) stays. Rows already in the new form stay as they are.
+// Owns: this re-keying. Never: the requests' values, other kv rows, or edits of shipped migrations.
 
 export const sql = /* sql */ `
 INSERT INTO kv (ns, key, value, updated_at)

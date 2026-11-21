@@ -6,12 +6,15 @@
 // models - speech to text, text to speech, image, video, music, sound effects - get -1 = "never" for every other
 // category, so the router never treats them as suitable for a chat category; B-058: the curated models of media-only
 // providers, media/providers/models.ts, by their table, with its relative price), the listing fields kept (B-058:
-// whether a model hears audio - audioIn; models the app cannot use at all are dropped, UNUSABLE_NAME), the catalog
-// order and the account fingerprint that decides when a listing is re-fetched.
+// whether a model hears audio - audioIn; models the app cannot use at all are dropped, UNUSABLE_NAME), the provider/name
+// order (B-083: the list order is models/order.ts catalogOrder) and the account fingerprint deciding listing re-fetches;
+// F05: each model's source as the person reads it (sourceLabel – the same in buildModel and fromRow).
 // Never: I/O, network or clock access (callers pass everything in).
 
 import { DECISION_PROVIDER, MODEL_FUNCTIONS, type Account, type EngineId, type ModelCaps, type ModelFunction, type ModelInfo, type ModelPrice, type ProviderId } from '../../shared/model/providers.ts';
 import type { ModelUse } from '../../shared/model/models-uses.ts';
+import { connectService } from '../../shared/model/providers-connect.ts';
+import { PROVIDER_LABELS } from '../accounts/service-shape.ts';
 import type { EngineModel } from '../engines/types.ts';
 import { LOCAL_PROVIDERS } from '../engines/http/common.ts';
 import { json, toJson } from '../db/database.ts';
@@ -73,7 +76,7 @@ export function fingerprint(account: Account): string {
   return JSON.stringify([account.provider, account.home ?? '', account.baseUrl ?? '', account.secretId ?? '', account.plan ?? '', account.deviceId ?? '']);
 }
 
-/** Catalog order: provider, then name, then id. */
+/** Provider, then name, then id (the specialists' order and the last tie-break of models/order.ts catalogOrder). */
 export function byProviderName(a: ModelInfo, b: ModelInfo): number {
   return a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id);
 }
@@ -83,14 +86,27 @@ export function isConnected(account: Account): boolean {
   return account.enabled && (account.state === 'ok' || account.state === 'unknown' || account.state === 'cooling');
 }
 
-/** Accounts whose model list may be (re)fetched now. */
+/** Accounts whose model list may be (re)fetched now – a cooling one too: listing models costs no quota, and a provider's new model must show while a plan waits for its reset. */
 export function isListable(account: Account): boolean {
-  return account.enabled && (account.state === 'ok' || account.state === 'unknown');
+  return account.enabled && (account.state === 'ok' || account.state === 'unknown' || account.state === 'cooling');
 }
 
-/** Prior for a provider model id; OpenRouter ids ("anthropic/claude-opus-5-5") also try the bare id. */
+/**
+ * F05: where a model runs, as the person reads it – the plan's or API's name for an account found or added by provider
+ * ("Codex", "Claude Code", "OpenRouter"), a connection settings.json names (its id is the model id's prefix, `owner`) by
+ * its known service's name, else by that id.
+ */
+export function sourceLabel(provider: ProviderId, owner: string): string {
+  if (owner === provider) return PROVIDER_LABELS[provider] ?? provider;
+  return connectService(owner)?.name ?? owner;
+}
+
+/** The owner part of a catalog id ("codex:gpt-6.1-sol" → "codex"; model names may hold ':' themselves, owners never). */
+const ownerOf = (id: string) => id.slice(0, Math.max(0, id.indexOf(':'))) || id;
+
+/** Prior for a provider model id; OpenRouter ids ("anthropic/claude-opus-5-5") also try the bare id; a newer version than any curated one takes its predecessor's. */
 export function priorFor(priors: Priors, model: string, id: string): PriorEntry | undefined {
-  return priors.forModel(model, id) ?? (model.includes('/') ? priors.forModel(model.slice(model.lastIndexOf('/') + 1)) : undefined);
+  return priors.forModel(model, id) ?? (model.includes('/') ? priors.forModel(model.slice(model.lastIndexOf('/') + 1)) : undefined) ?? priors.forNewer(model);
 }
 
 /**
@@ -220,7 +236,7 @@ export function buildModel(input: BuildInput): ModelInfo {
     id, provider, model: listed.model, name: name.slice(0, 200), engine, efforts, defaultEffort, caps, tier,
     ...valueFields({ provider, model: listed.model, prior, tier, feed: input.feed }),
     strengths: strengthsFor(prior, special),
-    available: false, accounts: [], functions: functionsOf(special),
+    available: false, accounts: [], functions: functionsOf(special), source: sourceLabel(provider, input.owner ?? provider),
   };
   if (!info.defaultEffort) delete info.defaultEffort;
   if (!info.functions?.length) delete info.functions;
@@ -252,6 +268,7 @@ export function fromRow(row: ModelRow, priors: Priors, feed?: FeedPrices): Model
     ...valueFields({ provider, model: row.model, prior, tier, feed }),
     strengths: neverOutside(fillNever(json<Record<string, number>>(row.strengths, {}), special), special),
     available: row.available === 1, accounts: json<string[]>(row.accounts, []), functions: functionsOf(special),
+    source: sourceLabel(provider, ownerOf(row.id)),
   };
   if (!info.defaultEffort) delete info.defaultEffort;
   if (!info.functions?.length) delete info.functions;

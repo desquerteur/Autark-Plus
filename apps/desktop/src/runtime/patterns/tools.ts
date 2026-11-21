@@ -29,7 +29,7 @@ function origin(entry: PatternSummary): string {
 export function patternTools(library: PatternLibrary) {
   const find = defineTool<{ query?: string }>({
     name: 'patterns.find',
-    description: 'List team patterns (example teams such as a research or content team, a solo-founder support team, an optional CEO assistant) that I can load with patterns.load and adapt. Optional query filters by words.',
+    description: 'Lists team patterns: example teams I can load with patterns.load and adapt.',
     inputSchema: { type: 'object', properties: { query: { type: 'string', maxLength: 200 } }, additionalProperties: false },
     category: 'read',
     describe: (args) => internal(args.query ? `Find team patterns: ${clip(args.query, 60)}` : 'List team patterns'),
@@ -47,7 +47,7 @@ export function patternTools(library: PatternLibrary) {
   });
   const load = defineTool<{ id: string }>({
     name: 'patterns.load',
-    description: 'Load one team pattern (from patterns.find) as a reference: its roles, reporting lines and suggested instructions.',
+    description: 'Loads a team pattern: its roles, reporting lines and suggested instructions.',
     inputSchema: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 128 } }, required: ['id'], additionalProperties: false },
     category: 'read',
     describe: (args) => internal(`Load team pattern ${clip(args.id, 60)}`),

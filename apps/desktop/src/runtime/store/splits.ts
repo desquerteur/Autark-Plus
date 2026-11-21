@@ -1,14 +1,14 @@
 // Repository for `split_groups` and `splits` (B-057, migration 084): the groups an agent split its work into and their
-// parts. Plain SQL, epoch ms; `after`, `fork` and `branch` are JSON columns, `ultra` and `worktree` 0/1. A group's
-// `parts` and a split's `of` are not stored – both are the number of the group's split rows (a group and its splits
-// are saved in one transaction by the split service). The origin is stored like a run's (source / source_label).
+// parts. Plain SQL, epoch ms; `after`, `fork`, `branch` and a group's `parent_session` (B-080, migration 092) are JSON
+// columns, `ultra` and `worktree` 0/1, `temperature` (B-083, migration 096) REAL. A group's `parts` and a split's `of` are not stored – both are the number of the
+// group's split rows (a group and its splits are saved in one transaction by the split service). The origin is stored like a run's (source / source_label).
 // Patches (updateSplit / updateGroup): a key that is present changes the column – present with `undefined` clears it
 // (NULL) – and an absent key keeps it.
 // Owns: SQL and row↔SplitGroup/Split mapping. Never: lifecycle rules, events or limits (runtime/splits/**).
 
 import { json, toJson, type Db, type Row } from '../db/database.ts';
 import type { SQLInputValue } from 'node:sqlite';
-import type { Split, SplitGroup, SplitGroupStatus, SplitStatus } from '../../shared/model/splits.ts';
+import type { Split, SplitGroup, SplitGroupStatus, SplitParentSession, SplitStatus } from '../../shared/model/splits.ts';
 import type { Origin } from '../../shared/model/origin.ts';
 import { compact, nul, opt, optNumber } from './rows.ts';
 
@@ -35,7 +35,9 @@ export interface SplitQuery {
 /** What updateSplit may change (identity, place in the group and creation time never change). */
 export type SplitPatch = Partial<Omit<Split, 'id' | 'groupId' | 'agentId' | 'idx' | 'of' | 'createdAt'>>;
 /** What updateGroup may change. */
-export type SplitGroupPatch = Partial<Pick<SplitGroup, 'status' | 'startedAt' | 'endedAt' | 'gatheredAt' | 'cwd' | 'modeKey' | 'ultra'>>;
+export type SplitGroupPatch = Partial<Pick<SplitGroup, 'status' | 'startedAt' | 'endedAt' | 'gatheredAt' | 'cwd' | 'modeKey' | 'ultra' | 'parentSession'>>;
+
+const jsonOrNull = (v: unknown): SQLInputValue => (v === undefined ? null : toJson(v));
 
 const GROUP_SELECT = 'SELECT g.*, (SELECT COUNT(*) FROM splits c WHERE c.group_id = g.id) AS part_count FROM split_groups g';
 const SPLIT_SELECT = 'SELECT s.*, (SELECT COUNT(*) FROM splits c WHERE c.group_id = s.group_id) AS part_count FROM splits s';
@@ -48,16 +50,18 @@ const GROUP_COLUMNS: Record<keyof SplitGroupPatch, { column: string; value: (v: 
   cwd: { column: 'cwd', value: (v) => nul(v as string | undefined) },
   modeKey: { column: 'mode_key', value: (v) => nul(v as string | undefined) },
   ultra: { column: 'ultra', value: (v) => (v ? 1 : 0) },
+  parentSession: { column: 'parent_session', value: (v) => jsonOrNull(v) },
 };
 
-const jsonOrNull = (v: unknown): SQLInputValue => (v === undefined ? null : toJson(v));
 const SPLIT_COLUMNS: Record<keyof SplitPatch, { column: string; value: (v: unknown) => SQLInputValue }> = {
   title: { column: 'title', value: (v) => String(v ?? '') },
   brief: { column: 'brief', value: (v) => String(v ?? '') },
   returns: { column: 'returns', value: (v) => nul(v as string | undefined) },
-  context: { column: 'context', value: (v) => String(v ?? 'fork') },
+  context: { column: 'context', value: (v) => String(v ?? 'brief') },
   model: { column: 'model', value: (v) => nul(v as string | undefined) },
   effort: { column: 'effort', value: (v) => nul(v as string | undefined) },
+  temperature: { column: 'temperature', value: (v) => nul(v as number | undefined) },
+  chat: { column: 'chat', value: (v) => nul(v as string | undefined) },
   after: { column: '"after"', value: (v) => toJson(v ?? []) },
   worktree: { column: 'worktree', value: (v) => (v ? 1 : 0) },
   status: { column: 'status', value: (v) => String(v ?? 'pending') },
@@ -67,6 +71,7 @@ const SPLIT_COLUMNS: Record<keyof SplitPatch, { column: string; value: (v: unkno
   branch: { column: 'branch', value: jsonOrNull },
   startedAt: { column: 'started_at', value: (v) => nul(v as number | undefined) },
   endedAt: { column: 'ended_at', value: (v) => nul(v as number | undefined) },
+  gatheredAt: { column: 'gathered_at', value: (v) => nul(v as number | undefined) },
 };
 
 function originOf(row: Row): Origin | undefined {
@@ -93,6 +98,7 @@ function toGroup(row: Row): SplitGroup {
     startedAt: optNumber(row.started_at),
     endedAt: optNumber(row.ended_at),
     gatheredAt: optNumber(row.gathered_at),
+    parentSession: json<SplitParentSession | undefined>(row.parent_session, undefined),
   });
 }
 
@@ -110,6 +116,8 @@ function toSplit(row: Row): Split {
     context: row.context as Split['context'],
     model: opt<string>(row.model),
     effort: opt<Split['effort']>(row.effort),
+    temperature: optNumber(row.temperature),
+    chat: opt<string>(row.chat),
     after: Array.isArray(after) ? after.map(Number).filter((n) => Number.isInteger(n)) : [],
     worktree: Number(row.worktree) === 1,
     status: row.status as SplitStatus,
@@ -120,6 +128,7 @@ function toSplit(row: Row): Split {
     createdAt: Number(row.created_at),
     startedAt: optNumber(row.started_at),
     endedAt: optNumber(row.ended_at),
+    gatheredAt: optNumber(row.gathered_at),
   });
 }
 
@@ -139,16 +148,17 @@ export class SplitRepo {
   saveGroup(group: SplitGroup): void {
     this.db.run(
       `INSERT INTO split_groups (id, agent_id, parent_run_id, conversation_id, task_id, source, source_label, thread, mode_key, cwd,
-         goal, ultra, status, created_at, started_at, ended_at, gathered_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         goal, ultra, status, created_at, started_at, ended_at, gathered_at, parent_session)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, task_id = excluded.task_id,
          source = excluded.source, source_label = excluded.source_label, thread = excluded.thread, mode_key = excluded.mode_key,
          cwd = excluded.cwd, goal = excluded.goal, ultra = excluded.ultra, status = excluded.status,
-         started_at = excluded.started_at, ended_at = excluded.ended_at, gathered_at = excluded.gathered_at`,
+         started_at = excluded.started_at, ended_at = excluded.ended_at, gathered_at = excluded.gathered_at,
+         parent_session = excluded.parent_session`,
       [
         group.id, group.agentId, group.parentRunId, nul(group.conversationId), nul(group.taskId), nul(group.origin?.source),
         nul(group.origin?.label), group.thread, nul(group.modeKey), nul(group.cwd), group.goal, group.ultra ? 1 : 0, group.status,
-        group.createdAt, nul(group.startedAt), nul(group.endedAt), nul(group.gatheredAt),
+        group.createdAt, nul(group.startedAt), nul(group.endedAt), nul(group.gatheredAt), jsonOrNull(group.parentSession),
       ],
     );
   }
@@ -175,17 +185,19 @@ export class SplitRepo {
   /** Insert or replace a split's stored fields (its `of` is derived, never written). */
   saveSplit(split: Split): void {
     this.db.run(
-      `INSERT INTO splits (id, group_id, agent_id, idx, title, brief, returns, context, model, effort, "after", worktree, fork, branch,
-         status, attempts, error, created_at, started_at, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO splits (id, group_id, agent_id, idx, title, brief, returns, context, model, effort, temperature, "after", worktree,
+         fork, branch, status, attempts, error, created_at, started_at, ended_at, chat, gathered_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET title = excluded.title, brief = excluded.brief, returns = excluded.returns,
-         context = excluded.context, model = excluded.model, effort = excluded.effort, "after" = excluded."after",
+         context = excluded.context, model = excluded.model, effort = excluded.effort, temperature = excluded.temperature,
+         "after" = excluded."after",
          worktree = excluded.worktree, fork = excluded.fork, branch = excluded.branch, status = excluded.status,
-         attempts = excluded.attempts, error = excluded.error, started_at = excluded.started_at, ended_at = excluded.ended_at`,
+         attempts = excluded.attempts, error = excluded.error, started_at = excluded.started_at, ended_at = excluded.ended_at, chat = excluded.chat,
+         gathered_at = excluded.gathered_at`,
       [
         split.id, split.groupId, split.agentId, split.idx, split.title, split.brief, nul(split.returns), split.context,
-        nul(split.model), nul(split.effort), toJson(split.after ?? []), split.worktree ? 1 : 0, jsonOrNull(split.fork),
-        jsonOrNull(split.branch), split.status, split.attempts, nul(split.error), split.createdAt, nul(split.startedAt), nul(split.endedAt),
+        nul(split.model), nul(split.effort), nul(split.temperature), toJson(split.after ?? []), split.worktree ? 1 : 0, jsonOrNull(split.fork),
+        jsonOrNull(split.branch), split.status, split.attempts, nul(split.error), split.createdAt, nul(split.startedAt), nul(split.endedAt), nul(split.chat), nul(split.gatheredAt),
       ],
     );
   }

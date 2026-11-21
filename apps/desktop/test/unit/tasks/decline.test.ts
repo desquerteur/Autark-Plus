@@ -21,7 +21,7 @@ function askFixture(t: { after: (fn: () => void) => void }) {
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
   const ask = (block: string) => {
     const body = `For you:\n\`\`\`ui\n${block}\n\`\`\``;
-    const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`).id, { body, state: 'final' });
+    const message = f.chats.postAgentMessage(chat.id, 'ag_ava', `run_${Math.random().toString(36).slice(2)}`, { body, state: 'final' });
     const blocks = uiBlocksOf(body);
     const [todo] = f.tasks.ingestBlocks(message, blocks.map((item) => item.block), blocks.map((item) => item.index));
     return { message, todo };
@@ -37,7 +37,7 @@ test('todos.decline: cancelled with the reason, the person\'s line "I can\'t do 
   f.db.run('DELETE FROM wakes');
 
   const view = await phone.call<TaskView>('todos.decline', { id: todo.id, reason: '  I prefer an AI voice  ', clientId: 'dec-1' });
-  assert.equal(view.status, 'cancelled');
+  assert.equal(view.status, 'dropped');
   assert.deepEqual(view.result, {
     summary: 'Declined: I prefer an AI voice', evidence: [{ kind: 'note', label: 'Declined: I prefer an AI voice' }],
     verification: 'reported_by_human', answer: { declined: true, reason: 'I prefer an AI voice' },
@@ -74,7 +74,7 @@ test('a decline needs no reason; a finished or cancelled to-do cannot be decline
   assert.equal(late.status, 'done');
   assert.equal(f.tasks.get(done.id)?.result?.summary, 'Done');
   const dropped = ask('{"important":true,"type":"confirm","instructions":"Water the plants"}').todo;
-  f.tasks.setStatus(dropped.id, 'cancelled', HUMAN_ID);
+  f.tasks.finish(dropped.id, { status: 'dropped' as const, summary: 'Dropped' }, HUMAN_ID);
   await assert.rejects(phone.call('todos.decline', { id: dropped.id }), { code: 'conflict' });
 
   const open = ask('{"important":true,"type":"confirm","instructions":"Feed the cat"}').todo;
@@ -95,22 +95,6 @@ test('todos.remove deletes a to-do the person added and refuses an agent\'s', as
   await assert.rejects(phone.call('todos.remove', { id: 'task_missing' }), { code: 'not_found' });
 });
 
-test('a mini-app to-do whose app never reports back: "Mark done" finishes it, "Can\'t do this…" declines it', async (t) => {
-  const { f, chat, phone, receipts, answerWakes } = askFixture(t);
-  const appMessage = (title: string) => f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', `run_${title}`).id, {
-    body: `\`\`\`app title="${title}" todo=true\n<p>broken</p>\n\`\`\``, state: 'final',
-  });
-  const [take] = f.tasks.ingestBlocks(appMessage('Voice take'), [], []);
-  const [mixer] = f.tasks.ingestBlocks(appMessage('Mixer'), [], []);
-  f.db.run('DELETE FROM wakes');
-  const done = await phone.call<TaskView>('tasks.complete', { id: take.id, clientId: 'mark-done' }); // what "Mark done" sends
-  assert.equal(done.status, 'done');
-  assert.equal(done.result?.summary, 'Done in mini-app');
-  const declined = await phone.call<TaskView>('todos.decline', { id: mixer.id, reason: 'It shows nothing' });
-  assert.equal(declined.status, 'cancelled');
-  assert.deepEqual([...receipts(take.id), ...receipts(mixer.id)].map((item) => item.body), ['Done in mini-app', "I can't do this: It shows nothing"]);
-  assert.deepEqual(answerWakes().map((wake) => [wake.reason, wake.note]), [['message', null]], 'both lines of one chat: one wake, as two typed lines');
-});
 
 test('only {declined: true, reason?} is a decline; other answers stay answers', () => {
   assert.deepEqual(declineOf({ declined: true, reason: ' No time\n ' }), { declined: true, reason: 'No time' });

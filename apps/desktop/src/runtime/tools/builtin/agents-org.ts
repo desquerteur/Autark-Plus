@@ -6,55 +6,67 @@
 // reports to the human – the secretary – stays outside every branch).
 // The summary names every hire with its role, a changed mode and "own instructions"; B-059: a hire without a name
 // reads "a new <template> (…, gets a first name)" – the name is picked only when the hire runs.
-// B-047 (D9): a hire's name is a person's first name (a role, template or numbered label is refused per hire;
-// without a name OrgService picks a free first name), the job goes in role. Every hire starts from the team's
-// standard SYSTEM.md (org/hire.ts, prompts/agent-default.md – B-076: the team's "How I work", then the hire's role and
-// "What I have here", nothing enforces it). B-078 (D15): the creator's `instructions` are the new agent's "who you are";
-// the result returns the SYSTEM.md path and the hire's own part with one line: that part is the new agent's own from
-// here, and I start them with a first line or task. A hire from the `head` template stands beside me – it reports to
+// B-047 (D9): without a name OrgService picks a free human first name; the job goes in role. Feedback 1b136d01 (owner
+// 19.11.2026: "nenn die nicht nur nach menschlichen Namen … oder einfach nur Firmenberater, Verkaufsagent"): a name given
+// is the name – a first name is the default, never a rule, so "Firmenberater" or "Mara · Firmenberaterin" stand as given. Every hire starts from the team's standard
+// SYSTEM.md of its kind (org/hire.ts, org/standard.ts) and makes it its own in its first turn (skill system-prompt).
+// B-078 (D15): the creator's `instructions` are the new agent's "who you are"; the result returns the SYSTEM.md path and
+// its own part (from "## My role" on) with one line: how I start them and help them write the file. A hire from the `head` template stands beside me – it reports to
 // the person unless managerId names someone.
 // `device` gives a hire its home PC (devices.list; default this PC) – like agents.update's device.
+// 17.11.2026 (measured 15.–17.11.: no hire could name a model, every new agent landed on the strongest one and its giver's
+// "strong" on the first task then raised its effort to max): `model` and `effort` settle a hire where its context starts –
+// the model as its start model with my name on it (ModelPolicy.pin / pinBy, like agents.update), described by the work the
+// colleague will do; without one Auto settles it by its kind (routing/kind.ts). The result's `runsOn` says which model and
+// effort the colleague starts on and why, so the choice is seen.
 // Owns: those three tools. Never: hires a second secretary (the existing one is returned) or archives the last
 // active agent.
 
 import path from 'node:path';
 import type { ToolContext, ToolDef } from '../types.ts';
-import { failure, json } from '../types.ts';
+import { EFFORT_PROPERTY, MODEL_PROPERTY, failure, json } from '../types.ts';
+import type { Effort } from '../../../shared/model/providers.ts';
+import { pinFor } from './agent-pin.ts';
 import { areaKind } from '../../org/spaces.ts';
-import { personNameProblem } from '../../org/first-names.ts';
-import { ownPart } from '../../org/system-parts.ts';
-import { rulesInForce } from './agents.ts';
 import { SYSTEM_FILE } from '../../../shared/model/agent-core.ts';
 import type { Agent } from '../../../shared/model/org.ts';
+import type { ModeInfo } from '../../../shared/model/knowledge.ts';
 import '../../contracts/agent-core.ts';
 import { resolveDevice } from '../registry.ts';
 import { announceHire } from './hire-notice.ts'; // AF-017
+import { coreInstructions } from '../../agent-core/prompt.ts';
+import { ownHowIWork } from '../../org/system-parts.ts';
 import { clip, defineTool } from './util.ts';
 import { firstReachRefusal } from '../../projects/isolation.ts'; // AF-026
 
 export const MAX_HIRES = 6;
 
-type Hire = { name?: string; template?: string; role?: string; instructions?: string; mode?: string; managerId?: string; spaceId?: string; device?: string };
+type Hire = { name?: string; template?: string; role?: string; instructions?: string; mode?: string; managerId?: string; spaceId?: string; device?: string; model?: string; effort?: Effort };
 type CreateArgs = Hire & { agents?: Hire[] };
 type SystemFile = { path?: string; text: string; next?: string };
-type HireResult = { ok: true; agentId: string; name: string; role: string; spaceId?: string; space?: string; worksOn?: string; existing?: true; note?: string; system?: SystemFile } | { ok: false; hire: string; error: string };
+type HireResult = { ok: true; agentId: string; name: string; role: string; spaceId?: string; space?: string; worksOn?: string; runsOn?: string; existing?: true; note?: string; system?: SystemFile } | { ok: false; hire: string; error: string };
 
 /** The SYSTEM.md text a hire result shows at most (a team call returns up to six). */
 const SYSTEM_TEXT_MAX = 6000;
 /** B-078: templates whose hires stand beside me and report to the person (a department head). */
 const BESIDE: ReadonlySet<string> = new Set(['head']);
 
-/** B-078: the line a hire result carries – the own part is the new agent's, and how I start them. */
+/** B-078: the line a hire result carries – the SYSTEM.md is the new agent's own, and how I start them. */
 export function startLine(name: string): string {
-  return `This is ${name}'s own part of their SYSTEM.md, with the "who you are" I gave under "## My role"; the team's standard "How I work" stands above it. From here ${name} grows it themselves. I start ${name} now: a first line in our 1:1 (chat.direct) with what I found – the colleagues, folders and accounts of the work, an earlier piece that shows what good looks like – or a first real task there (tasks.create with assignee = ${name}'s agentId and chatId = our 1:1).`;
+  return `${name} starts from the team's standard SYSTEM.md with the "who you are" I gave under "## My role" (above: that part) and makes the file their own in their first turn (skill system-prompt). I start ${name} now with the brief for it: a first line in our 1:1 (chat.direct) with who they are for the person and what I found – the colleagues, folders and accounts of the work, an earlier piece that shows what good looks like – or a first real task there (tasks.create with to = ${name} and chatId = our 1:1). Then I read what they wrote and say what I would sharpen.`;
 }
 
 const HIRE_PROPS = {
-  name: { type: 'string', maxLength: 60 }, // a person's first name: the description says so once for both levels
-  template: { type: 'string' }, role: { type: 'string', maxLength: 120 },
-  instructions: { type: 'string', maxLength: 8000 }, mode: { type: 'string' }, managerId: { type: 'string' }, spaceId: { type: 'string' },
-  device: { type: 'string', minLength: 1, maxLength: 120 },
+  name: { type: 'string', maxLength: 60, description: 'The name the hire goes by, as the person wants it: a first name ("Mara"), a role ("Firmenberater") or both. Without it the hire gets a free first name.' },
+  template: { type: 'string' }, role: { type: 'string', maxLength: 120, description: 'The job.' },
+  instructions: { type: 'string', maxLength: 8000, description: 'Who the colleague is and for whom they work, a few lines under "## My role"; from there they grow it. Their first piece of work is a task of its own (tasks.create).' },
+  mode: { type: 'string' }, managerId: { type: 'string', description: "'' = the person." },
+  spaceId: { type: 'string', description: "Default the template's or its manager's space; a private one only from inside it." },
+  device: { type: 'string', minLength: 1, maxLength: 120, description: 'Its home PC, where its turns, terminal and screen work run; default this one.' },
+  model: MODEL_PROPERTY, effort: EFFORT_PROPERTY,
 } as const;
+/** The same fields inside "agents", said once at the top level. */
+const HIRE_ITEM = Object.fromEntries(Object.entries(HIRE_PROPS).map(([key, prop]) => { const { description: _said, ...rest } = prop as { description?: string }; return [key, rest]; }));
 
 /**
  * Where a hire lands: an explicit active space; else the template's area – the new manager's
@@ -109,28 +121,36 @@ function hireLabel(hire: Hire, ctx: ToolContext): string {
   return `${who}${extras.length ? ` (${extras.join(', ')})` : ''}${into ? ` into ${into}` : ''}`;
 }
 
-/** Words that make a name a role: every template's key, name and role, every mode's key and name. */
-function roleWords(ctx: ToolContext): string[] {
-  const words = ctx.services.org.templates().flatMap((template) => [template.key, template.name, template.role ?? '']);
-  try { words.push(...ctx.services.modes.list().flatMap((mode) => [mode.key, mode.name])); } catch { /* no modes service: templates only */ }
-  return words;
-}
-
 /** B-047: the new agent's SYSTEM.md (path when the agent core is wired) and how I start them (B-078). */
 function systemFile(agent: Agent, ctx: ToolContext): SystemFile {
   let folder: string | undefined;
   try { folder = ctx.services.agentCore?.folder(agent.id); } catch { folder = undefined; }
-  const own = ownPart(agent.instructions, rulesInForce(ctx)); // B-076: the hire's own part; the standard above it stays as it is
+  const own = ownHowIWork(coreInstructions(ctx.services, agent)).rest; // the standard's "# How I work" above and the comment below are the same for every hire
   const text = own.length > SYSTEM_TEXT_MAX ? `${own.slice(0, SYSTEM_TEXT_MAX - 1)}…` : own;
   return { ...(folder ? { path: path.join(folder, SYSTEM_FILE) } : {}), text, next: startLine(agent.name) };
 }
 
+/**
+ * "Claude Sonnet 5.5 · medium – executing runs on the strong tier's best value": the model and effort the new colleague's
+ * first turn runs on (one route preview) and why – the model I named, else what Auto settles for its kind; undefined when no
+ * route can be read now.
+ */
+async function startsOn(ctx: ToolContext, agent: Agent): Promise<string | undefined> {
+  try {
+    let mode: ModeInfo;
+    try { mode = ctx.services.modes.get(agent.mode); } catch { mode = ctx.services.modes.get('general'); }
+    const route = await ctx.services.router.route({ agent, mode });
+    const name = ctx.services.catalog.get(route.modelId)?.name ?? route.modelId;
+    return `${name} · ${route.effort} – ${route.modelId === agent.modelPolicy.pin ? 'the model I named' : route.reason.split(' · ')[0]}`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** One hire; a refused one is a result, not an error, so the others still happen. */
-function hire(args: Hire, ctx: ToolContext): HireResult {
+async function hire(args: Hire, ctx: ToolContext): Promise<HireResult> {
   const org = ctx.services.org;
   const label = args.name ?? args.template ?? args.role ?? 'agent';
-  const problem = args.name === undefined ? undefined : personNameProblem(args.name, roleWords(ctx));
-  if (problem) return { ok: false, hire: label, error: `"${clip(args.name ?? '', 60)}" is not a person's first name: ${problem}. Give the hire a first name such as "Mara".` };
   const template = args.template ? org.templates().find((entry) => entry.key === args.template) : undefined;
   if (template?.reportsTo === 'human') {
     // Agents never hire a second secretary: the one there is works for the person.
@@ -142,18 +162,26 @@ function hire(args: Hire, ctx: ToolContext): HireResult {
   const managerId = args.managerId ?? (template && BESIDE.has(template.key) ? '' : ctx.agent.id); // '' = reports to the person
   const place = placement(args, ctx);
   if (place.error) return { ok: false, hire: label, error: place.error };
-  const { device, ...fields } = args;
+  const { device, model, effort, ...fields } = args;
   const pc = device === undefined ? undefined : resolveDevice(ctx.services, device);
   if (pc && 'error' in pc) return { ok: false, hire: label, error: pc.error };
+  const pin = model === undefined ? undefined : await pinFor(ctx, model);
+  if (pin && 'error' in pin) return { ok: false, hire: label, error: pin.error };
   try {
     let agent = org.create({ ...fields, managerId, spaceId: place.spaceId, createdBy: ctx.agent.id });
     if (pc && !pc.self) agent = org.update(agent.id, { deviceId: pc.id }, { by: ctx.agent.id, runId: ctx.runId, reason: 'home device' }); // this PC is the default (no deviceId)
+    if (pin?.pin || effort) {
+      // the model is its start model with my name on it, the effort its fixed one – what agents.update sets for a colleague
+      const named = pin?.pin ? { pin: pin.pin, pinBy: { name: ctx.agent.name, at: ctx.services.clock.now() } } : {};
+      agent = org.update(agent.id, { modelPolicy: { ...agent.modelPolicy, ...named, ...(effort ? { effort } : {}) } }, { by: ctx.agent.id, runId: ctx.runId, reason: 'model and effort for its work' });
+    }
     const space = agent.spaceId ? org.spaces().find((entry) => entry.id === agent.spaceId)?.name : undefined;
     const ignored = template?.reportsTo === 'human' && (args.role || args.mode || args.instructions);
-    const note = ignored ? `${agent.name} works for the person, so role, mode and instructions come from the template. I say anything else in a chat.` : undefined;
+    const notes = [ignored ? `${agent.name} works for the person, so role, mode and instructions come from the template. I say anything else in a chat.` : '', pin?.note ?? ''].filter(Boolean).join(' ');
+    const runsOn = await startsOn(ctx, agent);
     const system = systemFile(agent, ctx);
     announceHire(ctx, agent, space); // AF-017: the card in this chat and the person's notification
-    return { ok: true, agentId: agent.id, name: agent.name, role: agent.role, spaceId: agent.spaceId, space, ...(pc ? { worksOn: pc.name } : {}), ...(note ? { note } : {}), system };
+    return { ok: true, agentId: agent.id, name: agent.name, role: agent.role, spaceId: agent.spaceId, space, ...(pc ? { worksOn: pc.name } : {}), ...(runsOn ? { runsOn } : {}), ...(notes ? { note: notes } : {}), system };
   } catch (error) {
     return { ok: false, hire: label, error: error instanceof Error ? error.message : String(error) };
   }
@@ -161,7 +189,7 @@ function hire(args: Hire, ctx: ToolContext): HireResult {
 
 const listTemplates = defineTool<Record<string, never>>({
   name: 'agents.templates',
-  description: 'The agent templates I can hire from, and whether a hire reports to the person instead of me.',
+  description: 'Lists the agent templates I can hire from, and who a hire reports to.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => ({ summary: 'List agent templates', reversible: true, external: false }),
@@ -175,12 +203,12 @@ const listTemplates = defineTool<Record<string, never>>({
 
 const createAgent = defineTool<CreateArgs>({
   name: 'agents.create',
-  description: 'Hire one agent (from a template or a role) or a team in "agents"; each reports to me unless managerId is given (a head from template "head" stands beside me and reports to the person; managerId "" = the person). name: a person\'s first name; the job goes in role. instructions: who they are, in a few lines – they go under "## My role" in the team\'s standard SYSTEM.md, and from there the agent grows it. Without spaceId it lands in the template\'s area or its manager\'s space; into a private space only from inside it. device: its home PC – its turns, terminal and computer use run there, and I reach it in the shared chats (devices.list; default this PC).',
+  description: 'Hires one agent or a whole team, from a template or a role. Each reports to me unless managerId says otherwise; a head from template "head" stands beside me and reports to the person. A new colleague\'s context starts here, so this is where I name the model and effort its work asks for; without a model its kind settles one: an agent that leads runs on the frontier tier, one that executes on the strong tier, as the person\'s Model choice shifts them.',
   inputSchema: {
     type: 'object',
     properties: {
       ...HIRE_PROPS,
-      agents: { type: 'array', items: { type: 'object', properties: HIRE_PROPS, additionalProperties: false }, minItems: 1, maxItems: MAX_HIRES },
+      agents: { type: 'array', items: { type: 'object', properties: HIRE_ITEM, additionalProperties: false }, minItems: 1, maxItems: MAX_HIRES, description: 'Several hires, each with these fields.' },
     },
     additionalProperties: false,
   },
@@ -196,7 +224,8 @@ const createAgent = defineTool<CreateArgs>({
     if (list?.length && Object.values(single).some((value) => value !== undefined)) {
       return failure('Give either one hire in the top-level fields or a team in "agents", not both.');
     }
-    const results = hiresOf(args).map((item) => hire(item, ctx));
+    const results: HireResult[] = [];
+    for (const item of hiresOf(args)) results.push(await hire(item, ctx)); // one after another: each sees the names taken before it
     if (!list?.length) {
       const [only] = results;
       return only.ok ? json({ ...only }) : failure(only.error);
@@ -207,7 +236,7 @@ const createAgent = defineTool<CreateArgs>({
 
 const archiveAgent = defineTool<{ agentId?: string; successorId?: string; reason: string }>({
   name: 'agents.archive',
-  description: 'Archive an agent, or myself. successorId: the colleague who takes over – its role, place in the org, reports and open tasks (hire one first if needed); without it the reports move up to the manager and the open tasks to the next manager. Give the reason.',
+  description: 'Archives an agent or myself. The successor takes over role, reports and open tasks; without one they move up to the manager.',
   inputSchema: {
     type: 'object',
     properties: { agentId: { type: 'string' }, successorId: { type: 'string' }, reason: { type: 'string', minLength: 3, maxLength: 300 } },

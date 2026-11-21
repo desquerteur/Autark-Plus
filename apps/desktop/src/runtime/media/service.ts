@@ -8,10 +8,14 @@
 // MM6: what still uses a file and deleting it on the person's request (media/delete.ts).
 // B-078: a probe whose blob is not here yet pulls it from a linked PC and tries again a few times, further apart
 // (dictation.ts RETRY_MS) until the blob exists; a person's recording becomes the message's text (dictation.ts).
+// B-080 F4: bytes a pull brings later are probed when they land (arrived, devices/sync/blobs.ts onArrival), and at
+// start every row still waiting for its probe whose bytes are here is probed once – no timer of its own.
+// 17.11.2026 (task_d4pdwppg): a heavy video gets a light preview copy in the background (media/preview.ts) once its probe knows its size.
 // Owns: the hook → row step, message → chat links and the probe queue. Never: changes FileStore
 // behaviour or blob bytes, throws out of onFileStored (it runs inside every upload), or blocks an
 // upload on a probe.
 
+import { existsSync } from 'node:fs';
 import type { Message } from '../../shared/model/chat.ts';
 import type { MediaFilter, MediaInfo, MediaPatch } from '../../shared/model/media.ts';
 import type { MediaUses } from '../../shared/model/media-uses.ts';
@@ -27,6 +31,7 @@ import { countPdfPages, type PdfPageCounter } from './pdf-pages.ts';
 import { kindOf, needsProbe, probeFile } from './probe.ts';
 import { MediaRepo } from './repo.ts';
 import { blobHere, Dictation, RETRY_MS } from './dictation.ts';
+import { PreviewMaker } from './preview.ts';
 
 const FILE_ID = /^[a-f0-9]{64}$/;
 
@@ -56,8 +61,12 @@ export class MediaService implements MediaApi {
   private readonly queue = new Set<string>(); // file ids waiting for their probe
   private readonly waits = new Map<string, number>(); // file id → tries while its blob was missing
   private running?: Promise<void>;
+  /** B-080 F4: the first drain first queues the rows still waiting for a probe whose bytes are here. */
+  private scanAtStart = true;
   /** B-078: a person's recording becomes the message's text (media/dictation.ts). */
   readonly dictation: Dictation;
+  /** 17.11.2026: the light preview copy of heavy videos (media/preview.ts). */
+  private readonly previews: PreviewMaker;
 
   constructor(deps: MediaServiceDeps) {
     this.deps = deps;
@@ -65,9 +74,22 @@ export class MediaService implements MediaApi {
     // Secrets are bound later by the composition root; read them through the getter.
     this.library = new MediaLibrary({ db: s.db, bus: s.bus, clock: s.clock, get secrets() { return deps.services().secrets; } });
     this.repo = new MediaRepo(s.db);
+    this.previews = new PreviewMaker({ services: deps.services, emit: (info) => this.library.emit(info) });
     s.bus.on('message.created', (message) => this.linkMessage(message));
     s.bus.on('message.updated', (message) => this.linkMessage(message));
     this.dictation = new Dictation({ services: deps.services, ...(deps.later ? { later: deps.later } : {}) });
+    this.running = this.drain(); // after the composition: the rows whose probe never ran (see scanAtStart)
+  }
+
+  /** B-080 F4: the bytes of `fileId` landed here (a pull, devices/sync/blobs.ts) – its row is probed when it waits for that. */
+  arrived(fileId: string): void {
+    try {
+      const info = this.repo.get(fileId);
+      if (info && needsProbe(info)) this.enqueue(fileId);
+      else if (info?.kind === 'video') this.previews.consider(fileId);
+    } catch (error) {
+      this.safeLog('media arrival not probed', { id: fileId, error: String(error) });
+    }
   }
 
   /**
@@ -77,6 +99,7 @@ export class MediaService implements MediaApi {
    */
   onFileStored(file: FileRef, ctx?: { conversationId?: string }): void {
     try {
+      if (this.previews.owns(file.id)) return; // a video's own preview copy is no medium of its own
       this.record(file, ctx?.conversationId);
     } catch (error) {
       this.safeLog('media row not recorded', { id: file.id, error: String(error) });
@@ -112,6 +135,7 @@ export class MediaService implements MediaApi {
   /** Resolves once every queued probe has finished (tests, orderly shutdown). */
   async idle(): Promise<void> {
     while (this.running) await this.running;
+    await this.previews.idle();
   }
 
   // ------------------------------------------------------------------ internals
@@ -127,6 +151,7 @@ export class MediaService implements MediaApi {
     if (!info) return;
     if (created || linked) this.library.emit(info);
     if (needsProbe(info)) this.enqueue(file.id);
+    else if (info.kind === 'video') this.previews.consider(file.id);
   }
 
   /** Attachments and block files of a message belong to its chat unless an earlier chat claimed them. */
@@ -161,6 +186,7 @@ export class MediaService implements MediaApi {
   /** One probe at a time; `running` is cleared in the same tick the queue is seen empty. */
   private async drain(): Promise<void> {
     await new Promise<void>((resolve) => setImmediate(resolve)); // let the upload finish first
+    if (this.scanAtStart) { this.scanAtStart = false; this.queueStored(); this.previews.queueStored(); }
     for (;;) {
       const next = this.queue.values().next();
       if (next.done) { this.running = undefined; return; }
@@ -184,6 +210,26 @@ export class MediaService implements MediaApi {
     if (!this.repo.setFacts(fileId, facts, s.clock.now())) return;
     const next = this.repo.get(fileId);
     if (next) this.library.emit(next);
+    if (next?.kind === 'video') this.previews.consider(fileId); // its size and length are known now
+  }
+
+  /** B-080 F4: once at start – each row still waiting for its probe whose bytes are here (no pull for the others). */
+  private queueStored(): void {
+    try {
+      const s = this.deps.services();
+      if (!s.files) return;
+      const rows = s.db.all<{ file_id: string }>(`SELECT file_id FROM media WHERE (kind IN ('audio', 'video') AND duration_ms IS NULL)
+        OR (kind = 'image' AND width IS NULL) OR (mime LIKE 'application/pdf%' AND pages IS NULL)`);
+      for (const { file_id: id } of rows) {
+        const info = this.repo.get(id);
+        if (!info || !needsProbe(info)) continue;
+        let here = false;
+        try { here = existsSync(s.files.path(id)); } catch { here = false; }
+        if (here) this.queue.add(id);
+      }
+    } catch (error) {
+      this.safeLog('waiting media not queued', { error: String(error) });
+    }
   }
 
   /** A blob not here yet (stored on another PC): probed again later, further apart each time, a few times. */

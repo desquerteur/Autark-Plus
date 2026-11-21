@@ -44,7 +44,7 @@ function world(t: { after(fn: () => void): void }) {
     const { stable, volatile } = f.context.prompt({ agent: f.vid, conversationId: chat.id, mode: GENERAL_MODE, route: route() });
     const calls: Array<Parameters<StructuredRunner>[0]> = [];
     const decision: StructuredRunner = async (call) => { calls.push(call); return { text: '', structured: { tool: 'done', args: '{}' }, by: 'fake' }; };
-    await runFlow(f.services, { decision }, { kind: 'after-turn', agent: f.vid, conversationId: chat.id, thread: chat.id, context: 'The person: Wer ist unser Steuerberater?' });
+    await runFlow(f.services, decision, { agent: f.vid, conversationId: chat.id, thread: chat.id, context: 'The person: Wer ist unser Steuerberater?' });
     return { stable, volatile, system: calls[0].system, step: calls[0].prompt };
   };
   return { f, root, grow, first };

@@ -4,6 +4,11 @@
 // step – quiet-actions.ts; B-055: also while another agent holds the pointer lease), the lease for
 // clicks, focus and window moves, the pointer's travel to a clicked element (Q9: the helper bends
 // the planned path onto the element's clickable point), the window memory note, and act-and-verify.
+// B-080 (live 06./07.11.: 11 of 13 FAILED verifications were states Chromium/WebView2 apps showed a moment later):
+// `expect` travels to the helper, which re-reads every 100 ms until the expected state shows, at most VERIFY_MS
+// (without expect: one read after settleMs); a read-back with no control type and no name is a removed element (gone);
+// a window that `expect.window` names is looked for in the window list within what is left of the same VERIFY_MS.
+// A window step (window_close/minimize/maximize/restore) takes the window id alone.
 // Owns: the element action shapes, which actions need the pointer or the lease, and the checks of
 // `expect`. Never: retries a step, acts without the observed name and role of its ref, or acts
 // with another agent's refs (each agent has its own table, service.ts).
@@ -38,6 +43,9 @@ export const POINTER_ACTIONS: ReadonlySet<ElementAction> = new Set<ElementAction
 /** Element steps that need the pointer lease: those, and moving or closing windows (they change what the holder's pointer and keys reach). */
 export const LEASED_ACTIONS: ReadonlySet<ElementAction> = new Set<ElementAction>([...POINTER_ACTIONS, 'window_close', 'window_minimize', 'window_maximize', 'window_restore']);
 const CLICKS: ReadonlySet<ElementAction> = new Set<ElementAction>(['click', 'double_click', 'right_click']);
+/** How long the expected state may take to show after the step (the helper's re-read and the window list together). */
+export const VERIFY_MS = 2000;
+const WINDOW_STEP_MS = 100;
 
 export interface ElementActDeps {
   helper: () => HelperClient;
@@ -50,7 +58,8 @@ export interface ElementActDeps {
   listWindows: (signal?: AbortSignal) => Promise<Array<{ title: string }>>;
 }
 
-type ActAnswer = { element?: unknown; exists?: boolean; foreground?: { title?: string }; at?: unknown };
+/** `waitedMs`: how long the helper re-read for `expect`. */
+type ActAnswer = { element?: unknown; exists?: boolean; foreground?: { title?: string }; at?: unknown; waitedMs?: unknown };
 
 export async function elementAct(deps: ElementActDeps, input: ActInput): Promise<ActResult> {
   const refs = deps.refs(input.caller);
@@ -59,8 +68,8 @@ export async function elementAct(deps: ElementActDeps, input: ActInput): Promise
   if (input.ref) {
     target = refs.get(input.ref);
     if (!target) throw new WorkforceError('not_found', `Unknown ref "${input.ref}". Observe again with computer.ui_tree and use a ref from that output.`);
-  } else if (!input.name && !input.automationId) {
-    throw new WorkforceError('bad_request', 'Give a ref from computer.ui_tree (or a name/automationId).');
+  } else if (!input.name && !input.automationId && !(input.action.startsWith('window_') && input.window !== undefined)) {
+    throw new WorkforceError('bad_request', 'This step needs a ref from computer.ui_tree, or a name/automationId with window; a window step takes the window id alone.');
   }
   if (LEASED_ACTIONS.has(input.action) && !POINTER_ACTIONS.has(input.action)) deps.lease.check(input.caller);
   const { action, note } = POINTER_ACTIONS.has(input.action) ? await pointerOrQuiet(input.action, target, () => deps.input.elementGate(input.caller)) : { action: input.action, note: undefined };
@@ -79,30 +88,39 @@ export async function elementAct(deps: ElementActDeps, input: ActInput): Promise
     action,
     value: input.value,
     settleMs,
+    ...(input.expect ? { expect: input.expect } : {}),
     ...(planned ? { path: planned.args } : {}),
   };
   const end = LEASED_ACTIONS.has(action) ? deps.lease.begin(input.caller, hwnd || undefined) : () => undefined;
   let result: ActAnswer;
   try {
-    result = await deps.helper().call<ActAnswer>('act', args, { timeoutMs: 30_000 + (planned?.ms ?? 0), signal: input.signal });
+    if (planned && CLICKS.has(action)) deps.input.reportClick(input.caller, undefined, target?.rect, planned.path); // B-081: the drawn AI cursor travels with the move
+    result = await deps.helper().call<ActAnswer>('act', args, { timeoutMs: 30_000 + VERIFY_MS + (planned?.ms ?? 0), signal: input.signal });
   } catch (error) {
     throw deps.input.humanRefusal(error);
   } finally {
     if (POINTER_ACTIONS.has(action)) deps.input.noteInjected();
     end();
   }
-  if (CLICKS.has(action)) deps.input.reportClick(input.caller, result?.at, target?.rect, planned?.path);
+  if (CLICKS.has(action)) deps.input.reportClick(input.caller, result?.at, target?.rect, undefined); // B-081: the path went before the move; here where it arrived
   const shared = deps.windows.use(input.caller, hwnd || undefined);
-  const after = parseNodes(result?.element ? [{ ...(result.element as object), d: 0, p: -1 }] : [])[0];
-  const label = target ? `${target.role} "${target.name}"` : `${input.role ?? 'element'} "${input.name ?? input.automationId}"`;
-  const { verified, checks } = input.expect ? await verify(input.expect, result, after, () => deps.listWindows(input.signal)) : { verified: undefined, checks: [] };
+  const read = parseNodes(result?.element ? [{ ...(result.element as object), d: 0, p: -1 }] : [])[0];
+  // A removed element can read back as a dead node (no control type, no name): it is gone (an older helper sends it).
+  const dead = read !== undefined && read.role === 'unknown' && !read.name;
+  const after = dead ? undefined : read;
+  const exists = result?.exists !== false && !dead;
+  const label = target ? `${target.role} "${target.name}"` : (input.name ?? input.automationId) ? `${input.role ?? 'element'} "${input.name ?? input.automationId}"` : `window ${input.window}`;
+  const waited = typeof result?.waitedMs === 'number' && Number.isFinite(result.waitedMs) ? result.waitedMs : 0;
+  const { verified, checks } = input.expect
+    ? await verify(input.expect, exists, after, () => deps.listWindows(input.signal), Math.max(0, VERIFY_MS - waited), input.signal)
+    : { verified: undefined, checks: [] };
   return {
     action,
     ...(note ? { note } : {}),
     ...(shared ? { shared } : {}),
     target: label,
     after: after ? renderTree([after], hwnd, refs).text : undefined,
-    exists: result?.exists !== false,
+    exists,
     verified,
     checks,
     foreground: result?.foreground?.title,
@@ -116,21 +134,29 @@ async function clickPlan(input: PointerInput, action: ElementAction, rect: [numb
   return clickPath(from, centre, style, { button: action === 'right_click' ? 'right' : 'left', count: action === 'double_click' ? 2 : 1, targetSize: Math.max(4, Math.min(rect[2], rect[3])) });
 }
 
-/** The postconditions of `expect` against the element's state after the step. */
-async function verify(expect: ActExpectation, result: ActAnswer, after: UiNode | undefined, windows: () => Promise<Array<{ title: string }>>): Promise<{ verified: boolean; checks: string[] }> {
+/** The postconditions of `expect` against the element's state after the step; `expect.window` is looked for within `leftMs`. */
+async function verify(
+  expect: ActExpectation, exists: boolean, after: UiNode | undefined, windows: () => Promise<Array<{ title: string }>>, leftMs: number, signal?: AbortSignal,
+): Promise<{ verified: boolean; checks: string[] }> {
   let verified = true;
   const checks: string[] = [];
   const check = (ok: boolean, text: string) => { checks.push(`${ok ? 'ok' : 'FAILED'}: ${text}`); if (!ok) verified = false; };
-  const exists = result?.exists !== false;
   if (expect.gone !== undefined) check(expect.gone === !exists, expect.gone ? 'element is gone' : 'element still exists');
   if (expect.value !== undefined) check(exists && String(after?.value ?? '') === expect.value, `value is "${expect.value}" (now "${after?.value ?? ''}")`);
   if (expect.toggle !== undefined) check(after?.toggle === expect.toggle, `toggle is ${expect.toggle} (now ${after?.toggle ?? 'unknown'})`);
   if (expect.expanded !== undefined) check((after?.expand === 'expanded') === expect.expanded, `element is ${expect.expanded ? 'expanded' : 'collapsed'} (now ${after?.expand ?? 'unknown'})`);
   if (expect.selected !== undefined) check(Boolean(after?.selected) === expect.selected, `element is ${expect.selected ? '' : 'not '}selected`);
-  if (expect.window !== undefined) {
-    const wanted = expect.window.toLowerCase();
-    const list = await windows().catch(() => []);
-    check(list.some((window) => window.title.toLowerCase().includes(wanted)), `a window "${expect.window}" is open`);
-  }
+  if (expect.window !== undefined) check(await windowShows(expect.window.toLowerCase(), windows, leftMs, signal), `a window "${expect.window}" is open`);
   return { verified, checks };
+}
+
+/** Is a window whose title contains `wanted` open – re-listed every WINDOW_STEP_MS until it shows, at most `leftMs`? */
+async function windowShows(wanted: string, windows: () => Promise<Array<{ title: string }>>, leftMs: number, signal?: AbortSignal): Promise<boolean> {
+  const until = Date.now() + leftMs;
+  for (;;) {
+    const list = await windows().catch(() => []);
+    if (list.some((window) => window.title.toLowerCase().includes(wanted))) return true;
+    if (Date.now() + WINDOW_STEP_MS > until || signal?.aborted) return false;
+    await new Promise<void>((resolve) => { const timer = setTimeout(resolve, WINDOW_STEP_MS); (timer as { unref?: () => void }).unref?.(); });
+  }
 }

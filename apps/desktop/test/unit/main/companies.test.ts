@@ -4,7 +4,8 @@
 // folder and then a start, the first company starts without the flag, the company that asks only shows its window,
 // the switch sends the asking window to the tray. HostServices routes the op and says 'unavailable' without it. The
 // start command (the AppImage on Linux), the wake after an update from run-state.json, and the emergency stop of the
-// other companies against a local test server standing in for their runtimes.
+// other companies against a local test server standing in for their runtimes. 16.11.2026: a company with the removal
+// mark is neither opened, woken nor started, and a plain start with the first one removed opens the next one left.
 // Owns: these assertions only. Never: starts a process or touches the real data folders.
 
 import { after, test } from 'node:test';
@@ -15,12 +16,13 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  COMPANY_FLAG, appCommand, callCompany, companiesDir, companyArgs, companyDir, companyFlag, nextCompanyId, openCompany, startFlag, stopOtherCompanies, wakeCompanies,
+  COMPANY_FLAG, appCommand, callCompany, companiesDir, companyArgs, companyDir, companyFlag, openCompany, remainingCompanies, startFlag, startingCompany, stopOtherCompanies, wakeCompanies,
   type CompanyOpenDeps,
 } from '../../../src/main/companies.ts';
 import { HostServices, type HostServicesDeps } from '../../../src/main/host-services.ts';
 import { launcherArgs } from '../../../src/main/launcher-windows.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
+import { nextCompanyId, REMOVED_FILE } from '../../../src/shared/model/companies.ts';
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'wf-companies-'));
 after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -150,11 +152,47 @@ test('after an update the companies that were running start again in the backgro
   company('company-5', { state: 'running', at: 1 });
   company('company-6', { state: 'quit', by: 'launcher', at: 1, capped: 1 });
   company('Not An Id', { state: 'running', at: 1 });
+  const first = path.join(tmp, 'wake', 'Autark');
   const started: string[][] = [];
-  const woken = wakeCompanies(dir, (args) => { started.push(args); if (args[0] === '--company=company-5') throw new Error('EACCES'); });
+  const woken = wakeCompanies({ first, dir }, null, (args) => { started.push(args); if (args[0] === '--company=company-5') throw new Error('EACCES'); });
   assert.deepEqual(woken.sort(), ['company-2', 'company-5'], 'a refused start does not stop the others');
   assert.deepEqual(started.sort(), [['--company=company-2', '--background'], ['--company=company-5', '--background']]);
-  assert.deepEqual(wakeCompanies(path.join(tmp, 'wake', 'missing'), () => assert.fail('nothing to start')), []);
+  assert.deepEqual(wakeCompanies({ first: path.join(tmp, 'wake', 'gone'), dir: path.join(tmp, 'wake', 'missing') }, null, () => assert.fail('nothing to start')), []);
+
+  // F25 (16.11.2026): company-2 pressed Update – its relaunch wakes the first company (it was running) and the others, never itself.
+  mkdirSync(first, { recursive: true });
+  writeFileSync(path.join(first, 'run-state.json'), JSON.stringify({ state: 'running', at: 1 }));
+  const again: string[][] = [];
+  assert.deepEqual(wakeCompanies({ first, dir }, 'company-2', (args) => { again.push(args); }), [null, 'company-5']);
+  assert.deepEqual(again, [['--background'], ['--company=company-5', '--background']], 'the first company starts without a flag');
+  writeFileSync(path.join(first, 'run-state.json'), JSON.stringify({ state: 'quit', by: 'person', at: 2 }));
+  assert.deepEqual(wakeCompanies({ first, dir }, 'company-5', () => undefined), ['company-2'], 'a first company the person quit stays off');
+});
+
+test('16.11.2026 a removed company is never opened, woken or started; a plain start with the first one removed opens the next', () => {
+  const first = path.join(tmp, 'gone', 'Autark');
+  const dir = companiesDir(first);
+  const companies = { first, dir };
+  const mark = (folder: string) => { mkdirSync(folder, { recursive: true }); writeFileSync(path.join(folder, REMOVED_FILE), '{"at":1}\n'); };
+  for (const id of ['company-2', 'company-3', 'company-10']) mkdirSync(path.join(dir, id), { recursive: true });
+  mkdirSync(first, { recursive: true });
+  mkdirSync(path.join(dir, 'logins', 'claude'), { recursive: true }); // this PC's plan logins: never a company
+  assert.deepEqual(remainingCompanies(companies), [null, 'company-2', 'company-3', 'company-10']);
+  assert.equal(startingCompany(null, companies), null, 'a plain start: the first company');
+  assert.equal(startingCompany('company-3', companies), 'company-3');
+  assert.equal(startingCompany('company-9', companies), undefined, 'a flag whose folder is gone starts nothing (Electron would make it anew)');
+  mark(path.join(dir, 'company-2'));
+  assert.equal(startingCompany('company-2', companies), undefined, 'its own start at sign-in ends at once');
+  assert.deepEqual(remainingCompanies(companies), [null, 'company-3', 'company-10']);
+  const b = bench(null, 'unused');
+  b.deps.dir = dir;
+  assert.throws(() => openCompany({ id: 'company-2' }, b.deps), (error: WorkforceError) => error.code === 'not_found');
+  assert.deepEqual(b.calls, []);
+  writeFileSync(path.join(dir, 'company-2', 'run-state.json'), JSON.stringify({ state: 'running', at: 1 }));
+  assert.deepEqual(wakeCompanies(companies, 'company-3', () => undefined), [], 'never woken after an update');
+  mark(first);
+  assert.equal(startingCompany(null, companies), 'company-3', 'the first one removed: a plain start opens the next one left');
+  assert.deepEqual(remainingCompanies(companies), ['company-3', 'company-10']);
 });
 
 test('the emergency stop reaches every other running company through its runtime.json; never this one, a gone or a broken one', async () => {

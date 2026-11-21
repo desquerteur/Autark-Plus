@@ -73,7 +73,7 @@ test('withMailRun: only a mailbox call in a run a mail started gets the auto-rep
   assert.equal(built(), undefined);
 });
 
-test('apps/tools.ts: a mailbox call in a run its mail started reaches the connection with the argument; other runs do not', async () => {
+test('apps/tools.ts: a run a mail started sends with the auto-reply argument (owner 16.11.2026: it works fully); owner and schedule calls stay unchanged', async () => {
   const box: Connector = { id: 'box', name: 'box', transport: 'mail', enabled: true, fingerprint: 'f', mail: { address: 'me@example.com', password: 'secret://pw' } };
   const calls: Array<Record<string, unknown>> = [];
   const host: AppToolHost = { state: (id) => (id === box.id ? { connector: box, status: 'ok' } : undefined), call: async (_id, _tool, args) => { calls.push(args); return { content: [{ type: 'text', text: 'Sent.' }] }; } };
@@ -81,7 +81,8 @@ test('apps/tools.ts: a mailbox call in a run its mail started reaches the connec
   const ctx = (origin?: { source: string; label: string }): ToolContext =>
     ({ agent: { id: 'ag_sec', name: 'Sec' }, runId: 'run_1', mode: 'full', services: {}, signal: new AbortController().signal, status() {}, ...(origin ? { origin } : {}) }) as unknown as ToolContext;
   const args = { to: 'maria@client.example', subject: 'Re: Offer', text: 'Here it is.' };
-  await send.run(args, ctx({ source: 'app:box', label: 'New mail in me@example.com' }));
+  const mail = await send.run(args, ctx({ source: 'app:box', label: 'New mail in me@example.com' }));
+  assert.notEqual(mail.isError, true, 'a run a mail started sends like any other');
   await send.run(args, ctx({ source: 'schedule:s1', label: 'Morning' }));
   await send.run(args, ctx());
   assert.deepEqual(calls, [{ ...args, [AUTO_REPLY_ARG]: true }, args, args]);
@@ -97,6 +98,28 @@ async function mailbox(extra: Partial<MailTarget> = {}) {
   const conn = await connectMail(target, { ...CLIENT, ...SEAMS, timeoutMs: 3_000, watcher: { reidleMs: 5_000, backoffMinMs: 30 } });
   return { imap, smtp, conn, close: async () => { await conn.close(); await imap.stop(); await smtp.stop(); } };
 }
+
+test('IDLE: a rejected durable queue write retries the same UID without advancing the mark', async () => {
+  let stored: MailMark | undefined;
+  let attempts = 0;
+  const refs: string[][] = [];
+  const m = await mailbox({ mark: { get: () => stored, set: x => { stored = x; } }, onNewMail: info => {
+    attempts++;
+    refs.push(info.messageIds ?? []);
+    if (attempts === 1) {
+      assert.equal(stored?.next, 1);
+      throw new Error('synthetic queue write failure');
+    }
+  } });
+  try {
+    await until(() => m.imap.idling() === 1);
+    m.imap.deliver('INBOX', PERSON());
+    await until(() => attempts === 2 && stored?.next === 2);
+    assert.deepEqual(refs, [['INBOX/7000/1'], ['INBOX/7000/1']]);
+    await pause(80);
+    assert.equal(attempts, 2);
+  } finally { await m.close(); }
+});
 
 test('sending: a run a mail started sends with Auto-Submitted (reply and send, not a draft)', async () => {
   const m = await mailbox();
@@ -147,7 +170,7 @@ test('IDLE: automatic and bulk mail never wakes; real mail wakes with its own se
     m.imap.deliver('INBOX', PERSON());
     m.imap.deliver('INBOX', NEWSLETTER());
     await until(() => seen.length === 1);
-    assert.deepEqual(seen[0], { count: 1, from: 'Maria Lopez <maria@client.example>', subject: 'Offer please' });
+    assert.deepEqual(seen[0], { count: 1, from: 'Maria Lopez <maria@client.example>', subject: 'Offer please', messageIds: ['INBOX/7000/4'] });
     assert.ok(m.imap.folders.get('INBOX')!.messages.every((x) => !x.flags.has('\\Seen')), 'automatic mail stays unread in the mailbox');
   } finally { await m.close(); }
 });
@@ -162,7 +185,7 @@ test('IDLE: mail that came while the connection was down wakes exactly once on r
     m.imap.add('INBOX', NEWSLETTER());
     m.imap.add('INBOX', mail('Tom <tom@client.example>', 'Question'));
     await until(() => seen.length === 1);
-    assert.deepEqual(seen[0], { count: 2, from: 'Tom <tom@client.example>', subject: 'Question' });
+    assert.deepEqual(seen[0], { count: 2, from: 'Tom <tom@client.example>', subject: 'Question', messageIds: ['INBOX/7000/1', 'INBOX/7000/3'] });
     const examined = m.imap.log.filter((l) => l === 'EXAMINE INBOX').length;
     for (const s of [...m.imap.sockets]) s.destroy();
     await until(() => m.imap.log.filter((l) => l === 'EXAMINE INBOX').length > examined && m.imap.idling() === 1);
@@ -187,7 +210,7 @@ test('IDLE: mail read elsewhere while the PC slept (\\Seen) does not wake; the m
     m.imap.add('INBOX', mail('Ann <ann@client.example>', 'Invoice'));
     m.imap.add('INBOX', PERSON(), ['\\Seen']); // read on the phone at 06:50
     await until(() => seen.length === 1);
-    assert.deepEqual(seen[0], { count: 2, from: 'Ann <ann@client.example>', subject: 'Invoice' }, 'only the unread ones; the newest unread names the sender');
+    assert.deepEqual(seen[0], { count: 2, from: 'Ann <ann@client.example>', subject: 'Invoice', messageIds: ['INBOX/7000/1', 'INBOX/7000/2'] }, 'only the unread ones; the newest unread names the sender');
     assert.deepEqual(stored, { validity: 7000, next: 4 });
     const before = examined();
     for (const s of [...m.imap.sockets]) s.destroy();

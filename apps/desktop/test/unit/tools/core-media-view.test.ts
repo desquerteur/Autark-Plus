@@ -27,6 +27,6 @@ test('B-058 G10: media.view is offered in every mode, so the built-in modes with
   const mode = (key: string, tools: string[]) => ({ key, name: key, description: '', skills: [], tools, category: 'general', instructions: '' }) as never;
   const offers = (tools: string[], key = 'research') => registry.specsFor(agent, mode(key, tools)).some((spec) => spec.name === 'media.view');
   for (const key of ['research', 'writing', 'browser', 'computer', 'web', 'finance']) assert.ok(offers(['files.*', 'tasks.*'], key), `${key} sees images`);
-  assert.ok(offers(['tasks.*']), 'every mode sees images (registry EVERY_MODE)');
+  assert.ok(offers(['tasks.*']), 'every mode sees images (every tool in every mode)');
   assert.ok(offers(['media.*']), 'a media mode as before');
 });

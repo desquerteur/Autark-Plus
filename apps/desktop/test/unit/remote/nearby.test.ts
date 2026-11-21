@@ -99,3 +99,21 @@ test('RemoteService.nearby: only PCs that accept requests answer; Connect by Rem
   assert.equal(laptop.hello, undefined, 'turning requests off ends the hello answers');
   assert.deepEqual(await tower.remote.nearby(true), [], 'Refresh asks the network again');
 });
+
+test('F09: each company of a PC answers with its name and own Remote ID; names are plain text; an older answer has none', async () => {
+  const lan = new Lan();
+  const first = await lan.add('Server', 'http://10.0.0.1:47812', { deps: { company: () => '  Teydra Lab  ' } });
+  const second = await lan.add('Server', 'http://10.0.0.1:63140', { deps: { company: () => 'Teydra <b>Lab</b> 2' } });
+  await lan.add('Old', 'http://10.0.0.7:47812');
+  const broken = await lan.add('Broken', 'http://10.0.0.8:47812', { deps: { company: () => { throw new Error('no settings'); } } });
+  const notebook = await lan.add('Notebook', 'http://10.0.0.2:47812');
+  assert.equal(first.hello!()?.company, 'Teydra Lab', 'trimmed');
+  assert.equal(broken.hello!()?.company, undefined, 'a failing name leaves the answer without it');
+  const found = await notebook.remote.nearby();
+  const byId = new Map(found.map((entry) => [entry.remoteId, entry]));
+  assert.equal(byId.get(first.remote.remoteId())?.company, 'Teydra Lab');
+  assert.equal(byId.get(second.remote.remoteId())?.company, 'Teydra bLabb 2', 'plain text, as names are');
+  assert.equal(found.find((entry) => entry.name === 'Old')?.company, undefined);
+  assert.notEqual(first.remote.remoteId(), second.remote.remoteId(), 'each company is its own key');
+  assert.deepEqual(mergeNearby([pc('Studio', 'a', 'http://10.0.0.1:1', { company: 'x'.repeat(81) })], SELF)[0].company, 'x'.repeat(80), 'never longer than a hello carries');
+});

@@ -1,7 +1,8 @@
 // Owns: this phone's one connection to Autark's meeting server (services/remote-relay, protocol v1) – registration
 // with the phone's own device key, the PCs it pins (B-078: every PC of the company it belongs to, in the order the app
 // keeps them), presence of those PCs, finding a PC by Remote ID, sealed pairing requests and tunnels it opens –
-// mirroring the PC side (rendezvous/relay-client.ts). A connection silent for 90 s ends.
+// mirroring the PC side (rendezvous/relay-client.ts). B-084: every frame counts as traffic (the server's pings too); a
+// connection silent for 65 s ends, probe() ends one that does not answer a ping within 2 s, and a dead one is killed.
 // Never: trusts a box key its PC's device key did not sign, accepts tunnels, or makes this phone findable.
 package com.teydralab.autark.android.relay;
 
@@ -12,6 +13,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,7 +29,14 @@ public final class RelayLink implements WebSocketClient.Listener {
 
     public static final String PAIR_INFO = "wf-relay-pair-v1";
     public static final String TUNNEL_INFO = "wf-relay-tunnel-v1";
-    private static final long WATCHDOG_MS = 90_000;
+    private static final long WATCHDOG_MS = 65_000;
+    static final long PROBE_MS = 2_000;
+    /** One daemon thread for every one-shot check of the relay package (a probe's answer, a stream's first bytes). */
+    static final ScheduledExecutorService LATER = Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "autark-relay-later");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public static final class Found {
         public final String fingerprint;
@@ -49,7 +59,6 @@ public final class RelayLink implements WebSocketClient.Listener {
     private volatile WebSocketClient socket;
     /** Box keys of the pinned PCs online now. */
     private final Map<String, String> boxes = new ConcurrentHashMap<>();
-    private volatile long lastTraffic = System.currentTimeMillis();
     private volatile boolean down;
 
     /** `pins`: fingerprint → key of the PCs this phone belongs to (empty while pairing: nothing pinned). */
@@ -73,18 +82,22 @@ public final class RelayLink implements WebSocketClient.Listener {
     /** True when the server reported a pinned PC online (with a box key its device key signed). */
     public boolean pcOnline() { return !boxes.isEmpty(); }
 
-    /** The first pinned PC online, in the app's order (null when none is). */
-    public String firstOnline() {
-        for (String fp : pins.keySet()) if (boxes.containsKey(fp)) return fp;
-        return null;
+    /** True when the server reported the pinned PC `fp` online. */
+    public boolean online(String fp) { return fp != null && boxes.containsKey(fp); }
+
+    /** Ends the connection when nothing arrived for 65 s (the server pings every 30 s). */
+    public void checkAlive() {
+        WebSocketClient ws = socket;
+        if (!down && ws != null && System.currentTimeMillis() - ws.lastFrameAt() > WATCHDOG_MS) ws.kill();
     }
 
-    /** Ends the connection when nothing arrived for 90 s (the server pings every 30 s). */
-    public void checkAlive() {
-        if (!down && System.currentTimeMillis() - lastTraffic > WATCHDOG_MS) {
-            WebSocketClient ws = socket;
-            if (ws != null) ws.close();
-        }
+    /** Pings the server now and kills the connection when no frame at all arrives within 2 s – one check, armed here. */
+    public void probe() {
+        WebSocketClient ws = socket;
+        if (down || ws == null) return;
+        long before = ws.frames();
+        LATER.schedule(() -> { if (ws.frames() == before) ws.kill(); }, PROBE_MS, TimeUnit.MILLISECONDS);
+        try { ws.ping(); } catch (IOException error) { ws.kill(); } // a send stuck here ends with the kill above
     }
 
     public void close() {
@@ -95,7 +108,7 @@ public final class RelayLink implements WebSocketClient.Listener {
 
     // ------------------------------------------------------------------ requests
 
-    /** The PCs that accept requests under this Remote ID (key checked against the ID, box signed by that key). */
+    /** The PCs that accept requests under this Remote ID (key checked against the ID or its code chain, box signed by that key). */
     public List<Found> find(String remoteId) throws IOException {
         Map<String, Object> reply = ask(Json.map("t", "find", "id", remoteId), 10_000);
         List<Found> out = new ArrayList<>();
@@ -110,7 +123,10 @@ public final class RelayLink implements WebSocketClient.Listener {
             try { key = Crypto.fromB64url(pub); } catch (IllegalArgumentException error) { continue; }
             if (key.length != 32 || !boxSigned(key, Json.str(entry, "box"), Json.str(entry, "boxSig"))) continue;
             String fp = Crypto.fingerprint(key);
-            if (Crypto.remoteId(fp).equals(remoteId)) out.add(new Found(fp, key, Json.str(entry, "box")));
+            Object chain = entry.get("chain"); // B-084: a PC of the same person answers for the person code with its chain
+            if (Crypto.remoteId(fp).equals(remoteId) || (chain instanceof Map && CodeChain.belongs(remoteId, fp, Json.write(chain)))) {
+                out.add(new Found(fp, key, Json.str(entry, "box")));
+            }
         }
         return out;
     }
@@ -147,7 +163,7 @@ public final class RelayLink implements WebSocketClient.Listener {
         Tunnel tunnel = new Tunnel((int) tid, fp, new Tunnel.Link() {
             @Override public void send(byte[] frame) {
                 WebSocketClient ws = socket;
-                try { if (ws != null) ws.sendBinary(frame); } catch (IOException error) { ws.close(); }
+                try { if (ws != null) ws.sendBinary(frame); } catch (IOException error) { ws.kill(); }
             }
             @Override public void close(int id) {
                 tunnels.remove(id);
@@ -184,13 +200,12 @@ public final class RelayLink implements WebSocketClient.Listener {
     private void sendJson(Map<String, Object> frame) {
         WebSocketClient ws = socket;
         if (ws == null) return;
-        try { ws.sendText(Json.write(frame)); } catch (IOException error) { ws.close(); }
+        try { ws.sendText(Json.write(frame)); } catch (IOException error) { ws.kill(); }
     }
 
     // ------------------------------------------------------------------ frames from the server
 
     @Override public void text(String text) {
-        lastTraffic = System.currentTimeMillis();
         Map<String, Object> frame;
         try { frame = Json.object(text); } catch (IllegalArgumentException error) { return; }
         String type = Json.str(frame, "t");
@@ -256,7 +271,6 @@ public final class RelayLink implements WebSocketClient.Listener {
     }
 
     @Override public void binary(byte[] data) {
-        lastTraffic = System.currentTimeMillis();
         if (data.length < Tunnel.HEADER) return;
         int tid = ((data[0] & 0xff) << 24) | ((data[1] & 0xff) << 16) | ((data[2] & 0xff) << 8) | (data[3] & 0xff);
         Tunnel tunnel = tunnels.get(tid);

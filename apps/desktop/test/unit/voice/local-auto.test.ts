@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import { Bus } from '../../../src/runtime/bus.ts';
-import { AUDIO_TAGGER, SILERO_VAD, type LocalSpeechModel, type LocalSpeechPull } from '../../../src/shared/model/local-speech-models.ts';
+import { AUDIO_TAGGER, SILERO_VAD, SMART_TURN, type LocalSpeechModel, type LocalSpeechPull } from '../../../src/shared/model/local-speech-models.ts';
 import { AUTO_KEY, AUTO_NS, ensureTagger, LocalSpeechAuto, MAX_TRIES, type AutoRecord } from '../../../src/runtime/voice/local/auto.ts';
 import { LocalSpeech } from '../../../src/runtime/voice/local/service.ts';
 import { LocalSpeechEngine } from '../../../src/runtime/voice/local/engine.ts';
@@ -58,7 +58,7 @@ test('the recommended model downloads by itself once: auto events, the setting a
     t.auto.start();
     await settle();
     await t.auto.running();
-    assert.deepEqual(t.installed, [SILERO_VAD.id, 'fastconformer-de-int8'], 'the German model for a German speaker, with the VAD');
+    assert.deepEqual(t.installed, [SILERO_VAD.id, SMART_TURN.id, 'fastconformer-de-int8'], 'the German model for a German speaker, with the VAD');
     assert.equal(t.settings.voice.localStt, 'fastconformer-de-int8');
     assert.ok(t.events.length > 0 && t.events.every((event) => event.auto === true));
     assert.equal(t.events.at(-1)?.state, 'done');
@@ -78,7 +78,7 @@ test('the first run does not hold it back: dictation hears with this PC model as
     t.auto.start();
     await settle();
     await t.auto.running();
-    assert.deepEqual(t.installed, [SILERO_VAD.id, 'fastconformer-de-int8']);
+    assert.deepEqual(t.installed, [SILERO_VAD.id, SMART_TURN.id, 'fastconformer-de-int8']);
     assert.equal(t.settings.voice.localStt, 'fastconformer-de-int8');
   } finally { t.auto.stop(); t.data.done(); }
 });

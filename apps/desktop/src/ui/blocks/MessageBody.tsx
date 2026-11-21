@@ -3,6 +3,7 @@
 // message streams, every part except the tail keeps its identity, so only the tail re-renders.
 // A later agent or system block with the same `id` in the chat supersedes an earlier one ("Updated below").
 // The person's answer line to an ask block (kind 'answer') keeps its line breaks.
+// The body names its author (`data-author`), so a path clicked in it opens on that agent's home PC first (B-081).
 // Owns: part → renderer mapping, skeletons and "Couldn't display" fallbacks.
 // Never: renders raw HTML (markdown.tsx sanitizes), makes agent blocks binding, runs ```app
 // fences written by anyone but an agent, or shows ask widgets from humans/external bridges.
@@ -170,7 +171,7 @@ export function MessageBody(props: { message: Message }) {
   }, [message.conversationId, message.seq, message.authorKind, idsKey]);
 
   return (
-    <div class="message-body">
+    <div class="message-body" data-author={message.authorId}>
       {parts.map((part, i) => <PartView key={i} part={part} message={message} />)}
     </div>
   );

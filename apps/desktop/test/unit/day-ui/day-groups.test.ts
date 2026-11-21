@@ -1,7 +1,7 @@
 // My day's groups (src/ui/day/day-groups.ts, B-041 §4.1 / contract §5.5): Needs you (what rang, the block in
 // progress, overdue, what an agent or the host asks), Today (the day's blocks and near timers, by time), Unplanned
 // (the person's own without a block), Later (snoozed, repeating, far timers, due or planned on a later day); another
-// day lists only its blocks; the handed-off rows.
+// day lists its blocks and (B-080) Needs you by the badge's rule; the handed-off rows.
 // Owns: these assertions only. Never: the DOM, rpc or real timers.
 
 import { test } from 'node:test';
@@ -24,7 +24,7 @@ function todo(patch: Partial<TaskView> = {}): TaskView {
   seq++;
   return {
     id: patch.id ?? `todo_${seq}`, conversationId: 'ch_todo', title: `To-do ${seq}`, notes: '', status: 'open', assigneeKind: 'human',
-    createdBy: HUMAN_ID, priority: 0, ledger: {}, attempts: 0, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
+    createdBy: HUMAN_ID, priority: 0, ledger: {}, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
     steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'To-dos', running: false,
     ...patch,
   };
@@ -44,7 +44,7 @@ const input = (slots: CalendarEvent[] = [], patch: Partial<DayGroupInput> = {}):
 const timer = (at: number, patch: Partial<TaskView> = {}) => todo({ widget: { type: 'timer', label: 'Stretch', at: new Date(at).toISOString() }, dueAt: at, ...patch });
 
 test('Needs you: what rang, the block in progress, overdue, and what an agent or the host asks', () => {
-  const rang = timer(NOW - 5 * M, { status: 'needs_you' });
+  const rang = timer(NOW - 5 * M);
   const running = todo({ title: 'Kitchen' });
   const overdue = todo({ dueAt: NOW - H });
   const asked = todo({ createdBy: 'ag_mara', widget: { type: 'choice', options: ['A', 'B'] } });
@@ -67,18 +67,6 @@ test('Today: the day\'s planned blocks and timers within 12 h, by time; Unplanne
   assert.deepEqual(groups.needsYou, []);
 });
 
-test('Later: snoozed, repeating, far timers, due on a later day, planned on a later day – never one that rang', () => {
-  const snoozed = todo({ status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Snoozed', since: NOW } });
-  const repeats = timer(NOW + 20 * H, { status: 'waiting', waitingOn: { kind: 'schedule', reason: 'Repeats', since: NOW } });
-  const far = timer(NOW + 13 * H);
-  const tomorrow = todo({ dueAt: DAY_END + 9 * H });
-  const plannedLater = todo();
-  const rangTomorrow = todo({ dueAt: DAY_END + H, status: 'needs_you' });
-  const groups = dayGroups([snoozed, repeats, far, tomorrow, plannedLater, rangTomorrow], input([block(plannedLater.id, DAY_END + 9 * H)]));
-  assert.deepEqual(new Set(groups.later.map((task) => task.id)), new Set([snoozed.id, repeats.id, far.id, tomorrow.id, plannedLater.id]));
-  assert.deepEqual(groups.needsYou.map((task) => task.id), [rangTomorrow.id]);
-  assert.equal(groupOf(todo({ dueAt: DAY_END + H }), input([], { dayEnd: DAY_END + 2 * H })), 'unplanned', 'the end of today is the caller\'s (profile zone)');
-});
 
 test('one "Needs you" rule: the badge (countNow) counts exactly the Needs-you group, the running block aside', () => {
   const asked = todo({ createdBy: 'ag_mara', title: 'Which tax year?' });
@@ -100,38 +88,30 @@ test('one "Needs you" rule: the badge (countNow) counts exactly the Needs-you gr
   assert.equal(countNow([...list, running], NOW, DAY_END, new Set([running.id])), withRunning.needsYou.length, 'the briefing passes the running block');
 });
 
-test('another day lists only its blocks, by start', () => {
+test("another day lists its blocks by start – and B-080 Needs you on top, by the badge's rule", () => {
   const a = todo({ title: 'A' });
   const b = todo({ title: 'B' });
   const c = todo({ title: 'C', createdBy: 'ag_mara' });
   const tomorrow = { dayStart: DAY_END, dayEnd: DAY_END + 24 * H, isToday: false };
   const groups = dayGroups([a, b, c], input([block(b.id, DAY_END + 9 * H), block(a.id, DAY_END + 14 * H), block(c.id, NOW)], tomorrow));
   assert.deepEqual(groups.today.map((task) => task.title), ['B', 'A']);
-  assert.deepEqual([...groups.needsYou, ...groups.unplanned, ...groups.later], []);
+  assert.deepEqual(groups.needsYou.map((task) => task.title), ['C'], 'asked by Mara: it needs the person whatever day is shown');
+  assert.deepEqual([...groups.unplanned, ...groups.later], []);
 });
 
-test('handed off: the person\'s own step first ("Prepared – your step"), then who works on it, done last', () => {
-  const taxes = todo({ title: 'Do the taxes', assigneeKind: 'agent', assigneeId: 'ag_mara', status: 'working', updatedAt: NOW - H });
-  const site = todo({ title: 'Improve the website', assigneeKind: 'agent', assigneeId: 'ag_tom', status: 'open', updatedAt: NOW - 2 * H });
-  const done = todo({ title: 'Book a table', assigneeKind: 'agent', assigneeId: 'ag_mara', status: 'done', updatedAt: NOW });
-  const stuck = todo({ title: 'Renew the domain', assigneeKind: 'agent', assigneeId: 'ag_tom', status: 'blocked', updatedAt: NOW - 3 * H });
-  const unowned = todo({ title: 'Plan the trip', assigneeKind: 'team', status: 'open', updatedAt: NOW - 4 * H });
-  const step = todo({ title: 'Bring the form to the office', parentId: site.id, createdBy: 'ag_tom' });
-  const names: Record<string, string> = { ag_mara: 'Mara', ag_tom: 'Tom' };
-  const rows = handedOffRows([taxes, site, done, stuck, unowned], [step], (task) => (task.assigneeId ? names[task.assigneeId] : undefined), NOW);
-  assert.deepEqual(rows.map((row) => [row.task.title, row.text]), [
-    ['Improve the website', 'Prepared – your step: Bring the form to the office'],
-    ['Renew the domain', 'Stuck'],
-    ['Do the taxes', 'Mara working'],
-    ['Plan the trip', 'Not assigned yet'],
-    ['Book a table', 'Done ✓'],
-  ]);
-  assert.equal(rows[0].step?.id, step.id);
-  assert.equal(rows[4].done, true);
-  const wait = (since: number) => todo({ title: 'Print the flyers', assigneeKind: 'agent', assigneeId: 'ag_tom', status: 'waiting', waitingOn: { kind: 'external', reason: 'Printer', since } });
-  assert.deepEqual(handedOffRows([wait(NOW - 3 * 24 * H)], [], () => 'Tom', NOW).map((row) => row.text), ['Stuck'], "Work's Stuck rule: a wait over two days");
-  assert.deepEqual(handedOffRows([wait(NOW - H)], [], () => 'Tom', NOW).map((row) => row.text), ['Tom waiting']);
+test('B-080: a list of only needs-you items is not empty on another day, and Needs you counts what the badge counts', () => {
+  // Live: the badge said 9 while the next day said "Nothing planned".
+  const asked = todo({ title: 'Approve the invoice', createdBy: 'ag_mara' });
+  const overdue = todo({ title: 'Call the bank', dueAt: NOW - H });
+  const own = todo({ title: 'Read the book' });
+  const list = [asked, overdue, own];
+  const tomorrow = { dayStart: DAY_END, dayEnd: DAY_END + 24 * H, isToday: false };
+  const groups = dayGroups(list, input([], tomorrow));
+  assert.deepEqual(groups.needsYou.map((task) => task.title).sort(), ['Approve the invoice', 'Call the bank']);
+  assert.equal(groups.needsYou.length, countNow(list, NOW), 'the same count as the badge (store.ts forYouCount)');
+  assert.deepEqual([...groups.today, ...groups.unplanned, ...groups.later], [], "the person's own to-do without a block or date stays off another day");
 });
+
 
 test('a to-do for another day (window.date – typed while that day was shown): Unplanned on that day, Later today', () => {
   const tomorrow = '2026-10-25';

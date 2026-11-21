@@ -5,10 +5,16 @@
 // (the start-up backfill makes many at once; agents may hire sub-agents). It moves up with its first line.
 // The other lists of chats by activity – an agent page's Chats and Team chats (ui/team/model.ts) and the
 // New task chat picker (ui/tasks/CreateTask.tsx) – use the same rule without the pins (`byActivity`).
-// B-078: nestChats puts sub-chats under their parent (one level) and leaves threads out.
+// B-078: nestChats puts sub-chats under their parent (one level) and leaves threads out. F24 (owner 16.11.2026): the
+// list follows the org – the person's 1:1 with an agent that reports to another agent sits under the 1:1 with its
+// top-most agent manager that the list holds (orgParent; one level, so a deeper org gathers under its top manager); a
+// chat's own parent (settings.parentId, set by the person or the AI with chat.set_parent) wins, so a group stays at
+// the level the AI gave it whoever joins later.
 // Owns: that order and nesting. Never: reads the store, decides sections (archive.ts) or names chats (lib/chat-face.tsx).
 
-import type { ConversationSummary } from '../../shared/model/chat.ts';
+import { directPair, type ConversationSettings, type ConversationSummary } from '../../shared/model/chat.ts';
+import type { Agent } from '../../shared/model/org.ts';
+import { HUMAN_ID } from '../../shared/ids.ts';
 
 type Active = Pick<ConversationSummary, 'settings' | 'lastMessageAt' | 'createdAt'>;
 type Ordered = Active & Pick<ConversationSummary, 'pinned'>;
@@ -34,26 +40,64 @@ export function orderChats<C extends Ordered>(list: readonly C[], nameOf: (chat:
 /** B-078: one top row of a list section and the sub-chats listed under it (in the section's order). */
 export interface ChatNode<C> { chat: C; children: C[] }
 
-type Placed = { id: string; settings: { parentId?: string; anchorId?: string } };
+type Placed = { id: string; settings: { parentId?: string; anchorId?: string }; members?: ReadonlyArray<{ memberId: string; leftAt?: number }> };
+type OrgAgent = Pick<Agent, 'id' | 'managerId'>;
+
+/** The agent of the person's default 1:1 (K1 directPair), undefined for every other chat. */
+export function directAgent(chat: Placed, agents: ReadonlyMap<string, OrgAgent>): string | undefined {
+  const pair = directPair(chat.settings as ConversationSettings, (chat.members ?? []).filter((member) => !member.leftAt));
+  if (!pair?.includes(HUMAN_ID)) return undefined;
+  const other = pair.find((id) => id !== HUMAN_ID);
+  return other !== undefined && agents.has(other) ? other : undefined;
+}
+
+/**
+ * F24: where a chat sits in the list – its own parent (settings.parentId) first; else, for the person's 1:1 with an
+ * agent, the 1:1 with its top-most agent manager among `directs` (agent id → its 1:1's id in this list); undefined:
+ * a top row. Managers are walked up through agents only (a person or the owner ends the chain), each once.
+ */
+export function orgParent(chat: Placed, agents: ReadonlyMap<string, OrgAgent>, directs: ReadonlyMap<string, string>): string | undefined {
+  if (chat.settings.parentId !== undefined) return chat.settings.parentId;
+  const agentId = directAgent(chat, agents);
+  if (!agentId) return undefined;
+  let parent: string | undefined;
+  const seen = new Set([agentId]);
+  for (let manager = agents.get(agentId)?.managerId; manager && agents.has(manager) && !seen.has(manager); manager = agents.get(manager)?.managerId) {
+    seen.add(manager);
+    parent = directs.get(manager) ?? parent;
+  }
+  return parent;
+}
 
 /**
  * B-078: a section's ordered chats as a one-level tree – threads (settings.anchorId) are never rows; a sub-chat goes
  * under its parent when that parent is a top row of the same list, else it stays a top row itself (a parent elsewhere,
- * filtered out by a search, or an older deeper chain), so no chat ever drops out of the list.
+ * filtered out by a search, or an older deeper chain), so no chat ever drops out of the list. F24: with the org's
+ * agents (active ones), the person's 1:1s with sub-agents go under their top manager's 1:1 too (orgParent), and a
+ * chat placed under such a 1:1 goes where that 1:1 went (one level: into its top manager's group).
  */
-export function nestChats<C extends Placed>(ordered: readonly C[]): ChatNode<C>[] {
+export function nestChats<C extends Placed>(ordered: readonly C[], agents?: ReadonlyMap<string, OrgAgent>): ChatNode<C>[] {
   const rows = ordered.filter((chat) => !chat.settings.anchorId);
   const ids = new Set(rows.map((chat) => chat.id));
-  const under = (chat: C) => chat.settings.parentId !== undefined && chat.settings.parentId !== chat.id && ids.has(chat.settings.parentId);
+  const directs = new Map<string, string>();
+  if (agents) for (const chat of rows) { const agentId = directAgent(chat, agents); if (agentId && !directs.has(agentId)) directs.set(agentId, chat.id); }
+  const byId = new Map(rows.map((chat) => [chat.id, chat]));
+  const placed = (chat: C) => (agents ? orgParent(chat, agents, directs) : chat.settings.parentId);
+  const parentOf = (chat: C) => {
+    const parent = placed(chat);
+    const above = parent !== undefined ? byId.get(parent) : undefined;
+    return above && above.settings.parentId === undefined ? placed(above) ?? parent : parent; // under a 1:1 the org nested
+  };
+  const under = (chat: C) => { const parent = parentOf(chat); return parent !== undefined && parent !== chat.id && ids.has(parent); };
   const tops = new Set(rows.filter((chat) => !under(chat)).map((chat) => chat.id));
   const nodes = new Map<string, ChatNode<C>>();
   const out: ChatNode<C>[] = [];
   for (const chat of rows) {
-    if (under(chat) && tops.has(chat.settings.parentId!)) continue;
+    if (under(chat) && tops.has(parentOf(chat)!)) continue;
     const node = { chat, children: [] as C[] };
     nodes.set(chat.id, node);
     out.push(node);
   }
-  for (const chat of rows) if (under(chat) && tops.has(chat.settings.parentId!)) nodes.get(chat.settings.parentId!)!.children.push(chat);
+  for (const chat of rows) if (under(chat) && tops.has(parentOf(chat)!)) nodes.get(parentOf(chat)!)!.children.push(chat);
   return out;
 }

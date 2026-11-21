@@ -19,7 +19,7 @@ import { sttSetup, transcriptResponse } from '../media/stt-fixture.ts';
 type Setup = ReturnType<typeof sttSetup>;
 
 const delta = (t: Setup, sinceSeq = 0, context = t.context) =>
-  context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq, full: false });
+  context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq });
 
 const send = (t: Setup, ...attachments: Attachment[]) =>
   t.h.chats.send({ conversationId: t.chat.id, body: 'listen', authorId: 'human', attachments });
@@ -57,7 +57,7 @@ test('a voice note is pending on the first delta and carries duration, descripti
     assert.deepEqual(t.calls.models, ['whisper-1']);
 
     // Cache hit: a new context (runtime restart) and prepare() make no second request.
-    const restarted = new Context({ services: () => t.services, runner: false });
+    const restarted = new Context({ services: () => t.services });
     await restarted.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
     assert.ok(delta(t, 0, restarted).text.includes('Transcript:\nBook the venue for Friday.'));
     assert.equal(t.calls.count, 1);

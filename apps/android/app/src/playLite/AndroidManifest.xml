@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owns: the build without phone use (buildType playLite: the website's lite APK and the Play lite bundle): removes the
+     AccessibilityService and its disclosure from the merged manifest, so the app asks Android for no accessibility
+     capability at all (UseConsent.available() is then false; UseLink attaches without phone use, and the website lite
+     offers its phone-use build through its own installer: PhoneUseUpgrade). Nothing else in the merged manifest is on
+     Play Protect's hard-block list (SMS read/receive, notification listener, accessibility); build.ps1 checks the lite APK.
+     Never: adds anything. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <service android:name=".phoneuse.UseService" tools:node="remove" />
+        <activity android:name=".phoneuse.UseDisclosure" tools:node="remove" />
+    </application>
+</manifest>

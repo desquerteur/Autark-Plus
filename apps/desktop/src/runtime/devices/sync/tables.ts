@@ -26,10 +26,12 @@ import { mayReadMessage, mayReadTask } from '../../people/access.ts';
 import { ConversationRepo } from '../../chat/conversation-repo.ts';
 import { MessageRepo, toMessage } from '../../chat/message-repo.ts';
 import { TaskRepo, toTask } from '../../tasks/repo.ts';
+import { ownLoginFiles, removeLoginFiles } from './login-cleanup.ts';
 import { SpaceRepo } from '../../store/spaces.ts';
 import { ScheduleRepo } from '../../schedules/repo.ts';
 import { deleteRows, getRow, toItem } from '../../knowledge/rows.ts';
-import { onePerPc } from '../../accounts/cli-homes.ts';
+import { onePerPc, sharedHome } from '../../accounts/cli-homes.ts';
+import type { ProviderId } from '../../../shared/model/providers.ts';
 import { KvRepo } from '../../store/kv.ts';
 import { firesHere } from './home.ts';
 import '../../contracts/people.ts';
@@ -48,6 +50,8 @@ export interface Table {
   soft?: readonly string[];
   /** The row as it leaves this PC; undefined: this row stays here. */
   view?(row: Wire, self: string, s: RuntimeServices): Wire | undefined;
+  /** A row that came to stay here after it travelled (`view` now says undefined) is a removal for the other PCs: they drop it. */
+  retract?: true;
   /** Writes an incoming row; true when a reference it named is not here yet (it was left out). */
   write?(row: Wire, ctx: Apply, existed: boolean): boolean | void;
   /** Removes a row the other PC removed (with its event). */
@@ -137,7 +141,8 @@ const spaces: Table = {
 
 const people: Table = {
   name: 'people', soft: ['updated_at'],
-  drop: () => {}, // people are revoked, never deleted
+  // People are revoked; F14: one who never joined is removed – here as on my other PC (row, tokens, open code; person.removed).
+  drop: (id, { s }) => { if (s.people) s.people.forget(id); else s.db.run('DELETE FROM people WHERE id = ?', [id]); },
   emit: (id, { s }) => { const person = s.people?.get(id); if (person) s.bus.emit('person.upserted', person); },
 };
 
@@ -252,7 +257,7 @@ const schedules: Table = {
     if (owner) placeSchedules(s, owner);
   },
   drop: (id, { s }) => s.scheduler.remove(id),
-  emit: (id, { s }) => { const schedule = new ScheduleRepo(s.db).get(id); if (schedule) s.bus.emit('schedule.upserted', schedule); s.scheduler.arm(); },
+  emit: (id, { s }) => { const schedule = s.scheduler.get?.(id) ?? new ScheduleRepo(s.db).get(id); if (schedule) s.bus.emit('schedule.upserted', schedule); s.scheduler.arm(); }, // F06: as read here (its next time where another PC fires it)
 };
 
 /** A CLI plan here that is the login `row` names: same provider and e-mail – any, for a CLI with one sign-in per PC (AF-024: Gemini CLI's default home). */
@@ -262,19 +267,27 @@ const sameLogin = (db: Db, row: Wire): boolean => db.all<{ email: string | null;
   || (Boolean(row.email) && other.email === row.email));
 
 const accounts: Table = {
-  name: 'accounts', skip: ['state', 'limits', 'cooling_until', 'checked_at', 'device_id'], soft: ['home'],
+  name: 'accounts', skip: ['state', 'limits', 'cooling_until', 'checked_at', 'device_id', 'this_pc_only'], soft: ['home'], retract: true,
   // A plan's login travels (logins.ts), also one this PC found in a CLI's default home; its home on another PC is that
   // PC's own folder for it (or the default home of a CLI with one sign-in per PC), and a login the other PC has itself
   // stays one account there. What else a PC found (an environment key, a local model server) stays on it.
-  view: ({ detected, ...row }) => (detected && row.auth !== 'cli' ? undefined : row), // whether a PC found it is that PC's
+  // 17.11.2026: a plan login the person kept on this PC (`this_pc_only`) never leaves it (and goes back from the other PCs when it was shared before)
+  view: ({ detected, ...row }, _self, s) => (detected && row.auth !== 'cli' ? undefined : s.db.get('SELECT 1 FROM accounts WHERE id = ? AND this_pc_only = 1', [String(row.id)]) ? undefined : row), // whether a PC found it is that PC's
   write: (row, { s }, existed) => {
     const { home, ...rest } = row;
     if (existed) { upsert(s.db, 'accounts', rest); return; }
     if (row.auth === 'cli' && sameLogin(s.db, row)) return;
     const own = row.auth === 'cli' ? !onePerPc({ provider: String(row.provider), home: typeof home === 'string' ? home : null }) : Boolean(home); // AF-024: Gemini CLI's default home stays one per PC
-    upsert(s.db, 'accounts', { ...rest, home: own ? path.join(s.paths.accounts, String(row.provider), String(row.id)) : null });
+    // a plan's home here: the one home of that login on this PC (another company's, by its note's e-mail), else its own folder
+    const shared = own ? sharedHome(s.paths.accounts, row.provider as ProviderId, typeof row.email === 'string' ? row.email : undefined) : undefined;
+    upsert(s.db, 'accounts', { ...rest, home: own ? shared ?? path.join(s.paths.accounts, String(row.provider), String(row.id)) : null });
   },
-  drop: (id, { s }) => { void s.accounts.remove(id).catch((error: unknown) => s.log.warn('synced account not removed', { id, error: String(error) })); },
+  drop: (id, { s }) => {
+    // 17.11.2026: the login files this PC copied for it go with the row (login-cleanup.ts), so no token stays where the person did not want it
+    const account = s.accounts.get(id);
+    const files = account ? ownLoginFiles(s.paths.accounts, account, s.accounts.list()) : [];
+    void s.accounts.remove(id).then(() => removeLoginFiles(files)).catch((error: unknown) => s.log.warn('synced account not removed', { id, error: String(error) }));
+  },
   emit: (id, { s }) => { const account = s.accounts.get(id); if (account) s.bus.emit('account.upserted', account); },
 };
 
@@ -293,7 +306,7 @@ const messages: Table = {
       message.seq = here.seq;
       const ended = here.state !== message.state && message.state !== 'streaming';
       if (ended && ((here.state === 'streaming' && here.silent) || msgs.postedAfter(here.conversationId, here.id, here.seq))) {
-        message.seq = convs.nextSeq(here.conversationId, s.clock.now());
+        message.seq = convs.nextSeq(here.conversationId, s.clock.now(), { quiet: message.silent });
         msgs.moveToSeq(message.id, message.seq);
         convs.advanceReadIfCaughtUp(here.conversationId, message.authorId, message.seq);
       }
@@ -302,7 +315,7 @@ const messages: Table = {
     }
     const chat = convs.get(message.conversationId);
     if (!chat) throw new Error('its chat is not here');
-    message.seq = convs.nextSeq(chat.id, Math.max(message.createdAt, chat.lastMessageAt ?? 0)); // a fresh seq of this PC
+    message.seq = convs.nextSeq(chat.id, Math.max(message.createdAt, chat.lastMessageAt ?? 0), { quiet: message.silent }); // a fresh seq of this PC; a silent line moves no row here either
     msgs.insert(message);
     readWaits(s, chat.id, message.id);
     if (ctx.first) s.db.run('UPDATE members SET read_seq = ? WHERE conversation_id = ? AND read_seq = ?', [message.seq, chat.id, message.seq - 1]);

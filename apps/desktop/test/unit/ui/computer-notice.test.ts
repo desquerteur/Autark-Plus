@@ -1,5 +1,5 @@
 // The status line's computer-use line (src/ui/shell/computer-notice.ts): while an agent uses this PC and computer use
-// is not stopped, one info line says who and what, with [Watch] – it opens the Screen tab (the only way into it).
+// is not stopped, and only if the person turned it on (default off, 17.11.2026), one info line says who and what, with [Watch].
 // The Watch cell is part of the line: there for the whole time the line is, absent only without the screen preview.
 
 import { test } from 'node:test';
@@ -34,4 +34,10 @@ test('a connection without the screen preview gets the line but no Watch', () =>
   const notice = computerNotice(state({ agent: 'Mira' }), false, () => undefined);
   assert.equal(notice?.text, 'Mira is using this PC');
   assert.equal(notice?.actions, undefined);
+});
+
+test('feedback 17.11.2026: the line only shows when the person asked for it (Settings › General › Notifications)', () => {
+  const asked = computerNotice(state({ agent: 'Mira' }), true, () => undefined, true);
+  assert.equal(asked?.text, 'Mira is using this PC');
+  assert.equal(computerNotice(state({ agent: 'Mira' }), true, () => undefined, false), null, 'off: agents use the PC all day, no nagging line');
 });

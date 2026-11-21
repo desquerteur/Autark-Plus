@@ -83,9 +83,12 @@ function service(signedIn: { default: boolean; own: boolean }) {
   return { accounts, agent, other, settle, folders, registry: () => registry! };
 }
 
-test('kimi: a login in the default home is found by the ACP probe and adopted; an added account gets its own home and `kimi login`', async () => {
+test('kimi: a login in the default home is found by the ACP probe and adopted after "Use"; an added account gets its own home and `kimi login`', async () => {
   const h = service({ default: true, own: false });
   const report = await h.accounts.detect();
+  await h.settle();
+  assert.deepEqual([h.accounts.list().length, report.found?.map((login) => login.key)], [0, ['kimi-cli:default']], '17.11.2026: only offered until the person says Use');
+  await h.accounts.useFound('kimi-cli:default');
   await h.settle();
   assert.deepEqual(report.clis.find((cli) => cli.provider === 'kimi-cli'), { provider: 'kimi-cli', path: '/bin/kimi', version: '1.2.0', loggedIn: true });
   assert.equal(h.agent.calls[0].options.env?.KIMI_CODE_HOME, undefined, 'the probe asks the default home');

@@ -1,7 +1,7 @@
 // B-076: a side tab watched from another PC or a phone, in real Electron – the caster (main/side-driver/caster.ts) on a
 // local page in a WebContentsView set up like a side-browser tab (sandboxed, its debugger attached for the color scheme)
-// with the real side driver: `on` starts the screencast and JPEG frames come with the viewport, at most one per 500 ms
-// while the page animates; a click mapped the runtime's way (view-input.ts inputCommands on side-view.ts sideMeta) lands
+// with the real side driver: `on` starts the screencast and JPEG frames come with the viewport, at most one per 100 ms
+// (B-081) while the page animates; a click mapped the runtime's way (view-input.ts inputCommands on side-view.ts sideMeta) lands
 // on the button as a trusted click – also with the tab zoomed to 125 % – and counts as the person's (an agent waits, the
 // tab is kept); typed text reaches the focused field; an address, back; a confirm() the page opens comes with the page,
 // input waits for its answer and the watcher's answer lets the page go on; `off` stops the frames. The caster and driver
@@ -77,7 +77,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit());
 `;
 
-test('a watched side tab in real Electron: frames at most twice a second, a mapped click and typing land, also zoomed', { timeout: 180_000 }, async (t) => {
+test('a watched side tab in real Electron: frames at most ten a second, a mapped click and typing land, also zoomed', { timeout: 180_000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'workforce-side-view-'));
   const bundle = path.join(dir, 'side.cjs');
   await build({
@@ -135,8 +135,8 @@ test('a watched side tab in real Electron: frames at most twice a second, a mapp
   await sleep(3000);
   const during = (await frames()).slice(before);
   t.diagnostic(`frames in 3 s while the page animates: ${during.length}; sizes ${during.map((f) => f.size).join(', ')}`);
-  assert.ok(during.length >= 3 && during.length <= 7, `about two per second (${during.length})`);
-  for (let i = 1; i < during.length; i += 1) assert.ok(during[i].at - during[i - 1].at >= 450, 'at most one per 500 ms');
+  assert.ok(during.length >= 8 && during.length <= 32, `up to ten per second (${during.length})`);
+  for (let i = 1; i < during.length; i += 1) assert.ok(during[i].at - during[i - 1].at >= 90, 'at most one per 100 ms');
 
   // 2. a click mapped the runtime's way lands on the button as a trusted click and is the person's
   await click('#go');

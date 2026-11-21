@@ -4,9 +4,11 @@
 // without the home's app data folders (HOME_SKIP: AppData, Library …; also when the home is the path) and, for a
 // search inside files, its OneDrive folders (reading a cloud-only file downloads it). Bounds: SEARCH_MS per search (and the run's stop), MAX_ENTRIES
 // entries looked at (HOME_ENTRIES with the home), MAX_DEPTH folder levels, content only of files up to CONTENT_BYTES
-// that look like text, at most `maxResults` hits. Not visited: hidden entries, dependency/build folders and links (a
+// that look like text, at most `limit` hits. Not visited: hidden entries, dependency/build folders and links (a
 // search stays where it started). Shown lines are redacted. An empty search of the workspace alone names the person's
-// home folder as the wider place (a fact).
+// home folder as the wider place (a fact). B-080: the walk is shared with a miss's search for the exact name
+// (file-miss.ts: its own matcher, time bound and absolute paths), and a path that is no folder answers with
+// file-miss.ts's missText.
 // Owns: the walk, its roots and bounds, and the result text. Never: writes, follows links, or runs for a linked PC.
 
 import { open, readdir, stat } from 'node:fs/promises';
@@ -15,6 +17,7 @@ import path from 'node:path';
 import type { ToolContext, ToolDef } from '../types.ts';
 import { failure, text } from '../types.ts';
 import { clip, defineTool } from './util.ts';
+import { missText } from './file-miss.ts'; // B-080: a miss shows what is there
 
 /** Dependency and build folders no search walks into. */
 const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', 'bower_components', 'vendor', 'dist', 'build', 'out', 'target', 'coverage', '__pycache__', 'venv', 'env', 'site-packages', 'bin', 'obj']);
@@ -33,9 +36,9 @@ const DEFAULT_RESULTS = 50;
 const MAX_RESULTS = 200;
 const LINES_PER_FILE = 12;
 
-interface SearchArgs { query: string; path?: string; content?: boolean; maxResults?: number }
+interface SearchArgs { query: string; path?: string; content?: boolean; limit?: number }
 /** A folder a search starts in; `home`: the person's home folder (HOME_SKIP applies right below it). */
-interface Root { dir: string; home: boolean }
+export interface Root { dir: string; home: boolean }
 
 /** A name test: `*` and `?` as wildcards when given, else a part of the name (both without case). */
 export function nameMatcher(query: string): (name: string) => boolean {
@@ -77,12 +80,12 @@ export function searchTool(deps: { resolve: (ctx: ToolContext, given: string | u
   const homeOf = deps.home ?? (() => os.homedir());
   return defineTool<SearchArgs>({
     name: 'files.search',
-    description: 'Find files by name (part of it, or with * and ?) or, with content: true, by text inside them – below path, or in the one file path names. Without path: the workspace, then the person\'s home folder (its app data folders left out). Hidden and dependency folders and credential stores are skipped.',
+    description: "Finds files by name or, with content, by the text inside them. By default I search the workspace, then the person's home; hidden, dependency and app-data folders and credential stores are skipped.",
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', minLength: 1, maxLength: 200 }, path: { type: 'string', maxLength: 1024 },
-        content: { type: 'boolean' }, maxResults: { type: 'integer', minimum: 1, maximum: MAX_RESULTS },
+        query: { type: 'string', minLength: 1, maxLength: 200, description: 'Part of the name, * and ? work; with content, the text.' }, path: { type: 'string', maxLength: 1024, description: 'A folder, or one file.' },
+        content: { type: 'boolean' }, limit: { type: 'integer', minimum: 1, maximum: MAX_RESULTS },
       },
       required: ['query'], additionalProperties: false,
     },
@@ -92,7 +95,7 @@ export function searchTool(deps: { resolve: (ctx: ToolContext, given: string | u
       if (ctx.fromPc !== undefined) return failure('files.search runs only for agents of this PC.');
       const query = args.query.trim();
       if (!query) return failure('Name what to search for.');
-      const max = Math.min(args.maxResults ?? DEFAULT_RESULTS, MAX_RESULTS);
+      const max = Math.min(args.limit ?? DEFAULT_RESULTS, MAX_RESULTS);
       const home = homeOf();
       if (!args.path?.trim()) {
         const roots = await defaultRoots(ctx, deps.resolve, home);
@@ -101,7 +104,7 @@ export function searchTool(deps: { resolve: (ctx: ToolContext, given: string | u
       const root = await deps.resolve(ctx, args.path);
       const top = await stat(root).catch(() => undefined);
       if (top?.isFile()) return text(await oneFile(ctx, root, query, args)); // B-048: a single file is searched inside
-      if (!top?.isDirectory()) return failure(`No folder at ${args.path}.`);
+      if (!top?.isDirectory()) return failure(await missText(ctx, args.path, root, 'folder'));
       const roots = [{ dir: root, home: Boolean(home) && path.relative(path.resolve(home), root) === '' }]; // the home named as path: HOME_SKIP too
       return text(render(ctx, roots, await walk(ctx, roots, query, args.content === true, max, MAX_ENTRIES), args, home));
     },
@@ -122,28 +125,34 @@ function inside(root: string, target: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-interface Found { hits: string[]; entries: number; stopped?: string }
+export interface Found { hits: string[]; entries: number; stopped?: string }
 
-/** files.search with `path` naming one file: its matching lines (content search), up to maxResults, with the count of the rest. */
+/** B-080: how a walk tests and shows names – a matcher of its own (name, is it a folder, its full path), its own time bound, absolute paths. */
+export interface WalkHow { matches?: (name: string, directory: boolean, full: string) => boolean; ms?: number; absolute?: boolean }
+
+/** files.search with `path` naming one file: its matching lines (content search), up to limit, with the count of the rest. */
 async function oneFile(ctx: ToolContext, file: string, query: string, args: SearchArgs): Promise<string> {
   const workspace = path.resolve(ctx.services.paths.workspace);
   const name = shown(workspace, file);
-  const max = Math.min(args.maxResults ?? DEFAULT_RESULTS, MAX_RESULTS);
+  const max = Math.min(args.limit ?? DEFAULT_RESULTS, MAX_RESULTS);
   const result = await contentHits(file, query.toLowerCase(), max).catch(() => undefined);
   if (!result) return `No line of ${name} contains "${query}" (or it is not a text file up to 1 MB).`;
   const total = result.hits.length + result.more;
   const lines = result.hits.map((hit) => `${name}:${hit.line}: ${redact(ctx, hit.text)}`);
-  return [`${total} line${total === 1 ? '' : 's'} of ${name} contain "${query}":`, ...lines, ...(result.more ? [`+${result.more} more – raise maxResults or read with files.read fromLine.`] : [])].join('\n');
+  return [`${total} line${total === 1 ? '' : 's'} of ${name} contain "${query}":`, ...lines, ...(result.more ? [`+${result.more} more – raise limit or read with files.read fromLine.`] : [])].join('\n');
 }
 
 /** The roots one after the other, each breadth-first, within one set of bounds; a root met again inside another is not walked twice. */
-async function walk(ctx: ToolContext, roots: readonly Root[], query: string, content: boolean, max: number, limit: number): Promise<Found> {
+export async function walk(ctx: ToolContext, roots: readonly Root[], query: string, content: boolean, max: number, limit: number, how: WalkHow = {}): Promise<Found> {
   const started = Date.now();
-  const matches = nameMatcher(query);
+  const byName = nameMatcher(query);
+  const matches = how.matches ?? ((name: string) => byName(name));
+  const ms = how.ms ?? SEARCH_MS;
   const needle = query.toLowerCase();
   const workspace = path.resolve(ctx.services.paths.workspace);
+  const show = (full: string) => (how.absolute ? full : shown(workspace, full));
   const found: Found = { hits: [], entries: 0 };
-  const late = () => Date.now() - started > SEARCH_MS || ctx.signal.aborted;
+  const late = () => Date.now() - started > ms || ctx.signal.aborted;
   for (const root of roots) {
     const queue: Array<{ dir: string; depth: number }> = [{ dir: root.dir, depth: 0 }];
     for (let next = 0; next < queue.length; next++) {
@@ -152,21 +161,21 @@ async function walk(ctx: ToolContext, roots: readonly Root[], query: string, con
       for (const entry of entries) {
         if (found.hits.length >= max) { found.stopped = `the first ${max} hits`; return found; }
         if (++found.entries > limit) { found.stopped = `${limit.toLocaleString('en-US')} entries`; return found; }
-        if (late()) { found.stopped = ctx.signal.aborted ? 'the run stopped' : `${SEARCH_MS / 1000} s`; return found; }
+        if (late()) { found.stopped = ctx.signal.aborted ? 'the run stopped' : `${ms / 1000} s`; return found; }
         if (entry.isSymbolicLink() || skipped(entry.name, entry.isDirectory())) continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           if (root.home && depth === 0 && homeSkipped(entry.name, content)) continue;
           if (roots.some((other) => other !== root && path.relative(other.dir, full) === '')) continue; // searched as its own root
           if (depth < MAX_DEPTH) queue.push({ dir: full, depth: depth + 1 });
-          if (!content && matches(entry.name)) found.hits.push(`${shown(workspace, full)}/`);
+          if (!content && matches(entry.name, true, full)) found.hits.push(`${show(full)}/`);
           continue;
         }
         if (!entry.isFile()) continue;
-        if (!content) { if (matches(entry.name)) found.hits.push(shown(workspace, full)); continue; }
+        if (!content) { if (matches(entry.name, false, full)) found.hits.push(show(full)); continue; }
         const result = await contentHits(full, needle).catch(() => undefined);
         if (!result) continue;
-        const name = shown(workspace, full);
+        const name = show(full);
         for (const hit of result.hits) found.hits.push(`${name}:${hit.line}: ${redact(ctx, hit.text)}`);
         if (result.more) found.hits.push(`${name}: +${result.more} more matching line${result.more === 1 ? '' : 's'} in this file (search that file with path, or read it with files.read fromLine)`);
       }

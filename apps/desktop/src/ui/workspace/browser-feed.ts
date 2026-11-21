@@ -12,9 +12,13 @@
 // B-076: the feed is generic over its state and frame – a side-browser tab watched from another PC or the phone
 // (RemoteWebTab.tsx) is a pull-only feed keyed by its PC and tab; with `retryMs` a failed pull is tried again after
 // that time while the view stays (the other PC may come back), instead of waiting for a reconnect.
+// B-081: with `keep` a pull feed keeps that many entries without a view with their last state and frame (the oldest goes
+// first; `drop` forgets one whose tab was closed), so a view coming back shows its last picture at once, never an empty
+// field; `refresh` starts the next pull at once (a remote view's box changed), at most one per running pull.
 // Also the pure helpers for the agents' open browsers.
 // Owns: the ref-counted subscriptions, the pull loops and the last state / frame per browser.
-// Never: renders, polls on a timer, or keeps a subscription, loop or (pull mode) frame without a view.
+// Never: renders, polls on a timer, keeps a subscription or loop without a view, or (pull mode) a frame without a view
+// beyond `keep` of them.
 
 import type { BrowserFrame, BrowserSessionInfo, BrowserViewState } from '../../shared/model/browser.ts';
 
@@ -41,12 +45,20 @@ export interface BrowserFeedDeps<S extends Stamped = BrowserViewState, F extends
   pullPart?(agentId: string, at: number, index: number): Promise<{ data: string }>;
   /** B-076: after a failed pull, try again this much later while a view stays (else: at the next reconnect). */
   retryMs?: number;
+  /** B-081: pull mode – this many entries without a view keep their last state and frame (the oldest goes first). */
+  keep?: number;
 }
 
 export interface BrowserFeed<S = BrowserViewState, F = BrowserFrame> {
   subscribe(agentId: string, listener: BrowserFeedListener<S, F>): () => void;
   /** Agents whose browser has at least one view (tests, diagnostics). */
   active(): string[];
+  /** B-081, pull mode: the next pull starts now (what it sends changed), at most one per running pull; the old reply is ignored. */
+  refresh(agentId: string): void;
+  /** B-081: forgets a kept entry without a view (its tab was closed). */
+  drop(agentId: string): void;
+  /** B-081: the last view of a browser (kept or shown), so a view coming back draws it in its first paint. */
+  last(agentId: string): FeedView<S, F> | null;
 }
 
 interface Entry<S, F> {
@@ -56,6 +68,9 @@ interface Entry<S, F> {
   /** Pull mode: the running loop's epoch (a reconnect starts the next) and whether one runs. */
   epoch: number;
   pulling: boolean;
+  /** Pull mode: past which state and frame the loop asks; a refresh's pull is unanswered. */
+  after?: { state?: number; frame?: number };
+  refreshing?: boolean;
 }
 
 const isGone = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === 'not_found';
@@ -90,10 +105,10 @@ export function createBrowserFeed<S extends Stamped = BrowserViewState, F extend
     return data === frame.data ? frame : { ...frame, data };
   };
 
-  /** One pull at a time while the browser has a view and no reconnect started a newer loop. */
-  const loop = async (entry: Entry<S, F>, epoch: number) => {
+  /** One pull at a time while the browser has a view and no reconnect (or refresh) started a newer loop. */
+  const loop = async (entry: Entry<S, F>, epoch: number, start: { state?: number; frame?: number } = {}) => {
     entry.pulling = true;
-    const after: { state?: number; frame?: number } = {};
+    const after = (entry.after = { ...start });
     const current = () => entry.epoch === epoch;
     try {
       while (entry.listeners.size && current()) {
@@ -103,12 +118,14 @@ export function createBrowserFeed<S extends Stamped = BrowserViewState, F extend
           reply = await deps.pull!(entry.agentId, { ...after });
           frame = current() ? await joined(entry, reply) : null;
         } catch (error) {
+          if (current()) entry.refreshing = false;
           if (current() && entry.listeners.size) publish(entry, { error: deps.errorText(error) });
           if (!deps.retryMs) return;
           await new Promise((resolve) => setTimeout(resolve, deps.retryMs)); // one wait, then the loop asks again while a view stays
           continue;
         }
         if (!current()) return;
+        entry.refreshing = false;
         const same = !frame && !entry.view.error && entry.view.state?.at === reply.state.at; // a wait that ran out
         after.state = reply.state.at;
         if (frame) after.frame = frame.at;
@@ -119,15 +136,25 @@ export function createBrowserFeed<S extends Stamped = BrowserViewState, F extend
     }
   };
 
-  /** Pull mode: an entry no view shows and no loop serves goes with its frame (a remote tab's key is one per tab on its PC). */
+  const idle = (entry: Entry<S, F>) => !entry.listeners.size && !entry.pulling;
+
+  /**
+   * Pull mode: an entry no view shows and no loop serves goes with its frame (a remote tab's key is one per tab on its
+   * PC) – with `keep`, the newest of them stay with their frame (moved last, the oldest beyond `keep` go).
+   */
   const forget = (entry: Entry<S, F>) => {
-    if (!entry.listeners.size && !entry.pulling && entries.get(entry.agentId) === entry) entries.delete(entry.agentId);
+    if (!idle(entry) || entries.get(entry.agentId) !== entry) return;
+    entries.delete(entry.agentId);
+    if (!deps.keep || !entry.view.frame) return;
+    entries.set(entry.agentId, entry);
+    const kept = [...entries.values()].filter(idle);
+    for (const old of kept.slice(0, Math.max(0, kept.length - deps.keep))) entries.delete(old.agentId);
   };
 
-  const join = (entry: Entry<S, F>, fresh = false) => {
+  const join = (entry: Entry<S, F>, fresh = false, start?: { state?: number; frame?: number }) => {
     if (pulling()) {
       if (fresh) entry.epoch++;
-      if (fresh || !entry.pulling) void loop(entry, entry.epoch);
+      if (fresh || !entry.pulling) void loop(entry, entry.epoch, start);
       return;
     }
     deps.subscribe(entry.agentId).then(
@@ -178,6 +205,19 @@ export function createBrowserFeed<S extends Stamped = BrowserViewState, F extend
     },
     active() {
       return [...entries.entries()].filter(([, entry]) => entry.listeners.size > 0).map(([key]) => key);
+    },
+    refresh(agentId) {
+      const entry = entries.get(agentId);
+      if (!entry?.listeners.size || !pulling() || entry.refreshing) return;
+      entry.refreshing = true; // until this pull answers; it asks past what the view has, so its answer is the next change
+      join(entry, true, entry.after);
+    },
+    drop(agentId) {
+      const entry = entries.get(agentId);
+      if (entry && idle(entry)) entries.delete(agentId);
+    },
+    last(agentId) {
+      return entries.get(agentId)?.view ?? null;
     },
   };
 }

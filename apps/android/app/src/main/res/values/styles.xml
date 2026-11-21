@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Owns: platform-native chrome colors. Never: restyles the shared web app. -->
+<!-- Owns: platform-native chrome colors in light mode (values-night has the dark twin, so the WebView reports
+     prefers-color-scheme from the system; SystemBars repaints the bars from the page). Never: restyles the shared web app. -->
 <resources>
     <style name="AppThemeBase" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
@@ -9,5 +10,5 @@
     </style>
     <style name="AppTheme" parent="AppThemeBase" />
     <string name="app_name" translatable="false">Autark</string>
-    <string name="app_label" translatable="false">Autark Preview</string>
+    <string name="app_label" translatable="false">Autark</string>
 </resources>

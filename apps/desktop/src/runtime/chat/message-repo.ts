@@ -1,16 +1,17 @@
 // Repository for the canonical message log and its full-text index.
 // Owns: SQL for `messages` and `messages_fts` (rowid-linked, German-folded text), the re-seq of one
 // message (B-047 D4: a run's answer moves to the end of its chat – the seq the service reserved
-// is new, so UNIQUE(conversation_id, seq) holds, and the rowid, which links the FTS row, stays) and
-// the reads of what a run posted (its other text posts, its status update rate). B-075: a run's row is written while it
-// streams (writeLive: body and meta only, never once it is finished) and stays out of the index until then; the chat
-// summaries read the streaming rows (liveRows); the start-up reconcile takes only rows of runs of this PC.
+// is new, so UNIQUE(conversation_id, seq) holds, and the rowid, which links the FTS row, stays). A row left 'streaming' by an older version stays out of
+// the index; the start-up reconcile takes only rows of runs of this PC. B-080: update
+// also writes the time (a run's answer is dated when it arrives, chat/publish-message.ts – a synced row carries it to every
+// PC and the phone). emptyAnswered finds the
+// empty failed or platform-stopped rows of this PC's runs that their author answered later in the same chat (chat/lifecycle.ts).
 // Never: emits events or assigns seq on its own (the service reserves seq in its transaction).
 
 import { bool, int, json, toJson, type Db } from '../db/database.ts';
 import { nul, opt, optNumber } from '../store/rows.ts';
 import { foldText, ftsQuery } from '../../shared/text/normalize.ts';
-import type { Attachment, LiveRun, Message, MessageMeta } from '../../shared/model/chat.ts';
+import type { Attachment, Message, MessageMeta } from '../../shared/model/chat.ts';
 
 type Row = Record<string, unknown>;
 
@@ -74,18 +75,13 @@ export class MessageRepo {
     this.index(m);
   }
 
-  /** Persists mutable fields (body/state/meta/edit) and refreshes the index. */
+  /** Persists mutable fields (body/state/meta/edit, B-080: the time) and refreshes the index. */
   update(m: Message): void {
     this.db.run(
-      'UPDATE messages SET body = ?, state = ?, meta = ?, edited_at = ?, attachments = ?, mentions = ?, kind = ?, silent = ?, priority = ? WHERE id = ?',
-      [m.body, m.state, toJson(m.meta), nul(m.editedAt), toJson(m.attachments), toJson(m.mentions), m.kind, int(m.silent), m.priority, m.id],
+      'UPDATE messages SET body = ?, state = ?, meta = ?, edited_at = ?, attachments = ?, mentions = ?, kind = ?, silent = ?, priority = ?, created_at = ? WHERE id = ?',
+      [m.body, m.state, toJson(m.meta), nul(m.editedAt), toJson(m.attachments), toJson(m.mentions), m.kind, int(m.silent), m.priority, m.createdAt, m.id],
     );
     this.index(m);
-  }
-
-  /** B-075: a streaming row's body and meta (no index, no other field); false when it is no longer streaming (finished, removed). */
-  writeLive(id: string, body: string, meta: MessageMeta): boolean {
-    return this.db.run(`UPDATE messages SET body = ?, meta = ? WHERE id = ? AND state = 'streaming'`, [body, toJson(meta), id]).changes > 0;
   }
 
   /** Re-seq (B-047 D4): `seq` was just reserved by the service (ConversationRepo.nextSeq), so it is free. */
@@ -176,25 +172,18 @@ export class MessageRepo {
     return this.db.all<Row>(`SELECT * FROM messages WHERE state = 'streaming' AND (run_id IS NULL OR run_id IN (SELECT id FROM runs))`).map(toMessage);
   }
 
-  /** B-075: the runs at work in these chats – their agents' rows in state 'streaming', by chat, in seq order. */
-  liveRows(conversationIds: readonly string[]): Map<string, LiveRun[]> {
-    const out = new Map<string, LiveRun[]>();
-    if (!conversationIds.length) return out;
-    const rows = this.db.all<Row>(
-      `SELECT id, conversation_id, author_id, run_id, meta, created_at FROM messages
-       WHERE conversation_id IN (SELECT value FROM json_each(?)) AND state = 'streaming' AND author_kind = 'agent' AND run_id IS NOT NULL ORDER BY seq`,
-      [JSON.stringify(conversationIds)]);
-    for (const row of rows) {
-      const live = json<MessageMeta>(row.meta, {}).live;
-      const run: LiveRun = { runId: String(row.run_id), agentId: String(row.author_id), messageId: String(row.id), startedAt: live?.startedAt ?? Number(row.created_at) };
-      if (live?.note) run.note = live.note;
-      if (live?.model) run.model = live.model;
-      if (live?.effort) run.effort = live.effort;
-      if (live?.taskId) run.taskId = live.taskId;
-      const chat = String(row.conversation_id);
-      out.set(chat, [...(out.get(chat) ?? []), run]);
-    }
-    return out;
+  /**
+   * B-080 wave 3 (start-time repair): this PC's agent rows without text or files that ended 'failed', or 'stopped' by the
+   * platform (the person's own Stop leaves a quiet row – silent – that stays), and that their author answered later in the
+   * same chat with a final text line.
+   */
+  emptyAnswered(): Message[] {
+    return this.db.all<Row>(
+      `SELECT * FROM messages m WHERE m.author_kind = 'agent' AND m.kind = 'text' AND (m.state = 'failed' OR (m.state = 'stopped' AND m.silent = 0))
+       AND trim(m.body) = '' AND (m.attachments IS NULL OR m.attachments IN ('[]', 'null')) AND m.run_id IN (SELECT id FROM runs)
+       AND EXISTS (SELECT 1 FROM messages a WHERE a.conversation_id = m.conversation_id AND a.author_id = m.author_id AND a.seq > m.seq AND a.kind = 'text' AND a.state = 'final')
+       ORDER BY m.conversation_id, m.seq`,
+    ).map(toMessage);
   }
 
   /** Whether anything other than message `id` was posted in the chat after `seq` (its answer then moves to the end). */
@@ -223,19 +212,4 @@ export class MessageRepo {
       )
       .map(toMessage);
   }
-}
-
-/** B-047 D4 safety net: whether run `runId` posted a final text message into the chat besides `exceptId` (its own answer). */
-export function runPosted(db: Db, conversationId: string, runId: string, exceptId?: string): boolean {
-  return Boolean(db.get(
-    `SELECT 1 FROM messages WHERE conversation_id = ? AND run_id = ? AND kind = 'text' AND state = 'final' AND id != ? LIMIT 1`,
-    [conversationId, runId, exceptId ?? ''],
-  ));
-}
-
-/** How many status updates run `runId` posted (chat.send status, any chat) and when the latest was written. */
-export function runStatusLines(db: Db, runId: string): { count: number; lastAt?: number } {
-  const row = db.get<{ n: number; last: number | null }>(`SELECT COUNT(*) AS n, MAX(created_at) AS last FROM messages WHERE run_id = ? AND kind = 'status'`, [runId]);
-  const last = row?.last;
-  return { count: Number(row?.n ?? 0), ...(last !== null && last !== undefined ? { lastAt: Number(last) } : {}) };
 }

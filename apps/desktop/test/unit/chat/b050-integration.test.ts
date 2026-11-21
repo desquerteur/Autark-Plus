@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import { isConnectorSender, isExternalAgent } from '../../../src/shared/model/external-agents.ts';
-import { isPaused } from '../../../src/shared/model/task-pause.ts';
+import { isPaused } from '../../../src/shared/model/tasks.ts';
 import { findOrCreateDirect } from '../../../src/runtime/chat/direct.ts';
 import { pickUpQuiet } from '../../../src/runtime/chat/quiet-pickup.ts';
 import { chatTitleFor } from '../../../src/runtime/chat/titles.ts';

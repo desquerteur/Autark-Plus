@@ -12,9 +12,11 @@
 //             modes.changed with 'chat'; settings.updated with 'settings' or 'permissions'. computer.activity and
 //             work.state (the stops of computer use and agent work) reach every device with 'todo';
 //             browser.sessions (agent ids only) devices with 'todo' on a secure transport. tabs.changed and
-//             tabs.position (B-076: the PC's side pane, which the phone shows too) devices with 'manage'. pwa.updated,
-//             calendar.sources and 'browser:<agentId>' (the live view – devices pull frames with browser.pull)
-//             stay with the owner.
+//             tabs.position (B-076: the PC's side pane, which the phone shows too) devices with 'manage'. B-084 (D6):
+//             remote.updated, relay.updated, device.upserted and device.removed (Settings › Devices) devices with
+//             'settings' on a secure transport (as remote.* / devices.* themselves); 16.11.2026 calendar.sources too
+//             (Settings › Calendar on the phone: calendar.addIcs … connectGoogle are 'settings' + secure). pwa.updated
+//             and 'browser:<agentId>' (the live view – devices pull frames with browser.pull) stay with the owner.
 //   external – C8: only 'chat:<its chat>', and there message.created/updated/removed and the
 //             external.mention of itself or of one of its sub-identities (members 'ext:api:<its key>:…',
 //             bridges/external-rpc.ts) – no run's row while it streams (B-075: its live values), no media, task or list events; messages as
@@ -26,13 +28,17 @@
 // changed it – runtime listeners only; task.upserted carries every change to the lists), and phone use's own
 // 'phoneUse.reply' / 'phoneUse.attached'. B-078: 'phoneUse.request' (on 'system') reaches exactly the device it names –
 // not even the owner's window (it can carry text to type) – the phone's topic phoneUse:<deviceId> in effect.
+// 18.11.2026 (phone traffic): a device hears an agent.upserted whose only news is the status, step note or time without
+// the agent's instructions once that connection got them (`deviceAgent`) – they are its SYSTEM.md, ~27 KB a time.
 // Owns: topic syntax, the per-scope topic/event filter and per-scope event payloads (also the
 // external agent's chat view, `externalChat`).
 // Never: method permissions.
 
+import { createHash } from 'node:crypto';
 import type { EventName } from '../../shared/api/events.ts';
 import type { ClientScope, Topic } from '../../shared/api/protocol.ts';
 import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { isIdLike } from './params.ts';
 import { scopeHas } from './table.ts';
 
@@ -55,6 +61,8 @@ const PANE_EVENTS: ReadonlySet<string> = new Set(['tabs.changed', 'tabs.position
 const BUS_ONLY: ReadonlySet<string> = new Set(['task.changed', 'phoneUse.reply', 'phoneUse.attached']);
 /** B-078: accounts on the phone (accounts.* is 'settings' on a secure transport, rpc/handlers/providers.ts). */
 const ACCOUNT_EVENTS: ReadonlySet<string> = new Set(['account.upserted', 'account.removed', 'account.sign_in_failed']);
+/** B-084 (D6): Settings › Devices on the phone (remote.* / devices.* are 'settings' on a secure transport); 16.11.2026 its Calendar page. */
+const DEVICE_ADMIN_EVENTS: ReadonlySet<string> = new Set(['remote.updated', 'relay.updated', 'device.upserted', 'device.removed', 'apps.changed', 'calendar.sources']);
 
 /** True for a syntactically valid topic ('chats' … or 'chat:<id>' / 'runs:<agentId>' / 'browser:<agentId>'). */
 export function isTopic(value: unknown): value is Topic {
@@ -84,6 +92,7 @@ function deviceEvent(scope: DeviceScope, topic: Topic, event: EventName, data: u
   if (BRAKE_EVENTS.has(event)) return scope.capabilities.includes('todo');
   if (PANE_EVENTS.has(event)) return scope.capabilities.includes('manage');
   if (event === 'browser.sessions') return scope.capabilities.includes('todo') && scope.secure === true; // X02: agent ids only
+  if (DEVICE_ADMIN_EVENTS.has(event)) return scope.capabilities.includes('settings') && scope.secure === true;
   return event === 'settings.updated' && (scope.capabilities.includes('settings') || scopeHas(scope, 'permissions'));
 }
 
@@ -136,6 +145,21 @@ export function externalChat(chat: ConversationSummary): ConversationSummary {
     ...rest, settings: {}, pinned: false, unread: 0,
     members: chat.members.filter((member) => member.leftAt === undefined).map((member) => ({ ...member, readSeq: 0 })),
   };
+}
+
+/**
+ * A device's agent.upserted (phone traffic, 18.11.2026): `sent` – agent id → what this connection last got of that agent
+ * besides status, statusNote and updatedAt. When only those changed, the agent goes without `instructions` (the UI keeps
+ * the ones it holds: ui/lib/store-events.ts); anything else, the first time on a connection and an archived agent go whole.
+ */
+export function deviceAgent(sent: Map<string, string>, agent: Agent): Agent | Omit<Agent, 'instructions'> {
+  const { status: _status, statusNote: _note, updatedAt: _at, ...rest } = agent;
+  const key = createHash('sha256').update(JSON.stringify(rest)).digest('base64');
+  const same = sent.get(agent.id) === key;
+  sent.set(agent.id, key);
+  if (!same || agent.archivedAt !== undefined) return agent;
+  const { instructions: _instructions, ...slim } = agent;
+  return slim;
 }
 
 /** The payload `scope` receives for an event it may see (messages for an external agent). */

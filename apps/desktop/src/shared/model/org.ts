@@ -2,7 +2,7 @@
 // Owns: the plain-data shapes shared by runtime, UI, PWA and peers.
 // Never: contains behaviour; validation lives in the runtime services.
 
-import type { Effort, ModelPolicy } from './providers.ts';
+import type { ModelPolicy } from './providers.ts';
 
 /** A life area the person manages: their company, personal brand, private life … */
 export interface Space {
@@ -58,7 +58,6 @@ export interface AgentTemplate {
   skills: string[];
   spaceKind?: Space['kind'];
   instructions: string;
-  effort?: Effort;
   /** 'human': hired agents report to the person, never into the hiring manager's branch (the secretary). */
   reportsTo?: 'human';
 }

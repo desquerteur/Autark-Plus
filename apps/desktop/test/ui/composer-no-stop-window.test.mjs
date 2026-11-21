@@ -64,7 +64,7 @@ test('Chat without Stop: compose, talk and steer while an agent works; the emerg
   const actions = page.locator('.composer .composer-actions');
   const field = page.locator('.composer-input');
 
-  const previewReady = rpc.waitFor('message.updated', message => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 30_000);
+  const previewReady = rpc.waitFor('message.created', message => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 30_000);
   await rpc.call('messages.send', { conversationId: chat.id, body: 'Check the release notes' });
   const previewMessage = await previewReady;
   const preview = page.locator('.chat-row').filter({ has: page.locator('.row-title', { hasText: new RegExp(`^${manager.name} · Release$`) }) }).locator('.row-preview');
@@ -73,19 +73,21 @@ test('Chat without Stop: compose, talk and steer while an agent works; the emerg
 
   // The agent works (a native tool that never ends by itself).
   const taskWorking = rpc.waitFor('agent.activity', (event) => event.active.some((run) => run.agentId === manager.id && run.conversationId === chat.id && run.taskId), 30_000);
-  const task = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Ship the release [[hang:bash]]', assigneeKind: 'agent', assigneeId: manager.id });
+  const task = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Ship the release [[hang:bash]]', to: manager.id });
   await taskWorking;
   await page.locator('.chat-header .chat-live').waitFor({ timeout: 15_000 });
-  const taskLink = page.locator('.working-task', { hasText: task.title });
+  // 13.11.2026: the task a run works on is one click away in the header's working popover (no live block in the history).
+  await page.locator('.chat-header .chat-live').click();
+  const taskLink = page.locator('.working-popover .working-task', { hasText: task.title });
   await taskLink.waitFor();
   await taskLink.click();
   await page.locator('.tasks-detail').waitFor();
   await page.locator('.tasks-detail input').first().waitFor();
   await page.evaluate(id => { location.hash = `#/chat/${id}`; }, chat.id);
-  await page.locator('.working-task', { hasText: task.title }).waitFor();
+  await page.locator('.live-bar .live-bar-line').waitFor();
   await shot('no-stop-00-task-link');
   const idle = rpc.waitFor('agent.activity', event => !event.active.some(run => run.agentId === manager.id), 15_000);
-  await rpc.call('tasks.setStatus', { id: task.id, status: 'cancelled' });
+  await rpc.call('tasks.finish', { id: task.id, status: 'dropped' });
   await idle;
 
   // Preserve the chat-steering regression separately: task work and a chat turn have different wake groups.
@@ -106,9 +108,8 @@ test('Chat without Stop: compose, talk and steer while an agent works; the emerg
   assert.equal(await plusMenu.locator('[role^="menuitem"]:disabled').count(), 0, 'no entry is greyed out');
   await page.keyboard.press('Escape');
   await plusMenu.waitFor({ state: 'hidden', timeout: 5_000 });
-  await page.locator('.working-message').waitFor();
-  // B-047 D5: the live block shows its steps without a click.
-  await page.locator('.working-message .run-items.live-steps').waitFor();
+  // 13.11.2026: who works shows in the live bar above the composer (ui/chat/LiveBar.tsx).
+  await page.locator('.live-bar .live-bar-line').waitFor();
   await shot('no-stop-01-working-empty-light');
 
   // A draft enables Send; calls remain in the header.

@@ -17,7 +17,7 @@ export function task(patch: Partial<TaskView> = {}): TaskView {
   seq++;
   return {
     id: `task_${seq}`, conversationId: 'ch_a', title: `Task ${seq}`, notes: '', status: 'open', assigneeKind: 'agent', assigneeId: MARA,
-    createdBy: 'human', priority: 0, ledger: {}, attempts: 0, sort: seq, rev: 1, createdAt: NOW - seq * 1000, updatedAt: NOW,
+    createdBy: 'human', priority: 0, ledger: {}, sort: seq, rev: 1, createdAt: NOW - seq * 1000, updatedAt: NOW,
     steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'Launch', running: false,
     ...patch,
   };

@@ -3,7 +3,9 @@
 // B-078 (owner 06.11.2026): a "+" beside the company name offers New company / Connect as my other device / Join a
 // company as employee, each a companies.open with its start; picking one calls companies.open (main opens that window
 // and sends this one to the tray). The list is loaded when the bubble mounts and again on each opening, so the fixed-width menu opens at its
-// full height; the PWA and phones never ask for it. No new icons.
+// full height; the PWA and phones never ask for it. No new icons. B-084: inside the Android app (with its port) the
+// menu is the phone sheet (the paired companies with their pictures, Add a company, Settings; one status line);
+// "Forget this phone" left the menu for Settings › Devices.
 // Owns: these assertions on the source (a .tsx file cannot run under node --test). Never: renders or calls a runtime.
 
 import { test } from 'node:test';
@@ -32,13 +34,30 @@ test('one section: the companies (the current one ticked), then Settings; B-078:
   assert.match(source, /<Menu anchor=\{ref\.current\} open=\{adding\}[^\n]*sections=\{\[\{ items: ADD_ITEMS \}\]\}/);
   assert.match(source, /rpc\.call\('companies\.open', params\)\.catch\(\(error: unknown\) => toastError\(error, 'Could not open the company'\)\)/);
   assert.match(source, /if \(!list\.length\) return \[\];/, 'no list (a test profile): no section');
-  assert.match(source, /sections=\{\[\.\.\.companySections\(companies\.value\), \{ items: ITEMS \}\]\}/, 'Settings stays last');
-  assert.match(source, /const ITEMS: MenuItem\[\] = \[\n  \{ label: 'Settings', hint: comboLabel\('mod\+,'\), onSelect: \(\) => go\.settings\(\) \},/);
-  assert.match(source, /\.\.\.\(isPhoneApp\(\) \? \[\{ label: 'Forget this phone', [^\n]*onSelect: forgetThisPhone \}\] : \[\]\),/, 'B-078: only inside a phone app (Android or the iPhone web app)');
+  assert.match(source, / : \[\.\.\.companySections\(companies\.value\), \{ items: ITEMS \}\]\}/, 'Settings stays last');
+  assert.match(source, /const ITEMS: MenuItem\[\] = \[\n  \{ label: 'Settings', hint: comboLabel\('mod\+,'\), onSelect: \(\) => go\.settings\(\) \},\n\];/);
+  assert.doesNotMatch(source, /Forget this phone'/, 'B-084: Forget moved to Settings › Devices');
+  assert.doesNotMatch(source, /forgetThisPhone/);
 });
 
-test('nothing shifts and no new icons: the same fixed-width popover', () => {
+test('B-084 the phone sheet inside the Android app: photo, name, one status line, the paired companies, Add a company, Settings', () => {
+  assert.match(source, /const phone = isAndroidApp\(\) && hasNativePort\(\);/, 'an older app without the port keeps the plain menu');
+  assert.match(source, /sections=\{phone \? phoneSections\(phoneCompanies\.value\) : \[\.\.\.companySections\(companies\.value\), \{ items: ITEMS \}\]\}/, 'the desktop path is unchanged');
+  assert.match(source, /return \[\{ items: \[\.\.\.rows, ADD_COMPANY\] \}, \{ items: ITEMS \}\];/, 'companies, Add a company, then Settings');
+  assert.match(source, /lead: <CompanyPic company=\{company\} \/>/, 'each company with its picture');
+  assert.match(source, /checked: company\.current,\n\s*onSelect: \(\) => \{ if \(!company\.current\) switchCompany\(company\.id\); \}/, 'the current one ticked; a pick lets the app switch');
+  assert.match(source, /\{avatar \? <img src=\{avatar\} alt="" \/> : <span>\{initials\(name\)\}<\/span>\}/, 'the card photo, else initials');
+  assert.match(source, /data-color=\{paletteIndex\(id\)\}/, 'on a colour from the id');
+  assert.match(source, /const ADD_COMPANY: MenuItem = \{ label: 'Add a company', icon: 'plus', description: 'Scan or type another company\\'s code', onSelect: \(\) => \{ addCompany\(\); \} \};/);
+  assert.match(source, /<button type="button" class="profile-status" onClick=\{\(\) => \{ setOpen\(false\); showPcs\(\); \}\}>\{statusLine\(current\?\.name \?\? companyLabel\(profile, null\), phoneStatus\.value\)\}<\/button>/, 'the status line shows the PC picker');
+  assert.match(source, /<HumanAvatar size=\{40\} \/>/);
+});
+
+test('nothing shifts: the same fixed-width popover; the only icon is the plus of Add a company', () => {
   assert.match(source, /width=\{256\}/);
-  assert.doesNotMatch(source, /icon:/, 'menu items stay text only');
+  assert.equal(source.match(/icon:/g)?.length, 1, 'menu items stay text only, but for Add a company');
   assert.doesNotMatch(source, /<Icon\b/);
+  const css = readFileSync(path.join(UI, 'styles', 'settings.css'), 'utf8');
+  assert.match(css, /\.profile-status \{[^}]*height: 32px;[^}]*white-space: nowrap;/, 'the status line keeps one fixed height');
+  assert.match(css, /\.menu-item > \.company-pic \{ flex: none; width: 24px; height: 24px;/);
 });

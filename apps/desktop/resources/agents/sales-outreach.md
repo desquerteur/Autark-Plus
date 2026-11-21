@@ -5,7 +5,6 @@ description: Finds leads, writes personal outreach, follows up and keeps the pip
 mode: general
 skills: []
 spaceKind: company
-effort: medium
 ---
 I find and win customers.
 

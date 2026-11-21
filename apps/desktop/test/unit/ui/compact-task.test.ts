@@ -17,9 +17,9 @@ test('a colleague\'s own finished task stays a full card (only agents\' tasks sh
 
 test('a finished task an agent made, or one made during a run, is one line; the person\'s own task stays a card', () => {
   assert.equal(isCompact(task({ status: 'done', createdBy: 'ag_tom' }), meta()), true);
-  assert.equal(isCompact(task({ status: 'working', createdBy: 'ag_tom' }), meta()), false, 'work still going stays full');
+  assert.equal(isCompact(task({ status: 'open', createdBy: 'ag_tom' }), meta()), false, 'work still going stays full');
   assert.equal(isCompact(task({ status: 'done', createdBy: 'human' }), meta()), false);
-  assert.equal(isCompact(task({ status: 'cancelled', createdBy: 'human' }), meta('run_1')), true, 'meta.fromRun marks it as run work');
+  assert.equal(isCompact(task({ status: 'dropped', createdBy: 'human' }), meta('run_1')), true, 'meta.fromRun marks it as run work');
   assert.equal(compactState(task({ status: 'done' })), 'Done');
-  assert.equal(compactState(task({ status: 'cancelled' })), 'Cancelled');
+  assert.equal(compactState(task({ status: 'dropped' })), 'Cancelled');
 });

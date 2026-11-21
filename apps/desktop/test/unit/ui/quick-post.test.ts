@@ -17,7 +17,7 @@ import type { PostDeps } from '../../../src/ui/tasks/quick-post.ts';
 
 const view = (id: string, patch: Partial<TaskView> = {}): TaskView => ({
   id, title: id, notes: '', status: 'open', assigneeKind: 'team', createdBy: 'human',
-  priority: 0, ledger: {}, attempts: 0, sort: 0, rev: 1, createdAt: 1, updatedAt: 1, steps: [], progress: { done: 0, total: 0 },
+  priority: 0, ledger: {}, sort: 0, rev: 1, createdAt: 1, updatedAt: 1, steps: [], progress: { done: 0, total: 0 },
   conversationTitle: '', running: false, ...patch,
 });
 

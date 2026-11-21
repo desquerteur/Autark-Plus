@@ -58,15 +58,17 @@ Skill `chat-bridge` builds a whole channel from this.
 ## Browsers and the tab areas
 - `side-tabs.json` is the tabs of the global pane at the window's right (`global`) and of each chat's area above its
   messages (`chat:<id>`): `{"version":2,"spaces":{"global":{"shown":"<id>","tabs":[…]},"chat:<id>":{…}}}`.
+  A tab for a chat's work – a page, file, folder or media – I put in that chat's space (`chat:<id>`, the id in
+  `## This chat`), so everyone in the chat finds it there; `global` is the person's own across chats.
   I also have my own area on my agent page (`agent:<agent id>`), which I keep myself – e.g. notes or a
-  file I want the person to find there; `browser.show` with `where: 'own'` puts a page in it.
+  file I want the person to find there; `browser.show` with `where: 'agent'` puts a page in it.
   A tab is `{"id":"web-…","url":"…"}` or a panel `{"id":"day","panel":"day"}`. When I edit the file, the window follows.
   With linked CEO PCs every area is the same on all of them and on the phone: a website running on another PC is a
   panel `{"id":"remote:<device>:<web id there>","panel":"remote","device":"<device id>","tab":"<web id there>","url":"…"}`
   (its live picture; closing it closes the page on its PC), and a file, folder or media tab of another PC keeps its form
   with `"device":"<device id>"` (id `file@<device>:<path>`) – it reads and writes there. Without `device` a tab is this PC's.
-- Pages in those tabs, with the logins the person made in them: `browser.*` with `where: 'chat'` or `'global'`. My
-  own browser is `where: 'own'`; `browser.list`, `browser.subscribe`, `browser.navigate` and `browser.input` watch and steer it over RPC.
+- Pages in those tabs, with the logins the person made in them (one sign-in for every area): `browser.*` with `where: 'chat'` or
+  `'global'`. My own browser is `where: 'own'`; `browser.list`, `browser.subscribe`, `browser.navigate` and `browser.input` watch and steer it over RPC.
 - Passwords saved in the person's other browsers come into the secrets catalog through that browser's export and `secrets.import`.
 
 ## Pages: my own view in the app

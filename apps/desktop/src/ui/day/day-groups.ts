@@ -10,6 +10,8 @@
 //   Later     – snoozed, repeating waits, timers more than 12 h ahead, due or planned on a later day.
 // Another day than today shows that day's blocks, and under Unplanned the to-dos for that day without a block
 // (Task.window.date – typed while that day was shown, or "Morgen: …"); today lists such a to-do under Later.
+// B-080 (live: the badge said 9 while the next day said "Nothing planned"): Needs you stays on top on every day shown,
+// by the badge's own rule (needsYou with today's end, as store.ts forYouCount), so the day and the badge agree.
 // Owns: these rules (unit-tested in test/unit/day-ui/day-groups.test.ts). Never: imports the store,
 // rpc or the DOM – callers pass data and the time in.
 
@@ -18,7 +20,8 @@ import { HUMAN_ID } from '../../shared/ids.ts';
 import type { Task, TaskView } from '../../shared/model/tasks.ts';
 import { isLater, needsYou, timerAt, waitsForRing } from '../../shared/model/todo-later.ts';
 import { compareTodos } from '../tasks/todo-time.ts';
-import { stuckOf } from '../tasks/work-model.ts';
+import { stuckOf } from '../../shared/model/task-stuck.ts';
+import { waitsOnThePerson } from '../tasks/work-model.ts';
 
 export interface DayGroups<T> { needsYou: T[]; today: T[]; unplanned: T[]; later: T[] }
 export type DayGroupName = keyof DayGroups<unknown>;
@@ -28,7 +31,7 @@ export interface DayGroupInput {
   /** Local midnight of the day shown and of the day after it (the profile zone). */
   dayStart: number;
   dayEnd: number;
-  /** True when the day shown is today (else only its blocks and the to-dos for it are listed). */
+  /** True when the day shown is today (else Needs you, that day's blocks and the to-dos for it are listed). */
   isToday: boolean;
   /** The day shown (YYYY-MM-DD, profile zone): matches a to-do's window.date. */
   date?: string;
@@ -74,6 +77,7 @@ export function dayGroups<T extends Grouped>(list: readonly T[], input: DayGroup
   const out: DayGroups<T> = { needsYou: [], today: [], unplanned: [], later: [] };
   for (const task of list) {
     if (input.isToday) { out[groupOf(task, input)].push(task); continue; }
+    if (needsYou(task, input.now)) { out.needsYou.push(task); continue; } // B-080: the badge's rule, whatever day is shown
     const slot = input.slots.get(task.id);
     if (slot && slot.startAt < input.dayEnd && slot.endAt > input.dayStart) out.today.push(task);
     else if (!plannedSlot(task, input.slots) && input.date && task.window?.date === input.date && !waitsForRing(task)) out.unplanned.push(task);
@@ -97,12 +101,12 @@ export interface HandedOffRow<T> {
   done: boolean;
 }
 
-type HandedTask = Pick<TaskView, 'id' | 'title' | 'status' | 'assigneeKind' | 'assigneeId' | 'parentId' | 'updatedAt'> & Parameters<typeof stuckOf>[0];
+type HandedTask = Pick<TaskView, 'id' | 'title' | 'status' | 'assigneeKind' | 'assigneeId' | 'parentId' | 'updatedAt' | 'running'> & Parameters<typeof stuckOf>[0];
 
 /**
  * The handed-off rows (lib/day-store.ts handedOff: what the person created that others own): its
  * owner and state – the person's own open step under it first ("Prepared – your step: …"), done
- * ones last. "Stuck" is Work's rule (tasks/work-model.ts stuckOf) at `now`. `nameOf` names an
+ * ones last. "Stuck" is the shared rule (shared/model/task-stuck.ts) at `now`. `nameOf` names an
  * agent, a person or the team.
  */
 export function handedOffRows<T extends HandedTask>(
@@ -117,11 +121,10 @@ export function handedOffRows<T extends HandedTask>(
     let text: string;
     if (done) text = 'Done ✓';
     else if (step) text = `Prepared – your step: ${step.title}`;
-    else if (!name && task.status !== 'blocked' && task.status !== 'needs_you') text = 'Not assigned yet'; // Work: stuck, "No owner yet"
-    else if (stuckOf(task, now)) text = 'Stuck';
-    else if (task.status === 'needs_you') text = 'Needs you';
     else if (!name) text = 'Not assigned yet';
-    else if (task.status === 'working') text = `${name} working`;
+    else if (stuckOf(task, now)) text = 'Stuck';
+    else if (waitsOnThePerson(task)) text = 'Needs you';
+    else if (task.running) text = `${name} working`;
     else if (task.status === 'waiting') text = `${name} waiting`;
     else text = `With ${name}`;
     return { task, text, done, ...(step ? { step } : {}) };

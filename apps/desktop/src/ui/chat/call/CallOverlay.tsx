@@ -2,7 +2,9 @@
 // shell, Shell.tsx places it with the global overlays): big the agent's avatar inside a ring that pulses with its
 // voice, its name, the status ("Connecting…", "Listening", "Speaking", "Working…") with the call's clock, a wave of
 // who is heard (CallWave.tsx – real levels of microphone and playback), live captions, a small line about agents
-// still working in the background, and the controls: Mute, Audio output, Live captions and the red Hang up.
+// still working in the background, and the controls: Mute, Audio output, Live captions, B-085's Camera and Screen (not
+// with realtime voice, which sends audio only – call-view.ts; the preview with its cut-out, CallShare.tsx, sits in the
+// stage under the captions) and the red Hang up. What this device shows ends with its call.
 // Minimize (or Esc) shrinks it to a small floating window – avatar, name, status, Mute, Hang up – that can be dragged
 // and opens full size again on a click; it stays while the person moves through the app. The phone (PWA, same
 // component) gets the same view for its narrow screen: full height with the controls at the thumb, the mini window as
@@ -21,6 +23,9 @@ import { callCaption, callNow, callPhase, callUi, hangUp, setCallView, toggleCap
 import type { CallUi } from './call-session.ts';
 import { callSink, setCallSink, sinkSupported } from './call-levels.ts';
 import { useCallLevels } from './CallWave.tsx';
+import { CallShare } from './CallShare.tsx';
+import { callShare, canShare, stopShare, toggleShare, type ShareKind } from './call-view.ts';
+import { realtimeChat } from './realtime-call.ts';
 
 const MINI_KEY = 'wf.callMini';
 /** The mini window's first place: beside the rail, at the bottom (over the chat list, never over the composer's Send). */
@@ -95,6 +100,11 @@ function CallFull(props: { ui: CallUi }) {
   const background = useBackground(ui.conversationId);
   const caption = callCaption.value;
   const output = useOutputMenu();
+  // B-085 (owner 19.11.2026): show the camera or the screen – its picture goes with the person's lines (call-view.ts)
+  const shows = callShare.value?.conversationId === ui.conversationId ? callShare.value.kind : undefined;
+  const share = (kind: ShareKind, icon: IconName, label: string) => realtimeChat.value !== ui.conversationId && canShare(kind) && (
+    <Control icon={icon} label={shows === kind ? `Stop ${label.toLowerCase()}` : label} pressed={shows === kind} onClick={() => void toggleShare(ui.conversationId, kind)} />
+  );
   useEffect(() => {
     const returnTo = document.activeElement as HTMLElement | null;
     requestAnimationFrame(() => root.current?.focus({ preventScroll: true })); // the view itself: no ring on a button nobody chose; Tab goes on to its controls
@@ -135,12 +145,15 @@ function CallFull(props: { ui: CallUi }) {
               : <p class="call-captions-empty">{CALL_TEXT.nothingYet}</p>}
           </div>
         )}
+        <CallShare conversationId={ui.conversationId} />
         {background && <p class="call-background"><span class="call-background-dot" aria-hidden="true" />{background}</p>}
       </div>
       <div class="call-controls" role="group" aria-label="Call controls">
         <Control icon={ui.muted ? 'microphone-slash' : 'microphone'} label={ui.muted ? CALL_TEXT.unmute : CALL_TEXT.mute} pressed={ui.muted} onClick={toggleMute} />
         <Control icon="speaker-high" label={CALL_TEXT.output} expanded={output.anchor !== null} onClick={output.open} />
         <Control icon={ui.captions ? 'subtitles' : 'subtitles-slash'} label={ui.captions ? CALL_TEXT.captionsOn : CALL_TEXT.captionsOff} pressed={ui.captions} onClick={toggleCaptions} />
+        {share('camera', 'camera', 'Camera')}
+        {share('screen', 'monitor', 'Screen')}
         <Control icon="phone-disconnect" label={CALL_TEXT.hangUp} danger onClick={hangUp} />
       </div>
       <Menu anchor={output.anchor} open={output.anchor !== null} onClose={output.close} placement="top-start" label={CALL_TEXT.output} sections={output.sections} class="call-output-menu" />
@@ -221,6 +234,8 @@ function CallMini(props: { ui: CallUi }) {
 /** The call view of this device's call (nothing while no call is open). */
 export function CallOverlay() {
   const ui = callUi.value;
+  const id = ui?.conversationId;
+  useEffect(() => (id ? () => stopShare(id) : undefined), [id]); // B-085: what this device shows ends with its call
   if (!ui) return null;
   return ui.view === 'full' ? <CallFull key={`full-${ui.startedAt}`} ui={ui} /> : <CallMini key={`mini-${ui.startedAt}`} ui={ui} />;
 }

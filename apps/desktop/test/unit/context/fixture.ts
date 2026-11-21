@@ -47,7 +47,7 @@ export interface FixtureOptions {
   decisions?: DecisionService;
   skills?: SkillInfo[];
   promptsDir?: string;
-  runner?: ContextDeps['runner'];
+
   fileText?: (id: string) => Promise<string | undefined>;
 }
 
@@ -83,7 +83,7 @@ export function fixture(options: FixtureOptions = {}) {
   (h.org as unknown as { spaces(): Space[] }).spaces = () => spaces;
   const manager = h.org.add(agent('ag_mia', 'Mia', { role: 'Manager' }));
   const vid = h.org.add(agent('ag_vid', 'Vic', { role: 'Video editor', managerId: manager.id, team: 'Marketing', spaceId: 'sp_co', instructions: 'Prefer short cuts. Password hunter2 is not for chats.' }));
-  const context = new Context({ services: () => s, runner: options.runner ?? false, promptsDir: options.promptsDir });
+  const context = new Context({ services: () => s, promptsDir: options.promptsDir });
   const subconscious = new SubconsciousImpl({ services: () => s });
   s.context = context;
   s.subconscious = subconscious;
@@ -100,3 +100,13 @@ export function hex(char: string): string {
 }
 
 export type { Agent };
+
+/**
+ * 13.11.2026: chat lines with their labels ("[ch_… "T" · Name · HH:MM #n] ") read back in the short form "[HH:MM] Name: "
+ * (the owner without "(CEO)"; a system line's "[ch_… · HH:MM #n] · " as "· "), for checks of what lines say.
+ */
+export function asSaid(text: string): string {
+  return text.split('\n').map((line) => line
+    .replace(/^\[[^\]\n]*? · (\d\d:\d\d) #\d+\] · /, '· ')
+    .replace(/^\[[^\]\n]*? · ([^·\]\n]+?) · (\d\d:\d\d) #\d+\] /, (_all, who: string, at: string) => `[${at}] ${who.replace(/ \(CEO\)/, '')}: `)).join('\n');
+}

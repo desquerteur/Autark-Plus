@@ -112,7 +112,7 @@ test('demo/test mode: a registered fake engine serves the custom-server accounts
 test('two accounts of one provider share a model row', async () => {
   const h = setup();
   h.accounts.upsert(account('acc_c1', 'claude'), false);
-  h.accounts.upsert(account('acc_c2', 'claude', { priority: 1, rotation: true }), false);
+  h.accounts.upsert(account('acc_c2', 'claude', { priority: 1 }), false);
   h.engine('claude').lists.set('claude', [{ model: 'claude-opus-5-5', name: 'Claude Opus 5.5', efforts: ['high'] }]);
   await h.catalog.refresh({ force: true });
   assert.deepEqual(h.catalog.get('claude:claude-opus-5-5')!.accounts.sort(), ['acc_c1', 'acc_c2']);

@@ -1,7 +1,7 @@
 // Events the runtime pushes to subscribed clients (and that runtime modules publish on the
 // in-process bus). Owns: event names → payload types and which topic carries them.
-// Never: sends full state snapshots for small changes – events are deltas. B-075: a run's streaming answer has no
-// event of its own – its row is written (body and meta.live, throttled) and goes out as message.updated.
+// Never: sends full state snapshots for small changes – events are deltas. Who works for a chat travels in its
+// summary (ConversationSummary.live, conversation.upserted – runtime/chat/live.ts).
 
 import type { Agent, Space } from '../model/org.ts';
 import type { ConversationSummary, Message } from '../model/chat.ts';
@@ -19,6 +19,7 @@ import type { BrowserFrame, BrowserViewState } from '../model/browser.ts';
 import type { PointerState } from '../model/pointers.ts'; // B-055
 import type { CalendarEvent } from '../model/calendar.ts';
 import type { Project } from '../model/project.ts'; // AF-018
+import type { LiveCall } from '../model/call.ts'; // B-081
 import type { Topic } from './protocol.ts';
 
 export interface EventMap {
@@ -28,9 +29,13 @@ export interface EventMap {
   'message.created': Message;
   'message.updated': Message;
   'message.removed': { id: string; conversationId: string };
+  /** B-081: the ringing and running calls changed (shared/model/call.ts LiveCall; topic 'chats': every device of the person). */
+  'calls.live': { calls: LiveCall[] };
   // tasks
   'task.upserted': TaskView;
   'task.removed': { id: string; conversationId?: string }; // no conversationId: a chat-free task (B-054)
+  /** Runtime only: a colleague (per_…) is told about a task – given to them, due, or ended after they gave it (runtime/tasks/give.ts tell → pwa/person-push.ts). */
+  'person.notice': { personId: string; kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info'; title: string; body: string; taskId?: string; conversationId?: string };
   'schedule.upserted': Schedule;
   'schedule.removed': { id: string };
   /** B-041 My day (shared/model/calendar.ts): a calendar row of a member was created or changed (topic 'tasks', 'todo' devices). */
@@ -42,11 +47,13 @@ export interface EventMap {
   /** B-041: a member's connected calendars changed – read them with calendar.sources (topic 'system', owner only). */
   'calendar.sources': { ownerId: string };
   /** A connector was added, changed (status, tools) or removed – read them with apps.list
-   *  (topic 'system', owner only; `id` the connector that changed). */
+   *  (topic 'system', secure Settings devices; `id` the connector that changed). */
   'apps.changed': { id: string };
   /** A skill was saved or deleted (skills are plain SKILL.md folders); topic 'system' (owner). */
   'skills.changed': { name?: string };
   // org
+  /** To a device (phone/browser) without `instructions` when only status, step note and time changed since that connection
+   *  got the agent (runtime/rpc/scopes.ts deviceAgent; the UI keeps the known ones). A new step note alone is no agent.upserted. */
   'agent.upserted': Agent;
   'agent.removed': { id: string };
   'project.upserted': Project; // AF-018: a project changed (added, renamed, git state, a session)
@@ -70,6 +77,9 @@ export interface EventMap {
   'device.removed': { id: string };
   'pwa.updated': PwaState;
   'update.state': UpdateState; // forwarded from main (updater lives in main)
+  /** F03 (16.11.2026): how the desktop broker's setup at this app's start ended (main/broker-setup.ts, forwarded from main);
+   *  the computer tools say it while the secure desktop is out of reach (runtime/computer/broker.ts). */
+  'broker.setup': { state: 'installed' | 'declined' | 'failed'; code?: number; script: string };
   'feedback.upserted': FeedbackReport;
   'knowledge.upserted': KnowledgeItem;
   /** CTX5: items forgotten permanently – every version of the forgotten item's correction chain (topic: system). */
@@ -81,9 +91,11 @@ export interface EventMap {
   'media.upserted': MediaInfo;
   /** A chat bridge was created or changed status (disconnect = status 'stopped'). */
   'bridge.upserted': Bridge;
-  /** Something that deserves the human's attention (UI decides toast vs OS notification).
+  /** Something that deserves the human's attention (UI decides toast vs OS notification); 'call': an agent rings (the window
+   *  shows its own call notice from calls.live; the Android app shows an incoming call notice, and the same kind with
+   *  `call.until` already past ends that notice wherever the ring was answered, declined or missed).
    *  `toast` (C3): the runtime's decision for the in-window toast (the chat's notification level); absent from older runtimes. */
-  'notify': { kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info'; title: string; body: string; conversationId?: string; taskId?: string; toast?: boolean };
+  'notify': { kind: 'todo' | 'blocker' | 'important' | 'done' | 'reply' | 'info' | 'call'; title: string; body: string; conversationId?: string; taskId?: string; toast?: boolean; call?: { id: string; until: number } };
   /** MP7: agents' computer use on this PC (at most one per second) and the person's Stop/Resume (topic: system). */
   'computer.activity': ComputerActivityState;
   /** 21.10. 17:09: the person's emergency stop of all agent work on this PC and its Resume (topic: system). */
@@ -117,6 +129,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'conversation.upserted':
     case 'conversation.removed':
     case 'bridge.upserted':
+    case 'calls.live': // B-081: rings and running calls reach every chat-capable device
       return 'chats';
     case 'media.upserted':
       return value.conversationId ? `chat:${value.conversationId}` : 'chats';
@@ -135,6 +148,7 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'agent.activity':
     case 'space.upserted':
     case 'person.upserted': // F-52: people of the organisation (shared/model/people.ts)
+    case 'person.removed': // F14: one who never joined left for good
       return 'org';
     case 'run.upserted':
     case 'split.upserted': // B-057: a split group of that agent (shared/model/splits.ts)
@@ -150,8 +164,8 @@ export function topicOf(event: EventName, data: unknown): Topic {
     case 'usage.updated':
     case 'models.updated':
       return 'providers';
-    case 'calendar.sources': // B-041: connected calendars – owner only (rpc/scopes.ts lets no device hear it)
-    case 'apps.changed': // connectors – owner only (rpc/scopes.ts lets no device hear it)
+    case 'calendar.sources': // B-041: connected calendars (an owner id only) – the owner and a secure 'settings' device (rpc/scopes.ts)
+    case 'apps.changed': // Connector state carries an id only; safe Settings devices may refresh their redacted list.
       return 'system';
     default:
       return 'system';

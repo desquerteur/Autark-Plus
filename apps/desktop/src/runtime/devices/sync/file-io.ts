@@ -5,7 +5,7 @@
 // Owns: these reads and writes. Never: decides which paths may be read or written (the callers do) or logs content.
 
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { copyFileSync, createReadStream, renameSync, rmSync, statSync } from 'node:fs';
 import { appendFile, copyFile, lstat, open, rename, rm } from 'node:fs/promises';
 
 /** B-077: 1 MiB (was 4): a piece is one frame on the link, and the 15 s keepalive pings must not wait behind it on a slow path. */
@@ -47,6 +47,20 @@ export async function pullPieces(temp: string, get: (offset: number) => Promise<
 }
 
 const REFUSED: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+/** At most this many bytes are copied in one synchronous step; a bigger file waits for its next try (files.ts). */
+const SYNC_COPY_MAX = 4 * 1024 * 1024;
+
+/** replaceWith in one synchronous step (files.ts: no save here can land between the last look and the file in place). */
+export function replaceWithSync(temp: string, file: string, move: (from: string, to: string) => void = renameSync): void {
+  try {
+    move(temp, file);
+  } catch (error) {
+    if (!REFUSED.has(String((error as NodeJS.ErrnoException)?.code)) || statSync(temp).size > SYNC_COPY_MAX) throw error;
+    copyFileSync(temp, file);
+    rmSync(temp, { force: true });
+  }
+}
 
 /** Puts `temp` in place of `file` (same folder): a rename (`move`, tests), or a copy over the target where the rename is refused. */
 export async function replaceWith(temp: string, file: string, move: (from: string, to: string) => Promise<void> = rename): Promise<void> {
