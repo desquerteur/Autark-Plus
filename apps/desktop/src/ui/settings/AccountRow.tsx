@@ -17,7 +17,7 @@ import { askText, confirm } from '../lib/dialog.tsx';
 import { limitSlots, nextCredit, otherWindows, PLAN_SLOTS, resetButtonLabel, resetClock, resetConfirmText, resetCount, resetExpiryText, resetOutcomeText } from '../lib/limits.ts';
 import type { MenuItem, MenuSection } from '../lib/popover.tsx';
 import { rpc } from '../lib/rpc.ts';
-import { accounts, models } from '../lib/store.ts';
+import { accounts, models, signInFailures } from '../lib/store.ts';
 import { shortModelName } from '../chat/live-text.ts';
 import { serviceOfAccount } from '../../shared/model/providers-connect.ts';
 import { pushToast } from '../lib/toasts.ts';
@@ -150,7 +150,9 @@ export function AccountRow(props: { account: Account; siblings: readonly Account
   const cli = account.auth === 'cli';
   const signIn = cli && SIGN_IN[account.provider] !== undefined;
   const plan = cli && isPlanProvider(account.provider);
-  const repair = account.state === 'needs_login' && !signIn ? repairText(account) : undefined;
+  // #24: an official sign-in the agent refused says why (Gemini CLI: Google no longer serves personal accounts)
+  const refused = account.state === 'needs_login' ? signInFailures.value[account.id]?.message : undefined;
+  const repair = account.state === 'needs_login' && !signIn ? repairText(account) : refused;
   const hint = hintOf(account, repair, listed.length);
   const menu = (): MenuSection[] => {
     const order: MenuItem[] = [];

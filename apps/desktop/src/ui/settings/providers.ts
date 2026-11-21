@@ -70,8 +70,9 @@ export const SIGN_IN: Partial<Record<ProviderId, SignInKind>> = {
 };
 
 /** AF-024: what the Google Gemini panel (gemini-add.tsx) says about its two ways. */
-export const GEMINI_HINT = 'Sign in with Google uses your Gemini plan through Gemini CLI (installed if missing – it needs Node.js); '
-  + 'each account keeps its own sign-in, so you can add several. An API key from Google AI Studio is billed per use.';
+export const GEMINI_HINT = 'Sign in with Google runs Gemini CLI (installed if missing – it needs Node.js) and works only for Google Workspace '
+  + 'accounts with Gemini Code Assist Standard or Enterprise – Google stopped personal accounts in June 2026. '
+  + 'An API key from Google AI Studio works for everyone and is billed per use.'; // desquerteur/Autark-Plus#24
 
 /** AF-024: the name a new Google Gemini account gets – "Gemini", then "Gemini 2", "Gemini 3" … (a name in use is skipped). */
 export function nextGeminiName(list: readonly Pick<Account, 'provider' | 'label'>[]): string {

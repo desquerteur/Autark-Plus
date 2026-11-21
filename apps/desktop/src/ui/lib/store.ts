@@ -42,6 +42,8 @@ export const tasks = signal<TaskView[]>([]);
 export const todos = signal<TaskView[]>([]);
 export const settings = signal<Settings | null>(null);
 export const accounts = signal<Account[]>([]);
+/** desquerteur/Autark-Plus#24: account id → why its own sign-in was refused (account.sign_in_failed), until it works. */
+export const signInFailures = signal<Readonly<Record<string, { message: string; at: number }>>>({});
 export const usage = signal<UsageSummary[]>([]);
 export const activity = signal<AgentActivity[]>([]);
 export const models = signal<ModelInfo[]>([]);

@@ -99,7 +99,10 @@ export class AccountServiceImpl implements AccountServiceContract {
       ...store, checkOnce: (id) => this.monitor.checkOnce(id), env: () => this.env(), now: () => this.now(), demo: deps.demo,
       scan: () => scan({ finder: deps.finder, supervisor: deps.supervisor, env: deps.env, now: () => this.now(), cwd, launches: this.launches, version: deps.version, ...deps.detectDeps }),
     });
-    this.acp = new AcpPlans({ ...store, check: (id) => this.monitor.checkNow(id), signIns: this.signIns, engine: () => this.deps.engines().get('acp') });
+    this.acp = new AcpPlans({
+      ...store, check: (id) => this.monitor.checkNow(id), signIns: this.signIns, engine: () => this.deps.engines().get('acp'),
+      failed: (id, message) => this.deps.bus.emit('account.sign_in_failed', { id, message }), // #24
+    });
     this.homes = new CliHomes({ ...store, accounts: deps.paths.accounts, login: (id) => this.login(id, { page: true }), require: (id) => this.require(id), mkdir: deps.mkdir, rmdir: deps.rmdir });
     this.resets = new Resets({ get: (id) => this.repo.get(id), engine: () => this.deps.engines().get('codex'), check: (id) => this.monitor.checkNow(id) });
     if (deps.settings) {
@@ -234,12 +237,12 @@ export class AccountServiceImpl implements AccountServiceContract {
   }
 
   /**
-   * #24: answers as soon as the CLI is there. The rescan after a fresh install runs in the background – a full scan
-   * (every CLI's status, version and ACP probe) can take minutes and kept the plan flow on "Installing…".
+   * accounts.install: done once the CLI is found; the fresh install's rescan runs in the background like ensureCli's.
+   * desquerteur/Autark-Plus#24: awaiting that full scan (every CLI's status, Gemini CLI's cold ACP start: ~1–2 min on
+   * lexivers) kept the plan flow on "Installing …" long after the install had finished.
    */
   async install(provider: InstallableCli): Promise<void> {
-    const installed = await installCli(provider, { supervisor: this.deps.supervisor, finder: this.deps.finder, env: this.deps.env, demo: this.deps.demo });
-    if (installed) void this.detect(true).catch(() => undefined);
+    await this.ensureCli(provider);
   }
 
   /** B-051 L3: the plan's CLI before its account – throws the install error (nothing created); a fresh install rescans in the background. */

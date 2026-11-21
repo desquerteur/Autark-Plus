@@ -30,6 +30,8 @@ export interface AcpPlanDeps {
   signIns: SignIns;
   /** The ACP engine (its authMethods / authenticate hooks). */
   engine(): unknown;
+  /** desquerteur/Autark-Plus#24: announces an agent's refused sign-in with its reason (AccountService: 'account.sign_in_failed'). */
+  failed?(id: string, message: string): void;
 }
 
 export class AcpPlans {
@@ -69,7 +71,11 @@ export class AcpPlans {
     const started = startAuthentication(this.deps.engine(), account, spec);
     const ended = started
       .then(({ done }) => done)
-      .then(async () => { if (!this.disposed) await this.deps.check(account.id); })
+      .then(async (end) => {
+        if (this.disposed) return;
+        if (!end.ok && end.message) this.deps.failed?.(account.id, end.message); // #24: the reason first, then the check
+        await this.deps.check(account.id);
+      })
       .catch(() => undefined)
       .finally(() => { if (this.signingIn.get(account.id) === ended) this.signingIn.delete(account.id); });
     this.signingIn.set(account.id, ended);
