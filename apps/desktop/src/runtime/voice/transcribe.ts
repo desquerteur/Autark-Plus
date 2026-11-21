@@ -36,7 +36,7 @@ export { audioExtension, LANGUAGES_FIELD, languageCode, MAX_AUDIO_BYTES, PIECE_M
 export type { FetchFn, Heard, HeardPart } from './transcribe-endpoint.ts';
 
 /** Providers without an OpenAI-compatible /audio/transcriptions (plans, CLIs, media-only APIs). */
-const NO_TRANSCRIPTION = new Set(['codex', 'claude', 'anthropic', 'gemini-cli', 'copilot', 'kimi-cli', 'elevenlabs', 'fal']);
+const NO_TRANSCRIPTION = new Set(['codex', 'claude', 'anthropic', 'gemini-cli', 'copilot', 'kimi-cli', 'grok-cli', 'elevenlabs', 'fal']);
 const NOT_SET_UP = 'Speech to text is not set up yet: this PC downloads its speech model by itself (Settings › Models › Speech to text), or connect an OpenAI or OpenAI-compatible account with a transcription model.';
 /** A dictation transcribes the take it uploaded just before (the run itself takes ≤ 120 s) … */
 export const FRESH_TAKE_MS = 5 * 60_000;

@@ -42,7 +42,7 @@ export const SECTIONS: readonly SectionInfo[] = [
   // Listed everywhere (B-078: it holds the former Voice page); its providers and uses show where accounts.detect is allowed.
   { id: 'models', title: 'Models', icon: 'plugs', file: SETTINGS_FILE, requires: [], keywords: [
     'codex', 'claude', 'plan', 'account', 'provider', 'login', 'sign in', 'api key', 'openai', 'anthropic', 'openrouter', 'gemini', 'deepinfra', 'mistral',
-    'ollama', 'lm studio', 'llama.cpp', 'local server', 'install', 'limits', 'usage', 'quota', 'cost', 'kimi', 'copilot', 'reset', 'base url', 'endpoint', 'compatible',
+    'ollama', 'lm studio', 'llama.cpp', 'local server', 'install', 'limits', 'usage', 'quota', 'cost', 'kimi', 'copilot', 'grok', 'xai', 'supergrok', 'reset', 'base url', 'endpoint', 'compatible',
     'work', 'decisions', 'decision model', 'embeddings', 'vector', 'speech to text', 'text to speech', 'images', 'video', 'music', 'sound effects', 'this pc', 'download model',
     'set up with ai', 'groq', 'elevenlabs', 'fal', 'best', 'balanced', 'cheaper', 'model choice', 'another account', 'key variable', 'environment variable', 'rename',
     // B-078: the Voice page joined Models

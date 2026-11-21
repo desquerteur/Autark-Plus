@@ -412,7 +412,7 @@ export const TYPE_DOCS: Record<string, string> = {
   "ProposedAgent": "interface ProposedAgent { key: string; name: string; role: string; instructions: string; mode: string; template?: string; skills: string[]; reportsTo?: string; companionOf?: string; tasks?: ProposedTask[]; include: boolean; }",
   "ProposedTask": "interface ProposedTask { title: string; body: string }",
   "ProviderEntry": "interface ProviderEntry { name?: string; protocol?: ProviderProtocol; url?: string; key?: string; models?: Array<string | ProviderModelEntry>; }",
-  "ProviderId": "type ProviderId = | 'codex' | 'claude' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'xai' | 'deepseek' | 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm' | 'compatible' | 'gemini-cli' | 'copilot' | 'kimi-cli' | 'groq' | 'elevenlabs' | 'fal' | 'decision-api'",
+  "ProviderId": "type ProviderId = | 'codex' | 'claude' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'xai' | 'deepseek' | 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm' | 'compatible' | 'gemini-cli' | 'copilot' | 'kimi-cli' | 'grok-cli' | 'groq' | 'elevenlabs' | 'fal' | 'decision-api'",
   "ProviderModelEntry": "interface ProviderModelEntry { id: string; name?: string; uses?: ModelUse[] }",
   "ProviderProtocol": "type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]",
   "QuickTargetKind": "type QuickTargetKind = 'agent' | 'branch' | 'team' | 'person' | 'me'",

@@ -43,6 +43,7 @@ test('detect: CLIs with version and login state, keys stripped from their enviro
     { provider: 'gemini-cli' }, // the ACP plan CLIs report their provider id (PR8)
     { provider: 'copilot' },
     { provider: 'kimi-cli' }, // B-044: Kimi Code on the ACP engine
+    { provider: 'grok-cli' }, // #28: Grok Build on the ACP engine
   ]);
   assert.deepEqual(report.envKeys, ['OPENAI_API_KEY'], 'set and non-blank table names only');
   assert.deepEqual(report.tailscale, { running: true, dnsName: 'pc.tail1234.ts.net' });

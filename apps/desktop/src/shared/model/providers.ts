@@ -24,6 +24,7 @@ export type ProviderId =
   | 'gemini-cli' // Gemini plan (Google sign-in) via the official Gemini CLI on the ACP engine (PR8)
   | 'copilot' // GitHub Copilot plan via the official Copilot CLI on the ACP engine (PR8)
   | 'kimi-cli' // Kimi Code membership via the official Kimi Code CLI on the ACP engine (B-044)
+  | 'grok-cli' // SuperGrok / X Premium+ via xAI's official Grok Build CLI (`grok agent stdio`) on the ACP engine (desquerteur/Autark-Plus#28)
   | 'groq' // B-058: Groq API key (OpenAI-compatible: chat, /audio/transcriptions, /models) on the compatible engine
   | 'elevenlabs' // B-058: ElevenLabs API key – media only (speech, music, sound effects; runtime/media/providers), no chat engine
   | 'fal' // B-058: fal.ai API key – media only (video, music, sound effects; queue API), no chat engine
@@ -204,7 +205,7 @@ export interface UsageSummary {
 /** Result of scanning the PC for engines, logins and local model servers. */
 export interface DetectionReport {
   // `dismissed` (PR5): the person removed this login or server – detection no longer adds it ("Add again").
-  clis: Array<{ provider: 'codex' | 'claude' | 'gemini-cli' | 'copilot' | 'kimi-cli'; path?: string; version?: string; loggedIn?: boolean; method?: string; dismissed?: boolean }>;
+  clis: Array<{ provider: 'codex' | 'claude' | 'gemini-cli' | 'copilot' | 'kimi-cli' | 'grok-cli'; path?: string; version?: string; loggedIn?: boolean; method?: string; dismissed?: boolean }>;
   localServers: Array<{ provider: 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm'; baseUrl: string; models: string[]; dismissed?: boolean }>;
   envKeys: string[]; // names of provider env vars that are set (never values; ENV_KEY_PROVIDERS)
   tailscale?: { running: boolean; dnsName?: string };
@@ -259,11 +260,11 @@ export function functionCandidates(fn: ModelFunction, setting: string | undefine
 // ------------------------------------------------------------------ plan CLIs on the ACP engine (PR8)
 
 /** The plan CLIs Autark installs itself (accounts.install; AF-024: Gemini CLI through npm). */
-export type InstallableCli = 'claude' | 'codex' | 'gemini-cli';
-export const INSTALLABLE_CLIS: readonly InstallableCli[] = ['claude', 'codex', 'gemini-cli'];
+export type InstallableCli = 'claude' | 'codex' | 'gemini-cli' | 'grok-cli';
+export const INSTALLABLE_CLIS: readonly InstallableCli[] = ['claude', 'codex', 'gemini-cli', 'grok-cli'];
 
 /** Gemini CLI, GitHub Copilot CLI and Kimi Code: plan accounts that run on the generic ACP engine (runtime/engines/acp/providers.ts). */
-export const ACP_PLAN_PROVIDERS: readonly ProviderId[] = ['gemini-cli', 'copilot', 'kimi-cli'];
+export const ACP_PLAN_PROVIDERS: readonly ProviderId[] = ['gemini-cli', 'copilot', 'kimi-cli', 'grok-cli'];
 
 /**
  * An ACP plan: one sign-in per PC in the CLI's default home (Kimi Code: also isolated homes per

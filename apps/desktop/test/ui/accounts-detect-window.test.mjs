@@ -1,3 +1,4 @@
+// #28: Grok Build keeps its row while not installed ("Install and sign in").
 // Electron window check of Settings › Models (the model setup – settings/ModelSetup.tsx) for an installed Codex CLI
 // whose sign-in the scan could not tell (runtime accounts/detect.ts loginUnknown: its status command did not answer in
 // time) – "Installed · sign-in unknown" with "Check again", which scans again (force) and then shows what the status
@@ -87,8 +88,13 @@ test('Settings › Models: "Installed · sign-in unknown" with "Check again"', {
   await codex.locator('.set-row-hint', { hasText: /^Installed · sign-in unknown$/ }).waitFor({ timeout: 15_000 });
   const again = codex.getByRole('button', { name: 'Check again' });
   await again.waitFor({ timeout: 5_000 });
-  assert.deepEqual(await group.locator('.cli-row .set-row-label').allTextContents(), ['Claude Code', 'Codex'], 'the two plans always keep their rows; CLIs not found have none');
+  assert.deepEqual(await group.locator('.cli-row .set-row-label').allTextContents(), ['Claude Code', 'Codex', 'Grok Build'], 'the two plans and Grok Build (#28) always keep their rows; other CLIs not found have none');
   await group.locator('.cli-row', { hasText: 'Claude Code' }).locator('.set-row-hint', { hasText: /^Not installed$/ }).waitFor({ timeout: 5_000 });
+  // #28: Grok Build has no plan button – its row offers the install and the sign-in in one.
+  const grok = group.locator('.cli-row', { has: page.locator('.set-row-label', { hasText: /^Grok Build$/ }) });
+  await grok.locator('.set-row-hint', { hasText: /^Not installed$/ }).waitFor({ timeout: 5_000 });
+  assert.equal(await grok.getByRole('button', { name: 'Install and sign in' }).count(), 1, 'Grok Build: Install and sign in');
+  assert.equal(await group.locator('.cli-row', { hasText: 'Claude Code' }).getByRole('button').count(), 0, 'Claude Code keeps its plan button only');
   assert.equal(await codex.getByRole('button', { name: 'Sign in' }).count(), 0, 'no sign-in offered while it is unknown');
   for (const label of ['Claude plan', 'Codex plan', 'API key', 'Local server']) assert.equal(await group.locator('.model-setup-buttons').getByRole('button', { name: label, exact: true }).count(), 1, label);
   assert.ok((await page.evaluate(() => window.__wfDetect.length)) >= 1, 'the window asked the runtime');

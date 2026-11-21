@@ -11,7 +11,7 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
   openrouter: 'OpenRouter', google: 'Gemini API', xai: 'xAI API', deepseek: 'DeepSeek API', ollama: 'Ollama',
   lmstudio: 'LM Studio', llamacpp: 'llama.cpp', vllm: 'vLLM', compatible: 'OpenAI-compatible',
   'gemini-cli': 'Gemini CLI', copilot: 'Copilot CLI',
-  'kimi-cli': 'Kimi Code', groq: 'Groq API', elevenlabs: 'ElevenLabs', fal: 'fal.ai', // B-058
+  'kimi-cli': 'Kimi Code', 'grok-cli': 'Grok Build', groq: 'Groq API', elevenlabs: 'ElevenLabs', fal: 'fal.ai', // B-058
   'decision-api': 'Decision API',
 };
 
@@ -66,7 +66,7 @@ export type SignInKind = 'browser' | 'terminal';
 
 /** Providers whose official sign-in Workforce starts (accounts.login). */
 export const SIGN_IN: Partial<Record<ProviderId, SignInKind>> = {
-  codex: 'browser', claude: 'browser', 'gemini-cli': 'browser', copilot: 'terminal', 'kimi-cli': 'terminal',
+  codex: 'browser', claude: 'browser', 'gemini-cli': 'browser', copilot: 'terminal', 'kimi-cli': 'terminal', 'grok-cli': 'terminal',
 };
 
 /** AF-024: what the Google Gemini panel (gemini-add.tsx) says about its two ways. */
@@ -86,7 +86,7 @@ export function nextGeminiName(list: readonly Pick<Account, 'provider' | 'label'
 export const SIGN_OUT: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude']);
 
 /** CLIs Workforce can install (accounts.install; AF-024: Gemini CLI through npm). */
-export const INSTALLABLE: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli']);
+export const INSTALLABLE: ReadonlySet<ProviderId> = new Set<ProviderId>(['codex', 'claude', 'gemini-cli', 'grok-cli']);
 
 /**
  * Whether the account's official sign-in is what fixes its state: 'Sign-in needed', and for an ACP
@@ -101,11 +101,12 @@ export function needsSignIn(account: Pick<Account, 'provider' | 'auth' | 'state'
 /** The toast text once a sign-in started. */
 export function signInHint(provider: ProviderId | undefined): string {
   if (provider === 'copilot') return 'In the terminal window that opened, type /login and follow the steps, then come back here.';
+  if (provider === 'grok-cli') return 'Sign in to Grok in the browser page the terminal window opened (a SuperGrok or X Premium+ subscription), then come back here.'; // #28
   return provider && SIGN_IN[provider] === 'terminal' ? 'Finish sign-in in the terminal window that opened, then come back here.' : 'Finish it in the window that opened.';
 }
 
 /** The plan CLIs the PC scan looks for, in the order the model setup lists them. */
-export const PC_CLIS: ReadonlyArray<DetectionReport['clis'][number]['provider']> = ['claude', 'codex', 'kimi-cli', 'gemini-cli', 'copilot'];
+export const PC_CLIS: ReadonlyArray<DetectionReport['clis'][number]['provider']> = ['claude', 'codex', 'grok-cli', 'kimi-cli', 'gemini-cli', 'copilot'];
 
 export interface CliRowView {
   name: string;

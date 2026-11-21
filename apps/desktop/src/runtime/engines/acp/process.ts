@@ -20,7 +20,16 @@ export interface AcpLaunch {
   command: string;
   args: string[];
   env?: Record<string, string | undefined>; // e.g. the account's isolated home
+  /**
+   * #28 (Grok Build): the auth method that only reuses a sign-in the CLI already holds; when initialize offers one, it is
+   * authenticated right away (headless – it never opens a browser), because that agent refuses session/new without it.
+   * Without such a method (not signed in yet) nothing happens and session/new asks for the sign-in as usual.
+   */
+  silentAuth?: RegExp;
 }
+
+/** #28: how long the silent authenticate of a cached sign-in may take (it refreshes a token at most). */
+const SILENT_AUTH_MS = 30_000;
 
 /** The running turn of a session. */
 export interface SessionTurn {
@@ -83,11 +92,20 @@ export class AcpProcess {
     }
     const proc = new AcpProcess(options, lease, conn, info);
     proc.wire();
+    await proc.reuseSignIn();
     proc.armIdle();
     return proc;
   }
 
   private now(): number { return (this.options.now ?? Date.now)(); }
+
+  /** #28: authenticate with the launch's cached-sign-in method when the agent offers it; a refusal leaves the sign-in to session/new. */
+  private async reuseSignIn(): Promise<void> {
+    const pattern = this.launch.silentAuth;
+    const method = pattern ? this.info.authMethods.find((one) => pattern.test(one.id)) : undefined;
+    if (!method) return;
+    await this.conn.request('authenticate', { methodId: method.id, _meta: { headless: true } }, SILENT_AUTH_MS).catch(() => undefined);
+  }
 
   private wire(): void {
     this.conn.onNotification((note) => {

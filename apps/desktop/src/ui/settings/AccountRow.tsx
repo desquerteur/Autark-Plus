@@ -29,7 +29,7 @@ import { AccountAvatar } from '../lib/account-avatar.tsx';
 import { kindText } from '../lib/account-face.ts';
 
 /** The plans accounts.add gives another sign-in profile (cli-homes.ts); the login found on this PC is one of them too. Copilot CLI has one per PC. */
-const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli']); // AF-024: Gemini CLI too
+const OWN_HOMES: ReadonlySet<string> = new Set(['codex', 'claude', 'kimi-cli', 'gemini-cli', 'grok-cli']); // AF-024: Gemini CLI too
 
 /** The two fixed bars of a plan (5-hour limit, Weekly); other windows in the tooltip. */
 function LimitBars(props: { account: Account }) {

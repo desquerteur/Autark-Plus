@@ -28,6 +28,8 @@ type Cli = DetectionReport['clis'][number];
 
 /** The plans with a button; the others are listed only when found. */
 const WITH_BUTTON: ReadonlySet<string> = new Set<string>(PLAN_PROVIDERS);
+/** #28: plan CLIs without a button that keep their row while not installed – it offers the install and sign-in. */
+const ALWAYS_LISTED: ReadonlySet<string> = new Set<string>(['grok-cli']);
 
 /** A plan CLI without a connected account: its state, and the one action the buttons do not cover. */
 function CliRow(props: { cli: Cli; scanned: boolean; onChanged: () => void }) {
@@ -45,6 +47,7 @@ function CliRow(props: { cli: Cli; scanned: boolean; onChanged: () => void }) {
     <Row class="cli-row" label={view.name} hint={props.scanned ? view.hint : 'Looking…'} reserve>
       <span class="account-slot">
         {(action === 'sign-in' || action === 'add') && <ActionButton label="Sign in" busy={busy} onClick={() => add(false)} />}
+        {action === 'install' && <ActionButton label="Install and sign in" busy={busy} onClick={() => add(false)} />}
         {action === 'add-again' && <ActionButton label="Add again" busy={busy} onClick={() => add(true)} />}
         {action === 'check' && <ActionButton label="Check again" busy={busy} onClick={props.onChanged} />}
       </span>
@@ -92,7 +95,7 @@ export function ModelSetup(props: { children?: ComponentChildren }) {
         const list = groupAccounts(accounts.value.filter((account) => account.provider === provider && account.auth === 'cli'))[0]?.accounts ?? [];
         if (list.length) return list.map((account) => <AccountRow key={account.id} account={account} siblings={list} />);
         const cli = report?.clis.find((entry) => entry.provider === provider);
-        return WITH_BUTTON.has(provider) || cli?.path ? [<CliRow key={provider} cli={cli ?? { provider }} scanned={scanned} onChanged={() => void scan(true)} />] : [];
+        return WITH_BUTTON.has(provider) || ALWAYS_LISTED.has(provider) || cli?.path ? [<CliRow key={provider} cli={cli ?? { provider }} scanned={scanned} onChanged={() => void scan(true)} />] : [];
       })}
       {props.children}
       {report?.envKeys.map((name) => <EnvKeyRow key={name} name={name} />)}

@@ -38,13 +38,13 @@ const MANAGE = { capability: 'manage' } as const;
 const PROVIDERS: readonly ProviderId[] = [
   'codex', 'claude', 'openai', 'anthropic', 'openrouter', 'google', 'xai', 'deepseek',
   'ollama', 'lmstudio', 'llamacpp', 'vllm', 'compatible',
-  'gemini-cli', 'copilot', 'kimi-cli', // PR8 (B-044: Kimi Code): plan CLIs on the ACP engine
+  'gemini-cli', 'copilot', 'kimi-cli', 'grok-cli', // #28: Grok Build; PR8 (B-044: Kimi Code): plan CLIs on the ACP engine
   'groq', 'elevenlabs', 'fal', // B-058
   'decision-api',
 ];
 /** B-044: providers an endpoint test can reach (the HTTP engines' providers – the API form's and the local servers' "Test"). */
 const TESTABLE: readonly ProviderId[] = ['openai', 'anthropic', 'openrouter', 'google', 'xai', 'deepseek', 'groq', 'compatible', 'ollama', 'lmstudio', 'llamacpp', 'vllm'];
-const INSTALLABLE = ['claude', 'codex', 'gemini-cli'] as const; // AF-024: Gemini CLI through npm
+const INSTALLABLE = ['claude', 'codex', 'gemini-cli', 'grok-cli'] as const; // #28: Grok Build // AF-024: Gemini CLI through npm
 const ENV_KEY_NAMES: readonly string[] = Object.keys(ENV_KEY_PROVIDERS);
 const EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const TIERS = ['local', 'small', 'strong', 'frontier'] as const;

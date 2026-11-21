@@ -133,7 +133,7 @@ export function chosenFor(routing: unknown, use: ModelUse): string | undefined {
 }
 
 /** The plans Work can name by provider alone ("codex" = that plan's best model for each turn). */
-export const WORK_PLAN_PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'gemini-cli', 'copilot', 'kimi-cli'];
+export const WORK_PLAN_PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'gemini-cli', 'copilot', 'kimi-cli', 'grok-cli'];
 
 /** A use's value is a plan's provider id alone (Work: that plan's best model for each turn), not a model id. */
 export function isProviderChoice(value: string): boolean {

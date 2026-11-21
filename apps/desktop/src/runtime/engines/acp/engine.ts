@@ -126,7 +126,11 @@ export class AcpEngine implements Engine {
     catch (error) { return { state: 'error', message: error instanceof StartFailure ? error.message : `${account.label} could not start.` }; }
     const name = probed.proc.launch.name;
     if (!probed.error) return { state: 'ok' };
-    if (isAuthError(probed.error)) return { state: 'needs_login', message: `Sign in to ${name}.` };
+    if (isAuthError(probed.error)) {
+      // #28: an agent that reuses its sign-in only at start (AcpLaunch.silentAuth) sees a sign-in made since then only in a new process.
+      if (probed.proc.launch.silentAuth) void probed.proc.dispose().catch(() => undefined);
+      return { state: 'needs_login', message: `Sign in to ${name}.` };
+    }
     return { state: 'error', message: `${name} did not answer the account check.` };
   }
 

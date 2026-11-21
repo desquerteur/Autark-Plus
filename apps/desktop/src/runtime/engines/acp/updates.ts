@@ -44,13 +44,16 @@ export function hubToolName(wire: string): string {
 /**
  * The workforce tool a tool call names, or undefined. Strict on purpose: only an exact,
  * hub-qualified tool name (never a command or a title that merely contains one) and never a
- * kind that has effects of its own.
+ * kind that has effects of its own. #28: Grok Build reaches MCP tools through its own `use_tool`, whose first
+ * tool_call is titled "use_tool" and names the tool only in rawInput.tool_name ("workforce__tasks__create").
  */
 export function hubToolOf(toolCall: Record<string, unknown>): string | undefined {
   const kind = str(toolCall.kind);
   if (kind && OWN_EFFECT_KINDS.has(kind)) return undefined;
   const meta = isRecord(toolCall._meta) && isRecord(toolCall._meta.claudeCode) ? str(toolCall._meta.claudeCode.toolName) : undefined;
-  for (const candidate of [meta, str(toolCall.title)]) {
+  const grok = isRecord(toolCall._meta) && isRecord(toolCall._meta['x.ai/tool']) && toolCall._meta['x.ai/tool'].name === 'use_tool'
+    && isRecord(toolCall.rawInput) ? str(toolCall.rawInput.tool_name) : undefined;
+  for (const candidate of [meta, grok, str(toolCall.title)]) {
     const text = candidate?.trim();
     if (!text) continue;
     for (const pattern of HUB_TITLES) {
@@ -191,9 +194,10 @@ export function stopFor(stopReason: unknown): { stop: EngineTurnResult['stop']; 
   }
 }
 
-/** Token usage of a prompt answer (`usage`), when the agent reports it. */
+/** Token usage of a prompt answer (`usage`; #28: Grok Build reports the whole turn's in `_meta.usage`), when the agent reports it. */
 export function promptUsage(result: unknown): { inputTokens: number; outputTokens: number } | undefined {
-  const usage = isRecord(result) && isRecord(result.usage) ? result.usage : undefined;
+  const usage = !isRecord(result) ? undefined : isRecord(result.usage) ? result.usage
+    : isRecord(result._meta) && isRecord(result._meta.usage) ? result._meta.usage : undefined;
   if (!usage) return undefined;
   const inputTokens = num(usage.inputTokens) ?? 0;
   const outputTokens = (num(usage.outputTokens) ?? 0) + (num(usage.thoughtTokens) ?? 0);
