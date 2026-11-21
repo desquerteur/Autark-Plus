@@ -223,6 +223,19 @@ Check a download on Windows with `Get-FileHash .\autark-windows-x64.exe` (PowerS
 
 ## Installing
 
+### Linux server (Debian / Ubuntu)
+
+Install the latest release as a system service, without a desktop or display:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/scripts/install-headless.sh | sudo bash
+```
+
+The installer verifies the release checksum, starts Autark as its own unprivileged user, and prints a pairing link/code.
+The script runs as root: review it first if required by your server policy. See [server setup and removal](docs/headless-linux.md).
+
+### Desktop and Android
+
 The packages are not signed by a paid publisher certificate yet, so each system asks once:
 
 - **Windows:** SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**. Autark installs for
