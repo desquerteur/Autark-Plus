@@ -74,7 +74,8 @@ test('L5: claudeFreePlan – a claude.ai login on Free (any case); unknown plans
 function status(answer: Record<string, unknown>) {
   const { spawn, calls } = fakeSpawn((call) => {
     if (call.args.join(' ') !== 'auth status --json') return; // the probe stays silent until its timeout
-    setImmediate(() => { call.child.stdout.write(JSON.stringify(answer)); setImmediate(() => call.child.exit(0)); });
+    // Answer before timers, but close after spawnAlone's caller attaches listeners.
+    queueMicrotask(() => { call.child.stdout.write(JSON.stringify(answer)); queueMicrotask(() => call.child.exit(0)); });
   });
   return { status: new ClaudeStatus({ supervisor: testSupervisor(spawn), tempDir: '/tmp/wf', timeoutMs: 40 }), calls };
 }

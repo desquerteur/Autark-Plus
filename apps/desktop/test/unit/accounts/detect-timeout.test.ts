@@ -35,7 +35,9 @@ function slowClaude() {
     const line = [call.command, ...call.args].join(' ');
     if (line === '/bin/claude auth status --json') return; // hangs (ended only after its grace, login guard 03.11.)
     const out = ANSWERS[line];
-    setImmediate(() => { if (out !== undefined) call.child.stdout.write(out); setImmediate(() => call.child.exit(out === undefined ? 1 : 0)); });
+    // Scripted answers must not race the 30 ms deadline on a loaded host. The
+    // second microtask lets spawnAlone's caller attach its close listener first.
+    queueMicrotask(() => { if (out !== undefined) call.child.stdout.write(out); queueMicrotask(() => call.child.exit(out === undefined ? 1 : 0)); });
   });
   return { spawn, calls, overlap: () => overlap };
 }
