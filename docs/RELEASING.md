@@ -1,6 +1,6 @@
 # Releasing Autark-Plus
 
-Every release ships **Windows, Linux (x64 + arm64) and the signed Android APK**, each with SHA-256 checksums.
+Every release ships **Windows, Linux (x64 + arm64), macOS (arm64 + x64) and the signed Android APK**, each with SHA-256 checksums.
 
 ## One command (release PC)
 
@@ -11,6 +11,8 @@ git push https://github.com/desquerteur/Autark-Plus.git refs/tags/autark-plus/vX
 pwsh scripts/release/release-all.ps1 -Tag vX.Y.Z -Publish
 ```
 
+On the release PC without PowerShell 7, replace `pwsh` with `powershell.exe -NoProfile -ExecutionPolicy Bypass`.
+
 It sets the version from the tag (desktop `package.json`, Android `versionName`/`versionCode`), then builds:
 
 | Platform | Files | Built by |
@@ -18,9 +20,10 @@ It sets the version from the tag (desktop `package.json`, Android `versionName`/
 | Windows x64 | `autark-windows-x64.exe` (+ `.blockmap`, `latest.yml`) | `npm run package -- --win --x64` |
 | Linux x64 / arm64 | `autark-linux-<arch>.tar.gz` (what `scripts/install-headless.sh` downloads), `autark-linux-x64.AppImage`, `autark-linux-amd64.deb` / `autark-linux-arm64.deb` (deb names x64 `amd64`), `latest-linux.yml`, `latest-linux-arm64.yml` | `scripts/release/build-linux.sh` in WSL Ubuntu 24.04 |
 | Android | `autark-android.apk`, `latest-android.json` | `apps/android/build.ps1 -Release` |
+| macOS arm64 / x64 | `autark-mac-arm64.zip`, `autark-mac-x64.zip`, `latest-mac.yml` | `scripts/release/build-mac.sh` in WSL; ad-hoc signed, not notarized |
 
 and writes `SHA256SUMS.txt` and `release.json` over all of them into `.local/release/<tag>/`. With `-Publish` it creates the
-GitHub release (needs `gh` signed in or `GH_TOKEN`) and uploads everything. `-Skip windows|linux|android` leaves a platform out.
+GitHub release (needs `gh` signed in or `GH_TOKEN`) and uploads everything. `-Skip windows|linux|mac|android` leaves a platform out.
 
 Requirements on the release PC: Node 24, JDK 21, Android SDK (`%LOCALAPPDATA%\Android\Sdk`), WSL distro `Ubuntu-24.04`
 with `scripts/release/wsl-setup.sh` run once as root, `gh`.
@@ -40,7 +43,8 @@ commits. A plain `git tag vX.Y.Z` / `git push <remote> vX.Y.Z` can therefore pub
 ## CI
 
 `.github/workflows/build-desktop.yml` builds the desktop packages on a pushed `v*` tag once GitHub Actions can run. Until then
-the local command above is the release path. macOS is built by CI only.
+the local command above is the release path, including macOS cross-builds in WSL. A real Mac is still required to
+verify first launch; cross-build and signature checks alone do not prove that the app starts on macOS.
 
 ## Android signing
 
