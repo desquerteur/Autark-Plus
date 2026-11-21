@@ -103,7 +103,7 @@ test('the flow tally: used stays input + output of every call, cached is the cac
   assert.deepEqual([result.used, result.cached], [2 * 1050, 2 * 640]);
 });
 
-test('pricing: the cached part counts at a cached price only when the prior has one; of the shipped priors only the new Terra has one', () => {
+test('pricing: the cached part counts at a cached price only when the prior has one; of the shipped priors only the new Terra and Grok entries have one', () => {
   const usage = { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 600_000 };
   assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8 }), 2, 'no cached price: every input token at the input price, as before');
   assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8, cachedInputPerM: 0.2 }), 0.92);
@@ -113,8 +113,9 @@ test('pricing: the cached part counts at a cached price only when the prior has 
   assert.deepEqual(listPrice(usage, undefined, prior), { usd: 0.92, basis: 'prior-price' });
   assert.deepEqual(attemptCost({ account: { auth: 'api_key', provider: 'openai' } as never, usage, prior }), { basis: 'prior-price', usd: 0.92 });
   const shipped = Priors.load(path.join(RESOURCES, 'model-priors.json'));
-  // B-078 D16: real list prices; only the new GPT-6.1 Terra entry ships its cached price, so nothing booked before changes.
-  assert.deepEqual(shipped.data.models.filter((entry) => entry.priceCachedInputPerM !== undefined).map((entry) => entry.match), ['gpt-6.1-terra*'], 'nothing booked before changes');
+  // B-078 D16: real list prices; only the new GPT-6.1 Terra entry and the Grok entries (#28, added with their cached
+  // price) ship one, so nothing booked before changes.
+  assert.deepEqual(shipped.data.models.filter((entry) => entry.priceCachedInputPerM !== undefined).map((entry) => entry.match), ['gpt-6.1-terra*', 'grok-4.7*', 'grok-4.6*', 'grok-4.5*', 'grok-build*', 'grok-4.3*'], 'nothing booked before changes');
 });
 
 test('a failover turn: the attempts\' cached parts add up, and the first attempt\'s is the total minus the last one\'s', () => {

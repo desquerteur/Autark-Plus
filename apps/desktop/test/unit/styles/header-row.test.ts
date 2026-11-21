@@ -180,7 +180,7 @@ test("where the row has room, the global pane's tab strip is the title row above
   assert.match(media(shell, '(max-width: 875px)'), /\.shell > \.app-frame > \.pane-row-room\s*\{\s*width:\s*0;/);
   const ui = path.resolve(STYLES, '..');
   const frame = readFileSync(path.join(ui, 'shell', 'Shell.tsx'), 'utf8');
-  assert.match(frame, /getBoundingClientRect\(\)\.width >= ROW_ROOM/, 'three titled tabs fit (strip-slots.ts)');
+  assert.match(frame, /unzoom\(element\.getBoundingClientRect\(\)\.width\) >= ROW_ROOM/, 'three titled tabs fit (strip-slots.ts), measured in zoomed pixels (#30)');
   assert.match(frame, /strip-in-row/);
   assert.match(readFileSync(path.join(ui, 'workspace', 'strip-slots.ts'), 'utf8'), /export const ROW_ROOM = 3 \* TITLED_TAB \+ 3 \* 2 \+ NEW_TAB_CELL;/);
   const browser = css('workspace-browser.css');
