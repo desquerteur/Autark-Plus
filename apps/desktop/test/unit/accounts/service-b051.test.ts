@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
-import { INSTALL_FAILED } from '../../../src/runtime/accounts/install.ts';
+import { INSTALL_FAILED, SIGN_IN_OFF_IN_DEMO } from '../../../src/runtime/accounts/install.ts';
 import { CLAUDE_FREE_PLAN, claudeFreePlan, planBlocked } from '../../../src/runtime/accounts/cli.ts';
 import { ClaudeStatus } from '../../../src/runtime/engines/claude/status.ts';
 import { account, fakeSpawn, testSupervisor } from '../engines/fakes.ts';
@@ -48,6 +48,16 @@ test('L3: an installed CLI is never installed again; API and local accounts neve
   await h.service.add({ provider: 'codex' });
   await h.service.add({ provider: 'openai', apiKey: 'sk-test-0123456789' });
   assert.ok(!commands(h).some((line) => /install/.test(line)), 'no installer ran');
+  await h.service.dispose();
+});
+
+test('#24: the demo never starts a real sign-in, even when the CLI is installed – a clear error, no account, no home', async () => {
+  const h = harness({ demo: true, clis: { gemini: '/bin/gemini' } });
+  for (const provider of ['codex', 'claude', 'gemini-cli'] as const) {
+    await assert.rejects(h.service.add({ provider }), (error: Error & { code?: string }) => error.message === SIGN_IN_OFF_IN_DEMO && error.code === 'unavailable', provider);
+  }
+  assert.deepEqual([h.service.list().length, h.made.length, h.signIns.length], [0, 0, 0], 'no account, no home, no sign-in');
+  assert.ok(!commands(h).some((line) => /login|--acp/.test(line)), 'no sign-in process');
   await h.service.dispose();
 });
 

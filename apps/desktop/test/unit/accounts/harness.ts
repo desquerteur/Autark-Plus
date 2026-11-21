@@ -41,6 +41,8 @@ export interface HarnessOptions {
   signInUrlMs?: number;
   /** B-051: what an install command does (default: exits 0 and installs nothing). */
   install?: (call: SpawnCall) => void;
+  /** #24: the demo runtime (WORKFORCE_FAKE_ENGINE) – nothing is installed or signed in. */
+  demo?: boolean;
 }
 
 export function harness(options: HarnessOptions = {}) {
@@ -91,7 +93,7 @@ export function harness(options: HarnessOptions = {}) {
   const removed: string[] = [];
   const offline = async (): Promise<Response> => { throw new Error('offline'); };
   service = new AccountServiceImpl({
-    db, bus, clock, paths: { accounts: ACCOUNTS }, env, finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0,
+    db, bus, clock, paths: { accounts: ACCOUNTS }, env, finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0, demo: options.demo,
     engines: () => ({ get: engine, all: () => [], disposeIdle: async () => {} }),
     mkdir: async (dir) => { made.push(dir); }, rmdir: async (dir) => { removed.push(dir); },
     detectDeps: { fetch: options.fetch ?? offline, probeTimeoutMs: 1 },

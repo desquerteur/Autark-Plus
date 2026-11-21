@@ -9,7 +9,8 @@ import path from 'node:path';
 import { signal } from '@preact/signals';
 import type { Account, DetectionReport } from '../../../src/shared/model/providers.ts';
 import {
-  PLAN_LABELS, SIGN_IN_GAVE_UP, SIGN_IN_TEXT, SIGN_IN_WAIT_MS, cliMissing, startPlanSetup,
+  INSTALL_WAIT_MS, PLAN_LABELS, SIGN_IN_GAVE_UP, SIGN_IN_TEXT, SIGN_IN_WAIT_MS, START_WAIT_MS, cliMissing, installTooLong,
+  startPlanSetup, startTooLong,
   type PlanEnv, type PlanProvider, type PlanRpc, type PlanView,
 } from '../../../src/ui/onboarding/plan-setup.ts';
 
@@ -30,7 +31,8 @@ function harness(options: { accounts?: Account[]; report?: DetectionReport | nul
   const accounts = signal<Account[]>(options.accounts ?? []);
   const calls: Array<[string, unknown]> = [];
   const views: PlanView[] = [];
-  const timers: Array<{ ms: number; fire: () => void; cancelled: boolean }> = [];
+  const timers: Array<{ ms: number; fire: () => void; cancelled: boolean }> = []; // the sign-in wait (SIGN_IN_WAIT_MS)
+  const deadlines: Array<{ ms: number; fire: () => void; cancelled: boolean }> = []; // #24: the install and start deadlines
   const focus = new Set<() => void>();
   const record = <T>(name: string, arg: unknown, answer: () => Promise<T>) => { calls.push([name, arg]); return answer(); };
   const rpc: PlanRpc = {
@@ -40,11 +42,11 @@ function harness(options: { accounts?: Account[]; report?: DetectionReport | nul
   };
   const env: PlanEnv = {
     rpc, accounts, report: () => options.report ?? null,
-    timer: (ms, fire) => { const entry = { ms, fire, cancelled: false }; timers.push(entry); return () => { entry.cancelled = true; }; },
+    timer: (ms, fire) => { const entry = { ms, fire, cancelled: false }; (ms === SIGN_IN_WAIT_MS ? timers : deadlines).push(entry); return () => { entry.cancelled = true; }; },
     focus: (fire) => { focus.add(fire); return () => { focus.delete(fire); }; },
     show: (view) => views.push(view),
   };
-  return { accounts, calls, views, timers, focus, env };
+  return { accounts, calls, views, timers, deadlines, focus, env };
 }
 
 test('Codex plan installs a missing CLI, adds a sign-in and finishes on the signed-in event without an answer test', async () => {
@@ -194,6 +196,35 @@ test('cancelling during installation stops before adding the account', async () 
   installedDone!();
   assert.deepEqual(await flow.done, { ok: false, reason: 'cancelled', message: '' });
   assert.deepEqual(h.calls, [['install', 'codex']]);
+});
+
+test('#24: an install that never answers ends with a clear error after INSTALL_WAIT_MS and adds nothing', async () => {
+  const h = harness({ report: missing('gemini-cli'), rpc: { install: () => new Promise<never>(() => {}) } });
+  const flow = startPlanSetup('gemini-cli', h.env, 'Gemini 2');
+  assert.equal(h.views[0].text, 'Installing Gemini CLI – this takes about a minute…');
+  await until(() => h.deadlines.length === 1, 'the install deadline is set');
+  assert.equal(h.deadlines[0].ms, INSTALL_WAIT_MS);
+  assert.ok(INSTALL_WAIT_MS > 5 * 60_000, 'longer than the runtime install timeout');
+  h.deadlines[0].fire();
+  assert.deepEqual(await flow.done, { ok: false, reason: 'install', message: installTooLong('gemini-cli') });
+  assert.equal(installTooLong('gemini-cli'), 'Installing Gemini CLI took too long. Check your connection and try again.');
+  assert.deepEqual(h.calls, [['install', 'gemini-cli']]);
+  const last = h.views.at(-1)!;
+  assert.deepEqual([last.step, last.tone, last.text], ['install', 'error', installTooLong('gemini-cli')]);
+});
+
+test('#24: a sign-in start that never answers ends with a clear error after START_WAIT_MS', async () => {
+  const h = harness({ report: missing('gemini-cli'), rpc: { add: () => new Promise<never>(() => {}) } });
+  const flow = startPlanSetup('gemini-cli', h.env);
+  await until(() => h.calls.length === 2, 'install answered, add called');
+  assert.equal(h.deadlines[0].cancelled, true, 'the answered install clears its deadline');
+  assert.equal(h.views.at(-1)!.text, SIGN_IN_TEXT, 'the line left "Installing…" once the install answered');
+  const start = h.deadlines[1];
+  assert.equal(start.ms, START_WAIT_MS);
+  start.fire();
+  assert.deepEqual(await flow.done, { ok: false, reason: 'sign-in', message: startTooLong('gemini-cli') });
+  assert.deepEqual([h.views.at(-1)!.step, h.views.at(-1)!.tone], ['sign-in', 'error']);
+  assert.equal(h.timers.length, 0, 'no browser wait without an account');
 });
 
 test('a removed sign-in ends the wait', async () => {

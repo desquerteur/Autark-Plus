@@ -34,7 +34,7 @@ import { detect as scan } from './detect.ts';
 import { engineFor, selectCandidates } from './candidates.ts';
 import { mergeLimits } from './limits.ts';
 import { AccountMonitor } from './monitor.ts';
-import { installCli } from './install.ts';
+import { SIGN_IN_OFF_IN_DEMO, installCli } from './install.ts';
 import { SignIns } from './sign-in.ts';
 import { planBlocked } from './cli.ts';
 import { envKey } from './env-keys.ts';
@@ -165,6 +165,7 @@ export class AccountServiceImpl implements AccountServiceContract {
     if (AcpPlans.handles(provider) && !acpProvider(provider)?.home && input.envVar === undefined) return this.acp.add(provider, label);
     if (CLI_PROVIDERS.has(provider) && input.envVar === undefined) {
       if (provider === 'codex' || provider === 'claude' || provider === 'gemini-cli') await this.ensureCli(provider); // B-051 L3 (AF-024: Gemini CLI too): install first, else nothing is created
+      if (this.deps.demo) throw new WorkforceError('unavailable', SIGN_IN_OFF_IN_DEMO); // #24: an installed CLI must not start a real sign-in in the demo
       return this.homes.add(provider, input.label?.trim() ? label : undefined, label, input.rotation ?? false);
     }
     const connected = await connection({ ...input, label }, { env: this.env(), secrets: this.deps.secrets });
@@ -232,9 +233,13 @@ export class AccountServiceImpl implements AccountServiceContract {
     this.deps.bus.emit('account.removed', { id: account.id });
   }
 
+  /**
+   * #24: answers as soon as the CLI is there. The rescan after a fresh install runs in the background – a full scan
+   * (every CLI's status, version and ACP probe) can take minutes and kept the plan flow on "Installing…".
+   */
   async install(provider: InstallableCli): Promise<void> {
-    await installCli(provider, { supervisor: this.deps.supervisor, finder: this.deps.finder, env: this.deps.env, demo: this.deps.demo });
-    await this.detect(true);
+    const installed = await installCli(provider, { supervisor: this.deps.supervisor, finder: this.deps.finder, env: this.deps.env, demo: this.deps.demo });
+    if (installed) void this.detect(true).catch(() => undefined);
   }
 
   /** B-051 L3: the plan's CLI before its account – throws the install error (nothing created); a fresh install rescans in the background. */

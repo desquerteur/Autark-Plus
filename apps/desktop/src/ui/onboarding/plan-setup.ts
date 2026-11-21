@@ -1,7 +1,8 @@
 // The model setup's two plan buttons (plan-actions.tsx) each add an account and start its official sign-in.
 // Install a missing CLI first, then accounts.add creates a separate sign-in profile. Existing accounts stay as
 // they are. Wait for this account's sign-in through events and a re-check on window focus (one 5-minute timer,
-// no polling), then report that it signed in. No model turn is sent, even when another account already works.
+// no polling), then report that it signed in. #24: the install and the sign-in start each have a deadline
+// (INSTALL_WAIT_MS, START_WAIT_MS), so a runtime call that never answers ends in a clear error, never a stuck line. No model turn is sent, even when another account already works.
 // A newer flow cancels the running one: it stops at its next step and shows nothing.
 // Owns: this flow, its steps and texts. Never: renders, writes settings, reads or logs a token or the sign-in address.
 
@@ -22,6 +23,15 @@ const SIGNED_IN: Record<PlanProvider, string> = { codex: 'Codex account signed i
 export const SIGN_IN_WAIT_MS = 5 * 60_000;
 export const SIGN_IN_TEXT = 'Finish signing in in your browser…';
 export const SIGN_IN_GAVE_UP = 'Sign-in did not finish – try again.';
+/**
+ * #24: how long step 1 may take before the flow gives up – the runtime's 5-minute install timeout (install.ts) plus
+ * a margin. No runtime answer (a lost reply, a hung step) never keeps the line on "Installing…".
+ */
+export const INSTALL_WAIT_MS = 6 * 60_000;
+/** #24: how long starting the sign-in may take (accounts.add: the CLI starts and offers its sign-in). */
+export const START_WAIT_MS = 2 * 60_000;
+export const installTooLong = (provider: PlanProvider) => `Installing ${CLI[provider]} took too long. Check your connection and try again.`;
+export const startTooLong = (provider: PlanProvider) => `${CLI[provider]} did not start its sign-in in time – try again.`;
 
 export type PlanStep = 'install' | 'sign-in' | 'done';
 
@@ -79,6 +89,11 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     show({ step, text: message, tone: 'error', url });
     return { ok: false, reason, message };
   };
+  /** #24: a runtime call with a deadline – rejects with `message` when it has not answered after `ms`. */
+  const within = <T>(work: Promise<T>, ms: number, message: string) => new Promise<T>((resolve, reject) => {
+    const stop = env.timer(ms, () => reject(new Error(message)));
+    work.then((value) => { stop(); resolve(value); }, (error: unknown) => { stop(); reject(error); });
+  });
 
   /** Step 3: resolves with the account once it is settled (works, or the Free plan), 'gone' when it was removed, else 'timeout' / 'cancelled'. */
   const waitSignedIn = (id: string) => new Promise<Account | 'timeout' | 'gone' | 'cancelled'>((resolve) => {
@@ -110,7 +125,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     let url: string | undefined;
     show({ step: 'sign-in', text: SIGN_IN_TEXT });
     try {
-      const { signInUrl, ...rest } = await env.rpc.add(provider, label);
+      const { signInUrl, ...rest } = await within(env.rpc.add(provider, label), START_WAIT_MS, startTooLong(provider));
       account = rest;
       url = signInUrl;
     } catch (error) { return cancelled ? CANCELLED : fail('sign-in', 'sign-in', messageOf(error, 'Could not start the sign-in – try again.')); }
@@ -133,7 +148,7 @@ export function startPlanSetup(provider: PlanProvider, env: PlanEnv, label?: str
     // 1. the program
     if (cliMissing(env.report(), provider)) {
       show({ step: 'install', text: `Installing ${CLI[provider]} – this takes about a minute…` });
-      try { await env.rpc.install(provider); } catch (error) { return cancelled ? CANCELLED : fail('install', 'install', messageOf(error, `Could not install ${CLI[provider]}.`)); }
+      try { await within(env.rpc.install(provider), INSTALL_WAIT_MS, installTooLong(provider)); } catch (error) { return cancelled ? CANCELLED : fail('install', 'install', messageOf(error, `Could not install ${CLI[provider]}.`)); }
       if (cancelled) return CANCELLED;
     }
     const account = await signIn();

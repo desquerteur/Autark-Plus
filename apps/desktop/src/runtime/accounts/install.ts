@@ -27,6 +27,8 @@ export const GEMINI_NEEDS_NODE = 'Gemini CLI needs Node.js 20 or newer. Install 
 const EXECUTABLE: Readonly<Record<InstallableCli, CliId>> = { claude: 'claude', codex: 'codex', 'gemini-cli': 'gemini' };
 /** Demo mode: the fake engine needs no CLI, and a real installer must never run there. */
 export const INSTALL_OFF_IN_DEMO = 'The demo does not install programs.';
+/** #24: …nor starts a real sign-in when the CLI happens to be installed (window tests on a developer PC). */
+export const SIGN_IN_OFF_IN_DEMO = 'The demo does not sign in to real accounts.';
 const INSTALL_MS = 5 * 60_000;
 
 /** One install command: constant arguments, the env it runs with (undefined = the inherited one). */
