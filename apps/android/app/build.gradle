@@ -13,8 +13,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Release 0.3.4: the first APK published in desquerteur/OpenAutark (latest-android.json carries this versionCode).
-        versionCode = 310
-        versionName = '0.3.10'
+        versionCode = 311
+        versionName = '0.3.11'
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
