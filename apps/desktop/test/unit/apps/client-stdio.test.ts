@@ -101,7 +101,9 @@ test('a program that dies at start: its error line, with tokens and the app\'s o
 });
 
 test('a program that only prints text: the handshake times out with a hint; 2024-11-05 over stdio is accepted', async () => {
-  const error = await open('garbage', undefined, 300).catch((caught: unknown) => caught);
+  // This real-process deadline includes Node startup, which can exceed 300 ms
+  // on a loaded Windows host. Allow startup before testing the non-MCP hint.
+  const error = await open('garbage', undefined, 5_000).catch((caught: unknown) => caught);
   assert.ok(error instanceof McpTimeout);
   assert.equal(error.message, 'The app\'s program wrote text that is not MCP.');
   const old = await open('old');
