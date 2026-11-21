@@ -208,7 +208,6 @@ export const SECTIONS: readonly SectionDef[] = [
 ];
 
 const BY_SECTION: ReadonlyMap<string, SectionDef> = new Map(SECTIONS.map((section) => [section.key, section]));
-
 /** The section `name` (undefined: no such section). */
 export const sectionDef = (name: string): SectionDef | undefined => BY_SECTION.get(name);
 
