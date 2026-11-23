@@ -46,14 +46,14 @@ test('openai: reasoning summary + text deltas, function call round with encrypte
   assert.deepEqual(toolCalls, [{ name: 'tasks.create', args: { title: 'X' }, callId: 'call_1' }]);
   const [first, second] = server.hits('/v1/responses');
   assert.equal(first.headers.authorization, `Bearer ${KEY}`);
-  assert.equal(first.body.instructions, 'STABLE\n\nVOLATILE');
+  assert.equal(first.body.instructions, 'STABLE', 'the stable prompt only');
   assert.equal(first.body.store, false);
   assert.equal(first.body.stream, true);
   assert.equal(first.body.previous_response_id, undefined);
   assert.deepEqual(first.body.include, ['reasoning.encrypted_content']);
   assert.deepEqual(first.body.reasoning, { effort: 'xhigh', summary: 'auto' });
   assert.deepEqual(first.body.tools, [{ type: 'function', name: 'tasks__create', description: 'Create a task', parameters: input.tools[0].inputSchema, strict: false }]);
-  assert.deepEqual(first.body.input, [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }]);
+  assert.deepEqual(first.body.input, [{ role: 'user', content: [{ type: 'input_text', text: '<live>\nVOLATILE\n</live>' }, { type: 'input_text', text: 'hello' }] }], 'the live context first in the input');
   assert.deepEqual(second.body.input.slice(1), [
     reasoning, // reasoning keeps its id and encrypted content
     { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Creating it.', annotations: [] }] },
@@ -81,7 +81,7 @@ test('openai: failing tool and tool images go back as function_call_output + ima
   assert.equal(result.stop, 'done');
   const [first, second] = server.hits('/v1/responses');
   assert.equal(first.body.reasoning, undefined);
-  assert.deepEqual(first.body.input[0].content, [{ type: 'input_image', image_url: 'data:image/png;base64,CQ==' }]);
+  assert.deepEqual(first.body.input[0].content, [{ type: 'input_text', text: '<live>\nVOLATILE\n</live>' }, { type: 'input_image', image_url: 'data:image/png;base64,CQ==' }]);
   const tail = second.body.input.slice(-3);
   assert.deepEqual(tail[0], { type: 'function_call_output', call_id: 'c_err', output: 'ERROR: disk full' });
   assert.deepEqual(tail[1], { type: 'function_call_output', call_id: 'c_img', output: 'see image\n[image image/png]' });
@@ -123,7 +123,7 @@ test('openai: rate-limit failure → limit; incomplete → cut off with its usag
 test('openai: 401 is unavailable without the key; efforts per model family in listModels', async (t) => {
   let models = false;
   const { server, engine, acc } = await setup((req, res) => {
-    if (models) return sendJson(res, 200, { data: [{ id: 'gpt-4.1' }, { id: 'gpt-6.1' }, { id: 'o4-mini' }] });
+    if (models) return sendJson(res, 200, { data: ['gpt-4.1', 'gpt-6.1', 'gpt-6-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'o4-mini'].map((id) => ({ id })) });
     sendJson(res, 401, { error: { message: `bad key ${KEY}` } });
   });
   t.after(() => server.close());
@@ -133,5 +133,8 @@ test('openai: 401 is unavailable without the key; efforts per model family in li
   assert.ok(!JSON.stringify({ denied, events }).includes(KEY));
   models = true;
   const list = await engine.listModels(acc);
-  assert.deepEqual(list.map((m) => [m.model, m.efforts.length]), [['gpt-4.1', 1], ['gpt-6.1', 5], ['o4-mini', 5]]);
+  assert.deepEqual(Object.fromEntries(list.map((m) => [m.model, m.efforts.join(' ')])), {
+    'gpt-4.1': 'none', 'gpt-6.1': 'none low medium high xhigh', 'gpt-6-sol': 'none low medium high xhigh',
+    'gpt-6-astra': 'low medium high xhigh', 'gpt-6.1-sol': 'low medium high xhigh', 'o4-mini': 'low medium high xhigh',
+  }, 'B-083: GPT-6 Astra, GPT-6.1 Sol and the o-series refuse effort none, so it is not offered');
 });

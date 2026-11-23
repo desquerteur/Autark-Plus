@@ -1,7 +1,9 @@
-// One human to-do on My day's list (formerly "For you"): a single line – a check where one tick finishes it (B-041: a
+// One human to-do on My day's list (formerly "For you"): a row – a check where one tick finishes it (B-041: a
 // plain to-do, a confirmation, a reminder, a checklist; tasks/todo-actions.ts checkAnswer), else the widget icon –,
-// the verb-first title, and a short meta line (priority, chat, its block "09:30 · 30 min", "Prepared by Mara", the
-// due – none beside a block – or ring time). It expands in place into its widget (AskBlock, at most two buttons; an
+// the verb-first title (up to two lines, whole once expanded), a short meta line ("Urgent", or "High" only near its
+// due time – day/day-next.ts priorityWord –, its block "09:30 · 30 min" with its day when not today, who asks,
+// "Prepared by Mara", the due – none beside a block – or ring time) and, when the asker gave one, the sentence why.
+// A to-do whose planned time passed asks when it suits the person (day/DayStale.tsx, 17.11.2026). It expands in place into its widget (AskBlock, at most two buttons; an
 // agent's mini-app to-do, F01, its sandboxed app – tasks/AppTodo.tsx) – no modals – with the agent's preparation
 // (day/DayPrep) above it.
 // F04: a timer shows its ring time ("17:00 · in 5 min" in the last hour, parts.tsx DueText); a to-do that rang gets
@@ -27,7 +29,7 @@ import { newId } from '../../shared/ids.ts';
 import { Button, Icon, confirm } from '../lib/ui.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
 import { KeptTail } from '../lib/kept-tail.ts';
-import { conversationMap, removeById, todos } from '../lib/store.ts';
+import { agentName, conversationMap, removeById, todos } from '../lib/store.ts';
 import { chatTitle } from '../lib/chat-face.tsx';
 import { dayZone } from '../lib/day-store.ts';
 import { go } from '../lib/router.ts';
@@ -43,14 +45,17 @@ import { DueText, SnoozedText } from './parts.tsx';
 import { ensureSchedules, schedules, schedulesLoaded } from './schedules.ts';
 import { canOpenChat } from './jump.ts';
 import { putTask } from './task-cache.ts';
-import { checkAnswer } from './todo-actions.ts';
+import { checkAnswer, todoActions } from './todo-actions.ts';
 import { todoMenu } from './todo-menu.ts';
 import { MoreButton } from './parts.tsx';
 import { BrowserTodo, BrowserTodoNote, handBackQuietly, useBrowserTodo } from './BrowserTodo.tsx';
 import { checkTodo, removeTodo } from '../day/day-actions.ts';
 import { blockMinutes, minutesText, rowTime } from '../day/day-format.ts';
-import { clockOf } from '../day/day-grid.ts';
+import { askedBy, dayTimeText, priorityWord, staleBlock } from '../day/day-next.ts';
+import { today } from '../day/day-state.ts';
 import { DayPrep, prepByline } from '../day/DayPrep.tsx';
+import { repeatsTitle, withoutRepeat } from '../day/day-repeat.ts';
+import { DayStale } from '../day/DayStale.tsx';
 
 export interface HumanItemProps {
   task: TaskView;
@@ -65,6 +70,8 @@ export interface HumanItemProps {
   now?: number;
   /** B-041: its planned block (lib/day-store.ts slotOf) – the row shows when and how long. */
   slot?: CalendarEvent;
+  /** Past its planned time, but not the first such row of the list: a slim line instead of the asking box. */
+  staleCollapsed?: boolean;
 }
 
 /** The record widget's draft key behind a to-do (AskBlock keys its widget by the target). */
@@ -138,7 +145,7 @@ function PlainDone(props: { task: TaskView; onAnswered?: () => void }) {
   const done = async () => {
     setBusy(true);
     try {
-      putTask(await rpc.call('tasks.complete', { id: props.task.id, clientId: newId('up') }));
+      putTask(await rpc.call('tasks.finish', { id: props.task.id, clientId: newId('up') }));
       props.onAnswered?.();
     } catch (error) {
       toastError(error, 'Could not complete');
@@ -171,11 +178,14 @@ function When(props: { task: TaskView; now: number; until: number | undefined; s
   return props.planned ? null : <DueText dueAt={task.dueAt} now={now} />;
 }
 
-/** "09:30 · 30 min" for a planned block, else the time the to-do takes ("30 min"); '' without either. */
+/** "09:30 · 30 min" for a planned block ("Tomorrow 09:30 · 30 min" on another day), else the time the to-do takes ("30 min"); '' without either. */
 function slotText(task: TaskView, slot: CalendarEvent | undefined): string {
-  if (slot && slot.state === 'planned') return rowTime(clockOf(slot.startAt, dayZone.value), blockMinutes(slot));
+  if (slot && slot.state === 'planned') return rowTime(dayTimeText(slot.startAt, dayZone.value, today.value), blockMinutes(slot));
   return task.estimateMin ? minutesText(task.estimateMin) : '';
 }
+
+/** The reason "Not needed" gives an asked to-do (its asker hears it, like "Can't do this…"). */
+const NOT_NEEDED = 'Not needed any more';
 
 export function HumanItem(props: HumanItemProps) {
   const { task, expanded, leaving } = props;
@@ -184,16 +194,21 @@ export function HumanItem(props: HumanItemProps) {
   const known = (task.conversationId ? conversationMap.value.get(task.conversationId) : undefined);
   const chatName = (known && chatTitle(known)) || task.conversationTitle;
   const showChat = !props.hideChat && chatName && canOpenChat(task.conversationId);
-  const why = typeof task.widget?.why === 'string' ? task.widget.why : '';
+  const asker = askedBy(task);
+  const who = asker ? agentName(asker) : showChat ? chatName : ''; // who asks; the person's own: the chat it is in
+  const askedWhy = typeof task.widget?.why === 'string' ? task.widget.why.trim() : '';
+  const why = repeatsTitle(askedWhy, todoLabel(task)) ? '' : askedWhy; // 17.11.2026: not the title said again
   const app = appWidgetOf(task.widget);
   const browser = useBrowserTodo(task);
   const now = props.now ?? Date.now();
-  const ringing = isRinging(task) && !leaving;
+  const ringing = isRinging(task, Date.now()) && !leaving;
   const snoozed = isSnoozed(task);
   const until = useSnoozeEnd(task, snoozed);
   const timed = snoozed || task.dueAt !== undefined || timerAt(task) !== undefined;
   const length = slotText(task, props.slot);
   const prepared = prepByline(task.prep);
+  const word = priorityWord(task, now);
+  const passed = leaving ? undefined : staleBlock(props.slot, now);
   const check = !!checkAnswer(task);
   useEffect(() => { if (leaving) handBackQuietly(task.id); }, [leaving, task.id]);
   const answered = () => { handBackQuietly(task.id); props.onAnswered?.(); };
@@ -204,11 +219,17 @@ export function HumanItem(props: HumanItemProps) {
     setTicking(false);
   };
   const markDone = async () => {
-    try { settled(await rpc.call('tasks.complete', { id: task.id, answer: MARKED_DONE_ANSWER, clientId: newId('up') }), task); answered(); } catch (error) { toastError(error, 'Could not complete'); }
+    try { settled(await rpc.call('tasks.finish', { id: task.id, answer: MARKED_DONE_ANSWER, clientId: newId('up') }), task); answered(); } catch (error) { toastError(error, 'Could not complete'); }
   };
   const remove = async () => {
     if (!(await mayDropTake(task)) || !(await removeTodo(task))) return;
     if (task.widget?.type === 'record') discardTake(takeKeyOf(task)); // nothing to send it to any more
+  };
+  /** "Not needed" under a passed time: the person's own goes (Remove), an asked one is declined with that reason. */
+  const notNeeded = async () => {
+    if (todoActions(task).remove) { await remove(); return; }
+    if (!(await mayDropTake(task))) return;
+    try { settled(await rpc.call('todos.decline', { id: task.id, reason: NOT_NEEDED, clientId: newId('up') }), task); answered(); } catch (error) { toastError(error, 'Could not decline'); }
   };
   const handlers = { onMarkDone: () => void markDone(), onRemove: () => void remove(), onDecline: () => void mayDropTake(task).then((ok) => { if (ok) setDeclining(true); }) };
   const menu = useContextMenu(() => todoMenu(task, handlers));
@@ -230,30 +251,31 @@ export function HumanItem(props: HumanItemProps) {
           )}
           <span class="todo-text">
             <span class="todo-title">{ringing && <span class="sr-only">Needs you now: </span>}<KeptTail text={todoLabel(task)} /></span>
-            {(showChat || timed || task.priority > 0 || length || prepared) && (
+            {(who || timed || word || length || prepared) && (
               <span class="todo-meta">
-                {task.priority > 0 && <span class="todo-priority">{task.priority === 2 ? 'Urgent' : 'High'}</span>}
+                {word && <span class="todo-priority">{word}</span>}
                 {length && <span class="day-slot-time tabular">{length}</span>}
-                {showChat && <span class="todo-chat">{chatName}</span>}
+                {who && <span class="todo-chat">{who}</span>}
                 {prepared && <span class="day-prepared">{prepared}</span>}
                 <When task={task} now={now} until={until} snoozed={snoozed} planned={props.slot?.state === 'planned'} />
               </span>
             )}
+            {why && <span class="todo-why-line">{why}</span>}
           </span>
         </button>
         {!leaving && task.origin?.source.startsWith('schedule:') && <button type="button" class="text-button" aria-label="Open source schedule" onClick={() => go.schedule(task.origin!.source.slice(9))}>Schedule</button>}
         {!leaving && <MoreButton build={() => todoMenu(task, handlers)} />}
       </div>
+      {passed && !declining && <DayStale task={task} block={passed} now={now} collapsed={props.staleCollapsed} onNotNeeded={() => void notNeeded()} />}
       {declining && !leaving && <DeclineReason task={task} onClose={() => setDeclining(false)} onDeclined={answered} />}
       {expanded && !declining && !leaving && (
         <div class="todo-body">
-          {why && <p class="todo-why">{why}</p>}
           {task.notes && <Markdown text={task.notes} class="todo-notes" />}
           <DayPrep prep={task.prep} />
           {browser ? <BrowserTodo task={task} target={browser} /> : <BrowserTodoNote task={task} />}
           {app ? <AppTodoBody task={task} widget={app} />
             : task.widget
-              ? <AskBlock block={task.widget} target={askTargetOf(task)} bare onAnswered={answered} />
+              ? <AskBlock block={withoutRepeat(task.widget, todoLabel(task))} target={askTargetOf(task)} bare onAnswered={answered} authorId={task.createdBy} />
               : <PlainDone task={task} onAnswered={answered} />}
         </div>
       )}

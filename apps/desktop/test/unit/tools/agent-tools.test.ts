@@ -2,7 +2,9 @@
 // chain-of-command locks): a team of three is ONE call with results per hire, its summary names every hire (role,
 // changed mode, own instructions), uncut; agents.templates lists every template; archive keeps the last agent and
 // moves reports up; agents.update moves a report (cycles refused), sets the avatar colour/emoji and the home device;
-// the secretary reports to the person, keeps her template and is never hired twice by an agent.
+// the secretary reports to the person, keeps her template and is never hired twice by an agent; B-080: effort 'auto'
+// clears a fixed effort, and agents.delegate's constraints say what the receiver should know first. 17.11.2026: agents.create
+// names the model and effort a new colleague's work asks for, and its result says what the colleague starts on and why.
 // Owns: these assertions only. Never: real engines, timers or sleeps.
 
 import { test } from 'node:test';
@@ -49,7 +51,7 @@ function rig() {
     try { data = JSON.parse(text); } catch { /* error text */ }
     return { failed: Boolean(out.isError), data: data as Record<string, any>, text };
   };
-  return { org, manager, summaries, run };
+  return { org, manager, summaries, run, services, registry };
 }
 
 test('a team of three is one call with results per hire, all reporting to the manager', async () => {
@@ -83,6 +85,38 @@ test('agents.create takes a home device like agents.update', async () => {
   assert.equal(org.get(here.data.agentId as string)?.deviceId, undefined, 'this PC is the default');
   assert.match((await run(manager, 'agents.create', { name: 'Ivo', role: 'Helper', device: 'Attic' })).text, /No linked PC is called "Attic"/);
   assert.ok(!org.list().some((agent) => agent.name === 'Ivo'), 'nothing hired for an unknown PC');
+});
+
+test('17.11.2026: agents.create names the model and effort a new colleague\'s work asks for – its start model with my name on it, its fixed effort – and the result says what the colleague starts on and why', async () => {
+  const { org, manager, run, services, registry } = rig();
+  const sonnet = { id: 'claude:claude-sonnet-5-5', provider: 'claude', model: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', engine: 'claude', efforts: ['low', 'medium', 'high'], caps: {}, tier: 'strong', strengths: { chat: 0.4 }, available: true, accounts: ['acc_1'] };
+  Object.assign(services, {
+    clock: { now: () => 1_000 },
+    catalog: { list: () => [sonnet], get: (id: string) => (id === sonnet.id ? sonnet : undefined), refresh: async () => undefined },
+    accounts: { get: () => ({ id: 'acc_1', provider: 'claude', auth: 'cli', state: 'ok', enabled: true }) },
+    // the router's answer for a first turn: a start model runs, else Auto settles the kind's default
+    router: { route: async ({ agent }: { agent: Agent }) => (agent.modelPolicy.pin
+      ? { modelId: agent.modelPolicy.pin, effort: agent.modelPolicy.effort ?? 'medium', reason: 'my start model · chat' }
+      : { modelId: sonnet.id, effort: 'medium', reason: "executing runs on the strong tier's best value · chat" }) },
+  });
+  // On the code before 17.11.2026 a hire took no model: every new agent landed on the strongest one.
+  const named = await run(manager, 'agents.create', { name: 'Vera', role: 'Research', model: 'Claude Sonnet 5.5', effort: 'high' });
+  assert.equal(named.failed, false, named.text);
+  assert.deepEqual(org.get(named.data.agentId as string)?.modelPolicy, { pin: sonnet.id, pinBy: { name: manager.name, at: 1_000 }, effort: 'high' });
+  assert.equal(named.data.runsOn, 'Claude Sonnet 5.5 · high – the model I named');
+  const auto = await run(manager, 'agents.create', { name: 'Theo', role: 'Helper' });
+  assert.deepEqual(org.get(auto.data.agentId as string)?.modelPolicy, {}, 'nothing named: nothing fixed');
+  assert.equal(auto.data.runsOn, "Claude Sonnet 5.5 · medium – executing runs on the strong tier's best value");
+  const effortOnly = await run(manager, 'agents.create', { name: 'Ines', role: 'Checker', effort: 'low' });
+  assert.deepEqual(org.get(effortOnly.data.agentId as string)?.modelPolicy, { effort: 'low' });
+  const unknown = await run(manager, 'agents.create', { name: 'Ivo', role: 'Helper', model: 'nope' });
+  assert.match(unknown.text, /Unknown model "nope"/);
+  assert.ok(!org.list().some((agent) => agent.name === 'Ivo'), 'nothing hired for a model that is not there');
+  // The field is described by the work, not relative to the one who gives it.
+  const schema = registry.get('agents.create')!.inputSchema as { properties: Record<string, { description?: string; enum?: string[] }> };
+  assert.match(schema.properties.model.description ?? '', /the smallest model that does the hardest step of this work as well as the strongest would/);
+  assert.doesNotMatch(schema.properties.model.description ?? '', /mine|cheap|strong\b"/);
+  assert.deepEqual(schema.properties.effort.enum, ['low', 'medium', 'high', 'xhigh', 'max']);
 });
 
 test('agents.templates lists every template, the secretary reporting to the person', async () => {

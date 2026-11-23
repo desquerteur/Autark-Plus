@@ -87,7 +87,7 @@ export function registerAppFile(s: RegisterDeps, input: { messageId: string; blo
   }
   const todo = blockTodo(s, messageId, blockIndex);
   if (!todo) return refuse(new WorkforceError('not_found', 'To-do not found.', { details: { messageId, blockIndex } }));
-  if (todo.status === 'done' || todo.status === 'cancelled') return refuse(new WorkforceError('conflict', 'This to-do is already finished.', { details: { taskId: todo.id } }));
+  if (todo.status === 'done' || todo.status === 'dropped') return refuse(new WorkforceError('conflict', 'This to-do is already finished.', { details: { taskId: todo.id } }));
   if (!file) throw new WorkforceError('not_found', 'File not found.', { details: { fileId } });
   const kv = new KvRepo(s.db);
   const entry = entryOf(s.db, messageId, blockIndex);

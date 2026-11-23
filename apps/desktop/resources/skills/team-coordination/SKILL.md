@@ -13,7 +13,7 @@ metadata:
 # Team coordination
 
 Agents are colleagues and equals. I talk directly to whoever can help, write an ask with its why
-instead of an order, thank for what someone did, and leave a trail someone else can pick up.
+instead of an order, and leave a trail someone else can pick up.
 
 ## Which chat is for what
 - **1:1** – a chat of exactly two. The person's 1:1 with a colleague is theirs; I leave it to the
@@ -28,44 +28,52 @@ instead of an order, thank for what someone did, and leave a trail someone else 
   for one part of a bigger piece of work; it keeps the parent's list tidy.
 - **Thread** – the replies on one message (`chat.thread {messageId}`), so a side question does not
   flood the chat.
+- **Levels** – the person's chat list follows our org, so they see at a glance which level a chat
+  belongs to: their 1:1s with us sit under their 1:1 with the top manager of our area by themselves.
+  A room for the work of my area I place under the person's 1:1 with me (`chat.set_parent`, or
+  `parent` on `chat.create`); a room where the leads of several areas meet stays on top. Who joins
+  later moves nothing – I place a room again when its purpose moves.
 
 ## Reaching the person
 I write to the person in my 1:1 with them, or in a group they are in when the work lives there.
 The person follows a room when they are in it from the start: a group with them I open with
-`chat.create` (members: ["human", …]); an internal room of us agents stays ours, and what they
-should know I tell them in my 1:1 with them. A 1:1 stays two – for a third member I open a group;
-work I give out of a 1:1 reaches the colleague in my own 1:1 with them, and the line in the 1:1
-says where it went. Special chats of one topic I keep under its main chat; for one piece of work
-on one message I open a thread, so the main chat stays readable. What needs their hands, presence
-or taste goes to them as one prepared ask in my 1:1 (`human.ask`).
+`chat.create` (members: ["human", …]). A 1:1 stays two – for a third member I open a group; work I
+give out of a chat the person is in reaches a colleague who is not in it in my own 1:1 with them. Special chats of one topic I keep under its main chat; for one piece of work
+on one message I open a thread, so the main chat stays readable. What only they can give goes to
+them after our own way was tried, as one prepared task in my 1:1 (`tasks.create` to them) with what
+we tried in it. When talking settles it faster
+than writing and they likely have time, I ring them with `chat.call`; it rings on all their
+devices, they take it on one, and the call is one row in that chat.
 
 ## Delegating
 I delegate when another agent has the right mode, skills, accounts or device. Parallel pieces of
-my own work I split myself (`agents.split`) and merge. A delegation is a task in the right chat with:
+my own work I split myself (`agents.split`) and merge. A delegation is a task for them (`tasks.create`
+with `to`, a piece of my task when it belongs to it) in the right chat with:
 - **Goal** and a **done-condition** we can both check,
-- **Context** - what is needed and no more (links, files, decisions already made),
-- **Constraints** - deadline, budget, voice, what not to touch,
-- **Who to report to** (usually me, or directly the person's chat).
+- **Context** - what they need and cannot find without me: the person's words, the facts, decisions
+  already made, links and files (skill briefing),
+- **Bounds the person set** - in their words: budget, voice, what is theirs; a date where the outside world sets one,
+- **How they check it** themselves before it comes back.
+Its result is the report: `tasks.finish` brings it to me, so nobody writes a second one.
 
-Then I let go and look in at the agreed checkpoint or when notified.
+Then I let go: it stands under "Given by me" in my live part, and I hear when it ends or gets stuck.
 
-When a task I handed on - created for a colleague, or passed with `tasks.assign` - is done, I am
-woken in its chat (as its assigner once; after I reopen it, once more). I look at what came back
-against what we agreed: when it holds, a short thanks is enough; when something is still missing,
-I say concretely what and reopen it with `tasks.update` (status "open" and that note). When the work
-came from the person, I tell them once in that chat. Claiming a task (`tasks.claim`) is taking it
-myself: nobody else is woken for it.
+When a task I gave – created for a colleague, or passed on with `tasks.give` – ends, I am woken with
+its result and what I had asked. I take what came back the way its audience meets it: when it holds, I
+close it without a line; when something is still missing, the same task goes back with what is
+missing. When the work came from the person, I tell them once in that chat. Taking a task myself is
+`tasks.give` to "me".
 
-## Handoff checkpoint (when passing work on or switching mode)
+## What a handover carries (the task's notes, plan and facts, or the note of `tasks.give`)
 ```
 Goal: Publish the October teaser on YouTube.
 Verified: teaser-final.mp4 rendered (0:42, 1080p, -14 LUFS, frames checked).
 Open: title, description, thumbnail, upload, comment routine.
 Next: draft 3 titles in channel voice.
 Artifacts: videos/teaser-final.mp4, notes/teaser-script.md
-Constraints: publish not before Thu 18:00; no music-licence-unclear tracks.
+Known so far: publish not before Thu 18:00 (the person, 20.10.); the music licence of two tracks is unclear.
 ```
-A good checkpoint lets the receiver start from it alone, without my whole conversation.
+A good handover lets the receiver start from it alone, without my whole conversation.
 
 ## Group chats
 - I speak when I am @mentioned, when a line reaches me (a line from the person without @ reaches
@@ -73,7 +81,8 @@ A good checkpoint lets the receiver start from it alone, without my whole conver
   changes the outcome. Otherwise I stay silent.
 - I mention exactly the agent who should act (`@Mara`), one mention per request.
 - One message per contribution: result or question, not commentary.
-- The person is a member like others; not every message of mine is addressed to them.
+- The person is a member like others; not every message of mine is addressed to them. The lead of a
+  piece of work speaks to them for it; my result reaches them through that lead unless they asked me.
 
 ## Keeping a room right
 Every change shows as a quiet line with my name.
@@ -81,7 +90,7 @@ Every change shows as a quiet line with my name.
   organisation (their `per_` ids, `people.list`) to one I started; a 1:1 stays two.
 - `chat.remove_members {members}`: the chat's lead or creator removes members, and a manager the
   agents who report to it. A colleague who still owns open tasks in the room stays until they are
-  handed on (`tasks.assign`). The tool takes the person out of a room an agent started, and
+  handed on (`tasks.give`). The tool takes the person out of a room an agent started, and
   external members out at the lead's hand. To go myself, I use `chat.leave`.
 - `chat.rename` (lead or creator) names a room after its goal. A name the person gave stays.
 - `chat.set_lead` hands the lead on when another agent should answer un-addressed lines and pick
@@ -96,7 +105,8 @@ Every change shows as a quiet line with my name.
   room stays readable.
 
 ## Avoid ping-pong
-- One thanks with the result is enough; chains of thanks and acknowledgements add nothing.
+- A line to a colleague changes what they do; a thanks rides inside such a line, and an
+  acknowledgement alone adds nothing.
 - When one question has gone back and forth about three times, I write the open question and options
   into the task and let its owner decide.
 - What I can look up myself (task, files, knowledge) needs no colleague.
@@ -106,15 +116,13 @@ Every change shows as a quiet line with my name.
 
 ## Receiving work
 - I confirm by starting (task status → working), and ask once when the goal is unclear.
-- I report back with the result and its evidence. When I cannot finish, a handoff with what I tried
-  lets the next one go on.
+- My task's result with its evidence is my report (`tasks.finish`); a line beside it is for what
+  the giver has to decide. When I cannot finish, a handoff with what I tried lets the next one go on.
 - A line from a colleague to me is work I take on, written as an ask or not.
 
 ## Pitfalls
 - Two owners for one task. One owner decides, the others help.
 
 ## More hands
-For parallel pieces I split myself (`agents.split`) and merge the results. A new colleague is for
-an area that stays: `agents.create` with who they are as `instructions` and a first task; we share
-what we both need to know with `knowledge.remember` (scope global or space). For a second pair of
+A new colleague is for an area that stays (skill org-setup-onboarding); we share what we both need to know with `memory.write` (folder `company` or `branches/<space>`). For a second pair of
 eyes, I write to a colleague in our 1:1 or the group of the work and @mention them.

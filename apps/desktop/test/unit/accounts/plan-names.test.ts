@@ -38,7 +38,7 @@ test('the e-mail\'s local part; a shared first word gives the part after the dot
 });
 
 test('usageSummaries carries the name; the domain never shows', () => {
-  const plan = (id: string, provider: ProviderId, patch: Partial<Account>): Account => ({ id, provider, label: provider === 'codex' ? 'Codex' : 'Claude Code', auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 0, ...patch });
+  const plan = (id: string, provider: ProviderId, patch: Partial<Account>): Account => ({ id, provider, label: provider === 'codex' ? 'Codex' : 'Claude Code', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 0, ...patch });
   const list = usageSummaries([plan('acc_a', 'codex', { email: 'max.one@example.com' }), plan('acc_b', 'claude', { email: 'max.two@example.org' })], Date.UTC(2026, 10, 6));
   assert.deepEqual(list.map((entry) => entry.name), ['one', 'two']);
   assert.ok(list.every((entry) => !entry.name?.includes('@')));

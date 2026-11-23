@@ -1,188 +1,202 @@
-// B-078 D13: the public library (runtime/library/): index-only lists (JSON and Markdown links), sources typed as owner/repo
-// or a URL, a shallow clone through a fake git, the entries of a cloned source, and publishing – off, a stored secret, a
-// path of this PC, the model check, gh missing or signed out, and the GitHub calls of a pull request.
-// Owns: these assertions only. Never: network, a real git or gh.
+// The public library over HTTPS (runtime/library/hub.ts, publish.ts, tools/builtin/library.ts, skills.ts from:) against a
+// small local stand-in of services/library: find/open/share/rate send what the server expects, publishing stops at each
+// check before anything goes out, skills.save from: writes the entry's files beside my own text and records
+// derived-from, carryFiles keeps what is mine, and library.find names a skill whose entry changed.
+// Owns: these assertions only. Never: the real library server or a real model.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseIndex, readIndex } from '../../../src/runtime/library/import.ts';
-import { addSource, libraryEntries, listSources, sourceOf, sourceStates, syncSource, DEFAULT_SOURCES } from '../../../src/runtime/library/sources.ts';
-import { publishEntry, publishedText, type PublishDeps } from '../../../src/runtime/library/publish.ts';
-import type { Run, RunResult } from '../../../src/runtime/library/exec.ts';
+import { findEntries, openEntry, rateEntry, shareEntry } from '../../../src/runtime/library/hub.ts';
+import { publishEntry, type PublishDeps } from '../../../src/runtime/library/publish.ts';
 import type { StructuredRunner } from '../../../src/runtime/decision/types.ts';
+import type { LibraryItem } from '../../../src/shared/model/library.ts';
+import { SkillLibrary } from '../../../src/runtime/skills/service.ts';
+import { parseFrontMatter } from '../../../src/runtime/skills/frontmatter.ts';
+import { ManualClock } from '../../../src/runtime/system/clock.ts';
+import { carryFiles, skillTools } from '../../../src/runtime/tools/builtin/skills.ts';
+import { libraryTools } from '../../../src/runtime/tools/builtin/library.ts';
 
 const temp = () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'library-'));
   return { dir, done: () => rmSync(dir, { recursive: true, force: true }) };
 };
 
-test('index-only lists: JSON (marketplace style) and Markdown links, each name once, no bodies', () => {
-  const json = parseIndex(JSON.stringify({ plugins: [
-    { name: 'PDF Tools', description: 'Fill and merge PDF forms.', source: './pdf' },
-    { name: 'pdf tools', description: 'Duplicate name.' },
-    { name: 'no-description' },
-  ] }), 'demo', 'https://example.org/list.json');
-  assert.deepEqual(json, [{ source: 'demo', name: 'pdf-tools', description: 'Fill and merge PDF forms.', url: 'https://example.org/pdf' }]);
-  const markdown = parseIndex([
-    '# Awesome skills', '- [Git Helper](https://github.com/a/git-helper) - Writes commit messages from the diff.',
-    '* **[Data Viz](https://github.com/b/viz)** – Charts from CSV files in one call.', '- [Short](https://x.org) - tiny', 'Some prose.',
-    '- [Bad](javascript:alert(1)) - A link that is no web address at all.',
-  ].join('\n'), 'list', 'https://raw.githubusercontent.com/x/y/main/README.md');
-  assert.deepEqual(markdown.map((entry) => [entry.name, entry.url]), [['git-helper', 'https://github.com/a/git-helper'], ['data-viz', 'https://github.com/b/viz']]);
-  assert.equal(markdown[1].description, 'Charts from CSV files in one call.');
-});
+const PDF: LibraryItem = {
+  id: 'pdf', kind: 'skill', name: 'pdf', description: 'Fill and merge PDF forms.', license: 'Apache-2.0', source: 'anthropics/skills/skills/pdf',
+  author: 'Anthropic', rev: 'aaaaaaaaaaaa', rating: 4.5, votes: 2, uses: 7, updated: '2026-11-14', body: '# PDF\nTheir steps.',
+  files: { 'scripts/fill.py': 'print(1)', 'reference.md': '# Ref', '.hidden/x': 'no', 'nested/SKILL.md': 'no' }, notes: [{ stars: 5, note: 'Worked first time.', day: '2026-11-14' }],
+};
 
-test('sources: the shipped ones, owner/repo and list URLs typed, an added one kept', () => {
-  assert.deepEqual(DEFAULT_SOURCES.filter((source) => source.kind === 'git').map((source) => source.repo), ['teydra/OpenAutark', 'anthropics/skills', 'obra/superpowers', 'K-Dense-AI/claude-scientific-skills']);
-  assert.deepEqual(sourceOf('https://github.com/Someone/niche-skills.git'), { id: 'someone-niche-skills', kind: 'git', repo: 'Someone/niche-skills' });
-  assert.equal(sourceOf('owner/repo')?.repo, 'owner/repo');
-  assert.equal(sourceOf('https://example.org/skills/index.json')?.kind, 'index');
-  assert.equal(sourceOf('http://example.org/x.json'), undefined, 'only https lists');
-  assert.equal(sourceOf('not a source'), undefined);
-  const t = temp();
-  try {
-    addSource(t.dir, { id: 'someone-niche-skills', kind: 'git', repo: 'Someone/niche-skills' });
-    assert.ok(listSources(t.dir).some((source) => source.id === 'someone-niche-skills' && !source.builtin));
-  } finally { t.done(); }
-});
+/** A stand-in of services/library: the four routes, every request kept. */
+async function library(entries: LibraryItem[] = [PDF]) {
+  const seen: Array<{ method: string; url: string; body?: unknown }> = [];
+  const read = (request: IncomingMessage) => new Promise<string>((resolve) => { let data = ''; request.on('data', (chunk) => { data += chunk; }); request.on('end', () => resolve(data)); });
+  const server: Server = createServer(async (request, response) => {
+    const raw = await read(request);
+    const body = raw ? JSON.parse(raw) as Record<string, unknown> : undefined;
+    seen.push({ method: request.method ?? '', url: request.url ?? '', ...(body ? { body } : {}) });
+    const url = new URL(request.url ?? '/', 'http://x');
+    const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
+    if (url.pathname === '/find') {
+      const words = url.searchParams.get('q') ?? '';
+      return send(200, { entries: entries.filter((entry) => !words || `${entry.name} ${entry.description}`.toLowerCase().includes(words.toLowerCase())).map(({ body: _b, files: _f, notes: _n, ...hit }) => hit) });
+    }
+    if (url.pathname.startsWith('/get/')) {
+      const entry = entries.find((item) => item.id === decodeURIComponent(url.pathname.slice(5)));
+      return entry ? send(200, entry) : send(404, { error: 'No such entry.' });
+    }
+    if (url.pathname === '/share') return send(200, { id: String(body?.name), rev: 'bbbbbbbbbbbb', license: 'CC0-1.0' });
+    if (url.pathname === '/rate') return send(200, { id: String(body?.id), rating: Number(body?.stars), votes: 1 });
+    send(404, { error: 'Not found.' });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const before = process.env.AUTARK_LIBRARY_URL;
+  process.env.AUTARK_LIBRARY_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  return {
+    seen,
+    done: async () => {
+      if (before === undefined) delete process.env.AUTARK_LIBRARY_URL; else process.env.AUTARK_LIBRARY_URL = before;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
 
-test('sync: a shallow clone the first time, fetch + reset after; a cloned source lists its SKILL.md entries as external', async () => {
-  const t = temp();
+test('hub: find, open, share and rate send what the server expects; an error answer comes back as its text', async () => {
+  const lib = await library();
   try {
-    const calls: string[][] = [];
-    const run: Run = async (_command, args) => {
-      calls.push([...args]);
-      if (args[0] === 'clone') {
-        const target = args[args.length - 1];
-        mkdirSync(path.join(target, '.git'), { recursive: true });
-        mkdirSync(path.join(target, 'skills', 'pdf'), { recursive: true });
-        writeFileSync(path.join(target, 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\n---\n# PDF\nFill and merge PDF forms.');
-      }
-      return { code: 0, stdout: '', stderr: '' };
-    };
-    let now = 1000;
-    const deps = { dataDir: t.dir, git: () => '/usr/bin/git', run, now: () => now };
-    const source = { id: 'anthropics-skills', kind: 'git' as const, repo: 'anthropics/skills' };
-    const state = await syncSource(deps, source);
-    assert.deepEqual(calls[0].slice(0, 5), ['clone', '--depth', '1', '--single-branch', '--no-tags']);
-    assert.equal(calls[0][5], 'https://github.com/anthropics/skills.git');
-    assert.equal(state.entries, 1);
-    now = 2000;
-    await syncSource(deps, source);
-    assert.deepEqual(calls.slice(1).map((args) => args[2]), ['fetch', 'reset']);
-    const [entry] = libraryEntries(t.dir, now).filter((item) => item.source === 'anthropics-skills');
-    assert.equal(entry.name, 'pdf');
-    assert.equal(entry.description, 'PDF: Fill and merge PDF forms.', 'no description: heading + first sentence');
-    assert.match(entry.url ?? '', /github\.com\/anthropics\/skills\/blob\/HEAD\/skills\/pdf\/SKILL\.md$/);
-    const missing = await syncSource({ ...deps, git: () => undefined }, { id: 'superpowers', kind: 'git', repo: 'obra/superpowers' });
-    assert.equal(missing.problem, 'git is not installed on this PC');
-    assert.ok(sourceStates(t.dir).some((item) => item.source.id === 'anthropics-skills' && item.syncedAt === 2000));
-  } finally { t.done(); }
-});
-
-test('sync of a list keeps its entries in its index file', async () => {
-  const t = temp();
-  try {
-    const fetchText = async () => ({ ok: true, status: 200, text: async () => '- [Viz](https://github.com/b/viz) - Charts from CSV files in one call.' });
-    const state = await syncSource({ dataDir: t.dir, git: () => undefined, fetchText, now: () => 5 }, { id: 'list', kind: 'index', url: 'https://example.org/README.md' });
-    assert.equal(state.entries, 1);
-    assert.equal(readIndex(path.join(t.dir, 'library'), 'list')[0].name, 'viz');
-  } finally { t.done(); }
+    const hits = await findEntries({ words: 'pdf forms', kind: 'skill' });
+    assert.deepEqual(hits.map((hit) => [hit.id, hit.rating, hit.license]), [['pdf', 4.5, 'Apache-2.0']]);
+    assert.equal(lib.seen[0].url, '/find?q=pdf+forms&kind=skill&limit=10');
+    assert.deepEqual(Object.keys((await openEntry('pdf')).files).sort(), ['.hidden/x', 'nested/SKILL.md', 'reference.md', 'scripts/fill.py']);
+    await assert.rejects(openEntry('nothing'), /No such entry\./);
+    assert.deepEqual(await shareEntry({ kind: 'note', name: 'tip', description: 'A short tip for teams.', body: 'Twenty characters or more.', voter: 'v'.repeat(48) }), { id: 'tip', rev: 'bbbbbbbbbbbb', license: 'CC0-1.0' });
+    assert.deepEqual(await rateEntry({ id: 'pdf', stars: 5, voter: 'v'.repeat(48) }), { id: 'pdf', rating: 5, votes: 1 });
+    assert.deepEqual(lib.seen.filter((call) => call.method === 'POST').map((call) => call.url), ['/share', '/rate']);
+  } finally { await lib.done(); }
 });
 
 const SKILL = '---\nname: git-commits\ndescription: I use this when I write commit messages.\n---\n\n# Git commits\nSay what changed and why, in the imperative.';
 
-function publishDeps(over: Partial<PublishDeps> & { replies?: Record<string, RunResult> } = {}) {
-  const calls: Array<{ args: string[]; input?: string }> = [];
-  const replies = over.replies ?? {};
-  const run: Run = async (_command, args, options) => {
-    calls.push({ args: [...args], ...(options.input ? { input: options.input } : {}) });
-    const key = Object.keys(replies).find((prefix) => args.join(' ').startsWith(prefix));
-    if (key) return replies[key];
-    if (args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
-    if (args[1] === 'user') return { code: 0, stdout: 'someone\n', stderr: '' };
-    if (args[1] === 'repos/teydra/OpenAutark') return { code: 0, stdout: 'main\tfalse\n', stderr: '' };
-    if (args.includes('repos/teydra/OpenAutark/forks')) return { code: 0, stdout: 'someone\n', stderr: '' };
-    if (args[1]?.includes('/git/ref/heads/')) return { code: 0, stdout: 'abc123\n', stderr: '' };
-    if (args.includes('repos/teydra/OpenAutark/pulls')) return { code: 0, stdout: 'https://github.com/teydra/OpenAutark/pull/7\n', stderr: '' };
-    return { code: 0, stdout: '{}', stderr: '' };
-  };
+function publishDeps(over: Partial<PublishDeps> = {}) {
+  const shared: unknown[] = [];
   const check: StructuredRunner = async () => ({ text: '', structured: { internal: false, found: [] }, by: 'fake' });
-  const deps: PublishDeps = { enabled: () => true, redact: (text) => text.replace(/hunter2/g, 'secret://pw'), check, run, now: () => Date.UTC(2026, 10, 6, 15, 30), ...over };
-  return { deps, calls };
+  const deps: PublishDeps = {
+    enabled: () => true, redact: (text) => text.replace(/hunter2/g, 'secret://pw'), check,
+    share: async (entry) => { shared.push(entry); return { id: entry.name, rev: 'cccccccccccc' }; }, ...over,
+  };
+  return { deps, shared };
 }
 
-test('publish: off, a stored secret, a path of this PC and the model check each keep the text here', async () => {
-  const off = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, publishDeps({ enabled: () => false }).deps);
+test('publish: off, a stored secret, a path of this PC and the model check each keep the text here; nothing is sent', async () => {
+  const { deps, shared } = publishDeps();
+  const off = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, { ...deps, enabled: () => false });
   assert.deepEqual([off.ok, !off.ok && off.reason], [false, 'off']);
-  const secret = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\nThe password is hunter2.` }, publishDeps().deps);
+  const secret = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\nThe password is hunter2.` }, deps);
   assert.equal(!secret.ok && secret.reason, 'secret');
-  const local = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\nLogs are in C:\\Users\\alex\\logs.` }, publishDeps().deps);
+  const local = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\nLogs are in C:\\Users\\alex\\logs.` }, deps);
   assert.equal(!local.ok && local.reason, 'internal');
-  const mail = await publishEntry({ kind: 'note', name: 'contact', text: `${SKILL}\nWrite to maria@acme.de.` }, publishDeps().deps);
+  const mail = await publishEntry({ kind: 'note', name: 'contact', text: `${SKILL}\nWrite to maria@acme.de.` }, deps);
   assert.equal(!mail.ok && mail.reason, 'internal');
-  const flagged = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, publishDeps({ check: async () => ({ text: '', structured: { internal: true, found: ['customer Müller'] }, by: 'fake' }) }).deps);
+  const flagged = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, { ...deps, check: async () => ({ text: '', structured: { internal: true, found: ['customer Müller'] }, by: 'fake' }) });
   assert.ok(!flagged.ok && flagged.reason === 'internal' && flagged.text.includes('customer Müller'));
   for (const line of ['Run `cp /home/anna/acme/keys .` first.', 'Keys sit in "~/acme/keys".', 'The share is \\\\fileserver\\team.']) {
-    const quoted = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\n${line}` }, publishDeps().deps);
+    const quoted = await publishEntry({ kind: 'skill', name: 'git-commits', text: `${SKILL}\n${line}` }, deps);
     assert.equal(!quoted.ok && quoted.reason, 'internal', line);
   }
   const prompts: string[] = [];
-  const named = await publishEntry({ kind: 'skill', name: 'kunde-mueller-gmbh-export', text: SKILL }, publishDeps({ check: async (input) => { prompts.push(input.prompt); return { text: '', structured: { internal: true, found: ['customer name'] }, by: 'fake' }; } }).deps);
+  const named = await publishEntry({ kind: 'skill', name: 'kunde-mueller-gmbh-export', text: SKILL }, { ...deps, check: async (input) => { prompts.push(input.prompt); return { text: '', structured: { internal: true, found: ['customer name'] }, by: 'fake' }; } });
   assert.equal(!named.ok && named.reason, 'internal');
   assert.ok(prompts[0].startsWith('kunde-mueller-gmbh-export\n'), 'the model sees the public name too');
-  const nobody = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, publishDeps({ check: undefined }).deps);
+  const nobody = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, { ...deps, check: undefined });
   assert.equal(!nobody.ok && nobody.reason, 'no-check');
+  assert.equal(shared.length, 0, 'nothing went out');
   for (const result of [off, secret, local, flagged, nobody]) assert.ok(!result.ok && !/\b(you|may|must|allowed)\b/i.test(result.text), 'first person, no permission words');
 });
 
-test('publish: without gh or signed out it says so; otherwise a fork, a branch, the file under library/ and a pull request', async () => {
-  const missing = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, publishDeps({ replies: { 'auth status': { code: -1, stdout: '', stderr: '', missing: true } } }).deps);
-  assert.ok(!missing.ok && missing.reason === 'no-gh' && /gh auth login/.test(missing.text));
-  const out = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, publishDeps({ replies: { 'auth status': { code: 1, stdout: '', stderr: 'not logged in' } } }).deps);
-  assert.equal(!out.ok && out.reason, 'signed-out');
-  const { deps, calls } = publishDeps();
-  const done = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL, derivedFrom: ['anthropics-skills/skill-creator'] }, deps);
-  assert.deepEqual(done, { ok: true, url: 'https://github.com/teydra/OpenAutark/pull/7', branch: 'library/skill/git-commits-202611061530', path: 'library/skill/git-commits/SKILL.md' });
-  const put = calls.find((call) => call.args.includes('PUT'))!;
-  assert.equal(put.args[3], 'repos/someone/OpenAutark/contents/library/skill/git-commits/SKILL.md', 'the fork, only library/');
-  const content = Buffer.from((JSON.parse(put.input!) as { content: string }).content, 'base64').toString('utf8');
-  assert.match(content, /^---\nkind: skill\nderived-from: \["anthropics-skills\/skill-creator"\]\nname: git-commits/);
-  const pr = JSON.parse(calls.find((call) => call.args.includes('repos/teydra/OpenAutark/pulls'))!.input!) as { head: string; base: string };
-  assert.deepEqual([pr.head, pr.base], ['someone:library/skill/git-commits-202611061530', 'main']);
+test('publish: a clean text goes out with its name, description and body, and comes back with its address', async () => {
+  const { deps, shared } = publishDeps();
+  const done = await publishEntry({ kind: 'skill', name: 'Git Commits', text: SKILL }, deps);
+  assert.ok(done.ok);
+  assert.match(done.url, /\/get\/git-commits$/);
+  assert.deepEqual(shared, [{ kind: 'skill', name: 'git-commits', description: 'I use this when I write commit messages.', body: '# Git commits\nSay what changed and why, in the imperative.' }]);
+  const failed = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, { ...deps, share: async () => { throw new Error('At most 20 shares an hour from one place.'); } });
+  assert.ok(!failed.ok && failed.reason === 'failed' && /20 shares/.test(failed.text));
 });
 
-test('publish: a fresh fork gets a few tries for its branch; an entry already in the library is replaced with its sha', async () => {
-  const { deps, calls } = publishDeps();
-  const base = deps.run!;
-  let refTries = 0;
-  const waits: number[] = [];
-  const sha = 'a'.repeat(40);
-  deps.wait = async (ms) => { waits.push(ms); };
-  deps.run = async (command, args, options) => {
-    if (args.includes('repos/someone/OpenAutark/git/refs') && ++refTries < 3) { calls.push({ args: [...args] }); return { code: 1, stdout: '', stderr: 'Not Found' }; }
-    if (args[1]?.startsWith('repos/someone/OpenAutark/contents/') && !args.includes('PUT')) { calls.push({ args: [...args] }); return { code: 0, stdout: `${sha}\n`, stderr: '' }; }
-    return base(command, args, options);
-  };
-  const done = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, deps);
-  assert.ok(done.ok, JSON.stringify(done));
-  assert.equal(refTries, 3, 'the branch is created on the third try');
-  assert.equal(waits.length, 2);
-  const put = JSON.parse(calls.find((call) => call.args.includes('PUT'))!.input!) as { sha?: string };
-  assert.equal(put.sha, sha, 'the existing file\'s sha goes with the PUT');
-  const fresh = publishDeps();
-  await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, fresh.deps);
-  assert.equal((JSON.parse(fresh.calls.find((call) => call.args.includes('PUT'))!.input!) as { sha?: string }).sha, undefined, 'a new file goes without one');
-  const never = publishDeps({ replies: { 'api -X POST repos/someone/OpenAutark/git/refs': { code: 1, stdout: '', stderr: 'Not Found' } } });
-  never.deps.wait = async () => {};
-  const failed = await publishEntry({ kind: 'skill', name: 'git-commits', text: SKILL }, never.deps);
-  assert.ok(!failed.ok && /creating the branch/.test(failed.text));
-  assert.equal(never.calls.filter((call) => call.args.includes('repos/someone/OpenAutark/git/refs')).length, 5, 'bounded tries');
+test('carryFiles: plain files at their paths; never SKILL.md, a hidden path, a path outside, or a file of mine', () => {
+  const t = temp();
+  try {
+    writeFileSync(path.join(t.dir, 'SKILL.md'), 'mine');
+    const first = carryFiles({ 'SKILL.md': 'theirs', 'scripts/fill.py': 'print(1)', 'reference.md': '# Ref', '.git/config': 'x', 'a/.env': 'x', 'nested/SKILL.md': 'x', '../outside.txt': 'x' }, t.dir);
+    assert.deepEqual(first.sort(), ['reference.md', 'scripts/fill.py']);
+    assert.equal(readFileSync(path.join(t.dir, 'SKILL.md'), 'utf8'), 'mine');
+    assert.ok(!existsSync(path.join(t.dir, '.git')) && !existsSync(path.join(t.dir, 'a')) && !existsSync(path.join(t.dir, 'nested')) && !existsSync(path.join(t.dir, '..', 'outside.txt')));
+    writeFileSync(path.join(t.dir, 'scripts', 'fill.py'), 'print(2) # adapted');
+    assert.deepEqual(carryFiles({ 'scripts/fill.py': 'print(1)' }, t.dir), []);
+    assert.equal(readFileSync(path.join(t.dir, 'scripts', 'fill.py'), 'utf8'), 'print(2) # adapted', 'what I adapted stays mine');
+  } finally { t.done(); }
 });
 
-test('publishedText: a text without front matter gets name and kind', () => {
-  assert.equal(publishedText({ kind: 'note', name: 'x', text: 'Plain note.' }, 'plain-note'), '---\nname: plain-note\nkind: note\n---\n\nPlain note.\n');
+function skillContext(dir: string) {
+  const clock = new ManualClock();
+  const skills = new SkillLibrary({ paths: { workspace: path.join(dir, 'ws'), resources: path.join(dir, 'res') }, clock, home: '' });
+  const ctx = { services: { skills, paths: { data: path.join(dir, 'data'), workspace: path.join(dir, 'ws') }, clock, modes: { list: () => [] } }, agent: { id: 'ag_a' } } as never;
+  return { skills, ctx };
+}
+const textOf = (output: unknown) => (output as { content: Array<{ text: string }> }).content[0].text;
+
+test('skills.save from: the entry\'s files beside my own text, derived-from library:<id>@<rev>, its license; an unknown entry saves nothing', async () => {
+  const t = temp();
+  const lib = await library();
+  try {
+    const { skills, ctx } = skillContext(t.dir);
+    const save = skillTools.find((tool) => tool.name === 'skills.save')!;
+    const out = JSON.parse(textOf(await save.run({ name: 'pdf-forms', description: 'I fill PDF forms the way that works here.', body: 'My own steps.', from: 'pdf' } as never, ctx))) as { derivedFrom: string; carried: string[]; folder: string; license: string };
+    assert.deepEqual([out.derivedFrom, out.carried.sort(), out.license], ['library:pdf@aaaaaaaaaaaa', ['reference.md', 'scripts/fill.py'], 'Apache-2.0']);
+    const text = readFileSync(path.join(out.folder, 'SKILL.md'), 'utf8');
+    assert.deepEqual(parseFrontMatter(text).data['derived-from'], ['library:pdf@aaaaaaaaaaaa']);
+    assert.match(text, /My own steps\./);
+    assert.doesNotMatch(text, /Their steps/);
+    assert.equal(readFileSync(path.join(out.folder, 'scripts', 'fill.py'), 'utf8'), 'print(1)');
+    const missing = await save.run({ name: 'x-skill', body: 'b', from: 'nothing' } as never, ctx) as { isError?: boolean };
+    assert.equal(missing.isError, true);
+    assert.equal(skills.get('x-skill', 'ag_a'), undefined, 'nothing saved without its entry');
+  } finally { await lib.done(); t.done(); }
+});
+
+test('derived-from: a re-save keeps it, a newer rev of the same entry replaces the old one', () => {
+  const t = temp();
+  try {
+    const { skills } = skillContext(t.dir);
+    const derived = () => parseFrontMatter(readFileSync(path.join(t.dir, 'ws', 'agents', 'ag_a', 'skills', 'pdf-forms', 'SKILL.md'), 'utf8')).data['derived-from'];
+    skills.save({ name: 'pdf-forms', description: 'I fill PDF forms.', body: 'My steps.', ownerAgentId: 'ag_a', derivedFrom: ['library:pdf@aaaaaaaaaaaa'] });
+    skills.save({ name: 'pdf-forms', description: 'I fill PDF forms.', body: 'My steps, better.', ownerAgentId: 'ag_a' });
+    assert.deepEqual(derived(), ['library:pdf@aaaaaaaaaaaa'], 'kept on a re-save without it');
+    skills.save({ name: 'pdf-forms', description: 'I fill PDF forms.', body: 'Again.', ownerAgentId: 'ag_a', derivedFrom: ['library:forms@bbbbbbbbbbbb', 'library:pdf@cccccccccccc'] });
+    assert.deepEqual(derived(), ['library:forms@bbbbbbbbbbbb', 'library:pdf@cccccccccccc']);
+  } finally { t.done(); }
+});
+
+test('library.find lists hits with rating and license; without words it names my skill whose entry changed; library.open marks it as strangers\' text', async () => {
+  const t = temp();
+  const lib = await library();
+  try {
+    const { skills, ctx } = skillContext(t.dir);
+    skills.save({ name: 'pdf-forms', description: 'I fill PDF forms.', body: 'My steps.', ownerAgentId: 'ag_a', derivedFrom: ['library:pdf@000000000000'] });
+    skills.save({ name: 'same-pdf', description: 'I fill PDF forms too.', body: 'Steps.', ownerAgentId: 'ag_a', derivedFrom: ['library:pdf@aaaaaaaaaaaa'] });
+    const tool = (name: string) => libraryTools.find((item) => item.name === name)!;
+    const found = textOf(await tool('library.find').run({ words: 'pdf' } as never, ctx));
+    assert.match(found, /^- pdf · skill – Fill and merge PDF forms\. · ★4\.5 \(2\) · Apache-2\.0, Anthropic$/m);
+    const browse = textOf(await tool('library.find').run({} as never, ctx));
+    assert.match(browse, /my skill pdf-forms came from pdf, which changed/);
+    assert.doesNotMatch(browse, /same-pdf/);
+    const opened = textOf(await tool('library.open').run({ id: 'pdf' } as never, ctx));
+    assert.match(opened, /^From the public library Anthropic, Apache-2\.0, written by strangers/);
+    assert.match(opened, /skills\.save with from: "pdf"/);
+  } finally { await lib.done(); t.done(); }
 });

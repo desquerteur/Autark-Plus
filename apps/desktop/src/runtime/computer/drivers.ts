@@ -65,6 +65,7 @@ export function createHelper(platform: NodeJS.Platform, deps: HelperDeps): Helpe
       if (broker.reachable()) return broker.lease(deps.log);
       brokerState.via = 'powershell';
       brokerState.desktop = undefined;
+      deps.log.info('desktop helper selected', { via: 'powershell' });
       return deps.supervisor.spawn(input);
     },
   };

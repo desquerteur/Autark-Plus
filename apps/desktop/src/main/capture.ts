@@ -49,7 +49,7 @@ const isWebView = (view: unknown): view is ViewLike =>
 export function windowLayers(window: LayeredWindow | null): WindowLayers | null {
   if (!window || window.isDestroyed()) return null;
   const views = window.contentView.children.filter(isWebView).filter((view) =>
-    view.webContents.id !== window.webContents.id && !view.webContents.isDestroyed() && (view.getVisible?.() ?? true));
+    view.webContents && view.webContents.id !== window.webContents.id && !view.webContents.isDestroyed() && (view.getVisible?.() ?? true));
   return {
     width: window.getContentBounds().width,
     views: views.map((view) => ({ bounds: view.getBounds(), capturePage: () => view.webContents.capturePage() })),

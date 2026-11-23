@@ -16,6 +16,9 @@ export const MAX_ADDRESSES = 8;
 export interface MeshMeeting {
   /** The addresses the server saw that PC on (dialed together with the stored ones). */
   addresses(device: DeviceRecord): string[];
+  /** 18.11.2026: a WebRTC data channel straight to that PC, agreed on through the server (rendezvous/pc-rtc.ts);
+   * undefined when there is no try now (off, failed lately, not there). */
+  rtc?(device: DeviceRecord): Promise<SocketLike> | undefined;
   /** A tunnel through the server – the last fallback; undefined when that PC is not there. */
   tunnel(device: DeviceRecord): Promise<SocketLike> | undefined;
 }
@@ -57,20 +60,25 @@ export function firstOpen(opens: Array<() => Promise<SocketLike>>): Promise<Sock
  * (including a broken tunnel) is retryable. A 'not_found' from the handshake is thrown.
  */
 export async function openChannel(
-  routes: Array<() => Promise<SocketLike>>, signer: Signer, fingerprint: string,
-): Promise<{ channel: SecureChannel } | { refused: boolean; error: unknown }> {
+  routes: Array<() => Promise<SocketLike>>, signer: Signer, fingerprint: string, stale?: () => boolean,
+): Promise<{ channel: SecureChannel } | { stale: true } | { refused: boolean; error: unknown }> {
   let error: unknown;
   let refused = false;
   for (const open of routes) {
     let socket: SocketLike;
     try { socket = await open(); } catch (failure) { error = failure; continue; }
+    // B-087: a link came up meanwhile (the other PC dialed in while this slow dial was on its way): no second
+    // handshake – it would only replace that link and cut the calls it carries.
+    if (stale?.()) { socket.close(); return { stale: true }; }
     let answered = false;
     let closedUnanswered = false;
     socket.onMessage(() => { answered = true; });
     // Only an explicit refusal (4003) stops retries; tunnels without close codes can fail in transit.
     socket.onClose((code) => { if (!answered && code === REFUSED_CLOSE) closedUnanswered = true; });
     try {
-      return { channel: await connectSecure(socket, signer, fingerprint) };
+      const channel = await connectSecure(socket, signer, fingerprint);
+      (socket as { trusted?: () => void }).trusted?.(); // a data channel (rtc-socket.ts) lifts its pre-handshake caps
+      return { channel };
     } catch (failure) {
       if (failure instanceof WorkforceError && failure.code === 'not_found') throw failure;
       socket.close();

@@ -14,6 +14,7 @@ const namesIn = (text: string): string[] => [...new Set(text.match(/\b[A-Z]\w*\b
 function whoOf(rule: ScopeRule): Pick<RpcMethodInfo, 'who' | 'connector' | 'person'> {
   if (typeof rule === 'string') return { who: rule };
   if ('person' in rule) return { ...whoOf(rule.base), person: true };
+  if ('allCapabilities' in rule) return { who: rule.allCapabilities.join(' + ') };
   return { who: rule.capability, ...(rule.external ? { connector: true as const } : {}) };
 }
 

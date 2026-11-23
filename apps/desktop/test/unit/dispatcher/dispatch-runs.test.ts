@@ -3,14 +3,13 @@
 // or released, the freed slot is handed on before the keep-awake lease follows, a crashed turn
 // closes its run, live notes and activity rows, hooks of another run change nothing), the abort
 // kinds (the first kind decides, a Stop after an urgent cut makes it a stop, a shutdown keeps the
-// wakes, an urgent abort leaves a deferred boundary action) and the slot FIFO (agents/dispatch-slots.ts).
+// wakes, an urgent abort leaves a deferred boundary action). The slot FIFO (dispatch-slots.ts) is gone since 07.11.2026.
 // The dispatcher's own behaviour stays covered by dispatcher.test.ts and its siblings.
 // Owns: these assertions only. Never: real engines, timers or network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { abortTurn, RunningTurns, type RunEntry } from '../../../src/runtime/agents/dispatch-runs.ts';
-import { SlotQueue } from '../../../src/runtime/agents/dispatch-slots.ts';
 import { groupWakes } from '../../../src/runtime/agents/dispatch-groups.ts';
 import type { LiveStatus } from '../../../src/runtime/agents/dispatch-live.ts';
 import type { TurnOutcome, TurnRequest } from '../../../src/runtime/agents/turn-types.ts';
@@ -40,8 +39,7 @@ function rig(execute: (request: TurnRequest) => Promise<TurnOutcome>) {
   } as unknown as LiveStatus;
   const ended: string[] = [];
   let turns!: RunningTurns;
-  const supervisor = { admit: async () => () => {}, nudge: () => events.push('nudge') };
-  turns = new RunningTurns({ services: () => services, executor: { execute }, supervisor }, live, (agentId) => {
+  turns = new RunningTurns({ services: () => services, executor: { execute } }, live, (agentId) => {
     ended.push(agentId);
     events.push(`ended:${agentId}:running=${turns.has(agentId)}`);
   });
@@ -75,7 +73,7 @@ test('a turn runs a microtask after start, settles its wakes and hands the slot 
   await entry.finished;
   assert.deepEqual(r.events, [
     'awake:true', 'status:ag_tom:working', 'status:ag_tom:working:running tests',
-    'done:wk_1,wk_2', 'status:ag_tom:idle', 'nudge', 'ended:ag_tom:running=false', 'awake:false',
+    'done:wk_1,wk_2', 'status:ag_tom:idle', 'ended:ag_tom:running=false', 'awake:false',
   ]);
   assert.equal(r.turns.size, 0);
 });
@@ -128,21 +126,4 @@ test('abort kinds: the first decides, a Stop after an urgent cut is a stop, a sh
   abortTurn(human, 'The runtime is shutting down.', 'shutdown', 'release');
   assert.equal(human.control.stopKind, 'human', 'the first kind decides');
   assert.equal(human.settle, 'release', 'a shutdown keeps the wakes');
-});
-
-test('slot FIFO: each agent once, urgent work to the front, drain empties it', () => {
-  const slots = new SlotQueue();
-  slots.push('ag_a');
-  slots.push('ag_b');
-  slots.push('ag_c');
-  assert.ok(slots.has('ag_b'));
-  slots.toFront('ag_c');
-  slots.toFront('ag_d');
-  assert.equal(slots.size, 4);
-  assert.equal(slots.shift(), 'ag_d');
-  assert.equal(slots.has('ag_d'), false);
-  assert.deepEqual(slots.drain(), ['ag_c', 'ag_a', 'ag_b']);
-  assert.equal(slots.size, 0);
-  assert.equal(slots.has('ag_a'), false);
-  assert.equal(slots.shift(), undefined);
 });

@@ -65,8 +65,8 @@ export class ConversationRepo {
 
   /**
    * Reserves the next per-conversation seq (call inside a transaction). `quiet` leaves the chat's
-   * last_message_at and updated_at alone – a row only agents read (C6: the notice of the person's
-   * edit or delete, chat/message-edits.ts) must not move the chat up the person's list.
+   * last_message_at and updated_at alone – a silent line (a status line, an agent's quiet line, C6: the notice of the
+   * person's edit or delete, chat/message-edits.ts) must not move the chat up the person's list.
    */
   nextSeq(id: string, at: number, options: { quiet?: boolean } = {}): number {
     const row = options.quiet
@@ -221,7 +221,7 @@ export class ConversationRepo {
     const out = new Map<string, number>();
     if (!ids.length) return out;
     const rows = this.db.all<Row>(
-      `SELECT conversation_id, COUNT(*) AS n FROM tasks WHERE parent_id IS NULL AND status NOT IN ('done', 'cancelled')
+      `SELECT conversation_id, COUNT(*) AS n FROM tasks WHERE parent_id IS NULL AND status IN ('open', 'waiting')
        AND conversation_id IN (${ids.map(() => '?').join(',')}) GROUP BY conversation_id`,
       ids,
     );

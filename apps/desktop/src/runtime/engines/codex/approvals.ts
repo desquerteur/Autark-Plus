@@ -1,6 +1,6 @@
-// Answers to Codex app-server approval server-requests. Agent turns run with approvalPolicy 'never'
-// (isolation.ts), so these arrive only from an older server or an odd config: an agent turn accepts them
-// for the session, a read-only turn (helpers) declines them. AF-013: a turn with an access policy (codex/access.ts)
+// Answers to Codex app-server approval server-requests. B-080: Codex's command guard sends them in every agent turn
+// (approvalPolicy 'on-request', isolation.ts); the app accepts them: an agent turn accepts them for the session at once,
+// a read-only turn (helpers, approvalPolicy 'never') declines them. AF-013: a turn with an access policy (codex/access.ts)
 // asks on purpose; turn.ts judges each request and answers it for that one step.
 // Owns: the exact decision values per method (verified against the app-server's generated JSON schema).
 // Never: asks anyone.

@@ -48,7 +48,7 @@ test('feedback without a configured sender: Save keeps the report on this PC and
   const cell = page.locator('.frame-feedback-cell').getByRole('button', { name: 'Feedback', exact: true });
   await cell.waitFor({ timeout: 15_000 });
   await cell.click();
-  const dialog = page.locator('.popover.feedback-menu'); // the header cell's menu
+  const dialog = page.locator('dialog.feedback-overlay[open]'); // the snapshot overlay (feedback 16.11.2026)
   await dialog.getByRole('textbox', { name: 'Your feedback' }).fill('The sidebar width needs attention');
   await dialog.getByRole('button', { name: 'Save', exact: true }).waitFor();
   assert.equal(await dialog.getByRole('button', { name: 'Send', exact: true }).count(), 0, 'no Send that cannot deliver');

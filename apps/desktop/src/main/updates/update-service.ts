@@ -9,10 +9,14 @@
 // AF-019: the update source (repository, channel, automatic checks: source.ts) is set here and reaches the updater's
 // feed (setFeedURL) and the manual download; "nothing published there yet" is a calm 'current' with a message, and an
 // offered version must be newer than this one (and no prerelease on the stable channel).
+// B-080: the drain names the version it installs (prepareInstall(to)), so the next start says whether it landed.
+// F25 (16.11.2026): a linked own PC on a newer version asks for one throttled check (siblingVersion); a version whose
+// install did not land here (installFailed) is neither downloaded nor restarted for by itself again – a click still does.
 // Owns: UpdateState, check/download/install/apply/defer, the automatic-restart countdown.
 // Never: imports electron or electron-updater (updater and browser opener are injected), never
 // relaunches without prepareInstall() having drained the app.
 
+import { compareAppVersions } from '../../shared/model/devices.ts';
 import type { UpdateState } from '../../shared/model/system.ts';
 import { failureText, MESSAGES, type UpdaterCall } from './failures.ts';
 import { openManualDownload } from './manual-download.ts';
@@ -54,8 +58,8 @@ export interface UpdateServiceOptions extends TimerHooks {
   autoDownload(): boolean;
   /** Collects the live facts for the restart gate (renderer, idle, runtime). */
   facts(): Promise<GateFacts>;
-  /** Drains the app before the installer starts; throws to abort. */
-  prepareInstall(): Promise<void>;
+  /** Drains the app before the installer starts; throws to abort. B-080: `to` – the version being installed (the next start answers it). */
+  prepareInstall(to?: string): Promise<void>;
   /** Undoes prepareInstall when the restart does not happen after all (resume agent wakes). */
   cancelInstall?(): void;
   /** Opens the manual download in the system browser (automatic install unavailable). */
@@ -87,6 +91,10 @@ export class UpdateService {
   private evaluating = false;
   private disposed = false;
   private source: UpdateSource;
+  /** F25: the version whose install did not land here (this start's notice) – a click installs it, nothing else does. */
+  private failedVersion: string | undefined;
+  /** F25: sibling versions that already asked for a check (one check each). */
+  private readonly hinted = new Set<string>();
 
   constructor(updater: Updater, options: UpdateServiceOptions) {
     this.updater = updater;
@@ -162,6 +170,31 @@ export class UpdateService {
     return this.timers.now() - this.lastCheck < CHECK_THROTTLE_MS ? Promise.resolve(this.state) : this.check();
   }
 
+  /**
+   * F25 (16.11.2026): another of the person's PCs runs `version`. Newer than this app, it asks for one check now (within
+   * the check throttle) instead of at the next interval, so the rail shows the update; installing stays as it is – by a
+   * click, or by itself only where the person turned automatic updates on.
+   */
+  siblingVersion(version: string): void {
+    if (!this.active || this.hinted.has(version) || compareAppVersions(version, this.options.version) <= 0) return;
+    this.hinted.add(version);
+    this.options.log?.('a linked PC runs a newer version; checking for the update');
+    void this.checkIfDue().catch(() => {});
+  }
+
+  /**
+   * F25: this start's notice says the install of `version` did not land (e.g. Smart App Control blocked its setup). That
+   * version is not downloaded or installed by itself again here, so a blocked setup cannot loop; a click still installs it.
+   */
+  installFailed(version: string): void {
+    this.failedVersion = version;
+    void this.evaluateRestart();
+  }
+
+  private automaticFor(version: string | undefined): boolean {
+    return version === undefined || version !== this.failedVersion;
+  }
+
   async check(): Promise<UpdateState> {
     if (!this.active || this.busy || ['downloading', 'downloaded', 'installing'].includes(this.value.status)) return this.state;
     this.busy = true;
@@ -196,7 +229,7 @@ export class UpdateService {
 
   /** The preference changed: download now if wanted, re-evaluate the restart gate. */
   autoDownloadChanged(): void {
-    if (this.options.autoDownload() && this.value.status === 'available') void this.download();
+    if (this.options.autoDownload() && this.value.status === 'available' && this.automaticFor(this.value.availableVersion)) void this.download();
     void this.evaluateRestart();
   }
 
@@ -225,7 +258,7 @@ export class UpdateService {
     this.timers.clear('restart');
     this.emit({ status: 'installing', percent: 100, message: undefined, failure: undefined, restartAt: undefined });
     try {
-      await this.options.prepareInstall();
+      await this.options.prepareInstall(this.value.availableVersion);
       if (automatic && !(await this.gateOpen())) {
         this.options.cancelInstall?.();
         this.emit({ status: 'downloaded' });
@@ -291,7 +324,7 @@ export class UpdateService {
         releaseName: typeof info.releaseName === 'string' && info.releaseName.trim() ? info.releaseName.trim().slice(0, 200) : undefined,
         releaseNotes: releaseNotesText(info.releaseNotes),
       });
-      if (this.options.autoDownload() && this.value.automaticInstall) this.pendingDownload = true;
+      if (this.options.autoDownload() && this.value.automaticInstall && this.automaticFor(info.version)) this.pendingDownload = true;
     }
     if (event === 'update-not-available') this.emit({ status: 'current', availableVersion: undefined, releaseName: undefined, releaseNotes: undefined, percent: 0, message: undefined, failure: undefined });
     if (event === 'download-progress') this.emit({ status: 'downloading', percent: Math.max(0, Math.min(100, Math.round(info.percent ?? 0))) });
@@ -335,7 +368,7 @@ export class UpdateService {
       packaged: this.options.packaged,
       automaticInstall: this.value.automaticInstall,
       autoDownload: this.options.autoDownload(),
-      deferred: this.deferred,
+      deferred: this.deferred || !this.automaticFor(this.value.availableVersion), // F25: a version that failed here restarts only on a click
     };
     try {
       return { ...base, ...(await this.options.facts()) };

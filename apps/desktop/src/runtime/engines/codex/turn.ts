@@ -4,13 +4,18 @@
 // changes and MCP calls as tool_end.output, bounded 64k), usage incl. the reported context window and the cached input, limits, interrupt),
 // generated images as EngineTurnResult.files (base64 result, or the saved path when Codex sent no bytes) and the
 // turn/start input (with the volatile context block and the turn's own sandbox, approval policy and approval reviewer
-// from isolation.ts); B-049 F6: whether Codex compacted the thread in this turn (EngineTurnResult.compacted). B-049 F9:
+// from isolation.ts); B-049 F6: whether Codex compacted the thread in this turn (EngineTurnResult.compacted) – KI-Runde
+// 17.11.2026: each compaction is also a 'compacted' event (the context before it, how long it took). B-049 F9:
 // this turn's raw Responses items give its code-mode exec/wait calls as native tool events, and a call made inside a
 // script ("exec-" id) is marked nested on its tool_start (code-mode.ts). B-058: recordings as `localAudio` for a model
 // that hears audio (G7, reads.ts); a nested call's images steered into the running turn (G10, nestedImageSteer).
-// H1: the app note (app-note.ts) after the context block, in front of the input, when engine.ts says the thread is due.
 // A turn stopped before turn/start makes no model call (e.g. the emergency stop during a cold start).
 // A helper turn (engine.ts) whose model sends nothing for HELPER_SILENT_MS after turn/start answered is cut: a timeout, the call's own failure.
+// B-080: setTurnModel switches a started turn's model and effort (turn/settings/update, experimental: only 'applied' counts).
+// B-080: the final text holds the agent messages Codex completed – text of a sampling Codex dropped for a steered line or a
+// stream retry never completes and stays out. turn/start waits for Codex's answer (it queues behind the thread's running turn)
+// until the turn's signal ends the wait; a turn Codex starts after that is interrupted at once, so none runs unobserved. The
+// connection closing during that wait is our own engine process (details.local), never an account's failure.
 // Never: starts processes or threads (engine.ts does).
 
 import type { EngineEvent, EngineFile, EngineTurnInput, EngineTurnResult } from '../types.ts';
@@ -21,13 +26,14 @@ import { APPROVAL_METHODS, approvalResponse, declineUserInput } from './approval
 import { accessPermissions, changePaths } from './access.ts'; // AF-013
 import { codexActions } from '../../access/classify.ts'; // AF-013
 import type { TurnAccess } from './isolation.ts';
-import { ERR, ToolNames, isRecord, num, outputImages, outputText, safeCall, str, tryJson } from '../shared.ts';
+import { ERR, ToolNames, contextText, isRecord, nearestEffort, num, outputImages, outputText, safeCall, str, tryJson } from '../shared.ts';
+import type { Effort } from '../../../shared/model/providers.ts';
 import { normalizeCodexLimits } from '../../accounts/limits.ts';
 import { boundOutput } from '../output.ts';
 import { CodeCalls, hostMissingText, nestedImageSteer } from '../code-mode.ts'; // B-049 F9; B-058 G10 nested images
 import { codexHearsAudioNow } from './reads.ts'; // B-058 G7: recordings as localAudio for a model that hears them
 import { codexDown, providerDownMessage } from '../provider-outage.ts'; // B-059 #184
-import { appNoteItem } from './app-note.ts'; // H1: read after Codex's own multi-agent note
+import { orStopped } from './helper-thread.ts'; // B-080: turn/start waits on the turn's signal
 
 const OWN_ITEMS: Record<string, (item: Record<string, unknown>) => { name: string; args: unknown }> = {
   commandExecution: (item) => ({ name: 'shell', args: { command: item.command, cwd: item.cwd } }),
@@ -72,7 +78,26 @@ export const codexInput = (input: EngineTurnInput['input'], hears = false): Arra
   return [{ type: 'text', text: `[file: ${item.name} (${item.mime}) at ${item.path}]${item.text ? `\n${item.text}` : ''}`, text_elements: [] }];
 });
 
-export interface TurnControl { threadId: string; turnId?: string; rpc: RpcClient }
+/** A running turn's handles for steer and (B-080) setTurnModel: its thread, its turn once started, its events; B-080: its signal (engine.ts tell). */
+export interface TurnControl { threadId: string; turnId?: string; rpc: RpcClient; emit?: (event: EngineEvent) => void; signal?: AbortSignal }
+
+/**
+ * B-080 (model.set now): Codex's experimental turn/settings/update – the running turn goes on with `model` and `effort`
+ * (the nearest one the model lists) from its next request. True only when Codex answers 'applied' (then the turn's events
+ * say so); 'targetUnavailable', a refusal or a turn not started yet is false, and the caller continues in a new turn.
+ */
+export async function setTurnModel(control: TurnControl | undefined, model: string, effort: Effort, supported: string[] = []): Promise<boolean> {
+  if (!control?.turnId) return false;
+  const wire = supported.length ? nearestEffort(effort, supported) : effort === 'max' ? 'xhigh' : effort;
+  let status: string | undefined;
+  try {
+    const answer = await control.rpc.request<{ status?: string }>('turn/settings/update', { threadId: control.threadId, turnId: control.turnId, model, effort: wire }, 10_000);
+    status = str(answer?.status);
+  } catch { return false; } // an older Codex without the method, or a refused field
+  if (status !== 'applied') return false;
+  control.emit?.({ type: 'model', model, effort });
+  return true;
+}
 
 /**
  * A helper turn (structured answer, no tools) is one model request. Live 01.11.2026: a model that keeps reaching for tools it does not have
@@ -90,6 +115,27 @@ const INPUT_ITEMS: ReadonlySet<string> = new Set(['userMessage', 'hookPrompt']);
 const modelSign = (note: RpcNotification): boolean => note.method === 'thread/tokenUsage/updated'
   || (note.method.startsWith('item/') && !(isRecord(note.params.item) && INPUT_ITEMS.has(str(note.params.item.type) ?? '')));
 
+/**
+ * The thread's running token total (tokenUsage.total.totalTokens) as last counted, per app-server process and thread. Codex
+ * sends the thread's usage again unchanged when a turn is interrupted: measured 18.11.2026 on two cut turns (a model.set
+ * with now, a fold cut by the person's line), each run stored the turn before's last request (27,718 in + 14 out = the
+ * context before it; 141,459 + 49 = 141,508) as its own. A usage update whose total did not move is that repeat – no request.
+ * A process that has not counted the thread yet (the app started anew) knows the repeat by its size: a turn's first update
+ * whose request holds exactly the session's count before the turn – a real request of the turn holds its new input too.
+ */
+const countedTotals = new WeakMap<CodexServer, Map<string, number>>();
+
+/** Whether a usage update reports a new request of the turn (see countedTotals); `before`: the session's count before a turn's first update. */
+function newRequest(server: CodexServer, threadId: string, usage: Record<string, unknown>, before: number | undefined): boolean {
+  const total = isRecord(usage.total) ? num(usage.total.totalTokens) : undefined;
+  let threads = countedTotals.get(server);
+  if (!threads) countedTotals.set(server, (threads = new Map()));
+  const counted = threads.get(threadId);
+  if (total !== undefined) threads.set(threadId, total);
+  if (total !== undefined && counted !== undefined) return counted !== total;
+  return before === undefined || !isRecord(usage.last) || num(usage.last.totalTokens) !== before;
+}
+
 /** A completed imageGeneration item as an engine file (undefined when it carries no image). */
 export function generatedImage(item: Record<string, unknown>, n: number): EngineFile | undefined {
   if (item.status === 'failed' || isRecord(item.failure)) return undefined;
@@ -100,9 +146,10 @@ export function generatedImage(item: Record<string, unknown>, n: number): Engine
   return saved ? { name, path: saved } : undefined;
 }
 
-/** Volatile prompt context for a thread that already has its instructions (runtime context, not a chat message). */
+/** The live context as the turn input's first item (shared.ts contextText; runtime context, not a chat message). */
 export function contextBlock(volatile: string | undefined): Array<Record<string, unknown>> {
-  return volatile?.trim() ? [{ type: 'text', text: `<workforce-context>\n${volatile}\n</workforce-context>`, text_elements: [] }] : [];
+  const text = contextText(volatile);
+  return text ? [{ type: 'text', text, text_elements: [] }] : [];
 }
 
 /** The engine id of a reasoning block (Codex item id), when Codex sent one. */
@@ -119,26 +166,36 @@ export function reasoningText(summary: unknown): { text?: string } {
 
 /**
  * Runs a turn on an already started/resumed thread. `control` is filled for steer(); `context`
- * (the volatile prompt part) is sent in front of the input on reused threads; `access` (default
+ * (the live context) is sent in front of the input on every turn; `access` (default
  * 'full') is the turn's sandbox (isolation.ts turnAccess); `summary`
- * (D5) asks for reasoning summaries ('auto' for agent turns, 'none' for helper turns); `note` (H1, app-note.ts) is
- * the app note, sent after the context block; `helper` (engine.ts) arms the cut of a structured turn the model never answers.
+ * (D5) asks for reasoning summaries ('auto' for agent turns, 'none' for helper turns); `helper` (engine.ts) arms the cut of a structured turn the model never answers.
  */
 export async function runCodexTurn(args: {
   server: CodexServer; rpc: RpcClient; threadId: string; input: EngineTurnInput; effort?: string; names: ToolNames;
-  control: TurnControl; now: () => number; context?: string; access?: TurnAccess; summary?: 'auto' | 'none'; note?: string; helper?: boolean;
+  control: TurnControl; now: () => number; context?: string; access?: TurnAccess; summary?: 'auto' | 'none'; helper?: boolean;
 }): Promise<EngineTurnResult> {
   const { server, rpc, threadId, input, names, control } = args;
   const emit = (event: EngineEvent) => { try { input.onEvent(event); } catch { /* UI listener errors never break a turn */ } };
+  control.emit = emit; // B-080: setTurnModel reports the switch into this turn
   const texts = new Map<string, string>(); // agentMessage itemId → text (deltas, replaced by completed text)
+  const done = new Set<string>(); // B-080: agentMessage items Codex completed – a sampling it dropped for a steered line or a stream retry never completes
   const commentary = new Set<string>();
   const images = new Map<string, EngineFile>(); // imageGeneration itemId → generated image
   const usage: NonNullable<EngineTurnResult['usage']> = { inputTokens: 0, outputTokens: 0 }; // cachedInputTokens once Codex reports it
   let contextTokens: number | undefined;
   let contextWindow: number | undefined;
   let requests = 0;
+  let usageSeen = false; // the turn's first usage update is weighed against the session's count before it (newRequest)
   let lastError: { message: string; info: unknown } | undefined;
   let compacted = false; // B-049 F6: Codex compacted the thread's history in this turn (contextCompaction / thread/compacted)
+  let compacting: { at: number; before?: number } | undefined; // KI-Runde 17.11.2026: a compaction that began – when, and the context then
+  // The compaction as an event, once per compaction: the context before it and how long it took, as far as this turn saw them.
+  const tellCompacted = () => {
+    if (compacted && !compacting) return; // its deprecated second form
+    compacted = true;
+    emit({ type: 'compacted', ...(compacting?.before !== undefined ? { before: compacting.before } : contextTokens !== undefined ? { before: contextTokens } : {}), ...(compacting ? { ms: Math.max(0, args.now() - compacting.at) } : {}) });
+    compacting = undefined;
+  };
   let turnId: string | undefined;
   let ended = false; // this Codex cannot run tools: the turn was stopped
   let quiet: ReturnType<typeof setTimeout> | undefined; // a helper turn's cut, until the model's first sign
@@ -180,13 +237,17 @@ export async function runCodexTurn(args: {
         const item = isRecord(p.item) ? p.item : undefined;
         if (!item) break;
         const type = str(item.type) ?? '';
-        if (type === 'contextCompaction') compacted = true;
+        if (type === 'contextCompaction') {
+          if (note.method === 'item/started') compacting = { at: args.now(), ...(contextTokens !== undefined ? { before: contextTokens } : {}) };
+          else tellCompacted();
+        }
         if (type === 'fileChange' && str(item.id)) changed.set(str(item.id)!, changePaths(item)); // AF-013: the paths an approval request is about
         if (type === 'agentMessage') {
           const id = str(item.id) ?? '';
           if (item.phase === 'commentary') commentary.add(id);
           if (note.method === 'item/completed' && typeof item.text === 'string') {
             texts.set(id, item.text);
+            done.add(id);
             if (commentary.has(id) && item.text.trim()) emit({ type: 'commentary', text: item.text });
           }
         }
@@ -214,6 +275,9 @@ export async function runCodexTurn(args: {
       }
       case 'thread/tokenUsage/updated': {
         const tu = isRecord(p.tokenUsage) ? p.tokenUsage : {};
+        const first = !usageSeen;
+        usageSeen = true;
+        if (!newRequest(server, threadId, tu, first ? input.session?.contextTokens : undefined)) break; // the thread's usage sent again (an interrupt): no request of this turn
         const last = isRecord(tu.last) ? tu.last : {};
         const inTok = num(last.inputTokens) ?? 0, outTok = num(last.outputTokens) ?? 0;
         const cached = num(last.cachedInputTokens); // a part of inputTokens, which stays the total
@@ -227,7 +291,7 @@ export async function runCodexTurn(args: {
         break;
       }
       case 'thread/compacted': // deprecated form of the contextCompaction item (app-server schema v2)
-        compacted = true;
+        tellCompacted();
         break;
       case 'rawResponseItem/completed': // B-049 F9: only this turn's (an injection's items carry an 'auto-compact-<n>' turn id)
         if (p.turnId === turnId && isRecord(p.item)) {
@@ -288,17 +352,22 @@ export async function runCodexTurn(args: {
   input.signal.addEventListener('abort', onAbort, { once: true });
   try {
     const hears = input.input.some((item) => item.type === 'audio') && await codexHearsAudioNow(rpc, input.model);
-    const params: Record<string, unknown> = { threadId, input: [...contextBlock(args.context), ...appNoteItem(args.note), ...codexInput(input.input, hears)], model: input.model, ...accessPermissions(input.access, args.access ?? 'full', input.cwd) }; // AF-013: today's turnPermissions without a policy
+    const params: Record<string, unknown> = { threadId, input: [...contextBlock(args.context), ...codexInput(input.input, hears)], model: input.model, ...accessPermissions(input.access, args.access ?? 'full', input.cwd) }; // AF-013: today's turnPermissions without a policy
     if (args.effort) params.effort = args.effort;
     if (args.summary) params.summary = args.summary; // D5: TurnStartParams.summary (ReasoningSummary)
     if (input.outputSchema) params.outputSchema = input.outputSchema;
+    const session = input.session ? { ...input.session, ref: threadId } : { ref: threadId, generation: 1 };
     // Stopped while the server or the thread opened (e.g. "Stop all work" during a cold start): no model call after the Stop.
-    if (input.signal.aborted) return { text: '', stop: 'interrupted', error: ERR.cancelled(), usage, session: input.session ? { ...input.session, ref: threadId } : { ref: threadId, generation: 1 } };
+    if (input.signal.aborted) return { text: '', stop: 'interrupted', error: ERR.cancelled(), usage, session };
+    // B-080: no timer – Codex answers once the thread's running turn lets it (live: an abort took up to 9.5 min); the turn's
+    // signal (a Stop, the stall watch, a helper call's limit) ends the wait, and a turn Codex starts after that is interrupted.
+    const starting = rpc.request<{ turn?: { id?: string } }>('turn/start', params, 0);
     try {
-      const started = await rpc.request<{ turn?: { id?: string } }>('turn/start', params, 60_000);
-      turnId = str(started?.turn?.id);
+      turnId = str((await orStopped(starting, input.signal))?.turn?.id);
     } catch (error) {
-      return { text: '', stop: 'error', error: startError(error) };
+      if (!input.signal.aborted) return { text: '', stop: 'error', error: startError(error) };
+      void starting.then((late) => { const id = str(late?.turn?.id); return id ? rpc.request('turn/interrupt', { threadId, turnId: id }) : undefined; }).catch(() => undefined);
+      return { text: '', stop: 'interrupted', error: ERR.cancelled(), usage, session };
     }
     if (!turnId) return { text: '', stop: 'error', error: ERR.failed() };
     control.turnId = turnId;
@@ -310,8 +379,14 @@ export async function runCodexTurn(args: {
     if (input.signal.aborted) onAbort();
     const { status, error } = await completed;
     code.flush(); // B-049 F9: a script call still open ends with what it printed
-    const text =[...texts.entries()].filter(([id]) => !commentary.has(id)).map(([, text]) => text).filter(Boolean).join('\n\n');
-    const result: EngineTurnResult = { text, stop: 'done', usage, contextTokens, contextWindow, session: input.session ? { ...input.session, ref: threadId } : { ref: threadId, generation: 1 } };
+    // B-080: the completed answers (as Codex keeps them in its thread); the streamed deltas only when none completed
+    // A helper turn has no tools, so a model that wrote its whole answer as a commentary message (18.11.2026, a call's voice:
+    // the line went unanswered and nothing was passed on) answered with it.
+    const final = [...texts.entries()].filter(([id]) => !commentary.has(id));
+    const answers = args.helper && !final.some(([, part]) => part.trim()) ? [...texts.entries()] : final;
+    const kept = answers.some(([id]) => done.has(id)) ? answers.filter(([id]) => done.has(id)) : answers;
+    const text = kept.map(([, part]) => part).filter(Boolean).join('\n\n');
+    const result: EngineTurnResult = { text, stop: 'done', usage, contextTokens, contextWindow, session };
     if (images.size) result.files = [...images.values()];
     if (compacted) result.compacted = true;
     if (code.hostMissing !== undefined) return { ...result, stop: 'error', error: { ...ERR.unavailable(hostMissingText(code.hostMissing)), details: { codeHost: true } } };
@@ -336,9 +411,13 @@ export async function runCodexTurn(args: {
   }
 }
 
+/**
+ * An RpcError is Codex's own answer (a refusal); B-080: anything else is the connection to the app-server on this PC
+ * closing while turn/start waited (it has no timer) – our own engine process, `local`: no account cools (accounts/failure.ts).
+ */
 function startError(error: unknown) {
-  if (error instanceof RpcError && /limit/i.test(error.message)) return ERR.limit();
-  return ERR.unavailable('Codex could not start this turn.');
+  if (!(error instanceof RpcError)) return { ...ERR.unavailable('The Codex connection on this PC closed before the turn started.'), details: { local: true } };
+  return /limit/i.test(error.message) ? ERR.limit() : ERR.unavailable('Codex could not start this turn.');
 }
 
 /** Applies a limits push to retry timing: earliest reset of a window at 100 %. */

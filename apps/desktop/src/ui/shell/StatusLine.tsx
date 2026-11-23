@@ -1,9 +1,11 @@
 // The status line: a few small lines that lie over the top of the main zone (desktop) or under the phone's
 // top row – never a reserved band, so nothing moves when one comes or goes. Shown: the connection, the
-// emergency stop (Resume), running voice conversations (Open/Talk, End), realtime voice (Open, End),
+// emergency stop (Resume), an agent's ringing call (Accept, Decline) and a call on another device (Take over, Open –
+// chat/call/call-notices.ts), running voice conversations (Open/Talk, End) and realtime voice (Open, End) – B-085: a call
+// in the open chat shows on its call view (chat/call/CallOverlay.tsx in Autark-Plus) instead, a voice line stays only while it needs Talk –,
 // an agent using the computer (Watch – computer-notice.ts) and the toasts (lib/toasts.ts, newest first; most expire by
-// themselves, those for to-dos, blockers and important messages stay until Open, Dismiss or until their chat or My day
-// is open); other areas may register more
+// themselves – an important message after 20 s –, those for to-dos and blockers stay until Open, Dismiss or until their
+// chat or My day is open); other areas may register more
 // (shell/notices.ts). At most three lines at once; the rest follow as earlier ones go.
 // Owns: the line markup and the shell's own providers. Never: a notice's order (notices.ts).
 
@@ -18,6 +20,8 @@ import { dismissToast, toasts } from '../lib/toasts.ts';
 import { IconButton, Spinner } from '../lib/ui.tsx';
 import { focusVoice, stopVoice } from '../chat/composer/voice.ts';
 import { realtimeChat, stopRealtime } from '../chat/call/realtime-call.ts';
+import { answerCall, talking } from '../chat/call/CallHeader.tsx';
+import { registerCallNotices } from '../chat/call/call-notices.ts';
 import { registerAiNotice } from '../onboarding/ai-notice.ts';
 import { registerSetupNotice } from '../onboarding/setup-reminder.ts'; // AF-002: setup not finished, away from My day
 import { registerSpeechPullNotice } from '../settings/speech-models.ts';
@@ -44,7 +48,8 @@ function voiceNotices(): Notice[] {
   const sessions = voiceSessions.value;
   const several = sessions.length > 1;
   const open = activeConversationId.value;
-  return sessions.map((session) => {
+  // B-085: the open chat's call shows on its call view (chat/call/CallOverlay.tsx in Autark-Plus); the line stays only while it needs "Talk".
+  return sessions.filter((session) => !(session.conversationId === open && session.listening !== false)).map((session) => {
     const id = session.conversationId;
     const phase = voicePhase(session, several);
     const actions: NoticeAction[] = [];
@@ -57,8 +62,8 @@ function voiceNotices(): Notice[] {
 
 function realtimeNotice(): Notice | null {
   const id = realtimeChat.value;
-  if (!id) return null;
-  const actions: NoticeAction[] = activeConversationId.value === id ? [] : [{ label: 'Open', run: () => navigate({ view: 'chat', id }) }];
+  if (!id || activeConversationId.value === id) return null; // B-085: the open chat's call card shows it
+  const actions: NoticeAction[] = [{ label: 'Open', run: () => navigate({ view: 'chat', id }) }];
   actions.push({ label: 'End', run: () => stopRealtime() });
   return { id: `realtime:${id}`, tone: 'info', text: `${chatName(id)} · realtime voice`, actions, priority: NOTICE_PRIORITY.call };
 }
@@ -68,9 +73,12 @@ function toastNotices(): Notice[] {
     const text = toast.body ? `${toast.title} · ${toast.body}` : toast.title;
     const chat = toast.conversationId;
     const open = chat ? () => navigate({ view: 'chat', id: chat }) : toast.taskId ? () => navigate({ view: 'day' }) : undefined;
+    const own = toast.action; // B-082: the toast's own button (a kept recording's "Transcribe again")
+    const actions = [...(own ? [{ label: own.label, run: () => { own.run(); dismissToast(toast.id); } }] : []),
+      ...(open ? [{ label: 'Open', run: () => { open(); dismissToast(toast.id); } }] : [])];
     return {
       id: `toast-${toast.id}`, tone: toast.tone === 'error' ? 'error' : 'info', text, detail: text, priority: NOTICE_PRIORITY.toast,
-      ...(open ? { actions: [{ label: 'Open', run: () => { open(); dismissToast(toast.id); } }] } : {}),
+      ...(actions.length ? { actions } : {}),
       onDismiss: () => dismissToast(toast.id),
     };
   });
@@ -82,6 +90,7 @@ export function registerShellNotices(): () => void {
   const off = [
     registerNotice(() => connectionNotice({ status: rpc.status.value, loaded: loaded.value, loadError: loadError.value })),
     registerNotice(workStopNotice),
+    registerCallNotices({ answer: answerCall, talking }), // B-081: rings and calls on another device
     registerNotice(voiceNotices),
     registerNotice(realtimeNotice),
     registerComputerNotice(),

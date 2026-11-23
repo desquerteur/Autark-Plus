@@ -10,12 +10,13 @@
 // START_DELAY_MS after the runtime and on settings changes – one timer, nothing polls. An isolated test profile
 // (WORKFORCE_TEST_DATA) never downloads by itself.
 // ensureTagger(): the audio tagger (AUDIO_TAGGER, download only) once, on demand.
+// B-082: at the same start delay, Smart Turn next to an installed Silero VAD (LocalSpeech.ensureTurn), quietly.
 // Owns: when the automatic download runs, its kv record, ensureTagger. Never: downloads more than the one
-// recommended model (and the VAD), or changes a setting other than through the pull.
+// recommended model (and the VAD with Smart Turn), or changes a setting other than through the pull.
 
 import { statfs } from 'node:fs/promises';
 import type { RuntimeServices } from '../../contracts.ts';
-import { AUDIO_TAGGER, SILERO_VAD, localSpeechModel, type LocalSpeechModel } from '../../../shared/model/local-speech-models.ts';
+import { AUDIO_TAGGER, SILERO_VAD, SMART_TURN, localSpeechModel, type LocalSpeechModel } from '../../../shared/model/local-speech-models.ts';
 import type { Settings } from '../../../shared/model/system.ts';
 import { USE_AUTO, useValue } from '../../../shared/model/models-uses.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
@@ -75,7 +76,7 @@ export class LocalSpeechAuto {
     const s = this.deps.services();
     this.lastStt = this.settings()?.voice?.localStt || undefined;
     this.offs.push(s.bus.on('settings.updated', (settings) => this.changed(settings)));
-    this.timer = setTimeout(() => { this.timer = undefined; this.armed = true; void this.check(); }, this.deps.delayMs ?? START_DELAY_MS);
+    this.timer = setTimeout(() => { this.timer = undefined; this.armed = true; void this.check(); void this.deps.local.ensureTurn(); }, this.deps.delayMs ?? START_DELAY_MS);
     (this.timer as { unref?: () => void }).unref?.();
   }
 
@@ -135,7 +136,7 @@ export class LocalSpeechAuto {
     const model = localSpeechModel(pick?.id, 'stt');
     if (!pick || !model) return;
     if (pick.installed) { this.write({ state: 'declined', id: model.id, tries: 0 }); return; } // downloaded once and not chosen: the person's choice
-    const needed = model.download.bytes + model.sizeMb * 1_000_000 + (local.installed(SILERO_VAD) ? 0 : SILERO_VAD.download.bytes) + LOW_DISK_BYTES;
+    const needed = model.download.bytes + model.sizeMb * 1_000_000 + [SILERO_VAD, SMART_TURN].reduce((sum, part) => sum + (local.installed(part) ? 0 : part.download.bytes), 0) + LOW_DISK_BYTES;
     const free = await (this.deps.freeDisk ?? diskFree)(speechRoot(s.paths.data)).catch(() => undefined);
     if (free !== undefined && free < needed) { s.log.info('local speech auto download skipped: disk low', { model: model.id }); return; }
     const tries = (this.record()?.tries ?? 0) + 1;

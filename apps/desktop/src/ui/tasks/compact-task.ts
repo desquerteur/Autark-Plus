@@ -10,7 +10,7 @@ import { OWNER_ALIAS, isHumanActor } from '../../shared/model/people.ts';
 
 /** True when this task message is one compact line (a finished task an agent made), false for a full card. */
 export function isCompact(task: Pick<TaskView, 'status' | 'createdBy'>, message: Pick<Message, 'meta'>): boolean {
-  if (task.status !== 'done' && task.status !== 'cancelled') return false;
+  if (task.status !== 'done' && task.status !== 'dropped') return false;
   const fromRun = message.meta.fromRun;
   if (typeof fromRun === 'string' && fromRun) return true;
   // An agent made it: not the owner, not another person (per_…, their own work stays a card), not the app.

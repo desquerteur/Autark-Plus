@@ -5,7 +5,7 @@
 // Numeric options (e.g. seconds to wait) travel as labels and return as numbers.
 // Owns: the decide definition, the options rule (distinct also ignoring case, as the hub matches a
 // pick), the source rules – judged before anything runs, also without a decision model: an
-// existing tool of category 'read' offered in the mode and valid arguments; then run through registry.call, so the
+// existing tool of category 'read' that can work here (else the registry's reason, cannotWork) and valid arguments; then run through registry.call, so the
 // mode's offer applies as for a direct call –, the decision context (the agent's
 // context, then the source's output; the hub caps it at 12k), the stop (a stopped turn ends the
 // decision: DecisionRequest.signal), the reply and the run note { decision: { question, outcome,
@@ -25,6 +25,7 @@ import { outcomeOf } from '../../decision/service.ts';
 import { MAX_OPTIONS, NONE_OPTION } from '../../decision/types.ts';
 import { MCP_SERVER_NAME } from '../../mcp/names.ts';
 import { clip, defineTool, internal } from './util.ts';
+import { cannotWork } from './tools-meta.ts';
 
 export const DECIDE_TOOL = 'decide';
 /** The agent's own context; the rest of the hub's 12k characters is left for the source's output. */
@@ -43,19 +44,15 @@ type Checked = { name: string; args: Record<string, unknown> };
 
 const decide = defineTool<DecideArgs>({
   name: DECIDE_TOOL,
-  description: 'Hand a bounded choice to the decision model: a question and 2–255 text or number options (e.g. which file, which category, seconds to wait). A selected number is returned as a number. '
-    + 'It answers outcome "choice" (with choice and confidence), "none_fit" (none of the options fits) or "unsure" (low confidence or no decision model: I decide myself). '
-    + 'context: the facts it needs. source: a read tool to run first ({tool, args}, e.g. files.list); its output goes only to the decision model, never to me – '
-    + 'I use it when I need the pick, not the content. It judges; it does not count, compute or extract exact text from long data (it sees a bounded excerpt) – for that I use files.search, a command or my own reading. '
-    + 'A source call that would spend or change anything is refused. "none" stays off the list: it is always possible.',
+  description: 'Hands a bounded choice to the decision model and returns its pick. It answers choice, none_fit or unsure (then I decide myself); it judges, it does not count, compute or copy exact text – for that I search or read myself.',
   inputSchema: {
     type: 'object',
     properties: {
       question: { type: 'string', minLength: 1, maxLength: 1000 },
-      options: { type: 'array', minItems: 2, maxItems: MAX_OPTIONS, items: { anyOf: [{ type: 'string', minLength: 1, maxLength: 500 }, { type: 'number' }] } },
-      context: { type: 'string', maxLength: MAX_DECIDE_CONTEXT },
+      options: { type: 'array', minItems: 2, maxItems: MAX_OPTIONS, items: { anyOf: [{ type: 'string', minLength: 1, maxLength: 500 }, { type: 'number' }] }, description: `2–${MAX_OPTIONS} texts or numbers; none_fit is always possible.` },
+      context: { type: 'string', maxLength: MAX_DECIDE_CONTEXT, description: 'The facts it needs.' },
       source: {
-        type: 'object',
+        type: 'object', description: 'A read tool run first, {tool, args}, when I need the pick, not the content; only the decision model sees its output.',
         properties: { tool: { type: 'string', minLength: 1, maxLength: 100 }, args: { type: 'object' } },
         required: ['tool'],
         additionalProperties: false,
@@ -108,7 +105,7 @@ function checkSource(ctx: ToolContext, source: Source): Checked | { error: strin
   const tool = ctx.services.tools.get(name);
   if (!tool) return { error: `Unknown source tool "${clip(source.tool, 100)}". Name a read tool I can use, e.g. files.list.` };
   if (tool.category !== 'read') return { error: `${name} cannot be a source: a source only reads (its category is ${tool.category}). I call it myself if I need it.` };
-  if (!offered(ctx, name)) return { error: `Tool "${name}" is not available in mode "${ctx.mode}", so it cannot be a source.` };
+  if (!offered(ctx, name)) return { error: `${cannotWork(name, tool)} So it cannot be a source.` };
   const args = source.args ?? {};
   const errors = validate(args, tool.inputSchema);
   if (errors.length) return { error: `Invalid arguments for the source ${name}:\n${errors.join('\n')}` };

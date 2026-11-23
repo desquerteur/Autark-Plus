@@ -3,9 +3,10 @@
 // Owns: param checks and the knowledge list cursor (a numeric offset as string).
 // Never: business logic – it delegates to the knowledge, skill and mode services. Items the
 // human saves are trusted user knowledge; agents' items keep their own source.
-// Tiers: knowledge, skill reads and modes with 'chat'; skills.save with 'manage';
-// skills.delete and knowledge.forget (permanent, needs confirm: true) stay owner-only, and so
-// do modes.save and modes.delete (CTX8; the mode library validates the fields).
+// Tiers: knowledge, skill reads and modes with 'chat'; skills.save with 'manage'; skills.delete, modes.save and
+// modes.delete (CTX8; the mode library validates the fields) with 'manage' on a secure transport – Settings › Skills &
+// memory on the owner's own phone (16.11.2026), whose pane edits the same folders; knowledge.forget (permanent, needs
+// confirm: true) stays owner-only.
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
@@ -20,6 +21,7 @@ import { LIMITS, MODE_CATEGORIES, MODE_QUALIFIED_TIERS, MODE_TIERS, MODE_WORKSPA
 
 const CHAT = { capability: 'chat' } as const;
 const MANAGE = { capability: 'manage' } as const;
+const SECURE_MANAGE = { capability: 'manage', secure: true } as const;
 const SCOPES: readonly KnowledgeScope[] = ['global', 'space', 'agent', 'conversation', 'website', 'app', 'mode', 'reference']; // mode: scopeId = mode key (CTX3)
 const KINDS: readonly KnowledgeKind[] = ['fact', 'preference', 'experience', 'procedure', 'plan', 'observation', 'note', 'reference'];
 const PAGE = 50;
@@ -145,9 +147,9 @@ export function register(table: HandlerTable): void {
     if (!ctx.services.skills.get(name)) notFound('Skill', { name });
     ctx.services.skills.remove(name);
     return { ok: true };
-  });
+  }, SECURE_MANAGE);
   table.add('modes.list', (_params, ctx) => ctx.services.modes.list(), CHAT);
-  // CTX8, owner only: fields left out keep the mode's values (or those of `from`); unknown skills are reported.
+  // CTX8 (the owner and the owner's secure phone): fields left out keep the mode's values (or those of `from`); unknown skills are reported.
   table.add('modes.save', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['key', 'from', 'name', 'description', 'instructions', 'skills', 'tools', 'category', 'workspace', 'verifier', 'minTier', 'qualifiedTier']);
@@ -160,13 +162,13 @@ export function register(table: HandlerTable): void {
       verifier: optText(o, 'verifier', { max: LIMITS.verifier, allowEmpty: true }), minTier: optOneOf(o, 'minTier', MODE_TIERS),
       qualifiedTier: optOneOf(o, 'qualifiedTier', ['', ...MODE_QUALIFIED_TIERS] as const),
     });
-  });
-  // CTX8, owner only: deletes a user mode; a built-in mode of the same key comes back (`restored`).
+  }, SECURE_MANAGE);
+  // CTX8 (the owner and the owner's secure phone): deletes a user mode; a built-in mode of the same key comes back (`restored`).
   table.add('modes.delete', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['key']);
     return { ok: true, ...ctx.services.modes.remove(text(o, 'key', { max: 64 })) };
-  });
+  }, SECURE_MANAGE);
   // B-044, owner only: Settings › Modes › Open folder – <data>/modes in this PC's file manager (a file there is a mode).
   table.add('modes.openFolder', async (params, ctx) => {
     onlyKeys(input(params ?? {}), []);

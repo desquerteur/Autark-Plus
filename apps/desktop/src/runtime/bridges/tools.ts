@@ -7,7 +7,7 @@
 import { WorkforceError } from '../../shared/errors.ts';
 import type { Bridge, ConnectTelegramInput } from '../../shared/model/bridges.ts';
 import type { ToolDef } from '../tools/types.ts';
-import { failure, json } from '../tools/types.ts';
+import { CHAT_ID_PROPERTY, failure, json } from '../tools/types.ts';
 import { defineTool } from '../tools/builtin/util.ts';
 import type { TelegramApi, TgUpdate } from './telegram-api.ts';
 import { tokenFrom } from './tokens.ts';
@@ -29,23 +29,23 @@ export function newestPrivateChat(updates: readonly TgUpdate[]): { id: string; n
 }
 
 export function telegramTools(host: TelegramToolHost): ToolDef[] {
-  return [defineTool<{ botToken: string; externalChatId?: string; conversationId?: string }>({
+  return [defineTool<{ botToken: string; externalChatId?: string; chatId?: string }>({
     name: 'telegram.connect',
-    description: 'Mirror a chat to Telegram through a bot (skill telegram-setup). botToken: secret://<id> or the token from @BotFather. externalChatId: the Telegram chat id; without it, the newest private chat that wrote to the bot (that person becomes the owner). conversationId: default this chat.',
+    description: 'Mirrors a chat to Telegram through a bot (skill telegram-setup). Without externalChatId it takes the newest private chat that wrote to the bot, and that sender speaks there as the person.',
     inputSchema: {
       type: 'object',
       properties: {
-        botToken: { type: 'string', minLength: 10, maxLength: 200 },
+        botToken: { type: 'string', minLength: 10, maxLength: 200, description: 'secret://<id> or the token from @BotFather.' },
         externalChatId: { type: 'string', minLength: 1, maxLength: 64 },
-        conversationId: { type: 'string', minLength: 1, maxLength: 120 },
+        chatId: { ...CHAT_ID_PROPERTY, minLength: 1, maxLength: 120 },
       },
       required: ['botToken'], additionalProperties: false,
     },
     category: 'communicate',
     describe: () => ({ summary: 'Connect a chat to Telegram', external: true }),
     async run(args, ctx) {
-      const conversationId = args.conversationId ?? ctx.conversationId ?? ctx.split?.parentConversationId;
-      if (!conversationId) return failure('Name the chat to mirror (conversationId).');
+      const conversationId = args.chatId ?? ctx.conversationId ?? ctx.split?.parentConversationId;
+      if (!conversationId) return failure('Name the chat to mirror (chatId).');
       const handle = HANDLE.exec(args.botToken.trim())?.[1];
       let externalChatId = args.externalChatId?.trim();
       let owner: string | undefined;

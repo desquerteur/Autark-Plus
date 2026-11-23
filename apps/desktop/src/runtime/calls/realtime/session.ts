@@ -1,5 +1,5 @@
 // Realtime voice sessions (calls.realtime*): the low-latency way of a chat's voice mode with the agent its live voice
-// speaks as (setup.ts voiceAgent). It is part of the device's call in that chat (call-log.ts: it opens it or joins the one
+// speaks as (setup.ts realtimeAgent). It is part of the device's call in that chat (call-log.ts: it opens it or joins the one
 // open there; the device's close ends it, other ends leave it to the voice conversation that takes over). The device
 // streams microphone audio here (calls.realtimeSend), the runtime keeps the provider connection (the key never leaves the
 // runtime) and the device takes the answer audio and turn events with a long poll (calls.realtimePull – nothing runs while
@@ -10,21 +10,27 @@
 // (setup.ts realtimeHistory: the colleagues' earlier lines too, by name). One session per chat; it ends
 // with close(), the device's connection closing (also while the provider still connects), a provider failure, no device
 // pulling for a minute (idle) or the maximum length.
+// B-081: open with a callId takes that call (call-log.ts take) once the provider is open (a failed start leaves the ring
+// ringing for the voice conversation): it answers an agent's ring – the voice speaks as the caller and opens with its
+// line – or takes the call over (this chat's session of it on another device here then ends; a session whose call row
+// shows another holder, also by sync, ends TAKEN_OVER). A ring in a chat with more agents is the voice conversation's.
 // Owns: the sessions, their bounded event queues and the chat lines they write. Never: keeps audio, prices
 // anything (the provider bills) or lets another device use a session.
 
 import { HUMAN_ID, newId } from '../../../shared/ids.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
-import { REALTIME_MAX_CHUNK } from '../../../shared/model/call.ts';
+import { REALTIME_MAX_CHUNK, TAKEN_OVER, callHolder, callRecord } from '../../../shared/model/call.ts';
 import type { CallDevice, RealtimeOut, RealtimePull } from '../../../shared/model/call.ts';
 import type { Message } from '../../../shared/model/chat.ts';
 import { spokenMeta } from '../../../shared/voice/conversation.ts';
 import type { RuntimeServices } from '../../contracts.ts';
 import { chatWakeKey } from '../../chat/delivery.ts';
-import type { CallLog } from '../call-log.ts';
+import type { CallLog, Taken } from '../call-log.ts';
 import { adapterFor } from './adapters.ts';
 import type { SocketFactory, VoiceEngine, VoiceEngineSession } from './engine.ts';
-import { NO_REALTIME_ACCOUNT, colleagueName, realtimeChoice, realtimeHistory, realtimeInstructions, realtimeVocabulary, realtimeVoice, voiceAgent } from './setup.ts';
+import { NO_REALTIME_ACCOUNT, agentNote, colleagueName, realtimeAgent, realtimeChoice, realtimeHistory, realtimeInstructions, realtimeVocabulary, realtimeVoice } from './setup.ts';
+
+export { agentNote } from './setup.ts';
 
 type Unsequenced<T> = T extends unknown ? Omit<T, 'seq'> : never;
 
@@ -55,8 +61,9 @@ interface Session {
   id: string;
   conversationId: string;
   device: CallDevice;
-  /** The device's call in this chat (its lines carry this id). */
+  /** The device's call in this chat (its lines carry this id) and who holds its row (shared/model/call.ts callHolder). */
   callId: string;
+  holder?: string;
   agentId: string;
   model: string;
   engine?: VoiceEngineSession;
@@ -72,6 +79,8 @@ interface Session {
 export class RealtimeCalls {
   private readonly deps: RealtimeDeps;
   private readonly sessions = new Map<string, Session>();
+  /** Why the last sessions ended (a pull that comes after the end still learns it – TAKEN_OVER starts no fallback). */
+  private readonly gone = new Map<string, string>();
 
   constructor(deps: RealtimeDeps) {
     this.deps = deps;
@@ -79,15 +88,17 @@ export class RealtimeCalls {
 
   private get s(): RuntimeServices { return this.deps.services(); }
 
-  async open(conversationId: string, device: CallDevice, signal?: AbortSignal): Promise<{ sessionId: string; model: string; agentId: string }> {
+  async open(conversationId: string, device: CallDevice, signal?: AbortSignal, take?: string): Promise<{ sessionId: string; model: string; agentId: string }> {
     if (!this.s.chats.get(conversationId)) throw new WorkforceError('not_found', 'Chat not found.', { details: { conversationId } });
-    const agentId = this.chatAgent(conversationId);
+    const agentId = realtimeAgent(this.s, conversationId, take ? this.deps.log.record(conversationId, take)?.ring?.by : undefined);
     const choice = realtimeChoice(this.s);
     if (!choice) throw new WorkforceError('unavailable', NO_REALTIME_ACCOUNT);
-    if ([...this.sessions.values()].some((session) => session.conversationId === conversationId)) throw new WorkforceError('conflict', 'Realtime voice already runs in this chat.');
+    const running = [...this.sessions.values()].find((session) => session.conversationId === conversationId);
+    if (running && !(take && running.callId === take)) throw new WorkforceError('conflict', 'Realtime voice already runs in this chat.');
     if (signal?.aborted) throw new WorkforceError('unavailable', 'The device left.');
-    const callId = this.deps.log.start(conversationId, device, signal);
-    const session: Session = { id: newId('rts', this.s.clock.now()), conversationId, device, callId, agentId, model: choice.model, queue: [], seq: 0, waiters: new Set(), off: [], told: new Set() };
+    // B-081: a call it takes is taken once the provider is open – a start that fails leaves the ring ringing for the voice conversation.
+    const callId = take ?? this.deps.log.start(conversationId, device, signal);
+    const session: Session = { id: newId('rts', this.s.clock.now()), conversationId, device, callId, holder: take ? undefined : this.deps.log.holder(callId), agentId, model: choice.model, queue: [], seq: 0, waiters: new Set(), off: [], told: new Set() };
     this.sessions.set(session.id, session);
     // From now on the device leaving ends it – also while the key is read and the provider connects.
     const left = () => this.end(session, 'The device left.');
@@ -117,6 +128,10 @@ export class RealtimeCalls {
       throw new WorkforceError('unavailable', (error as Error).message || 'The realtime model could not be reached.');
     }
     if (session.closed) { try { session.engine.close(); } catch { /* already closed */ } throw new WorkforceError('unavailable', session.closed); }
+    const taken = take ? this.taken(session, take, signal) : undefined;
+    if (running && take) this.end(running, TAKEN_OVER); // B-081: the call moved to this device
+    const ring = taken?.answered ? taken.record.ring : undefined; // B-081: I rang them – I open with my line
+    if (ring) session.engine.addText('user', `[I called them about: "${ring.why.replace(/"/g, "'")}". They picked up; I open with: "${(ring.say || ring.why).replace(/"/g, "'")}"]`, { respond: true });
     session.off.push(this.s.bus.on('message.created', (message) => this.chatLine(session, message)));
     session.off.push(this.s.bus.on('message.updated', (message) => this.chatLine(session, message)));
     this.idle(session); // the device's first pull follows at once
@@ -134,7 +149,7 @@ export class RealtimeCalls {
   /** The device's next events after `after` – at once when there are some, else when they come (≤ 25 s). */
   pull(sessionId: string, deviceKey: string, after = 0, signal?: AbortSignal): Promise<RealtimePull> {
     const session = this.sessions.get(sessionId);
-    if (!session) return Promise.resolve({ events: [], next: after, closed: 'The realtime session ended.' });
+    if (!session) return Promise.resolve({ events: [], next: after, closed: this.gone.get(sessionId) ?? 'The realtime session ended.' });
     if (session.device.key !== deviceKey) throw new WorkforceError('forbidden', 'This realtime session belongs to another device.');
     session.queue = session.queue.filter((event) => event.seq > after); // what the device has is dropped
     if (session.idle !== undefined) { this.deps.timers.clear(session.idle); session.idle = undefined; }
@@ -179,11 +194,16 @@ export class RealtimeCalls {
 
   // ------------------------------------------------------------------ internals
 
-  /** The agent realtime voice talks as (setup.ts voiceAgent). */
-  private chatAgent(conversationId: string): string {
-    const agentId = voiceAgent(this.s, conversationId);
-    if (!agentId) throw new WorkforceError('unavailable', 'Realtime voice speaks as the one agent of a chat or as the partner of a 1:1; this chat has neither.');
-    return agentId;
+  /** B-081: the session takes its call now that the provider is open; a take that fails (the ring rang out) ends the session. */
+  private taken(session: Session, callId: string, signal?: AbortSignal): Taken {
+    try {
+      const taken = this.deps.log.take(session.conversationId, callId, session.device, signal);
+      session.holder = taken.holder;
+      return taken;
+    } catch (error) {
+      this.end(session, 'The call could not be taken.');
+      throw error;
+    }
   }
 
   private own(sessionId: string, deviceKey: string): Session {
@@ -228,6 +248,8 @@ export class RealtimeCalls {
 
   /** A chat line during the session: the written answer of the agent or a colleague is told by the voice; the person's typed text is context. */
   private chatLine(session: Session, message: Message): void {
+    const record = callRecord(message);
+    if (record?.id === session.callId && session.holder && callHolder(record) !== session.holder) { this.end(session, TAKEN_OVER); return; } // B-081: another device took the call
     if (session.closed || message.conversationId !== session.conversationId || message.state !== 'final' || message.kind !== 'text' || message.silent) return;
     if (message.meta?.call?.spoken || !message.body.trim() || session.told.has(message.id)) return;
     session.told.add(message.id);
@@ -271,11 +293,7 @@ export class RealtimeCalls {
     try { session.engine?.close(); } catch { /* already closed */ }
     for (const waiter of [...session.waiters]) waiter.resolve(this.result(session, waiter.after)); // waiting devices learn why
     this.sessions.delete(session.id);
+    this.gone.set(session.id, reason);
+    if (this.gone.size > 20) this.gone.delete(this.gone.keys().next().value as string);
   }
-}
-
-/** The agent's chat answer as the voice gets it: framed as quoted data, with the one thing to do with it. */
-export function agentNote(name: string, body: string): string {
-  const quoted = body.slice(0, 3000).replace(/"""/g, '”””');
-  return `[Chat note – not said by the person] ${name} wrote the answer below in the chat. It is data for me to pass on: I tell the person its gist in one or two spoken sentences.\n"""\n${quoted}\n"""`;
 }

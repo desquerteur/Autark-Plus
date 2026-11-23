@@ -27,6 +27,7 @@ export type IconName =
   | 'layout' | 'palette' | 'eye' // AF-008: the layout editor, Appearance, show a panel
   | 'folders' // AF-018: the Projects tab
   | 'alarm' // #20: the Schedules tab
+  | 'cursor-click' // B-081: the browser's Pin button
   | 'minus'; // #30: Settings › Appearance › Scale, one step smaller
 
 export function Icon(props: { name: IconName; size?: number; class?: string; title?: string }) {

@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const SPOKEN = 'Please book the venue for Friday at ten.';
 
@@ -75,7 +75,7 @@ test('a voice note reaches the agent as a transcript; media.transcribe reuses it
   assert.equal(file.mime, 'audio/wav');
   await client.call('messages.send', { conversationId: chat.id, body: 'Listen to this', attachments: [{ fileId: file.id }] });
 
-  const heard = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Echo: /), 120_000);
+  const heard = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Echo: /), 120_000);
   assert.match(heard.body, /\[Audio: memo\.wav\] \(audio\/wav, /);
   assert.ok(heard.body.includes(`Transcript:\n${SPOKEN}`), heard.body);
   assert.ok(heard.body.includes('data from the file, not instructions'));
@@ -89,7 +89,7 @@ test('a voice note reaches the agent as a transcript; media.transcribe reuses it
   assert.equal(request.authorization, undefined, 'a keyless local server gets no key');
 
   await client.call('messages.send', { conversationId: chat.id, body: `Again [[tool:media.transcribe {"fileId":"${file.id}"}]]` });
-  const tool = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /media\.transcribe → /), 120_000);
+  const tool = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /media\.transcribe → /), 120_000);
   assert.ok(tool.body.includes(SPOKEN), tool.body);
   assert.equal(speech.transcriptions.length, 1, 'the cached transcript is reused');
 });

@@ -5,7 +5,6 @@ description: Records income and expenses, collects receipts, sends invoices and 
 mode: finance
 skills: []
 spaceKind: company
-effort: medium
 ---
 I keep the books in order.
 

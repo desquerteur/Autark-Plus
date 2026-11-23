@@ -1,6 +1,6 @@
 // B-057 turn pipeline for splits (agents/split-turn.ts and its one-line hooks in turn-prepare, turn-attempt, turn-finish,
 // turn.ts; context/split-section.ts in the volatile prompt): a split's turn runs on its thread split:<id>, never moves the
-// parent's chat cursor or posts, stays internal, skips the learning passes, books its cost on the parent agent, gets the
+// parent's chat cursor or posts, stays internal, books its cost on the parent agent, gets the
 // 'split' section; a person's message that suggested Ultra carries its note into the
 // agent's own turn (no standing Ultra section, owner 30.10.2026); an agent's own turn gets its
 // settled splits' results block, gathered only when it ends done; a split's first turn is seeded once. Real chats, run
@@ -13,7 +13,8 @@ import { account } from '../models/harness.ts';
 import { TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { SessionStore } from '../../../src/runtime/agents/sessions.ts';
 import { ULTRA_NOTE } from '../../../src/runtime/context/split-section.ts';
-import { turnEndedEarly } from '../../../src/runtime/agents/split-turn.ts';
+import { NOTHING_BACK, turnEndedEarly } from '../../../src/runtime/agents/split-turn.ts';
+import { recordStart, startOf } from '../../../src/runtime/agents/session-key.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
 import type { RouteRequest, RuntimeServices, SplitService } from '../../../src/runtime/contracts.ts';
 import type { SplitRunEnd } from '../../../src/runtime/contracts/splits.ts';
@@ -31,7 +32,7 @@ function setup(caps: Partial<EngineCaps> = {}) {
   const agentId = f.vid.id;
   const chat = f.chats.create({ title: 'Launch video', agentIds: [agentId], createdBy: 'human' });
   const inputs: EngineTurnInput[] = [];
-  const state: { stop: EngineTurnResult['stop']; onRun?: (input: EngineTurnInput) => Promise<unknown> } = { stop: 'done' };
+  const state: { stop: EngineTurnResult['stop']; text?: string; costUsd?: number; sameRef?: boolean; onRun?: (input: EngineTurnInput) => Promise<unknown> } = { stop: 'done' };
   const toolCtxs: ToolContext[] = [];
   const engineCaps: EngineCaps = { sessions: false, dynamicTools: false, mcp: false, images: false, rebase: false, structured: false, ownTools: false, ...caps } as EngineCaps;
   const forks: EngineForkInput[] = [];
@@ -42,9 +43,9 @@ function setup(caps: Partial<EngineCaps> = {}) {
       inputs.push(input);
       await state.onRun?.(input);
       return {
-        text: 'Part done: three cuts.', stop: state.stop, usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.12 },
+        text: state.text ?? 'Part done: three cuts.', stop: state.stop, usage: { inputTokens: 100, outputTokens: 20, costUsd: state.costUsd ?? 0.12 },
         ...(state.stop === 'error' ? { error: { code: 'internal', message: 'boom' } } : {}),
-        ...(engineCaps.sessions ? { session: { ref: `sess_${inputs.length}`, generation: 1 } } : {}),
+        ...(engineCaps.sessions ? { session: { ref: state.sameRef && input.session ? input.session.ref : `sess_${inputs.length}`, generation: 1 } } : {}),
       } as EngineTurnResult;
     },
   } as unknown as Engine;
@@ -76,14 +77,14 @@ function setup(caps: Partial<EngineCaps> = {}) {
     status: 'running', parts: 3, createdAt: 0, splits: [view(1, 'Intro'), view(2, 'Middle section'), view(3, 'Outro')],
   };
   const calls = {
-    ends: [] as Array<{ splitId: string; end: SplitRunEnd }>, gathered: [] as Array<{ runId: string; groupIds: string[] }>,
+    ends: [] as Array<{ splitId: string; end: SplitRunEnd }>, gathered: [] as Array<{ runId: string; splitIds: string[] }>,
     after: [] as Array<{ runId: string; status: string }>, asked: [] as string[],
-    pending: undefined as { groupIds: string[]; text: string } | undefined, askedRuns: [] as Array<string | undefined>,
+    pending: undefined as { splitIds: string[]; text: string } | undefined, askedRuns: [] as Array<string | undefined>,
   };
   s.splits = {
     get: (id: string) => { const split = group.splits.find((item) => item.id === id); return split ? { split, group } : undefined; },
     pendingResults: (_agentId: string, thread: string, runId?: string) => { calls.asked.push(thread); calls.askedRuns.push(runId); return calls.pending; },
-    markGathered: (runId: string, groupIds: string[]) => { calls.gathered.push({ runId, groupIds }); },
+    markGathered: (runId: string, splitIds: string[]) => { calls.gathered.push({ runId, splitIds }); },
     afterParentTurn: (runId: string, status: string) => { calls.after.push({ runId, status }); },
     onSplitRunEnd: (splitId: string, end: SplitRunEnd) => { calls.ends.push({ splitId, end }); },
   } as unknown as SplitService;
@@ -91,7 +92,10 @@ function setup(caps: Partial<EngineCaps> = {}) {
 
   const splitTurn = (extra: Partial<SplitTurn> = {}): SplitTurn => ({
     splitId: 'sp_2', groupId: 'sg_1', idx: 2, of: 3, title: 'Middle section', parentRunId: 'run_parent', parentThread: chat.id,
-    parentConversationId: chat.id, context: 'brief', firstTurn: true, ...extra,
+    parentConversationId: chat.id, context: 'brief', firstTurn: true,
+    // B-080: a fork part carries the session its parent's splitting turn ended with (recorded when the group started)
+    ...(extra.context === 'fork' ? { parentSession: { engine: 'claude' as const, accountId: 'acc_api', ref: 'parent_sess', contextTokens: 1000 } } : {}),
+    ...extra,
   });
   const executor = new TurnExecutor(() => s);
   const runSplit = (runId: string, split = splitTurn(), control: TurnControl = { lastSeq: 0, steeredSeq: 0 }) => executor.execute({
@@ -106,7 +110,7 @@ function setup(caps: Partial<EngineCaps> = {}) {
   return { ...f, s, agentId, chat, inputs, forks, state, toolCtxs, routes, spends, calls, group, splitTurn, runSplit, runOwn, cursor, opus };
 }
 
-test('a split turn runs on its own thread, internal: no cursor, no post, no learning passes; cost and model stats on its parent agent', async () => {
+test('a split turn runs on its own thread, internal: no cursor, no post; cost and model stats on its parent agent', async () => {
   const h = setup();
   h.chats.send({ conversationId: h.chat.id, body: 'Please cut the launch video.', authorId: 'human' });
   const cursorBefore = h.cursor();
@@ -128,26 +132,28 @@ test('a split turn runs on its own thread, internal: no cursor, no post, no lear
   assert.deepEqual(h.calls.ends, [{ splitId: 'sp_2', end: { runId: 'run_s2', status: 'done' } }]);
   assert.deepEqual(h.calls.after, [], 'a split turn is no parent turn');
   assert.deepEqual(h.calls.asked, [], 'a split never gets split results');
-  // Its input: the brief; its route: the parent's model and effort ('same') as an explicit request, without a chat.
+  // Its input: the brief; its route, without a chat: a fresh part that names no model starts from its origin's model and effort – the
+  // router keeps it there or, when the origin is above what executing needs, takes the executing default (17.11.2026).
   assert.match(String(h.inputs[0].input[0].type === 'text' ? h.inputs[0].input[0].text : ''), /cut the middle section to 40 seconds/);
   assert.equal(h.routes[0].conversationId, undefined);
-  assert.deepEqual(h.routes[0].split, { splitId: 'sp_2' });
-  assert.deepEqual(h.routes[0].previous, { modelId: h.opus.id, effort: 'high', explicit: true });
+  assert.deepEqual(h.routes[0].split, { splitId: 'sp_2', fresh: true });
+  assert.deepEqual(h.routes[0].previous, { modelId: h.opus.id, effort: 'high' }, 'nobody asked for a model: not an explicit request');
+  assert.equal(h.routes[0].boundary, true, 'no session of its own yet');
 });
 
 test('the volatile split section is there; the agent\'s own turn has none', async () => {
   const h = setup();
   await h.runSplit('run_s2');
   const volatile = h.inputs[0].system.volatile;
-  assert.match(volatile, /I am split #2 of 3 of Vic\. My main self split its work just now \(goal: Cut the launch video\)\./);
-  assert.match(volatile, /My part: #2 Middle section\./);
-  assert.match(volatile, /Other parts \(not mine\): #1 Intro; #3 Outro\./);
-  assert.match(volatile, /I post nothing in chats and ask nobody/);
-  assert.match(volatile, /Splitting again, delegating, handing off, .* are my main self's \(so is the Splitting line of my environment\)/);
+  // B-083: design/principle.md "Ultra PART" with the name, piece and whole filled in – no bans.
+  assert.match(volatile, /## My part #2 of 3\nI am Vic – this part of me takes “Middle section” all the way \(the whole: Cut the launch video\), while my origin and my other parts carry the rest\./);
+  assert.match(volatile, /I tell it as soon as I see it \(agents\.split_tell – to my origin, a part, or all\); agents\.split_results \{steps\} shows what my other parts do\. When I end, my last words and what I did on the way go back to my origin on their own and merge into it; what a chat should see now, I post there myself\./);
+  assert.match(volatile, /My other parts: #1 Intro; #3 Outro\./);
+  assert.doesNotMatch(volatile, /I post nothing in chats|main self|Splitting again/);
   assert.match(volatile, /I keep to the files of my part/);
   assert.doesNotMatch(volatile, /## Ultra/);
   await h.runOwn('run_own');
-  assert.doesNotMatch(h.inputs[1].system.volatile, /I am split/);
+  assert.doesNotMatch(h.inputs[1].system.volatile, /this part of me/);
 });
 
 test('Ultra suggested on a message: its note reaches the agent\'s own turn with that message only; no standing Ultra section', async () => {
@@ -166,7 +172,7 @@ test('Ultra suggested on a message: its note reaches the agent\'s own turn with 
 
 test('settled splits\' results join the agent\'s own turn input; gathered only when that turn ends done', async () => {
   const h = setup();
-  h.calls.pending = { groupIds: ['sg_1'], text: 'Split results – Cut the launch video:\n#1 Intro: done – 12 s.\n#2 Middle section: done – three cuts.' };
+  h.calls.pending = { splitIds: ['spl_1', 'spl_2'], text: 'Split results – Cut the launch video:\n#1 Intro: done – 12 s.\n#2 Middle section: done – three cuts.' };
   await h.runOwn('run_first');
   h.state.stop = 'error';
   await h.runOwn('run_failed');
@@ -176,8 +182,8 @@ test('settled splits\' results join the agent\'s own turn input; gathered only w
   await h.runOwn('run_done');
   const doneInput = h.inputs[2].input[0];
   assert.match(doneInput.type === 'text' ? doneInput.text : '', /#2 Middle section: done – three cuts\./);
-  assert.deepEqual(h.calls.asked, [h.chat.id, h.chat.id, h.chat.id], 'asked for the turn\'s own thread');
-  assert.deepEqual(h.calls.gathered, [{ runId: 'run_first', groupIds: ['sg_1'] }, { runId: 'run_done', groupIds: ['sg_1'] }], 'never for the failed turn');
+  assert.deepEqual(h.calls.asked, ['main', 'main', 'main'], 'asked for the turn\'s own thread');
+  assert.deepEqual(h.calls.gathered, [{ runId: 'run_first', splitIds: ['spl_1', 'spl_2'] }, { runId: 'run_done', splitIds: ['spl_1', 'spl_2'] }], 'never for the failed turn');
   assert.deepEqual(h.calls.after, [
     { runId: 'run_first', status: 'done' }, { runId: 'run_failed', status: 'failed' }, { runId: 'run_done', status: 'done' },
   ]);
@@ -237,6 +243,34 @@ test('a split\'s first turn is seeded once (here: a native fork) and bound under
   assert.equal(h.inputs[2].session, undefined);
 });
 
+test('FIXES-3 B1: a native fork carries its parent\'s running cost total (Claude Code, measured 18.11.2026) – the part\'s first turn stores only its own cost', async () => {
+  const h = setup({ sessions: true, fork: true });
+  const store = new SessionStore(h.s.db);
+  store.save({ agentId: h.agentId, conversationId: h.chat.id, engine: 'claude', accountId: 'acc_api', ref: 'parent_sess', generation: 1, cursorSeq: 0, contextTokens: 1000, updatedAt: 0 });
+  store.setCostTotal(h.agentId, h.chat.id, 'claude', { ref: 'parent_sess', usd: 0.237647 });
+  Object.assign(h.state, { sameRef: true, costUsd: 0.249378 }); // the CLI's total for the fork: its parent's 0.237647 and its own request
+  await h.runSplit('run_s2', h.splitTurn({ context: 'fork' }));
+  assert.equal(h.inputs[0].session?.ref, 'fork_1');
+  assert.equal(h.s.runs.get('run_s2')?.costUsd, 0.011731, 'its own share, not the parent\'s session');
+  assert.deepEqual(store.get(h.agentId, 'split:sp_2', 'claude')?.costTotal, { ref: 'fork_1', usd: 0.249378 });
+  assert.deepEqual(store.get(h.agentId, h.chat.id, 'claude')?.costTotal, { ref: 'parent_sess', usd: 0.237647 }, 'the parent\'s total is untouched');
+});
+
+test('S2 (FIXES-2 C.6): a native fork part starts from its parent session\'s start record and gets what changed since as lines', async () => {
+  const h = setup({ sessions: true, fork: true });
+  const store = new SessionStore(h.s.db);
+  const started = '# My SYSTEM.md\nI write tight.';
+  store.save({ agentId: h.agentId, conversationId: h.chat.id, engine: 'claude', accountId: 'acc_api', ref: 'parent_sess', generation: 1, cursorSeq: 0, contextTokens: 1000, updatedAt: 0, promptKey: 'parent-key' });
+  recordStart(h.s.db, { agentId: h.agentId, thread: h.chat.id, engine: 'claude' }, { key: 'parent-key', native: [], hub: [], sections: [{ name: 'system-md', text: started }] }, 0);
+  await h.runSplit('run_s2', h.splitTurn({ context: 'fork' }));
+  const first = h.inputs[0];
+  assert.equal(first.session?.ref, 'fork_1');
+  assert.equal(first.system.stable, started, 'the system text the forked session holds: its parent\'s start');
+  assert.match(first.system.volatile, /Parts of my standing text changed since this session began\./, 'the sections that changed since, as lines');
+  assert.equal(store.get(h.agentId, 'split:sp_2', 'claude')?.promptKey, 'parent-key', 'the part runs on that start');
+  assert.ok(startOf(h.s.db, { agentId: h.agentId, thread: 'split:sp_2', engine: 'claude' }, 'parent-key'), 'recorded on the part\'s thread');
+});
+
 test('a retry routed to another account than its earlier attempt\'s session starts as the parent again (seeded), never blind', async () => {
   const h = setup({ sessions: true, fork: true });
   const store = new SessionStore(h.s.db);
@@ -280,4 +314,35 @@ test('a split\'s turn that planned no run ends it; a cut one is re-queued', () =
     { runId: 'run_1', status: 'failed', retryable: true, requeue: true, error: 'The runtime stopped before the split ran.' },
     { runId: 'run_2', status: 'stopped', error: 'The agent is paused or archived.' },
   ]);
+});
+
+test('B-080: a done part counts as done only when it brought something back – last words or a note to its origin', async () => {
+  const h = setup();
+  await h.runSplit('run_words'); // "Part done: three cuts."
+  h.state.text = '';
+  await h.runSplit('run_quiet');
+  h.state.onRun = async () => {
+    h.s.runs.item('run_told', { kind: 'tool_call', name: 'agents.split_tell', effectStatus: 'none',
+      data: { callId: 'call_1', args: JSON.stringify({ to: 'origin', text: 'The cut list is in cuts.md.' }), summary: 'To my origin: The cut list is in cuts.md.' } });
+  };
+  await h.runSplit('run_told'); // Mara's case: its piece went to its origin through agents.split_tell
+  assert.deepEqual(h.calls.ends.map((entry) => entry.end), [
+    { runId: 'run_words', status: 'done' },
+    { runId: 'run_quiet', status: 'failed', retryable: true, error: NOTHING_BACK },
+    { runId: 'run_told', status: 'done' },
+  ]);
+});
+
+test('B-080: a first session on a model without a catalog window forks by the window its engine reported elsewhere', async () => {
+  for (const reported of [undefined, 1_000_000]) {
+    const h = setup({ sessions: true, fork: true });
+    // claude:opus has no catalog window (caps {}): 300,000 tokens are past DEFAULT_WINDOW's fit, within a reported 1,000,000.
+    if (reported) {
+      new SessionStore(h.s.db).save({ agentId: h.agentId, conversationId: 'task:other', engine: 'claude', accountId: 'acc_api', ref: 'other_sess', generation: 1,
+        cursorSeq: 0, model: h.opus.id, contextWindow: reported, updatedAt: 0 });
+    }
+    const parentSession = { engine: 'claude' as const, accountId: 'acc_api', ref: 'parent_sess', contextTokens: 300_000 };
+    await h.runSplit('run_s2', h.splitTurn({ context: 'fork', parentSession }));
+    assert.equal(h.forks.length, reported ? 1 : 0, reported ? 'native fork' : 'text seed');
+  }
 });

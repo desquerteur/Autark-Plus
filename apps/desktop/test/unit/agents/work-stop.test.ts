@@ -70,7 +70,7 @@ test('a stored stop survives a restart: the new runtime starts held until the pe
   await h.dispatcher.stop();
   // "Restart": a new dispatcher and latch on the same database.
   const executor = new FakeExecutor();
-  const dispatcher = new DispatcherImpl({ services: () => h.services, executor, supervisor: { admit: async () => () => {} }, maxConcurrent: 2 });
+  const dispatcher = new DispatcherImpl({ services: () => h.services, executor });
   h.services.dispatcher = dispatcher;
   const again = new WorkStop({ services: () => h.services });
   assert.deepEqual({ stopped: again.current().stopped, from: again.current().stoppedFrom }, { stopped: true, from: 'Pixel 9' });

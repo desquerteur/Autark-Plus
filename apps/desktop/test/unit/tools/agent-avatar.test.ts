@@ -63,8 +63,7 @@ function rig() {
     if (via === 'codex') journal.item(runId, { kind: 'tool_call', name: 'image_generation', data: { own: true }, effectStatus: 'none' });
     if (via !== 'media') {
       // 'chat': the same attachment without an image generation in the run (e.g. chat.send of someone's file)
-      const message = via === 'codex' ? h.chats.beginAgentMessage(chat.id, agentId, runId) : h.chats.send({ conversationId: chat.id, body: 'file', authorId: agentId, authorKind: 'agent' });
-      if (via === 'codex') h.chats.finishAgentMessage(message.id, { body: 'Here is the portrait.', state: 'final' });
+      const message = via === 'codex' ? h.chats.postAgentMessage(chat.id, agentId, runId, { body: 'Here is the portrait.' }) : h.chats.send({ conversationId: chat.id, body: 'file', authorId: agentId, authorKind: 'agent' });
       h.db.run('UPDATE messages SET attachments = ? WHERE id = ?', [attachments, message.id]);
     }
     return id;
@@ -166,8 +165,8 @@ test('the bundled skill agent-portrait; the core rules no longer name it (B-047)
   assert.ok(!AGENT_FEATURES_OFF.includes('image_generation'));
   assert.match(parsed.body, /agent turns on Codex have Codex's image generation/);
   assert.match(parsed.body, /`media\.image`/);
-  // B-047 (D6): the core rules no longer carry the portrait line; the skill is found through the skills index.
-  assert.ok(!readFileSync(path.join(RESOURCES, 'prompts', 'rules.md'), 'utf8').includes('agent-portrait'));
+  // B-047 (D6): How I work (the standards) does not carry the portrait line; the skill is found through the skills index.
+  assert.ok(!['standard-agent.md', 'standard-manager.md'].some((name) => readFileSync(path.join(RESOURCES, 'prompts', name), 'utf8').includes('agent-portrait')));
 });
 
 test('agents.list shows each agent\'s avatar kind and palette colour', async () => {

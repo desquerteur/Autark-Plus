@@ -1,5 +1,6 @@
 // D13: the composers' mic button (chat composer, task composer) in its one 36 px slot: Dictate →
-// starting (a spinner from the tap until the microphone is open) → Stop → transcribing (spinner).
+// starting (a spinner from the tap until the microphone is open) → Stop → transcribing (spinner with a small ×: a click stops
+// waiting for the text – feedback 08604667, 18.11.2026; voice.ts cancelTranscribing).
 // It never takes the focus from the field (mousedown is prevented), so the take goes to the
 // field's caret or selection, read at the click; a field that was not focused gets it appended.
 // Its title says why this page gives no text right now (lib/dictation.ts dictationNote); while this PC's
@@ -14,11 +15,11 @@
 import type { RefObject } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { dictationNote } from '../../lib/dictation.ts';
-import { IconButton, Spinner } from '../../lib/ui.tsx';
+import { Icon, IconButton, Spinner } from '../../lib/ui.tsx';
 import type { DictationTarget } from './dictation-insert.ts';
 import type { WaveState } from './DictationWave.tsx';
 import { PressTracker } from '../../feedback/press.ts';
-import { cancelDictation, dictating, dictationCaret, dictationStarting, startDictation, transcribing } from './voice.ts';
+import { cancelDictation, cancelTranscribing, dictating, dictationCaret, dictationStarting, startDictation, transcribing } from './voice.ts';
 
 /** The field's caret/selection right now (`focused`: the take goes there, else it is appended). */
 export function targetOf(field: HTMLTextAreaElement | null): DictationTarget | undefined {
@@ -60,7 +61,12 @@ export function MicButton(props: { draftKey: string; field: RefObject<HTMLTextAr
   const key = props.draftKey;
   const tracker = props.onHoldSend ? props.tracker ?? null : null;
   if (transcribing.value.has(key)) {
-    return <button type="button" class="icon-button" aria-label="Transcribing dictation" title="Transcribing dictation" disabled><Spinner size={16} label="Transcribing dictation" /></button>;
+    return (
+      <button type="button" class="icon-button dictation-transcribing" aria-label="Cancel transcription" title="Transcribing – click to cancel"
+        onMouseDown={(event) => event.preventDefault()} onClick={() => cancelTranscribing(key)}>
+        <Spinner size={20} label="Transcribing dictation" /><Icon name="x" size={10} />
+      </button>
+    );
   }
   if (dictationStarting.value === key) {
     return <button type="button" class="icon-button dictation-starting" aria-label="Starting dictation" title="Starting dictation" disabled><Spinner size={16} label="Starting dictation" /></button>;

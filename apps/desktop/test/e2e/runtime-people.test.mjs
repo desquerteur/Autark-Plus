@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
-import { connect, startRuntime, waitForNew } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, connect, startRuntime, waitForNew } from './lib/runtime-client.mjs';
 
 async function postRpc(port, method, params) {
   const response = await fetch(`http://127.0.0.1:${port}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 1, method, params }) });
@@ -57,7 +57,7 @@ test('a person joins by invite, works with an agent and the owner, and is cut of
   const asked = await postRpc(live.port, 'people.join', { ticket, name: 'Android · Chrome' });
   const todo = await until(() => owner.call('todos.list').then((list) => list.find((entry) => entry.title === 'Let Android · Chrome join as Anna Berg · Designer?')), Boolean, 'the decision to-do');
   assert.equal(todo.createdBy, 'system');
-  await owner.call('tasks.complete', { id: todo.id, answer: { choice: 'Allow' } });
+  await owner.call('tasks.finish', { id: todo.id, answer: { choice: 'Allow' } });
   const joined = await postRpc(live.port, 'people.awaitJoin', { ticket: asked.ticket });
   assert.equal(joined.status, 'accepted', JSON.stringify(joined));
   await assert.rejects(postRpc(live.port, 'people.join', { ticket }), /no longer valid/);
@@ -80,7 +80,7 @@ test('a person joins by invite, works with an agent and the owner, and is cut of
   assert.ok(list[0].members.some((member) => member.memberId === 'owner'), 'the CEO reads as "owner"');
   await assert.rejects(person.call('messages.list', { conversationId: own.id }), /not found/);
   await person.call('events.subscribe', { topics: ['chats', 'tasks', 'org', `chat:${shared.id}`, `chat:${own.id}`] });
-  const reply = waitForNew(person, 'message.updated', (message) => message.conversationId === shared.id && message.authorId === manager.id && message.state === 'final', 90_000);
+  const reply = waitForNew(person, MESSAGE_EVENTS, (message) => message.conversationId === shared.id && message.authorId === manager.id && message.state === 'final', 90_000);
   const sent = await person.call('messages.send', { conversationId: shared.id, body: `@${manager.name} hello from Anna`, mentions: [manager.id] });
   assert.equal(sent.authorId, 'human', 'her message is hers');
   assert.ok((await reply).body.length > 0, 'the agent answered her');
@@ -94,11 +94,11 @@ test('a person joins by invite, works with an agent and the owner, and is cut of
   assert.ok(meta.some((chat) => chat.id === side.id && chat.withOwner === false), 'the admin sees it as metadata');
 
   // 4. A task for her: her For you only; she finishes it (the owner could too – no barrier, Umbau Einfachheit).
-  const task = await owner.call('tasks.create', { conversationId: shared.id, title: 'Pick the colours', assigneeKind: 'human', assigneeId: anna.id });
+  const task = await owner.call('tasks.create', { conversationId: shared.id, title: 'Pick the colours', to: anna.id });
   const hers = await until(() => person.call('todos.list'), (entries) => entries.some((entry) => entry.id === task.id), 'her to-do');
   assert.equal(hers.find((entry) => entry.id === task.id).assigneeId, undefined, 'it reads as hers');
   assert.ok(!(await owner.call('todos.list')).some((entry) => entry.id === task.id), 'not on the owner\'s For you');
-  await person.call('tasks.complete', { id: task.id, note: 'Blue and sand' });
+  await person.call('tasks.finish', { id: task.id, note: 'Blue and sand' });
   const done = await owner.call('tasks.get', { id: task.id });
   assert.equal(done.status, 'done');
   assert.equal(done.result.verification, 'reported_by_human');

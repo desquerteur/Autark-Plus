@@ -14,7 +14,7 @@ import type { Account } from '../../../src/shared/model/providers.ts';
 import type { EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 
 function account(id: string, extra: Partial<Account> = {}): Account {
-  return { id, provider: 'codex', label: 'Codex work', auth: 'cli', state: 'ok', priority: 0, rotation: true, enabled: true, detected: true, createdAt: 0, ...extra };
+  return { id, provider: 'codex', label: 'Codex work', auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 0, ...extra };
 }
 
 const SIGNED_OUT = { stop: 'error', text: '', error: { code: 'unavailable', message: 'Codex is not signed in.' } } as unknown as EngineTurnResult;
@@ -66,17 +66,4 @@ test('the Manager\'s sign-in task is chat-free: no work chat, no 1:1, a wake on 
     r.set('acc_a', { state: 'ok' });
     assert.equal(r.tasks.get(task.id)!.status, 'done', 'it still closes itself');
   }
-});
-
-test('the person\'s fallback to-do is chat-free, first-class on My day, and closes itself', () => {
-  const r = rig([account('acc_a')]);
-  const before = r.chatIds();
-  r.fail('acc_a');
-  const todo = r.relogin.openWork('acc_a')!;
-  assert.deepEqual([todo.assigneeKind, todo.humanReason, todo.conversationId], ['human', 'credential', undefined]);
-  assert.deepEqual(todo.origin, RELOGIN_ORIGIN);
-  assert.deepEqual(r.chatIds(), before, 'no To-do chat is made for it');
-  assert.ok(r.tasks.todos().some((item) => item.id === todo.id), 'on My day');
-  r.set('acc_a', { state: 'ok' });
-  assert.equal(r.tasks.get(todo.id)!.status, 'done');
 });

@@ -390,7 +390,7 @@ export default function home(rel) {
   <div class="wrap maker">
     <div>
       <span class="eyebrow" data-reveal><span class="eyebrow__n">12</span> Who builds it</span>
-      <h2 class="h2" data-reveal style="margin-top:22px">Made in Salzburg <em>by ${maker.company}.</em></h2>
+      <h2 class="h2" data-reveal style="margin-top:22px">Made in Austria <em>by ${maker.company}.</em></h2>
       <p class="lead" data-reveal style="--d:1;margin-top:24px">${site.name} is built by ${maker.company}, the company of founder and software engineer <a href="${maker.founderUrl}" rel="noopener">${maker.founder}</a>. <a href="${root}about/">Why it exists</a>.</p>
       <p class="small muted" data-reveal style="--d:2;margin-top:20px"><a href="${maker.awardUrl}" rel="noopener">${maker.company}: ${maker.award}</a></p>
     </div>

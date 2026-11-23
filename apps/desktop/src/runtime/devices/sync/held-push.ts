@@ -114,7 +114,7 @@ export function vapidHeader(endpoint: string, now: number, pair: KeyPair): strin
  * Sends `payload` to each target under its own key (a target whose key this PC does not hold is skipped); a held
  * subscription the push service no longer knows (404/410) leaves the held list. Returns how many were delivered.
  */
-export async function pushTo(s: Services, targets: HeldSub[], payload: unknown, options: { urgent?: boolean; fetch?: PushFetch } = {}): Promise<number> {
+export async function pushTo(s: Services, targets: HeldSub[], payload: unknown, options: { urgent?: boolean; fetch?: PushFetch; ttl?: number } = {}): Promise<number> {
   if (!targets.length) return 0;
   const keys = await heldKeys(s);
   const own = await ownKey(s);
@@ -130,7 +130,7 @@ export async function pushTo(s: Services, targets: HeldSub[], payload: unknown, 
       const response = await send(target.endpoint, {
         method: 'POST',
         headers: {
-          'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', TTL: '86400', Urgency: options.urgent ? 'high' : 'normal',
+          'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', TTL: String(options.ttl ?? 86400), Urgency: options.urgent ? 'high' : 'normal',
           Authorization: vapidHeader(target.endpoint, s.clock.now(), { pub: target.key, priv }),
         },
         body: encryptPayload(body, Buffer.from(target.data.keys.p256dh, 'base64url'), Buffer.from(target.data.keys.auth, 'base64url')),

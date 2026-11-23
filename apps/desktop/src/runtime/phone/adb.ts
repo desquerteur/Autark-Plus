@@ -1,10 +1,13 @@
 // Phone use via ADB (USB or wireless debugging): the PhoneDriver (driver.ts) agents' phone.* tools use.
 // Owns: finding adb (PATH, Android SDK and winget locations – adb-args.ts), command building with
 // argument arrays, device selection (a named ready phone from an `adb devices` answer younger than
-// REUSE_MS is not asked for again – no polling),
+// REUSE_MS is not asked for again – no polling), the serials attached to this PC (attached(), from the
+// last answer and the connects since – phone/linked.ts names them; a change is told through deps.changed),
+// whether adb is installed here (installed(), from the last look on disk – the registry's phone gate),
 // screenshot (exec-out screencap -p, downscaled), the uiautomator tree, tap/swipe/text/keyevent with
 // bounds validation, opening URLs/apps (a step's signal ends it before the next command), and
 // wireless debugging: pair/connect/disconnect, nearby phones, phone info, USB to Wi-Fi (connect.ts).
+// phone.say has no bubble here and says so (the Autark app's driver has one).
 // The test profile WORKFORCE_ADB=none (adbOverride) finds no adb anywhere.
 // Never: runs adb through a shell on this PC, sends keys that lock or power off the phone,
 // installs or uninstalls apps, or touches developer settings.
@@ -22,7 +25,7 @@ import { parseDevices, parseDump, parseWmSize, renderDump, screenOf, type PhoneD
 import { spawnAdb, type AdbExec, type ExecResult } from './adb-exec.ts';
 import { connectPhone, disconnectPhone, discoverPhones, pairPhone, type AdbRun } from './connect.ts';
 import { inputText, keycode, sdkCandidates, shQuote } from './adb-args.ts';
-import type { PhoneDriver, PhoneShot, PhoneStepOptions, PhoneTree, PhoneWireless } from './driver.ts';
+import type { PhoneDriver, PhoneSaid, PhoneShot, PhoneStepOptions, PhoneTree, PhoneWireless } from './driver.ts';
 
 export type { AdbExec, ExecResult } from './adb-exec.ts';
 export { inputText, keycode, sdkCandidates, shQuote } from './adb-args.ts';
@@ -43,6 +46,8 @@ export interface AdbDeps {
   exists?: (file: string) => boolean;
   home?: string;
   now?: () => number;
+  /** The serials attached here changed (devices/connect.ts announces this PC's caps). */
+  changed?: () => void;
 }
 
 const DUMP_PATH = '/data/local/tmp/workforce-ui.xml';
@@ -57,6 +62,10 @@ export class AdbPhone implements PhoneDriver, PhoneWireless {
   private readonly runner: AdbRun = (args, options) => this.run(args, options);
   /** The last `adb devices` answer: a named ready phone in it is used without asking again for REUSE_MS. */
   private recent: { at: number; devices: PhoneDevice[] } | undefined;
+  /** The serials this PC has attached over ADB, as the last answer and the connects since showed them (attached()). */
+  private serials = new Set<string>();
+  /** adb was found on this PC at the last look (installed()). */
+  private found = false;
   private readonly now: () => number;
 
   constructor(deps: AdbDeps) {
@@ -73,13 +82,41 @@ export class AdbPhone implements PhoneDriver, PhoneWireless {
     const result = await this.run(['devices', '-l'], { timeoutMs: 15_000 });
     const devices = parseDevices(text(result.stdout));
     this.recent = { at: this.now(), devices };
+    this.attach(new Set(devices.filter((device) => device.state === 'device').map((device) => device.serial)));
     return devices;
+  }
+
+  /** The phones attached to this PC over ADB right now, as this driver last saw them (phone/linked.ts names them). */
+  attached(): string[] {
+    return [...this.serials];
+  }
+
+  /** Was adb found on this PC at the last look? Answers without a look (the registry's phone gate, tools/registry.ts). */
+  installed(): boolean {
+    return this.found;
+  }
+
+  /** The serials attached here are now `next`; a change is told (deps.changed). */
+  private attach(next: Set<string>): void {
+    const same = next.size === this.serials.size && [...next].every((serial) => this.serials.has(serial));
+    this.serials = next;
+    if (!same) this.deps.changed?.();
   }
 
   /** Wireless debugging (phone/connect.ts): pair with the dialog's host:port + 6-digit code, connect, disconnect. */
   pair(address: string, code: string): Promise<{ address: string; name?: string }> { return pairPhone(this.runner, address, code); }
-  connect(address: string): Promise<{ address: string; already: boolean }> { return connectPhone(this.runner, address); }
-  disconnect(serial: string): Promise<{ serial: string; was: boolean }> { this.recent = undefined; return disconnectPhone(this.runner, serial); }
+  async connect(address: string): Promise<{ address: string; already: boolean }> {
+    const result = await connectPhone(this.runner, address);
+    this.attach(new Set([...this.serials, result.address]));
+    return result;
+  }
+
+  async disconnect(serial: string): Promise<{ serial: string; was: boolean }> {
+    this.recent = undefined;
+    const result = await disconnectPhone(this.runner, serial);
+    this.attach(new Set([...this.serials].filter((serial) => serial !== result.serial)));
+    return result;
+  }
   /** Phones announcing wireless debugging nearby (adb mdns services). */
   discover(): Promise<NearbyPhone[]> { return discoverPhones(this.runner); }
 
@@ -163,6 +200,11 @@ export class AdbPhone implements PhoneDriver, PhoneWireless {
     return pkg;
   }
 
+  /** ADB has no bubble on the phone: a line or question for the person goes only through the Autark app. */
+  async say(): Promise<PhoneSaid> {
+    throw new WorkforceError('unavailable', 'phone.say works only through the Autark app on the phone; over ADB the phone has no bubble. I write to the person in the chat instead.');
+  }
+
   // ------------------------------------------------------------------ internals
 
   /** A stopped step sends nothing more. */
@@ -235,11 +277,12 @@ export class AdbPhone implements PhoneDriver, PhoneWireless {
     this.adbPath ??= (async () => {
       try {
         const found = await this.deps.finder?.find('adb' as string as CliId); // the finder's lookup is generic over the name
-        if (found) return found.command;
+        if (found) { this.found = true; return found.command; }
       } catch { /* fall through to SDK paths */ }
       const exists = this.deps.exists ?? ((file: string) => { try { return existsSync(file); } catch { return false; } });
       const candidates = sdkCandidates(this.deps.env ?? process.env, this.deps.platform ?? process.platform, this.deps.home ?? os.homedir());
       const hit = candidates.find((file) => exists(file));
+      this.found = Boolean(hit);
       if (!hit) this.adbPath = undefined; // look again next time (the person may install it meanwhile)
       return hit;
     })();

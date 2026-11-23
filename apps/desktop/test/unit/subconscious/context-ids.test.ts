@@ -23,15 +23,15 @@ function chat() {
     t.clock.advance(1000);
   }
   const run = {
-    services: t.services, agent: t.tom, conversationId: t.chat.id, thread: t.chat.id, kind: 'after-turn', signal: new AbortController().signal,
-    hits: new Map(), searches: [], show: () => {}, route: () => {}, finish: () => {},
+    services: t.services, agent: t.tom, conversationId: t.chat.id, thread: 'main', signal: new AbortController().signal,
+    hits: new Map(), searches: [], show: () => {}, finish: () => {},
   } as unknown as FlowRun;
-  const ids = new Set(t.ledger.items(t.tom.id, t.chat.id).map((item) => item.itemId));
-  const firstTurn = t.ledger.items(t.tom.id, t.chat.id).filter((item) => item.kind === 'tool').sort((a, b) => a.order - b.order).slice(0, 6).map((item) => Number(item.itemId.slice(1)));
+  const ids = new Set(t.ledger.items(t.tom.id, 'main').map((item) => item.itemId));
+  const firstTurn = t.ledger.items(t.tom.id, 'main').filter((item) => item.kind === 'tool').sort((a, b) => a.order - b.order).slice(0, 6).map((item) => Number(item.itemId.slice(1)));
   const alone = firstTurn.filter((n) => !ids.has(`m${n}`));
   const shared = firstTurn.filter((n) => ids.has(`m${n}`));
   assert.ok(alone.length >= 2 && shared.length >= 1, `the fixture has numbers only a tool carries and one a message carries too: ${[...ids].join(' ')}`);
-  const state = (id: string) => t.ledger.items(t.tom.id, t.chat.id).find((item) => item.itemId === id)?.state;
+  const state = (id: string) => t.ledger.items(t.tom.id, 'main').find((item) => item.itemId === id)?.state;
   return { t, run, alone, shared, state };
 }
 
@@ -70,7 +70,7 @@ test('context.condense, context.restore, context.read and the list\'s after take
     const condensed = String(await tool('context.condense').run({ ids: [a], text: given }, run));
     assert.match(condensed, new RegExp(`^condensed t${a}: about \\d+ tokens saved`));
     assert.equal(state(`t${a}`), 'condensed');
-    assert.match(String(await tool('context.restore').run({ ids: [a] }, run)), new RegExp(`^back in full: t${a}`));
+    assert.match(String(await tool('context.restore').run({ ids: [a] }, run)), new RegExp(`^Restored t${a} `));
     assert.equal(state(`t${a}`), 'keep');
     const page = String(await tool('context.list').run({ after: a }, run));
     assert.doesNotMatch(page, new RegExp(`\\nt${a} `), 'the page starts after the item the number stands for');

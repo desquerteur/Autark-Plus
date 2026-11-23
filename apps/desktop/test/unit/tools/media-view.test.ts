@@ -164,6 +164,6 @@ test('media.view: other chats, non-images, blind models and bad arguments are re
     const stopped = new AbortController();
     stopped.abort();
     assert.equal(textOf(await tool.run({ fileId: mine.id }, ctxFor(t, 'ag_ada', { signal: stopped.signal }))), 'Stopped before the image was ready.');
-    assert.match(tool.description, /^See an image for myself: /, 'the first sentence says what it does (B-049 F8)');
+    assert.match(tool.description, /^Shows me an image: a stored one, a region of it, or an image file\. /, 'the first sentence says what it does (B-049 F8)');
   } finally { t.temp.cleanup(); }
 });

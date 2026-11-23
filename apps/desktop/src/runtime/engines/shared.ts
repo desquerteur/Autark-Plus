@@ -1,7 +1,8 @@
 // Small helpers shared by all engines.
 // Owns: bounded newline-delimited JSON reading, provider-safe tool names, ToolOutput → text,
 // effort normalization, the folder comparison of sessions, the fixed, user-safe error data
-// engines return and the sums of the cached tokens a usage reports (CacheTokens).
+// engines return, the sums of the cached tokens a usage reports (CacheTokens) and the one
+// <live> block every engine puts in front of a turn's input (contextText).
 // Never: talks to a provider or knows a provider's wire format beyond names.
 
 import path from 'node:path';
@@ -17,24 +18,34 @@ import type { ToolOutput, ToolSpec } from '../tools/types.ts';
  */
 export function readJsonLines(stream: Readable, onMessage: (message: unknown) => void, onBad: (reason: string) => void, maxLine = 4 * 1024 * 1024): void {
   let buffer = '';
+  let scanned = 0; // 18.11.: where the next newline search starts – a long line (an image as base64) is not searched again with every chunk
   let broken = false;
   stream.setEncoding?.('utf8');
   stream.on('data', (chunk: string | Buffer) => {
     if (broken) return;
     buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
     let newline: number;
-    while ((newline = buffer.indexOf('\n')) >= 0) {
+    while ((newline = buffer.indexOf('\n', scanned)) >= 0) {
       const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
+      scanned = 0;
       if (!line) continue;
       let message: unknown;
       try { message = JSON.parse(line); } catch { broken = true; onBad('invalid_json'); return; }
       onMessage(message);
       if (broken) return;
     }
+    scanned = buffer.length;
     if (buffer.length > maxLine) { broken = true; onBad('line_too_long'); }
   });
 }
+
+/**
+ * Codex's app-server sends a generated image as ONE line of base64 (imageGeneration item): a 1536×1024 PNG is 3.4 MB, 4.5 MB
+ * as base64, and the plan's image tool may return up to 20 MB (GENERATED_MAX_BYTES). 18.11.2026: with the 4 MB default every
+ * such image closed the connection ("line_too_long") after Codex had made it. A rollout line with a few of them is bigger still.
+ */
+export const CODEX_LINE_MAX = 96 * 1024 * 1024;
 
 /** Provider function names must match ^[a-zA-Z0-9_-]{1,64}$; ours are dotted ("tasks.create"). */
 export function toWireName(name: string): string {
@@ -106,6 +117,14 @@ export const ERR = {
 export function sameFolder(a: string, b: string): boolean {
   const norm = (dir: string) => { const full = path.resolve(dir); return process.platform === 'win32' ? full.toLowerCase() : full; };
   return norm(a) === norm(b);
+}
+
+/**
+ * The live context (EngineTurnInput.system.volatile) as the block every engine sends first in a turn's input – never in the
+ * system prompt, so the system prompt stays the same cached text for every session of an agent. '' when there is none.
+ */
+export function contextText(volatile: string | undefined): string {
+  return volatile?.trim() ? `<live>\n${volatile}\n</live>` : '';
 }
 
 /** Parses JSON text; undefined on failure. */

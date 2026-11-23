@@ -1,6 +1,5 @@
-// Migration 96 (official 0.3.5): a split part may carry a sampling temperature (splits.temperature).
-// Taken over unchanged from the official Autark 0.3.5 (teydra/OpenAutark, Apache-2.0, release build of 09.11.2026),
-// whose public source stopped at 091: a profile that official build migrated must open in this fork (AF-022).
+// Migration 96 (08.11.2026, B-083 Ultra): a part's temperature (Split.temperature, 0..2) like its model and effort –
+// agents.split sets it, agents.split_tell changes it; engines that sample with one send it (split-turn.ts planSplit).
 // Owns: this column. Never: data rows, or edits of shipped migrations.
 
 export const sql = /* sql */ `

@@ -121,12 +121,14 @@ export async function fillLogin(link: FillRpc | undefined, contents: FillContent
     const value = values[field];
     if (!value || contents.isDestroyed()) continue;
     if (!samePage()) return moved;
-    contents.focus();
+    // 17.11.2026 (Mika: "Object has been destroyed" in the main process while a login was filled): a tab that closes between
+    // two steps makes focus / insertText throw – the fill then ends with `moved`, nothing rejects into main.
+    try { contents.focus(); } catch { return moved; }
     let found = false;
     try { found = (await contents.executeJavaScriptInIsolatedWorld(FILL_WORLD, [{ code: `${FIELD_SCRIPT}(${JSON.stringify(want)})` }])) === true; } catch { found = false; }
     if (!found) continue;
     if (!samePage()) return moved;
-    await contents.insertText(value);
+    try { await contents.insertText(value); } catch { return moved; }
     filled.push(field);
   }
   return filled.length ? { filled } : { error: 'No login field on this page.' };

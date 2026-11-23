@@ -6,13 +6,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { modelOptions, namedValue, OTHER, providerOptions, servingAccounts, setUpRequest, THIS_PC, useRowView, writeModel, writeProvider } from '../../../src/ui/settings/uses-view.ts';
+import { modelOptions, namedValue, OTHER, providerOptions, servingAccounts, setUpRequest, START_MODEL_HINT, THIS_PC, useRowView, writeModel, writeProvider } from '../../../src/ui/settings/uses-view.ts';
 import type { LocalSpeechOffer } from '../../../src/shared/model/local-speech-models.ts';
 import type { ModelUse, UseNow } from '../../../src/shared/model/models-uses.ts';
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 
 const account = (id: string, provider: Account['provider'], patch: Partial<Account> = {}): Account => ({
-  id, provider, label: id === 'acc_codex' ? 'Codex · work' : id, auth: provider === 'codex' ? 'cli' : 'api_key', state: 'ok', priority: 0, rotation: false,
+  id, provider, label: id === 'acc_codex' ? 'Codex · work' : id, auth: provider === 'codex' ? 'cli' : 'api_key', state: 'ok', priority: 0,
   enabled: true, detected: false, createdAt: 1, ...patch,
 });
 const model = (id: string, name: string, accounts: string[], patch: Partial<ModelInfo> = {}): ModelInfo => ({
@@ -89,6 +89,17 @@ test('This PC lists its local models with their download size; a local download 
   assert.deepEqual(idle.button, { kind: 'download', label: 'Download', disabled: false, target: 'fastconformer' });
   const running = useRowView('stt', now('stt', { kind: 'none', state: 'setup', action, thisPc: true }), MODELS, ACCOUNTS, OFFERS, { id: 'fastconformer', state: 'downloading', done: 50, total: 200 }, true);
   assert.deepEqual([running.button?.label, running.button?.disabled, running.hint], ['25 %', true, 'Downloading 25 % · fastconformer']);
+});
+
+test('B-083: a model on Work is a start model – the row says so (its options stay plain); Auto and a plan keep their words', () => {
+  const picked = useRowView('work', now('work', { stored: 'openrouter:qwen/qwen3-8b', accountId: 'acc_or', modelId: 'openrouter:qwen/qwen3-8b', name: 'Qwen3 8B' }), MODELS, ACCOUNTS, [], undefined, true);
+  assert.equal(picked.hint, START_MODEL_HINT);
+  assert.match(picked.hint, /start model/i);
+  assert.deepEqual(picked.models.map((option) => [option.label, option.hint]), [['Qwen3 8B', undefined]]);
+  const auto = useRowView('work', now('work', { accountId: 'acc_or', modelId: 'openrouter:qwen/qwen3-8b', name: 'Qwen3 8B' }), MODELS, ACCOUNTS, [], undefined, true);
+  assert.doesNotMatch(auto.hint, /start model/i, 'nothing picked: what Work is for');
+  const plan = useRowView('work', now('work', { stored: 'codex', kind: 'plan', accountId: 'acc_codex', modelId: 'codex', name: 'GPT-6.1 Sol' }), MODELS, ACCOUNTS, [], undefined, true);
+  assert.doesNotMatch(plan.hint, /start model/i);
 });
 
 test('a pick writes the keys that make it real', () => {

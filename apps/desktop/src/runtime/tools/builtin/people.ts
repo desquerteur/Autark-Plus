@@ -4,7 +4,8 @@
 // of any chat. chat.direct, chat.create and chat.add_members take these ids.
 // B-078 (D20): per person also where they are reachable – their own PC linked here (its name, online or not) – and
 // whether I reach a calendar of theirs (calendar/members.ts: on their PC, here, or none); on an employee's PC one more
-// line names the company ('owner') the same way.
+// line names the company ('owner') the same way. F13: the CEOs – the owner and anyone with the role 'ceo' – carry
+// `role: 'ceo'`; I work for each of them.
 // Owns: that read. Never: changes people, or shows revoked people, invites, scopes or another PC's addresses.
 
 import type { ToolContext, ToolDef } from '../types.ts';
@@ -27,7 +28,7 @@ function reach(ctx: ToolContext, id: string): Record<string, unknown> {
 
 const listPeople = defineTool<Record<string, never>>({
   name: 'people.list',
-  description: 'The people of the organisation: "human" (the person I work for) and colleagues (per_… ids) with name, title, manager, the PC they are on (online or not) and whether I reach their calendar – for chat.direct, chat.create, chat.add_members, tasks and calendar who. Read-only.',
+  description: 'Lists the people of the organisation: the CEOs I work for (role ceo) and colleagues. Each with id, name, title, manager, PC, online and whether I reach their calendar.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   category: 'read',
   describe: () => internal('List the people of the organisation'),
@@ -37,7 +38,7 @@ const listPeople = defineTool<Record<string, never>>({
     const companyRow = company.pc ? [{ id: OWNER_ALIAS, name: 'The owner of the company this PC works in', ...company }] : [];
     if (!people.length && !companyRow.length) return text('Only the person I work for ("human") – no colleagues in the organisation yet. Their calendar is here.');
     return json([...people.slice(0, 200).map((person) => ({
-      id: person.id, name: person.id === HUMAN_ID ? authorName(ctx, HUMAN_ID) : person.name, ...(person.title ? { title: person.title } : {}),
+      id: person.id, name: person.id === HUMAN_ID ? authorName(ctx, HUMAN_ID) : person.name, ...(person.role === 'ceo' ? { role: 'ceo' } : {}), ...(person.title ? { title: person.title } : {}),
       ...(person.managerId ? { manager: `${authorName(ctx, person.managerId)} (${person.managerId})` } : {}),
       ...(person.status === 'invited' ? { joined: false } : {}), ...reach(ctx, person.id),
     })), ...companyRow]);

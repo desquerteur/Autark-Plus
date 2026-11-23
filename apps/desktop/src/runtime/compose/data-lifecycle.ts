@@ -7,11 +7,12 @@ import '../contracts/lifecycle.ts';
 import type { KnowledgeStore } from '../knowledge/service.ts';
 import { PrivacyService } from '../privacy/service.ts';
 import { NativeHistory } from '../privacy/native-history.ts';
+import { homeRoots } from '../system/paths.ts';
 
 export function createDataLifecycle(s: RuntimeServices, knowledge: KnowledgeStore): { stop(): void } {
   // Accounts and engines are built later: late-bound.
   const history = new NativeHistory({
-    db: s.db, clock: s.clock, log: s.log, accountsRoot: s.paths.accounts,
+    db: s.db, clock: s.clock, log: s.log, accountsRoots: homeRoots(s.paths),
     accounts: () => s.accounts?.list() ?? [], engine: (id) => { try { return s.engines?.get(id); } catch { return undefined; } },
   });
   const privacy = new PrivacyService({

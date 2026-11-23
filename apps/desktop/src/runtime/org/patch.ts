@@ -7,6 +7,7 @@
 // Never: saves or emits events (org/service.ts), or decides who may edit.
 
 import { WorkforceError } from '../../shared/errors.ts';
+import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
 import type { Agent, AgentStatus } from '../../shared/model/org.ts';
 import { defaultAvatar } from './avatar.ts';
 import { checkAvatar } from './avatar-files.ts';
@@ -40,7 +41,7 @@ export function patchedAgent(agent: Agent, patch: Partial<Agent>, rules: PatchRu
   }
   if (has('role')) next.role = cleanText(patch.role ?? '', 'role', 80).trim();
   if (has('avatar')) next.avatar = checkAvatar(cleanAvatar(patch.avatar));
-  if (has('instructions')) next.instructions = cleanText(patch.instructions ?? '', 'instructions', 20000);
+  if (has('instructions')) next.instructions = cleanText(patch.instructions ?? '', 'instructions', MAX_SYSTEM_MD);
   if (has('mode')) next.mode = cleanMode(patch.mode);
   if (has('skills')) next.skills = cleanSkills(patch.skills ?? []);
   if (has('modelPolicy')) next.modelPolicy = cleanObject(patch.modelPolicy ?? {}, 'model policy');

@@ -3,6 +3,7 @@
 // `based_on` columns stay in the table, unread and unwritten – a new row takes their defaults).
 // F-52: an agent's manager may be a person of the organisation – stored in person_manager_id
 // (migration 42; manager_id references agents), both read as Agent.managerId.
+// F14: the list with archived agents leaves out those that left no trace (listWithArchived).
 // Never: validation, org rules or events (org/service.ts).
 
 import { json, toJson, type Db, type Row } from '../db/database.ts';
@@ -53,6 +54,20 @@ export class AgentRepo {
   list(includeArchived = false): Agent[] {
     const where = includeArchived ? '' : 'WHERE archived_at IS NULL';
     return this.db.all(`SELECT * FROM agents ${where} ORDER BY created_at, rowid`).map(toAgent);
+  }
+
+  /**
+   * F14: the active agents and the archived ones that left a trace here – a run, a chat, a task given to or made by
+   * them. An archived agent without any (a first-run Manager retired at link-up, a hire undone at once) stays out.
+   */
+  listWithArchived(): Agent[] {
+    return this.db.all(
+      `SELECT * FROM agents a WHERE a.archived_at IS NULL
+         OR EXISTS (SELECT 1 FROM runs r WHERE r.agent_id = a.id)
+         OR EXISTS (SELECT 1 FROM members m WHERE m.member_id = a.id)
+         OR EXISTS (SELECT 1 FROM tasks t WHERE t.assignee_id = a.id OR t.created_by = a.id)
+       ORDER BY a.created_at, a.rowid`,
+    ).map(toAgent);
   }
 
   get(id: string): Agent | undefined {

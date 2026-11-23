@@ -1,6 +1,6 @@
 // B-066: skill routes (a viewer sees its own, each manager's up its chain, shared, built in; an own copy hides nothing
-// from anyone outside its tree), always-visible skills in the prompt section, skills from any folder (skills.find /
-// skills.load with `in`) and the shipped money and writing-skills descriptions.
+// from anyone outside its tree), always-visible skills in the prompt section, skills from any folder (knowledge.find
+// with `in`, knowledge.open folder:<path>/<name>) and the shipped money and writing-skills descriptions.
 // Owns: these assertions only.
 
 import { test } from 'node:test';
@@ -11,7 +11,7 @@ import path from 'node:path';
 import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { SkillLibrary } from '../../../src/runtime/skills/service.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
-import { skillTools } from '../../../src/runtime/tools/builtin/skills.ts';
+import { findTools } from '../../../src/runtime/tools/builtin/find.ts';
 import { lastPromptText, writeLastPrompt } from '../../../src/runtime/context/last-prompt.ts';
 import { RESOURCES } from '../store/helpers.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
@@ -95,43 +95,57 @@ test('saving: an own copy of a built-in or manager\'s skill keeps the always fla
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('skills.find and skills.load with `in` read a folder of another provider as data', async () => {
+test('knowledge.find with `in` and knowledge.open folder: read a folder of another provider as data', async () => {
   const { root } = fixture();
   try {
     const project = path.join(root, 'project');
     writeSkill(path.join(project, '.agents', 'skills'), 'deploy-steps', 'How this project deploys');
     writeSkill(path.join(project, '.agent', 'skills'), 'review-style', 'How reviews read here');
     const ctx = { services: { paths: { workspace: root } }, agent: agent('low') } as never;
-    const tool = (name: string) => skillTools.find((entry) => entry.name === name)!;
-    const listed = JSON.stringify(await tool('skills.find').run({ in: project } as never, ctx));
+    const tool = (name: string) => findTools.find((entry) => entry.name === name)!;
+    const listed = JSON.stringify(await tool('knowledge.find').run({ in: [project] } as never, ctx));
     assert.match(listed, /deploy-steps/);
     assert.match(listed, /review-style/);
     assert.match(listed, /written outside this app/);
-    assert.doesNotMatch(JSON.stringify(await tool('skills.find').run({ in: project, query: 'reviews' } as never, ctx)), /deploy-steps/);
-    assert.match(JSON.stringify(await tool('skills.load').run({ name: 'deploy-steps', in: project } as never, ctx)), /Body of How this project deploys/);
-    assert.equal((await tool('skills.load').run({ name: 'nothing', in: project } as never, ctx) as { isError?: boolean }).isError, true);
-    assert.match(JSON.stringify(await tool('skills.find').run({ in: path.join(root, 'workspace', 'nowhere') } as never, ctx)), /plain text: read them/);
+    assert.doesNotMatch(JSON.stringify(await tool('knowledge.find').run({ in: [project], query: 'reviews' } as never, ctx)), /deploy-steps/);
+    assert.match(JSON.stringify(await tool('knowledge.open').run({ id: `folder:${project}/deploy-steps` } as never, ctx)), /Body of How this project deploys/);
+    assert.equal((await tool('knowledge.open').run({ id: `folder:${project}/nothing` } as never, ctx) as { isError?: boolean }).isError, true);
+    assert.match(JSON.stringify(await tool('knowledge.find').run({ in: [path.join(root, 'workspace', 'nowhere')] } as never, ctx)), /plain text: read them/);
+    assert.equal((await tool('knowledge.find').run({ in: ['project'] } as never, ctx) as { isError?: boolean }).isError, true, 'a relative folder is neither memory nor a PC folder');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the shipped money and writing-skills skills are always visible and say when to read them', () => {
+test('knowledge.open loads a skill by its bare name on my route, with its folder; home: needs a home project', async () => {
+  const skills = new SkillLibrary({ paths: { workspace: path.join(os.tmpdir(), 'wf-no-workspace'), resources: RESOURCES }, clock: new ManualClock(), home: '' });
+  const ctx = { services: { skills, modes: { get: () => GENERAL_MODE }, paths: { workspace: os.tmpdir() } }, agent: agent('any'), mode: 'general' } as never;
+  const open = findTools.find((entry) => entry.name === 'knowledge.open')!;
+  const text = JSON.stringify(await open.run({ id: 'writing-skills' } as never, ctx));
+  assert.match(text, /Skill loaded – how I work where it fits my task/);
+  assert.match(text, /\(folder: [^)]*writing-skills\)/);
+  const home = await open.run({ id: 'home:deploy' } as never, ctx) as { isError?: boolean; content: Array<{ text: string }> };
+  assert.equal(home.isError, true);
+  assert.match(home.content[0].text, /Home projects are not available/);
+});
+
+test('the shipped chats, money and writing-skills skills are always visible and say when to read them', () => {
   const skills = new SkillLibrary({ paths: { workspace: path.join(os.tmpdir(), 'wf-no-workspace'), resources: RESOURCES }, clock: new ManualClock(), home: '' });
   const always = skills.alwaysFor(agent('any'), GENERAL_MODE);
-  assert.deepEqual(always.map((info) => info.name), ['money', 'writing-skills']);
+  assert.deepEqual(always.map((info) => info.name), ['chats', 'money', 'writing-skills']);
   // B-075 (owner 04.11.2026): skill descriptions speak in the reader's own voice.
-  assert.match(always[0].description, /^I read this before I spend or commit money/);
-  assert.match(always[1].description, /^I read this before I write or change a skill, a memory or a brief/);
+  assert.match(always[1].description, /^I read this before I spend or commit money/);
+  assert.match(always[2].description, /^I read this before I write or change a skill, a memory or a brief/);
+  assert.match(always[0].description, /^I read this when I am unsure where a line of mine belongs/);
 });
 
 test('last-prompt.md: written each turn into the agent\'s folder, never creating one, never failing', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'wf-last-'));
   try {
-    const parts = { stable: 'STABLE', volatile: 'VOLATILE' };
+    const parts = { system: 'STABLE', input: 'INPUT' };
     writeLastPrompt(root, 'ag_gone', parts);
     mkdirSync(path.join(root, 'agents', 'ag_here'), { recursive: true });
     writeLastPrompt(root, 'ag_here', parts);
     assert.equal(readFileSync(path.join(root, 'agents', 'ag_here', 'last-prompt.md'), 'utf8'), lastPromptText(parts));
-    assert.match(lastPromptText(parts), /STABLE\n\nVOLATILE/);
+    assert.match(lastPromptText(parts), /# System prompt\n\nSTABLE\n\n# Input\n\nINPUT\n$/);
     writeLastPrompt(undefined, 'ag_here', parts);
     writeLastPrompt(root, '../escape', parts);
   } finally { rmSync(root, { recursive: true, force: true }); }

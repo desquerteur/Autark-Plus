@@ -19,8 +19,10 @@ export function previewText(body: string, attachments: Array<{ name: string }> =
   const withoutFences = body.replace(/```(\w*)([^\n]*)\n([\s\S]*?)(```|$)/g, (_all, lang: string, info: string, inner: string) => {
     if (lang === 'ui') {
       const title = /"title"\s*:\s*"([^"]{1,60})"/.exec(inner)?.[1];
+      // 18.11.2026 (Mika, window check): a quick question read "[choice]" in the chat list – the question is the better label
+      const question = /"(?:question|prompt)"\s*:\s*"((?:[^"\\]|\\.){1,160})"/.exec(inner)?.[1]?.replace(/\\(["\\])/g, '$1').replace(/\\n/g, ' ');
       const type = /"type"\s*:\s*"([a-z_]{1,20})"/.exec(inner)?.[1];
-      return `\n[${title ?? type ?? 'ui'}]\n`;
+      return `\n[${title ?? question ?? type ?? 'ui'}]\n`;
     }
     if (lang === 'mermaid') return '\n[diagram]\n';
     if (lang === 'app') return `\n[${/title="([^"]{1,60})"/.exec(info)?.[1] ?? 'app'}]\n`;
@@ -95,7 +97,9 @@ export function displayTitle(
 /**
  * Finds `@Name` mentions in a body against candidate members (names may contain spaces).
  * Longest names are tried first so "@Anna Lena" beats "@Anna". Matching is folded
- * (case/diacritics-insensitive) and requires a word boundary after the name.
+ * (case/diacritics-insensitive) and requires a word boundary after the name. An '@' counts
+ * only at the start or after a character that cannot be part of an e-mail address's local
+ * part, so "info@karl-weber.de" names nobody.
  */
 export function findMentions(body: string, candidates: Array<{ id: string; name: string }>): string[] {
   if (!body.includes('@')) return [];
@@ -104,6 +108,7 @@ export function findMentions(body: string, candidates: Array<{ id: string; name:
   const found = new Set<string>();
   let index = folded.indexOf('@');
   while (index >= 0) {
+    if (index > 0 && /[\p{L}\p{N}._%+-]/u.test(folded.charAt(index - 1))) { index = folded.indexOf('@', index + 1); continue; }
     const rest = folded.slice(index + 1);
     for (const candidate of sorted) {
       const name = foldText(candidate.name.trim());

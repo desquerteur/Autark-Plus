@@ -64,7 +64,7 @@ class FakePage implements PageLike {
   async bringToFront() {}
   async close() { this.closed = true; }
   isClosed() { return this.closed; }
-  async evaluate(expression: string) { return expression.includes('type=password') ? this.passwords : expression.includes('otpauth') ? this.links : undefined; }
+  async evaluate(expression: string) { return expression.includes('type=password') || expression.includes("type === 'password'") ? this.passwords : expression.includes('otpauth') ? this.links : undefined; } // the second: the hidden-field read (BEFUND §6)
   keyboard = { press: async (key: string) => { this.actions.push({ selector: 'keyboard', name: 'press', value: key }); } };
   mouse = { wheel: async (_x: number, y: number) => { this.actions.push({ selector: 'mouse', name: 'wheel', value: y }); } };
   downloads: Array<(download: DownloadLike) => void> = [];
@@ -247,4 +247,17 @@ test('URLs are normalised to http(s) and the installed browser channel is detect
   assert.equal(detectChannel({ platform: 'win32', env, exists: only('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe') }), 'msedge');
   assert.equal(detectChannel({ platform: 'win32', env, exists: only('C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe') }), 'chrome');
   assert.throws(() => detectChannel({ platform: 'linux', env: {}, exists: () => false }), /No Google Chrome or Microsoft Edge/);
+});
+
+test('B-081: a submit whose page is still navigating is not a failure – the steps stay done, with the new url and a "still loading" note', async () => {
+  const { browser, launches } = setup();
+  await browser.open('ag_1', { url: 'https://example.com' });
+  const page = launches[0].context.list[0];
+  page.onAction = (selector, name) => { if (name === 'click') page.urlValue = 'https://example.com/inbox'; }; // the submit went through and navigated
+  page.ariaSnapshot = async () => { throw new Error('locator.ariaSnapshot: Timeout 5000ms exceeded.\nCall log:\n  - waiting for navigation'); };
+  const out = await browser.batch('ag_1', { steps: [{ action: 'click', target: { ref: 'e2' } }] });
+  assert.equal(out.done, 1, 'the click ran');
+  assert.equal(out.failure, undefined, 'no failure, even though the page cannot be read back yet');
+  assert.equal(out.url, 'https://example.com/inbox', 'the new url is reported');
+  assert.match(out.changes.text, /still loading – browser\.snapshot reads it once it is there/);
 });

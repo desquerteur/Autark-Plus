@@ -6,10 +6,30 @@
 import type { MotionStyle } from '../../shared/model/pointer-motion.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import type { PointerMove } from './motion.ts';
-import { hostOf, perform, translateError, type BrowserAction, type BrowserTarget, type PageLike } from './page.ts';
+import { hostOf, locate, perform, translateError, type BrowserAction, type BrowserTarget, type PageLike } from './page.ts';
 
 /** One step of browser.batch (`secretId`: fill or type a stored secret). */
-export interface BatchStep { action: BrowserAction; target?: BrowserTarget; value?: string; secretId?: string; values?: string[]; key?: string; files?: string[]; amount?: number }
+export interface BatchStep { action: BrowserAction; target?: BrowserTarget; value?: string; secretId?: string; values?: string[]; key?: string; files?: string[]; amount?: number; offset?: { x: number; y: number } }
+
+/** fb_1m7mtty0aszywt5y0 (17.11.2026): a click or hover at a point inside the element (CSS px from its top-left) – an image
+ *  CAPTCHA's tile inside its iframe, a canvas. Playwright's own `position` option, so its waiting and checks stay. */
+const AT_POINT: ReadonlySet<BrowserAction> = new Set(['click', 'double_click', 'right_click', 'hover']);
+type PointOptions = { timeout?: number; button?: 'left' | 'right'; position: { x: number; y: number } };
+async function atPoint(page: PageLike, step: BatchStep, timeout: number): Promise<void> {
+  if (!step.target) throw new WorkforceError('bad_request', 'In my own browser a point (x, y) is inside an element: name it (ref, role, label, text or css).');
+  const element = locate(page, step.target) as unknown as {
+    click(options: PointOptions): Promise<void>; dblclick(options: PointOptions): Promise<void>; hover(options: PointOptions): Promise<void>;
+    boundingBox?(options?: { timeout?: number }): Promise<{ width: number; height: number } | null>;
+  };
+  const box = await element.boundingBox?.({ timeout }).catch(() => null);
+  if (box && (step.offset!.x > box.width || step.offset!.y > box.height)) {
+    throw new WorkforceError('bad_request', `The point ${Math.round(step.offset!.x)},${Math.round(step.offset!.y)} is outside the element (${Math.round(box.width)}×${Math.round(box.height)}).`);
+  }
+  const options: PointOptions = { timeout, position: step.offset! };
+  if (step.action === 'double_click') return element.dblclick(options);
+  if (step.action === 'hover') return element.hover(options);
+  return element.click({ ...options, ...(step.action === 'right_click' ? { button: 'right' } : {}) });
+}
 
 export interface StepRun {
   done: number;
@@ -43,6 +63,12 @@ export async function runSteps(page: PageLike, steps: readonly BatchStep[], opti
         if (!options.secret) throw new WorkforceError('unavailable', 'Stored secrets cannot be filled here.');
         if (step.action !== 'fill' && step.action !== 'type') throw new WorkforceError('bad_request', 'A stored secret is used with fill or type.');
         value = await options.secret(step.secretId, hostOf(page.url()));
+      }
+      if (step.offset && AT_POINT.has(step.action)) {
+        await atPoint(page, step, options.timeoutMs);
+        done++;
+        await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => undefined);
+        continue;
       }
       const files = step.files?.map((file) => options.file(file));
       const point = await perform(page, { ...step, value, files, timeoutMs: options.timeoutMs, motion: options.motion });

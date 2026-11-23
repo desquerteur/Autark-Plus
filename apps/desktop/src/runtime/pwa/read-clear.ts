@@ -8,7 +8,7 @@
 // shows nothing, or at worst puts the same notice back quietly once, instead of stacking blank "Autark" notices.
 // Apple's push service (the iPhone web app) gets no clear at all: iOS revokes a subscription that receives a push
 // without a notice (isApplePush).
-// Owns: remembering which chats this PC pushed a notice for, and the clear. Never: pushes a person's devices, or a to-do's
+// Owns: remembering which chats this PC pushed a notice for, and clearing a chat or a call's own tag. Never: pushes a person's devices, or a to-do's
 // notice (a to-do stays until it is done), a clear to Apple's push service, or logs an endpoint.
 
 import { HUMAN_ID } from '../../shared/ids.ts';
@@ -59,11 +59,16 @@ export function isApplePush(endpoint: string): boolean {
 
 /** One silent push that closes the notices of chat `id` on every phone of the owner this PC holds (not iPhones). */
 export async function clearChat(s: Pick<RuntimeServices, 'db' | 'host' | 'clock' | 'log'>, id: string, fetch?: PushFetch, note?: PushedNote): Promise<number> {
+  const { url, tag } = pushTarget({ kind: 'reply', conversationId: id });
+  return clearNotice(s, tag, fetch, note ? { ...note, url } : undefined);
+}
+
+/** A call ends independently of its chat's unread messages: close exactly its own notification tag. */
+export async function clearNotice(s: Pick<RuntimeServices, 'db' | 'host' | 'clock' | 'log'>, tag: string, fetch?: PushFetch, note?: PushedNote & { url: string }): Promise<number> {
   const own = await ownKey(s);
   const now = s.clock.now();
   const targets = [...(own ? localSubs(s.db, own.pub, now) : []).filter((sub) => !sub.person), ...ownerHeld(s.db, heldSubs(s.db), now)]
     .filter((sub) => !isApplePush(sub.endpoint));
-  const { url, tag } = pushTarget({ kind: 'reply', conversationId: id });
-  const older = note ? { tag, url, title: note.title, body: note.body, silent: true, ...(note.id ? { id: note.id } : {}) } : {};
+  const older = note ? { tag, url: note.url, title: note.title, body: note.body, silent: true, ...(note.id ? { id: note.id } : {}) } : {};
   return pushTo(s, targets, { clear: tag, ...older }, { fetch });
 }

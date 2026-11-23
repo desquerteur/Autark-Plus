@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AUDIO_TAGGER, localSpeechModel, SILERO_VAD, type LocalSpeechModel, type LocalSpeechPull } from '../../../src/shared/model/local-speech-models.ts';
+import { AUDIO_TAGGER, localSpeechModel, SILERO_VAD, SMART_TURN, type LocalSpeechModel, type LocalSpeechPull } from '../../../src/shared/model/local-speech-models.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import { LocalSpeech, MAX_SPEAKING } from '../../../src/runtime/voice/local/service.ts';
 import { LocalSpeechEngine } from '../../../src/runtime/voice/local/engine.ts';
@@ -60,8 +60,8 @@ test('pull: VAD comes along, progress over both, the model is chosen; a second c
     release();
     assert.deepEqual(await first, { ok: true });
     assert.deepEqual(await second, { ok: true });
-    assert.deepEqual(t.installed, [SILERO_VAD.id, CANARY.id], 'one download each');
-    const total = SILERO_VAD.download.bytes + CANARY.download.bytes;
+    assert.deepEqual(t.installed, [SILERO_VAD.id, SMART_TURN.id, CANARY.id], 'one download each (B-082: Smart Turn with the VAD)');
+    const total = SILERO_VAD.download.bytes + SMART_TURN.download.bytes + CANARY.download.bytes;
     assert.ok(t.events.every((event) => event.id === CANARY.id && event.total === total));
     assert.deepEqual(t.events.at(-1), { id: CANARY.id, total, state: 'done', done: total });
     assert.ok(t.events.some((event) => event.state === 'unpacking' && event.done === total));
@@ -71,7 +71,7 @@ test('pull: VAD comes along, progress over both, the model is chosen; a second c
     assert.equal(t.local.sttModel()?.id, CANARY.id);
     await t.local.pull(VOICE.id);
     assert.deepEqual(t.updates.at(-1), { voice: { localTts: VOICE.id } });
-    assert.ok(!t.installed.slice(2).includes(SILERO_VAD.id), 'a voice needs no VAD');
+    assert.ok(!t.installed.slice(3).some((id) => id === SILERO_VAD.id || id === SMART_TURN.id), 'a voice needs no VAD');
   } finally { t.data.done(); }
 });
 
@@ -86,7 +86,31 @@ test('pull: two recognizers at once fetch Silero VAD only once (review fix: both
     release();
     assert.deepEqual(await both, [{ ok: true }, { ok: true }]);
     assert.equal(t.installed.filter((id) => id === SILERO_VAD.id).length, 1, 'one VAD download');
-    assert.deepEqual([...t.installed].sort(), [CANARY.id, parakeet.id, SILERO_VAD.id].sort());
+    assert.deepEqual([...t.installed].sort(), [CANARY.id, parakeet.id, SILERO_VAD.id, SMART_TURN.id].sort());
+  } finally { t.data.done(); }
+});
+
+test('B-082 ensureTurn: Smart Turn comes next to an installed Silero VAD once; without Silero nothing is fetched', async () => {
+  const t = setup();
+  try {
+    await t.local.ensureTurn();
+    assert.deepEqual(t.installed, [], 'no recognizer, no VAD: nothing');
+    installFake(t.data.dir, SILERO_VAD);
+    await Promise.all([t.local.ensureTurn(), t.local.ensureTurn()]);
+    assert.deepEqual(t.installed, [SMART_TURN.id], 'fetched once');
+    await t.local.ensureTurn();
+    assert.deepEqual(t.installed, [SMART_TURN.id], 'already there');
+    assert.deepEqual(t.events, [], 'quiet: no pull events, no setting');
+    assert.deepEqual(t.updates, []);
+  } finally { t.data.done(); }
+});
+
+test('B-082 review fix: a failing Smart Turn download never blocks the recognizer pull', async () => {
+  const t = setup({ install: async (model) => { if (model.id === SMART_TURN.id) throw new Error('huggingface.co unreachable'); } });
+  try {
+    assert.deepEqual(await t.local.pull(CANARY.id), { ok: true });
+    assert.equal(t.local.sttModel()?.id, CANARY.id, 'the recognizer is installed and chosen');
+    assert.equal(t.events.at(-1)?.state, 'done');
   } finally { t.data.done(); }
 });
 
@@ -129,6 +153,23 @@ test('localModels: fitted rows with installed marks; a blocked engine is said be
   try {
     assert.deepEqual(blocked.local.models().engine, { ready: false, error: 'Windows blocked the local speech engine (Smart App Control or an app control policy does not trust its files on this PC yet).' });
   } finally { blocked.data.done(); }
+});
+
+test('speak: a chosen voice missing on this PC is fetched once in the background, the line still falls back', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const t = setup({ voice: { localTts: VOICE.id }, install: () => gate });
+  try {
+    await assert.rejects(t.local.speak({ text: 'Hallo' }), /No local voice is downloaded on this PC/);
+    await assert.rejects(t.local.speak({ text: 'Noch einmal' }), /No local voice is downloaded on this PC/);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(t.installed, [VOICE.id], 'one download for two lines');
+    assert.deepEqual(t.updates, [], 'the setting stays as the person chose it');
+    assert.ok(t.events.some((event) => event.id === VOICE.id && event.auto === true && event.state === 'done'));
+    const spoken = await t.local.speak({ text: 'Jetzt' });
+    assert.ok(spoken.sampleRate > 0, 'the fetched voice speaks');
+  } finally { t.data.done(); }
 });
 
 test('speak: PCM16 in the chosen voice and language; blank is empty; no voice or too many lines are clear errors', async () => {

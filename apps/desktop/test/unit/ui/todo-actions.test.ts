@@ -8,9 +8,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import type { UiBlock } from '../../../src/shared/blocks/catalog.ts';
+import type { TaskStatus } from '../../../src/shared/model/tasks.ts';
 import { checkAnswer, todoActions } from '../../../src/ui/tasks/todo-actions.ts';
 
-type Status = 'open' | 'done' | 'cancelled' | 'waiting' | 'needs_you';
+type Status = TaskStatus;
 const item = (createdBy: string, widget?: Record<string, unknown>, status: Status = 'open') =>
   ({ assigneeKind: 'human' as const, createdBy, status, widget: widget as UiBlock | undefined });
 const none = { decline: false, remove: false, markDone: false, snooze: false, sendToTeam: false };
@@ -38,7 +39,7 @@ test('a mini-app to-do can be marked done or declined; finished to-dos offer not
   const app = { type: 'app', messageId: 'msg_1', index: 0, permissions: [] };
   assert.deepEqual(todoActions(item('ag_ava', app)), { ...none, decline: true, markDone: true, snooze: true });
   assert.deepEqual(todoActions(item('ag_ava', app, 'done')), none);
-  assert.deepEqual(todoActions(item(HUMAN_ID, undefined, 'cancelled')), { ...none, remove: true });
+  assert.deepEqual(todoActions(item(HUMAN_ID, undefined, 'dropped')), { ...none, remove: true });
   assert.deepEqual(todoActions({ ...item('ag_ava'), assigneeKind: 'agent' }), none, 'agent work is no to-do');
 });
 
@@ -47,7 +48,7 @@ test('the check finishes plain to-dos, confirmations, reminders and checklists â
   assert.deepEqual(checkAnswer(item('ag_ava', { type: 'confirm', instructions: 'Water the plants' })), { answer: { done: true } });
   assert.deepEqual(checkAnswer(item(HUMAN_ID, { type: 'timer', label: 'Pills', repeat: 'daily' })), { answer: { event: 'done' } }, 'a repeating one then waits');
   assert.deepEqual(checkAnswer(item(HUMAN_ID, { type: 'checklist', items: ['Milk', { text: 'Bread' }] })), { answer: { checked: ['Milk', 'Bread'], open: [] } });
-  assert.deepEqual(checkAnswer(item(HUMAN_ID, undefined, 'needs_you')), {}, 'a to-do that rang');
+  assert.deepEqual(checkAnswer(item(HUMAN_ID, undefined, 'open')), {}, 'a to-do that rang (still open)');
 });
 
 test('no check where only the widget can answer, for approvals, mini-apps and finished to-dos', () => {

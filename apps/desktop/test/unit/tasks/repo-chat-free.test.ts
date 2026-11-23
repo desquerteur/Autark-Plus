@@ -20,7 +20,7 @@ function setup() {
 
 const base = (id: string, extra: Partial<Task> = {}): Task => ({
   id, title: `Task ${id}`, notes: '', status: 'open', assigneeKind: 'agent', assigneeId: 'ag_ava', createdBy: 'ag_ava', priority: 0,
-  ledger: {}, attempts: 0, sort: 0, rev: 0, createdAt: T, updatedAt: T, ...extra,
+  ledger: {}, sort: 0, rev: 0, createdAt: T, updatedAt: T, ...extra,
 });
 
 test('a chat-free task round-trips: NULL chat and message, its own space and origin', () => {

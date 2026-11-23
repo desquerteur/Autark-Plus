@@ -1,10 +1,12 @@
 // The context ledger's rows (B-048 E1, table context_items – migration 77).
-// Owns: the SQL of context_items: row ↔ LedgerItem, id allocation (m<seq> from the message; t/s/r/a/f from
-// one counter per agent and chat – the highest number used plus one, and rows are never deleted one by one,
-// so a number is never used twice), the monotonic order, the agent's turn count in the chat (distinct runs –
-// the unit of a pin), pins, marks and the applied state of a rebuild. B-049 F9: whether a row is NESTED (a call made
+// The key is (agent, thread) – 13.11.2026: one context per agent, so its main thread holds the lines of every chat it saw.
+// Owns: the SQL of context_items: row ↔ LedgerItem, id allocation (m<n> counting the thread's messages, t/s/r/a/f/c from one
+// counter per agent and thread – each the highest number used plus one, and rows are never deleted one by one, so a number is never used twice), the monotonic order, the agent's turn count in the chat (distinct runs –
+// the unit of a pin), pins, marks and the applied state of a rebuild, the copy that starts a fork's record (F26). B-049 F9: whether a row is NESTED (a call made
 // inside a code-mode script) is read with every row from its journal row – the call id there starts with "exec-"
-// (shared NESTED_CALL_PREFIX) – so rows captured before F9 count too, without a column; a pin's room counts no nested row.
+// (shared NESTED_CALL_PREFIX) – so rows captured before F9 count too, without a column; a pin's room counts no nested row
+// and no checkpoint (a hand-over is pinned by the fold, not out of the room the agent keeps things in). KI-Runde 17.11.2026:
+// the rows of one tool by its journal name (callItems – the fold leaves tasks.finish calls) and a pin set directly (pin).
 // Never: decides what to capture or mark, reads originals or deletes rows other than a removed chat's.
 
 import type { Db } from '../../db/database.ts';
@@ -37,7 +39,7 @@ export interface LedgerRow {
   nested?: number;
 }
 
-export type NewRow = Pick<LedgerRow, 'agent_id' | 'conversation_id' | 'kind' | 'run_id' | 'created_at' | 'tokens' | 'title' | 'origin_engine' | 'origin_model' | 'ref' | 'bytes'> & { seq?: number };
+export type NewRow = Pick<LedgerRow, 'agent_id' | 'conversation_id' | 'kind' | 'run_id' | 'created_at' | 'tokens' | 'title' | 'origin_engine' | 'origin_model' | 'ref' | 'bytes'>;
 
 /** B-049 F9: a tool/skill/file row whose journal result names an "exec-" call id (the prefix has no LIKE wildcard). */
 const NESTED = `COALESCE(kind IN ('tool', 'skill', 'file') AND ref LIKE 'item:%' AND EXISTS (SELECT 1 FROM run_items ri WHERE ri.id = substr(context_items.ref, 6)
@@ -96,29 +98,18 @@ export class LedgerStore {
     return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
   }
 
-  /** The newest chat message seq recorded (undefined: none yet). */
-  lastMessageSeq(agentId: string, conversationId: string): number | undefined {
-    const row = this.db.get<{ seq: number | null }>(`SELECT MAX(CAST(substr(item_id, 2) AS INTEGER)) AS seq FROM context_items WHERE ${KEY} AND kind = 'message'`, [agentId, conversationId]);
-    return row?.seq === null || row?.seq === undefined ? undefined : Number(row.seq);
-  }
-
-  /** The run's own words are in the ledger (its text or a tool call) – its chat message is not recorded again. */
+  /** The run's own words are in the ledger (its text, its hand-over or a tool call) – its chat message is not recorded again. */
   hasOwnWords(agentId: string, conversationId: string, runId: string): boolean {
-    return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? AND kind IN ('assistant', 'tool') LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
+    return this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} AND run_id = ? AND kind IN ('assistant', 'tool', 'checkpoint') LIMIT 1`, [agentId, conversationId, runId]) !== undefined;
   }
 
-  /** Inserts a new row with the next order and id (m<seq> for a message); returns it. Call inside a transaction. */
+  /** Inserts a new row with the next order and id; returns it. Call inside a transaction. */
   insert(input: NewRow): LedgerRow {
     const { agent_id: agentId, conversation_id: conversationId } = input;
     const order = Number(this.db.get<{ n: number | null }>(`SELECT MAX("order") AS n FROM context_items WHERE ${KEY}`, [agentId, conversationId])?.n ?? 0) + 1;
-    let itemId: string;
-    if (input.kind === 'message') {
-      if (!input.seq || input.seq < 1) throw new Error('A message item needs its seq.');
-      itemId = `m${Math.floor(input.seq)}`;
-    } else {
-      const last = this.db.get<{ n: number | null }>(`SELECT MAX(CAST(substr(item_id, 2) AS INTEGER)) AS n FROM context_items WHERE ${KEY} AND kind <> 'message'`, [agentId, conversationId])?.n;
-      itemId = `${KIND_PREFIX[input.kind]}${Number(last ?? 0) + 1}`;
-    }
+    const message = input.kind === 'message'; // messages count apart (m1, m2 …); t/s/r/a/f/c share one counter
+    const last = this.db.get<{ n: number | null }>(`SELECT MAX(CAST(substr(item_id, 2) AS INTEGER)) AS n FROM context_items WHERE ${KEY} AND kind ${message ? '=' : '<>'} 'message'`, [agentId, conversationId])?.n;
+    const itemId = `${KIND_PREFIX[input.kind]}${Number(last ?? 0) + 1}`;
     this.db.run(
       `INSERT INTO context_items (agent_id, conversation_id, item_id, kind, run_id, "order", created_at, tokens, title, ref, origin_engine, origin_model, bytes)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -146,7 +137,34 @@ export class LedgerStore {
 
   /** B-050 K5: the tokens of the items pinned at least until `atLeast` (KEEP_PIN: the items kept for good) – B-049 F9: nested rows cost none. */
   pinnedTokens(agentId: string, conversationId: string, atLeast: number): number {
-    return Number(this.db.get<{ n: number | null }>(`SELECT SUM(tokens) AS n FROM context_items WHERE ${KEY} AND pinned_until >= ? AND NOT ${NESTED}`, [agentId, conversationId, atLeast])?.n ?? 0);
+    return Number(this.db.get<{ n: number | null }>(`SELECT SUM(tokens) AS n FROM context_items WHERE ${KEY} AND pinned_until >= ? AND kind <> 'checkpoint' AND NOT ${NESTED}`, [agentId, conversationId, atLeast])?.n ?? 0);
+  }
+
+  /** Pins a row until the turn count `until` (the fold pins its hand-over for good). */
+  pin(row: Pick<LedgerRow, 'agent_id' | 'conversation_id' | 'item_id'>, until: number): void {
+    this.db.run(`UPDATE context_items SET pinned_until = ? WHERE ${KEY} AND item_id = ?`, [until, row.agent_id, row.conversation_id, row.item_id]);
+  }
+
+  /**
+   * The ids of the rows that are the agent's own words posted in a chat: their journal note names the message it became, or
+   * reached one (agents/publishing.ts), or – a commentary segment's 'Update' note – the messages its blocks became (agents/chat-out.ts).
+   */
+  postedItems(agentId: string, conversationId: string): Set<string> {
+    return new Set(this.db.all<{ item_id: string }>(
+      `SELECT item_id FROM context_items WHERE ${KEY} AND kind = 'assistant' AND ref LIKE 'item:%'
+         AND EXISTS (SELECT 1 FROM run_items ri WHERE ri.id = substr(context_items.ref, 6)
+           AND (json_extract(ri.data, '$.messageId') IS NOT NULL OR json_extract(ri.data, '$.visibility') = 'notify' OR json_extract(ri.data, '$.messageIds') IS NOT NULL))`,
+      [agentId, conversationId],
+    ).map((row) => row.item_id));
+  }
+
+  /** The ids of the tool rows whose call is `name`, read from their journal row (a call through tools.call is journaled under its target's name). */
+  callItems(agentId: string, conversationId: string, name: string): Set<string> {
+    return new Set(this.db.all<{ item_id: string }>(
+      `SELECT item_id FROM context_items WHERE ${KEY} AND kind = 'tool' AND ref LIKE 'item:%'
+         AND EXISTS (SELECT 1 FROM run_items ri WHERE ri.id = substr(context_items.ref, 6) AND ri.name = ?)`,
+      [agentId, conversationId, name],
+    ).map((row) => row.item_id));
   }
 
   /** The newest `limit` rows of the subconscious's calls (their journal call id starts with TRACE_CALL_PREFIX), hidden ones left out. */
@@ -205,9 +223,9 @@ export class LedgerStore {
     ) !== undefined;
   }
 
-  /** Rows (any agent) of one chat message. */
-  byMessage(conversationId: string, messageId: string): LedgerRow[] {
-    return this.db.all<LedgerRow>(`SELECT ${COLUMNS} FROM context_items WHERE conversation_id = ? AND ref = ?`, [conversationId, `msg:${messageId}`]);
+  /** Rows (any agent and thread) of one chat message. */
+  byMessage(messageId: string): LedgerRow[] {
+    return this.db.all<LedgerRow>(`SELECT ${COLUMNS} FROM context_items WHERE ref = ?`, [`msg:${messageId}`]);
   }
 
   /** An edited message: its rows' title and estimate follow the new text. */
@@ -224,12 +242,28 @@ export class LedgerStore {
   }
 
   /** A deleted message: its rows keep none of its words, leave the view and count as pruned (the id stays). */
-  forgetMessage(conversationId: string, messageId: string, at: number): number {
+  forgetMessage(messageId: string, at: number): number {
     return this.db.run(
       `UPDATE context_items SET title = 'Deleted message', condensed = NULL, state = 'hidden', mark_reason = 'deleted by its author', marked_at = ?, pruned_at = COALESCE(pruned_at, ?)
-        WHERE conversation_id = ? AND ref = ?`,
-      [at, at, conversationId, `msg:${messageId}`],
+        WHERE ref = ?`,
+      [at, at, `msg:${messageId}`],
     ).changes;
+  }
+
+  /**
+   * F26: a fork's record – `from`'s rows up to the last one of `runId` (all of them when that run left none) copied into `to` as they
+   * are (ids, order, marks, pins, refs to the same originals), when `to` holds no row yet; returns how many it copied.
+   */
+  copy(agentId: string, from: string, to: string, runId: string): number {
+    return this.db.tx(() => {
+      if (this.db.get(`SELECT 1 AS hit FROM context_items WHERE ${KEY} LIMIT 1`, [agentId, to])) return 0;
+      const upTo = this.db.get<{ n: number | null }>(`SELECT MAX("order") AS n FROM context_items WHERE ${KEY} AND run_id = ?`, [agentId, from, runId])?.n;
+      const columns = 'kind, run_id, "order", created_at, tokens, title, state, condensed, pinned_until, origin_engine, origin_model, ref, applied, marked_by, mark_reason, marked_at, bytes, pruned_at';
+      return this.db.run(
+        `INSERT INTO context_items (agent_id, conversation_id, item_id, ${columns}) SELECT agent_id, ?, item_id, ${columns} FROM context_items WHERE ${KEY} AND "order" <= ?`,
+        [to, agentId, from, upTo ?? Number.MAX_SAFE_INTEGER],
+      ).changes;
+    });
   }
 
   /** A removed chat: its blob-backed unpruned rows (for their blobs), then every row goes. */

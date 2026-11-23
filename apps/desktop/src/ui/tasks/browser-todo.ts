@@ -15,12 +15,12 @@ export interface BrowserTodoTarget { agentId: string; url?: string }
 
 type TodoAgent = Pick<Agent, 'id' | 'mode' | 'archivedAt'>;
 
-export function browserTodoTarget(task: Pick<TaskView, 'widget' | 'createdBy' | 'mode'>, agents: ReadonlyMap<string, TodoAgent>, sessions: readonly BrowserSessionInfo[]): BrowserTodoTarget | undefined {
+export function browserTodoTarget(task: Pick<TaskView, 'widget' | 'createdBy'>, agents: ReadonlyMap<string, TodoAgent>, sessions: readonly BrowserSessionInfo[]): BrowserTodoTarget | undefined {
   if (task.widget?.type !== 'confirm') return undefined;
   const agent = agents.get(task.createdBy);
   if (!agent || agent.archivedAt !== undefined) return undefined;
   const open = sessions.some((entry) => entry.agentId === agent.id);
-  if (!open && !BROWSER_MODES.has(agent.mode) && !(task.mode && BROWSER_MODES.has(task.mode))) return undefined;
+  if (!open && !BROWSER_MODES.has(agent.mode)) return undefined;
   const target: BrowserTodoTarget = { agentId: agent.id };
   const url = task.widget.url;
   if (typeof url === 'string' && /^https?:\/\/\S+$/i.test(url.trim())) target.url = url.trim();

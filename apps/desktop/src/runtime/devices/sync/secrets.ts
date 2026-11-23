@@ -116,6 +116,7 @@ export class SecretSync {
       : this.stamps.since(PREFIX, since).map(({ key }) => key.slice(PREFIX.length));
     let ok = true;
     for (let index = 0; index < ids.length; index += PAGE) {
+      if (!this.s.devices.online(peer)) { ok = false; break; } // B-087: the link is gone – no dial (or decrypt) per page; the next link-up owes the rest
       const items: Item[] = [];
       for (const id of ids.slice(index, index + PAGE)) {
         const item = await this.item(id, this.stamps.get(PREFIX + id) ?? { at: 0, h: '' });

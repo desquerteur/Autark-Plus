@@ -6,6 +6,8 @@
 // B-055: the step names its caller (lease.ts callerOf: the pointer lease, the agent's own refs, the
 // window memory), a click travels with `motion`, and a note says when another agent worked in the
 // same window lately.
+// B-080: a window step (window_close/minimize/maximize/restore) takes the window id alone (element-act.ts), and
+// `expect` is checked against the state the app shows within a bounded re-read.
 
 import type { ToolDef } from '../tools/types.ts';
 import { WorkforceError } from '../../shared/errors.ts';
@@ -33,23 +35,23 @@ type ActArgs = { ref?: string; window?: number; name?: string; automationId?: st
 export function actTool(computer: ComputerService, refLabels: RefLabels, apps: WindowApps): ToolDef {
   return defineTool<ActArgs>({
     name: 'computer.act',
-    description: 'Act on a UI element by its ref from computer.ui_tree (semantic, verified): invoke a button, set_value of a field, toggle, expand/collapse, select, scroll, focus, or click it. Prefer pattern actions (invoke, toggle, select, set_value): they need no mouse, so they also run while the person or another agent uses it. It acts when the element still matches what I observed. Add expect to verify the result. action focus_window brings window (id) to the front.',
+    description: 'Acts on a UI element by ref: invoke, set a value, toggle, select, scroll or click. Window actions too; it acts only while the element still matches what I saw, and invoke, toggle, select and set_value need no mouse, so they run while someone else uses it.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string', maxLength: 20 },
-        window: { ...INT, description: 'window id (needed for focus_window or when using name/automationId)' },
-        name: { type: 'string', maxLength: 200 },
+        window: { ...INT, description: 'A window id: alone for focus_window and window_*.' },
+        name: { type: 'string', maxLength: 200, description: 'Finds the element instead of a ref.' },
         automationId: { type: 'string', maxLength: 200 },
         role: { type: 'string', maxLength: 40 },
         action: { type: 'string', enum: [...ELEMENT_ACTIONS, 'focus_window'] },
-        value: { type: 'string', maxLength: 10_000, description: "set_value text; toggle 'on'/'off'; scroll up/down/left/right/page_up/page_down" },
+        value: { type: 'string', maxLength: 10_000, description: 'set_value text; toggle on/off; scroll direction.' },
         expect: {
           type: 'object',
-          description: 'postcondition checked after the action',
+          description: 'What holds afterwards when it worked; checked.',
           properties: {
             value: { type: 'string' }, toggle: { type: 'string', enum: ['on', 'off'] }, expanded: { type: 'boolean' },
-            selected: { type: 'boolean' }, gone: { type: 'boolean' }, window: { type: 'string', description: 'a window whose title contains this is open' },
+            selected: { type: 'boolean' }, gone: { type: 'boolean' }, window: { type: 'string', description: 'A window title holding this.' },
           },
           additionalProperties: false,
         },

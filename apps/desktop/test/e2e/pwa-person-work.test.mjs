@@ -39,7 +39,7 @@ test('a person attaches a file in her chat', {
   const agent = (await owner.call('agents.list'))[0];
   const anna = await owner.call('people.save', { name: 'Anna Berg', title: 'Designer', scopes: { spaces: 'all', startChats: true, assignAgents: true }, managerId: 'human' });
   const chat = await owner.call('chats.create', { title: 'Launch plan', agentIds: [agent.id], people: [anna.id] });
-  const task = await owner.call('tasks.create', { conversationId: chat.id, title: 'Pick the colours', assigneeKind: 'human', assigneeId: anna.id });
+  const task = await owner.call('tasks.create', { conversationId: chat.id, title: 'Pick the colours', to: anna.id });
   const ownerNotifications = (await owner.call('settings.get')).notifications;
   const invite = await owner.call('people.invite', { id: anna.id });
 
@@ -50,7 +50,7 @@ test('a person attaches a file in her chat', {
   phone.on('pageerror', (error) => errors.push(error.message));
   await phone.goto(invite.url.replace('//localhost:', '//127.0.0.1:'));
   const todo = await until(async () => (await owner.call('todos.list')).find((entry) => entry.title.startsWith('Let ') && entry.title.includes('Anna Berg')), 'the owner\'s decision to-do');
-  await owner.call('tasks.complete', { id: todo.id, answer: { choice: 'Allow' } });
+  await owner.call('tasks.finish', { id: todo.id, answer: { choice: 'Allow' } });
   await phone.locator('.mobile-shell').waitFor({ timeout: 60_000 });
 
   // A file into her chat, through the composer.

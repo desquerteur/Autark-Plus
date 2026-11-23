@@ -13,12 +13,11 @@ import type { AgentActivity } from '../../../src/shared/model/runs.ts';
 import type { SplitGroupView, SplitStatus, SplitView } from '../../../src/shared/model/splits.ts';
 import type { SessionInfo } from '../../../src/shared/api/methods.ts';
 import {
-  RECENT_MS, SIDEBAR_GROUPS, changedAgents, chatGroups, elapsedText, groupCounts, groupDone, groupForCall, groupWorking, isActiveGroup, isLiveGroup,
+  RECENT_MS, SIDEBAR_GROUPS, changedAgents, elapsedText, groupCounts, groupDone, groupForCall, groupWorking, isActiveGroup, isLiveGroup,
   partLabel, partOf, runGroups, runningByAgent, sidebarGroups, splitDuration, splitIconKind, splitModelText, splitRunKeys, tokensText,
 } from '../../../src/ui/splits/split-text.ts';
 import { applyGroup, applyGroups, findSplit, groupsOfRun, loadSplits, splitGroups } from '../../../src/ui/splits/split-model.ts';
 import { liveStatus, workingIds, workingRows } from '../../../src/ui/chat/live-text.ts';
-import { liveWork } from '../../../src/ui/chat/message-rows.ts';
 import { formatRoute, parseRoute } from '../../../src/ui/lib/router.ts';
 import { rpc } from '../../../src/ui/lib/rpc.ts';
 import { session } from '../../../src/ui/lib/session.ts';
@@ -122,16 +121,10 @@ test('a parent run\'s groups in order, and which one belongs to which agents.spl
   assert.equal(groupForCall([], NOW), undefined);
 });
 
-test('a chat\'s running groups: one live block each, in start order – made in this chat or reported for it', () => {
+test('a group is live while started with a part not settled', () => {
   const later = group('sg_later', { startedAt: NOW + 50 });
-  const earlier = group('sg_early', { startedAt: NOW + 10 });
   const settled = group('sg_done', { splits: [split(1, 'done')] });
   const pending = group('sg_pending', { status: 'pending', splits: [split(1, 'pending')] });
-  const elsewhere = group('sg_else', { conversationId: 'c2' });
-  const named = group('sg_named', { conversationId: undefined, startedAt: NOW + 70 });
-  const list = [later, earlier, settled, pending, elsewhere, named];
-  assert.deepEqual(chatGroups(list, 'c1').map((entry) => entry.id), ['sg_early', 'sg_later']);
-  assert.deepEqual(chatGroups(list, 'c1', [splitEntry('run_s', 'sg_named', 1)]).map((entry) => entry.id), ['sg_early', 'sg_later', 'sg_named']);
   assert.ok(isLiveGroup(later) && !isLiveGroup(settled) && !isLiveGroup(pending));
 });
 
@@ -145,9 +138,8 @@ test('running splits per agent come from the live activity; a key changes only w
   assert.deepEqual(changedAgents(before, splitRunKeys([activityEntry('run_main')])).sort(), ['ag_ava', 'ag_mira'], 'all ended');
 });
 
-test('the chat: no live block per split run; the header line and the popover fold a group into one', () => {
+test('the chat: the header line and the popover fold a group into one', () => {
   const active = [activityEntry('run_main', { agentId: 'ag_ava', startedAt: NOW + 1 }), splitEntry('run_s1', 'sg_1', 1, { startedAt: NOW + 5 }), splitEntry('run_s2', 'sg_1', 2, { startedAt: NOW + 6 })];
-  assert.deepEqual(liveWork([]), [], 'B-075: live blocks are rows – a split run has none, its group has one block');
   const names: Record<string, string> = { ag_mira: 'Mira', ag_ava: 'Ava' };
   const nameOf = (id: string) => names[id];
   const chat = { id: 'c1', working: [] };
@@ -156,9 +148,9 @@ test('the chat: no live block per split run; the header line and the popover fol
   const rows = workingRows(chat, active, nameOf);
   assert.deepEqual(rows.map((row) => [row.key, row.note]), [['run_main', 'Working'], ['split:sg_1', '2 of 5 parts working']]);
   assert.equal(rows[1]!.groupId, 'sg_1');
-  const handed = workingRows(chat, [active[0]!], nameOf, undefined, [{ id: 'sg_7', agentId: 'ag_mira', startedAt: NOW, note: '3 of 4 parts working' }]);
+  const handed = workingRows(chat, [active[0]!], nameOf, [{ id: 'sg_7', agentId: 'ag_mira', startedAt: NOW, note: '3 of 4 parts working' }]);
   assert.deepEqual(handed.map((row) => [row.key, row.name, row.model, row.note]), [['split:sg_7', 'Mira', '', '3 of 4 parts working'], ['run_main', 'Ava', '', 'Working']], 'in start order');
-  const named = workingRows(chat, [], nameOf, undefined, [{ id: 'sg_8', agentId: 'ag_mira', startedAt: NOW, note: '1 of 2 parts working', goal: 'Check the invoices' }]);
+  const named = workingRows(chat, [], nameOf, [{ id: 'sg_8', agentId: 'ag_mira', startedAt: NOW, note: '1 of 2 parts working', goal: 'Check the invoices' }]);
   assert.equal(named[0]!.model, 'Check the invoices', 'a group row names its goal in the model slot');
   const two = [...active, splitEntry('run_t1', 'sg_2', 1, { startedAt: NOW + 9 })];
   assert.deepEqual(workingIds(chat, two), ['ag_ava', 'ag_mira'], 'who works: each agent once');
@@ -217,25 +209,19 @@ test('the split route: #/team/<agentId>/split/<splitId>', () => {
 const ui = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/ui');
 const read = (file: string) => readFileSync(path.join(ui, file), 'utf8');
 
-test('wiring and fixed boxes: the step, the live block, the sidebar cell, the Ultra cell', () => {
+test('wiring and fixed boxes: the step, the sidebar cell; no Ultra cell (B-083)', () => {
   assert.match(read('team/run-steps.tsx'), /entry\.call\.name === SPLIT_TOOL && entry\.result\?\.data\.ok !== false\) return <SplitStep /, 'a refused split call stays an ordinary line');
-  assert.match(read('chat/WorkingMessage.tsx'), /liveGroupsOf\(props\.conversationId\)/);
   assert.match(read('lib/store-events.ts'), /wireSplits\(\);/);
-  // Owner 30.10.2026: Ultra is suggested for the next message (the draft keeps it, like the level), not a chat setting.
-  assert.match(read('chat/Composer.tsx'), /<UltraCell chat=\{chat\} on=\{ultra\} onToggle=\{\(next\) => updateDraft\(chat\.id, \{ ultra: next \|\| undefined \}\)\} \/>\s*<ModelChip /, 'the Ultra switch right beside the model chip, on the draft');
-  assert.match(read('chat/composer/send.ts'), /\.\.\.\(saved\.ultra && send\.ultraOffered \? \{ ultra: true \} : \{\}\)/, 'sent with the message – only while the chat offers the cell');
-  assert.match(read('chat/Composer.tsx'), /ultraOffered: ultraOffered\(chat\)/, 'every send path (also /silent, /important) passes it');
-  assert.match(read('chat/composer/draft.ts'), /draftFor\(conversationId\)\.value = \{ text: '', attachments: \[\], level: 'normal' \};/, 'a sent draft is fresh: Ultra off');
-  const cell = read('chat/composer/UltraCell.tsx');
-  assert.match(cell, /<span class="ultra-switch placeholder" aria-hidden="true" \/>/, 'an inert placeholder of the same size where it is not offered');
-  assert.match(cell, /role="switch" aria-checked=\{props\.on\}/);
-  assert.doesNotMatch(cell, /chats\.update/, 'no chat setting');
-  assert.match(read('chat/MessageItem.tsx'), /message\.meta\.ultra === true && <Icon name="lightning" size=\{12\} class="ultra-marker"/, 'the sent message shows it');
-  assert.doesNotMatch(cell, /visibility\s*:|(?<![\w-])hidden=/, 'never hidden through visibility');
+  // B-083 (owner 08.11.2026: "Die soll es einfach selbst erkennen"): the composer has no Ultra switch – the agent splits
+  // itself when it pays; an older message that carried the hint still shows its marker.
+  assert.doesNotMatch(read('chat/Composer.tsx'), /UltraCell|ultraOffered/, 'no Ultra cell in the composer');
+  assert.doesNotMatch(read('chat/composer/send.ts'), /ultra:|ultraOffered/, 'nothing sends an Ultra hint');
+  assert.doesNotMatch(read('chat/composer/draft.ts'), /ultra\?:/, 'the draft keeps no Ultra flag');
+  assert.match(read('chat/MessageItem.tsx'), /message\.meta\.ultra === true && <Icon name="lightning" size=\{12\} class="ultra-marker"/, 'an older message shows it');
   assert.doesNotMatch(read('styles/splits.css'), /visibility\s*:/);
   const nav = read('splits/SplitNav.tsx');
   assert.match(nav, /<span class="team-split-count tabular"/, 'the count cell is always drawn');
-  assert.match(read('team/TeamNav.tsx'), /\{splits && open && <SplitNavRows /, 'split rows only inside the person\'s expansion');
+  assert.match(read('team/TeamTree.tsx'), /\{splits && open && <SplitNavRows /, 'split rows only inside the person\'s expansion');
   const css = read('styles/splits.css');
   const rule = (selector: string) => new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(css)?.[1] ?? '';
   assert.match(rule('.team-split-count'), /min-width: 20px/);

@@ -1,6 +1,6 @@
-// The helper model My day's morning briefing asks for its few sentences (day/briefing.ts): the engines' structured
-// runner on a small, fast route (decision/engine-runner.ts), one per runtime. None when no model is available – the
-// briefing then shows its count line only.
+// The helper model of My day and the knowledge catalog: the engines' structured runner on a small, fast route
+// (decision/engine-runner.ts), one per runtime. None when no model is available. (The morning briefing asks none since
+// 17.11.2026, day/briefing.ts.)
 // Owns: finding that runner. Never: decides what is asked.
 
 import type { RuntimeServices } from '../contracts.ts';

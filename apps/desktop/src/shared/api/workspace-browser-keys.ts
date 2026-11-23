@@ -5,15 +5,50 @@
 // address field, find, history); 'host' – the app's own shortcuts (sidebar, palette, settings, new chat) that a page
 // passes on. mod is Cmd on macOS and Ctrl elsewhere; Ctrl+Tab is Ctrl everywhere, as in Chrome. Escape only stops a page
 // that is loading – otherwise it is the page's.
-// Owns: that mapping. Never: acts on a key itself.
+// Feedback 16.11.2026 (F15): the feedback shortcut Ctrl+Shift+F (Cmd+Shift+F on macOS; free in pageKey) is the feedback
+// cell's press from the keyboard. Main reads it in before-input-event of the app's page (main/window.ts) and of every side
+// browser page (main/workspace-chrome.ts), so it works under modal dialogs and with the keyboard in a site: FeedbackKey
+// passes its going down and its release on (a held key's repeats are swallowed, never a second press) and the page never
+// gets it.
+// Owns: these mappings. Never: acts on a key itself.
 
+import type { FeedbackKeyStep } from './desktop.ts';
 import type { BrowserKeyAction } from './workspace-browser.ts';
 
 export type MainKeyAction = 'reload' | 'hard-reload' | 'back' | 'forward' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'devtools' | 'stop' | 'reopen';
-export type PageKey = { main: MainKeyAction } | { app: Exclude<BrowserKeyAction, 'send-page'> } | { host: string };
+export type PageKey = { main: MainKeyAction } | { app: Exclude<BrowserKeyAction, 'send-page' | 'pick'> } | { host: string };
 
 /** The parts of a key press this needs (Electron's Input; a DOM KeyboardEvent maps to it). */
-export interface KeyInput { type: string; key: string; control: boolean; meta: boolean; shift: boolean; alt: boolean }
+export interface KeyInput { type: string; key: string; control: boolean; meta: boolean; shift: boolean; alt: boolean; code?: string; isAutoRepeat?: boolean }
+
+/** The feedback shortcut as lib/hotkeys.ts writes combos (its label: comboLabel). */
+export const FEEDBACK_COMBO = 'mod+shift+f';
+
+/**
+ * One window part's feedback shortcut (main keeps one per page that reads keys). `step` says what to do with a key event:
+ * 'down' / 'up' – pass it to the app (FeedbackKeyStep) and keep it from the page; 'swallow' – keep it from the page and
+ * pass nothing (a held key's repeats); undefined – not the shortcut. The release is the F key's going up, whichever
+ * modifier was let go first; a release without its press here is not ours (an F typed in a field).
+ */
+export class FeedbackKey {
+  private held = false;
+
+  step(input: KeyInput, mac: boolean): FeedbackKeyStep | 'swallow' | undefined {
+    // the letter F where the layout types Latin letters, else the key in F's place (a Cyrillic layout)
+    const f = /^[a-z]$/i.test(input.key) ? input.key.toLowerCase() === 'f' : input.code === 'KeyF';
+    if (!f) return undefined;
+    if (input.type === 'keyUp') {
+      if (!this.held) return undefined;
+      this.held = false;
+      return 'up';
+    }
+    if (input.type !== 'keyDown' && input.type !== 'rawKeyDown') return undefined;
+    if (!(mac ? input.meta : input.control) || !input.shift || input.alt) return undefined;
+    if (input.isAutoRepeat) return 'swallow';
+    this.held = true; // a press whose release was lost (the window lost the focus) is simply pressed again
+    return 'down';
+  }
+}
 
 /** The app's own shortcuts that reach the app from inside a page (lib/hotkeys.ts: sidebar, palette, settings, new chat). */
 const HOST_KEYS = new Set(['b', 'k', ',', 'n']);

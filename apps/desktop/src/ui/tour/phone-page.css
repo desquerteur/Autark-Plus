@@ -1,0 +1,18 @@
+/* Feedback 16.11.2026 (F15): the stylesheet of the Android app's feedback video page (assets/tour.html, bundled by
+   scripts/tour-page.mjs with phone-page.tsx; not part of the PC UI's styles/index.css): the tokens (light or dark like
+   the phone: data-theme=system), the primitives (buttons) and the tour's own styles, and the player filling the
+   phone's screen – the title row with Skip, the stage as tall as the screen leaves room for, the caption and the
+   controls, inside the safe area.
+   Owns: this page's frame. Never: the tour's look (styles/tour.css) or colours outside tokens.css. */
+
+@import "../styles/tokens.css";
+@import "../styles/base.css";
+@import "../styles/tour.css";
+
+body.tour-page { background: var(--surface); }
+#tour { display: flex; height: 100%; }
+.tour-page .tour-player {
+  box-sizing: border-box; width: 100%; height: 100dvh;
+  padding: calc(12px + env(safe-area-inset-top)) 16px calc(14px + env(safe-area-inset-bottom));
+}
+.tour-page .tour-player.phone .tour-stage-room { flex: 1 1 auto; aspect-ratio: auto; max-height: none; }

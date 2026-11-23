@@ -105,12 +105,10 @@ test('outgoing: the owner and final agent answers as plain text; status lines, d
     assert.deepEqual(s.telegram.sent, [{ chatId: String(GROUP_ID), text: 'Sam: Please check the plan (https://example.com/p)' }]);
 
     s.h.chats.status(s.chat.id, { type: 'note', text: 'Switched model' });
-    const draft = s.h.chats.beginAgentMessage(s.chat.id, 'ag_ada', 'run_1');
-    s.h.chats.appendDelta(draft.id, 'Working…');
     await s.bridges.settled();
-    assert.equal(s.telegram.sent.length, 1, 'no status line and no streaming draft');
+    assert.equal(s.telegram.sent.length, 1, 'no status line');
 
-    s.h.chats.finishAgentMessage(draft.id, { body: 'Done.\n\n```ui\n{"type":"callout","text":"Saved"}\n```', state: 'final' });
+    s.h.chats.postAgentMessage(s.chat.id, 'ag_ada', 'run_1', { body: 'Done.\n\n```ui\n{"type":"callout","text":"Saved"}\n```' });
     await s.bridges.settled();
     assert.equal(s.telegram.sent[1].text, 'Ada: Done.\n\n[interactive content – open the app]');
 

@@ -101,11 +101,12 @@ interface LocalSpan { samples: Float32Array; sampleRate: number; frames: number;
 const pcmRate = (mime: string) => Number(PCM_RATE.exec(mime)?.[1] ?? RATE);
 
 async function localPcm(s: HearServices, fileId: string, ref: { mime: string; size: number }, format: 'wav' | 'pcm', startMs: number, maxMs: number): Promise<HeardPcm> {
-  const large = ref.size > WHOLE_BYTES && typeof s.files.path === 'function';
+  const large = ref.size > WHOLE_BYTES && typeof s.files.local === 'function';
   const bytes = large ? undefined : await s.files.read(fileId);
   let span: LocalSpan;
   try {
-    span = bytes ? spanIn(bytes, ref.mime, format, startMs, maxMs) : await spanOf(s.files.path(fileId), ref.mime, format, startMs, maxMs);
+    // B-080: local() pulls bytes whose row came from another of the person's PCs (read() does that too)
+    span = bytes ? spanIn(bytes, ref.mime, format, startMs, maxMs) : await spanOf(await s.files.local(fileId), ref.mime, format, startMs, maxMs);
   } catch (error) {
     if (error instanceof WorkforceError) throw error;
     throw new WorkforceError('bad_request', `This recording cannot be read (${error instanceof Error ? error.message : 'broken file'}).`);

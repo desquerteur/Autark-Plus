@@ -1,7 +1,7 @@
 // B-076: a side tab watched from another PC or a phone (src/main/side-driver/caster.ts) on a fake DevTools debugger and a
 // manual clock: only the three Input commands pass, an address is made absolute like the address field does; `on` starts
 // the screencast with the agents' live-view settings (JPEG 60, ≤ 1280 px) and the page focused, every frame is acknowledged
-// at once and at most one per 500 ms – the newest – goes on with the page; the cast ends a minute after the last renewal
+// at once and at most one per 100 ms (B-081) – the newest – goes on with the page; the cast ends a minute after the last renewal
 // or at `on: false`; input is the person's (agents yield, a press keeps the tab) and a failure never echoes it. A dialog
 // the page opens travels with the page, input waits for its answer and the watcher gives it; a watch that ends lets the
 // page leave the off-screen host (a page made anew stays), and the watcher's wake is no agent's use.
@@ -96,7 +96,8 @@ test('on: the page wakes, the screencast runs with the live-view settings and th
   assert.equal(r.dbg.named('Page.startScreencast').length, 1);
 });
 
-test('every frame is acknowledged at once; at most one per 500 ms goes on – the newest – with the page and its viewport', async () => {
+test('every frame is acknowledged at once; at most one per 100 ms goes on – the newest – with the page and its viewport', async () => {
+  assert.equal(CAST_FRAME_GAP_MS, 100, 'B-081: up to 10 frames a second');
   const r = rig();
   await r.caster.cast({ tab: TAB, on: true });
   r.frame(1, 'AAA');
@@ -104,13 +105,13 @@ test('every frame is acknowledged at once; at most one per 500 ms goes on – th
   assert.equal(r.updates.length, 1);
   assert.deepEqual(r.updates[0]!.frame, { data: 'AAA', meta: { deviceWidth: 1280, deviceHeight: 800, offsetTop: 0, pageScaleFactor: 1, zoom: 1 } });
   assert.equal(r.updates[0]!.page.url, r.contents.url);
-  r.timers.advance(100);
+  r.timers.advance(40);
   r.frame(2, 'BBB');
   r.frame(3, 'CCC');
   await tick();
   assert.deepEqual(r.dbg.named('Page.screencastFrameAck').map((c) => c.params.sessionId), [1, 2, 3]);
   assert.equal(r.updates.length, 1, 'the slot is not free yet');
-  r.timers.advance(CAST_FRAME_GAP_MS - 100);
+  r.timers.advance(CAST_FRAME_GAP_MS - 40);
   assert.deepEqual(r.updates.map((u) => u.frame?.data), ['AAA', 'CCC'], 'the newest waited for the slot');
   r.dbg.emit('Page.frameNavigated', { frame: { id: 'main', url: 'https://mail.example/' } });
   assert.equal(r.updates.length, 3, 'a navigation tells the page at once');

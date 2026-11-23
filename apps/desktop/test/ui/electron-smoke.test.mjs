@@ -52,12 +52,14 @@ test('desktop window boots, connects and chats with the demo engine', { timeout:
   await page.locator('.first-run-view').waitFor({ state: 'detached', timeout: 20_000 });
   await page.evaluate((id) => { location.hash = `#/chat/${encodeURIComponent(id)}`; }, conversationId);
 
-  // The Manager's chat answers through the runtime.
+  // The Manager's chat answers through the runtime. Its first turn reads the start line too (F07: the person's line from
+  // Start, delivered to nobody), so the demo engine echoes two lines – the start line's, then this message's – and a
+  // regex text match reads the raw text, newline included.
   const composer = page.locator('textarea').first();
   await composer.waitFor({ state: 'visible', timeout: 20_000 });
   await composer.fill('Hello from the smoke test');
   await page.locator('button.send-button').first().click();
-  await page.getByText(/Echo: .*Hello from the smoke test/).first().waitFor({ timeout: 60_000 });
+  await page.getByText(/Echo: [^\n]*\n[^\n]*Hello from the smoke test/).first().waitFor({ timeout: 60_000 });
   await page.screenshot({ path: path.join(shots, 'chat-light.png') });
 
   await page.emulateMedia({ colorScheme: 'dark' });

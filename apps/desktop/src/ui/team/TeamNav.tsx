@@ -1,45 +1,40 @@
-// Sidebar content for #/team (and the phone's Team tab): the one org chart. Header data (teamNavHeader –
-// "Team", the in-place search and ONE fixed "Add" cell whose menu holds Agent, Person, Import an agent team… (set up with AI) and Start setup again).
-// Body: People (the owner on top, people under whom they report to – each opens their page – with the agents
-// that report to them) and the agents of the top grouped by space (space-less agents such as the Manager first
-// without a heading, then one heading per space) and nested under their manager – a manager row (or a person
-// with reports) expands its reports right below in a height-limited, internally scrolling block (most used
-// first, other managers stay visible) – each agent with its real status ring/dot, one-line status and the tiny
-// "AI". Right-click or long-press on a row opens its menu (menus.ts agentMenu / personMenu). B-057: an agent's
-// splits are rows inside the same expansion, below its reports – a group that starts never pushes the open
-// reports down (splits/SplitNav.tsx – the caret takes its reserved slot when the agent has only splits; a
-// closed row shows the running count in its always-reserved cell). At the very end a collapsed "Archived (n)" group
-// (ArchivedGroup.tsx; a right click on its rows offers Restore). AF-014: Add › "Agent from folder…" and a folder dropped on
-// the list open FolderAgentDialog.tsx; Add › "Group agents by folder" shows the agents by home project (FolderGroups.tsx).
-// Owns: the team navigation, its expand state (per device), search and the Add menu with its dialogs.
-// Never: edits the org or draws header markup (lib/header.tsx does).
+// Sidebar content for #/team (and the phone's Team tab): the one org chart (TeamTree.tsx) with carets. Header data
+// (teamNavHeader – "Team", the in-place search and ONE fixed "Add" cell whose menu holds Agent, Agent from folder… (AF-014:
+// the owner's FolderAgentDialog.tsx; elsewhere set up with AI), Person, Import an agent team… (set up with AI) and Start
+// setup again). A manager row (or a person with reports) expands its reports right below; branches open by hand
+// (remembered per device) and above the open agent. While searching: matching people and agents as flat rows. At the very
+// end – F14 – a collapsed "Invited (n)" group for the owner (people who never joined: not in the tree until they do; their
+// menu offers Remove), then the collapsed "Archived (n)" group (ArchivedGroup.tsx; a right click on its rows offers
+// Restore). Opening either only adds rows below. F13: Add › Person opens the Add person page (#/team/person/new,
+// PersonNew.tsx) – no pop-up. AF-014: a folder dropped on the list opens FolderAgentDialog.tsx; Add › "Group agents by
+// folder" shows the agents by home project (FolderGroups.tsx) in the tree's place. AF-017: on the computer "All agents"
+// on top opens the agent directory (#/team's main page).
+// Owns: the team navigation, its expand state (per device), search, the Invited group and the Add menu with its dialogs.
+// Never: edits the org, draws the tree's rows itself (TeamTree.tsx) or header markup (lib/header.tsx does).
 
 import { useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import type { Agent } from '../../shared/model/org.ts';
 import type { Person } from '../../shared/model/people.ts';
-import { AgentAvatar, Icon } from '../lib/ui.tsx';
 import type { MenuSection } from '../lib/ui.tsx';
+import { Icon } from '../lib/ui.tsx';
 import type { HeaderProps } from '../lib/header.tsx';
-import { useContextMenu, openContextMenu } from '../lib/context-menu.tsx';
-import { agentName, agents, isMobile, route } from '../lib/store.ts';
+import { openContextMenu } from '../lib/context-menu.tsx';
 import { go } from '../lib/router.ts';
+import { agents, isMobile, route } from '../lib/store.ts';
 import { can, isOwner } from '../lib/session.ts';
 import { setupAgainAllowed, startSetupAgain } from '../onboarding/setup-again.ts';
-import { countReports, groupBySpace, matchesAgent } from './model.ts';
-import type { OrgEntry } from './model.ts';
-import { countPersonReports, statusLabel } from './people-model.ts';
-import type { PersonEntry } from './people-model.ts';
-import { agentLine, AgentStatusAvatar, AiTag } from './parts.tsx';
-import { ensureSpaces, orgTree, peopleTree, spaces, teamPeople } from './org-state.ts';
-import { agentMenu, personMenu } from './menus.ts';
+import { matchesAgent } from './model.ts';
+import { ensureSpaces, invitedPeople, teamPeople } from './org-state.ts';
+import { AgentRow, PersonRow, TeamTree } from './TeamTree.tsx';
+import type { Expand } from './TeamTree.tsx';
 import { ArchivedGroup } from './ArchivedGroup.tsx';
 import { NewAgentDialog } from './NewAgentDialog.tsx';
 import { FolderGroups } from './FolderGroups.tsx'; // AF-014
 import { droppedFolder, groupByFolder, mayHoldFolder, openFolderAgent, setGroupByFolder } from './folder-agent.ts'; // AF-014
-import { PersonDialogs, personDialog } from './person-dialogs.tsx';
-import { importTeamRequest, setUpWithAi } from './set-up-with-ai.ts';
-import { SplitCount, SplitNavRows, hasSplits, useSplitNav } from '../splits/SplitNav.tsx'; // B-057
+import { PersonDialogs } from './person-dialogs.tsx';
+import { folderAgentRequest, importTeamRequest, setUpWithAi } from './set-up-with-ai.ts';
+import { useSplitNav } from '../splits/SplitNav.tsx'; // B-057
 
 const EXPANDED_KEY = 'wf.teamExpanded';
 
@@ -48,12 +43,13 @@ const search = signal({ open: false, query: '' });
 
 const addingAgent = signal(false);
 
-/** The Add menu: Agent, Person (owner), Import an agent team… (the Manager's chat, prepared) and – apart – Start setup again. */
+/** The Add menu: Agent, Agent from folder… (AF-014), Person, Import an agent team… (the Manager's chat, prepared) and – apart – Group agents by folder and Start setup again. */
 function addMenu(): MenuSection[] {
   const sections: MenuSection[] = [{ items: [
     { label: 'Agent', onSelect: () => { addingAgent.value = true; } },
-    ...(isOwner() ? [{ label: 'Agent from folder…', onSelect: () => openFolderAgent() }] : []), // AF-014
-    ...(can('people.save') ? [{ label: 'Person', onSelect: () => { personDialog.value = { kind: 'new' as const }; } }] : []),
+    // AF-014: the owner picks the folder in the dialog; another session prepares the Manager's chat for it
+    { label: 'Agent from folder…', onSelect: () => { if (isOwner()) openFolderAgent(); else void setUpWithAi(folderAgentRequest()); } },
+    ...(can('people.save') ? [{ label: 'Person', onSelect: () => go.addPerson() }] : []),
     { label: 'Import an agent team…', onSelect: () => { void setUpWithAi(importTeamRequest()); } },
   ] }];
   if (isOwner()) sections.push({ items: [{ label: 'Group agents by folder', checked: groupByFolder.peek(), onSelect: () => setGroupByFolder(!groupByFolder.peek()) }] }); // AF-014
@@ -94,106 +90,26 @@ function ancestorsOf(agentId: string | undefined, list: Agent[], people: readonl
   return out;
 }
 
-type Toggle = { expanded: boolean; onToggle: () => void } | null;
-
-function Caret(props: { name: string; toggle: Toggle; what?: string }) {
-  if (!props.toggle) return <span class="team-caret-space" aria-hidden="true" />;
-  const { expanded, onToggle } = props.toggle;
-  return (
-    <button type="button" class="team-caret" aria-expanded={expanded} aria-label={`${expanded ? 'Hide' : 'Show'} ${props.what ?? 'reports'} of ${props.name}`} onClick={onToggle}>
-      <Icon name={expanded ? 'caret-down' : 'caret-right'} size={12} />
-    </button>
-  );
-}
-
-function AgentRow(props: { agent: Agent; depth: number; reports: number; toggle?: Toggle; activeId?: string; what?: string }) {
-  const { agent } = props;
-  const active = agent.id === props.activeId;
-  const toggle = props.toggle ?? null;
-  const menu = useContextMenu(() => agentMenu(agent));
-  return (
-    <div class={`team-row${active ? ' active' : ''}`} style={{ '--depth': String(props.depth) }} {...menu}>
-      <Caret name={agent.name} toggle={toggle} what={props.what} />
-      <button type="button" class="team-row-open" aria-current={active ? 'page' : undefined} onClick={() => go.agent(agent.id)}>
-        <AgentStatusAvatar agent={agent} size={30} />
-        <span class="team-row-text">
-          <span class="team-row-name"><span class="row-title">{agent.name}</span><AiTag /></span>
-          <span class="row-preview">{agentLine(agent)}</span>
-        </span>
-        {toggle && !toggle.expanded && props.reports > 0 && <span class="nav-count tabular" title={`${props.reports} reports`}>{props.reports}</span>}
-        <SplitCount agentId={agent.id} shown={!toggle?.expanded} />
-      </button>
-    </div>
-  );
-}
-
-function PersonRow(props: { person: Person; depth: number; reports: number; toggle?: Toggle; activeId?: string }) {
-  const { person } = props;
-  const active = person.id === props.activeId;
-  const toggle = props.toggle ?? null;
-  const name = person.id === 'human' ? agentName('human') : person.name;
-  const status = statusLabel(person);
-  const line = [person.title, status === 'Active' || person.owner ? '' : status].filter(Boolean).join(' · ');
-  const menu = useContextMenu(() => personMenu(person));
-  return (
-    <div class={`team-row person${active ? ' active' : ''}`} style={{ '--depth': String(props.depth) }} {...menu}>
-      <Caret name={name} toggle={toggle} />
-      <button type="button" class="team-row-open" aria-current={active ? 'page' : undefined} onClick={() => go.person(person.id)}>
-        <AgentAvatar agentId={person.id} size={30} />
-        <span class="team-row-text">
-          <span class="row-title">{name}</span>
-          {line && <span class="row-preview">{line}</span>}
-        </span>
-        {toggle && !toggle.expanded && <span class="nav-count tabular" title={`${props.reports} reports`}>{props.reports}</span>}
-      </button>
-    </div>
-  );
-}
-
-interface Expand { expanded: Set<string>; toggle: (id: string) => void; activeId?: string; splitId?: string }
-
-function Branch(props: { entry: OrgEntry; depth: number; expand: Expand }) {
-  const { entry, expand } = props;
-  const open = expand.expanded.has(entry.agent.id);
-  const hasReports = entry.reports.length > 0;
-  const splits = hasSplits(entry.agent.id); // B-057: the same expansion shows its split rows (never opened by itself)
-  return (
-    <>
-      <AgentRow agent={entry.agent} depth={props.depth} reports={countReports(entry)} activeId={expand.splitId && splits && open ? undefined : expand.activeId}
-        what={hasReports ? (splits ? 'reports and splits' : 'reports') : 'splits'}
-        toggle={hasReports || splits ? { expanded: open, onToggle: () => expand.toggle(entry.agent.id) } : null} />
-      {hasReports && open && (
-        <div class={`team-reports${props.depth === 0 ? ' limited' : ''}`} role="group" aria-label={`Reports of ${entry.agent.name}`}>
-          {entry.reports.map((report) => <Branch key={report.agent.id} entry={report} depth={props.depth + 1} expand={expand} />)}
-        </div>
-      )}
-      {splits && open && <SplitNavRows agentId={entry.agent.id} depth={props.depth + 1} activeSplitId={expand.splitId} />}
-    </>
-  );
-}
-
-function PersonBranch(props: { entry: PersonEntry; depth: number; expand: Expand; personId?: string }) {
-  const { entry, expand } = props;
-  const id = entry.person.id;
-  const reports = entry.people.length + entry.agents.length;
-  const open = expand.expanded.has(id);
-  return (
-    <>
-      <PersonRow person={entry.person} depth={props.depth} reports={countPersonReports(entry)} activeId={props.personId}
-        toggle={reports ? { expanded: open, onToggle: () => expand.toggle(id) } : null} />
-      {reports > 0 && open && (
-        <div class="team-reports" role="group" aria-label={`Reports of ${entry.person.name}`}>
-          {entry.people.map((report) => <PersonBranch key={report.person.id} entry={report} depth={props.depth + 1} expand={expand} personId={props.personId} />)}
-          {entry.agents.map((report) => <Branch key={report.agent.id} entry={report} depth={props.depth + 1} expand={expand} />)}
-        </div>
-      )}
-    </>
-  );
-}
-
 function matchesPerson(person: Person, query: string): boolean {
   const q = query.trim().toLowerCase();
   return person.name.toLowerCase().includes(q) || person.title.toLowerCase().includes(q);
+}
+
+/** F14: "Invited (n)" – the owner's people who never joined, collapsed (open while one of them is the open page). */
+function InvitedGroup(props: { activeId?: string }) {
+  const list = invitedPeople.value;
+  const [open, setOpen] = useState<boolean | undefined>(undefined); // undefined: by itself (open on one of theirs)
+  if (!list.length) return null;
+  const shown = open ?? list.some((person) => person.id === props.activeId);
+  return (
+    <div class="team-space team-archived team-invited">
+      <button type="button" class="team-archived-toggle" aria-expanded={shown} onClick={() => setOpen(!shown)}>
+        <Icon name={shown ? 'caret-down' : 'caret-right'} size={12} />
+        <span>Invited ({list.length})</span>
+      </button>
+      {shown && list.map((person) => <PersonRow key={person.id} person={person} depth={0} reports={0} activeId={props.activeId} />)}
+    </div>
+  );
 }
 
 export function TeamNav() {
@@ -217,8 +133,7 @@ export function TeamNav() {
     setCollapsed(open ? [...collapsed, id] : collapsed.filter((entry) => entry !== id));
     try { localStorage.setItem(EXPANDED_KEY, JSON.stringify(next)); } catch { /* ignore */ }
   };
-  const expand: Expand = { expanded, toggle, activeId, splitId: current?.splitId };
-  const groups = groupBySpace(orgTree.value, spaces.value);
+  const expand: Expand = { open: (id) => expanded.has(id), toggle, activeId, splitId: current?.splitId, personId };
   const q = query.trim();
   const agentMatches = q ? list.filter((agent) => matchesAgent(agent, q)).sort((a, b) => a.name.localeCompare(b.name)) : [];
   const personMatches = q ? teamPeople.value.filter((person) => matchesPerson(person, q)).sort((a, b) => a.name.localeCompare(b.name)) : [];
@@ -245,23 +160,9 @@ export function TeamNav() {
               </>
             )
             : <p class="empty-state team-empty">Nobody found</p>)
-          : (
-            <>
-              {peopleTree.value.length > 0 && (
-                <div class="team-space team-people">
-                  <div class="team-space-title">People</div>
-                  {peopleTree.value.map((entry) => <PersonBranch key={entry.person.id} entry={entry} depth={0} expand={expand} personId={personId} />)}
-                </div>
-              )}
-              {groupByFolder.value ? <FolderGroups agents={list} row={(agent) => <AgentRow key={agent.id} agent={agent} depth={0} reports={0} activeId={activeId} />} /> : groups.map((group, index) => (
-                <div class="team-space" key={group.space?.id ?? `rest-${index}`}>
-                  {(group.space || peopleTree.value.length > 0) && <div class="team-space-title">{group.space?.name ?? 'Agents'}</div>}
-                  {group.entries.map((entry) => <Branch key={entry.agent.id} entry={entry} depth={0} expand={expand} />)}
-                </div>
-              ))}
-            </>
-          )}
+          : groupByFolder.value ? <FolderGroups agents={list} row={(agent) => <AgentRow key={agent.id} agent={agent} depth={0} reports={0} activeId={activeId} />} /> : <TeamTree expand={expand} />}
         {!q && !list.length && <p class="empty-state team-empty">No agents yet</p>}
+        {!q && <InvitedGroup activeId={personId} />}
         {!q && <ArchivedGroup />}
       </div>
       <NewAgentDialog open={addingAgent.value} onClose={() => { addingAgent.value = false; }} />

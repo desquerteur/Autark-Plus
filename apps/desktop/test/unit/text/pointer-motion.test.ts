@@ -74,16 +74,18 @@ test('instant is one step at t = 0; so is a move that goes nowhere', () => {
   assert.equal(dwellMs('glide'), 0);
 });
 
-test('durations follow Fitts and stay bounded: glide ≤ 420 ms, human ≤ 1400 ms, pace scales within 0.25–4', () => {
-  assert.ok(motionDuration(50, 'glide') < motionDuration(800, 'glide'), 'farther takes longer');
+test('durations follow Fitts and stay bounded: glide ≤ 300 ms, human ≤ 1400 ms, pace scales within 0.25–4', () => {
+  assert.ok(motionDuration(50, 'glide') < motionDuration(600, 'glide'), 'farther takes longer');
   assert.ok(motionDuration(400, 'glide', 8) > motionDuration(400, 'glide', 80), 'a smaller target takes longer');
   assert.ok(motionDuration(400, 'human') > motionDuration(400, 'glide'), 'a hand is slower than a glide');
   for (const distance of [1, 10, 100, 1000, 10_000, 1e7]) {
-    assert.ok(motionDuration(distance, 'glide') <= 420, `glide ${distance}`);
+    assert.ok(motionDuration(distance, 'glide') <= 300, `glide ${distance}`);
     assert.ok(motionDuration(distance, 'human') <= 1400, `human ${distance}`);
   }
-  assert.equal(motionDuration(1e7, 'glide', 24, 100), 420 * 4, 'pace is clamped to 4');
-  assert.equal(motionDuration(1e7, 'glide', 24, 0), Math.round(420 * 0.25), 'and to 0.25');
+  // B-081: quick enough to click fast – 100 px about 180 ms, 300 px about 250 ms, 600 px about 295 ms
+  assert.deepEqual([100, 300, 600, 1000].map((distance) => motionDuration(distance, 'glide')), [178, 248, 295, 300]);
+  assert.equal(motionDuration(1e7, 'glide', 24, 100), 300 * 4, 'pace is clamped to 4');
+  assert.equal(motionDuration(1e7, 'glide', 24, 0), Math.round(300 * 0.25), 'and to 0.25');
   const steps = planMotion(A, { x: 1500, y: 900 }, { style: 'human', seed: 3 });
   assert.ok(steps.at(-1)!.t <= 1400 + 20, 'the path itself keeps the duration (± sampling)');
   const quick = pressMs('human', 1);

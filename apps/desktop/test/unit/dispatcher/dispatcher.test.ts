@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { agent } from '../chat/harness.ts';
 import type { Engine } from '../../../src/runtime/engines/types.ts';
-import { compareGroups, defaultMaxConcurrent, groupWakes, nextUtcMonthStart } from '../../../src/runtime/agents/dispatch-groups.ts';
+import { compareGroups, groupWakes, nextUtcMonthStart } from '../../../src/runtime/agents/dispatch-groups.ts';
 import { flush, openWakes, setup } from './fakes.ts';
 
-function withAgents(options: { maxConcurrent?: number } = {}) {
-  const h = setup(options);
+function withAgents() {
+  const h = setup();
   h.org.add(agent('ag_tom', 'Tom'));
   h.org.add(agent('ag_lea', 'Lea'));
   h.org.add(agent('ag_max', 'Max'));
@@ -38,50 +38,40 @@ test('immediate wakes reach the dispatcher without polling; one turn per agent a
   assert.equal(openWakes(h.db).length, 0);
 });
 
-test('global cap: agents wait in a FIFO; a finishing agent queues behind the waiting ones', async () => {
-  const h = withAgents({ maxConcurrent: 1 });
+test('07.11.2026, one capacity rule: every agent\'s own turn starts at once (B-080: no lane has a global limit)', async () => {
+  const h = withAgents();
   const chats = ['ag_tom', 'ag_lea', 'ag_max'].map((id) => h.chats.create({ agentIds: [id], createdBy: 'human' }));
   h.dispatcher.start();
   for (const chat of chats) { h.chats.send({ conversationId: chat.id, body: 'go', authorId: 'human' }); h.clock.advance(10); }
   await flush();
-  assert.deepEqual(h.executor.calls.map((call) => call.request.agentId), ['ag_tom']);
-  // Tom gets more work while running; Lea and Max waited longer.
-  h.chats.send({ conversationId: chats[0].id, body: 'and this', authorId: 'human' });
+  assert.deepEqual(h.executor.calls.map((call) => call.request.agentId), ['ag_tom', 'ag_lea', 'ag_max'], 'no slot FIFO, no waiting');
+  assert.equal(h.executor.maxRunning, 3);
+  h.chats.send({ conversationId: chats[0].id, body: 'and this', authorId: 'human' }); // Tom is busy: his next turn follows his own
   await flush();
-  for (let i = 0; i < 3; i++) { h.executor.last().finish(); await flush(); }
-  assert.deepEqual(h.executor.calls.map((call) => call.request.agentId), ['ag_tom', 'ag_lea', 'ag_max', 'ag_tom']);
-  assert.equal(h.executor.maxRunning, 1);
+  h.executor.calls[0].finish();
+  await flush();
+  assert.equal(h.executor.last().request.agentId, 'ag_tom');
+  for (const call of h.executor.calls) call.finish();
+  await flush();
+  assert.equal(openWakes(h.db).length, 0);
 });
 
-test('global cap: an important message moves its agent to the front of the FIFO', async () => {
-  const h = withAgents({ maxConcurrent: 1 });
-  const chats = ['ag_tom', 'ag_lea', 'ag_max'].map((id) => h.chats.create({ agentIds: [id], createdBy: 'human' }));
-  h.dispatcher.start();
-  h.chats.send({ conversationId: chats[0].id, body: 'go', authorId: 'human' });
-  h.chats.send({ conversationId: chats[1].id, body: 'go', authorId: 'human' });
-  await flush();
-  h.chats.send({ conversationId: chats[2].id, body: 'now please', authorId: 'human', priority: 'important' });
-  await flush();
-  for (let i = 0; i < 2; i++) { h.executor.last().finish(); await flush(); }
-  assert.deepEqual(h.executor.calls.map((call) => call.request.agentId), ['ag_tom', 'ag_max', 'ag_lea']);
-  assert.equal(h.executor.calls[0].request.signal.aborted, false, 'other agents are not interrupted');
-});
 
 test('groups by chat/task: the most important group runs first, the others are released', async () => {
   const h = withAgents();
   const a = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
-  h.chats.send({ conversationId: a.id, body: 'hello', authorId: 'human' }); // message wake for chat A
-  h.clock.advance(1000);
-  h.wakes.wake({ agentId: 'ag_tom', reason: 'schedule', conversationId: a.id, taskId: 'task_x', note: 'Check the upload' });
+  // 07.11.2026: an answer and a message share the first rank – the older goes first.
   h.wakes.wake({ agentId: 'ag_tom', reason: 'answer', conversationId: 'ch_other', note: '[ui-answer] yes' });
+  h.clock.advance(1000);
+  h.chats.send({ conversationId: a.id, body: 'hello', authorId: 'human' }); // message wake for chat A
+  h.wakes.wake({ agentId: 'ag_tom', reason: 'schedule', conversationId: a.id, taskId: 'task_x', note: 'Check the upload' });
   h.dispatcher.start();
   await flush();
   const first = h.executor.last().request;
   assert.equal(first.reason, 'answer');
   assert.equal(first.conversationId, 'ch_other');
-  assert.deepEqual(first.notes, [{ text: '[ui-answer] yes', at: h.clock.now(), reason: 'answer' }]);
+  assert.deepEqual(first.notes, [{ text: '[ui-answer] yes', at: h.clock.now() - 1000, reason: 'answer' }]);
   assert.equal(first.control.lastSeq, 0);
-  assert.equal(typeof first.admit, 'function');
   const open = openWakes(h.db).filter((row) => row.claimed_at === null);
   assert.equal(open.length, 2, 'message and schedule groups wait unclaimed');
   h.executor.last().finish();
@@ -155,8 +145,8 @@ test('urgent with steer: unseen lines are steered into the running turn, no abor
   await flush();
   assert.equal(steered.length, 1);
   assert.equal(steered[0].runId, call.request.runId);
-  assert.match(steered[0].text, /^\[\d\d:\d\d\] Lena: \(important\) Use the blue logo!$/m, 'in the delta form');
-  assert.doesNotMatch(steered[0].text, /make the intro/);
+  assert.match(steered[0].text, /^\[ch_\w+ [^\]]*· Lena \(CEO\) · \d\d:\d\d #\d+\] \(important\) Use the blue logo!$/m, 'in the delta form');
+  assert.doesNotMatch(steered[0].text.replace(/^\[[^\]]*\] /gm, ''), /make the intro/, 'the earlier line is not steered again (its chat title may name it)');
   assert.equal(call.request.control.steeredSeq, urgent.seq);
   assert.equal(call.request.signal.aborted, false);
   assert.ok(h.runItems.some((item) => item.kind === 'note' && 'steered' in item.data));
@@ -261,37 +251,32 @@ test('pure rules: grouping, ordering, capacity default', () => {
   assert.equal(task.reason, 'task');
   assert.equal(task.dueAt, 5);
   const sorted = [...groups].sort((x, y) => compareGroups(x, y));
-  assert.deepEqual(sorted.map((group) => group.conversationId), ['c3', 'c2', 'c1']);
+  assert.deepEqual(sorted.map((group) => group.conversationId), ['c2', 'c3', 'c1'], '07.11.2026: a message before a hand-over');
   const urgentFirst = [...groups].sort((x, y) => compareGroups(x, y, 'c1'));
   assert.equal(urgentFirst[0].conversationId, 'c1');
-  assert.equal(defaultMaxConcurrent(1), 2);
-  assert.equal(defaultMaxConcurrent(6), 4);
-  assert.equal(defaultMaxConcurrent(32), 6);
 });
 
-test('urgent under a full global cap: the interrupted agent keeps its slot for the urgent chat', async () => {
-  const h = withAgents({ maxConcurrent: 1 });
+test('urgent: the interrupted agent runs the important chat next; other agents run meanwhile, never wait', async () => {
+  const h = withAgents();
   const research = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   const call = h.chats.create({ agentIds: ['ag_tom'], createdBy: 'human' });
   const lea = h.chats.create({ agentIds: ['ag_lea'], createdBy: 'human' });
   h.dispatcher.start();
   h.chats.send({ conversationId: research.id, body: 'long research', authorId: 'human' });
   await flush();
-  h.chats.send({ conversationId: lea.id, body: 'go', authorId: 'human' }); // Lea waits for the slot
+  h.chats.send({ conversationId: lea.id, body: 'go', authorId: 'human' });
   await flush();
+  assert.equal(h.executor.last().request.agentId, 'ag_lea', 'Lea starts at once beside Tom');
   h.chats.send({ conversationId: call.id, body: 'Call me now', authorId: 'human', priority: 'important' });
   await flush();
   assert.equal(h.executor.calls[0].request.signal.aborted, true);
-  assert.deepEqual(h.executor.calls.map((item) => [item.request.agentId, item.request.conversationId]), [['ag_tom', research.id], ['ag_tom', call.id]]);
+  const tom = () => h.executor.calls.filter((item) => item.request.agentId === 'ag_tom').map((item) => item.request.conversationId);
+  assert.deepEqual(tom(), [research.id, call.id]);
   h.executor.last().finish();
   await flush();
-  assert.equal(h.executor.last().request.agentId, 'ag_lea', 'then the agent that waited');
-  h.executor.last().finish();
+  assert.deepEqual(tom(), [research.id, call.id, research.id], 'then the cut work again');
+  for (const item of h.executor.calls) item.finish();
   await flush();
-  assert.deepEqual([h.executor.last().request.agentId, h.executor.last().request.conversationId], ['ag_tom', research.id]);
-  h.executor.last().finish();
-  await flush();
-  assert.equal(h.executor.maxRunning, 1);
   assert.equal(openWakes(h.db).length, 0);
 });
 
@@ -305,27 +290,23 @@ test('an abort that arrives after the turn finished its work does not hand the w
   assert.equal(openWakes(h.db).length, 0, 'finished work is not re-run after the restart');
 });
 
-test('setPaused holds new turns; resuming keeps the FIFO order of waiting agents', async () => {
-  const h = withAgents({ maxConcurrent: 1 });
+test('setPaused holds new turns; resuming starts every agent with due wakes', async () => {
+  const h = withAgents();
   const [tom, lea, max] = ['ag_tom', 'ag_lea', 'ag_max'].map((id) => h.chats.create({ agentIds: [id], createdBy: 'human' }));
   h.dispatcher.start();
   h.chats.send({ conversationId: tom.id, body: 'go', authorId: 'human' });
   await flush();
+  h.dispatcher.setPaused(true);
   h.chats.send({ conversationId: max.id, body: 'go', authorId: 'human' });
-  await flush();
   h.chats.send({ conversationId: lea.id, body: 'go', authorId: 'human' });
   await flush();
-  h.dispatcher.setPaused(true);
   h.executor.last().finish();
   await flush();
   assert.equal(h.executor.calls.length, 1, 'no new turn while paused');
   h.dispatcher.setPaused(false);
   await flush();
-  assert.equal(h.executor.last().request.agentId, 'ag_max', 'the agent that waited longest goes first');
-  h.executor.last().finish();
-  await flush();
-  assert.equal(h.executor.last().request.agentId, 'ag_lea');
-  h.executor.last().finish();
+  assert.deepEqual(h.executor.calls.slice(1).map((call) => call.request.agentId).sort(), ['ag_lea', 'ag_max']);
+  for (const call of h.executor.calls) call.finish();
   await flush();
   assert.equal(h.executor.calls.length, 3);
 });
@@ -378,10 +359,10 @@ test('the human cancelling a task interrupts the turn running on it (human stop)
   const other = h.tasks.create({ conversationId: chat.id, title: 'Write the post', assigneeId: 'ag_lea', createdBy: 'human' });
   await flush();
   const leaCall = h.executor.last();
-  h.tasks.setStatus(other.id, 'cancelled', 'ag_tom');
+  h.tasks.finish(other.id, { status: 'dropped' as const, summary: 'Dropped' }, 'ag_tom');
   assert.equal(leaCall.request.signal.aborted, false, 'an agent cancelling never aborts another turn');
 
-  h.tasks.setStatus(task.id, 'cancelled', 'human');
+  h.tasks.finish(task.id, { status: 'dropped' as const, summary: 'Dropped' }, 'human');
   assert.equal(call.request.signal.aborted, true);
   assert.equal(call.request.control.stopKind, 'human');
   await flush();

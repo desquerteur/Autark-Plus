@@ -1,11 +1,11 @@
 // Activity, pure: one row per member – people and agents side by side – with what they finished today, what they are on
 // right now, how much is open and how much is stuck; plus the totals line. Robin's "Dashboard über alles, was alle machen":
-// the owner's admin overview. Stuck is Work's rule (tasks/work-model.ts stuckOf: blocked, stopped by the person, waiting
-// longer than two days, escalated) and, for a human, work past its due time (a timer is never stuck – it rings). Working
+// the owner's admin overview. Stuck is the shared rule (shared/model/task-stuck.ts stuckOf: nothing moved for two days
+// unless a planned time is ahead, paused, no owner) and, for a human, work past its due time (a timer is never stuck). Working
 // now: an agent's live run (its task's title, else what started it, the origin's label, else the run's note, else
 // "Working"; the live note beside it when it says more; its own turn, never one of its splits); a person's task marked
-// working or with a running focus timer. Open counts all open work given to the member except what waits for a ring
-// (snoozed, a repeating timer between rings). Work nobody owns yet (team work the router still has to place) is a row of
+// with a running focus timer. Open counts all open work given to the member except what waits for a ring
+// (snoozed, a repeating timer between rings). Work nobody owns yet (an older PC's row the watcher still places) is a row of
 // its own ({ id: 'team', kind: 'team' } – "No owner yet"), so the totals match Work and Home. The caller may narrow what
 // is counted to Work's own scope (`counted`, ActivityView: tasks/work-model.ts onWork – the viewer's own to-dos are My
 // day's, not Work's): done today, open and stuck then say what Work, Home and a count's link show; "now" still sees every
@@ -17,7 +17,8 @@ import { HUMAN_ID } from '../../shared/ids.ts';
 import type { AgentActivity } from '../../shared/model/runs.ts';
 import type { Task, TaskView } from '../../shared/model/tasks.ts';
 import { waitsForRing } from '../../shared/model/todo-later.ts';
-import { finishedAt, stuckOf } from '../tasks/work-model.ts';
+import { finishedAt } from '../tasks/work-model.ts';
+import { stuckOf } from '../../shared/model/task-stuck.ts';
 
 /** A member's row – or, kind 'team' (id 'team', Work's owner filter for no owner), the work nobody owns yet. */
 export interface ActivityMember { id: string; kind: 'person' | 'agent' | 'team' }
@@ -95,14 +96,14 @@ function nowOf(member: ActivityMember, mine: readonly TaskView[], input: Activit
       ...(run.taskId ? { taskId: run.taskId } : {}), conversationId: run.conversationId,
     };
   }
-  const busy = mine.filter((task) => task.timerStartedAt !== undefined || task.status === 'working')
+  const busy = mine.filter((task) => task.timerStartedAt !== undefined)
     .sort((a, b) => (b.timerStartedAt ?? 0) - (a.timerStartedAt ?? 0) || b.updatedAt - a.updatedAt)[0];
   return busy ? { title: busy.title, taskId: busy.id, conversationId: busy.conversationId } : undefined;
 }
 
 /** One row per member, in the order given. */
 export function activityRows(members: readonly ActivityMember[], input: ActivityInput): ActivityRow[] {
-  const open = openWork(input.open, input.todos).filter((task) => task.status !== 'done' && task.status !== 'cancelled' && !waitsForRing(task));
+  const open = openWork(input.open, input.todos).filter((task) => task.status !== 'done' && task.status !== 'dropped' && !waitsForRing(task));
   const counts = input.counted ?? (() => true);
   return members.map((member) => {
     const mine = open.filter((task) => ownedByMember(task, member));

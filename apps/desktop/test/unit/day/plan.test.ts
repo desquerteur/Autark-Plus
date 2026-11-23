@@ -40,18 +40,6 @@ test("Robin's evening list is planned the next morning around the 10:00 meeting,
   assert.equal(plannedDate(f.s, HUMAN_ID), TUE, 'today was planned: the morning run will not plan it again');
 });
 
-test('only plannable to-dos: no host card, no ring, no agent step that does not need the person there', async () => {
-  const f = dayFixture({ now: wall(TUE, '07:00') });
-  f.org.add(agent('ag_x', 'Mara', { createdAt: 1 }));
-  const chat = f.s.chats.create({ agentIds: ['ag_x'], humans: true, createdBy: HUMAN_ID }).id;
-  f.s.tasks.create({ title: 'Nudeln', assigneeKind: 'human', createdBy: HUMAN_ID, humanReason: 'physical', widget: { type: 'timer', label: 'Nudeln', duration: 'PT10M' } });
-  f.s.tasks.create({ conversationId: f.todoChat(), title: 'Approve 40 €', assigneeKind: 'human', createdBy: SYSTEM_ID, humanReason: 'approval', widget: { type: 'approve', action: 'Pay', approvalId: 'apr_1' } });
-  f.s.tasks.create({ conversationId: chat, title: 'Pick a colour', assigneeKind: 'human', createdBy: 'ag_x', humanReason: 'taste' });
-  const errand = f.s.tasks.create({ conversationId: chat, title: 'Zettel zur Polizei bringen', assigneeKind: 'human', createdBy: 'ag_x', humanReason: 'physical' });
-  const result = await f.day.plan(HUMAN_ID, TUE, 'plan');
-  assert.deepEqual(f.calendar.events.map((e) => e.taskId), [errand.id]);
-  assert.equal(result.placed.length, 1);
-});
 
 test('replan moves a planner block not started yet and reports it; one that finds no place goes', async () => {
   const f = dayFixture({ now: wall(TUE, '07:00') });
@@ -131,9 +119,9 @@ test('a block the person dragged that ended unticked yesterday, and a to-do reop
   calendar.move(block.id, wall('2026-10-26', '15:00'), wall('2026-10-26', '15:30'), block.rev, HUMAN_ID); // dragged: the person's
   const washBlock = calendar.upsertBlock(wash.id, wall('2026-10-26', '16:00'), wall('2026-10-26', '16:30'), 'planner');
   f.clock.set(wall('2026-10-26', '16:10'));
-  f.s.tasks.setStatus(wash.id, 'done', HUMAN_ID);
+  f.s.tasks.finish(wash.id, { status: 'done' as const, summary: 'Done' }, HUMAN_ID);
   f.clock.set(wall('2026-10-26', '17:00'));
-  f.s.tasks.setStatus(wash.id, 'open', HUMAN_ID);
+  f.s.tasks.update(wash.id, { status: 'open' as const }, HUMAN_ID);
   assert.equal(calendar.blocksFor([wash.id]).size, 0, 'reopened after its block: unplanned');
   assert.ok(washBlock.id);
   f.clock.set(wall(TUE, '06:00'));

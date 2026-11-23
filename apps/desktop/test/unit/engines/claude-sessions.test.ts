@@ -1,6 +1,5 @@
-// Claude Code engine sessions over a scripted `claude -p` stream: a new session carries the
-// volatile context in the system prompt, a resumed one as a <workforce-context> block in the
-// user message; the context window comes from result.modelUsage; a session id Claude Code no
+// Claude Code engine sessions over a scripted `claude -p` stream: the system prompt is the stable part only; new and
+// resumed sessions alike get the live context as a <live> block first in the user message; the context window comes from result.modelUsage; a session id Claude Code no
 // longer knows ends the session (details.rebase); a session this process ran in another folder is
 // renewed quietly before the CLI starts (details.folder – Claude Code keeps sessions per folder).
 
@@ -50,8 +49,8 @@ test('claude: volatile context in the prompt of a new session, as a block on res
   assert.equal(fresh.stop, 'done');
   assert.equal(fresh.contextWindow, 1_000_000, 'the dated variant of the turn model, not the helper model');
   assert.ok(cli.calls[0].args.includes('--session-id'));
-  assert.ok([...written.values()].some((text) => text === 'STABLE\n\n__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__\n\nVOLATILE'), 'a new session gets both prompt parts (B-049: split at the boundary line)');
-  assert.deepEqual(userLine(cli.calls[0].child).message.content, [{ type: 'text', text: 'hello' }]);
+  assert.ok([...written.values()].some((text) => text === 'STABLE'), 'the prompt file holds the stable part only');
+  assert.deepEqual(userLine(cli.calls[0].child).message.content, [{ type: 'text', text: '<live>\nVOLATILE\n</live>' }, { type: 'text', text: 'hello' }]);
 
   const resumed = await e.run(turnInput({ model: 'claude-opus-5-5', session: fresh.session, system: { stable: 'STABLE', volatile: 'VOLATILE2' } }).input);
   assert.equal(resumed.stop, 'done');
@@ -59,7 +58,7 @@ test('claude: volatile context in the prompt of a new session, as a block on res
   const args = cli.calls[1].args;
   assert.equal(args[args.indexOf('--resume') + 1], fresh.session!.ref);
   const content = userLine(cli.calls[1].child).message.content;
-  assert.deepEqual(content[0], { type: 'text', text: '<workforce-context>\nVOLATILE2\n</workforce-context>' });
+  assert.deepEqual(content[0], { type: 'text', text: '<live>\nVOLATILE2\n</live>' });
   assert.deepEqual(content[1], { type: 'text', text: 'hello' });
   await e.dispose();
 

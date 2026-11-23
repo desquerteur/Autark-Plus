@@ -21,7 +21,7 @@ import type { Account, EngineId } from '../../../shared/model/providers.ts';
 import type { AccountCheck, CacheTokens, Engine, EngineCaps, EngineEvent, EngineModel, EngineTurnInput, EngineTurnResult } from '../types.ts';
 import type { ToolOutput } from '../../tools/types.ts';
 import { hasTrace, type TraceCall } from '../../../shared/model/subconscious.ts';
-import { ToolNames, addCache, safeCall, outputText } from '../shared.ts';
+import { ToolNames, addCache, safeCall, outputText, isRecord } from '../shared.ts';
 import { HttpEngineError, LOCAL_PROVIDERS, MAX_TOOL_ITERATIONS, endpointFor, readJson, redact, statusError, turnError, type FetchFn } from './common.ts';
 
 /** A call the model chose before a steered message arrived is not started; the model re-checks it with the message. */
@@ -160,7 +160,12 @@ export abstract class HttpEngine implements Engine {
       .filter((m): m is { id: string; display_name?: unknown } => typeof m.id === 'string' && m.id.length <= 200 && (!key || !m.id.includes(key)))
       .slice(0, 500)
       .sort((a, b) => a.id.localeCompare(b.id));
-    return ids.map((m) => ({ model: m.id, name: typeof m.display_name === 'string' ? m.display_name.slice(0, 200) : m.id, efforts: this.effortsFor(m.id) }));
+    return ids.map((m) => this.listedModel(m, account));
+  }
+
+  /** Provider metadata stays with its account; basic adapters only need the id. */
+  protected listedModel(raw: { id: string; display_name?: unknown }, _account: Account): EngineModel {
+    return { model: raw.id, name: typeof raw.display_name === 'string' ? raw.display_name.slice(0, 200) : raw.id, efforts: this.effortsFor(raw.id) };
   }
 
   protected effortsFor(_model: string): EngineModel['efforts'] {
@@ -227,6 +232,8 @@ export abstract class HttpEngine implements Engine {
           let output: ToolOutput;
           if (!name) output = { content: [{ type: 'text', text: `Unknown tool: ${call.name}` }], isError: true };
           else if (this.steering.get(input.runId)?.length) output = { content: [{ type: 'text', text: NOT_RUN_STEERED }], isError: true }; // decided before the new message
+          // A malformed call is not a no-argument action: let the model correct it before any tool runs.
+          else if (!isRecord(call.args)) output = { content: [{ type: 'text', text: 'Tool arguments must be a valid JSON object. Correct the arguments and try again.' }], isError: true };
           else {
             safeEmit({ type: 'tool_start', callId: call.id, name, args: call.args, own: false });
             output = await safeCall(input.callTool, name, call.args, call.id);

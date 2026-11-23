@@ -1,31 +1,37 @@
-// Workspace file and shell tools. files.write is for engines that bring no tools of their own (HTTP APIs, local
-// models; CLI engines such as Codex and Claude Code use their native tools) and runs on this PC. shell.exec is direct
-// for those engines (tools/core-sets.ts) and reachable for every engine through tools.find / tools.call – a CLI engine
-// uses it for a linked PC's terminal. files.read and files.list are offered to every engine. A path is relative to the
-// workspace or absolute anywhere on this PC – the data folder included (agents work on the whole PC). Only an explicit
-// `device` naming a linked PC sends a read there (its 'tools.call', devices/tools.ts runRemoteTool); shell.exec is a
-// remote tool – with `device` (or an agent homed on another PC) the terminal of that PC runs it.
-// B-061: a command without cwd runs in the folder of a split part (its own worktree, else its group's – ToolContext.split.cwd), else
-// in the workspace (commandCwd; shell.exec and secrets.run).
-// B-044: shell.exec takes `env`, whose values may hold secret://<id> handles resolved at spawn (command.ts, secrets/handles.ts).
+// Workspace file and shell tools. files.write and shell.exec are direct for engines that bring no tools of their own
+// (HTTP APIs, local models – tools/core-sets.ts) and reachable for every engine through tools.call – a CLI engine uses
+// shell.exec for a linked PC's terminal or a command with a stored secret, and files.write for bytes or a large text from
+// its script; files.write runs on this PC. A path is relative to the workspace or absolute anywhere on the PC – the data
+// folder included. files.read, files.list and shell.exec are remote tools: with `device` (or an agent homed on another
+// PC) that PC runs them (registry.ts, devices/tools.ts runRemoteTool), by the same path rule as this PC's own agents
+// (readPath). shell.exec is offered in every mode (registry.ts: every tool in every mode; core-sets.ts BASE_CORE) and takes `env`, whose values may hold
+// secret://<id> handles resolved at spawn (command.ts, secrets/handles.ts). A command without cwd runs in a split part's
+// folder (ToolContext.split.cwd), else in the workspace (commandCwd). On Windows it runs in PowerShell itself
+// (defaultShell: the engines' PowerShell 7 where found, else Windows PowerShell 5.1; the command as one -Command
+// argument, UTF-8 out of and into programs, no progress records); macOS and Linux keep sh. A miss of files.read /
+// files.list shows what is there (file-miss.ts missText); files.list counts the entries past its first 500.
 // Owns: files.read, files.write, files.list, shell.exec, the path rule (resolvePath) and the resource of a workspace
 // path (workspaceResource: one spelling per file); isInside / realInside for the worktrees (git/).
 // Never: lets a command run unbounded (timeout + output cap; killed on run abort).
 
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdir, open, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ActionDescription, ToolContext, ToolDef, ToolOutput } from '../types.ts';
+import type { ActionDescription, ToolContext, ToolDef } from '../types.ts';
 import { failure, json, text } from '../types.ts';
-import { resolveDevice } from '../placement.ts';
 import { WorkforceError } from '../../../shared/errors.ts';
 import { clip, defineTool } from './util.ts';
 import { commandAction, ENV_SCHEMA, runCommand } from './command.ts';
 import { searchTool } from './files-search.ts';
+import { missText } from './file-miss.ts'; // B-080: a miss shows what is there
 import { LINE_READ_BYTES, lineWindow } from './file-window.ts';
+import { pwshDir } from '../../engines/wf-shim.ts'; // B-080 wave 3: the engines' PowerShell 7
 
 const MAX_READ = 256 * 1024;
+const PATH = { type: 'string', minLength: 1, maxLength: 1024 };
+/** Entries one files.list answer shows; the rest is counted in its last line. */
+export const LIST_ENTRIES = 500;
 const outside = () => new WorkforceError('forbidden', 'Path is outside the folder.');
 
 /** A path as given: relative to the workspace, or absolute anywhere on this PC. */
@@ -76,9 +82,8 @@ export async function realInside(root: string, relative: string | undefined): Pr
   return real;
 }
 
-/** The real path of a read on this PC (resolvePath, links followed); a linked PC's call reads only in its workspace. */
+/** The real path of a read (resolvePath, links followed) – one rule for this PC's agents and a linked PC's calls (B-080). */
 export async function readPath(ctx: ToolContext, given: string | undefined): Promise<string> {
-  if (ctx.fromPc !== undefined) return realInside(ctx.services.paths.workspace, given);
   const target = resolvePath(ctx, given);
   return realpath(target).catch(() => target);
 }
@@ -101,9 +106,8 @@ function realExistingSync(target: string): string {
 /**
  * The resource of a workspace path: its real path relative to the real workspace root,
  * '/'-separated ('.' = the root). './a', 'b/../a', an absolute path into the workspace and a link
- * to the file all give one spelling, so a deny or ask rule that names the path holds for each of
- * them – here and when a linked PC asks (devices/file-peer.ts). A path outside the workspace, or
- * one that cannot be checked, keeps its spelling: the tool refuses it anyway.
+ * to the file all give one spelling, so the journal names one file one way. A path outside the
+ * workspace, or one that cannot be checked, keeps its spelling.
  */
 export function workspaceResource(root: string, relative: string | undefined): string {
   const given = relative ?? '.';
@@ -119,44 +123,9 @@ export function workspaceResource(root: string, relative: string | undefined): s
   }
 }
 
-/** files.read / files.list `device`: unlike a remote tool's, its default is this PC (see the header). */
-const READ_DEVICE = Object.freeze({
-  type: 'string', minLength: 1, maxLength: 120,
-  description: 'A linked PC to read on (name or id from devices.list); it must allow "Use files" for this PC.',
-});
-
-type Linked = { id: string; name: string } | { error: string } | undefined;
-
-/** The linked PC an explicit `device` names; undefined for none or this PC. */
-function linkedPc(ctx: ToolContext, device: string | undefined): Linked {
-  if (device === undefined) return undefined;
-  const target = resolveDevice(ctx.services, device);
-  if ('error' in target) return target;
-  return target.self || !target.id ? undefined : { id: target.id, name: target.name };
-}
-
-/** The path a read is judged by – here the real workspace path; on a linked PC (which judges its own path) the plainly normalized one – and ' on <that PC>'. */
-function readTarget(ctx: ToolContext, device: string | undefined, given: string | undefined): { path: string; on: string } {
-  const there = linkedPc(ctx, device);
-  if (there && !('error' in there)) return { path: path.posix.normalize((given ?? '.').replace(/\\/g, '/')), on: ` on ${there.name}` };
-  return { path: workspaceResource(ctx.services.paths.workspace, given), on: '' };
-}
-
-/** What a read asks for (readTarget); the summary names a linked PC. */
-function describeRead(ctx: ToolContext, device: string | undefined, summary: string, given: string | undefined): ActionDescription {
-  const target = readTarget(ctx, device, given);
-  return { summary: `${summary}${target.on}`, resource: target.path, reversible: true, external: false };
-}
-
-/** Runs the read on the linked PC (its 'tools.call', never forwarded further); errors reach the registry as failures. */
-async function readThere(ctx: ToolContext, there: { id: string }, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
-  const input = { ...args };
-  delete input.device;
-  const result = await ctx.services.devices.call(there.id, 'tools.call', {
-    name, args: input, agentId: ctx.agent.id, agentName: ctx.agent.name, runId: ctx.runId, conversationId: ctx.conversationId, taskId: ctx.taskId, mode: ctx.mode,
-  }, ctx.signal);
-  const output = result as ToolOutput | undefined;
-  return output && Array.isArray(output.content) ? output : text(typeof result === 'string' ? result : JSON.stringify(result ?? null));
+/** What a read asks for: its summary and the workspace resource of the path (on another PC the registry adds its name). */
+function readAction(ctx: ToolContext, summary: string, given: string | undefined): ActionDescription {
+  return { summary, resource: workspaceResource(ctx.services.paths.workspace, given), reversible: true, external: false };
 }
 
 export type ShellSpawn = (command: string, options: { cwd: string; signal: AbortSignal; env?: NodeJS.ProcessEnv }) => {
@@ -166,8 +135,41 @@ export type ShellSpawn = (command: string, options: { cwd: string; signal: Abort
   kill(): boolean;
 };
 
+/** B-080: what every Windows command starts with – no progress records, UTF-8 out of and into native programs. */
+export const WINDOWS_PREAMBLE = "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding";
+
+/**
+ * B-080 wave 3 (live 09.11.2026: a command that did not parse stopped the preamble too, and its ParserError came back in
+ * the OEM code page – "nicht zul�ssig"): the command as it runs after the preamble – its text travels as UTF-16 base64
+ * (no quoting on the way), is parsed by [ScriptBlock]::Create once the preamble ran (a parse error comes back UTF-8 and
+ * the call exits 1) and runs dot-sourced in the script's own scope. The line after it keeps -Command's exit rule: a last
+ * statement that failed (a native program's non-zero exit, Write-Error) exits 1; `exit N` exits N.
+ */
+export function windowsScript(command: string): string {
+  const encoded = Buffer.from(command, 'utf16le').toString('base64');
+  return `. ([ScriptBlock]::Create([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}'))).ToString() + "\`n\`nif (-not \`$?) { exit 1 }"))`;
+}
+
+/**
+ * B-080: how Windows runs a command – PowerShell itself, the command as one -Command argument (no cmd.exe in between, no
+ * -EncodedCommand: its errors would come back as CLIXML), UTF-8 output and no progress records first; and
+ * $OutputEncoding UTF-8 too, so text piped into a program ('Grüße' | python -, '<json>' | wf call … -) keeps its
+ * letters (5.1's default there is ASCII: "Gr??e"). B-080 wave 3: PowerShell 7 (pwsh.exe, engines/wf-shim.ts pwshDir of
+ * `env`) where it is found, the same shell as the engines'; Windows PowerShell 5.1 otherwise; the command as windowsScript.
+ */
+export function windowsShell(command: string, env: NodeJS.ProcessEnv = process.env): { file: string; args: string[] } {
+  const pwsh = pwshDir(env);
+  return {
+    file: pwsh ? path.win32.join(pwsh, 'pwsh.exe') : path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `${WINDOWS_PREAMBLE}\n${windowsScript(command)}`],
+  };
+}
+
 export const defaultShell: ShellSpawn = (command, options) => {
-  const child = nodeSpawn(command, { cwd: options.cwd, env: options.env, shell: true, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+  const win = process.platform === 'win32';
+  const spawnOptions: SpawnOptions = { cwd: options.cwd, env: options.env, windowsHide: true, detached: !win, stdio: ['ignore', 'pipe', 'pipe'] };
+  const powershell = win ? windowsShell(command, options.env) : undefined;
+  const child = powershell ? nodeSpawn(powershell.file, powershell.args, spawnOptions) : nodeSpawn(command, { ...spawnOptions, shell: true });
   const kill = () => {
     if (process.platform === 'win32' && child.pid) {
       nodeSpawn(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => { child.kill(); });
@@ -190,18 +192,20 @@ export function shellResource(command: string, cwd: string | undefined): string 
 export function fileTools(deps: { shell?: ShellSpawn } = {}): ToolDef[] {
   const shell = deps.shell ?? defaultShell;
 
-  const readFileTool = defineTool<{ path: string; maxBytes?: number; fromLine?: number; lines?: number; device?: string }>({
+  const readFileTool = defineTool<{ path: string; maxBytes?: number; fromLine?: number; lines?: number }>({
     name: 'files.read',
-    description: 'Read a text file by workspace path, or by absolute path anywhere on this PC.',
-    inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 1024 }, maxBytes: { type: 'integer', minimum: 1, maximum: MAX_READ }, fromLine: { type: 'integer', minimum: 1 }, lines: { type: 'integer', minimum: 1 }, device: { ...READ_DEVICE } }, required: ['path'], additionalProperties: false },
-    category: 'read',
-    describe: (args, ctx) => describeRead(ctx, args.device, `Read ${args.path}`, args.path),
+    description: 'Reads a text file anywhere on the PC in windows of whole lines. The last line says which lines came and where I go on.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: PATH, maxBytes: { type: 'integer', minimum: 1, maximum: MAX_READ, description: 'Default 256 KB.' }, fromLine: { type: 'integer', minimum: 1 }, lines: { type: 'integer', minimum: 1 } },
+      required: ['path'], additionalProperties: false,
+    },
+    category: 'read', remote: true,
+    describe: (args, ctx) => readAction(ctx, `Read ${args.path}`, args.path),
     async run(args, ctx) {
-      const there = linkedPc(ctx, args.device);
-      if (there) return 'error' in there ? failure(there.error) : readThere(ctx, there, 'files.read', args);
       const file = await readPath(ctx, args.path);
       const info = await stat(file).catch(() => undefined);
-      if (!info?.isFile()) return failure(`No file at ${args.path}.`);
+      if (!info?.isFile()) return failure(await missText(ctx, args.path, file)); // B-080: what is there (a folder: its listing)
       // Only the bytes needed are read: the start (maxBytes, default MAX_READ), or up to LINE_READ_BYTES for lines
       // further down – a big file (or one a linked PC asks for) never fills memory. B-048: lines in windows (file-window.ts).
       const limit = args.fromLine !== undefined && args.fromLine > 1 ? LINE_READ_BYTES : (args.maxBytes ?? MAX_READ);
@@ -212,44 +216,57 @@ export function fileTools(deps: { shell?: ShellSpawn } = {}): ToolDef[] {
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
         body = buffer.subarray(0, bytesRead).toString('utf8');
       } finally { await handle.close(); }
-      return text(lineWindow(body, args, info.size <= limit));
+      return text(lineWindow(body, args, { size: info.size, readBytes: Math.min(limit, info.size) }));
     },
   });
-  const writeFileTool = defineTool<{ path: string; content: string; append?: boolean }>({
+  // A command line ends at 32,767 characters (os error 206), so files.write takes bytes too – base64 or a whole data: URL.
+  const writeFileTool = defineTool<{ path: string; content: string; append?: boolean; base64?: boolean }>({
     name: 'files.write',
-    description: 'Create or overwrite a text file: a workspace path, or an absolute path anywhere on this PC (folders are created).',
-    inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1 }, content: { type: 'string', maxLength: 2_000_000 }, append: { type: 'boolean' } }, required: ['path', 'content'], additionalProperties: false },
-    category: 'write_local', audience: 'http',
+    description: 'Creates, overwrites or appends to a file anywhere on this PC, as text or bytes. Folders are created, and no command-line limit applies.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', minLength: 1 }, content: { type: 'string', maxLength: 20_000_000, description: 'With base64: base64 or a whole data: URL.' }, append: { type: 'boolean' }, base64: { type: 'boolean' } },
+      required: ['path', 'content'], additionalProperties: false,
+    },
+    category: 'write_local',
     describe: (args) => ({ summary: `Write ${args.path}`, external: false }),
     async run(args, ctx) {
       const file = resolvePath(ctx, args.path);
       await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, args.content, { encoding: 'utf8', flag: args.append ? 'a' : 'w' });
-      return json({ ok: true, path: file, bytes: Buffer.byteLength(args.content) });
+      const data = args.base64 ? Buffer.from(args.content.replace(/^data:[^,]*,/, ''), 'base64') : args.content;
+      await writeFile(file, data, { ...(args.base64 ? {} : { encoding: 'utf8' as const }), flag: args.append ? 'a' : 'w' });
+      return json({ ok: true, path: file, bytes: typeof data === 'string' ? Buffer.byteLength(data) : data.length });
     },
   });
 
-  const listDir = defineTool<{ path?: string; device?: string }>({
+  const listDir = defineTool<{ path?: string }>({
     name: 'files.list',
-    description: "List a folder: a workspace path or an absolute path anywhere on this PC, or with device a linked PC's workspace.",
-    inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 1024 }, device: { ...READ_DEVICE } }, additionalProperties: false },
-    category: 'read',
-    describe: (args, ctx) => describeRead(ctx, args.device, `List ${args.path ?? '.'}`, args.path),
+    description: 'Lists a folder anywhere on the PC; past 500 entries the rest is counted.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 1024, description: 'Default the workspace.' } }, additionalProperties: false },
+    category: 'read', remote: true,
+    describe: (args, ctx) => readAction(ctx, `List ${args.path ?? '.'}`, args.path),
     async run(args, ctx) {
-      const there = linkedPc(ctx, args.device);
-      if (there) return 'error' in there ? failure(there.error) : readThere(ctx, there, 'files.list', args);
       const dir = await readPath(ctx, args.path);
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
-      if (!entries) return failure(`No folder at ${args.path ?? '.'}.`);
-      const lines = entries.slice(0, 500).map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+      if (!entries) return failure(await missText(ctx, args.path ?? '.', dir, 'folder')); // B-080: the nearest folder's listing
+      const lines = entries.slice(0, LIST_ENTRIES).map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+      const rest = entries.length - lines.length; // B-089: what is not shown is said, with the call that finds it
+      if (rest > 0) lines.push(`[${LIST_ENTRIES} of ${entries.length} entries shown; ${rest} more are in this folder – files.search with a part of a name and this path finds them.]`);
       return text(lines.length ? lines.join('\n') : '(empty)');
     },
   });
 
   const shellExec = defineTool<{ command: string; cwd?: string; timeoutSeconds?: number; env?: Record<string, string> }>({
     name: 'shell.exec',
-    description: 'Run a shell command on this PC or, with device, on a linked PC (devices.list) – engines with a shell of their own use it for a linked PC. cwd: a workspace path or an absolute folder anywhere there, default the workspace (a split part: its own folder). Output is capped. At a timeout it gets more seconds or is aborted; the decision accompanies the result. A secret goes in by handle: env {"API_KEY": "secret://<id>"}.',
-    inputSchema: { type: 'object', properties: { command: { type: 'string', minLength: 1, maxLength: 8000 }, cwd: { type: 'string' }, timeoutSeconds: { type: 'integer', minimum: 1, maximum: 1800, description: 'Seconds until the first timeout review; default estimated from the command (search 15, install 300, build/test 180, other 60).' }, env: { ...ENV_SCHEMA } }, required: ['command'], additionalProperties: false },
+    description: 'Runs a shell command on this PC or a linked PC, with stored secrets in its env if needed. With a shell of my own I use it for a linked PC or a stored secret. On Windows it runs in PowerShell (7 where installed, else 5.1): I chain with ";" and write cmd syntax as cmd /c "…"; output is capped.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', minLength: 1, maxLength: 8000 }, cwd: { type: 'string', description: 'Default the workspace; a split part: its own folder.' },
+        timeoutSeconds: { type: 'integer', minimum: 1, maximum: 1800, description: 'Until the first timeout review, which extends or ends it; default estimated.' }, env: { ...ENV_SCHEMA },
+      },
+      required: ['command'], additionalProperties: false,
+    },
     category: 'write_system', remote: true,
     describe: (args, ctx) => commandAction(ctx, { summary: `Run: ${clip(args.command, 200)}`, resource: shellResource(args.command, args.cwd), reversible: false, external: false }, args.env),
     async run(args, ctx) {
@@ -260,4 +277,3 @@ export function fileTools(deps: { shell?: ShellSpawn } = {}): ToolDef[] {
 
   return [readFileTool, writeFileTool, listDir, shellExec, searchTool({ resolve: readPath })];
 }
-

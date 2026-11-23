@@ -3,8 +3,9 @@
 // main code loads; a start that goes on hands over to a detached ordinary start), MultipleInstancesPolicy
 // IgnoreNew, triggers: at the person's sign-in; 30 s after a crash ('Application Error' 1000) or hang
 // ('Application Hang' 1002) in the Application log whose event data names this executable's full path; and
-// one time trigger at the next due work – written only on a deliberate quit from next-due.json
-// (`armDueStart`: no schtasks call per re-arm of the scheduler, none when that time is unchanged). Only
+// one time trigger at the next due work – written only on an update's quit from next-due.json (a quit by the
+// person removes it: closing closes, 14.11.2026) (`armDueStart`: no schtasks call per re-arm of the scheduler,
+// none when that time is unchanged). Only
 // while signed in (InteractiveToken, LeastPrivilege), battery allowed, a missed due start runs when the PC
 // is back, normal priority. Schema facts (learn.microsoft.com, Task Scheduler schema 1.2): trigger children
 // in sequence Enabled, StartBoundary, …, then LogonTrigger UserId/Delay, EventTrigger Subscription (an
@@ -152,16 +153,16 @@ export async function windowsTask(enabled: boolean, deps: WindowsTaskDeps): Prom
 }
 
 /**
- * A deliberate quit (the person's or an update's; not the system ending the session): the task's one time
- * trigger at the runtime's next due work (next-due.json, settled at runtime stop) – a schtasks process only
- * when that time changed; overdue work waits for the next start. Never throws.
+ * A deliberate quit (the person's or an update's; not the system ending the session): an update's quit sets the
+ * task's one time trigger at the runtime's next due work (next-due.json, settled at runtime stop), the person's
+ * removes it – a schtasks process only when that time changed; overdue work waits for the next start. Never throws.
  */
 export async function armDueStart(enabled: boolean, by: QuitBy | undefined, deps: WindowsTaskDeps): Promise<void> {
   if (!enabled || (by !== 'person' && by !== 'update') || deps.platform !== 'win32' || !deps.packaged || deps.testMode) return;
   try {
     const now = deps.now?.() ?? Date.now();
     const next = readNextDue(deps.dataDir);
-    const due = typeof next === 'number' && next > now ? Math.max(next, now + MIN_LEAD_MS) : null;
+    const due = by === 'update' && typeof next === 'number' && next > now ? Math.max(next, now + MIN_LEAD_MS) : null;
     const stored = await readRegistered(deps);
     if (stored && stored.hash === baseHash(deps) && stored.due === due) return;
     await registerTask(deps, due, QUIT_TIMEOUT_MS);

@@ -12,6 +12,7 @@ import { agent, harness } from '../chat/harness.ts';
 import { HUMAN_ID, SYSTEM_ID } from '../../../src/shared/ids.ts';
 import { taskSpace } from '../../../src/runtime/tasks/space.ts';
 import type { ChatService } from '../../../src/runtime/contracts.ts';
+import { findDirect } from '../../../src/runtime/chat/direct.ts';
 
 function setup() {
   const h = harness();
@@ -48,18 +49,19 @@ test('space: the creating agent\'s, else the parent\'s; origin: the input, else 
   h.running.push({ agentId: 'ag_tom', runId: 'run_1', note: '', startedAt: 0, origin: { source: 'app:mail_1', label: 'New mail in office@example.com' } });
   const fromMail = h.tasks.create({ title: 'Offer by Friday', createdBy: 'ag_tom', assigneeId: 'ag_tom' });
   assert.deepEqual(fromMail.origin, { source: 'app:mail_1', label: 'New mail in office@example.com' }, 'the creating run\'s origin');
-  const given = h.tasks.create({ title: 'Approve', assigneeKind: 'human', humanReason: 'approval', createdBy: SYSTEM_ID, origin: { source: 'approvals', label: '  Mara: Delete item 8  ' } });
+  const given = h.tasks.create({ title: 'Approve', assigneeKind: 'human', createdBy: SYSTEM_ID, origin: { source: 'approvals', label: '  Mara: Delete item 8  ' } });
   assert.deepEqual(given.origin, { source: 'approvals', label: 'Mara: Delete item 8' }, 'the caller\'s, cleaned');
 });
 
-test('a chat keeps working as before: the anchor is posted, the owner joins; a missing chat is still refused', () => {
+test('a chat keeps working as before: the anchor is posted; an owner outside a chat of the person gets it in the 1:1 of the giver (KI-Runde 17.11.2026); a missing chat is still refused', () => {
   const h = setup();
   const chat = h.chats.create({ title: 'Launch', agentIds: ['ag_tom'], createdBy: HUMAN_ID });
   const task = h.tasks.create({ conversationId: chat.id, title: 'Prepare the offer', assigneeKind: 'agent', assigneeId: 'ag_mara', createdBy: HUMAN_ID });
-  assert.equal(task.conversationId, chat.id);
+  assert.equal(task.conversationId, findDirect(h.services, HUMAN_ID, 'ag_mara'), 'a chat of the person keeps its members: the work is in their 1:1 with Mara');
   assert.ok(task.messageId, 'anchored');
   assert.equal(h.chats.message(task.messageId!)?.kind, 'task');
-  assert.ok(h.chats.members(chat.id).some((member) => member.memberId === 'ag_mara'), 'the owner joined');
+  assert.ok(!h.chats.members(chat.id).some((member) => member.memberId === 'ag_mara'), 'nobody is seated in a chat of the person');
+  assert.equal(h.tasks.create({ conversationId: chat.id, title: 'Draft', assigneeKind: 'agent', assigneeId: 'ag_tom', createdBy: HUMAN_ID }).conversationId, chat.id, 'a member keeps the chat');
   assert.equal(task.origin, undefined, 'a chat task needs no origin');
   assert.throws(() => h.tasks.create({ conversationId: 'conv_missing', title: 'x', createdBy: HUMAN_ID }), /Chat not found/);
 });
@@ -75,15 +77,6 @@ test('a step takes its parent\'s chat only when its creator is a member there', 
   assert.ok(!h.chats.members(chat.id).some((member) => member.memberId === 'ag_mara'), 'and nobody was brought into the chat');
 });
 
-test('a colleague gets chat-free work only from the owner (P3)', () => {
-  const h = setup();
-  const now = h.clock.now();
-  h.db.run(`INSERT INTO people (id, name, status, created_at, updated_at) VALUES ('per_lena0000000', 'Lena', 'active', ?, ?)`, [now, now]);
-  const fromOwner = h.tasks.create({ title: 'Sign the delivery note', assigneeKind: 'human', assigneeId: 'per_lena0000000', createdBy: HUMAN_ID });
-  assert.equal(fromOwner.assigneeId, 'per_lena0000000');
-  assert.equal(fromOwner.conversationId, undefined);
-  assert.throws(() => h.tasks.create({ title: 'Check the stock', assigneeKind: 'human', assigneeId: 'per_lena0000000', createdBy: 'ag_mara' }), /gets work through a chat with them/);
-});
 
 test('the anchor send failing removes the task and its steps again (compensation) and re-throws', () => {
   const h = setup();
@@ -91,20 +84,8 @@ test('the anchor send failing removes the task and its steps again (compensation
   const before = h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tasks')!.n;
   const send = h.chats.send.bind(h.chats);
   (h.chats as unknown as { send: ChatService['send'] }).send = () => { throw new Error('delivery down'); };
-  assert.throws(() => h.tasks.create({ conversationId: chat.id, title: 'Prepare', steps: ['One', 'Two'], createdBy: HUMAN_ID, assigneeId: 'ag_tom' }), /delivery down/);
+  assert.throws(() => h.tasks.create({ conversationId: chat.id, title: 'Prepare', plan: ['One', 'Two'], createdBy: HUMAN_ID, assigneeId: 'ag_tom' }), /delivery down/);
   (h.chats as unknown as { send: ChatService['send'] }).send = send;
   assert.equal(h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tasks')!.n, before, 'no row and no step left behind');
   assert.equal(h.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM tasks_fts WHERE tasks_fts MATCH 'Prepare'")!.n, 0, 'no search rows either');
-});
-
-test('a chat-free task writes no status lines; its assigner is woken without a chat', () => {
-  const h = setup();
-  const task = h.tasks.create({ title: 'Collect the receipts', assigneeKind: 'team', createdBy: HUMAN_ID });
-  const messages = h.messages();
-  h.tasks.assign(task.id, { kind: 'agent', id: 'ag_tom' }, 'ag_mara');
-  h.tasks.setStatus(task.id, 'working', 'ag_tom');
-  h.tasks.complete(task.id, { summary: 'Collected', evidence: [{ kind: 'note', label: 'done' }], verification: 'claimed_by_agent' }, 'ag_tom');
-  assert.equal(h.messages(), messages, 'no status line anywhere');
-  const assigner = h.wakeRows().filter((row) => row.agent_id === 'ag_mara' && row.task_id === task.id);
-  assert.deepEqual(assigner.map((row) => [row.reason, row.conversation_id]), [['child', null]], 'the assigner hears of the result');
 });

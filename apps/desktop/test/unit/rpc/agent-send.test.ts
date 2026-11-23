@@ -1,7 +1,9 @@
 // AF-001 – messages.send from an agent's own wf (owner scope with `agentId`, set by the /ws handshake for a valid
 // AUTARK_AGENT_TOKEN): the line is the agent's – author, kind and name – written through its chat.send tool, so it reaches
-// only chats the agent is a member of and never wakes the agent itself; the person's fields (model, attachments …) are
+// only chats the agent is a member of and never wakes the agent itself; the person's fields (model, pin, Ultra …) are
 // refused; while the agent has a turn running, the line belongs to that run. The plain owner still writes as the person.
+// Since the upstream 0.3.16 merge the handler is upstream's B-085 sendAsAgent (rpc/handlers/chats.ts): attachments are
+// allowed on an agent's line, and the line carries the run's id (no separate meta.sentDuringRun).
 // Owns: these assertions only. Never: real engines, timers or network.
 
 import { test } from 'node:test';
@@ -51,8 +53,8 @@ test('an agent\'s wf: only into its own chats; the person\'s fields are refused;
   assert.equal(f.chats.messages(other.id).filter((message) => message.kind !== 'status').length, 0, 'nothing posted there');
 
   const own = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-  for (const key of ['model', 'pin', 'attachments', 'speech', 'secrets', 'ultra', 'effort']) {
-    const refused = await ava.request('messages.send', { conversationId: own.id, body: 'x', [key]: key === 'attachments' ? [] : 'x' });
+  for (const key of ['model', 'pin', 'speech', 'secrets', 'ultra', 'effort', 'marks']) {
+    const refused = await ava.request('messages.send', { conversationId: own.id, body: 'x', [key]: 'x' });
     assert.equal(refused.error?.code, 'bad_request', `${key} is the person's`);
   }
   const quiet = await ava.call<Message>('messages.send', { conversationId: own.id, body: 'For later', silent: true });
@@ -69,7 +71,6 @@ test('an agent\'s wf during its running turn: the line belongs to that run', asy
   const sent = await ava.call<Message>('messages.send', { conversationId: chat.id, body: 'Halfway there.' });
   const stored = f.chats.message(sent.id)!;
   assert.equal(stored.runId, run.id);
-  assert.equal(stored.meta?.sentDuringRun, true);
 });
 
 test('the plain owner (the window, the person\'s own wf) still writes as the person', async (t) => {

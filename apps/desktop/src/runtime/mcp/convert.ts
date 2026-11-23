@@ -1,6 +1,8 @@
 // Shape conversion between workforce tools and MCP: ToolSpec → MCP Tool (wire name, object
-// input schema) and ToolOutput → MCP CallToolResult (text/image content, isError,
-// structuredContent for plain-object results).
+// input schema) and ToolOutput → MCP CallToolResult (text and image content, isError). The agent reads the text and
+// the images; `structured` stays inside the runtime (registry hints, the journal and device forwarding read
+// ToolOutput.structured, never the MCP result). B-080: no structuredContent – Claude Code hands an agent only that JSON
+// when it is there and drops the text (live: browser.extract came back as {"url","tab"}, a UI tree as {"window","app"}).
 // Owns: those mappings. Never: calls tools or decides what is offered.
 
 import type { ToolOutput, ToolSpec } from '../tools/types.ts';
@@ -21,7 +23,6 @@ export type McpContent =
 export interface McpCallResult {
   content: McpContent[];
   isError: boolean;
-  structuredContent?: Record<string, unknown>;
 }
 
 /** MCP requires an object schema at the top level. */
@@ -48,9 +49,7 @@ export function toCallResult(output: ToolOutput): McpCallResult {
   }
   const isError = Boolean(output.isError);
   if (!content.length) content.push({ type: 'text', text: isError ? 'The tool failed.' : 'Done.' });
-  const result: McpCallResult = { content, isError };
-  if (isRecord(output.structured)) result.structuredContent = output.structured;
-  return result;
+  return { content, isError };
 }
 
 export function errorResult(message: string): McpCallResult {

@@ -15,17 +15,18 @@ export interface SpeechToText {
    * Dictation: one transcription of a stored recording, nothing cached; text '' when no words were
    * heard (the service's blank text). An answer without a text string rejects like any failure.
    */
-  transcribe(input: { fileId: string; language?: string }): Promise<{ text: string; confidence?: number }>;
+  transcribe(input: { fileId: string; language?: string; chatId?: string }): Promise<{ text: string; confidence?: number }>;
   /**
    * Agent hearing: the cached transcript of a stored recording, else one transcription (one at a
    * time across all callers), secret-redacted and cached in the file's text column. Rejects with a
-   * user-safe WorkforceError (not set up, too large, provider failure, no words heard).
+   * user-safe WorkforceError (not set up, too large, provider failure, no words heard). `dictation`: a person's
+   * voice message (media/dictation.ts) – heard as dictation (unsure places marked, the chat as a listener's context).
    */
-  transcript(fileId: string): Promise<string>;
+  transcript(fileId: string, dictation?: { chatId?: string }): Promise<string>;
   /** B-047 D14 (voice/local/service.ts): this PC's local speech models and whether the engine runs here. */
   localModels(): LocalSpeechModels;
-  /** B-047 D14: downloads a local speech model and chooses it (progress: bus 'voice.pull'). */
-  pullLocal(id: string): Promise<{ ok: true }>;
+  /** B-047 D14: downloads a local speech model and chooses it unless `choose` says no (progress: bus 'voice.pull'). */
+  pullLocal(id: string, options?: { choose?: () => boolean }): Promise<{ ok: true }>;
   /** B-047 D14: one line spoken by the chosen local voice. B-058: `signal` – the caller gave up (stop, deadline); no further sentence is spoken. */
   speak(input: { text: string; voice?: string; language?: string; signal?: AbortSignal }): Promise<SpokenAudio>;
 }

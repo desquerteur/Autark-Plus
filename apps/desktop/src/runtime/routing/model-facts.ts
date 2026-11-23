@@ -1,9 +1,16 @@
 // Model facts for agents (RT4): compact texts of what the catalog knows about one model – where it runs (plan, API key,
 // local, endpoint), its efforts, prior strength per category, its list price and smarts (B-078) – and which models are
-// specialists that cannot run an agent (agents.update pins). B-078 (D16): the one models line every agent carries in the
-// stable part of its prompt (factsLine – context/setup-facts.ts modelsFactsLine, rendered in "My environment"): at most
+// specialists that cannot run an agent (agents.update pins). B-078 (D16): the one models line every agent carries in
+// its prompt (factsLine – context/setup-facts.ts modelsFactsLine; B-089: the volatile section 'models'): at most
 // FACTS_MODELS connected work models, the smartest first, each with price, smarts and how a turn on it is paid – the same
-// text while the connections stay the same, so the prompt cache holds.
+// text while the connections stay the same, so the prompt cache holds. B-083: a key holding a plan's monthly API credits
+// (Account.credits) is paid like a plan, as routing and booking treat it. B-083 (live 09.11.): a model whose engine sends a
+// temperature carries one tag (temperatureTag, engines/http/temperature.ts) in this line and in models.list, so the agent
+// can pick one when a temperature matters.
+// B-089 (11.11.2026, live 10.11.: "(+387 more in models.list)" became "(+385 more …)" within an hour – a relist, a price
+// refresh, an account that cools or signs out move the line – and every agent's sessions started cold): the line is no
+// longer in the stable prompt but the volatile section 'models' (context/prompt-volatile.ts), sent to a resumed session
+// only when it changes.
 // Owns: these texts. Never: ranks or decides (router.ts, model-list.ts do) or writes anything.
 
 import type { Account, Effort, ModelInfo } from '../../shared/model/providers.ts';
@@ -11,6 +18,7 @@ import { EFFORT_ORDER, effortRank } from '../models/efforts.ts';
 import { CATEGORIES } from '../models/priors.ts';
 import { chargeOf } from '../models/pricing.ts';
 import { LOCAL_PROVIDERS } from '../engines/http/common.ts';
+import { takesTemperature } from '../engines/http/temperature.ts'; // B-083
 import { categoryLabel } from './categories.ts';
 import { NEVER, strengthOf } from './score.ts';
 
@@ -40,6 +48,7 @@ export function effortRange(efforts: readonly Effort[]): string | undefined {
 export function sourceOf(model: ModelInfo, account?: Account): 'plan' | 'API key' | 'local' | 'endpoint' {
   if (account) {
     if (account.auth === 'local') return 'local';
+    if (account.credits && chargeOf(account) === 'plan') return 'plan'; // B-083: a key holding a plan's monthly API credits
     // A key from the environment (PR5) and a CLI signed in with an API key are pay-per-use too.
     if (account.auth === 'api_key' || account.auth === 'env' || (account.auth === 'cli' && chargeOf(account) === 'paid')) return 'API key';
     if (account.auth === 'cli') return 'plan';
@@ -69,6 +78,14 @@ export function priceText(model: Pick<ModelInfo, 'price'>): string | undefined {
   return model.price ? `$${dollars(model.price.inputPerM)}/$${dollars(model.price.outputPerM)}` : undefined;
 }
 
+/** B-083: "takes temperature" when the model's engine sends one beside its thinking; else undefined. Owner 09.11.: no tag for
+ *  "at effort none" – a reasoning model takes one only without reasoning, and thinking is never given up for a temperature;
+ *  a model whose only effort is none (every compatible model: the router clamps to it) has no thinking to give up. */
+export function temperatureTag(model: { engine: string; model: string; efforts?: readonly Effort[] }): string | undefined {
+  const onlyNone = !!model.efforts?.length && model.efforts.every((effort) => effort === 'none');
+  return takesTemperature(model.engine, model.model, onlyNone ? 'none' : undefined) ? 'takes temperature' : undefined;
+}
+
 /** Models named in the facts line. */
 export const FACTS_MODELS = 8;
 
@@ -89,7 +106,7 @@ export function factsLine(models: readonly ModelInfo[], accounts: readonly Accou
   for (const model of ranked) {
     const account = model.accounts.map((id) => byId.get(id)).find((entry) => entry !== undefined);
     const price = priceText(model);
-    const item = [`${model.name}${price ? ` ${price}` : ''}`, model.smarts !== undefined ? String(model.smarts) : undefined, PAID[sourceOf(model, account)]].filter(Boolean).join(' · ');
+    const item = [`${model.name}${price ? ` ${price}` : ''}`, model.smarts !== undefined ? String(model.smarts) : undefined, PAID[sourceOf(model, account)], temperatureTag(model)].filter(Boolean).join(' · ');
     if (!distinct.includes(item)) distinct.push(item); // the same model on two connections of one kind: once
   }
   const items = distinct.slice(0, FACTS_MODELS);

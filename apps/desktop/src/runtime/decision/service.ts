@@ -5,6 +5,7 @@
 // Owns: redaction of the request, option validation (unknown choice → no answer), the always-offered "none" option,
 // the request's deadline (timeoutMs) and its caller's stop (signal), and what a choice answer means (outcome).
 // Never: throws for "no backend" (returns confidence 0, by 'none') or sends secret values.
+// B-089 (11.11.2026): an answer after a failed backend logs which way answered ('decision answered by another way').
 
 import type { DecisionOutcome, DecisionRequest, DecisionResult, DecisionService, Logger } from '../contracts.ts';
 import { NONE_OPTION, type DecisionBackend } from './types.ts';
@@ -67,6 +68,7 @@ export class DecisionHub implements DecisionService {
 
   private async single(request: DecisionRequest, original: string[], deadline?: AbortSignal): Promise<DecisionResult> {
     const startedAt = performance.now();
+    const failed: string[] = [];
     for (const backend of this.options.backends) {
       if (deadline?.aborted) return TIMED_OUT;
       if (!backend.available()) continue;
@@ -75,9 +77,12 @@ export class DecisionHub implements DecisionService {
         const attempt = AbortSignal.timeout(request.timeoutMs ?? this.options.timeoutMs ?? 30_000);
         const signal = deadline ? AbortSignal.any([attempt, deadline]) : attempt;
         const left = request.timeoutMs === undefined ? request : { ...request, timeoutMs: Math.max(1, Math.round(request.timeoutMs - (performance.now() - startedAt))) };
-        return this.validate(await untilAborted(backend.decide(left, signal), deadline), request, original);
+        const result = this.validate(await untilAborted(backend.decide(left, signal), deadline), request, original);
+        if (failed.length) this.options.log?.info('decision answered by another way', { purpose: request.purpose, failed, by: result.by }); // B-089
+        return result;
       } catch (error) {
         if (deadline?.aborted) return TIMED_OUT;
+        failed.push(backend.id);
         this.options.log?.warn('decision backend failed', { backend: backend.id, purpose: request.purpose, error: String(error) });
       }
     }

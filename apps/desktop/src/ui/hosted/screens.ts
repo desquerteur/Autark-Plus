@@ -1,7 +1,8 @@
 // The iPhone web app's own screens before the PC's UI takes over (B-078 follow-up): Add to Home Screen (Safari, not
 // installed yet), Connect (the PC's Remote ID, typed in 3-3-3 groups or pasted), the code to compare with the PC, waiting
 // for the PC (with "Forget this phone" in a fixed row once the PCs stop answering), "This phone was removed" (it comes
-// back over the PC's UI), "Update Autark on your PC", "could not start" and "this iPhone is too old". Plain DOM in one fixed, centred frame (styles in
+// back over the PC's UI), "Update Autark on your PC", "could not start", "this iPhone is too old" and – F29 – "Autark
+// stopped a file" (a file that is not the PC's own; over the PC's UI too). Plain DOM in one fixed, centred frame (styles in
 // the website's app page, light and dark, safe-area insets): the title, the body, a status slot that is always two lines
 // tall and the honest iOS line – a click never moves a neighbour. The frame goes once the PC UI has mounted.
 // Owns: these screens' markup and wording. Never: pairing, connecting or storage (shell.ts drives them).
@@ -125,6 +126,13 @@ export class Screens {
 
   failed(text: string): void {
     this.screen('Autark could not start', el('p', { class: 'hs-muted' }, text),
+      el('div', { class: 'hs-actions' }, button('Try again', 'primary', () => location.reload())));
+  }
+
+  /** F29: the service worker did not hand the page `file` – its bytes are not the ones the PC lists. */
+  fileRefused(file: string): void {
+    this.screen('Autark stopped a file',
+      el('p', { class: 'hs-muted' }, 'This iPhone runs only your PC’s own files, checked against the list your PC sends over its encrypted connection. ', el('b', {}, file), ' is not one of them, so it did not run.'),
       el('div', { class: 'hs-actions' }, button('Try again', 'primary', () => location.reload())));
   }
 

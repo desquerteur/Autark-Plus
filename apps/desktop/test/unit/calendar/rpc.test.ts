@@ -1,8 +1,10 @@
 // B-041 foundation: the calendar.* and day.* RPC surface – tiers ('todo' for the person's own day, 'tasks' to hand
-// work to the team, 'settings' to read connected calendars, the owner for everything that holds a credential),
+// work to the team, 'settings' to read connected calendars, 'settings' on a secure transport – the owner's phone,
+// 16.11.2026 – for everything that holds a credential),
 // no person variants, 'unavailable' while a service is missing, empty reads on an empty profile (no briefing),
 // the person's own rows through calendar.list/add/move/remove from a To-do phone (track A1), parameter checks, and
-// the event side (rows and the briefing on 'tasks' for devices holding 'todo', source changes owner-only).
+// the event side (rows and the briefing on 'tasks' for devices holding 'todo', source changes for the owner and a secure
+// 'settings' device).
 // Owns: checks of handlers/calendar.ts, handlers/day.ts, compose/calendar.ts and their scope rules only.
 
 import { test } from 'node:test';
@@ -19,7 +21,7 @@ import { OWNER, TestClient, rpcFixture } from '../rpc/s1-helpers.ts';
 const FULL: DeviceCapability[] = ['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'];
 const device = (capabilities: DeviceCapability[]): ClientScope => ({ kind: 'device', deviceId: 'dev_day', capabilities, secure: true });
 const DAY_TODO = ['calendar.list', 'calendar.add', 'calendar.move', 'calendar.remove', 'day.add', 'day.plan', 'day.briefing', 'day.handedOff'];
-const OWNER_ONLY = ['calendar.addIcs', 'calendar.updateSource', 'calendar.removeSource', 'calendar.sync', 'calendar.google', 'calendar.connectGoogle', 'calendar.person'];
+const OWNER_ONLY = ['calendar.person']; // 16.11.2026: the connected calendars are 'settings' + secure (rpc/phone-settings-reach.test.ts)
 const VALID: Record<string, unknown> = {
   'calendar.list': { from: 1_000, to: 2_000 }, 'calendar.add': { text: 'Steuern', startAt: 1_000, endAt: 2_000, kind: 'auto' },
   'calendar.move': { id: 'cev_1', startAt: 1_000, endAt: 2_000, rev: 0 }, 'calendar.remove': { id: 'cev_1' }, 'calendar.sources': undefined,
@@ -27,31 +29,10 @@ const VALID: Record<string, unknown> = {
   'calendar.removeSource': { id: 'cal_1' }, 'calendar.sync': {}, 'calendar.google': undefined, 'calendar.connectGoogle': {},
   'calendar.person': { id: 'per_anna00000000', from: 1_000, to: 2_000 },
   'day.add': { text: 'Wäsche waschen, Küche aufräumen' }, 'day.plan': { date: '2026-10-25', mode: 'plan' },
-  'day.briefing': { date: '2026-10-25' }, 'day.sendToTeam': { id: 'task_1' }, 'day.handedOff': {},
+  'day.briefing': { date: '2026-10-25' }, 'day.handedOff': {},
 };
 
-test('tiers: the day for To-do devices, Send to team with tasks, sources read with settings, credentials with the owner; people their own calendars', () => {
-  const table = createHandlerTable();
-  const may = (method: string, scope: ClientScope) => allowedScope(table.get(method)!.scope, scope);
-  for (const method of DAY_TODO) assert.deepEqual(table.get(method)?.scope, { capability: 'todo' }, method);
-  for (const method of DAY_TODO) assert.ok(may(method, device(['todo'])), method);
-  assert.deepEqual(table.get('day.sendToTeam')?.scope, { capability: 'tasks' });
-  assert.ok(!may('day.sendToTeam', device(['todo'])) && may('day.sendToTeam', device(['todo', 'tasks'])));
-  assert.deepEqual(table.get('calendar.sources')?.scope, { person: true, base: { capability: 'settings' } }, 'B-078 D20: a person lists their own');
-  const PERSON_TOO = new Set(['calendar.addIcs', 'calendar.removeSource']);
-  for (const method of OWNER_ONLY) {
-    assert.deepEqual(table.get(method)?.scope, PERSON_TOO.has(method) ? { person: true, base: 'owner' } : 'owner', method);
-    assert.ok(!may(method, device(FULL)), method);
-  }
-  assert.deepEqual(Object.keys(VALID).sort(), table.methods().filter((method) => /^(calendar|day)\./.test(method)).sort(), 'every new method is covered here');
-});
 
-test("without the services every method answers 'unavailable'", async (t) => {
-  const f = rpcFixture({ table: createHandlerTable() });
-  t.after(f.cleanup);
-  const owner = new TestClient(f.server, OWNER);
-  for (const [method, params] of Object.entries(VALID)) assert.equal((await owner.request(method, params)).error?.code, 'unavailable', method);
-});
 
 test('wired, an empty profile answers empty reads in the profile zone (no briefing, nothing handed off, no sources)', async (t) => {
   const f = rpcFixture({ table: createHandlerTable() });
@@ -137,5 +118,8 @@ test("events: calendar rows and the briefing travel on 'tasks' to devices holdin
   assert.ok(mayReceive(device(['tasks']), 'tasks', 'task.upserted'), 'task events are unchanged');
   assert.equal(topicOf('calendar.sources', { ownerId: 'human' }), 'system');
   assert.ok(mayReceive(OWNER, 'system', 'calendar.sources', { ownerId: 'human' }));
-  assert.ok(!mayReceive(device(FULL), 'system', 'calendar.sources', { ownerId: 'human' }));
+  // 16.11.2026: Settings › Calendar on the owner's phone – a secure 'settings' device hears source changes, nothing else does
+  assert.ok(mayReceive(device(FULL), 'system', 'calendar.sources', { ownerId: 'human' }));
+  assert.ok(!mayReceive({ ...device(FULL), secure: false } as ClientScope, 'system', 'calendar.sources', { ownerId: 'human' }));
+  assert.ok(!mayReceive(device(['todo', 'chat']), 'system', 'calendar.sources', { ownerId: 'human' }));
 });

@@ -5,7 +5,7 @@
 // already is refused ("Session ID … is already in use") – so the flags go only on the fork's first turn.
 // fork() only reserves the new id: the engine keeps the pending fork in this process and the first turn on its ref resumes
 // the parent with the fork flags (engine.ts run, target()). Claude Code replays the recorded system prompt on a resumed
-// session, so the split's identity travels in the user message (<workforce-context>, as on every resume).
+// session, so the split's identity travels in the user message (<live>, as on every turn).
 // Where the parent resumes from: a `project:` ref by its id in the app's own home's fixed project folder (the fork lands
 // there too: its ref keeps the prefix); a transcript path as it is (while it exists); a plain id by that id when the split
 // runs in the folder the parent's turns ran in (this process saw it), else by the absolute path of the CLI's transcript of

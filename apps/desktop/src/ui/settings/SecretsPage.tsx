@@ -4,7 +4,7 @@
 // Name | Value rows, a pasted .env split into rows, a chosen or dropped file (a browser's or password manager's export, a
 // .env, a JSON) – where 'Login, card or fields…' and a row's Edit open SecretForm in place of the rows; the route follows
 // from the entry, and the AI and the files can name another. Delete asks first. Agents add their own (secrets.save) and
-// the chat's Plus › Secret too. A secret the app keeps for itself (createdBy SYSTEM_ID) is not listed. A phone may add and look.
+// the chat's Plus › Secret too. A secret the app keeps for itself (createdBy SYSTEM_ID) is not listed. Secure owner devices may also edit/remove; export is separate.
 // Owner 04.11.2026 (select, export, see the email): on the PC a box in each row's label selects it – all are selected
 // until deselected (secret-catalog.ts) – and the group's head holds All, None, the count, Export (one CSV file, its path
 // in a toast) and Delete (asks once); a login shows its username where a value would be, a card its last digits.
@@ -48,7 +48,9 @@ export function SecretsPage() {
   const notices = new Map((folder.data?.notices ?? []).map((notice) => [notice.id, notice.text]));
   // shown once all three have answered: rows arriving later would be inserted between the others
   const ready = [list, groups, folder].every((state) => state.data !== undefined || state.error !== null);
-  const onPc = can('secrets.delete'); // changing, deleting and exporting a stored secret stays on the PC
+  const canDelete = can('secrets.delete') && can('secrets.deleteGroup');
+  const canExport = can('secrets.export');
+  const selectable = canDelete || canExport;
   const selected = selectedEntries(entries, deselected);
   const exportable = exportIds(selected);
   const remove = async (entry: CatalogEntry) => {
@@ -74,13 +76,13 @@ export function SecretsPage() {
       if (failure) toastError(new Error(failure), `${deleted} deleted – the others could not be deleted`);
     } finally { setBusy(''); reload(); }
   };
-  const actions = onPc && (
+  const actions = selectable && (
     <>
       <button type="button" class="button ghost small" disabled={!entries.length} onClick={() => setDeselected(new Set())}>All</button>
       <button type="button" class="button ghost small" disabled={!entries.length} onClick={() => setDeselected(noneSelected(entries))}>None</button>
       <span class="secret-selected">{selected.length} selected</span>
-      <Button variant="ghost" class="small" busy={busy === 'export'} disabled={!exportable.length || busy !== ''} onClick={() => void exportSelected()}>Export</Button>
-      <Button variant="ghost" class="small danger" busy={busy === 'delete'} disabled={!selected.length || busy !== ''} onClick={() => void removeSelected()}>Delete</Button>
+      {canExport && <Button variant="ghost" class="small" busy={busy === 'export'} disabled={!exportable.length || busy !== ''} onClick={() => void exportSelected()}>Export</Button>}
+      {canDelete && <Button variant="ghost" class="small danger" busy={busy === 'delete'} disabled={!selected.length || busy !== ''} onClick={() => void removeSelected()}>Delete</Button>}
     </>
   );
   const catalog = (
@@ -90,7 +92,7 @@ export function SecretsPage() {
       {ready && !entries.length && !list.error && <Row label="No secrets stored" reserve />}
       {ready && entries.map((entry, index) => {
         const hint = shownHint(entry, secrets);
-        const label = onPc
+        const label = selectable
           ? (
             <label class="secret-pick">
               <input type="checkbox" checked={isSelected(entry, deselected)} aria-label={`Select ${entry.name}`} onChange={() => setDeselected((now) => toggled(now, entry.id))} />
@@ -108,8 +110,8 @@ export function SecretsPage() {
           <Row key={entry.id} class="secret-entry" label={label} hint={entryLine(entry)} reserve>
             <div class="set-inline">
               {entry.type !== 'missing' && <span class="masked" title={hint} aria-label={hint ? undefined : 'Hidden value'}>{hint ?? MASK}</span>}
-              {onPc && can(entry.type === 'group' ? 'secrets.saveGroup' : 'secrets.save') && <button type="button" class="button ghost small" aria-label={`Edit ${entry.name}`} onClick={() => setEditing(entry)}>Edit</button>}
-              {onPc && <button type="button" class="button ghost small danger" aria-label={`Delete ${entry.name}`} onClick={() => void remove(entry)}>Delete</button>}
+              {canDelete && can(entry.type === 'group' ? 'secrets.saveGroup' : 'secrets.save') && <button type="button" class="button ghost small" aria-label={`Edit ${entry.name}`} onClick={() => setEditing(entry)}>Edit</button>}
+              {canDelete && <button type="button" class="button ghost small danger" aria-label={`Delete ${entry.name}`} onClick={() => void remove(entry)}>Delete</button>}
             </div>
           </Row>,
         ];

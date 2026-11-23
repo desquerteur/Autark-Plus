@@ -7,63 +7,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { peopleRig, settle } from './rig.ts';
+import { registerPersonVoice } from '../../../src/runtime/people/rpc-voice.ts';
 import type { TaskView } from '../../../src/shared/model/tasks.ts';
 import { authorName } from '../../../src/runtime/context/render.ts';
 import { realId, viewId, viewTask } from '../../../src/runtime/people/perspective.ts';
 
-test('a task for a person: their For you only, the assigning agent hears it when they finish', async (t) => {
-  const r = peopleRig();
-  t.after(() => r.cleanup());
-  const anna = await r.join('Anna Berg');
-  const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id], createdBy: 'human', title: 'Launch' });
-  const outside = r.chats.create({ agentIds: ['ag_research'], createdBy: 'human', title: 'Owner only' });
-  const task = r.tasks.create({ conversationId: chat.id, title: 'Pick the colours', createdBy: 'ag_research' });
-  // An agent hands it to her – no humanReason needed for a colleague; not into a chat she is not in.
-  const given = r.tasks.assign(task.id, { kind: 'human', id: anna.person.id }, 'ag_research');
-  assert.equal(given.assigneeId, anna.person.id);
-  const elsewhere = r.tasks.create({ conversationId: outside.id, title: 'Secret', createdBy: 'ag_research' });
-  assert.throws(() => r.tasks.assign(elsewhere.id, { kind: 'human', id: anna.person.id }, 'ag_research'), /not in this chat/);
-  assert.equal(r.notified.filter((note) => note.title === 'Pick the colours').length, 0, 'the owner is not notified of her work');
 
-  const hers = await anna.client.call<TaskView[]>('todos.list');
-  assert.deepEqual(hers.map((entry) => entry.title), ['Pick the colours']);
-  assert.equal(hers[0].assigneeId, undefined, 'hers reads as "mine"');
-  const owners = await r.owner.call<TaskView[]>('todos.list');
-  assert.ok(!owners.some((entry) => entry.id === task.id), 'not on the owner\'s For you');
-
-  const done = await anna.client.call<TaskView>('tasks.complete', { id: task.id, note: 'Blue and sand' });
-  assert.equal(done.status, 'done');
-  const stored = r.tasks.get(task.id)!;
-  assert.equal(stored.result?.verification, 'reported_by_human');
-  assert.equal(stored.result?.summary, 'Blue and sand');
-  await settle();
-  assert.ok(r.wakeRows().some((row) => row.agent_id === 'ag_research' && row.task_id === task.id), 'the assigning agent is woken to check it');
-});
-
-test('a person creates and delegates work: to an agent of their spaces, a colleague in the chat, the owner', async (t) => {
-  const r = peopleRig();
-  t.after(() => r.cleanup());
-  const anna = await r.join('Anna Berg', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
-  const ben = await r.join('Ben Vogt');
-  const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id, ben.person.id], createdBy: 'human', title: 'Team' });
-  const own = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Write the brief', assigneeKind: 'human' });
-  assert.equal(r.tasks.get(own.id)!.assigneeId, anna.person.id);
-  assert.equal(r.chats.message(r.tasks.get(own.id)!.messageId!)!.authorKind, 'human', 'the anchor is hers, as a human');
-  const delegated = await anna.client.call<TaskView>('tasks.update', { id: own.id, patch: { assigneeKind: 'agent', assigneeId: 'ag_research' } });
-  assert.equal(delegated.assigneeId, 'ag_research');
-  assert.ok(r.wakeRows().some((row) => row.agent_id === 'ag_research' && row.task_id === own.id), 'the agent owner is woken');
-  await assert.rejects(anna.client.call('tasks.create', { conversationId: chat.id, title: 'x', assigneeKind: 'agent', assigneeId: 'ag_secret' }), /may not work with this agent/);
-  const forBen = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Review the brief', assigneeKind: 'human', assigneeId: ben.person.id });
-  assert.equal(forBen.assigneeId, ben.person.id);
-  assert.deepEqual((await ben.client.call<TaskView[]>('todos.list')).map((entry) => entry.title), ['Review the brief']);
-  await assert.rejects(ben.client.call('tasks.update', { id: delegated.id, patch: { title: 'mine now' } }), /Only your own tasks/);
-  const forOwner = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Approve the budget', assigneeKind: 'human', assigneeId: 'owner' });
-  assert.equal(forOwner.assigneeId, 'owner', 'the CEO\'s to-do reads as the owner\'s in her view');
-  assert.equal(r.tasks.get(forOwner.id)!.assigneeId, undefined, 'stored as the owner\'s To-do');
-  assert.ok((await r.owner.call<TaskView[]>('todos.list')).some((entry) => entry.id === forOwner.id), 'on the owner\'s For you');
-  assert.ok(r.notified.some((note) => note.title === 'Approve the budget'), 'the owner is notified');
-  assert.ok(!(await anna.client.call<TaskView[]>('todos.list')).some((entry) => entry.id === forOwner.id));
-});
 
 test('an agent\'s ask goes to the person who wrote last; agents read people as colleagues', async (t) => {
   const r = peopleRig();
@@ -72,13 +21,12 @@ test('an agent\'s ask goes to the person who wrote last; agents read people as c
   const anna = await r.join('Anna Berg', { title: 'Designer' });
   const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id], createdBy: 'human', title: 'Logo' });
   await anna.client.call('messages.send', { conversationId: chat.id, body: '@Research which logo?', mentions: ['ag_research'] });
-  const answer = r.chats.beginAgentMessage(chat.id, 'ag_research', 'run_1');
-  r.chats.finishAgentMessage(answer.id, { body: 'Pick one:\n```ui\n{"type":"choice","question":"Which logo?","options":[{"label":"A"},{"label":"B"}]}\n```', state: 'final' });
+  const answer = r.chats.postAgentMessage(chat.id, 'ag_research', 'run_1', { body: 'Pick one:\n```ui\n{"type":"choice","question":"Which logo?","options":[{"label":"A"},{"label":"B"}]}\n```', state: 'final' });
   r.tasks.ingestBlocks(r.chats.message(answer.id)!, [{ type: 'choice', question: 'Which logo?', important: true, options: [{ label: 'A' }, { label: 'B' }] }]);
   const asks = await anna.client.call<TaskView[]>('todos.list');
   assert.equal(asks.length, 1, 'the ask is on Anna\'s For you');
   assert.ok(!(await r.owner.call<TaskView[]>('todos.list')).some((entry) => entry.id === asks[0].id));
-  await anna.client.call('tasks.complete', { id: asks[0].id, answer: { choice: 'B' } });
+  await anna.client.call('tasks.finish', { id: asks[0].id, answer: { choice: 'B' } });
   const receipt = r.chats.messages(chat.id).find((message) => message.kind === 'answer')!;
   assert.equal(receipt.authorId, anna.person.id);
   assert.equal(receipt.authorKind, 'human');
@@ -109,4 +57,60 @@ test('an agent managed by a person knows its manager as a colleague', async (t) 
   const { identityValues } = await import('../../../src/runtime/context/prompt-stable.ts');
   const values = identityValues(r.services, r.org.get('ag_research')!);
   assert.equal(values.manager_name, `Anna Berg (colleague, ${anna.person.id}) (Design lead)`);
+});
+
+test('a person gives work: to an agent of their spaces, a colleague in the chat, the owner; never another\'s task', async (t) => {
+  const r = peopleRig();
+  t.after(() => r.cleanup());
+  const anna = await r.join('Anna Berg', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
+  const ben = await r.join('Ben Vogt');
+  const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id, ben.person.id], createdBy: 'human', title: 'Team' });
+  const own = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Write the brief', to: 'me' });
+  assert.equal(r.tasks.get(own.id)!.assigneeId, anna.person.id);
+  const given = await anna.client.call<TaskView>('tasks.give', { id: own.id, to: 'ag_research' });
+  assert.equal(given.assigneeId, 'ag_research');
+  assert.ok(r.wakeRows().some((row) => row.agent_id === 'ag_research' && row.task_id === own.id), 'the agent hears it at once');
+  await assert.rejects(anna.client.call('tasks.create', { conversationId: chat.id, title: 'x', to: 'ag_secret' }), /do not give tasks to this agent/);
+  const forBen = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Review the brief', to: ben.person.id });
+  assert.equal(forBen.assigneeId, ben.person.id);
+  assert.deepEqual((await ben.client.call<TaskView[]>('todos.list')).map((entry) => entry.title), ['Review the brief']);
+  await assert.rejects(ben.client.call('tasks.update', { id: given.id, patch: { title: 'mine now' } }));
+  const forOwner = await anna.client.call<TaskView>('tasks.create', { conversationId: chat.id, title: 'Approve the budget', to: 'owner' });
+  assert.equal(r.tasks.get(forOwner.id)!.assigneeId, undefined, 'stored as the owner\'s to-do');
+  assert.ok(r.notified.some((note) => note.title?.includes('Approve the budget')), 'the owner is told');
+});
+
+test('a person finishes work an agent gave them: the agent hears how it ended', async (t) => {
+  const r = peopleRig();
+  t.after(() => r.cleanup());
+  const anna = await r.join('Anna Berg');
+  const chat = r.chats.create({ agentIds: ['ag_research'], people: [anna.person.id], createdBy: 'human', title: 'Launch' });
+  const task = await r.tasks.createTo({ conversationId: chat.id, title: 'Pick the colours', createdBy: 'ag_research' }, anna.person.id);
+  assert.deepEqual((await anna.client.call<TaskView[]>('todos.list')).map((entry) => entry.title), ['Pick the colours']);
+  const done = await anna.client.call<TaskView>('tasks.finish', { id: task.id, note: 'Blue and sand' });
+  assert.equal(done.status, 'done');
+  await settle();
+  assert.ok(r.wakeRows().some((row) => row.agent_id === 'ag_research' && /"Pick the colours", which I gave Anna Berg, is done/.test(row.note ?? '')), 'the giver hears it');
+});
+
+test('the to-do button on a colleague\'s phone: a screenshot, a quick task to an agent they work with, their own to-do', async (t) => {
+  const r = peopleRig({ modules: [registerPersonVoice] });
+  t.after(() => r.cleanup());
+  const anna = await r.join('Anna Berg', { scopes: { spaces: ['sp_company'], startChats: true, assignAgents: true } });
+  const ben = await r.join('Ben Vogt', { scopes: { spaces: ['sp_company'], startChats: false, assignAgents: false } });
+  const shot = await anna.client.call<{ id: string }>('files.upload', { name: 'screen-1.jpg', mime: 'image/jpeg', dataBase64: Buffer.from('jpeg bytes').toString('base64') });
+  const { task } = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'The header looks broken', attachments: [{ fileId: shot.id, name: 'screen-1.jpg' }], clientId: 'c1' });
+  assert.equal(task.assigneeKind, 'agent');
+  assert.notEqual(task.assigneeId, 'ag_secret', 'never an agent of another space');
+  assert.equal(r.tasks.get(task.id)!.createdBy, anna.person.id);
+  assert.deepEqual(r.tasks.get(task.id)!.files?.map((file) => file.name), ['screen-1.jpg']);
+  const again = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'The header looks broken', attachments: [{ fileId: shot.id }], clientId: 'c1' });
+  assert.equal(again.task.id, task.id, 'a retry is the same task');
+  const mine = await anna.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'Call the printer', target: { kind: 'me' } });
+  assert.equal(r.tasks.get(mine.task.id)!.assigneeId, anna.person.id);
+  await assert.rejects(anna.client.call('tasks.quickCreate', { text: 'x', target: { kind: 'agent', id: 'ag_secret' } }), /do not give tasks to this agent/);
+  await assert.rejects(ben.client.call('tasks.quickCreate', { text: 'x', attachments: [{ fileId: shot.id }] }), /files you uploaded/);
+  const kept = await ben.client.call<{ task: TaskView }>('tasks.quickCreate', { text: 'Order paper' });
+  assert.equal(r.tasks.get(kept.task.id)!.assigneeId, ben.person.id, 'without agents of theirs a colleague keeps it');
+  await assert.rejects(anna.client.call('files.upload', { name: 'x.exe', mime: 'application/octet-stream', dataBase64: 'AA==' }), /speech and screenshots/);
 });

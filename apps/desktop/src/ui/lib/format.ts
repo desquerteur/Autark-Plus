@@ -54,6 +54,11 @@ export function listTime(ms: number | undefined, now = Date.now()): string {
   return dateFmt.format(ms);
 }
 
+/** A moment in a short log, said once: today "19:57", any other day the date with the time, "16.11. 19:57". */
+export function logTime(ms: number, now = Date.now()): string {
+  return startOfDay(ms) === startOfDay(now) ? timeFmt.format(ms) : `${dateFmt.format(ms)} ${timeFmt.format(ms)}`;
+}
+
 /** "in 3 h", "5 min ago" … */
 export function relative(ms: number, now = Date.now()): string {
   const diff = ms - now;

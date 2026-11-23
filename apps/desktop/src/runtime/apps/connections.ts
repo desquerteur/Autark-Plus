@@ -33,6 +33,7 @@ export interface ConnectionDeps {
   /** `text` with every secret://<id> handle filled in from the vault (`host`: where it goes, for the log). */
   resolve(text: string, host?: string): Promise<string>;
   /** A mailbox's servers: its entry's, else looked up from the address. */
+  identity?(connector: Connector, servers: { imap: MailServer; smtp: MailServer; user?: string }): string | undefined;
   mailServers(connector: Connector): Promise<{ imap: MailServer; smtp: MailServer; user?: string }>;
   oauth: Pick<AppOAuth, 'authHeaders'>;
   /** The current entry (a changed entry gets a fresh connection from the service). */
@@ -232,18 +233,28 @@ export class AppConnections {
     if (!mail) throw new McpTransportError('The mailbox has no address.', false);
     const servers = await this.d.mailServers(connector);
     const id = connector.id;
+    if (this.d.connector(id) !== connector) throw new McpTransportError('Mailbox incarnation changed.', false);
+    const generation = this.d.identity?.(connector, servers);
+    connector.mailGeneration = generation;
+    const assertCurrent = () => {
+      if (this.d.connector(id) !== connector || connector.mailGeneration !== generation) throw new McpTransportError('Mailbox incarnation changed.', false);
+    };
+    assertCurrent();
     return {
-      kind: 'mail', address: mail.address, imap: { ...servers.imap }, smtp: { ...servers.smtp },
+      assertCurrent,
+      kind: 'mail', contactStopFile: mail.contactStopFile, address: mail.address, imap: { ...servers.imap }, smtp: { ...servers.smtp },
       login: async () => {
-        const current = this.d.connector(id)?.mail ?? mail;
+        assertCurrent();
+        const current = mail;
         let password: string;
         try { password = await this.d.resolve(current.password, servers.imap.host); } catch {
           throw new ReconnectNeeded(`The password of ${connector.name} is missing – put it into mail.json.`);
         }
+        assertCurrent();
         return { user: current.user ?? servers.user ?? current.address, password };
       },
-      onNewMail: (info) => { try { this.d.onNewMail?.(id, info); } catch { /* the wake is best effort */ } },
-      ...(this.d.mark ? { mark: { get: () => this.d.mark?.get(id), set: (m: MailMark) => this.d.mark?.set(id, m) } } : {}),
+      onNewMail: (info) => { assertCurrent(); this.d.onNewMail?.(id, { ...info, generation }); },
+      ...(this.d.mark ? { mark: { get: () => { assertCurrent(); return this.d.mark?.get(id); }, set: (m: MailMark) => { assertCurrent(); this.d.mark?.set(id, m); } } } : {}),
     };
   }
 

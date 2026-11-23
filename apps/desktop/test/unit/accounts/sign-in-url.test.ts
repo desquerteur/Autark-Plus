@@ -145,5 +145,5 @@ test('a sign-in started without page (the agent tool path) does not wait for one
   const services = { accounts: { login: async (...args: unknown[]) => { asked.push(args); return { started: true, url: CODEX_URL }; } } } as unknown as RuntimeServices;
   const ctx = { scope: { kind: 'owner' }, services, extras: {}, topics: new Set(), signal: new AbortController().signal, secure: true } as unknown as HandlerContext;
   assert.deepEqual(await table.get('accounts.login')!.handler({ id: 'acc_1' } as never, ctx), { started: true, url: CODEX_URL });
-  assert.deepEqual(asked, [['acc_1', { page: true }]]);
+  assert.deepEqual(asked, [['acc_1', { page: true, away: false }]]);
 });

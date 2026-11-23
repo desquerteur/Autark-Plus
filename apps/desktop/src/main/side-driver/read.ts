@@ -1,6 +1,7 @@
 // Reading a side tab for an agent – its accessibility snapshot (with the page facts: human
-// check, password fields whose values stay hidden), a screenshot, its visible text, the response body of
-// a request, and eval in the page's own world (debugging only).
+// check, password fields whose values stay hidden), a screenshot (B-081: the CDP picture while a watcher's viewport is
+// on, so image px stay CSS px), its visible text, the response body of a request, and eval in the page's own world
+// (debugging only).
 // Owns: those reads. Never: changes the page (eval is the agent's own expression, on request only).
 
 import type { NativeImage } from 'electron';
@@ -54,7 +55,7 @@ export async function takeLook(tab: SideTab): Promise<{ snap: Snapshot; look: Lo
   return { snap, look: { lines: snap.lines, url, title: tab.contents.getTitle(), doc: tab.doc }, human: facts.human === true || isChallengeUrl(url) };
 }
 
-/** B-076: the page's picture through CDP (Page.captureScreenshot), for when capturePage fails; undefined when that fails too. */
+/** B-076: the page's picture through CDP (Page.captureScreenshot), for when capturePage fails or (B-081) a watcher's viewport is on; undefined when it fails. */
 async function cdpPicture(tab: SideTab, clip?: { x: number; y: number; width: number; height: number }): Promise<NativeImage | undefined> {
   try {
     const shot = await tab.cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true, ...(clip ? { clip: { ...clip, scale: 1 } } : {}) }) as { data?: string };

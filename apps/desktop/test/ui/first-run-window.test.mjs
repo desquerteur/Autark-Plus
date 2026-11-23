@@ -16,9 +16,12 @@
 //     Claude Code install says why in the same line; busy shows on the pressed button only; nothing moves; the flow
 //     survives the remount across the phone layout; Continue is disabled while no model can answer, and "Skip for now"
 //     asks first (Cancel stays);
+//   * About you also has upstream B-085's "Your PC" radio rows (Full access checked) and the ticked "Public library" box
+//     (17.11.2026; this run unticks it, Continue saves it);
 //   * Connect your tools (the rows of Settings › Apps) is skipped; Your first agent shows the Manager; Start creates
-//     nobody, completes the onboarding and opens the Manager's chat with the app's start text as the person's own line
-//     (once, before the Manager's answer) – and the spotlight tour starts (spotlight-tour-window.test.mjs covers it; Skip
+//     nobody, completes the onboarding and opens the Manager's chat with the app's start line as the person's own line
+//     (F07, once) and the Manager's first message directly below it, no model run until the person answers – that first
+//     turn reads the start line and the answer; the spotlight tour starts (spotlight-tour-window.test.mjs covers it; Skip
 //     here);
 //   * My day after the first run while no model can answer: the status line says so with Connect → Settings › Models,
 //     which shows the same four buttons; the line goes as soon as a model can answer;
@@ -69,7 +72,7 @@ const PLAN_FAKE = `(() => {
   };
 })();`;
 
-test('first run: tour → AI (model setup, plan flow) → About you → the start text and the Manager answers', { timeout: 300_000 }, async (t) => {
+test('first run: choice → AI (model setup, plan flow) → About you → the start text and the Manager answers', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-first-run-'));
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
@@ -154,6 +157,17 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
     await profileCard.getByLabel('Company').fill('Test GmbH');
   });
   assert.equal(await profileCard.locator('textarea').count(), 0, 'no first-request field');
+  // B-085: "Your PC": two radio rows, Full access checked by default.
+  const access = profileCard.locator('fieldset.first-run-access');
+  assert.equal(await access.getByRole('radio').count(), 2, 'Full access and Careful');
+  assert.equal(await access.getByRole('radio', { name: /^Full access/ }).isChecked(), true, 'Full access is the default');
+  assert.equal(await access.getByRole('radio', { name: /^Careful/ }).isChecked(), false);
+  // 17.11.2026: sharing in the public library is asked here, ticked by default; this run unticks it.
+  const share = profileCard.getByRole('checkbox', { name: /^Public library/ });
+  assert.equal(await share.isChecked(), true, 'sharing in the public library is on by default and visible');
+  assert.notEqual((await settings()).library?.publish, false, 'sharing is on until Continue says otherwise');
+  await shot('first-run-00c2-profile-library-default'); // the starting state: the box ticked, before this run unticks it
+  await expectStable(page, ['.first-run-card', '.first-run-actions'], async () => { await share.uncheck(); });
   await shot('first-run-00d-profile-light');
   await page.emulateMedia({ colorScheme: 'dark' });
   await shot('first-run-00e-profile-dark');
@@ -170,6 +184,7 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await layer.locator('.first-run-card[data-card="first-run-ai"]').waitFor({ timeout: 10_000 });
   assert.equal((await settings()).onboarding.step, 'ai');
   assert.deepEqual([(await settings()).profile.name, (await settings()).profile.company], ['Test Person', 'Test GmbH'], 'saved on Continue');
+  assert.equal((await settings()).library?.publish, false, 'unticked: Continue turns sharing in the public library off');
   assert.equal((await page.locator('.first-run-step').textContent())?.trim(), 'Step 2 of 4');
 
   // AI card: the model setup – rows, the four buttons, the reserved link cell and the status line; the scan fills the
@@ -236,7 +251,7 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await waitHeld('accounts.install');
   await expectStable(page, plansFrame, async () => { await release('accounts.install', { result: { ok: true } }); await waitHeld('accounts.add'); await waitStatus(/^Finish signing in in your browser…$/); });
   assert.equal(await ai.locator('button.first-run-link').count(), 0, 'no page yet: the inert placeholder holds the cell');
-  const fakeAccount = { id: 'acc_fake_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'needs_login', priority: 0, rotation: false, enabled: true, detected: false, createdAt: Date.now() };
+  const fakeAccount = { id: 'acc_fake_codex', provider: 'codex', label: 'Codex', auth: 'cli', state: 'needs_login', priority: 0, enabled: true, detected: false, createdAt: Date.now() };
   await expectStable(page, plansFrame, async () => {
     await release('accounts.add', { result: { ...fakeAccount, signInUrl: 'https://auth.openai.com/oauth/authorize?test=1' } });
     await ai.locator('button.first-run-link').waitFor({ timeout: 5_000 });
@@ -341,8 +356,10 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   await size(1280, 820);
   await page.waitForTimeout(400);
 
-  // Start: the profile is saved, nobody is created, the Manager's chat opens with the start text and it answers; the
-  // spotlight tour starts (Skip here – spotlight-tour-window.test.mjs goes through it).
+  // Start: the profile is saved, nobody is created, the Manager's chat opens with its two opening lines – F07 the start
+  // line in the person's name, then the Manager's first message directly below it (B-090: both written by the app, no
+  // turn) – and the Manager answers the person's reply; that first turn reads the start line too. The spotlight tour
+  // starts (Skip here – spotlight-tour-window.test.mjs goes through it).
   await about.getByRole('button', { name: 'Start' }).click();
   await page.locator('dialog.spotlight[data-step="welcome"]').waitFor({ timeout: 20_000 });
   await page.locator('dialog.spotlight .spotlight-skip').click();
@@ -355,15 +372,39 @@ test('first run: tour → AI (model setup, plan flow) → About you → the star
   const done = await settings();
   assert.deepEqual([done.profile.name, done.profile.company], ['Test Person', 'Test GmbH']);
   assert.deepEqual([done.onboarding.completed, done.onboarding.step, done.onboarding.tour], [true, 'done', 'skipped']);
+  assert.notEqual(done.profile.pcAccess, 'careful', 'Full access kept (absent = whole)');
+  assert.equal(done.library?.publish, false, 'unticked: sharing in the public library is off');
   assert.equal((await rpc.call('agents.list')).filter((agent) => !agent.archivedAt).length, agentsBefore, 'only the Manager: nobody was created');
-  await page.locator('article.message.agent').first().waitFor({ timeout: 90_000 }); // the Manager's turn
-  const messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
+  await page.locator('article.message.agent').first().waitFor({ timeout: 20_000 }); // the Manager's first message
+  let messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
+  const startLines = messages.filter((message) => message.authorKind === 'human');
+  assert.equal(startLines.length, 1, "one line in the person's name: the start line");
+  const [startLine] = startLines;
+  assert.match(startLine.body, /^(Sent by Autark|Von Autark gesendet|Envoyé par Autark|Enviado por Autark)\b/, 'the start line, in the PC language');
+  const welcome = messages.filter((message) => message.authorId === manager.id);
+  assert.equal(welcome.length, 1, "the Manager's first message, once");
+  assert.match(welcome[0].body, /^(Hi|Hallo|Bonjour|Hola) Test Person, .*\n1\. \*\*/s, 'in the PC language, with the numbered questions');
+  assert.equal(welcome[0].seq, startLine.seq + 1, "the Manager's first message directly below the start line");
+  assert.deepEqual(messages.map((message) => message.id), [startLine.id, welcome[0].id], 'nothing else in the chat');
+  assert.ok(messages.every((message) => !message.runId), 'both written by the app, no model run');
+  assert.deepEqual(await page.locator('article.message').evaluateAll((list) => list.map((item) => item.dataset.messageId)), [startLine.id, welcome[0].id], 'the window shows the start line, then the greeting');
+  assert.equal(await page.locator(`article.message.human[data-message-id="${startLine.id}"]`).count(), 1, 'the start line as the person\'s own');
+  assert.deepEqual((await rpc.call('chats.get', { id: chatId })).working, [], 'nobody works until the person answers');
+  await shot('first-run-08-manager-welcome-light');
+  const composer = page.locator('textarea').first();
+  await composer.fill('English with me and inside the team. Start right away.');
+  await page.locator('button.send-button').first().click();
+  await page.waitForFunction(() => document.querySelectorAll('article.message.agent').length >= 2, undefined, { timeout: 90_000 }); // the Manager's turn
+  messages = await rpc.call('messages.list', { conversationId: chatId, limit: 20 });
   const own = messages.filter((message) => message.authorKind === 'human');
-  assert.equal(own.length, 1, "the start text is the person's own line, once");
-  assert.match(own[0].body, /^Automatic message from the app, not typed by me: I just installed Autark, entered Test Person and Test GmbH and clicked Start\. .*my personal manager/);
-  const answer = messages.find((message) => message.authorId === manager.id);
-  assert.ok(answer, 'the Manager answered');
-  assert.ok(own[0].createdAt <= answer.createdAt, 'the start text came before the answer');
+  assert.deepEqual(own.map((message) => message.id).slice(0, 1), [startLine.id], 'the start line stays first');
+  assert.equal(own.length, 2, "the start line and the person's answer");
+  const answer = messages.filter((message) => message.authorId === manager.id).at(-1);
+  assert.ok(answer && answer.id !== welcome[0].id, 'the Manager answered');
+  assert.ok(own[1].createdAt <= answer.createdAt, 'the answer came after the reply');
+  // The demo engine echoes the turn's new input (its own greeting is not new to it): the start line, then the reply.
+  const read = answer.body.indexOf(startLine.body);
+  assert.ok(read >= 0 && answer.body.indexOf('English with me and inside the team.') > read, `the Manager's first turn read the start line and the reply (${answer.body.slice(0, 300)})`);
   await shot('first-run-08-manager-chat-light');
 
   // My day (Home) after the first run while no model can answer – the status line says so with Connect (the signals

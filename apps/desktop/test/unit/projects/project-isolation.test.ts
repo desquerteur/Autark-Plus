@@ -1,6 +1,6 @@
 // AF-026 – project isolation, a one-way street (runtime/projects/isolation.ts and its gates): an agent in a project
-// reaches only its project's agents (and the person) – by chat.send, chat.direct, chat.create, chat.add_members,
-// agents.delegate, tasks.create / tasks.assign, agents.list and its own wf (RPC); an agent outside every project reaches
+// reaches only its project's agents (and the person) – by a `<chat>` block (agents/chat-out.ts), chat.direct, chat.create,
+// chat.add_members, tasks.create / tasks.give, agents.list and its own wf (RPC); an agent outside every project reaches
 // project agents as before; a project agent answers an outsider in the chat the outsider (or the person) started – and a
 // thread on its message – but never in a chat started inside; project A never reaches project B; the person is free.
 // Owns: these assertions only. Never: real engines, timers, folders of the person or network.
@@ -12,6 +12,7 @@ import { HUMAN_ID } from '../../../src/shared/ids.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext, ToolDef } from '../../../src/runtime/tools/types.ts';
 import { chatTools } from '../../../src/runtime/tools/builtin/chat.ts';
+import { ChatOutbox } from '../../../src/runtime/agents/chat-out.ts';
 import { chatTreeTools } from '../../../src/runtime/tools/builtin/chat-tree.ts';
 import { agentTools } from '../../../src/runtime/tools/builtin/agents.ts';
 import { taskTools } from '../../../src/runtime/tools/builtin/tasks.ts';
@@ -68,7 +69,14 @@ function setup() {
     return { failed, text, data, chatId: data.chatId as string };
   };
   const posts = (chatId: string) => h.chats.messages(chatId).filter((m) => m.kind !== 'status');
-  return { ...h, homes, run, posts };
+  /** A `<chat>` block of the agent's text (13.11.2026: agents post this way, agents/chat-out.ts): its repair notes. */
+  const say = async (agentId: string, chatId: string, text: string) => {
+    const outbox = new ChatOutbox(h.services as RuntimeServices, { agentId, runId: `run_${agentId}` });
+    outbox.segment(`<chat to="${chatId}">${text}</chat>`, true);
+    await outbox.done();
+    return { posted: outbox.posted, notes: outbox.notes };
+  };
+  return { ...h, homes, run, posts, say };
 }
 
 const OUTSIDE = /outside my project "shop"/;
@@ -98,12 +106,14 @@ test('the rule: who is in which project, and who reaches whom', () => {
 
 test('inside → inside: a project agent writes to, opens chats with and gives work to its project\'s agents', async () => {
   const h = setup();
-  const direct = await h.run('chat.send', { to: 'ag_ben', text: 'Can you check the cart?' }, 'ag_ava');
+  const direct = await h.run('chat.direct', { with: 'ag_ben' }, 'ag_ava');
   assert.equal(direct.failed, false, direct.text);
+  const said = await h.say('ag_ava', direct.chatId, 'Can you check the cart?');
+  assert.deepEqual(said.notes, []);
   assert.equal(h.posts(direct.chatId).length, 1);
   assert.equal((await h.run('chat.create', { title: 'Cart', members: ['ag_ben'] }, 'ag_ava')).failed, false);
   assert.equal((await h.run('chat.direct', { with: 'Ben', topic: 'Checkout' }, 'ag_ava')).failed, false);
-  assert.equal((await h.run('tasks.create', { title: 'Fix totals', assignee: 'ag_ben' }, 'ag_ava')).failed, false);
+  assert.equal((await h.run('tasks.create', { title: 'Fix totals', to: 'ag_ben' }, 'ag_ava')).failed, false);
   const listed = await h.run('agents.list', {}, 'ag_ava');
   assert.deepEqual((JSON.parse(listed.text) as Array<{ id: string }>).map((a) => a.id).sort(), ['ag_ava', 'ag_ben'], 'it sees itself and its project\'s agents only');
 });
@@ -111,13 +121,11 @@ test('inside → inside: a project agent writes to, opens chats with and gives w
 test('inside → outside: refused on every way, with the reason', async () => {
   const h = setup();
   for (const [name, args] of [
-    ['chat.send', { to: 'ag_dan', text: 'Hi Dan' }],
-    ['chat.send', { to: 'Dan', text: 'Hi Dan' }],
     ['chat.direct', { with: 'ag_dan' }],
+    ['chat.direct', { with: 'Dan' }],
     ['chat.direct', { with: 'ag_dan', topic: 'Ads' }],
     ['chat.create', { title: 'Ads', members: ['ag_ben', 'ag_dan'] }],
-    ['agents.delegate', { to: 'ag_dan', title: 'Write the ad' }],
-    ['tasks.create', { title: 'Write the ad', assignee: 'ag_dan' }],
+    ['tasks.create', { title: 'Write the ad', to: 'ag_dan' }],
     ['agents.update', { agentId: 'ag_dan', role: 'Ads' }],
   ] as const) {
     const out = await h.run(name, args, 'ag_ava');
@@ -129,8 +137,8 @@ test('inside → outside: refused on every way, with the reason', async () => {
   assert.equal(added.failed, true);
   assert.match(added.text, OUTSIDE);
   assert.equal(h.chats.members(room.id).some((m) => m.memberId === 'ag_dan'), false);
-  const mine = (await h.run('tasks.create', { title: 'Mine', assignee: 'self' }, 'ag_ava')).data.taskId as string;
-  const moved = await h.run('tasks.assign', { taskId: mine, assignee: 'ag_dan' }, 'ag_ava');
+  const mine = (await h.run('tasks.create', { title: 'Mine' }, 'ag_ava')).data.taskId as string;
+  const moved = await h.run('tasks.give', { taskId: mine, to: 'ag_dan' }, 'ag_ava');
   assert.equal(moved.failed, true);
   assert.match(moved.text, OUTSIDE);
   assert.equal(h.chats.list().some((chat) => chat.members.some((m) => m.memberId === 'ag_dan')), false, 'no chat with Dan was opened');
@@ -139,10 +147,10 @@ test('inside → outside: refused on every way, with the reason', async () => {
 
 test('project A → project B: refused both ways', async () => {
   const h = setup();
-  const toB = await h.run('chat.send', { to: 'ag_cy', text: 'Hello blog' }, 'ag_ava');
+  const toB = await h.run('chat.direct', { with: 'ag_cy' }, 'ag_ava');
   assert.equal(toB.failed, true);
   assert.match(toB.text, OUTSIDE);
-  const toA = await h.run('chat.send', { to: 'ag_ava', text: 'Hello shop' }, 'ag_cy');
+  const toA = await h.run('chat.direct', { with: 'ag_ava' }, 'ag_cy');
   assert.equal(toA.failed, true);
   assert.match(toA.text, /Ava \(ag_ava\) is outside my project "blog"/);
   const listed = JSON.parse((await h.run('agents.list', {}, 'ag_cy')).text) as Array<{ id: string }>;
@@ -151,43 +159,45 @@ test('project A → project B: refused both ways', async () => {
 
 test('outside → inside works as before, and the project agent answers in exactly that chat', async () => {
   const h = setup();
-  const asked = await h.run('chat.send', { to: 'ag_ava', text: 'Ava, what is the cart total?' }, 'ag_dan');
+  const asked = await h.run('chat.direct', { with: 'ag_ava' }, 'ag_dan');
   assert.equal(asked.failed, false, asked.text);
+  assert.deepEqual((await h.say('ag_dan', asked.chatId, 'Ava, what is the cart total?')).notes, []);
   assert.ok(h.wakeRows().some((row) => row.agent_id === 'ag_ava'), 'the project agent is woken');
-  assert.equal((await h.run('tasks.create', { title: 'Check the total', assignee: 'ag_ava' }, 'ag_dan')).failed, false);
+  assert.equal((await h.run('tasks.create', { title: 'Check the total', to: 'ag_ava' }, 'ag_dan')).failed, false);
   const listed = JSON.parse((await h.run('agents.list', {}, 'ag_dan')).text) as Array<{ id: string }>;
   assert.equal(listed.length, 4, 'an agent outside every project sees everyone');
 
-  const answer = await h.run('chat.send', { to: 'ag_dan', text: '42 euros.' }, 'ag_ava');
-  assert.equal(answer.failed, false, answer.text);
-  assert.equal(answer.chatId, asked.chatId, 'the answer goes into the chat Dan opened');
-  assert.equal((await h.run('chat.send', { chatId: asked.chatId, text: 'And shipping is free.' }, 'ag_ava')).failed, false);
+  const again = await h.run('chat.direct', { with: 'ag_dan' }, 'ag_ava');
+  assert.equal(again.failed, false, again.text);
+  assert.equal(again.chatId, asked.chatId, 'the answer goes into the chat Dan opened');
+  assert.deepEqual((await h.say('ag_ava', asked.chatId, '42 euros.')).notes, []);
+  assert.deepEqual((await h.say('ag_ava', asked.chatId, 'And shipping is free.')).notes, []);
   assert.deepEqual(h.posts(asked.chatId).map((m) => m.authorId), ['ag_dan', 'ag_ava', 'ag_ava']);
 
   const seq = h.posts(asked.chatId)[0]!.seq;
   const thread = await h.run('chat.thread', { chatId: asked.chatId, seq }, 'ag_ava');
   assert.equal(thread.failed, false, thread.text);
-  assert.equal((await h.run('chat.send', { chatId: thread.chatId, text: 'Details in this thread.' }, 'ag_ava')).failed, false, 'a thread on the incoming message counts as the same conversation');
+  assert.deepEqual((await h.say('ag_ava', thread.chatId, 'Details in this thread.')).notes, [], 'a thread on the incoming message counts as the same conversation');
 
   // Still no new conversation outwards: a new topic chat, a group or work for Dan stay refused.
   assert.match((await h.run('chat.direct', { with: 'ag_dan', topic: 'Something else' }, 'ag_ava')).text, OUTSIDE);
-  assert.match((await h.run('tasks.create', { title: 'Do it for me', assignee: 'ag_dan' }, 'ag_ava')).text, OUTSIDE);
+  assert.match((await h.run('tasks.create', { title: 'Do it for me', to: 'ag_dan' }, 'ag_ava')).text, OUTSIDE);
 });
 
 test('a chat with outsiders that was started inside the project is no answer', async () => {
   const h = setup();
   const s = h.services as RuntimeServices;
   const old = h.chats.create({ title: 'Before the project', agentIds: ['ag_ava', 'ag_dan'], createdBy: 'ag_ava', lead: 'ag_ava' });
-  const sent = await h.run('chat.send', { chatId: old.id, text: 'Dan, one more thing' }, 'ag_ava');
-  assert.equal(sent.failed, true);
-  assert.match(sent.text, /Dan \(ag_dan\) is outside my project "shop", and this chat was started inside it/);
+  const sent = await h.say('ag_ava', old.id, 'Dan, one more thing');
+  assert.equal(sent.notes.length, 1);
+  assert.match(sent.notes[0]!, /Dan \(ag_dan\) is outside my project "shop", and this chat was started inside it/);
   assert.equal(h.posts(old.id).length, 0);
   const byBen = h.chats.create({ title: 'Ben\'s', agentIds: ['ag_ben', 'ag_ava', 'ag_dan'], createdBy: 'ag_ben' });
   assert.ok(postRefusal(s, 'ag_ava', byBen.id), 'started by another agent of the project: still inside');
   assert.equal(postRefusal(s, 'ag_dan', old.id), undefined, 'the outsider itself is free');
 
   const byPerson = h.chats.create({ title: 'Ad campaign', agentIds: ['ag_ava', 'ag_dan'], createdBy: HUMAN_ID });
-  assert.equal((await h.run('chat.send', { chatId: byPerson.id, text: 'Here is the shop\'s side.' }, 'ag_ava')).failed, false, 'a chat the person put together is theirs');
+  assert.deepEqual((await h.say('ag_ava', byPerson.id, 'Here is the shop\'s side.')).notes, [], 'a chat the person put together is theirs');
 });
 
 test('the prompt tells a project agent whom it reaches', () => {

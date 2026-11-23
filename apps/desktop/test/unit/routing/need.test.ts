@@ -60,14 +60,18 @@ test('cheaper, faster, vision, long context', async () => {
   assert.match(moved.reason, /asked for a cheaper model/);
 });
 
-test('nothing meets the need: the usual rules, led by why; a chat or agent pin wins', async () => {
+test("nothing meets the need: the usual rules, led by why; B-079: the agent's own request beats its own pin", async () => {
   const h = await needSetup();
   const none = await h.route('chat', 'long_context', OPUS);
   assert.match(none.reason, /^no model with a longer context fits/);
   assert.notEqual(none.by, 'request');
-  const pinned = await h.router.route({ agent: agent('ag_1', { modelPolicy: { pin: LUNA } }), mode: mode('chat'), previous: { modelId: OPUS, effort: 'medium', explicit: true, asked: 'model', need: { kind: 'stronger', from: LUNA } } });
-  assert.equal(pinned.modelId, LUNA);
-  assert.equal(pinned.by, 'pin');
+  // live 07.11.2026: Jonas's "Opus high for code" (model.set) lost to his own Sol pin – the pin is his default, the request his choice now.
+  const asked = await h.router.route({ agent: agent('ag_1', { modelPolicy: { pin: LUNA } }), mode: mode('chat'), previous: { modelId: OPUS, effort: 'medium', explicit: true, asked: 'model', need: { kind: 'stronger', from: LUNA } } });
+  assert.notEqual(asked.modelId, LUNA, 'the request leaves the agent pin');
+  assert.equal(asked.by, 'request');
+  const plain = await h.router.route({ agent: agent('ag_1', { modelPolicy: { pin: LUNA } }), mode: mode('chat'), previous: { modelId: LUNA, effort: 'medium' } });
+  assert.equal(plain.modelId, LUNA, 'without a request the agent pin holds');
+  assert.equal(plain.by, 'pin');
 });
 
 test('needCandidates: never weak at the work (except stronger), cost from the account, speed where measured', () => {
@@ -84,4 +88,13 @@ test('needCandidates: never weak at the work (except stronger), cost from the ac
   assert.deepEqual(ids('cheaper'), ['fast', 'slow', 'local'], 'weak is never offered');
   assert.deepEqual(ids('faster'), ['fast'], 'measured speeds decide (slow is not faster); local has none and is never the faster guess');
   assert.deepEqual(needCandidates(entries, { need: 'faster', from: model('x', { tier: 'frontier' }), category: 'chat', cost }).map((e) => e.model.id), ['fast', 'slow'], 'without measured speeds: a lower tier, not local');
+});
+
+test('B-079 startEffort: my own model.set effort first, then my own fixed effort', async () => {
+  const { startEffort } = await import('../../../src/runtime/routing/previous.ts');
+  const asked = { modelId: 'm', effort: 'xhigh' as const, explicit: true, asked: 'effort' as const };
+  assert.deepEqual(startEffort({ agentEffort: 'medium' } as never, asked, 'chat', true), { effort: 'xhigh', requested: true }, 'live 07.11.: Nora\'s xhigh, asked for by the owner');
+  assert.deepEqual(startEffort({ agentEffort: 'medium' } as never, { ...asked, asked: 'model' as const }, 'chat', true), { effort: 'medium', requested: false }, 'a model-only request keeps the fixed effort');
+  assert.deepEqual(startEffort({ agentEffort: 'medium' } as never, { modelId: 'm', effort: 'max' }, 'chat', true), { effort: 'medium', requested: false }, 'no request: the fixed effort');
+  assert.deepEqual(startEffort({} as never, { modelId: 'm', effort: 'max' }, 'chat', true), { effort: 'max', requested: false }, 'nothing fixed: the kept model keeps its effort');
 });

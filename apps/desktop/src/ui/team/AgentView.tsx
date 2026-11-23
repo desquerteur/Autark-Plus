@@ -1,11 +1,14 @@
-// Agent page (#/team/<agentId>, the avatar click target): identity and live status, a link to its work, its
-// model, folder and skills, its schedules and its runs with tool calls and provider-visible reasoning
-// summaries. The header (lib/header.tsx) has no icon cells: the agent's NAME is the dropdown, with the same
+// Agent page (#/team/<agentId>, the avatar click target): its profile – identity and live status, "Show work", its
+// model, folder and skills, its schedules, AF-017 where it works (AgentWhereabouts.tsx) and AF-006 its personality. "Show work" opens its Work page (#/team/<agentId>/work, AgentWork.tsx; owner
+// F12, 15.11.2026): what it does right now, its really active tasks and its activity log – one place for the log, so the
+// profile carries none. The header (lib/header.tsx) has no icon cells of its own: the agent's NAME is the dropdown, with the same
 // menu as a right click on the agent anywhere (menus.ts agentMenu: Message · Browser · Connect Telegram… ·
 // Duplicate · Change reports-to… · Export · Archive). "Browser" shows the live view of the agent's own browser and its own area (agent:<id>,
 // AgentBrowser.tsx) instead of the profile, "Profile" brings it back. An archived agent is read-only with "Restore" in that menu. On the
-// phone the header is the stack's one top row with Back as its lead (shell/views.ts ownsTopRow).
-// Owns: the view frame and the name dropdown. Never: shows invented thoughts or fake status.
+// phone the header is the stack's one top row with Back as its lead (shell/views.ts ownsTopRow) and the feedback cell at its end
+// (feedback/cell.tsx, as on every phone row).
+// Owns: the view frame, the name dropdown and useAgent (the Work page reads its agent the same way). Never: shows
+// invented thoughts or fake status.
 
 import { useEffect, useState } from 'preact/hooks';
 import type { Agent } from '../../shared/model/org.ts';
@@ -19,16 +22,16 @@ import { back } from '../lib/router.ts';
 import { AgentProfile } from './AgentProfile.tsx';
 import { AgentDetails } from './AgentDetails.tsx';
 import { AgentPersonality } from './AgentPersonality.tsx'; // AF-006
-import { AgentRuns } from './AgentRuns.tsx';
 import { AgentBrowser } from './AgentBrowser.tsx';
 import { TitleMenu } from './TitleMenu.tsx';
 import { agentBrowser, agentMenu } from './menus.ts';
 import { ensureSpaces } from './org-state.ts';
 import { keptPage } from '../lib/kept-page.ts';
 import { AgentWhereabouts } from '../agents/AgentWhereabouts.tsx'; // AF-017
+import { phoneFeedbackCells } from '../feedback/cell.tsx';
 
 /** The agent from the store, or (archived / not yet loaded) fetched once. */
-function useAgent(agentId: string): { agent: Agent | undefined; missing: boolean } {
+export function useAgent(agentId: string): { agent: Agent | undefined; missing: boolean } {
   const fromStore = agentMap.value.get(agentId);
   const [fetched, setFetched] = useState<Agent | undefined>(undefined);
   const [missing, setMissing] = useState(false);
@@ -57,7 +60,7 @@ export function AgentView(props: { agentId: string }) {
   if (!agent) {
     return (
       <div class="agent-view">
-        <Header zone="main" class="agent-header" lead={phoneBack()} title="" />
+        <Header zone="main" class="agent-header" lead={phoneBack()} title="" cells={phoneFeedbackCells()} />
         <div class="agent-scroll"><div class="agent-column">{missing ? <EmptyState>This agent no longer exists.</EmptyState> : <Spinner />}</div></div>
       </div>
     );
@@ -66,18 +69,14 @@ export function AgentView(props: { agentId: string }) {
   const archived = agent.archivedAt !== undefined;
   return (
     <div class="agent-view">
-      <Header zone="main" class="agent-header" lead={phoneBack()} title={<TitleMenu name={agent.name} sections={() => agentMenu(agent)} />} />
+      <Header zone="main" class="agent-header" lead={phoneBack()} title={<TitleMenu name={agent.name} sections={() => agentMenu(agent)} />} cells={phoneFeedbackCells()} />
       {agentBrowser.value === agent.id ? <AgentBrowser agentId={agent.id} /> : <div class="agent-scroll" {...keptPage}>
         <div class="agent-column" {...menu}>
           {archived && <p class="agent-archived">Archived</p>}
           <AgentProfile agent={agent} readOnly={archived} />
-          <AgentWhereabouts agent={agent} />{/* AF-017: project, team, hired by, status, Open chat and Show work */}
+          <AgentWhereabouts agent={agent} />{/* AF-017: project, team, hired by, status, Open chat and Show work (its Work page, AgentWork.tsx) */}
           <AgentDetails agent={agent} />
           <AgentPersonality agent={agent} />{/* AF-006: its own personality and its role part of SYSTEM.md */}
-          <section class="agent-runs" aria-label="Runs">
-            <h3 class="agent-section-title">Runs</h3>
-            <AgentRuns agentId={agent.id} />
-          </section>
         </div>
       </div>}
     </div>

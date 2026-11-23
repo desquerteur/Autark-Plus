@@ -4,15 +4,18 @@
 // person's answer. The text field folds CR LF to LF, so the file's line ends are kept here and given back on save.
 // A doc with typed text outlives its tab (a tab closed or not shown keeps the draft until the app ends). B-076: a file
 // of a linked PC (`device`) works the same – its calls go there, its stamps are that PC's; while that PC is offline a
-// load says so in one line and the next look tries again.
+// load says so in one line and the next look tries again. B-081: a path that holds nothing is the 'missing' phase with
+// the similar paths (`near`, the not-found page); create() makes it an empty text a save creates, and the look goes on,
+// so a file that appears there meanwhile is followed.
 // Owns: that loop and the words under the field. Never: touches the DOM or merges texts.
 
 import { signal } from '@preact/signals';
-import type { PathRead, PathWritten } from '../../shared/api/methods-files.ts';
+import type { PathEntry, PathRead, PathWritten } from '../../shared/api/methods-files.ts';
 
 export const POLL_MS = 2000;
 
-export type FilePhase = 'loading' | 'text' | 'binary' | 'large' | 'folder' | 'failed';
+/** 'missing': nothing at the path – the not-found page (create() turns it into an empty 'text'). */
+export type FilePhase = 'loading' | 'text' | 'missing' | 'binary' | 'large' | 'folder' | 'failed';
 
 export interface FileState {
   phase: FilePhase;
@@ -22,6 +25,8 @@ export interface FileState {
   saving: boolean;
   /** The file does not exist yet; a save creates it. */
   fresh: boolean;
+  /** With phase 'missing': similar existing paths on the PC that holds the path (files.readPath `near`). */
+  near?: readonly PathEntry[];
   /** The file changed on disk under typed text: the notice with Reload. */
   changed: boolean;
   /** The file changed on disk and the field followed. */
@@ -57,6 +62,8 @@ export class FileDoc {
   /** The stamp last seen on disk. */
   private seen: string | undefined;
   private looking = false;
+  /** create() was asked: a missing file is an empty text, not the not-found page. */
+  private making = false;
 
   constructor(path: string, calls: FileCalls, device?: string) {
     this.path = path;
@@ -77,10 +84,18 @@ export class FileDoc {
       this.crlf = raw.includes('\r\n');
       this.text = this.saved = fieldText(raw);
       this.base = read.stamp;
-      this.set({ ...facts, phase: 'text', fresh: read.state === 'missing' });
+      const missing = read.state === 'missing' && !this.making;
+      this.set({ ...facts, phase: missing ? 'missing' : 'text', fresh: read.state === 'missing', near: missing ? read.near ?? [] : undefined });
     } else if (read.state !== 'same') {
-      this.set({ ...facts, phase: read.state, fresh: false });
+      this.set({ ...facts, phase: read.state, fresh: false, near: undefined });
     }
+  }
+
+  /** The not-found page's Create, or an app-own file meant to be made: an empty text that Ctrl+S creates. */
+  create(): void {
+    this.making = true;
+    const now = this.state.peek();
+    if (now.phase === 'missing') this.set({ phase: 'text', near: undefined, revision: now.revision + 1 });
   }
 
   /** Reads the file; typed text is thrown away (Reload). */

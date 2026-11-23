@@ -1,12 +1,12 @@
 // KnowledgeService: memory is a folder tree of Markdown files (memory-tree.ts, <data>/memory) and the files are the truth.
-// Writing memory makes it findable: every write, change and removal – through this API or a direct file edit the data
-// folder watcher reports – goes to services.vectors, and searching is services.vectors.search over the caller's folders
-// (acl.ts). No embedder: the words of those files instead (search.ts), never merged. The old calls (save, correct, expire,
+// Writing memory makes it findable at once by its words (tree-words.ts; the caller's folders pick, acl.ts). With a chosen embedding model, every write,
+// change and removal – through this API or a direct file edit the data folder watcher reports – also goes to services.vectors,
+// and searching is services.vectors.search over those folders instead, never merged. The old calls (save, correct, expire,
 // pin, list, history …) are thin wrappers over the files; an item's id is its path ('/' written ':', memory-tree.ts).
 // The database keeps what is no memory file: the runtime's chat observations (kind 'observation') and the old versions
 // of files (expired rows, `supersedes` = the file's id; retention removes them). Texts are redacted before they are stored.
-// Owns: these calls, the old versions and when vectors hear of a file. Never: an index of the tree in memory or in a
-// prompt; embeds a file outside the tree; recreates an item under an id without a file or row.
+// Owns: these calls, the old versions and when vectors hear of a file. Never: a list of the tree in a prompt; embeds a file
+// outside the tree; recreates an item under an id without a file or row.
 
 import path from 'node:path';
 import type { Bus } from '../bus.ts';
@@ -25,13 +25,14 @@ import { KINDS, buildItem, type SaveInput } from './item-build.ts';
 import { MemoryFollow, type MemoryVectors } from './memory-follow.ts';
 import { migrateRows, movedTo } from './memory-migrate.ts';
 import {
-  MEMORY_ENTRY, MemoryTree, PINNED_DIR, entryOfItem, folderOfScope, folderOfWholeScope, isEntryName, isFileId, itemOfEntry, memoryId, sameEntry, withPinned, type MemoryEntry,
+  MEMORY_ENTRY, MemoryTree, PINNED_DIR, entryOfItem, folderOfScope, folderOfWholeScope, isFileId, itemOfEntry, memoryId, sameEntry, withPinned, type MemoryEntry,
 } from './memory-tree.ts';
 import { describePlace, describeTop, scratchRoot } from './memory-places.ts';
 import { SCAN_MAX, scanFiles, scanFilesAsync } from './memory-scan.ts';
 import { ITEM_COLUMNS, chainIds, correctRow, currentRows, deleteRows, expireRow, getRow, insertItem, pinRow, rowHistory, toItem, type KnowledgeRow } from './rows.ts';
 import { normalScopeId } from './scope-id.ts';
-import { vectorWhy, wordHits } from './search.ts';
+import { vectorHits } from './search.ts';
+import { TreeWords } from './tree-words.ts';
 import { ALWAYS_CHARS } from './always.ts';
 
 export type { MemoryVectors };
@@ -72,6 +73,8 @@ export class KnowledgeStore implements KnowledgeService {
   private rootDir?: string;
   private topDescribed = false;
   private follow: MemoryFollow;
+  /** The tree's words (tree-words.ts): its word index and its notes as last read. */
+  private readonly words: TreeWords;
 
   constructor(options: KnowledgeServiceOptions) {
     this.db = options.db;
@@ -83,6 +86,7 @@ export class KnowledgeStore implements KnowledgeService {
     this.vectors = options.vectors ?? (() => undefined);
     this.rootDir = options.root;
     this.tree = new MemoryTree(() => (this.rootDir ??= this.defaultRoot()), options.writes);
+    this.words = new TreeWords(this.tree);
     this.follow = new MemoryFollow({ db: this.db, now: () => this.clock.now(), tree: this.tree, vectors: this.vectors, log: this.log, retryMs: options.embedRetryMs });
     migrateRows(this.db, this.tree, this.log);
   }
@@ -138,6 +142,7 @@ export class KnowledgeStore implements KnowledgeService {
       ...(input.validFrom ?? old?.validFrom ? { validFrom: input.validFrom ?? old?.validFrom } : {}),
       ...(input.validTo ?? old?.validTo ? { validTo: input.validTo ?? old?.validTo } : {}),
       ...(input.by ?? old?.by ? { by: input.by ?? old?.by } : {}),
+      ...(input.confidence ?? old?.confidence ? { confidence: input.confidence ?? old?.confidence } : {}),
       updated: this.clock.now(),
     };
     if (old && sameEntry(old, next)) return { path: rel, outcome: 'unchanged' };
@@ -162,24 +167,10 @@ export class KnowledgeStore implements KnowledgeService {
     const folders = queryFolders(this.db, query);
     const text = query.text.trim();
     const vectors = text ? this.vectors() : undefined;
-    if (vectors?.available()) {
-      const places = folders.filter((folder) => !folder || this.tree.exists(folder)).map((folder) => (folder ? `${MEMORY_ENTRY}/${folder}` : MEMORY_ENTRY));
-      if (!places.length) return [];
-      const found = await vectors.search({ query: text, in: places, k: Math.min(limit * 3, 100) });
-      if (found.hits.length || (!found.note && found.searched.embeddedFiles > 0)) { // no hits with a note or nothing embedded: the embedder is in trouble or has not got there yet – the words below
-        const hits = new Map<string, KnowledgeHit>();
-        for (const hit of found.hits) {
-          if (!isEntryName(hit.path)) continue; // a folder description embedded on purpose is no note
-          const entry = this.tree.read(this.tree.fileRel(hit.path));
-          const item = entry && itemOfEntry(entry);
-          if (!item || hits.has(item.id) || !passes(item, query, now)) continue; // a file's best chunk comes first
-          hits.set(item.id, { item, score: Number(hit.score.toFixed(5)), why: vectorWhy(item, now, this.zone()) });
-        }
-        return [...hits.values()].slice(0, limit);
-      }
-    }
-    const items = await scanFilesAsync(this.tree, folders, (item) => passes(item, query, now), text ? SCAN_MAX : limit);
-    if (text) return wordHits(items, text, limit, now, this.zone());
+    const meant = vectors?.available() ? await vectorHits(vectors, this.tree, query, text, folders, limit, now, this.zone()) : undefined; // search.ts; never merged with words
+    if (meant) return meant;
+    if (text) return this.words.hits(query, text, folders, limit, now, this.zone()); // tree-words.ts: the query's folders and filters pick the hits
+    const items = await scanFilesAsync(this.tree, folders, (item) => passes(item, query, now), limit);
     return items
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.recordedAt - a.recordedAt || (a.id < b.id ? 1 : -1))
       .map((item) => ({ item, score: 0, why: savedText(item.recordedAt, now, this.zone()) }));
@@ -393,6 +384,7 @@ export class KnowledgeStore implements KnowledgeService {
     describePlace(this.tree, this.db, rel);
     if (old) this.keepVersion(old);
     this.tree.write(rel, entry);
+    this.words.changed(rel);
     this.follow.changed(rel);
     const item = itemOfEntry({ ...entry, path: rel });
     this.emit(item);
@@ -436,4 +428,3 @@ export class KnowledgeStore implements KnowledgeService {
     this.bus?.emit('knowledge.upserted', item);
   }
 }
-

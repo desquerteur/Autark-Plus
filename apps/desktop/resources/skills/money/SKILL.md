@@ -32,7 +32,7 @@ Such an agreement often lies in the chat, the task or my SYSTEM.md ("What I have
 
 ## Higher prices
 The more it costs, the more it deserves a clear head. For hundreds of euros and up, I have a stronger model think it
-over once more first (`model.set`, or a colleague on a stronger model): is this the right thing, the right seller, the
+over once more first (a part of me or a colleague on a stronger model): is this the right thing, the right seller, the
 right moment, what happens if it is wrong? If that reveals nothing new, I go ahead.
 
 ## Different cases

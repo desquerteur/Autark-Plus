@@ -1,5 +1,5 @@
 // Device model: this PC, linked PCs, phones and browsers.
-// Owns: the device registry shapes shared by runtime and UI, and phone/browser access state.
+// Owns: the device registry shapes shared by runtime and UI, phone/browser access state, and the app version order (compareAppVersions).
 // Never: carries private keys or one-time pairing secrets to the UI.
 
 export type DeviceKind = 'pc' | 'phone' | 'browser';
@@ -13,8 +13,32 @@ export interface DeviceCaps {
   browser?: boolean;
   shell?: boolean;
   screens?: number;
-  adbPhones?: string[]; // phones reachable via ADB from this PC
+  adbPhones?: string[]; // phones attached to that PC over ADB (serials), as it last saw them
+  appPhones?: string[]; // phones whose Autark app is attached to that PC (device ids): phone.* reaches them through it
   os?: string;
+  /** F25 (16.11.2026): the Autark version that PC runs (Settings › Devices; a newer one on my own PC checks for the update here). Older PCs send none. */
+  version?: string;
+}
+
+/**
+ * Orders two app versions ("0.3.8", "0.3.6-local.3"): negative when `a` is older, 0 when equal, positive when newer. The
+ * numbers count first; a pre-release ("-local.3") is older than its plain version; unreadable parts count as 0.
+ */
+export function compareAppVersions(a: string, b: string): number {
+  const parse = (value: string) => {
+    const [core = '', pre = ''] = value.trim().replace(/^v/, '').split('-', 2);
+    return { nums: core.split('.').map((part) => Number.parseInt(part, 10) || 0), pre };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < Math.max(x.nums.length, y.nums.length, 3); i++) {
+    const diff = (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
+    if (diff) return diff;
+  }
+  if (x.pre === y.pre) return 0;
+  if (!x.pre) return 1;
+  if (!y.pre) return -1;
+  return x.pre.localeCompare(y.pre, 'en', { numeric: true });
 }
 
 export interface Device {
@@ -36,6 +60,8 @@ export interface Device {
    * own device (everything the same). An employee's PC may not run tools on this PC.
    */
   personId?: string;
+  /** B-081: this PC joined that PC – as its CEO (everything the same) or as an employee there (files stay there). */
+  joinedAs?: 'ceo' | 'employee';
 }
 
 export interface PwaState {

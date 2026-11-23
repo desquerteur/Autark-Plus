@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fixture } from '../context/fixture.ts';
+import { asSaid, fixture } from '../context/fixture.ts';
 import { renderMessages } from '../../../src/runtime/context/render.ts';
 import { renderContext } from '../../../src/runtime/context/delta.ts';
 import { steerInput } from '../../../src/runtime/agents/dispatch-steer.ts';
@@ -28,7 +28,7 @@ function setup() {
     f.chats.send({ conversationId: group.id, body, authorId, ...extra });
   const statusLines = () => f.chats.messages(group.id).filter((message) => message.kind === 'status');
   const delta = (agentId: string, sinceSeq: number) =>
-    f.context.delta({ agent: agentId === f.vid.id ? f.vid : f.manager, conversationId: group.id, sinceSeq, full: false }).text;
+    asSaid(f.context.delta({ agent: agentId === f.vid.id ? f.vid : f.manager, conversationId: group.id, sinceSeq }).text);
   return { ...f, group, say, statusLines, delta };
 }
 
@@ -128,13 +128,6 @@ test('agents read whom a reply answers, a reply to a deleted message, and never 
   assert.match(f.delta(f.manager.id, reply.seq - 1), /^\[11:00\] Alex: \(reply to a deleted message\)\nMake it shorter\n· Vic deleted their message from 11:00 \(#\d+\)$/);
   assert.equal(f.delta(f.vid.id, reply.seq - 1), '[11:00] Alex: (reply to a deleted message)\nMake it shorter');
 
-  // B-050 live test (28.10.): a run's own placeholder that is removed while still streaming (an internal or empty
-  // answer, a held one) was never posted – no "deleted their message" line for the colleagues.
-  const draft = f.chats.beginAgentMessage(f.group.id, f.vid.id, 'run_internal');
-  f.chats.removeMessage(draft.id, f.vid.id);
-  assert.equal(f.statusLines().filter((line) => line.meta.status?.details?.deleted === draft.id).length, 0, 'no notice for a streaming placeholder');
-  assert.equal(f.delta(f.manager.id, reply.seq - 1).includes(`(#${draft.seq})`), false);
-
   const other = f.chats.create({ title: 'Elsewhere', agentIds: [f.manager.id], createdBy: 'human' });
   const secret = f.chats.send({ conversationId: other.id, body: 'Salary list', authorId: 'human' });
   const forged: Message = { ...reply, id: 'msg_forged', replyTo: secret.id };
@@ -173,7 +166,7 @@ test('an important reply steered into a running turn keeps its quote and the edi
   f.say('Make it shorter', 'human', { replyTo: cut.id, priority: 'important' });
   const input = steerInput(f.services, f.vid.id, f.group.id, started);
   assert.ok(input, 'new lines');
-  const lines = input.text.split('\n').slice(1);
+  const lines = input.text.split('\n').slice(1).map(asSaid);
   assert.deepEqual(lines, [
     `· Alex edited #${mine.seq}; it now reads: "Budget is 6k"`,
     '[11:00] Alex: (reply to Vic (me): "Rough cut is ready.") (important) Make it shorter',

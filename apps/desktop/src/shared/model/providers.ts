@@ -84,10 +84,21 @@ export interface Account {
   limits?: AccountLimits;
   coolingUntil?: number;
   priority: number; // lower = preferred
-  rotation: boolean; // may be used automatically when another account of the same provider is limited
   enabled: boolean;
   detected: boolean; // found from an existing login on this PC
   deviceId?: string; // which PC this account lives on (undefined = home)
+  /** B-083: an API key whose organisation holds the API credits a plan includes (Claude Max/Ultra, ChatGPT Pro/Business):
+   *  prepaid and lost at the end of each billing month, so routing uses it like a plan while they last (charge.ts). */
+  credits?: boolean;
+  /** 17.11.2026: a plan (Claude Code, Codex) whose owner allows the provider's extra usage once its window is used up (Claude
+   *  "usage credits", ChatGPT "credits" – switched on at the provider, billed by it): routing keeps the account instead of
+   *  waiting for the reset, behind every plan that has quota left (runtime/accounts/candidates.ts inOverage). Off until the
+   *  person switches it on; an account whose provider has not enabled it fails its turn and waits as before. */
+  extraUsage?: boolean;
+  /** 17.11.2026: a plan login that stays on this PC – its row and its login files do not travel to the company's other PCs (device sync,
+   *  runtime/devices/sync/tables.ts). What "Use" on a found login starts with ("Only on this PC"); the person's switch in the account row
+   *  changes it either way. Absent: shared with the company's PCs, as every account was before. */
+  thisPcOnly?: boolean;
   createdAt: number;
   checkedAt?: number;
 }
@@ -151,11 +162,19 @@ export interface ModelInfo {
   accounts: string[]; // account ids that can run it
   /** Addition (FN1): media functions this specialist serves (it is never routed for chat). */
   functions?: ModelFunction[];
+  /** B-083: the id of the newest model of the same family when this one is an older version of it (catalog order,
+   *  models/order.ts – such models stand below the current ones). Absent: this is its family's newest. */
+  newer?: string;
+  /** F05: where it runs, as the person reads it – "Codex", "Claude Code", "OpenRouter", or a connection's own id or
+   *  known service name (models/catalog-merge.ts sourceLabel). Optional: an older runtime's catalog has none. */
+  source?: string;
 }
 
 /** Agent/chat level preference. Router stays inside these bounds. */
 export interface ModelPolicy {
-  pin?: string; // fixed model id (hard pin) or undefined for auto
+  pin?: string; // B-083: the agent's start model (undefined = chosen per task); its own model.set and its subconscious change a turn's model
+  /** B-083: who set the start model last and when (the agent reads it in "## Now"; a person's choice on the agent page names that person). */
+  pinBy?: { name: string; at: number; self?: boolean };
   effort?: Effort; // fixed effort
   floorTier?: ModelInfo['tier'];
   ceilingTier?: ModelInfo['tier'];
@@ -174,6 +193,8 @@ export interface RouteDecision {
   reason: string; // short human-readable explanation ("video animation · Opus strongest prior")
   by: 'pin' | 'rules' | 'decision-model' | 'fallback' | 'previous' | 'hint'; // 'hint' (SG): the chat's model suggestion, shared/model/model-guide.ts
   alternatives: string[]; // next candidates (failover order)
+  /** B-083: the temperature this turn asks for (the agent's own request, else the person's suggestion in the chat); undefined = the model's own. */
+  temperature?: number;
   /** AF-021: the chosen account could not run and routing.accountFallback 'switch' took another (the chat says so). */
   accountSwitch?: AccountSwitch;
 }
@@ -196,18 +217,34 @@ export interface UsageSummary {
   label: string;
   /** B-078 (D17): the plan's short name for the rail (shared/model/plan-names.ts: a label of the person's own, else the e-mail's local part). */
   name?: string;
-  active: boolean; // currently chosen by rotation
+  active: boolean; // the plan its provider uses first right now (accounts/candidates.ts)
   weeklyRemainingPercent?: number;
   weeklyResetsAt?: number;
   limits?: AccountLimits;
 }
 
 /** Result of scanning the PC for engines, logins and local model servers. */
+/**
+ * 17.11.2026: a plan login on this PC that is not an account here – offered, never used or shared before the person says
+ * "Use" (accounts.useFound) or "Not here" (accounts.declineFound). `where`: the login in the CLI's default home on this PC,
+ * or one another company on this PC made (its home in the PC's logins folder). `email`: the login's note, only for a login
+ * of another company – a default-home login's e-mail is not read (no token reading). `declined`: the person said "Not here"
+ * for a login of another company (a default-home one is dismissed in `clis` with "Add again").
+ */
+export interface FoundLogin {
+  key: string; // opaque: what accounts.useFound and accounts.declineFound take
+  provider: ProviderId;
+  where: 'this-pc' | 'other-company';
+  email?: string;
+  declined?: true;
+}
+
 export interface DetectionReport {
   // `dismissed` (PR5): the person removed this login or server – detection no longer adds it ("Add again").
   clis: Array<{ provider: 'codex' | 'claude' | 'gemini-cli' | 'copilot' | 'kimi-cli' | 'grok-cli'; path?: string; version?: string; loggedIn?: boolean; method?: string; dismissed?: boolean }>;
   localServers: Array<{ provider: 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm'; baseUrl: string; models: string[]; dismissed?: boolean }>;
   envKeys: string[]; // names of provider env vars that are set (never values; ENV_KEY_PROVIDERS)
+  found?: FoundLogin[]; // 17.11.2026: plan logins offered, not adopted (FoundLogin); absent in an old report
   tailscale?: { running: boolean; dnsName?: string };
   checkedAt: number;
 }
@@ -257,6 +294,11 @@ export function functionCandidates(fn: ModelFunction, setting: string | undefine
   return [...(chosen ? [{ model: chosen, source: 'settings' as const }] : []), ...rest.map((model) => ({ model, source: 'auto' as const }))];
 }
 
+/** Whether `account` is the login this PC found in its CLI's default home (a Codex one runs on a copy in its own home). */
+export function foundHere(account: Pick<Account, 'provider' | 'auth' | 'home' | 'detected'>): boolean {
+  return account.auth === 'cli' && (account.home === undefined || (account.provider === 'codex' && account.detected));
+}
+
 // ------------------------------------------------------------------ plan CLIs on the ACP engine (PR8)
 
 /** The plan CLIs Autark installs itself (accounts.install; AF-024: Gemini CLI through npm). */
@@ -268,8 +310,8 @@ export const ACP_PLAN_PROVIDERS: readonly ProviderId[] = ['gemini-cli', 'copilot
 
 /**
  * An ACP plan: one sign-in per PC in the CLI's default home (Kimi Code: also isolated homes per
- * account, KIMI_CODE_HOME – B-044). Account selection applies the plan rule of plan-roles.ts to it
- * (primary, others only in opt-in rotation), but it has no limit readings, so the account monitor
+ * account, KIMI_CODE_HOME – B-044). Account selection treats it as a plan (every signed-in one takes
+ * turns, accounts/candidates.ts), but it has no limit readings, so the account monitor
  * does not keep re-checking it (isPlanProvider stays Codex/Claude Code).
  */
 export function isAcpPlan(provider: ProviderId): boolean {

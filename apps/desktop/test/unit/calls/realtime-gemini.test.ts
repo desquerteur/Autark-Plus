@@ -53,7 +53,7 @@ function setup(baseUrl: string, routingVoice?: string, listed: Array<{ provider:
   const h = harness();
   h.org.add(agent('ag_ava', 'Ava', { voice: 'aoede' }));
   const solo = h.chats.create({ agentIds: ['ag_ava'], createdBy: HUMAN_ID });
-  const account = { id: 'acc_g', provider: 'google', label: 'Gemini', auth: 'api_key', baseUrl, state: 'ok', priority: 1, rotation: false, enabled: true, detected: false, createdAt: 0 };
+  const account = { id: 'acc_g', provider: 'google', label: 'Gemini', auth: 'api_key', baseUrl, state: 'ok', priority: 1, enabled: true, detected: false, createdAt: 0 };
   Object.assign(h.services, {
     accounts: { list: () => [account], apiKey: async () => 'g-test-key' },
     catalog: { list: () => listed },

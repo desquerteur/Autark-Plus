@@ -8,7 +8,7 @@ import { effect, signal } from '@preact/signals';
 import type { NavigateRequest } from '../../shared/api/desktop.ts';
 import { bridge, platform } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
-import { navigate, route } from '../lib/router.ts';
+import { callRequest, navigate, route } from '../lib/router.ts';
 import { feedbackOpen, focusMessage, newChatOpen, paletteOpen, voiceSession } from '../lib/shell-state.ts';
 import { activeConversationId, tasks, todos, updateState } from '../lib/store.ts';
 import { draftFor, flushAllDrafts } from '../chat/composer/draft.ts';
@@ -43,6 +43,7 @@ export async function openTarget(request: NavigateRequest): Promise<void> {
   }
   if (!conversationId) return;
   navigate({ view: 'chat', id: conversationId });
+  if (request.call) callRequest.value = conversationId; // the floating to-do button's Call (CallHeader.tsx starts it)
   if (messageId) focusMessage.value = { conversationId, messageId };
 }
 

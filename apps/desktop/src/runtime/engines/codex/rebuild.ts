@@ -5,13 +5,13 @@
 // tools through neutral-calls.ts (B-049: a shell call of Claude or Codex as Codex's own exec_command
 // function_call + output, Claude's Read/Grep/Glob as our files.read/files.search when the thread has them, an
 // edit as a note with its diff or content); every other native tool as an assistant note
-// "[ran <tool>: <summary>]" plus its output as a user-side note; reasoning as a reasoning item only with
+// one user-side "[record of an earlier call …]" with its output (BEFUND §3, never assistant text); reasoning as a reasoning item only with
 // encrypted content of the same account and model family, else not at all (as assistant text it reads as words the model never said); a
 // condensed item's restore stamp stays in its text –, the injection in chunks (thread/inject_items), the
 // check with thread/items/list where this Codex lists injected items before a turn (the probe says so per
 // version), and the model-free probe (thread/start, inject a message and a call/output pair, items/list,
 // thread/delete – no turn). B-075: a thread opened here waits THREAD_OPEN_MS and is stored hidden from the Codex desktop
-// app's lists, like every new agent thread (helper-thread.ts HIDDEN_THREAD).
+// app's lists, like every new agent thread (helper-thread.ts HIDDEN_THREAD); B-080: each inject_items chunk waits THREAD_OPEN_MS too.
 // Live (28.10., codex-cli 0.165.0-alpha.1.2, temp CODEX_HOME, no login): thread/start with dynamicTools,
 // inject_items of user/assistant messages and a function_call/function_call_output pair answered {};
 // thread/items/list listed 0 items before a turn (verify 'accepted'); thread/delete answered {}.
@@ -33,9 +33,9 @@ import type { TraceCall } from '../../../shared/model/subconscious.ts';
 import { traceItems } from '../trace-text.ts';
 import type { RpcClient } from './rpc.ts';
 import { RpcError } from './rpc.ts';
-import { HIDDEN_THREAD, THREAD_OPEN_MS } from './helper-thread.ts';
+import { HIDDEN_THREAD, THREAD_OPEN_MS, untilStopped } from './helper-thread.ts';
 import { isRecord, str, toWireName } from '../shared.ts';
-import { boundOutput, noteText, oursCall, outputNote, sameReasoningSource, withStamp } from '../rebuild-text.ts';
+import { boundOutput, oursCall, recordText, sameReasoningSource, withStamp } from '../rebuild-text.ts';
 import { CODEX_NATIVE, mapNativeCall, type Mapped } from '../neutral-calls.ts';
 
 /** Items per thread/inject_items call, and characters per call (Codex sets no limit; requests stay moderate). */
@@ -70,8 +70,8 @@ export function responseItems(items: RebuildItem[], target: { offered: ReadonlyS
     if (call) {
       const mapped: Mapped | undefined = oursCall(call) ? undefined : mapNativeCall(call, item.origin?.engine, mapTarget);
       if (mapped?.as === 'note') {
-        out.push(message('assistant', noteText(call, mapped.detail, item.calls)));
-        out.push(message('user', outputNote(call, item.stamp)));
+        // 17.11.2026 (BEFUND §3): one user-side record, never assistant text the model would imitate
+        out.push(message('user', recordText(call, { ...(mapped.detail ? { detail: mapped.detail } : {}), ...(item.calls ? { calls: item.calls } : {}), ...(item.stamp ? { stamp: item.stamp } : {}) })));
         continue;
       }
       let callId = call.callId?.trim() || `call_${item.itemId}`;
@@ -138,7 +138,7 @@ export async function listedCount(rpc: RpcClient, threadId: string): Promise<num
  */
 export async function injectHistory(rpc: RpcClient, threadId: string, items: ResponseItem[], verify: RebuildProbe['verify']): Promise<void> {
   for (const [index, chunk] of chunks(items).entries()) {
-    try { await rpc.request('thread/inject_items', { threadId, items: chunk }, 60_000); } catch (error) {
+    try { await rpc.request('thread/inject_items', { threadId, items: chunk }, THREAD_OPEN_MS); } catch (error) { // B-080: the thread still opens on the account's shared, busy app-server
       throw new Error(`thread/inject_items refused chunk ${index + 1}: ${error instanceof Error ? error.message.slice(0, 200) : 'failed'}`);
     }
   }
@@ -150,7 +150,7 @@ export async function injectHistory(rpc: RpcClient, threadId: string, items: Res
 
 /**
  * A new thread (`start`: the turn's settings and dynamic tools) holding `items`; deleted again when the injection fails. Its id.
- * `open` starts the thread (B-049 F1: the engine's lean agent thread with its fallback; default a plain thread/start).
+ * `open` starts the thread (the engine's lean agent thread; default a plain thread/start).
  */
 export async function startRebuiltThread(
   rpc: RpcClient, start: Record<string, unknown>, items: ResponseItem[], verify: RebuildProbe['verify'],
@@ -180,11 +180,16 @@ export async function revertThread(rpc: RpcClient, threadId: string, beforeTurnI
   }
 }
 
-/** The subconscious's calls injected into `threadId` as real pairs; undefined when done, else why Codex refused them. */
-export async function injectTrace(rpc: RpcClient, threadId: string, calls: readonly TraceCall[], runId: string): Promise<string | undefined> {
+/**
+ * The subconscious's calls injected into `threadId` as real pairs; undefined when done, else why Codex refused them. B-080: no
+ * timer – Codex queues the inject behind the thread's running turn; `signal` (the turn's) ends the wait, so a late inject is
+ * never also sent as text. Before a turn engine.ts passes its open's `rpc` (helper-thread.ts untilStopped: the turn's signal,
+ * the server held against its idle shutdown).
+ */
+export async function injectTrace(rpc: Pick<RpcClient, 'request'>, threadId: string, calls: readonly TraceCall[], runId: string, signal?: AbortSignal): Promise<string | undefined> {
   const items = responseItems(traceItems(calls, runId), { offered: new Set(), accountId: '', model: '' });
   try {
-    await rpc.request('thread/inject_items', { threadId, items }, 30_000);
+    await (signal ? untilStopped(rpc, signal) : rpc).request('thread/inject_items', { threadId, items }, 0);
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message.slice(0, 200) : 'refused';

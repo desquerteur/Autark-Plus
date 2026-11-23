@@ -5,7 +5,8 @@
 // main zone keeps free for it: the main zone's header row runs on over the pane, so opening or closing it moves no header
 // cell. Its tab strip is the row's part above it (`strip-in-row`) only where the row leaves it room for three titled tabs
 // after the caption controls and the frame's cells (measured on .pane-row-room, shell.css; strip-slots.ts ROW_ROOM), else
-// its first line under the row: a drag of the pane or the window may move the strip, a click never does.
+// its first line under the row: a drag of the pane or the window may move the strip, a click never does. B-080: in a
+// narrow window the pane yields its width: the chat keeps 340 px, the list 200 px; full view gives a page the whole zone.
 // Each zone's header row is the top --header-h of the zone; its body scrolls below it. The main zone
 // is `rightmost` (shell.css turns that into --caption-space: the caption controls plus the frame's workspace
 // and feedback cells, WindowBar.tsx). The status line (StatusLine.tsx) lies over the top of the main zone.
@@ -20,7 +21,9 @@ import { useSignal } from '@preact/signals';
 import { GLOBAL_SPACE } from '../../shared/api/workspace-browser.ts';
 import { isMobile, loadError, loaded, preferences, route, updatePreferences } from '../lib/store.ts';
 import { rpc } from '../lib/rpc.ts';
-import { bridge, unzoom } from '../lib/platform.ts';
+import { bridge, os, platform, unzoom } from '../lib/platform.ts';
+import { pushToast, toasts } from '../lib/toasts.ts';
+import { chatZoom, nextZoom, restoreChatZoom, setChatZoom, zoomKey } from '../chat/text-zoom.ts';
 import { hotkey } from '../lib/hotkeys.ts';
 import { toggleSettings } from '../lib/router.ts';
 import { ConfirmHost } from '../lib/dialog.tsx';
@@ -49,6 +52,8 @@ import { TourDialog } from '../tour/TourDialog.tsx'; // B-055: the feedback tour
 import { CallOverlay } from '../chat/call/CallOverlay.tsx'; // AF-015: the call view (its own layer, not a panel)
 import { SpotlightHost } from '../tour/Spotlight.tsx'; // AF-002: the spotlight tour and first-visit hints
 import { UpdateNotice } from './UpdateNotice.tsx'; // AF-019: "Version X is available" with release notes
+import { openTour } from '../tour/open.ts';
+import { firstVideoHere } from '../pwa/native.ts';
 
 function useGlobalHotkeys(): void {
   useEffect(() => {
@@ -60,6 +65,24 @@ function useGlobalHotkeys(): void {
     ];
     return () => off.forEach((fn) => fn());
   }, []);
+  // 17.11.2026 (Theo, portrait videos): Ctrl+Alt +/−/0 sizes the chat's text on the desktop (chat/text-zoom.ts; plain Ctrl +/−/0 is the app scale, #30) – after
+  // workspace/pane-shortcuts.ts, which keeps the key for a website tab the keyboard is in.
+  useEffect(() => {
+    if (platform !== 'desktop') return undefined;
+    restoreChatZoom();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const dir = zoomKey({ key: event.key, code: event.code, mod: os === 'mac' ? event.metaKey : event.ctrlKey, alt: event.altKey });
+      if (dir === undefined) return;
+      event.preventDefault();
+      setChatZoom(nextZoom(chatZoom.peek(), dir), (percent) => {
+        toasts.value = toasts.peek().filter((toast) => !toast.title.startsWith('Chat text ')); // one size line, not a pile
+        pushToast({ title: `Chat text ${percent} %`, body: percent === 100 ? undefined : `${os === 'mac' ? '⌘⌥' : 'Ctrl+Alt'}+0 resets` }, 1500);
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 }
 
 /** Desktop: the caption controls follow the layout (main/title-bar.ts); sent on change only. */
@@ -68,6 +91,8 @@ function useCaptionLayout(compact: boolean): void {
 }
 
 function Overlays() {
+  // Feedback 16.11.2026 (F15): the iPhone web app plays the feedback video once, on its first start after pairing.
+  useEffect(() => { if (firstVideoHere()) openTour({ autoplay: true }); }, []);
   return (
     <>
       <CommandPalette />
@@ -77,7 +102,7 @@ function Overlays() {
       <AccessRequestHost />
       <FolderAgentHost />
       <RememberWhyHost />
-      <TourDialog />
+      <TourDialog phone={isMobile.value} />
       <SpotlightHost />
       <RegionDialog />
       <CallOverlay />

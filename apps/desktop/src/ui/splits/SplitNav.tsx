@@ -1,5 +1,5 @@
 // An agent's splits in the team sidebar (B-057 S18 b): inside the same expansion the person opens for the agent's
-// reports (team/TeamNav.tsx Branch, below them – never opened by itself), a height-limited, internally scrolling block
+// reports (team/TeamTree.tsx Branch, below them – never opened by itself), a height-limited, internally scrolling block
 // of fixed 34 px rows for its active and recently finished groups (split-text.ts sidebarGroups, shown oldest first so a
 // new group appends at the bottom; it opens scrolled to its end, the open split's row kept in view). Each group starts
 // with one static 24 px line naming its goal (muted, one line with an ellipsis, the full goal in its tooltip – rows of

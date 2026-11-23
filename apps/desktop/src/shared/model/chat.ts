@@ -1,10 +1,11 @@
 // Chat model: conversations (WhatsApp-like channels), members and the canonical message log.
-// Owns: shapes for chats/messages/attachments, message levels (B-050), sub-chats and threads (B-078) and a run's live values in its row (B-075: meta.live,
-// meta.ms, meta.lines – a run's status is a value in the chat, synced and rendered like a message). A chat is NOT an agent; agents are members.
+// Owns: shapes for chats/messages/attachments, message levels (B-050), sub-chats and threads (B-078) and the chat's live bar
+// (LiveRun: who works for the chat now – never a row in the history). A chat is NOT an agent; agents are members.
 // Never: duplicates message text anywhere else (tasks reference messages by id) – except a call row's transcript lines
 // (shared/model/call.ts), kept in step by runtime/calls/call-log.ts.
 
 import type { StepKind } from '../text/step-label.ts';
+import type { TextMarks } from '../voice/marks.ts';
 
 export type MemberKind = 'human' | 'agent' | 'external';
 
@@ -65,7 +66,7 @@ export interface ConversationSummary extends Conversation {
   lastPreview?: { authorId: string; text: string; at: number };
   /** B-078, threads only (settings.anchorId): its real replies – finished, non-silent lines that are no status line – and who wrote the last one. */
   replies?: { count: number; authorId?: string };
-  working: string[]; // agent ids running in this chat (B-075: the authors of its rows in state 'streaming')
+  working: string[]; // agent ids at work for this chat (the agents of `live`)
   openTasks: number;
   draft?: string;
 }
@@ -159,10 +160,14 @@ export interface SpeechMeta {
 export interface SendMessageInput {
   /** The message was dictated or spoken. */
   speech?: SpeechMeta;
+  /** B-082: hidden marks beside the plain body (unsure and dictated spans); stored as meta.marks after a check. */
+  marks?: TextMarks;
 }
 
 export interface MessageMeta {
   speech?: SpeechMeta;
+  /** B-082: the body's hidden marks (spans in the plain body); only the agent's view shows them, an edit drops them. */
+  marks?: TextMarks;
 }
 
 // ------------------------------------------------------------------ added by C2 (archive, agent membership tools)
@@ -210,8 +215,6 @@ export interface MessageMeta {
    * it into that run's steps. Message.runId stays the run's own output (its answer, its posts).
    */
   fromRun?: string;
-  /** Posted by the agent with chat.send during a run (Message.runId names it): a publication of that run, not its final answer. */
-  sentDuringRun?: boolean;
   /** B-059 #74: on a run's answer – how many tool calls the run made (or `thought`: it only reasoned); the chat shows its line from the first frame. */
   steps?: number;
   thought?: boolean;
@@ -253,51 +256,30 @@ export interface MessageMeta {
   modelHint?: ModelTag; // the model asked for with this message – a recommendation for whoever takes the work, shown small under it; absent = Auto
 }
 
-// ------------------------------------------------------------------ added by B-075 (live status as values in the chat)
+// ------------------------------------------------------------------ the chat's live bar (13.11.2026)
 
 /**
- * A run step as a value in its chat row: a step label (shared/text/step-label.ts) – never a tool's input or output.
- * `thought`: a reasoning summary's headline ("Thought · <target>"); `running`: the call still runs (or the thought is
- * still written); `failed`: the call failed.
+ * A run step as a value: a step label (shared/text/step-label.ts) – never a tool's input or output. `thought`: a
+ * reasoning summary's headline; `running`: the call still runs (or the thought is still written); `failed`: the call failed.
  */
 export interface LiveStep { kind: StepKind; verb: string; active: string; target: string; running?: true; failed?: true; thought?: true }
 
-/** Steps a run's row shows while it works (meta.live.steps); earlier ones are only counted (`more`). */
-export const LIVE_STEPS = 6;
-/** Steps a finished answer keeps (meta.lines, the newest). */
-export const LINES_MAX = 60;
-
 /**
- * B-075: what a run's row (state 'streaming') says while the run works – written by the runtime (runtime/chat/live-row.ts),
- * synced with the row like any message, rendered by every device; a channel like WhatsApp leaves it out (final rows only).
+ * One agent – or one part of a split agent (`split`) – at work for a chat right now: a line of the live bar above the
+ * chat's composer (runtime/chat/live.ts decides where it shows). `step`: what it does at this moment ("Reading
+ * invoices.pdf"); `note`: the dispatcher's live note (also a waiting note); `model` (display name) · `effort` and the
+ * turn's temperature (B-083: `temperatureSent` false – the model samples at its own setting). `deviceId` (F10,
+ * 16.11.2026): the run is on another of the person's PCs (devices/sync/live.ts); absent: on this PC.
  */
-export interface LiveMeta {
-  /** What the agent does or waits for right now (the run's live note, also waiting and approval notes). */
-  note?: string;
-  /** The newest steps, oldest first (at most LIVE_STEPS). */
-  steps: LiveStep[];
-  /** How many earlier steps are not in `steps`. */
-  more: number;
-  /** What the run runs on now (display name) · effort – after a failover too. */
-  model?: string;
-  effort?: string;
-  taskId?: string;
-  startedAt: number;
+export interface LiveRun {
+  runId: string; agentId: string; startedAt: number; step?: string; note?: string; model?: string; effort?: string;
+  temperature?: number; temperatureSent?: boolean; taskId?: string;
+  split?: { id: string; groupId: string; idx: number; of: number; parentRunId: string; title: string };
+  deviceId?: string;
 }
-
-export interface MessageMeta {
-  /** B-075: only while the row streams (removed when it is finished). */
-  live?: LiveMeta;
-  /** B-075: on a run's finished row – how long the run worked (ms) and its steps (the newest LINES_MAX). */
-  ms?: number;
-  lines?: LiveStep[];
-}
-
-/** B-075: one run working in a chat, from its row (ConversationSummary.live). */
-export interface LiveRun { runId: string; agentId: string; messageId: string; note?: string; model?: string; effort?: string; taskId?: string; startedAt: number }
 
 export interface ConversationSummary {
-  /** B-075: the chat's runs at work – its rows in state 'streaming' (absent when none); `working` names their agents. */
+  /** The chat's live bar (absent when nobody works for it); `working` names its agents. */
   live?: LiveRun[];
 }
 

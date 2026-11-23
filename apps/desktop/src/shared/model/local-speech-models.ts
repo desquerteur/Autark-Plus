@@ -17,16 +17,17 @@
 //   tts tiny   Supertone Supertonic 3 int8 (31 languages incl. German, 10 preset voices; raw text in, no
 //              phonemizer; weights OpenRAIL-M – use restrictions, the licence text travels with the notice)
 //   vad        Silero VAD (MIT) – fetched with every speech-to-text model, never listed on its own
+//   turn       Smart Turn v3.2 (BSD-2-Clause, B-082) – fetched with Silero VAD; both run in the conversation page
 //   tagging    CED Mini (B-058, sound events; Apache-2.0) – AUDIO_TAGGER, outside the fit rule and the voice settings
 // Not offered: Kokoro (no German voice), Piper de_DE voices (sherpa-onnx 2.0 removed the GPL espeak-ng
 // phonemizer they need), Pocket TTS (its sherpa archive needs a reference recording and German is unverified).
 // `ramMb` is the estimate while loaded (weights plus the ONNX runtime), `sizeMb` the unpacked files.
-// Owns: these ids, figures, files and the fit rule. Never: I/O.
+// Owns: these ids, figures, files, the fit rule and the turn detector's fixed file names. Never: I/O.
 
 export type LocalSpeechPurpose = 'stt' | 'tts';
 export type LocalSpeechTier = 'tiny' | 'small' | 'medium';
 /** How the runtime builds the model (runtime/voice/local/addon.ts configs); B-058 'ced': sherpa-onnx AudioTagging `{ model: { ced } }`. */
-export type LocalSpeechKind = 'canary' | 'nemo-transducer' | 'supertonic' | 'silero-vad' | 'ced';
+export type LocalSpeechKind = 'canary' | 'nemo-transducer' | 'supertonic' | 'silero-vad' | 'ced' | 'smart-turn';
 
 export interface LocalSpeechDownload {
   url: string;
@@ -112,6 +113,34 @@ export const SILERO_VAD: LocalSpeechModel = {
 };
 
 /**
+ * B-082 decision 8: Smart Turn v3.2 CPU (int8, pipecat-ai/smart-turn-v3, BSD-2-Clause; 23 languages incl. German) –
+ * whether a spoken line is finished, run in the conversation page (ui/lib/turn-models.ts). Pinned to the repo revision
+ * of 08.11.2026, SHA-256 from Hugging Face's LFS record. Fetched with Silero VAD, never listed on its own.
+ */
+export const SMART_TURN: LocalSpeechModel = {
+  id: 'smart-turn-v3.2-cpu', purpose: 'vad', tier: 'tiny', kind: 'smart-turn', label: 'Smart Turn v3.2', publisher: 'Pipecat',
+  languages: [], licence: 'BSD-2-Clause', licenceUrl: 'https://huggingface.co/pipecat-ai/smart-turn-v3',
+  files: ['smart-turn-v3.2-cpu.onnx'],
+  download: {
+    url: 'https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx',
+    sha256: '2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f', bytes: 8_679_182, format: 'file', file: 'smart-turn-v3.2-cpu.onnx',
+  },
+  sizeMb: 9, ramMb: 40, note: 'End of turn: whether a spoken line is finished.',
+};
+
+/** B-082: where the conversation page loads its turn detector's files – app://app/turn/<name> and the runtime's /turn/<name>. */
+export const TURN_ROUTE = '/turn/';
+/** onnxruntime-web's single-thread WebAssembly build and its loader, as shipped under node_modules/onnxruntime-web/dist. */
+export const ORT_WASM_FILES: readonly string[] = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs'];
+
+/** What one fixed name under TURN_ROUTE serves: an ort file or a model's one file; anything else is no file. */
+export function turnFile(name: string): { ort: string } | { model: LocalSpeechModel } | undefined {
+  if (ORT_WASM_FILES.includes(name)) return { ort: name };
+  const model = [SILERO_VAD, SMART_TURN].find((entry) => entry.files[0] === name);
+  return model ? { model } : undefined;
+}
+
+/**
  * B-058 G9: CED-mini audio tagging (sherpa-onnx AudioTagging, 527 AudioSet sound classes with scores; 9.6M
  * parameters, AudioSet mAP 49.0). Checked on 29.10.2026: release audio-tagging-models, archive downloaded once,
  * SHA-256 computed locally (GitHub lists no digest for it), top folder and files as below; the archive also holds
@@ -132,7 +161,7 @@ export const LOCAL_TAGGING_MODELS: readonly LocalSpeechModel[] = [AUDIO_TAGGER];
 /** A catalog model by id (listed models, the VAD and – B-058 – the audio tagger); `purpose` narrows it. */
 export function localSpeechModel(id: string | undefined, purpose?: LocalSpeechPurpose | 'vad' | 'tagging'): LocalSpeechModel | undefined {
   const wanted = (id ?? '').trim();
-  const found = wanted === SILERO_VAD.id ? SILERO_VAD : LOCAL_SPEECH_MODELS.find((entry) => entry.id === wanted) ?? LOCAL_TAGGING_MODELS.find((entry) => entry.id === wanted);
+  const found = wanted === SILERO_VAD.id ? SILERO_VAD : wanted === SMART_TURN.id ? SMART_TURN : LOCAL_SPEECH_MODELS.find((entry) => entry.id === wanted) ?? LOCAL_TAGGING_MODELS.find((entry) => entry.id === wanted);
   return found && (!purpose || found.purpose === purpose) ? found : undefined;
 }
 

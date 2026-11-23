@@ -201,6 +201,10 @@ test('grok: a login in ~/.grok is reused silently (cached_token, headless) and a
   assert.equal(probe.options.env?.GROK_CLAUDE_MCPS_ENABLED, '0');
   const auth = h.agent.state.requests.find((msg) => msg.method === 'authenticate');
   assert.deepEqual(auth?.params, { methodId: 'cached_token', _meta: { headless: true } });
+  // upstream 0.3.16 (17.11.2026, adoption.ts): a plan login is only offered until the person says Use – as for Kimi and Gemini
+  assert.deepEqual([h.accounts.list().length, report.found?.map((login) => login.key)], [0, ['grok-cli:default']], 'only offered until the person says Use');
+  await h.accounts.useFound('grok-cli:default');
+  await h.settle();
   assert.deepEqual(h.accounts.list().map((a) => [a.provider, a.label, a.home, a.detected]), [['grok-cli', 'Grok Build', undefined, true]]);
 
   const added = await h.accounts.add({ provider: 'grok-cli', label: 'Work' });

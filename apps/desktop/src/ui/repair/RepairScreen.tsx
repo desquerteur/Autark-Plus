@@ -22,6 +22,7 @@ export function RepairScreen(props: { state: RepairState }) {
   const problem = state.problem;
   const [last, setLast] = useState<LastAction | null>(null);
   if (!problem) return null;
+  const needsKeyring = problem.code === 'keyring_unavailable';
   const copies = state.backups.filter((copy) => restorable(copy, state.appSchema));
   const text = problemText(problem, copies);
   const { busy, note } = screenStatus(last, state);
@@ -57,10 +58,10 @@ export function RepairScreen(props: { state: RepairState }) {
         {text.body.map((line) => <p key={line}>{line}</p>)}
         {problem.detail && <p class="repair-detail">{problem.detail}</p>}
         <div class="repair-actions">
-          <Button variant="primary" busy={busy === 'retry'} disabled={busy !== null} onClick={() => void retry()}>Try again</Button>
+          {!needsKeyring && <Button variant="primary" busy={busy === 'retry'} disabled={busy !== null} onClick={() => void retry()}>Try again</Button>}
           <Button busy={busy === 'diagnostics'} disabled={busy !== null && busy !== 'diagnostics'} onClick={() => void diagnostics()}>Export diagnostics</Button>
         </div>
-        {copies.length > 0 && (
+        {!needsKeyring && copies.length > 0 && (
           <div class="repair-copies" aria-label="Copies from before updates">
             {copies.map((copy) => {
               const label = copyLabel(copy, fullDate);
@@ -73,7 +74,7 @@ export function RepairScreen(props: { state: RepairState }) {
             })}
           </div>
         )}
-        {newer > 0 && <p class="repair-muted">{newer === 1 ? 'One copy is' : `${newer} copies are`} from a newer version and cannot be opened here.</p>}
+        {!needsKeyring && newer > 0 && <p class="repair-muted">{newer === 1 ? 'One copy is' : `${newer} copies are`} from a newer version and cannot be opened here.</p>}
         {note && <p class={`repair-note${note.error ? ' error' : ''}`} role="status">{note.text}</p>}
       </section>
       <ConfirmHost />

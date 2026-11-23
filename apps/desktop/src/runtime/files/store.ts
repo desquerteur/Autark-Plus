@@ -4,7 +4,8 @@
 // (blob, files row, media row and its search entry) when asked – never while the same bytes
 // are being stored, and a put of those bytes waits for a running removal – plus the blob
 // clean-up of this store (files/cleanup.ts: queue, batch, start-up reconcile). A read of a file whose row came from
-// another of the person's PCs fetches its bytes first (deps.missing: devices/sync/blobs.ts needBlob, compose/services.ts).
+// another of the person's PCs fetches its bytes first (deps.missing: devices/sync/blobs.ts needBlob, compose/services.ts);
+// B-080: so does local(id), the path for readers that open the blob themselves (media.view, listening, export).
 // Never: decides on its own that a file may go (the clean-up asks files/references.ts, the
 // person confirms media.delete), trusts file names for binary types, or parses a PDF before
 // someone asks for its text.
@@ -79,6 +80,13 @@ export class Blobs implements FileStore, Reclaimer {
     return path.join(this.deps.blobs, id.slice(0, 2), id.slice(2, 4), id);
   }
 
+  /** B-080: the path of a stored file's bytes, fetched through `missing` first when they are not here (a failed fetch leaves the read to fail). */
+  async local(id: string): Promise<string> {
+    const file = this.path(id);
+    if (this.deps.missing && !(await exists(file))) await this.deps.missing(id).catch(() => false);
+    return file;
+  }
+
   get(id: string): FileRef | undefined {
     return SHA256.test(id) ? this.repo.get(id) : undefined;
   }
@@ -149,8 +157,8 @@ export class Blobs implements FileStore, Reclaimer {
 
   async read(id: string): Promise<Uint8Array> {
     if (!this.get(id)) throw new WorkforceError('not_found', 'This file does not exist.');
-    await this.fetched(id);
-    try { return new Uint8Array(await readFile(this.path(id))); } catch { throw new WorkforceError('not_found', 'The stored file is missing.'); }
+    const file = await this.local(id);
+    try { return new Uint8Array(await readFile(file)); } catch { throw new WorkforceError('not_found', 'The stored file is missing.'); }
   }
 
   async text(id: string, maxChars = TEXT_CACHE_CHARS): Promise<string | undefined> {
@@ -183,6 +191,7 @@ export class Blobs implements FileStore, Reclaimer {
     let finish: () => void = () => undefined;
     this.removing.set(id, new Promise<void>((resolve) => { finish = resolve; }));
     try {
+      const preview = new MediaRepo(this.deps.db).previewOf(id); // 17.11.2026: a video's light copy has no row of its own and goes with it
       await rm(this.path(id), { force: true });
       if (this.writing.has(id)) return false; // a put of these bytes waits for us and writes the blob again; its row stays
       this.deps.db.tx(() => {
@@ -190,6 +199,7 @@ export class Blobs implements FileStore, Reclaimer {
         this.repo.remove(id);
       });
       this.stored.delete(id);
+      if (preview && preview !== id) await this.remove(preview); // the copy is a removal of its own: it has no row but its file's, and no other use
       return true;
     } catch (error) {
       this.deps.log.warn('file not removed', { id, error: String(error) });
@@ -212,11 +222,6 @@ export class Blobs implements FileStore, Reclaimer {
 
   // ------------------------------------------------------------------ internals
 
-  /** The bytes of a file whose row is here: fetched through `missing` when they are not (a failed fetch leaves the read to fail). */
-  private async fetched(id: string): Promise<void> {
-    if (this.deps.missing && !(await exists(this.path(id)))) await this.deps.missing(id).catch(() => false);
-  }
-
   private async extract(file: FileRef): Promise<string> {
     let text: string;
     if (file.mime === 'application/pdf') {
@@ -226,8 +231,7 @@ export class Blobs implements FileStore, Reclaimer {
     } else if (officeKind(file.mime)) {
       text = file.size > OFFICE_LIMITS.bytes ? '' : await officeText(await this.read(file.id), officeKind(file.mime)!);
     } else {
-      await this.fetched(file.id);
-      const handle = await open(this.path(file.id), 'r');
+      const handle = await open(await this.local(file.id), 'r');
       try {
         const buffer = Buffer.alloc(Math.min(file.size, TEXT_READ_BYTES));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);

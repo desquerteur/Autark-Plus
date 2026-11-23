@@ -4,16 +4,23 @@ rules_version = '2';
 // delete one through these rules. Only the team's PC fetches and deletes letters (with its service account, which
 // does not go through rules) and only the team's private key opens them. Paste into Firebase console › Firestore ›
 // Rules and publish. Written by the app: apps/desktop/resources/feedback/firestore.rules.
+// v2 (feedback 16.11.2026): ids only of the characters our senders use (drop.ts DOCUMENT_ID); an optional `exp`
+// timestamp at most 31 days ahead – the TTL policy on feedback.exp deletes a letter nobody fetched by then. Letters
+// of older apps (v and sealed only) are still accepted; they leave the mailbox when the team fetches.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /feedback/{id} {
       allow create: if request.auth == null
-        && id.size() <= 64
-        && request.resource.data.keys().hasOnly(['v', 'sealed'])
+        && id.matches('^[A-Za-z0-9_-]{1,64}$')
+        && request.resource.data.keys().hasOnly(['v', 'sealed', 'exp'])
         && request.resource.data.keys().hasAll(['v', 'sealed'])
         && request.resource.data.v == 1
         && request.resource.data.sealed is bytes
-        && request.resource.data.sealed.size() < 1000000;
+        && request.resource.data.sealed.size() < 1000000
+        && (!('exp' in request.resource.data)
+          || (request.resource.data.exp is timestamp
+            && request.resource.data.exp > request.time
+            && request.resource.data.exp <= request.time + duration.value(31, 'd')));
       allow read, update, delete: if false;
     }
     match /{document=**} {

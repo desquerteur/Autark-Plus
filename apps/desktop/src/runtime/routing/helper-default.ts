@@ -1,10 +1,10 @@
 // Helper default for runtime text calls (SG, wishes 21.10. 17:55/17:57): subconscious, decision
-// fallback, verification, compaction and widget fills run as the SYSTEM agent (decision/
-// engine-runner.ts). This is what the Decisions use's "auto" means (shared/model/models-uses.ts): a
-// connected Codex subscription (plan login, not an API key) with quota left (≥ HELPER_MIN_HEADROOM %) and a
-// small model – the newest "Luna" the account lists, else the smallest it lists – at low effort; compaction
-// starts at medium, and a caller may ask for more (an effort-only request, e.g. the LLM decision fallback's
-// one retry at medium after an unsure answer, decision/llm-fallback.ts). A Decisions model chosen in
+// fallback, verification and widget fills run as the SYSTEM agent (decision/engine-runner.ts). This is
+// what the Decisions use's "auto" means (shared/model/models-uses.ts): a connected Codex subscription
+// (plan login, not an API key) with quota left (≥ HELPER_MIN_HEADROOM %) and a small model – the newest
+// "Luna" the account lists, else the smallest it lists – at low effort; a caller may ask for more (an
+// effort-only request, e.g. the LLM decision fallback's one retry at medium after an unsure answer,
+// decision/llm-fallback.ts). A Decisions model chosen in
 // Settings wins first (router.ts, routing/pins.ts settingsPin), then this default.
 // Transport: the per-account `codex app-server` the agents use (engines/codex) – often already
 // running, our own short instructions, structured output, limit pushes; no extra `codex exec`
@@ -12,7 +12,7 @@
 // The pick names the model AND the accounts that may run it (`accountIds`, the qualifying plan
 // logins): the router takes only those (router.ts), so a primary API-key login or a low primary
 // plan never runs the default even when it lists the same model; with none left it falls through.
-// B-044 (integration): this default serves SYSTEM calls only (helpers and compaction) – an agent's turn,
+// B-044 (integration): this default serves SYSTEM calls only – an agent's turn,
 // plain conversation included, is routed by the model choice and the work plan (router.ts).
 // helperModel reads that pick without a route, else names the router's fallback (API keys only as its spill-over).
 // Owns: these choices. Never: reads token or auth files; the default never takes a pay-per-use login, a used-up or
@@ -29,7 +29,6 @@ import { isPaid, tierRank } from './score.ts';
 
 /** A plan with less quota left than this (percent) is kept for agent work. */
 export const HELPER_MIN_HEADROOM = 20;
-const MEDIUM_PURPOSES: ReadonlySet<string> = new Set(['compact', 'compaction']);
 const LUNA = /luna/i;
 
 export interface HelperPick {
@@ -38,11 +37,6 @@ export interface HelperPick {
   effort: Effort;
   /** Only these accounts may run it (plan logins with quota left). */
   accountIds: ReadonlySet<string>;
-}
-
-/** The start effort of a helper call: low, medium for compaction. */
-export function helperEffort(purpose: string | undefined): Effort {
-  return purpose && MEDIUM_PURPOSES.has(purpose) ? 'medium' : 'low';
 }
 
 /** Codex plan logins that may serve helper calls now (not an API-key login, quota left). */
@@ -67,7 +61,7 @@ function smallest(models: readonly ModelInfo[]): ModelInfo | undefined {
 export function helperDefault(s: RuntimeServices, request: RouteRequest, pool: Pool, models: readonly ModelInfo[]): HelperPick | undefined {
   if (request.agent.id !== SYSTEM_ID) return undefined;
   const asked = request.previous?.explicit && request.previous.asked === 'effort' ? request.previous.effort : undefined;
-  const effort = asked ?? helperEffort(request.text?.trim().toLowerCase());
+  const effort: Effort = asked ?? 'low';
   const plan = planSmallModel(s, pool, models);
   return plan ? { modelId: plan.model.id, source: 'helper', effort, accountIds: plan.accountIds } : undefined;
 }

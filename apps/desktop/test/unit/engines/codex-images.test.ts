@@ -1,6 +1,6 @@
 // Codex image generation reaches the chat (MM2): a scripted app-server emits imageGeneration
 // items; the turn result carries them as EngineTurnResult.files (base64 or data: URL, failed
-// items dropped), and ChatServiceImpl.finishAgentMessage stores the files and attaches them
+// items dropped), and ChatServiceImpl.postAgentMessage stores the files and attaches them
 // before the message is announced, linked in the media library. B-044: such an attachment of a run with
 // image_generation is the agent's own portrait source (tools/builtin/agent-avatar.ts madeByRun).
 
@@ -66,25 +66,24 @@ test('generatedImage: bytes win, a saved path is the fallback, failures give not
   assert.equal(generatedImage({ id: 'c', status: 'failed', result: 'AAAA' }, 1), undefined);
 });
 
-test('finishAgentMessage stores engine files and attaches them before announcing the message', async () => {
+test('postAgentMessage stores engine files and attaches them before announcing the message', async () => {
   const s = mediaSetup();
   try {
     const workspace = path.join(s.temp.dir, 'workspace');
     s.h.services.paths = { workspace, accounts: path.join(s.temp.dir, 'accounts') } as Paths;
     const image = png(64, 48);
-    const started = s.h.chats.beginAgentMessage(s.chat.id, 'ag_ada', 'run_1');
-    const announced = new Promise<Message>((resolve) => { const off = s.h.bus.on('message.updated', (message) => { if (message.id === started.id) { off(); resolve(message); } }); });
-    s.h.chats.finishAgentMessage(started.id, {
-      body: 'Here you go', state: 'final',
+    const announced = new Promise<Message>((resolve) => { const off = s.h.bus.on('message.created', (message) => { if (message.runId === 'run_1') { off(); resolve(message); } }); });
+    const posted = s.h.chats.postAgentMessage(s.chat.id, 'ag_ada', 'run_1', {
+      body: 'Here you go',
       files: [
         { name: 'generated-image-1.png', mime: 'image/png', dataBase64: Buffer.from(image).toString('base64') },
         { name: 'elsewhere.png', path: path.join(s.temp.dir, 'elsewhere.png') }, // outside the workspace: not stored
       ],
-    });
+    }).id;
     const message = await announced;
     const id = createHash('sha256').update(image).digest('hex');
     assert.deepEqual(message.attachments.map((file) => [file.fileId, file.name, file.mime, file.width, file.height]), [[id, 'generated-image-1.png', 'image/png', 64, 48]]);
-    assert.deepEqual(s.h.chats.message(started.id)!.attachments.map((file) => file.fileId), [id], 'persisted');
+    assert.deepEqual(s.h.chats.message(posted)!.attachments.map((file) => file.fileId), [id], 'persisted');
     assert.equal(s.media.get(id)!.conversationId, s.chat.id, 'shown under the chat in the media library');
     await s.media.idle();
   } finally { s.temp.cleanup(); }
@@ -98,9 +97,8 @@ test('B-044: a generated image attached to the answer of a run with image_genera
     journal.start({ id: 'run_img', agentId: 'ag_ada', conversationId: s.chat.id, trigger: 'message' });
     journal.item('run_img', { kind: 'tool_call', name: 'image_generation', data: { callId: 'ig_1', own: true }, effectStatus: 'none' });
     const image = png(512, 512);
-    const started = s.h.chats.beginAgentMessage(s.chat.id, 'ag_ada', 'run_img');
-    const announced = new Promise<void>((resolve) => { const off = s.h.bus.on('message.updated', (message) => { if (message.id === started.id) { off(); resolve(); } }); });
-    s.h.chats.finishAgentMessage(started.id, { body: 'My portrait', state: 'final', files: [{ name: 'generated-image-1.png', mime: 'image/png', dataBase64: Buffer.from(image).toString('base64') }] });
+    const announced = new Promise<void>((resolve) => { const off = s.h.bus.on('message.created', (message) => { if (message.runId === 'run_img') { off(); resolve(); } }); });
+    s.h.chats.postAgentMessage(s.chat.id, 'ag_ada', 'run_img', { body: 'My portrait', files: [{ name: 'generated-image-1.png', mime: 'image/png', dataBase64: Buffer.from(image).toString('base64') }] });
     await announced; // the files are stored and attached first
     const id = createHash('sha256').update(image).digest('hex');
     assert.equal(madeByRun(s.h.db, 'ag_ada', id), true);

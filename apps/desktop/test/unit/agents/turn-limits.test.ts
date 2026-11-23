@@ -32,8 +32,8 @@ const withTool: (result: EngineTurnResult) => Script = (result) => async (input)
   return result;
 };
 
-/** Two Claude Code plans (or two accounts of `provider`): acc_1 is used first, acc_2 is the second one (rotation on by default). */
-function limitSetup(options: { rotation?: boolean; provider?: ProviderId & EngineId } = {}) {
+/** Two Claude Code plans (or two accounts of `provider`): acc_1 is used first, acc_2 is the second one – every signed-in plan takes turns. */
+function limitSetup(options: { provider?: ProviderId & EngineId } = {}) {
   const provider = options.provider ?? 'claude';
   const h = setup();
   const unused = () => { throw new Error('not used in this test'); };
@@ -44,7 +44,7 @@ function limitSetup(options: { rotation?: boolean; provider?: ProviderId & Engin
   const now = h.clock.now();
   const repo = new AccountRepo(h.db);
   repo.save(account('acc_1', provider, { label: provider === 'claude' ? 'Claude Code' : provider, createdAt: now }));
-  repo.save(account('acc_2', provider, { label: provider === 'claude' ? 'Claude Code 2' : `${provider} 2`, priority: 1, rotation: options.rotation ?? true, createdAt: now + 1 }));
+  repo.save(account('acc_2', provider, { label: provider === 'claude' ? 'Claude Code 2' : `${provider} 2`, priority: 1, createdAt: now + 1 }));
 
   const calls: string[] = [];
   const scripts: Record<string, Script> = {};
@@ -107,17 +107,22 @@ test('a limit before any tool call cools the account with the provider hint and 
   assert.equal(zero.service.get('acc_1')!.coolingUntil, zero.now + MINUTE);
 });
 
-test('AF-023 bug: rotation off – the primary used up, the turn goes on on the second plan, and the next turn starts there', async () => {
-  // Before AF-023 the second plan (rotation off, as every plan since B-072) never ran: "limited right now" – the bug.
-  const h = limitSetup({ rotation: false });
+test('owner 09.11.2026: a limited plan hands the turn to the next signed-in plan, without any switch; with both limited nothing runs', async () => {
+  const h = limitSetup();
   h.scripts.acc_1 = async () => LIMIT;
   const first = await h.run();
-  assert.equal(first.status, 'done', 'the work goes on');
-  assert.deepEqual(h.calls, ['acc_1', 'acc_2'], 'the same turn retries on the second plan');
+  assert.equal(first.status, 'done', 'AF-023: the work goes on');
+  assert.deepEqual(h.calls, ['acc_1', 'acc_2'], 'the second plan steps in');
   assert.equal(h.service.get('acc_1')!.state, 'cooling');
+  h.calls.length = 0;
+  h.scripts.acc_2 = async () => LIMIT;
+  assert.equal((await h.run()).status, 'failed', 'the second plan reaches its limit too');
+  assert.deepEqual(h.calls, ['acc_2']);
+  h.calls.length = 0;
   const next = await h.run();
-  assert.equal(next.status, 'done');
-  assert.deepEqual(h.calls, ['acc_1', 'acc_2', 'acc_2'], 'while the first is used up, turns start on the second');
+  assert.equal(next.status, 'failed');
+  assert.match(next.error ?? '', /limited right now/);
+  assert.deepEqual(h.calls, [], 'both cool: no plan runs');
 });
 
 test('a limit on the model window (weekly-opus) keeps the account for other models', async () => {
@@ -143,8 +148,8 @@ test('a limit on the model window (weekly-opus) keeps the account for other mode
   assert.deepEqual(h.calls, ['acc_1']);
 });
 
-test("'not signed in' sets needs_login with one notification (not cooling); the next plan runs without rotation", async () => {
-  const h = limitSetup({ rotation: false });
+test("'not signed in' sets needs_login with one notification (not cooling); the next plan runs", async () => {
+  const h = limitSetup();
   h.scripts.acc_1 = async () => unavailable('Claude Code is not signed in for this account.');
   const outcome = await h.run();
   assert.equal(outcome.status, 'done');
@@ -248,7 +253,7 @@ test('accountFailure classifies the engines’ own messages', () => {
 });
 
 test('AF-023: a failure chain moves on account by account – each at most once, no endless loop', async () => {
-  const h = limitSetup({ rotation: false });
+  const h = limitSetup();
   new AccountRepo(h.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: h.now + 2 }));
   h.scripts.acc_1 = async () => LIMIT;
   h.scripts.acc_2 = async () => unavailable('The provider is overloaded. Retry later.');
@@ -261,7 +266,7 @@ test('AF-023: a failure chain moves on account by account – each at most once,
   assert.equal(lines[1], 'Switched to Claude Code 3 – Claude Code 2 just failed.');
 
   // Every account fails: each is tried once, then the turn ends (no loop).
-  const all = limitSetup({ rotation: false });
+  const all = limitSetup();
   new AccountRepo(all.db).save(account('acc_3', 'claude', { label: 'Claude Code 3', priority: 2, createdAt: all.now + 2 }));
   for (const id of ['acc_1', 'acc_2', 'acc_3']) all.scripts[id] = async () => LIMIT;
   const failed = await all.run();

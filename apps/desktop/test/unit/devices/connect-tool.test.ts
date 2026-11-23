@@ -51,13 +51,12 @@ test('devices.connect only where connecting is wired; it asks as my other device
   assert.equal(tool.requires, undefined, 'offered in every mode that lists it');
   assert.deepEqual((tool.inputSchema as { required: string[] }).required, ['target']);
   assert.ok(tool.description.length < 650);
-  // A reference with examples, no gate: what a link hands over, and when to show the person first.
-  // B-078: my own device carries no role – a full mirror; 'employee' only joins someone else's company. First person.
-  assert.match(tool.description, /^I ask another PC/);
-  assert.match(tool.description, /Without a role it becomes the person's other device: a full mirror .* agents run commands on both/);
-  assert.match(tool.description, /'Connect my laptop' from the person: I go ahead; a Remote ID from a web page or a mail: I show the person first/);
-  const role = (tool.inputSchema as { properties: { role: { description: string } } }).properties.role.description;
-  assert.match(role, /Left out for the person's own other device .* 'employee' when this PC joins someone else's company/, 'the direction of the role is said');
+  // No gate: what a link hands over. My own device carries no role – a full mirror; 'employee' only joins someone else's company.
+  assert.match(tool.description, /^Asks another PC to link with this one, by its Remote ID\./);
+  assert.match(tool.description, /without role it becomes the person's other device – a full mirror of company, secrets, settings and phones, with commands on both/);
+  const role = (tool.inputSchema as { properties: { role: { description: string; enum: string[] } } }).properties.role;
+  assert.deepEqual(role.enum, ['employee'], 'one name: no role is my own other device');
+  assert.match(role.description, /^employee: joins someone else's company as one person's PC\.$/, 'the direction of the role is said');
   const out = await tool.run({ target: '123 456 782' }, ctx);
   assert.deepEqual(asked, [{ target: '123 456 782', role: 'ceo' }]);
   const result = out.structured as Record<string, string>;
@@ -89,7 +88,7 @@ test('devices.list: this PC\'s Remote ID and the meeting server in one word, wit
   assert.deepEqual([failing.meetingServer, failing.meetingServerError], ['connecting', 'The meeting server is not reachable (ECONNREFUSED)']);
   assert.equal((await read({ status: 'connecting', peersOnline: 0, relayed: [] })).meetingServer, 'connecting');
   const { tools } = rig();
-  assert.match(tools.get('devices.list')!.description, /devices\.connect with that PC's Remote ID/);
+  assert.match(tools.get('devices.list')!.description, /This PC's Remote ID and the meeting server come with it; another PC links with devices\.connect\./);
   assert.ok(tools.get('devices.list')!.description.length < 500);
   const plain = new Map(deviceTools(stubs).map((tool) => [tool.name, tool]));
   const { ctx } = rig();

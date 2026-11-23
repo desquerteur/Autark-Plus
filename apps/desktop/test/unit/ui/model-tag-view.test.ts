@@ -1,6 +1,7 @@
 // B-050 K6 round 3 (src/ui/chat/model-tag-view.ts): the model tag under a message – a person's message
 // that asked for a model and an agent's that recommended one show its short name; Auto, an external author's meta, a status line and an unknown name show nothing;
-// the tooltip says Suggested / Pinned and the effort; the model a message was written on (meta.model) is no tag.
+// the tooltip says "Suggested" and the effort – B-083: also for an older stamp marked pinned (every pick is a tip);
+// the model a message was written on (meta.model) is no tag.
 // Owns: these assertions only.
 
 import { test } from 'node:test';
@@ -16,7 +17,7 @@ test('a person\'s and an agent\'s message show the model they named; Auto, exter
   assert.deepEqual(messageModelTag(message('human', { modelHint: { modelId: 'claude:claude-opus-5-5', effort: 'high' } }), nameOf),
     { name: 'Opus 5.5', pinned: false, title: 'Suggested: Opus 5.5 · High' });
   assert.deepEqual(messageModelTag(message('human', { modelHint: { modelId: 'claude:claude-opus-5-5', pinned: true } }), nameOf),
-    { name: 'Opus 5.5', pinned: true, title: 'Pinned: Opus 5.5' });
+    { name: 'Opus 5.5', pinned: false, title: 'Suggested: Opus 5.5' }, 'B-083: an older pinned stamp reads as a suggestion');
   assert.deepEqual(messageModelTag(message('agent', { modelHint: { modelId: 'codex:gpt-6.1-sol' } }), nameOf),
     { name: 'GPT-6.1 Sol', pinned: false, title: 'Suggested: GPT-6.1 Sol' }, 'an agent\'s recommendation (chat.send model) shows under its message');
   assert.equal(messageModelTag(message('agent', { model: 'codex:gpt-6.1-sol' }), nameOf), undefined, 'the model it was written on is no tag');

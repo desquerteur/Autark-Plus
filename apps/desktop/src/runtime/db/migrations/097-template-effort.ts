@@ -1,8 +1,10 @@
-// Migration 97 (official 0.3.5): seeded template agents whose effort still equals the template's old fixed one lose it
-// (model_policy.effort), so the router picks the effort; an effort the person changed stays.
-// Taken over unchanged from the official Autark 0.3.5 (teydra/OpenAutark, Apache-2.0, release build of 09.11.2026),
-// whose public source stopped at 091: a profile that official build migrated must open in this fork (AF-022).
-// Owns: that field of those agents. Never: other agents, or edits of shipped migrations.
+// Migration 97 (B-083, owner 08.11.2026: agents run "fast nur Medium Thinking, was ich irgendwie komisch finde"):
+// every hire template in resources/agents/*.md carried an `effort:` line (medium or high), and org/hire.ts stored it
+// as the agent's fixed effort, which routing applied to every turn – so the agent never chose its own. The templates
+// no longer carry one and a hire starts with an empty model policy; here an agent hired from a template loses the
+// effort it got from it, when that effort still equals the value the template shipped. An effort someone set later
+// to another value stays, as do other agents, other policy keys and rows that are not valid JSON (as in 076).
+// Owns: this data move. Never: other agents, other policy keys.
 
 export const sql = /* sql */ `
 UPDATE agents SET model_policy = json_remove(model_policy, '$.effort')

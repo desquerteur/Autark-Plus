@@ -63,12 +63,12 @@ test('anthropic: request shape, thinking + signature kept unchanged, parallel to
   assert.equal(first.body.max_tokens, 64_000);
   assert.equal(first.body.stream, true);
   assert.deepEqual(first.body.cache_control, { type: 'ephemeral' });
-  assert.deepEqual(first.body.system, [{ type: 'text', text: 'STABLE', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'VOLATILE' }]);
+  assert.deepEqual(first.body.system, [{ type: 'text', text: 'STABLE', cache_control: { type: 'ephemeral' } }], 'the stable prompt only');
   assert.deepEqual(first.body.tools, [{ name: 'tasks__create', description: 'Create a task', input_schema: input.tools[0].inputSchema }]);
   assert.deepEqual(first.body.thinking, { type: 'adaptive', display: 'summarized' });
   assert.deepEqual(first.body.output_config, { effort: 'high' });
   assert.equal(first.body.tool_choice, undefined);
-  assert.deepEqual(first.body.messages, [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }]);
+  assert.deepEqual(first.body.messages, [{ role: 'user', content: [{ type: 'text', text: '<live>\nVOLATILE\n</live>' }, { type: 'text', text: 'hello' }] }], 'the live context first in the message');
   assert.equal(second.body.messages.length, 3);
   assert.deepEqual(second.body.messages[1], { role: 'assistant', content: [
     { type: 'thinking', thinking: 'Weighing options', signature: 'SIG==' },
@@ -99,7 +99,7 @@ test('anthropic: pause_turn re-sends the conversation without new user content; 
   assert.equal(result.stop, 'done');
   assert.equal(result.text, 'Searching\n\nFound.');
   const [first, second, third] = server.hits('/v1/messages');
-  assert.deepEqual(first.body.messages[0].content, [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'Bw==' } }]);
+  assert.deepEqual(first.body.messages[0].content, [{ type: 'text', text: '<live>\nVOLATILE\n</live>' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'Bw==' } }]);
   assert.deepEqual(second.body.messages.map((m: any) => m.role), ['user', 'assistant']);
   assert.deepEqual(third.body.messages[3], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_9', is_error: true, content: [
     { type: 'text', text: 'denied\n[image image/png]' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBB' } },

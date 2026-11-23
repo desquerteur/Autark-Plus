@@ -3,24 +3,31 @@
 // three rows that open a dialog: an own MCP server (AF-005: web address with headers, or a command with arguments and
 // environment variables – apps-server.tsx), pasted JSON in the format of Claude Desktop / Claude Code (apps-server.tsx) and
 // a mailbox. A key dialog serves a catalog entry that needs a token (GitHub) or the keys of a local server (Google, Slack,
-// Discord) and a connected app that asks for one. Each writes entries of the connector files (apps-files.ts); the runtime
-// connects, a server that signs in opens the browser, and the Connected row shows how it went.
+// Discord) and a connected app that asks for one. MCP additions are preflighted, their keys saved to Secrets, then sent
+// through apps.add as handles (apps-files.ts addServers / saveServers); a connected app's token goes in by apps.setToken;
+// the mailbox form writes mail.json itself. The runtime connects, a server that signs in opens the PC browser, and the
+// Connected row shows how it went. 16.11.2026 (upstream): what runs on the PC – a local command server, a pasted one, the
+// mailbox – is for whoever manages the PC's files (files.writePath: the owner and the owner's own phone; the runtime
+// checks the same, connected-apps.ts onPc); a device without that adds web servers only.
 // Owns: these rows and dialogs. Never: keeps a typed token or password after saving, writes one into a file, or logs it.
 
 import { useState } from 'preact/hooks';
 import type { ConnectedApp } from '../../shared/model/apps.ts';
 import { Dialog, DialogActions } from '../lib/dialog.tsx';
 import { openExternal } from '../lib/platform.ts';
-import { errorText } from '../lib/rpc.ts';
+import { errorText, rpc } from '../lib/rpc.ts';
+import { can, isOwner } from '../lib/session.ts';
 import { Button } from '../lib/ui.tsx';
 import { setUpWithAi } from '../team/set-up-with-ai.ts';
 import { ActionButton, Group, Row, useBusy } from './controls.tsx';
 import { APP_CATALOG, catalogConnected, catalogEntry, searchCatalog, type CatalogEntry, type CatalogKey } from './apps-catalog.ts';
-import { editConnectors, fileOf, mailEntry, storeKey, tokenHeaders, withEntry, withToken, type MailFields } from './apps-files.ts';
+import { addServers, editConnectors, mailEntry, storeKey, withEntry, type MailFields } from './apps-files.ts';
 import { ImportForm, ServerForm } from './apps-server.tsx';
 
+/** This session runs what runs on the PC (a command server, the mailbox): it manages the PC's files. */
+const onPc = (): boolean => can('files.writePath');
 const valueOf = (event: Event) => (event.currentTarget as HTMLInputElement).value;
-const addMcp = (name: string, entry: Record<string, unknown>) => editConnectors('mcp.json', (text) => withEntry('mcp.json', text, name, entry));
+const addMcp = (name: string, entry: Record<string, unknown>) => addServers([{ name, entry }]);
 const storeToken = (name: string, token: string) => storeKey(`${name} token`, 'token', token, `Connects the app ${name} (Settings › Connectors).`);
 
 /** What the key dialog is for: a catalog entry to connect or a connected app. */
@@ -43,17 +50,20 @@ function TokenForm(props: { target: TokenTarget; onClose: () => void }) {
   const [busy, run] = useBusy();
   const save = () => void run(async () => {
     setError('');
+    if (!can('secrets.save')) { setError('Saving a token requires Settings › Secrets access.'); return; }
     try {
       if (target.kind === 'catalog' && target.entry.keys?.length) {
+        // a local server's keys: isSecretPair would not take every one of them for a secret, so each goes into Secrets here
         const handles: Record<string, string> = {};
         for (const [index, key] of target.entry.keys.entries()) {
           handles[key.env] = `secret://${await storeKey(`${name} · ${key.label}`, 'token', values[index].trim(), `Connects ${name} (Settings › Connectors).`)}`;
         }
         await addMcp(name, catalogEntry(target.entry, handles));
+      } else if (target.kind === 'catalog') {
+        await addMcp(name, { url: target.entry.url, headers: { Authorization: `Bearer ${values[0].trim()}` } }); // addServers stores it after the entry checked out
       } else {
         const secretId = await storeToken(name, values[0].trim());
-        if (target.kind === 'catalog') await addMcp(name, { url: target.entry.url, headers: tokenHeaders(secretId) });
-        else await editConnectors(fileOf(target.app), (text) => withToken(fileOf(target.app), text, name, secretId));
+        await rpc.call('apps.setToken', { id: target.app.id, name: target.app.name, transport: 'http', secretId });
       }
       props.onClose();
     } catch (failure) { setError(errorText(failure)); }
@@ -71,7 +81,7 @@ function TokenForm(props: { target: TokenTarget; onClose: () => void }) {
       <DialogActions message={error || `${needs}Goes into Secrets; the file holds only its handle`} tone={error ? 'error' : 'muted'}>
         {hint && <Button variant="ghost" onClick={() => openExternal(hint.createUrl)}>Create one</Button>}
         <Button variant="secondary" onClick={props.onClose}>Cancel</Button>
-        <Button variant="primary" busy={busy} disabled={values.some((value) => !value.trim())} onClick={save}>Connect</Button>
+        <Button variant="primary" busy={busy} disabled={values.some((value) => !value.trim()) || !can('secrets.save')} onClick={save}>Connect</Button>
       </DialogActions>
     </>
   );
@@ -163,15 +173,16 @@ export function AddApps(props: { apps: readonly ConnectedApp[] }) {
           </Row>
         )}
       </div>
-      <Row label="Own MCP server" hint="Any MCP server: a web address (HTTP) with headers, or a command on this PC (stdio) with its variables" reserve>
+      <Row label="Own MCP server" hint={isOwner() ? 'Any MCP server: a web address (HTTP) with headers, or a command on this PC (stdio) with its variables'
+        : onPc() ? 'Any MCP server: web servers connect remotely; commands run on your PC, and a sign-in opens in its browser pane here' : 'Web servers (HTTP) from here; local commands and OAuth sign-in run on the PC'} reserve>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('server')} /></span>
       </Row>
-      <Row label="Paste JSON" hint={'The "mcpServers" config of Claude Desktop, Claude Code or Cursor – checked before it goes in'} reserve>
+      <Row label="Paste JSON" hint={'The "mcpServers" config of Claude Desktop, Claude Code or Cursor – checked before it goes in; commands run on the PC'} reserve>
         <span class="account-slot"><ActionButton label="Paste" onClick={() => setForm('json')} /></span>
       </Row>
-      <Row label="Add email" hint="A mailbox agents read, sort, draft and send from; new mail wakes an agent" reserve>
+      {onPc() && can('system.root') && <Row label="Add email" hint="A mailbox agents read, sort, draft and send from; new mail wakes an agent" reserve>
         <span class="account-slot"><ActionButton label="Add" onClick={() => setForm('mail')} /></span>
-      </Row>
+      </Row>}
       <TokenDialog target={token} onClose={() => setToken(null)} />
       <Dialog open={form !== null} onClose={() => setForm(null)} title={form ? FORM_TITLES[form] : undefined} width={form === 'json' ? 600 : 520} class="secret-edit anchored">
         {form === 'server' && <ServerForm onClose={() => setForm(null)} />}

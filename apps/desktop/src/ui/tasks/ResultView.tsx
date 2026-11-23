@@ -1,19 +1,25 @@
 // The documentation of a finished task (T6, concept 26): its finish time, the summary, "Also handled …" (the
-// team's report lines – Work's report collects them, work-model.ts report) and the follow-up chips (each schedule
-// chip can be paused or cancelled, a task chip opens it). B-078 D10: no verification mark and no evidence chips –
-// the agent side keeps its verification; the person reads what was done.
-// Owns: result rendering and the follow-up actions. Never: shows unverified work as verified.
+// team's report lines – Work's report collects them, work-model.ts report), the evidence the agent named and the
+// follow-up chips (each schedule chip can be paused or cancelled, a task chip opens it). B-078 D10: no verification
+// mark – the agent side keeps its verification; the person reads what was done. B-080 (live: 153 of 157 results of
+// three days carried evidence nobody could open): each piece of evidence is a chip (its ref as the tooltip) – a link
+// opens in the browser, an absolute path through path-links.ts (B-081: on the task's agent's home PC first, then this
+// PC – a folder, media or file tab; a gone path its not-found tab); anything else stays a quiet static chip.
+// Owns: result rendering, the evidence chips and the follow-up actions. Never: shows unverified work as verified.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { TaskResult, TaskView } from '../../shared/model/tasks.ts';
+import type { Evidence, TaskResult, TaskView } from '../../shared/model/tasks.ts';
 import { Chip, Icon, Menu } from '../lib/ui.tsx';
-import type { MenuSection } from '../lib/ui.tsx';
+import type { IconName, MenuSection } from '../lib/ui.tsx';
+import { openLink } from '../blocks/host.ts';
+import { openPathLink } from '../workspace/path-links.ts';
 import { toastError } from '../lib/toasts.ts';
 import { listTime, fullDate } from '../lib/format.ts';
 import { Markdown } from '../blocks/markdown.tsx';
 import { ensureSchedules, scheduleMenu, schedules, schedulesLoaded } from './schedules.ts';
 import { fetchTask } from './task-cache.ts';
 import { openTask } from './jump.ts';
+import { evidenceTarget } from './work-model.ts';
 
 function ScheduleChip(props: { scheduleId: string; label: string }) {
   const ref = useRef<HTMLSpanElement>(null); // menu anchor (Chip itself does not forward refs)
@@ -56,6 +62,25 @@ function FollowUps(props: { items: NonNullable<TaskResult['followUps']> }) {
   );
 }
 
+const EVIDENCE_ICONS: Record<Evidence['kind'], IconName> = { file: 'file-text', link: 'globe', tool: 'wrench', check: 'check', note: 'file', screenshot: 'image' };
+
+function EvidenceChips(props: { items: Evidence[]; agentId?: string }) {
+  return (
+    <div class="task-followups task-evidence" aria-label="Evidence">
+      {props.items.map((item, index) => {
+        const target = evidenceTarget(item.ref);
+        const label = item.label || item.ref || item.kind;
+        if (!target) return <span key={index} class="chip followup-chip static" title={item.ref}><Icon name={EVIDENCE_ICONS[item.kind] ?? 'file'} size={15} /><span class="chip-label">{label}</span></span>;
+        const open = () => {
+          if (target.kind === 'link') openLink(target.ref);
+          else void openPathLink(target.ref, props.agentId);
+        };
+        return <Chip key={index} class="followup-chip" icon={EVIDENCE_ICONS[item.kind] ?? 'file'} title={target.ref} onClick={open}>{label}</Chip>;
+      })}
+    </div>
+  );
+}
+
 export function ResultView(props: { task: TaskView }) {
   const { task } = props;
   const result = task.result;
@@ -75,6 +100,7 @@ export function ResultView(props: { task: TaskView }) {
           <ul>{result.alsoHandled.map((line, index) => <li key={index}>{line}</li>)}</ul>
         </div>
       )}
+      {!!result.evidence?.length && <EvidenceChips items={result.evidence} agentId={task.assigneeId} />}
       {!!result.followUps?.length && <FollowUps items={result.followUps} />}
     </section>
   );

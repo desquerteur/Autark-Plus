@@ -1,13 +1,15 @@
 // `review` ask widget: the human looks at a result (image, audio, video, document or link) and
 // gives a verdict. The first option answers at once; any other option asks for a short note
 // first, so the agent knows what to change.
+// A document on a PC opens on every device the way a path in a chat does (path-links.ts openPathLink): the side pane on
+// the desktop, the open chat's area on the phone, read on the asking agent's home PC first (16.11.: on the phone it did not open).
 // Answer: {verdict, note?}. Owns: preview + verdict. Never: auto-loads remote media.
 
 import { useState } from 'preact/hooks';
 import { Button, Icon } from '../../lib/ui.tsx';
-import { toastError } from '../../lib/toasts.ts';
-import { isFileId, isRemoteUrl, openLink, openPath, platform } from '../host.ts';
+import { isFileId, isRemoteUrl, openLink } from '../host.ts';
 import { Inline } from '../markdown.tsx';
+import { openPathLink, pathIn } from '../../workspace/path-links.ts';
 import type { AskWidgetProps } from './ask-types.ts';
 import { MediaImage, MediaPlayer, mediaKind } from './Media.tsx';
 import { useDraft } from './use-draft.ts';
@@ -22,7 +24,7 @@ function isMedia(src: string, kind: string): boolean {
   return isFileId(src) || src.startsWith('data:image/') || MEDIA_EXT.test(src);
 }
 
-function Preview(props: { src: string; kind: string }) {
+function Preview(props: { src: string; kind: string; authorId?: string }) {
   const { src, kind } = props;
   if (!src) return null;
   if (isMedia(src, kind)) {
@@ -30,18 +32,18 @@ function Preview(props: { src: string; kind: string }) {
     return <div class="w-review-media">{type === 'image' ? <MediaImage src={src} /> : <MediaPlayer src={src} kind={type} />}</div>;
   }
   const remote = isRemoteUrl(src);
+  const local = !remote && pathIn(src, false) !== undefined;
   const name = remote ? src : src.split(/[\\/]/).pop() || src;
-  const open = async (reveal: boolean) => {
-    try {
-      if (remote) openLink(src);
-      else await openPath(src, reveal);
-    } catch (error) { toastError(error, "Couldn't open the file"); }
+  const open = (event: Event) => {
+    if (remote) { openLink(src); return; }
+    const author = props.authorId ?? (event.currentTarget as HTMLElement).closest<HTMLElement>('[data-author]')?.dataset.author;
+    void openPathLink(src, author);
   };
   return (
     <div class="w-review-file">
       <Icon name={remote ? 'app-window' : 'file'} size={18} />
       <span class="w-review-name" title={src}>{name}</span>
-      {(remote || platform === 'desktop') && <button type="button" class="button secondary" onClick={() => void open(false)}>Open</button>}
+      {(remote || local) && <button type="button" class="button secondary" onClick={open}>Open</button>}
     </div>
   );
 }
@@ -64,7 +66,7 @@ export function Review(props: AskWidgetProps) {
 
   return (
     <div class="w-review">
-      <Preview src={s(block.src)} kind={s(block.kind)} />
+      <Preview src={s(block.src)} kind={s(block.kind)} authorId={props.authorId} />
       {block.question !== undefined && <div class="w-question"><Inline text={s(block.question)} /></div>}
       {pending ? (
         <form class="w-review-note" onSubmit={(event) => { event.preventDefault(); sendPending(); }}>

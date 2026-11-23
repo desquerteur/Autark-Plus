@@ -91,7 +91,7 @@ test('a relay cannot make a tunnel hold much: binary before the other end proved
   assert.equal(b.closed, true, 'even a genuine text message over the limit');
 });
 
-test('the peer channel runs over a tunnel; messages right behind the handshake reach the first listener', async () => {
+test('the peer channel runs over a tunnel; messages right behind the handshake reach the listeners', async () => {
   const owner = newBox();
   const { e, cipher } = toBox(owner.pub, TUNNEL_INFO);
   const sides: { a?: RelayTunnel; b?: RelayTunnel } = {};
@@ -111,6 +111,7 @@ test('the peer channel runs over a tunnel; messages right behind the handshake r
   const channel = await accepted;
   const got: unknown[] = [];
   channel.onMessage((message) => got.push(message));
+  await Promise.resolve(); // 18.11.2026: the backlog goes out in a microtask, to every listener of this run
   assert.deepEqual(got, [{ n: 1 }, { n: 2 }]);
   channel.send({ back: true });
   const back: unknown[] = [];

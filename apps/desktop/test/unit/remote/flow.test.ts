@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatRemoteId } from '../../../src/runtime/remote/id.ts';
-import { COMMIT_TTL_MS, MAX_OPEN, PER_ADDRESS, REQUEST_TTL_MS } from '../../../src/runtime/remote/requests.ts';
+import { COMMIT_TTL_MS, MAX_OPEN, PER_ADDRESS, REQUEST_TTL_MS, WAIT_MAX_MS } from '../../../src/runtime/remote/requests.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { Lan, linkedIds, settle } from './rig.ts';
 
@@ -79,6 +79,62 @@ test('without a linked notice wired, Accept still stores both keys', async () =>
   laptop.remote.decide(laptop.remote.state().incoming[0].id, true);
   await settle();
   assert.deepEqual([linkedIds(laptop), linkedIds(tower)], [[tower.identity.deviceId], [laptop.identity.deviceId]]);
+});
+
+test('F13: Accept with a new person makes them as their PC links – once; decline, a requester that gives up and my own PC make nobody', async () => {
+  const lan = new Lan();
+  const made: Array<{ name: string; title?: string }> = [];
+  const joined: Array<{ personId: string; device: string }> = [];
+  const office = await lan.add('Office', 'http://10.0.0.1:47812', {
+    deps: {
+      createPerson: (input) => { made.push(input); return `per_new${made.length}`; },
+      joined: (personId, device) => { joined.push({ personId, device: device.name }); },
+    },
+  });
+  const anna = await lan.add('Anna laptop', 'http://10.0.0.2:47812');
+
+  await anna.remote.connect({ target: office.remote.remoteId(), role: 'employee' });
+  office.remote.decide(office.remote.state().incoming[0].id, false);
+  await settle();
+  assert.deepEqual(made, [], 'Decline makes nobody');
+
+  // Accepted, then the requester gives up before it collected the answer: nobody is made.
+  await anna.remote.connect({ target: office.remote.remoteId(), role: 'employee' });
+  office.timers.fire(WAIT_MAX_MS);
+  await settle();
+  office.remote.decide(office.remote.state().incoming[0].id, true, undefined, { name: 'Anna' });
+  anna.remote.cancel();
+  await settle();
+  assert.deepEqual([made, linkedIds(office)], [[], []], 'a requester that gave up leaves no person behind');
+
+  await anna.remote.connect({ target: office.remote.remoteId(), role: 'employee' });
+  office.remote.decide(office.remote.state().incoming[0].id, true, undefined, { name: 'Anna', title: 'Design' });
+  await settle();
+  assert.deepEqual(made, [{ name: 'Anna', title: 'Design' }], 'made once, as her PC links');
+  assert.equal(office.repo.get(anna.identity.deviceId)?.personId, 'per_new1', 'the PC is hers: an employee link, never mine');
+  assert.deepEqual(joined, [{ personId: 'per_new1', device: 'Anna laptop' }], 'she is in now');
+  assert.deepEqual(office.admitted, ['per_new1']);
+  assert.match(office.notes[0]?.body ?? '', /is linked as an employee's PC/);
+
+  // My own PC never becomes a person's.
+  const tower = await lan.add('Tower', 'http://10.0.0.3:47812');
+  await tower.remote.connect({ target: office.remote.remoteId() });
+  const [mine] = office.remote.state().incoming;
+  assert.throws(() => office.remote.decide(mine.id, true, undefined, { name: 'Bob' }), (error: unknown) => error instanceof WorkforceError && error.code === 'bad_request' && /as your own PC/.test(error.message));
+  assert.equal(office.remote.state().incoming.length, 1, 'the request still waits for a right answer');
+  assert.equal(made.length, 1);
+});
+
+test('F13: a person that cannot be made refuses the link; the requester hears why', async () => {
+  const lan = new Lan();
+  const office = await lan.add('Office', 'http://10.0.0.1:47812', { deps: { createPerson: () => { throw new WorkforceError('not_found', 'This manager no longer exists.'); } } });
+  const anna = await lan.add('Anna laptop', 'http://10.0.0.2:47812');
+  await anna.remote.connect({ target: office.remote.remoteId(), role: 'employee' });
+  office.remote.decide(office.remote.state().incoming[0].id, true, undefined, { name: 'Anna', managerId: 'ag_gone' });
+  await settle();
+  assert.deepEqual(linkedIds(office), []);
+  assert.equal(anna.remote.state().outgoing?.status, 'declined');
+  assert.match(anna.remote.state().outgoing?.reason ?? '', /manager no longer exists/);
 });
 
 test('connect by address; decline; expiry; cancel', async () => {

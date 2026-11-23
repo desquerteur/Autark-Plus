@@ -19,7 +19,7 @@ import { CHAT, PARENT, part, world } from '../splits/fixture.ts';
 const TURN: SplitTurn = { splitId: 'sp_1', groupId: 'sg_1', idx: 1, of: 2, title: 'Part one', parentRunId: 'run_old', parentThread: 'ch_x', context: 'brief', firstTurn: true };
 
 test("every person's Stop of a turn stops its pending split groups at once; a split lane's stop and a shutdown do not", async () => {
-  const h = setup({ maxConcurrent: 4 });
+  const h = setup();
   h.org.add(agent('ag_tom', 'Tom'));
   const after: Array<[string, string]> = [];
   h.services.splits = {

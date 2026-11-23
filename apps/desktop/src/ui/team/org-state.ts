@@ -1,6 +1,7 @@
 // Org data the team views need beyond the store: spaces (loaded on demand, again after every session answer – i.e.
 // every reconnect – then kept fresh by 'space.upserted'), the live activity per agent, and the org tree ranked by
-// the human's chat activity – with people as nodes (B-041 §8: an agent under a person sits under that person).
+// the human's chat activity – with people as nodes (B-041 §8: an agent under a person sits under that person). F14: only
+// people who joined are nodes; the owner's invited ones are a list of their own (invitedPeople).
 // Owns: the spaces signal and these computed views. Never: polls or keeps agent copies (agents come from
 // store.agents).
 
@@ -13,7 +14,7 @@ import { activity, agents, conversations, settings } from '../lib/store.ts';
 import { people } from '../lib/people.ts';
 import { withSelf } from '../lib/self-identity.ts';
 import { buildOrg, interactionScores } from './model.ts';
-import { peopleOrg } from './people-model.ts';
+import { peopleOrg, splitInvited } from './people-model.ts';
 import { runningByAgent } from '../splits/split-text.ts';
 
 export const spaces = signal<Space[]>([]);
@@ -60,8 +61,12 @@ export const teamPeople = computed(() => {
   return withSelf(people.value.filter((person) => admin || person.status !== 'revoked'), settings.value?.profile);
 });
 
+/** F14: who is in the org chart (joined) and – for the owner – who is only invited yet (the sidebar's "Invited (n)"). */
+const split = computed(() => splitInvited(teamPeople.value));
+export const invitedPeople = computed(() => (can('people.save') ? split.value.invited : []));
+
 /** B-041 §8 – one org chart: people with the agents under them, and the agents of the top (people-model.ts peopleOrg). */
-const chart = computed(() => peopleOrg(teamPeople.value, buildOrg(agents.value, agentScores.value)));
+const chart = computed(() => peopleOrg(split.value.members, buildOrg(agents.value, agentScores.value)));
 
 /** The org tree (managers → reports) of the active agents of the top, ranked by use (agents under a person are in peopleTree). */
 export const orgTree = computed(() => chart.value.agents);

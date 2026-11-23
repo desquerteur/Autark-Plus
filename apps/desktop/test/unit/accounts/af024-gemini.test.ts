@@ -79,7 +79,7 @@ test('Gemini CLI (ACP): its quota errors are limits with their wait – "exhaust
 });
 
 const gemini = (id: string, extra: Partial<Account> = {}): Account => ({
-  id, provider: 'gemini-cli', label: id, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...extra,
+  id, provider: 'gemini-cli', label: id, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...extra,
 });
 const limited = (resetsAt: number, perModel: boolean): EngineTurnResult => ({
   text: '', stop: 'limit', error: { code: 'rate_limited', message: 'The usage limit of this account was reached.', retryAfterMs: resetsAt - NOW, details: { quota: { daily: true, perModel, resetsAt } } },
@@ -115,7 +115,7 @@ test('a daily quota becomes a used-up window: the model\'s own keeps the account
   assert.equal(recordAccountFailure({ accounts: own.accounts, clock: own.clock }, list[0], 'gemini-2.5-pro', limited(MIDNIGHT_PT, true)), 'limit');
   assert.deepEqual(own.calls, ['limits acc_g1 1d-gemini-2-5-pro'], 'no cooling: only that model waits');
   assert.deepEqual(selectCandidates(list, 'acp', NOW, 'gemini-2.5-pro').map((a) => a.id), ['acc_g2'], 'Gemini 1 is used up for Pro: Gemini 2 stands in');
-  assert.deepEqual(selectCandidates(list, 'acp', NOW, 'gemini-2.5-flash').map((a) => a.id), ['acc_g1'], 'Flash still runs on Gemini 1 (the first plan; AF-023)');
+  assert.deepEqual(selectCandidates(list, 'acp', NOW, 'gemini-2.5-flash').map((a) => a.id), ['acc_g1', 'acc_g2'], 'Flash still runs on Gemini 1 first (every signed-in plan takes turns, upstream 09.11.2026)');
   assert.equal(windowLabel(list[0].limits!.windows[0].name), 'Daily · gemini-2-5-pro');
 
   const whole = recorder([gemini('acc_g3')]);

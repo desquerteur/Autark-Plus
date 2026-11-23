@@ -28,18 +28,17 @@ function report(result: VectorEmbedResult): string {
 
 export const vectorEmbed: ToolDef = defineTool<{ paths: string[] }>({
   name: 'vector.embed',
-  description: 'Makes files or folders searchable with vector.search: embeds whole files and keeps them, at a cost in time, so I embed what my work keeps coming back to; a file or two is quicker read. Unchanged files are not redone. Folders skip binaries, dependency folders, caches and secrets. Big folders: call again for the rest.',
+  description: 'Makes files or folders searchable by meaning with vector.search. It costs time, so I embed what my work keeps coming back to; unchanged files are skipped, folders leave out binaries, dependencies, caches and secrets, and a big folder takes more calls.',
   inputSchema: {
     type: 'object',
     properties: { paths: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 1024 } } },
     required: ['paths'], additionalProperties: false,
   },
   category: 'read',
-  anyMode: true,
+  requires: 'embeddings',
   describe: (args) => ({ summary: `Embed ${clip(args.paths.join(', '), 120)}`, resource: args.paths[0], reversible: true, external: false }),
   async run(args, ctx) {
     if (ctx.fromPc !== undefined) return failure('vector.embed runs only for agents of this PC.');
-    if (!ctx.services.vectors.available()) return failure('No embedding model is available (Settings: Embeddings). Search with files.search instead.');
     const places = await Promise.all(args.paths.map((given) => placePath(ctx, given)));
     return text(report(await ctx.services.vectors.embed(places)));
   },

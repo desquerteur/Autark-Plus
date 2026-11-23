@@ -1,6 +1,5 @@
-// Run items as the person sees them – shared by Team › agent › Runs (AgentRuns.tsx), the chat's
-// live work block (chat/WorkingMessage.tsx) and the "Worked … · N steps" disclosure above an agent
-// answer (chat/RunDisclosure.tsx), on the desktop and the phone. D5, like Codex: every step is one
+// Run items as the person sees them – shared by Team › agent (its activity log, AgentLog.tsx) and split rows
+// (splits/SplitRows.tsx), on the desktop and the phone. D5, like Codex: every step is one
 // compact 24 px line – icon, verb, target (step-view.ts), a spinner while a call runs, red when it
 // failed, a click opens its input and output; provider-visible reasoning summaries are muted
 // "Thought · <headline>" lines (shimmering while written) – never invented thoughts; plans, errors
@@ -11,8 +10,6 @@
 // Loading (useRunItems): runs.items once the view needs it, then live while the run runs – over
 // `runs:<agentId>` where this connection may hold that stream ('manage'), otherwise by reading the
 // items again when the agent's live activity note changes (at most every 2 s: splits, Team on a chat-only phone).
-// B-075: the chat renders a run's steps from its row (step-view.ts stepItems) and reads the journal only on a click
-// (the live block's earlier steps, a stopped run's steps, an answer's "Worked …" list) where this PC holds it.
 // Live work is announced before its run is journaled, so a live run not found yet is an empty list.
 // A finished run's items are kept until the next (re)connect (a chat opened again shows them
 // without a call), and the latest list of a live view (a split, a live block opened to its journal) seeds the
@@ -29,9 +26,8 @@ import { EmptyState, Icon, Spinner } from '../lib/ui.tsx';
 import { RpcError, rpc, errorText } from '../lib/rpc.ts';
 import { holds } from '../lib/session.ts';
 import { activity } from '../lib/store.ts';
-import { mergeItem } from '../chat/run-summary.ts';
 import { runEntries } from './model.ts';
-import { liveWindow, shownEntry } from './step-view.ts';
+import { liveWindow, mergeItem, shownEntry } from './step-view.ts';
 import { StepEntry, entryKey } from './run-steps.tsx';
 
 export { ToolEntry } from './run-steps.tsx';

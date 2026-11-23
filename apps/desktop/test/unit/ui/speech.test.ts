@@ -1,9 +1,9 @@
 // The microphone's audio helpers (ui/lib/pcm.ts, pcm-worklet.ts): floats → 16 kHz PCM16 LE, the take's
-// WAV, the conversation's utterance detector and the level meter.
+// WAV, the block level and the level meter (the conversation's line end: turn-detect.test.ts).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LevelHistory, meterLevel, PCM_RATE, Pcm16Encoder, UtteranceDetector, pcm16ToFloat, rms, wavFile } from '../../../src/ui/lib/pcm.ts';
+import { LevelHistory, meterLevel, PCM_RATE, Pcm16Encoder, pcm16ToFloat, rms, wavFile } from '../../../src/ui/lib/pcm.ts';
 import { PCM_TAP, registerPcmTap } from '../../../src/ui/lib/pcm-worklet.ts';
 
 function samples(values: number[]): Float32Array {
@@ -27,27 +27,9 @@ test('Pcm16Encoder: 48 kHz → 16 kHz, little-endian, clamped, phase carried acr
   assert.deepEqual([loudView.getInt16(0, true), loudView.getInt16(2, true), loudView.getInt16(4, true)], [32767, -32767, Math.round(0.25 * 32767)]);
 });
 
-test('rms + UtteranceDetector: start on sound, end after 1.1 s silence or the 120 s cap', () => {
+test('rms of a block', () => {
   assert.equal(rms(new Float32Array(0)), 0);
   assert.ok(Math.abs(rms(samples([0.5, -0.5])) - 0.5) < 1e-9);
-
-  const detector = new UtteranceDetector();
-  assert.equal(detector.feed(0.001, 0), null);
-  assert.equal(detector.feed(0.05, 100), 'start');
-  assert.equal(detector.speaking, true);
-  assert.equal(detector.feed(0.001, 900), null);
-  assert.equal(detector.feed(0.05, 1000), null, 'sound again keeps the utterance');
-  assert.equal(detector.feed(0.001, 2000), null);
-  assert.equal(detector.feed(0.001, 2101), 'end');
-  assert.equal(detector.speaking, false);
-
-  const capped = new UtteranceDetector({ maxMs: 500 });
-  assert.equal(capped.feed(0.05, 0), 'start');
-  assert.equal(capped.feed(0.05, 499), null);
-  assert.equal(capped.feed(0.05, 500), 'end');
-  capped.feed(0.05, 600);
-  capped.reset();
-  assert.equal(capped.speaking, false);
 });
 
 // ------------------------------------------------------------------ D13: clean audio, level meter

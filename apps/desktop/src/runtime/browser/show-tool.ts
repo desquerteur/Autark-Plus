@@ -1,10 +1,10 @@
 // browser.show: an agent shows the person a web page – it opens as a tab in this chat's area above the messages and is
 // shown there at once (a closed area's cell in the app gets a dot). Without a chat it goes to the person's pane (global);
-// `where` says otherwise – own: the agent's own area on its agent page (agent:<id>, place.ts sideOn). The tab carries the
+// `where` says otherwise – agent: the agent's own area on its agent page (agent:<id>, place.ts sideOn with 'own'). The tab carries the
 // agent and the chat; without `newTab` it is the agent's preview tab there (main/workspace-marks.ts). It is no device
-// tool (offered in every mode); it goes through main (host op sideBrowser).
-// Owns: the tool, its own where text (its 'own' is the agent's area, not the agent's browser) and the preview hint
-// browser.open shares. Never: reads the page (browser.open with where: chat or global does).
+// tool (offered in every mode); it goes through main (host op sideBrowser). B-081: its texts say this chat's work goes in
+// this chat's area and global is the person's own across chats.
+// Owns: the tool and its where text. Never: reads the page (browser.open with where: chat or global does).
 
 import type { ToolDef } from '../tools/types.ts';
 import { text } from '../tools/types.ts';
@@ -16,12 +16,7 @@ import { sideOn, type Place } from './place.ts';
 
 export const BROWSER_SHOW_TOOL = 'browser.show';
 
-/** What newTab does in the person's browser (browser.open and browser.show). */
-export const PREVIEW_HINT = 'my preview tab there, which my next page replaces until the person uses it; true: a tab of its own.';
-
-/** browser.show's places – all three in the person's browser. */
-export const SHOW_WHERE = "chat: this chat's area above its messages (everyone here sees it); global: the person's own pane; own: my area on my agent page (I keep it: space agent:<my id> in side-tabs.json) – all three in the person's browser, with the logins the person made there. Default: chat when this run has one, else global.";
-const SHOW_NO_CHAT = "This run has no chat, so there is no chat area: where: 'global' is the person's pane, 'own' my area on my agent page.";
+const SHOW_NO_CHAT = "This run has no chat, so there is no chat area: where: 'global' is the person's pane, 'agent' my area on my agent page.";
 
 /** Where the result says the page went. */
 const PLACE_NAME: Record<Place, string> = { chat: "this chat's area", global: "the person's pane", own: 'my area on my agent page' };
@@ -33,15 +28,15 @@ export function showUrl(input: string): string {
   }
 }
 
-const show = defineTool<{ url: string; where?: Place; newTab?: boolean }>({
+const show = defineTool<{ url: string; where?: 'chat' | 'global' | 'agent'; newTab?: boolean }>({
   name: BROWSER_SHOW_TOOL,
-  description: "Show the person a web page: it opens as a tab in this chat's area above the messages (where: global – the person's own pane; own – my area on my agent page). To read or work in it myself, I use browser.open with where: chat or global.",
+  description: "Shows the person a web page as a tab above this chat, with their logins. This chat's work goes there so everyone here finds it; what I want them to see for themselves – a site, background, a page I am building – I put in front of them this way (global: their own pane) rather than only describe it. To read or work in the page myself I use browser.open.",
   inputSchema: {
     type: 'object',
     properties: {
-      url: { type: 'string', minLength: 1, maxLength: 4000, description: 'http(s) address, e.g. https://example.com/pricing or localhost:5173' },
-      where: { type: 'string', enum: ['chat', 'global', 'own'], description: SHOW_WHERE },
-      newTab: { type: 'boolean', description: `Without it the page takes ${PREVIEW_HINT}` },
+      url: { type: 'string', minLength: 1, maxLength: 4000 },
+      where: { type: 'string', enum: ['chat', 'global', 'agent'], description: "chat (default), global: the person's pane across chats, or agent: my area on my agent page." },
+      newTab: { type: 'boolean', description: 'Else my preview tab, which my next page replaces until the person uses it.' },
     },
     required: ['url'],
     additionalProperties: false,
@@ -51,7 +46,7 @@ const show = defineTool<{ url: string; where?: Place; newTab?: boolean }>({
   async run(args, ctx) {
     const url = showUrl(args.url);
     if (args.where === 'chat' && !ctx.conversationId) throw new WorkforceError('bad_request', SHOW_NO_CHAT);
-    const place = args.where ?? (ctx.conversationId ? 'chat' : 'global');
+    const place: Place = args.where === 'agent' ? 'own' : args.where ?? (ctx.conversationId ? 'chat' : 'global');
     const result = await sideCall(ctx, { action: 'open', url, ...(args.newTab === undefined ? {} : { newTab: args.newTab }), show: true, ...sideOn(ctx, place, {}) });
     return { ...text(`Opened ${url} in ${PLACE_NAME[place]} (tab ${result.tab ?? ''}).`), structured: { url, tab: result.tab } };
   },

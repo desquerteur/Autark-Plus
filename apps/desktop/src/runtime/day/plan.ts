@@ -1,7 +1,7 @@
 // Planning one day of My day (B-041 track A2, contract §5.7): day.plan and the morning run. Connected calendars
 // sync first (calendarSources.sync 'plan', when there are any – a failed sync never stops the plan); then the
 // person's open to-dos that belong in a calendar – their own, and the steps that need them somewhere in person
-// (humanReason 'physical'); never a host card, a timer that rings by itself or a mini-app – with their estimates
+// (one given to them with an estimate of their time); never a host card, a timer that rings by itself or a mini-app – with their estimates
 // (the stored one, else the learned rule), the day's busy spans and every task block go to calendar/planner.ts
 // planDay, and its placements become planner blocks (calendar.upsertBlock 'planner'); a movable block that found
 // no new place goes, so its to-do shows as unplanned. Planning the local today records kv day/planned:<member>
@@ -36,7 +36,7 @@ const MAX_TODOS = 1000;
 export function plannable(task: TaskView): boolean {
   if (task.assigneeKind !== 'human' || task.status !== 'open') return false;
   if (task.widget?.type === 'timer' || appWidgetOf(task.widget)) return false;
-  return isHumanActor(task.createdBy) || (task.createdBy !== SYSTEM_ID && task.humanReason === 'physical');
+  return isHumanActor(task.createdBy) || (task.createdBy !== SYSTEM_ID && task.estimateMin !== undefined);
 }
 
 const asBlock = (event: CalendarEvent): PlanBlock => ({ ...(event.taskId ? { taskId: event.taskId } : {}), startAt: event.startAt, endAt: event.endAt, setBy: event.setBy, state: event.state });

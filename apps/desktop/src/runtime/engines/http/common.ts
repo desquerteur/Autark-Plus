@@ -1,7 +1,8 @@
 // Shared security rules for HTTP engines (ported from legacy connections.cjs / inference.cjs).
 // Owns: endpoint validation (HTTPS or loopback HTTP, no userinfo/query/fragment), `redirect:'error'`,
 // 1 MiB cap per JSON body / SSE event, fixed user-safe error messages per status, key redaction,
-// and an SSE reader.
+// and an SSE reader. B-083: a used-up prepaid credit (a plan's monthly API credits or any key's balance) is recognised
+// from the first bytes of a refused 400/429 body – read only to classify – and cools the account for a day.
 // Never: puts provider response bodies or keys into errors, logs or events.
 
 import type { WorkforceErrorData } from '../../../shared/errors.ts';
@@ -46,8 +47,28 @@ export function endpointFor(account: Pick<Account, 'provider' | 'baseUrl'>): str
   return url.href.replace(/\/+$/, '');
 }
 
+/** B-079: how long a key whose credit is used up (HTTP 402) stays out of routing before one call tries it again. */
+export const CREDIT_COOLDOWN_MS = 6 * 60 * 60_000;
+/** B-083: how long an account whose prepaid credit the provider calls used up waits – tried again daily, so a new billing
+ *  month's plan credits are found within a day. */
+export const CREDIT_EXHAUSTED_COOLDOWN_MS = 24 * 60 * 60_000;
+/** B-083: the providers' error fields for it – Anthropic HTTP 400 `"message": "Your credit balance is too low …"`, OpenAI
+ *  HTTP 429 `"code": "insufficient_quota" | "credit_balance_exhausted"`. Fields, not free text: a body that echoes a request
+ *  or an upstream text (escaped quotes) never matches. */
+const CREDIT_USED_UP = /"code"\s*:\s*"(?:insufficient_quota|credit_balance_exhausted)"|"message"\s*:\s*"Your credit balance is too low/;
+/** How much of a refused request's body is read to recognise them. */
+const ERROR_PEEK = 16 * 1024;
+
+/** B-083: a used-up prepaid credit is a limit of the account – it cools a day, and routing takes another model meanwhile. */
+export function creditError(): WorkforceErrorData {
+  return { code: 'rate_limited', message: 'The credit of this key is used up. Another model takes over; this key is tried again in a day.', retryAfterMs: CREDIT_EXHAUSTED_COOLDOWN_MS };
+}
+
 export function statusError(status: number): WorkforceErrorData {
   if (status === 401) return { code: 'unavailable', message: 'The provider rejected this connection. Reconnect in Settings.' };
+  // B-079 (live 07.11.: a gateway's free credit ran out and every decision call failed with 402 for hours, never moving
+  // on): a used-up credit is a limit of the account – it cools, and routing takes another model until it is topped up.
+  if (status === 402) return { code: 'rate_limited', message: 'The credit of this key is used up (HTTP 402). Another model takes over until it is topped up.', retryAfterMs: CREDIT_COOLDOWN_MS };
   // Gateways can allow some models and deny others on the same valid key (e.g. free credits).
   // A 403 establishes neither an invalid key nor an outage of the whole account.
   if (status === 403) return { code: 'forbidden', message: 'The provider denied access to this model or request (HTTP 403). Check model permissions or paid-credit requirements; this does not establish that the API key is invalid.' };
@@ -91,35 +112,43 @@ export async function postJson(fetchFn: FetchFn, url: string, headers: Record<st
     if (signal.aborted) throw new HttpEngineError(ERR.cancelled());
     throw new HttpEngineError({ code: 'unavailable', message: 'Could not reach the model. Check the connection before retrying.' });
   }
-  if (!response.ok) {
-    const limitText = response.status === 429 ? await errorBodyText(response) : ''; // AF-024
-    await response.body?.cancel().catch(() => {});
-    const data = statusError(response.status);
-    if (response.status === 429) {
-      const hinted = limitFromText(limitText);
-      data.retryAfterMs = retryAfter(response) ?? hinted.retryAfterMs;
-      if (hinted.details) data.details = hinted.details;
-    }
-    throw new HttpEngineError(data);
-  }
+  if (!response.ok) throw new HttpEngineError(await refusal(response));
   return response;
 }
 
-/** AF-024: the first 8 KB of an error body as text (a 429's quota and retry hint); '' when it cannot be read. */
-async function errorBodyText(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return '';
+/**
+ * The safe error of a refused request: by its status, or a used-up credit its 400/429 body names (B-083). AF-024: a 429
+ * body's own wait and daily quota (Gemini API RetryInfo) fill in what the Retry-After header leaves out.
+ */
+async function refusal(response: Response): Promise<WorkforceErrorData> {
+  const peekable = response.status === 400 || response.status === 429;
+  const text = peekable ? await peek(response) : '';
+  if (!peekable) await response.body?.cancel().catch(() => {});
+  if (CREDIT_USED_UP.test(text)) return creditError();
+  const data = statusError(response.status);
+  if (response.status === 429) {
+    const hinted = limitFromText(text);
+    data.retryAfterMs = retryAfter(response) ?? hinted.retryAfterMs;
+    if (hinted.details) data.details = hinted.details;
+  }
+  return data;
+}
+
+/** The first ERROR_PEEK bytes of a refused request's body, only to classify it – never into an error, log or event. */
+async function peek(response: Response): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
-    while (size < 8192) {
+    while (size < ERROR_PEEK) {
       const { done, value } = await reader.read();
-      if (done || !value) break;
+      if (done) break;
       chunks.push(value);
       size += value.byteLength;
     }
-  } catch { /* what arrived is enough */ } finally { await reader.cancel().catch(() => {}); }
-  return Buffer.concat(chunks).subarray(0, 8192).toString('utf8');
+  } catch { /* unreadable: the status alone decides */ } finally { await reader.cancel().catch(() => {}); }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 /** Reads a JSON body with a byte cap. */

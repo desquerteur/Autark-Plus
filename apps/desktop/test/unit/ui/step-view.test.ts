@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RunItem, RunItemKind } from '../../../src/shared/model/runs.ts';
-import { STEP_ICONS, answerOf, callStep, liveWindow, parsedArgs, shownEntry, stepItems, thoughtLine, thoughtParts } from '../../../src/ui/team/step-view.ts';
+import { STEP_ICONS, answerOf, callStep, liveWindow, parsedArgs, shownEntry, thoughtLine, thoughtParts } from '../../../src/ui/team/step-view.ts';
 import { runEntries } from '../../../src/ui/team/model.ts';
 
 let seq = 0;
@@ -49,21 +49,4 @@ test('the live window keeps the newest steps at the bottom and counts the folded
   assert.deepEqual(liveWindow(list, 6), { hidden: 2, shown: [3, 4, 5, 6, 7, 8] });
   assert.deepEqual(liveWindow(list, 6, true), { hidden: 0, shown: list });
   assert.deepEqual(liveWindow([1, 2], 6), { hidden: 0, shown: [1, 2] });
-});
-
-test('B-075: a row\'s step values become the items the same list renders – a call with its result (failed kept), a running one without, a thought', () => {
-  const items = stepItems('run_9', [
-    { kind: 'command', verb: 'Ran', active: 'Running', target: 'npm test' },
-    { kind: 'read', verb: 'Read', active: 'Reading', target: 'src/app.ts', failed: true },
-    { kind: 'plan', verb: 'Thought', active: 'Thinking', target: 'Checking the plan', thought: true, running: true },
-    { kind: 'web', verb: 'Opened', active: 'Opening', target: 'example.com', running: true },
-  ]);
-  const entries = runEntries(items);
-  assert.deepEqual(entries.map((entry) => entry.kind === 'tool' ? [callStep(entry.call).target, entry.result?.data.ok] : [entry.item.kind]), [
-    ['npm test', true], ['src/app.ts', false], ['reasoning'], ['example.com', undefined],
-  ]);
-  const thought = entries[2]!.kind === 'item' ? entries[2]!.item : undefined;
-  assert.deepEqual(thoughtLine(thought!, true), { verb: 'Thinking', headline: 'Checking the plan', text: '**Checking the plan**', live: true });
-  assert.ok(items.every((item) => item.data.args === undefined && item.data.output === undefined), 'no input or output');
-  assert.deepEqual(stepItems('run_9', []), []);
 });

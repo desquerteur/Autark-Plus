@@ -3,7 +3,11 @@
 // one: phone.pair with the 6-digit code from the phone's pairing dialog, phone.connect, phone.disconnect;
 // phone.devices also lists phones nearby. Remote-capable – the phone hangs off whichever PC it is paired with. The skills
 // phone-access (the app) and phone-adb (adb) say how each is set up. Every output of an action says to look again (no
-// blind chains).
+// blind chains); phone.type through the app shows what the field reads afterwards instead (masked like any readback).
+// Each step names the agent (`by`) for the app's bubble; phone.say (feedback 16.11.2026 F16) puts my
+// line or question (✓ / ✕) there, so the person sees what I do without opening the app and answers with one tap.
+// KI-Runde 17.11.2026: each description opens with what the prompt's one-line list must carry – phone.say the ask,
+// phone.key the app phone's keys with notifications (what just arrived, an SMS code), phone.ui_tree that it reads the screen.
 // Owns: schemas, summaries, output formatting. Never: repeats a pairing code in a summary or an output.
 
 import type { ToolContext, ToolDef } from '../tools/types.ts';
@@ -13,24 +17,28 @@ import { imageOutput } from '../computer/tools.ts';
 import { notConnected, pairThenConnect } from './connect.ts';
 import { movingKey } from './adb-args.ts';
 import { typedText } from '../secrets/handles.ts';
+import { PHONE_SAY_MAX } from '../../shared/api/methods-phone.ts';
+import { FIELD_MAX } from './app-driver.ts';
 import type { PhoneDriver, PhoneStepOptions, PhoneWireless } from './driver.ts';
 
 type Phone = PhoneDriver & PhoneWireless;
 
-const SERIAL = { type: 'string', maxLength: 120, description: 'device serial from phone.devices (only needed with several phones)' };
+const SERIAL = { type: 'string', maxLength: 120, description: 'Needed only with several phones (phone.devices).' };
 const VERIFY = 'Not verified – I read phone.ui_tree before the next step.';
-const ADDRESS = { type: 'string', minLength: 3, maxLength: 260, description: 'host:port shown on the phone, e.g. 192.168.1.20:37099' };
+/** After a secret went to the phone: the phone has the value; whatever I read back (ui_tree, a screenshot's text) shows it as its handle. */
+const MASKED = 'The phone got the stored value; phone.ui_tree shows it as its secret:// handle (masked), not as typed text.';
+const ADDRESS = { type: 'string', minLength: 3, maxLength: 260, description: 'host:port shown on the phone.' };
 const short = (value: unknown) => String(value ?? '').slice(0, 80);
 
 const where = (ctx: ToolContext) => ctx.deviceId ?? 'this PC';
 const phone = (summary: string, ctx: ToolContext, reversible: boolean) => ({ summary, resource: where(ctx), reversible, external: false });
 
 export function phoneTools(adb: Phone): ToolDef[] {
-  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal });
+  const step = (ctx: ToolContext): PhoneStepOptions => ({ signal: ctx.signal, job: ctx.runId, by: ctx.agent?.name });
 
   const devices = defineTool<Record<string, never>>({
     name: 'phone.devices',
-    description: "The Android phones I can use from this PC: the person's phone with the Autark app (phone use, no ADB – state 'phone use off' until they turn it on), phones over ADB (USB or wireless debugging) with their state, and phones nearby that offer ADB pairing.",
+    description: "Lists the Android phones I can use from this PC, with their state. The person's phone with the Autark app, phones over ADB, and phones nearby offering pairing.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('List connected phones', ctx, true),
@@ -38,7 +46,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
       if (!(await adb.available())) return text("No phone is connected: the Autark app on the person's phone is not connected to this PC right now, and adb is not installed here (skill phone-access for the app; skill phone-adb: winget install Google.PlatformTools).");
       const list = await adb.devices();
       const nearby = notConnected(await adb.discover().catch(() => []), list);
-      const lines = list.map((d) => `- ${d.serial} · ${d.state}${d.model ? ` · ${d.model}` : ''}`);
+      const lines = list.map((d) => `- ${d.serial} · ${d.state} · ${d.transport === 'autark-app' ? 'Autark app' : 'ADB'}${d.model ? ` · ${d.model}` : ''}`);
       const near = nearby.map((n) => `- ${n.address} · ${n.service === 'pairing' ? 'pairing dialog open (phone.pair with the code shown there)' : 'paired phone ready to connect (phone.connect)'}`);
       if (!lines.length && !near.length) return text("No phone is connected. The person's phone joins with the Autark app (skill phone-access); another one with wireless debugging (skill phone-adb, then phone.pair).");
       const body = [lines.length ? lines.join('\n') : 'No phone is connected.', near.length ? `Nearby:\n${near.join('\n')}` : ''].filter(Boolean).join('\n');
@@ -48,10 +56,10 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const pair = defineTool<{ address: string; code: string; connect?: string }>({
     name: 'phone.pair',
-    description: "Pair an Android phone over wireless debugging: the IP address:port and 6-digit code from the phone's \"Pair device with pairing code\" dialog, then connect (connect = the address under Wireless debugging, else found nearby).",
+    description: 'Pairs an Android phone over wireless debugging with its pairing code, then connects.',
     inputSchema: {
       type: 'object',
-      properties: { address: ADDRESS, code: { type: 'string', minLength: 6, maxLength: 20, description: 'the 6-digit pairing code' }, connect: ADDRESS },
+      properties: { address: { ...ADDRESS, description: 'host:port from the pairing dialog.' }, code: { type: 'string', minLength: 6, maxLength: 20 }, connect: { ...ADDRESS, description: 'host:port under Wireless debugging; default found nearby.' } },
       required: ['address', 'code'],
       additionalProperties: false,
     },
@@ -68,7 +76,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const connect = defineTool<{ address: string }>({
     name: 'phone.connect',
-    description: 'Connect to an already paired Android phone over wireless debugging (the IP address:port shown under Wireless debugging; it changes after a restart).',
+    description: 'Connects to an already paired phone over wireless debugging. Its address under Wireless debugging changes after a restart.',
     inputSchema: { type: 'object', properties: { address: ADDRESS }, required: ['address'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Connect to the Android phone at ${short(args.address)} from ${where(ctx)}`, ctx, false), // any host:port
@@ -83,8 +91,8 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const disconnect = defineTool<{ serial: string }>({
     name: 'phone.disconnect',
-    description: 'Disconnect a phone on wireless debugging (its serial from phone.devices, e.g. 192.168.1.20:37099) – when the task on the phone is done.',
-    inputSchema: { type: 'object', properties: { serial: { ...SERIAL, minLength: 3, description: 'serial of a wireless phone from phone.devices' } }, required: ['serial'], additionalProperties: false },
+    description: 'Disconnects a phone on wireless debugging.',
+    inputSchema: { type: 'object', properties: { serial: { ...SERIAL, minLength: 3, description: 'From phone.devices.' } }, required: ['serial'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Disconnect the Android phone ${short(args.serial)} from ${where(ctx)}`, ctx, true),
     async run(args) {
@@ -98,7 +106,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const screenshot = defineTool<{ serial?: string }>({
     name: 'phone.screenshot',
-    description: 'Screenshot of the phone screen (downscaled; the text gives the factor to phone pixels). Prefer phone.ui_tree to find elements.',
+    description: 'Takes a screenshot of the phone screen; the text gives the factor to phone pixels. Elements I find with phone.ui_tree.',
     inputSchema: { type: 'object', properties: { serial: SERIAL }, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('Screenshot of the phone', ctx, true),
@@ -111,7 +119,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const uiTree = defineTool<{ serial?: string }>({
     name: 'phone.ui_tree',
-    description: 'Elements on the phone screen (uiautomator): class, text, description, id, tap/scroll ability and the centre point to tap.',
+    description: 'Reads the phone screen: every element with its text and the point to tap it.',
     inputSchema: { type: 'object', properties: { serial: SERIAL }, additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (_args, ctx) => phone('Read the phone screen', ctx, true),
@@ -125,7 +133,7 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const tap = defineTool<{ x: number; y: number; serial?: string }>({
     name: 'phone.tap',
-    description: 'Tap at phone pixel coordinates (use the @x,y of an element from phone.ui_tree).',
+    description: "Taps at phone pixel coordinates, an element's @x,y from phone.ui_tree.",
     inputSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, serial: SERIAL }, required: ['x', 'y'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Tap the phone at ${args.x},${args.y}`, ctx, false),
@@ -138,10 +146,10 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const swipe = defineTool<{ x1: number; y1: number; x2: number; y2: number; durationMs?: number; serial?: string }>({
     name: 'phone.swipe',
-    description: 'Swipe on the phone (scroll a list: from lower to upper point, 300–500 ms). Through the Autark app the path is a light curve with a little jitter, like a finger.',
+    description: 'Swipes on the phone from one point to another, e.g. upwards to scroll.',
     inputSchema: {
       type: 'object',
-      properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, durationMs: { type: 'integer', minimum: 50, maximum: 10_000 }, serial: SERIAL },
+      properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, durationMs: { type: 'integer', minimum: 50, maximum: 10_000, description: '300–500 ms scrolls a list.' }, serial: SERIAL },
       required: ['x1', 'y1', 'x2', 'y2'],
       additionalProperties: false,
     },
@@ -155,22 +163,25 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const type = defineTool<{ text: string; serial?: string }>({
     name: 'phone.type',
-    description: 'Type text into the focused field on the phone (tap the field first). Over ADB only ASCII; through the Autark app any text. Newlines press Enter.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 2000 }, serial: SERIAL }, required: ['text'], additionalProperties: false },
+    description: 'Types text into the focused field on the phone. Over ADB only ASCII, through the Autark app any text.',
+    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 2000, description: 'Newlines press Enter.' }, serial: SERIAL }, required: ['text'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Type ${args.text.length} characters on the phone`, ctx, false),
     async run(args, ctx) {
       ctx.status('typing on the phone');
       const typed = await typedText(ctx, args.text); // secret://<id> → the value, now (secrets/handles.ts)
-      await adb.type(args.serial, typed.text, step(ctx));
-      return text(`Typed ${args.text.length} characters. ${VERIFY}`);
+      const field = await adb.type(args.serial, typed.text, step(ctx));
+      const secret = typed.text === args.text ? '' : ` ${MASKED}`;
+      // Chat sweep 16.11.2026 (words beside the typed text in a field): the field's text read back, masked like any readback.
+      if (typeof field === 'string') return text(typed.mask(`Typed ${args.text.length} characters. The field now reads: "${field.slice(0, FIELD_MAX)}".${secret}`));
+      return text(`Typed ${args.text.length} characters.${secret} ${VERIFY}`);
     },
   });
 
   const key = defineTool<{ key: string; serial?: string }>({
     name: 'phone.key',
-    description: 'Press a phone key: back, home, recents, enter, delete, tab, escape, up/down/left/right, page_up/page_down, wakeup.',
-    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40 }, serial: SERIAL }, required: ['key'], additionalProperties: false },
+    description: 'Presses a phone key such as back, home or notifications, which shows what just arrived. On the phone with the Autark app the keys are back, home, recents, notifications (the shade with fresh messages and codes, which phone.ui_tree then reads), quick_settings and enter.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string', minLength: 1, maxLength: 40, description: 'Autark app: back, home, recents, notifications, quick_settings, enter. Over ADB: back, home, recents, enter, delete, tab, escape, arrows, page_up/page_down or wakeup.' }, serial: SERIAL }, required: ['key'], additionalProperties: false },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Press ${short(args.key)} on the phone`, ctx, movingKey(args.key)),
     async run(args, ctx) {
@@ -181,20 +192,44 @@ export function phoneTools(adb: Phone): ToolDef[] {
 
   const open = defineTool<{ url?: string; package?: string; serial?: string }>({
     name: 'phone.open',
-    description: 'Open a link (http/https) or an installed app by package name (e.g. com.whatsapp) on the phone.',
+    description: 'Opens a link or an installed app on the phone.',
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string', maxLength: 4000 }, package: { type: 'string', maxLength: 200 }, serial: SERIAL },
+      properties: { url: { type: 'string', maxLength: 4000, description: 'A private link as its secret:// handle works.' }, package: { type: 'string', maxLength: 200, description: 'e.g. com.whatsapp.' }, serial: SERIAL },
       additionalProperties: false,
     },
     category: 'device', remote: true, requires: 'device',
     describe: (args, ctx) => phone(`Open ${short(args.url ?? args.package)} on the phone`, ctx, false), // a link can start an action in an app
     async run(args, ctx) {
       if (!args.url && !args.package) return failure('Give url or package.');
-      const opened = await adb.open(args.serial, { url: args.url, package: args.package }, step(ctx));
-      return json({ opened, note: VERIFY });
+      const link = args.url === undefined ? undefined : await typedText(ctx, args.url); // a stored private link opens by its handle
+      const opened = await adb.open(args.serial, { url: link?.text, package: args.package }, step(ctx));
+      const named = link !== undefined && link.text !== args.url;
+      return json({ opened: named ? args.url : opened, ...(named ? { masked: MASKED } : {}), note: VERIFY });
     },
   });
 
-  return [devices, pair, connect, disconnect, screenshot, uiTree, tap, swipe, type, key, open];
+  const say = defineTool<{ text: string; ask?: boolean; serial?: string }>({
+    name: 'phone.say',
+    description: "Asks the person for a moment of their phone with ✓ and ✕, or shows my line on it. With ask: true my question appears on the phone with the Autark app and I get yes, no or none (no tap within 60 s); ✓ gives me the phone for this task. Without ask the line shows what I do there. While they use the phone and my steps can wait, one question gets their decision in a tap; going straight ahead works too, since a touch of theirs pauses me only until 5 s after it.",
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', minLength: 1, maxLength: PHONE_SAY_MAX, description: 'One short line.' }, ask: { type: 'boolean' }, serial: SERIAL },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    category: 'device', remote: true, requires: 'device',
+    // A line in the bubble changes nothing on the phone; my next line or the job's end replaces it.
+    describe: (args, ctx) => phone(args.ask ? `Ask on the phone: "${short(args.text)}"` : `Show "${short(args.text)}" on the phone`, ctx, true),
+    async run(args, ctx) {
+      ctx.status(args.ask ? 'asking on the phone' : 'writing on the phone');
+      const said = await adb.say(args.serial, args.text, args.ask === true, step(ctx));
+      if (!args.ask) return text("The bubble shows my line until my next one or the end of this task's phone use.");
+      if (said.answer === 'yes') return text('The person answered ✓: the phone is mine for this task now. I look at the screen (phone.ui_tree) before my first step.');
+      if (said.answer === 'no') return text('The person answered ✕ – not now: they keep the phone for the moment. What I needed from it I ask them for in our chat, and I go on with other work.');
+      return text('No answer within 60 s – the person did not tap. My phone steps run as usual; a touch of theirs pauses me until 5 s after it.');
+    },
+  });
+
+  return [devices, pair, connect, disconnect, screenshot, uiTree, tap, swipe, type, key, open, say];
 }

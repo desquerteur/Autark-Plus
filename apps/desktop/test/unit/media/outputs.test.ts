@@ -2,7 +2,8 @@
 // message whose ```ui blocks name workspace files is announced once, with fileIds, and the
 // media rows join the chat; escapes (.., absolute, junction/symlink) and missing files are not
 // stored but become repair notes; agent-written fileIds must be visible to the agent; cards,
-// file and tabs blocks keep their indexes; chat.send `files` become attachments; human
+// file and tabs blocks keep their indexes; a <chat> block's `files` become attachments (B-080: a stored file's own path too,
+// under the same visibility check); human
 // messages are left alone; a real finishTurn hands ask-block and file notes to the next turn;
 // the fileId rules of shared/blocks/validate.ts.
 
@@ -16,16 +17,16 @@ import { planTurn } from '../../../src/runtime/agents/turn-prepare.ts';
 import type { Paths } from '../../../src/runtime/contracts.ts';
 import { Blobs } from '../../../src/runtime/files/store.ts';
 import { withMediaHook } from '../../../src/runtime/media/hook.ts';
+import { resolveOutput } from '../../../src/runtime/media/outputs.ts';
 import { MediaService } from '../../../src/runtime/media/service.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
-import { chatTools } from '../../../src/runtime/tools/builtin/chat.ts';
-import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { uiBlocksOf } from '../../../src/shared/blocks/parse.ts';
 import { validateBlock } from '../../../src/shared/blocks/validate.ts';
 import type { Message } from '../../../src/shared/model/chat.ts';
 import { setup as turnSetup } from '../agents/fixture.ts';
 import { tempDir } from '../store/helpers.ts';
 import { png, str } from './fixtures.ts';
+import { ChatOutbox } from '../../../src/runtime/agents/chat-out.ts';
 import { mediaSetup } from './setup.ts';
 
 const F = '```';
@@ -34,7 +35,7 @@ function outputsSetup() {
   const s = mediaSetup();
   const workspace = path.join(s.temp.dir, 'workspace');
   mkdirSync(path.join(workspace, 'out'), { recursive: true });
-  s.h.services.paths = { workspace, accounts: path.join(s.temp.dir, 'accounts'), data: s.temp.dir, temp: path.join(s.temp.dir, 'tmp') } as Paths;
+  s.h.services.paths = { workspace, accounts: path.join(s.temp.dir, 'accounts'), data: s.temp.dir, temp: path.join(s.temp.dir, 'tmp'), blobs: path.join(s.temp.dir, 'blobs') } as Paths;
   const write = (relative: string, bytes: Uint8Array) => {
     const file = path.join(workspace, relative);
     mkdirSync(path.dirname(file), { recursive: true });
@@ -45,22 +46,22 @@ function outputsSetup() {
 }
 type Setup = ReturnType<typeof outputsSetup>;
 
-/** The next message.updated for `id` (the announcement after the outputs are stored). */
-function announced(s: Setup, id: string, event: 'message.updated' | 'message.created' = 'message.updated'): Promise<Message> {
+/** The announcement of `id` (message.created, once the outputs are stored – at once when it came already). */
+function announced(s: Setup, id: string, event: 'message.updated' | 'message.created' = 'message.created'): Promise<Message> {
+  const seen = s.h.of(event).find((message) => message.id === id);
+  if (seen) return Promise.resolve(seen);
   return new Promise((resolve) => {
     const off = s.h.bus.on(event, (message) => { if (message.id === id) { off(); resolve(message); } });
   });
 }
 
 async function finishAgent(s: Setup, body: string, agentId = 'ag_ada'): Promise<{ returned: Message; final: Message }> {
-  const started = s.h.chats.beginAgentMessage(s.chat.id, agentId, 'run_1');
-  const done = announced(s, started.id);
-  const returned = s.h.chats.finishAgentMessage(started.id, { body, state: 'final' });
-  return { returned, final: await done };
+  const returned = s.h.chats.postAgentMessage(s.chat.id, agentId, 'run_1', { body });
+  return { returned, final: await announced(s, returned.id) };
 }
 
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-const updatesOf = (s: Setup, id: string) => s.h.of('message.updated').filter((message) => message.id === id);
+const updatesOf = (s: Setup, id: string) => s.h.of('message.created').filter((message) => message.id === id);
 
 test('a media block with a workspace path is stored, announced once with its fileId and linked to the chat', async () => {
   const s = outputsSetup();
@@ -68,10 +69,9 @@ test('a media block with a workspace path is stored, announced once with its fil
     const bytes = png(32, 16);
     s.write('out/a.png', bytes);
     const body = `Here is the chart\n${F}ui\n{"type":"media","src":"out/a.png","caption":"Chart"}\n${F}`;
-    const started = s.h.chats.beginAgentMessage(s.chat.id, 'ag_ada', 'run_1');
+    const started = s.h.chats.postAgentMessage(s.chat.id, 'ag_ada', 'run_1', { body });
     const done = announced(s, started.id);
-    const returned = s.h.chats.finishAgentMessage(started.id, { body, state: 'final' });
-    assert.equal(returned.state, 'final');
+    assert.equal(started.state, 'final');
     assert.equal(updatesOf(s, started.id).length, 0, 'not announced before the file is stored');
     const final = await done;
 
@@ -85,7 +85,7 @@ test('a media block with a workspace path is stored, announced once with its fil
     assert.equal(updatesOf(s, started.id).length, 1, 'one announcement');
     assert.equal(s.media.get(sha(bytes))!.conversationId, s.chat.id, 'the library shows it under the chat');
     assert.deepEqual(await s.h.services.files.read(sha(bytes)), bytes);
-    assert.deepEqual(takeRepairNotes(s.h.services, 'ag_ada', s.chat.id), []);
+    assert.deepEqual(takeRepairNotes(s.h.services, 'ag_ada', 'main'), []);
     await s.media.idle();
   } finally { s.temp.cleanup(); }
 });
@@ -109,7 +109,7 @@ test('escapes are rejected: "..", an absolute path outside and a junction/symlin
 
     assert.equal(final.body, body, 'nothing was rewritten');
     assert.equal(s.h.services.files.get(sha(secret)), undefined, 'nothing from outside was stored');
-    const notes = takeRepairNotes(s.h.services, 'ag_ada', s.chat.id);
+    const notes = takeRepairNotes(s.h.services, 'ag_ada', 'main');
     assert.equal(notes.length, 3);
     for (const [index, line] of notes.entries()) {
       assert.ok(line.startsWith(`[file-error block ${index + 1}: `), line); // B-076: counted from 1
@@ -124,7 +124,7 @@ test('a missing file keeps the block and gets a note; human messages are never i
     const body = `${F}ui\n{"type":"file","path":"out/missing.pdf","label":"Report"}\n${F}`;
     const { final } = await finishAgent(s, body);
     assert.equal(final.body, body);
-    const notes = takeRepairNotes(s.h.services, 'ag_ada', s.chat.id);
+    const notes = takeRepairNotes(s.h.services, 'ag_ada', 'main');
     assert.deepEqual(notes, ['[file-error block 1: "out/missing.pdf" was not found] I check the path and send the block again.']);
 
     s.write('out/human.png', png(4, 4));
@@ -154,7 +154,7 @@ test('fileIds an agent writes stay only when it may see the file', async () => {
     assert.equal((blocks[2].block.items as Array<{ image?: string }>)[0].image, undefined);
     assert.equal(s.media.get(loose.id)!.conversationId, undefined, 'the global file is not pulled into the chat');
     assert.equal(s.media.get(elsewhere.id)!.conversationId, s.other.id);
-    const notes = takeRepairNotes(s.h.services, 'ag_ada', s.chat.id);
+    const notes = takeRepairNotes(s.h.services, 'ag_ada', 'main');
     assert.ok(notes.some((line) => line.startsWith('[file-error block 2: file ') && line.includes('is not available to me')));
     assert.ok(notes.some((line) => line.startsWith('[file-error block 2: "out/none.png" was not found]')));
     assert.ok(notes.some((line) => line.startsWith('[file-error block 3: file ')));
@@ -202,42 +202,65 @@ test('cards, file and tabs blocks get their files; block indexes and other block
   } finally { s.temp.cleanup(); }
 });
 
-function ctxFor(s: Setup, agentId: string, conversationId: string): ToolContext {
-  return { agent: s.h.org.require(agentId), runId: 'run_1', conversationId, mode: 'general', services: s.h.services, signal: new AbortController().signal, status() {} };
-}
-
-test('chat.send files become attachments; outside paths and invisible ids send nothing', async () => {
+test('<chat files="…"> become attachments; outside paths and invisible ids are left out and named (13.11.2026: the block replaces chat.send)', async () => {
   const s = outputsSetup();
   try {
-    const send = chatTools.find((tool) => tool.name === 'chat.send')!;
+    const out = new ChatOutbox(s.h.services, { agentId: 'ag_ada', runId: 'run_1' });
+    const post = async (text: string, files: string[] = []) => {
+      const before = out.posted.length;
+      out.segment(`<chat to="${s.chat.id}"${files.length ? ` files="${files.join(', ')}"` : ''}>${text}</chat>`, true);
+      await out.done();
+      return out.posted.length > before ? s.h.chats.messages(s.chat.id).filter((message) => message.authorId === 'ag_ada').at(-1)! : undefined;
+    };
     const report = str('the report');
     s.write('out/report.txt', report);
     const shown = await s.put(png(8, 8), 'shown.png');
     s.attach(s.chat.id, shown);
-    const out = await send.run({ text: 'Report attached', files: ['out/report.txt', shown.id.toUpperCase()] }, ctxFor(s, 'ag_ada', s.chat.id));
-    assert.ok(!out.isError, JSON.stringify(out.content));
-    const { messageId } = out.structured as { messageId: string };
-    const message = s.h.chats.message(messageId)!;
+    const message = (await post('Report attached', ['out/report.txt', shown.id.toUpperCase()]))!;
     assert.deepEqual(message.attachments.map((file) => [file.name, file.fileId]), [['report.txt', sha(report)], ['shown.png', shown.id]]);
     assert.equal(s.media.get(sha(report))!.conversationId, s.chat.id);
 
     const loose = await s.put(png(9, 9), 'loose.png');
     writeFileSync(path.join(s.temp.dir, 'outside.txt'), str('no'));
-    const count = s.h.chats.messages(s.chat.id).length;
-    const refused = await send.run({ text: 'More', files: ['../outside.txt', loose.id, 'https://example.invalid/a.png'] }, ctxFor(s, 'ag_ada', s.chat.id));
-    assert.equal(refused.isError, true);
-    const text = (refused.content[0] as { text: string }).text;
-    assert.match(text, /^Nothing was sent\./);
-    assert.match(text, /"\.\.\/outside\.txt" is outside the workspace\./);
-    assert.match(text, /is not available to me\./);
-    assert.match(text, /neither a workspace path nor a file id/);
-    assert.equal(s.h.chats.messages(s.chat.id).length, count);
+    const more = (await post('More', ['../outside.txt', loose.id, 'https://example.invalid/a.png']))!;
+    assert.deepEqual(more.attachments, [], 'none of them is attached');
+    const note = out.notes.at(-1)!;
+    assert.match(note, /"\.\.\/outside\.txt" is outside the workspace\./);
+    assert.match(note, /is not available to me\./);
+    assert.match(note, /neither a workspace path nor a file id/);
 
-    // Blocks in chat.send text are imported too (the message is announced with its fileId).
+    // B-080: a stored file's own path is that file – attached when I may see it, no new blob.
+    const blobs = () => s.h.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM files')!.n;
+    const stored = blobs();
+    const byPath = (await post('The QA shot', [s.h.services.files.path(shown.id)]))!;
+    assert.deepEqual(byPath.attachments.map((file) => file.fileId), [shown.id]);
+    assert.equal(blobs(), stored, 'no new blob');
+    await post('Not mine', [s.h.services.files.path(loose.id)]);
+    assert.match(out.notes.at(-1)!, /File [a-f0-9]{12}… is not available to me\./);
+
+    // Blocks in a posted text are imported too (the message is announced with its fileId).
     s.write('out/b.png', png(6, 6));
     const created = new Promise<Message>((resolve) => { const off = s.h.bus.on('message.created', (m) => { if (m.body.includes('out/b.png')) { off(); resolve(m); } }); });
-    await send.run({ text: `${F}ui\n{"type":"media","src":"out/b.png"}\n${F}` }, ctxFor(s, 'ag_ada', s.chat.id));
+    await post(`${F}ui\n{"type":"media","src":"out/b.png"}\n${F}`);
     assert.equal(uiBlocksOf((await created).body)[0].block.fileId, sha(png(6, 6)));
+    await s.media.idle();
+  } finally { s.temp.cleanup(); }
+});
+
+test('B-080: a ```ui media block whose src is a stored file\'s own path gets that fileId when I may see it, a note when not', async () => {
+  const s = outputsSetup();
+  try {
+    const shown = await s.put(png(8, 8), 'shown.png');
+    s.attach(s.chat.id, shown);
+    const loose = await s.put(png(9, 9), 'loose.png');
+    const src = s.h.services.files.path(shown.id);
+    const body = `${F}ui\n${JSON.stringify([{ type: 'media', src, caption: 'QA' }, { type: 'media', src: s.h.services.files.path(loose.id) }])}\n${F}`;
+    const { final } = await finishAgent(s, body);
+    const blocks = uiBlocksOf(final.body);
+    assert.deepEqual([blocks[0].block.fileId, blocks[0].block.src, blocks[0].block.kind], [shown.id, src, 'image'], 'the stored file, its path kept');
+    assert.equal(blocks[1].block.fileId, undefined);
+    const notes = takeRepairNotes(s.h.services, 'ag_ada', 'main');
+    assert.ok(notes.some((line) => line.startsWith('[file-error block 2: file ') && line.includes('is not available to me')), notes.join('\n'));
     await s.media.idle();
   } finally { s.temp.cleanup(); }
 });
@@ -254,21 +277,21 @@ test('a finished turn: the final message gets its fileId; ask-block and file not
     const bytes = png(20, 20);
     writeFileSync(path.join(workspace, 'out', 'a.png'), bytes);
     h.services.paths = { workspace, accounts: path.join(temp.dir, 'accounts'), temp: path.join(temp.dir, 'tmp') } as Paths;
+    h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Show me the chart' }); // the person's line: the final text answers it (the safety net)
     const request = h.request();
     const plan = (await planTurn(h.services, request))!;
-    const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
     const body = [
       `${F}ui\n{"type":"media","src":"out/a.png"}\n${F}`,
       `${F}ui\n{"type":"choice","question":"Pick one"}\n${F}`,
       `${F}ui\n{"type":"file","path":"out/gone.txt"}\n${F}`,
     ].join('\n');
-    const done = new Promise<Message>((resolve) => { const off = h.bus.on('message.updated', (m) => { if (m.id === messageId) { off(); resolve(m); } }); });
-    finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: body, stop: 'done' }), messageId);
+    const done = new Promise<Message>((resolve) => { const off = h.bus.on('message.created', (m) => { if (m.runId === request.runId) { off(); resolve(m); } }); });
+    finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: body, stop: 'done' }));
     const final = await done;
     assert.equal(final.state, 'final');
     assert.equal(uiBlocksOf(final.body)[0].block.fileId, sha(bytes));
     assert.equal(media.get(sha(bytes))!.conversationId, h.chat.id);
-    const notes = takeRepairNotes(h.services, h.tom.id, h.chat.id);
+    const notes = takeRepairNotes(h.services, h.tom.id, 'main');
     assert.ok(notes.some((line) => line.startsWith('[ui-error block "Pick one" (2nd block): ')), notes.join('\n')); // B-076: named, counted from 1
     assert.ok(notes.includes('[file-error block 3: "out/gone.txt" was not found] I check the path and send the block again.'), notes.join('\n'));
     await media.idle();
@@ -294,4 +317,19 @@ test('validate: media/file keep a 64-hex fileId only; a fileId stands in for a m
   const none = validateBlock({ type: 'file', label: 'Cut' });
   assert.deepEqual(none.ok ? undefined : none.error, '"path" missing in file');
   assert.ok(validateBlock({ type: 'file', src: 'C:/out/a.mp4' }).ok, 'path aliases still work');
+});
+
+test('an account home is never an output, also in a workspace that holds the data folder: the logins folder and <data>/accounts', async () => {
+  const temp = tempDir();
+  try {
+    const data = path.join(temp.dir, 'data');
+    const paths = { workspace: temp.dir, data, accounts: path.join(temp.dir, 'logins'), blobs: path.join(data, 'blobs') };
+    for (const file of [path.join(paths.accounts, 'claude', 'acc_a', 'x.txt'), path.join(data, 'accounts', 'claude', 'acc_mac', 'x.txt'), path.join(temp.dir, 'out', 'x.txt')]) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, 'x');
+    }
+    assert.deepEqual(await resolveOutput(paths, 'logins/claude/acc_a/x.txt'), { refused: 'outside' });
+    assert.deepEqual(await resolveOutput(paths, 'data/accounts/claude/acc_mac/x.txt'), { refused: 'outside' }, 'a home that stayed in the data folder');
+    assert.ok('path' in await resolveOutput(paths, 'out/x.txt'));
+  } finally { temp.cleanup(); }
 });

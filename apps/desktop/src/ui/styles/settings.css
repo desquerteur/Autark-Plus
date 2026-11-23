@@ -1,6 +1,6 @@
 /* Settings: the pages' frame, the nav, groups and functional rows (label left, control right), controls (switch, select,
    inputs, segmented, small buttons, the reserved hint line), account state chips, masks, QR and pairing codes and
-   device dots. The same grammar is reused by the agent view and dialogs elsewhere.
+   device dots, the profile menu's quota badges and phone sheet, the settings search's marks. The same grammar is reused by the agent view and dialogs elsewhere.
    Owns: these looks. Never: other areas, colors outside tokens.css. */
 /* ---------------------------------------------------------------- page frame (header look: app.css) */
 .settings-view { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; }
@@ -18,7 +18,10 @@
 .settings-nav-item.selected { background: var(--selected); color: var(--text); }
 .settings-nav-item.selected .icon { opacity: 1; }
 .settings-nav-empty { padding: 10px 20px; color: var(--muted); font-size: 13px; }
-.set-search-hit { background: var(--selected); }
+.set-search-hit { background: var(--selected); } /* the fallback where CSS Custom Highlights are missing */
+/* F20: the settings search's words in blue on the open page (settings/search-marks.ts) – colour only, nothing moves */
+::highlight(settings-search) { background-color: color-mix(in srgb, var(--update) 22%, transparent); }
+::highlight(settings-search-current) { background-color: color-mix(in srgb, var(--update) 45%, transparent); }
 /* ---------------------------------------------------------------- groups and rows */
 .set-group { max-width: 680px; margin: 0 0 32px; container-type: inline-size; }
 .set-group:last-child { margin-bottom: 0; }
@@ -178,6 +181,16 @@ select.set-input:focus { outline: none; border-color: var(--focus); }
 .profile-quota:empty { display: none; }
 .profile-quota { margin: 0 0 4px; padding: 0 6px 6px; border-bottom: 1px solid var(--line); }
 .profile-quota .usage-stack { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; max-height: none; overflow: visible; }
+/* the Android app's profile sheet (B-084, shell/ProfileMenu.tsx): photo, name, one fixed-height status line (a tap shows
+   the app's PC picker), the paired companies with a 24 px picture in the icon's place */
+.profile-head-row.phone-head { align-items: center; gap: 10px; padding: 10px 8px 8px 10px; }
+.phone-head .profile-head-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.profile-status {
+  display: block; height: 32px; max-width: 100%; padding: 0; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 12px; line-height: 32px; text-align: left;
+}
+.profile-status:hover, .profile-status:focus-visible { color: var(--text); }
+.menu-item > .company-pic { flex: none; width: 24px; height: 24px; font-size: 10px; }
 
 /* ---------------------------------------------------------------- number field, the learned words (voice-words.tsx) */
 .set-number { display: inline-flex; align-items: center; gap: 6px; }
@@ -225,8 +238,20 @@ dialog.dialog.voice-words-dialog { height: min(560px, calc(100vh - 2 * var(--dia
 .secret-kv-rows { display: grid; gap: 6px; }
 .secret-kv-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 28px; align-items: center; gap: 8px; }
 .secret-kv-row > .input { height: 34px; padding: 6px 10px; font: inherit; font-size: 13px; line-height: 20px; }
-.secret-kv-value { overflow: hidden; resize: none; -webkit-text-security: disc; }
+.secret-kv-value { overflow: hidden; resize: none; white-space: pre; overflow-wrap: normal; -webkit-text-security: disc; } /* one line: a long value never shows the top of a second */
 .secret-kv-gap { width: 28px; height: 28px; }
+/* a phone (feedback 16.11.2026 00403337, "Voll schwierig die Secrets hinzutragen … schönere Felder, mehr Platz"): each
+   row stacks – the name over the whole width with its ×, the value under it, both a finger's height */
+@media (max-width: 719px) {
+  .secret-kv-rows { gap: 12px; }
+  .secret-band-body { overflow-x: hidden; }
+  /* name and value equally wide, the × beside the pair (Mika 17.11.); 44 px is a finger's height */
+  .secret-kv-row { grid-template-columns: minmax(0, 1fr) 44px; row-gap: 6px; column-gap: 4px; }
+  .secret-kv-row > .input { box-sizing: border-box; width: 100%; min-width: 0; height: 44px; padding: 10px 12px; line-height: 22px; }
+  .secret-kv-row > .input:first-child { grid-column: 1; grid-row: 1; }
+  .secret-kv-row > .secret-kv-value { grid-column: 1; grid-row: 2; }
+  .secret-kv-row > :last-child:not(.input) { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: center; }
+}
 .secret-band-foot { display: grid; gap: 6px; flex: none; margin-top: 10px; }
 .secret-band-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .secret-band-actions > .button { flex: none; }
@@ -274,3 +299,18 @@ dialog textarea.apps-import-text { min-height: 0; resize: none; }
 .apps-agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apps-agent-role { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .feedback-review-text { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; user-select: text; }
+/* Settings › Security › Changes (SecurityPage.tsx): who is a link for an agent; a text change opens to both full texts */
+.sec-change-who { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.sec-change-line { all: unset; cursor: pointer; }
+.sec-change-line:hover { color: var(--text); }
+.sec-change-line:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.sec-change-cap { display: block; margin-top: 6px; font-size: 11px; font-weight: 600; }
+.sec-change-text { display: block; color: var(--text); white-space: pre-wrap; user-select: text; }
+
+/* Settings › Devices › Connection › Your own meeting server (own-server.tsx, 18.11.2026) */
+.own-server p { margin: 0 0 10px; line-height: 1.5; }
+.own-server h4 { margin: 14px 0 6px; font-size: 13px; }
+.own-server code { font-family: var(--mono); font-size: 12px; }
+.own-server-command { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--hover); }
+.own-server-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; }
+.own-server-file { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }

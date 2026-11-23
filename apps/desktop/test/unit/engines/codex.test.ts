@@ -1,11 +1,13 @@
 // Codex engine over a scripted app-server: thread start/resume, the volatile context block on
 // reused threads, streaming, tools, approvals, limits, interrupt/steer, the reported context
 // window, ended sessions (details.rebase – also a loaded thread whose turn runs in another folder,
-// marked details.folder), models and account checks.
+// marked details.folder), models and account checks. B-080: the final text holds the agent messages Codex completed (a
+// sampling it dropped for a steered line or a retry stays out); Codex's "no rollout found" for thread/delete means gone.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CodexEngine } from '../../../src/runtime/engines/codex/engine.ts';
+import { CodexEngine, threadGone } from '../../../src/runtime/engines/codex/engine.ts';
+import { RpcError } from '../../../src/runtime/engines/codex/rpc.ts';
 import type { EngineEvent } from '../../../src/runtime/engines/types.ts';
 import { fakeSpawn, fakeFinder, testSupervisor, turnInput, account, tick, type FakeChild } from './fakes.ts';
 
@@ -80,7 +82,7 @@ test('codex: thread/start carries instructions, sandbox and dynamic tools; strea
   assert.deepEqual(args.slice(0, 3), ['app-server', '--listen', 'stdio://']);
   const start = fake.state.requests.find((r: any) => r.method === 'thread/start');
   assert.equal(start.params.baseInstructions, 'STABLE');
-  assert.equal(start.params.developerInstructions, 'VOLATILE');
+  assert.equal(start.params.developerInstructions, undefined, 'the live context is never in the instructions');
   assert.equal(start.params.sandbox, 'read-only', 'the workspace-write sandbox comes with each turn (codex-isolation.test.ts)');
   assert.equal(start.params.approvalPolicy, 'never');
   assert.deepEqual(start.params.dynamicTools[0], { type: 'function', name: 'tasks__create', description: 'Create a task', inputSchema: input.tools[0].inputSchema });
@@ -175,14 +177,14 @@ test('codex: abort sends turn/interrupt; steer sends turn/steer', async () => {
 const complete = (child: FakeChild, msg: any) => child.send({ method: 'turn/completed', params: { threadId: msg.params.threadId, turn: { id: 'turn_1', status: 'completed' } } });
 const turnStarts = (fake: { state: any }) => fake.state.requests.filter((r: any) => r.method === 'turn/start');
 
-test('codex: a reused or resumed thread gets the current volatile context in front of the turn input; a new thread does not', async () => {
+test('codex: every turn – new, reused or resumed thread – gets the current live context in front of its input, never in the instructions', async () => {
   const fake = appServer({ onTurn: complete });
   const e = engine(fake.spawn);
   const first = await e.run(turnInput({ system: { stable: 'STABLE', volatile: 'VOLATILE1' } }).input);
   assert.deepEqual(bare(first.session), { ref: 'thr_1', generation: 1 }); // B-049 F7 adds the native turn id
-  assert.equal(fake.state.requests.find((r: any) => r.method === 'thread/start').params.developerInstructions, 'VOLATILE1');
-  const firstInput = turnStarts(fake)[0].params.input; // H1: the app note (codex-app-note.test.ts) goes in front of it
-  assert.ok(!firstInput.some((item: any) => String(item.text).includes('<workforce-context>')), 'thread/start already carries it');
+  assert.equal(fake.state.requests.find((r: any) => r.method === 'thread/start').params.developerInstructions, undefined);
+  const firstInput = turnStarts(fake)[0].params.input;
+  assert.deepEqual(firstInput[0], { type: 'text', text: '<live>\nVOLATILE1\n</live>', text_elements: [] }, 'a new thread gets it in the input too');
   assert.deepEqual(firstInput.at(-1), { type: 'text', text: 'hello', text_elements: [] });
 
   const second = await e.run(turnInput({ session: { ref: 'thr_1', generation: 1 }, system: { stable: 'STABLE', volatile: 'VOLATILE2' }, input: [{ type: 'text', text: 'next' }] }).input);
@@ -190,7 +192,7 @@ test('codex: a reused or resumed thread gets the current volatile context in fro
   assert.equal(fake.state.requests.filter((r: any) => r.method === 'thread/start' || r.method === 'thread/resume').length, 1, 'the loaded thread is reused as is');
   const input = turnStarts(fake)[1].params.input;
   assert.equal(input[0].type, 'text');
-  assert.ok(input[0].text.startsWith('<workforce-context>\n') && input[0].text.includes('VOLATILE2') && input[0].text.endsWith('\n</workforce-context>'), input[0].text);
+  assert.ok(input[0].text.startsWith('<live>\n') && input[0].text.includes('VOLATILE2') && input[0].text.endsWith('\n</live>'), input[0].text);
   assert.ok(!input[0].text.includes('VOLATILE1'));
   assert.deepEqual(input[1], { type: 'text', text: 'next', text_elements: [] });
 
@@ -206,7 +208,7 @@ test('codex: a reused or resumed thread gets the current volatile context in fro
   assert.deepEqual(bare(resumed.session), { ref: 'thr_1', generation: 3 }); // B-049 F7 adds the native turn id
   assert.ok(fake2.state.requests.some((r: any) => r.method === 'thread/resume' && r.params.threadId === 'thr_1'));
   assert.ok(!fake2.state.requests.some((r: any) => r.method === 'thread/start' || r.method === 'thread/inject_items'));
-  assert.match(turnStarts(fake2)[0].params.input[0].text, /^<workforce-context>\nVOLATILE3\n<\/workforce-context>$/);
+  assert.match(turnStarts(fake2)[0].params.input[0].text, /^<live>\nVOLATILE3\n<\/live>$/);
   await e2.dispose();
 });
 
@@ -304,5 +306,65 @@ test('codex: a web search is journaled with its query on completion (Codex fills
   assert.deepEqual(starts.map((event: any) => [event.callId, event.args.query]), [['w1', 'Teydra Lab opening hours'], ['w2', 'teydra.com'], ['w2', 'teydra.com']], 'w1 waits for its query; a repeated start is ignored by the journal');
   assert.ok(events.some((event: any) => event.type === 'status' && event.note === 'Searching the web'));
   assert.deepEqual(events.filter((event: any) => event.type === 'tool_end').map((event: any) => [event.callId, event.ok]), [['w1', true], ['w2', true]]);
+  await e.dispose();
+});
+
+/** B-080: a turn whose notifications `script` sends (params carry the thread and turn). */
+async function textOf(script: (send: (method: string, params: Record<string, unknown>) => void) => void) {
+  const fake = appServer({ onTurn: (child, msg) => {
+    const base = { threadId: msg.params.threadId, turnId: 'turn_1' };
+    script((method, params) => child.send({ method, params: { ...base, ...params } }));
+    child.send({ method: 'turn/completed', params: { threadId: base.threadId, turn: { id: 'turn_1', status: 'completed' } } });
+  } });
+  const e = engine(fake.spawn);
+  const { input, events } = turnInput();
+  const result = await e.run(input);
+  await e.dispose();
+  return { text: result.text, streamed: events.filter((event: any) => event.type === 'text').map((event: any) => event.delta) };
+}
+
+const started = (id: string) => ({ item: { id, type: 'agentMessage', phase: 'final_answer' } });
+const completed = (id: string, text: string) => ({ item: { id, type: 'agentMessage', phase: 'final_answer', text } });
+
+test('B-080: an agent message Codex never completes (a sampling dropped for a steered line or a retry) stays out of the final text', async () => {
+  const run = await textOf((send) => {
+    send('item/started', started('m1'));
+    send('item/agentMessage/delta', { itemId: 'm1', delta: 'Stich' });
+    send('item/started', started('m2'));
+    send('item/agentMessage/delta', { itemId: 'm2', delta: 'Stichprobe ' });
+    send('item/agentMessage/delta', { itemId: 'm2', delta: 'dokumentiert.' });
+    send('item/completed', completed('m2', 'Stichprobe dokumentiert.'));
+  });
+  assert.equal(run.text, 'Stichprobe dokumentiert.');
+  assert.deepEqual(run.streamed, ['Stich', 'Stichprobe ', 'dokumentiert.'], 'the live row still streams both');
+});
+
+test('B-080: two completed answer messages are both kept; deltas alone stay the answer when nothing completed', async () => {
+  const two = await textOf((send) => {
+    send('item/completed', completed('f1', 'A.'));
+    send('item/completed', completed('f2', 'B.'));
+  });
+  assert.equal(two.text, 'A.\n\nB.');
+  const deltas = await textOf((send) => {
+    send('item/agentMessage/delta', { itemId: 'd1', delta: 'Only ' });
+    send('item/agentMessage/delta', { itemId: 'd1', delta: 'deltas.' });
+  });
+  assert.equal(deltas.text, 'Only deltas.');
+});
+
+test('B-080: Codex\'s "no rollout found" for thread/delete means the thread is gone (deleteSession: missing); a timeout is not', async () => {
+  assert.equal(threadGone(new RpcError(-32600, 'no rollout found for thread id 01a1bb05-89e8fa192be2')), true);
+  assert.equal(threadGone(new RpcError(-32000, 'codex did not answer thread/delete')), false);
+  assert.equal(threadGone(new RpcError(-32601, 'method not found')), false);
+  const fake = appServer();
+  const e = engine(fake.spawn);
+  await e.listModels(account()); // the server is up
+  const child = fake.calls[0].child;
+  const answer = child.onLine!;
+  child.onLine = (msg, self) => {
+    if (msg.method === 'thread/delete') child.send({ id: msg.id, error: { code: -32600, message: 'no rollout found for thread id 01a1bb05' } });
+    else answer(msg, self);
+  };
+  assert.equal(await e.deleteSession(account(), 'thr_gone'), 'missing');
   await e.dispose();
 });

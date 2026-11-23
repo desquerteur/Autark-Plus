@@ -1,7 +1,7 @@
-// Time formatting for the volatile prompt and rendered chat lines, in the human's time zone.
+// Time formatting for the live part of the prompt and rendered chat lines, in the person's time zone.
 // Owns: validated time zones, the one profile-zone read (`profileZone`: the prompt's Now line and every
 // "saved"/"indexed" day of retrieved knowledge, knowledge/age.ts), cached Intl formatters and the few
-// fixed formats agents see ("14:05", "18 Oct", "Sat 18 Oct 2026, 14:05"). English month/day names (agent-facing).
+// fixed formats agents see ("14:05", "18 Oct", "Mon 16 Nov 07:00", "Sat 18 Oct 2026, 14:05"). English month/day names.
 // Never: used for the stable prompt section (times there would break prompt caching).
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -78,9 +78,13 @@ export function stampText(ms: number, zone: string | undefined, now: number): st
   return dayKey(ms, zone) === dayKey(now, zone) ? time : `${dateText(ms, zone, now)} ${time}`;
 }
 
-/** Due/next-run text: "today 18:00", "20 Oct 09:00", with "overdue" when in the past. */
+/** A day in the live part: "Thu 12 Nov" (the year only when it is not `now`'s) – absolute, never "today". */
+export function dayName(ms: number, zone: string | undefined, now: number): string {
+  const p = parts(ms, zone);
+  return `${p.weekday} ${p.day} ${p.month}${parts(now, zone).year === p.year ? '' : ` ${p.year}`}`;
+}
+
+/** A time in the live part: "Mon 16 Nov 07:00" (the year only when it is not `now`'s) – absolute, never "today" or "overdue". */
 export function dueText(ms: number, zone: string | undefined, now: number): string {
-  const time = clockText(ms, zone);
-  const day = dayKey(ms, zone) === dayKey(now, zone) ? 'today' : dateText(ms, zone, now);
-  return `${day} ${time}${ms < now ? ' (overdue)' : ''}`;
+  return `${dayName(ms, zone, now)} ${clockText(ms, zone)}`;
 }

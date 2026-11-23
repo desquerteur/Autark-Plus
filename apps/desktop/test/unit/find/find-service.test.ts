@@ -1,7 +1,7 @@
-// FIND: one find/open path over skills, memory notes and references – a lexical score with its reason, main skills
+// FIND: one find/open path over skills, memory notes and references – the word index's score with its reason, main skills
 // first among equals, skills opened page by page with their version, notes with the day they were saved, another
 // agent's own note not opened, and the tool's wording (a description with the title, never the text).
-// Owns: these assertions. Never: a real database (the knowledge service is a fake over three notes).
+// Owns: these assertions. Never: a real database (the knowledge service is a fake over three notes, ranked by the real word search).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +9,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FindService } from '../../../src/runtime/find/service.ts';
+import { wordHits } from '../../../src/runtime/knowledge/search.ts';
+import { WordIndex } from '../../../src/runtime/knowledge/words.ts';
 import { PAGE_CHARS } from '../../../src/runtime/find/open.ts';
 import { findTools } from '../../../src/runtime/tools/builtin/find.ts';
 import { SkillLibrary } from '../../../src/runtime/skills/service.ts';
@@ -39,10 +41,13 @@ function world() {
     note('k1', 'Invoice rule', 'Invoices over 1000 EUR need two reminders.', { description: 'When a customer pays late.' }), note('k2', 'Ana private', 'Invoice draft notes', { scope: 'agent', scopeId: 'ag_ana' }),
     note('k3', 'Supplier', 'Pays within ten days.', { description: 'When the Kessler gearbox order is due.' }),
   ];
+  const index = new WordIndex();
+  const globals = notes.filter((item) => item.scope === 'global');
   const services = {
     skills: new SkillLibrary({ paths: { workspace, resources: path.join(root, 'resources') }, clock, home: '' }),
+    paths: { workspace, resources: path.join(root, 'resources'), data: path.join(root, 'data'), temp: root },
     knowledge: {
-      search: async () => notes.filter((item) => item.scope === 'global').map((item) => ({ item, score: 1, why: '' })),
+      search: async ({ text }: { text: string }) => wordHits(index, notes, globals, text, 8, clock.now(), 'UTC'),
       get: (id: string) => notes.find((item) => item.id === id),
     },
     clock, modes: { get: () => mode, list: () => [mode] }, settings: { get: () => ({ profile: { timezone: 'UTC' } }) },
@@ -64,7 +69,7 @@ test('find: skills and notes that carry the words, each with its reason; opening
     assert.equal(page.page, 2);
     assert.ok(page.pages >= 2 && page.text.length <= PAGE_CHARS);
     const again = await w.find.open(caller, { id: 'skill:invoice-check', version: 'old' });
-    assert.match(again.changed ?? '', /changed since you found it/);
+    assert.match(again.changed ?? '', /changed since I found it/);
     assert.match((await w.find.open(caller, { id: 'note:k1' })).text, /two reminders/);
     await assert.rejects(w.find.open(caller, { id: 'note:k2' }), /does not exist/, 'another agent\'s own note');
   } finally { w.cleanup(); }

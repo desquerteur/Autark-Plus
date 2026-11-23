@@ -113,13 +113,13 @@ export class ProviderFile {
   }
 
   /** A new connection: an entry in the file, and through it the account. */
-  add(input: { provider: ProviderId; label: string; rotation?: boolean }, connection: Connection): Account {
+  add(input: { provider: ProviderId; label: string }, connection: Connection): Account {
     const shape = { provider: input.provider, baseUrl: connection.baseUrl, label: input.label, secretId: connection.secretId };
     const id = this.freeId(shape, new Set(Object.keys(this.entries())));
     this.write({ providers: { [id]: entryOfAccount(shape) } });
     const account = this.deps.repo.get(id);
     if (!account) throw new Error(`The connection ${id} was not added.`);
-    return input.rotation ? this.deps.save({ ...account, rotation: true }) : account;
+    return account;
   }
 
   /** The new name of a connection. */

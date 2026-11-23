@@ -13,7 +13,6 @@ import { readFileSync } from 'node:fs';
 import { KnowledgeStore } from '../../../src/runtime/knowledge/service.ts';
 import { Org } from '../../../src/runtime/org/service.ts';
 import { parseTemplate } from '../../../src/runtime/org/templates.ts';
-import { memoryTools } from '../../../src/runtime/tools/builtin/memory.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
@@ -27,7 +26,6 @@ function setup() {
   return { org, db, manager: org.ensureSeed()! };
 }
 
-const remember = memoryTools.find((tool) => tool.name === 'knowledge.remember')!;
 const ctxOf = (agent: Agent, services: RuntimeServices): ToolContext => ({ agent, runId: 'run_mem', mode: 'general', services, signal: new AbortController().signal, status: () => {} });
 
 test('the secretary template reports to the human; other templates do not', () => {
@@ -55,4 +53,3 @@ test('hired by an agent, the secretary keeps the template\'s role, mode and inst
   const own = org.create({ template: 'secretary', name: 'Mia', role: 'My helper', instructions: 'Keep it short.', createdBy: HUMAN_ID });
   assert.deepEqual([own.role, own.instructions], ['My helper', 'Keep it short.'], 'the person may shape her');
 });
-

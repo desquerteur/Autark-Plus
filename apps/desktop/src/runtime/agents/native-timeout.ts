@@ -3,7 +3,12 @@
 // real tool call and its output on a continuation, without replaying the original request; its words say that the app's time
 // limit stopped the call and nobody declined it (B-072). Not interrupted, the decisions reach
 // it at once where the engine can (engine.tell), else before its next turn: a turn that ended well is not started again. Nested
-// calls suspend their script's timer.
+// calls suspend their script's timer. B-080 (live 07.11.2026: 140 of 309 reviewed calls started while an earlier one of the
+// turn was open – Claude names every call of a message at once and runs them one after another; all 5 Read aborts waited
+// behind a shell): a call's clock starts when it runs – a call named while another top-level call is open starts unarmed,
+// and when a top-level native call ends, every other open native call not reviewed yet starts its clock then.
+// Package C (17.11.2026): a continued turn reports the latest cost (Claude Code's session running total, never a sum of
+// them) and its usage events count the model calls of every segment.
 // Owns: deadlines, decision delivery and native continuation. Never: guesses a command's result.
 
 import type { CacheTokens, Engine, EngineEvent, EngineTurnInput, EngineTurnResult } from '../engines/types.ts';
@@ -66,6 +71,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
   let cache: CacheTokens = {};
   let hadUsage = false;
   let hadCost = false;
+  let callsBefore = 0; // the model calls of the segments before this one (each engine process counts from one)
   let next = input;
   let compacted = false;
   let traceAsText: string | undefined;
@@ -78,6 +84,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
     const deliveries: Promise<void>[] = [];
     let interrupted = false;
     let ended = false;
+    let segmentCalls = 0;
     const clear = (call: Call) => {
       if (call.handle !== undefined) timers.clear(call.handle);
       call.handle = undefined;
@@ -134,11 +141,12 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
     };
     const event = (value: EngineEvent) => {
       if (value.type === 'tool_start' && (value.own || (value.parent && calls.has(value.parent))) && value.callId && !calls.has(value.callId)) {
+        const queued = !value.parent && [...calls.values()].some((other) => !other.parent); // it runs once the call ahead of it ends
         const call: Call = { id: value.callId, tool: value.name, native: value.own, args: value.args, started: now(), seconds: value.own ? initial(value.name, value.args) : 0, notes: [], reviews: 0, children: new Set(), ...(value.parent ? { parent: value.parent } : {}) };
         calls.set(call.id, call);
         const parent = call.parent ? calls.get(call.parent) : undefined;
         if (parent) { clear(parent); parent.children.add(call.id); }
-        arm(call, call.seconds);
+        if (!queued) arm(call, call.seconds);
       } else if (value.type === 'tool_end') {
         const call = calls.get(value.callId);
         if (call) {
@@ -147,8 +155,12 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
           if (call.notes.length) deliver(note(call, value.output ?? value.summary));
           const parent = call.parent ? calls.get(call.parent) : undefined;
           if (parent) { parent.children.delete(call.id); if (!parent.children.size) arm(parent, parent.seconds); }
+          // B-080: a native call that waited behind this one in the engine's queue starts its clock now (a nested call's end
+          // leaves its script running, so what waits behind the script still waits)
+          if (call.native && !call.parent) for (const other of calls.values()) if (other.native && !other.reviews && !other.review && !other.children.size) { clear(other); other.started = now(); arm(other, other.seconds); }
         }
       }
+      if (value.type === 'usage' && value.modelCalls !== undefined) { segmentCalls = value.modelCalls; value = { ...value, modelCalls: callsBefore + value.modelCalls }; }
       input.onEvent(value);
     };
     let result: EngineTurnResult;
@@ -158,6 +170,7 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
       for (const call of calls.values()) clear(call);
     }
     await Promise.all(deliveries);
+    callsBefore += segmentCalls;
     compacted ||= result.compacted === true;
     traceAsText ??= result.traceAsText;
     files.push(...result.files ?? []);
@@ -166,7 +179,8 @@ export async function runWithNativeTimeouts(engine: Engine, input: EngineTurnInp
       totals.inputTokens += result.usage.inputTokens;
       totals.outputTokens += result.usage.outputTokens;
       cache = addCache(cache, result.usage);
-      if (result.usage.costUsd !== undefined) { hadCost = true; totals.costUsd += result.usage.costUsd; }
+      // the latest reported cost: the only engine that continues with one (Claude Code) reports the session's running total
+      if (result.usage.costUsd !== undefined) { hadCost = true; totals.costUsd = result.usage.costUsd; }
     }
     for (const call of calls.values()) {
       if (call.notes.length) undelivered.push(note(call, NO_OUTPUT));

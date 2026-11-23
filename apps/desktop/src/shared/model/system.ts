@@ -15,11 +15,23 @@ export interface Profile {
   timezone: string; // IANA, default OS zone
   /** B-078 (D17): the AI's own note on how the person wants to be spoken to (≤ 600 characters; the stable prompt's "My environment"). */
   notes?: string;
+  /**
+   * B-085: how far the team goes on its own on this PC, chosen on the first run's About card – 'whole' (absent: anywhere)
+   * or 'careful' (freely in its own folders, checks with the person before changes elsewhere). An agreement line in the
+   * agents' SYSTEM.md, never enforced.
+   */
+  pcAccess?: 'whole' | 'careful';
+  /**
+   * Owner 16.11.2026 (Settings › Security): the person's lines to every agent, last in each agent's system prompt after
+   * its own HUMAN.md (≤ MAX_HUMAN_MD characters; '' = none). Starts as the "I'm not a robot" line in the PC's language
+   * (shared/model/agent-core.ts humanDefault); the person and the agents change it like every setting.
+   */
+  forEveryAgent?: string;
 }
 
 /** B-078 (D13): the public skill library (runtime/knowledge, track T3). */
 export interface LibrarySettings {
-  /** Skills worth sharing go to the public library as a pull request with the person's own GitHub sign-in (default on). */
+  /** Skills and notes worth sharing go to the public library at library.openautark.com, after the checks (default on). */
   publish: boolean;
 }
 
@@ -38,6 +50,8 @@ export interface Preferences {
 export interface NotificationSettings {
   enabled: boolean;
   sound: boolean;
+  /** A line at the bottom while an agent uses this PC, with Watch (default false: feedback 17.11.2026 – agents use the PC all day). */
+  computerUse: boolean;
   quietHours?: { from: string; to: string };
   /** What may interrupt: human to-dos, blockers, important messages (always quiet otherwise). */
   pushFor: Array<'todo' | 'blocker' | 'important' | 'done' | 'reply'>;
@@ -86,7 +100,7 @@ export interface RoutingSettings {
  * The first run (ui/onboarding, AF-002): the setup assistant's steps – profile (language, name, company), ai (one model
  * that answers, or skipped on purpose), connectors (optional) and agent (meet the Manager or hire a first agent) – then
  * 'done'. Steps of older versions read on (settings/validate.ts): 'tour', 'about', 'team' and 'voice' as 'profile'.
- * "Set up again" starts at 'profile'.
+ * "Set up again" starts at 'profile'. (Upstream 0.3.16's first card – new company or my other PC – was its step 'tour'.)
  */
 export type OnboardingStep = 'profile' | 'ai' | 'connectors' | 'agent' | 'done';
 export const ONBOARDING_STEPS: readonly OnboardingStep[] = ['profile', 'ai', 'connectors', 'agent', 'done'];
@@ -147,6 +161,11 @@ export interface DeviceSettings {
    * each other at. Absent = Autark's own (DEFAULT_RELAY); empty = off.
    */
   relay?: string;
+  /** F25: a phone app may reach this PC over a WebRTC data channel it sets up through its tunnel. Absent = on. */
+  rtc?: boolean;
+  /** F25: the STUN servers ("stun:host:port", ≤ 4) offered for it; empty = none (then only on the same network or
+   * tailnet). Absent = DEFAULT_STUN (shared/model/relay.ts). */
+  stun?: string[];
 }
 
 /** Partial deep update accepted by settings.update. */
@@ -171,13 +190,24 @@ export type FeedbackVisibility = 'public' | 'private';
 
 export interface FeedbackReport {
   id: string;
-  kind: FeedbackKind;
+  /** Agent reports always; a person's report only when one was chosen (16.11.2026: the menu no longer claims "bug"). */
+  kind?: FeedbackKind;
   text: string;
   author: string; // 'human' or agent id (agent reports are untrusted)
   screenshotFileId?: string;
   annotationFileId?: string;
-  /** `runId`: agent reports only – the run that filed the report. */
-  context: { view?: string; conversationId?: string; version: string; os: string; runId?: string };
+  /** 16.11.2026: the recorded takes of a dictated report (uploaded WebM or MP4 files, at most FEEDBACK_AUDIO_MAX). */
+  audioFileIds?: string[];
+  /**
+   * `runId`: agent reports only – the run that filed the report. `version`/`os`: this PC's runtime. 16.11.2026:
+   * `client` – where the person wrote it (the writing page's own facts, redacted); `company` – this company's data
+   * folder ('first', 'company-2'); `clientId` – the writing device's id for the report (feedback.create dedupe);
+   * `clientDiagnostics` – that device's own diagnostics (an Android crash report), redacted.
+   */
+  context: {
+    view?: string; conversationId?: string; version: string; os: string; runId?: string;
+    client?: string; company?: string; clientId?: string; clientDiagnostics?: string;
+  };
   /**
    * B-055: 'sent' = the sealed report is in the team's mailbox (only the team can open it). Older states stay
    * readable: queued = an older browser draft, received = an older receiver's receipt with GitHub pending.
@@ -190,7 +220,7 @@ export interface FeedbackReport {
   receiptId?: string;
   /** B-055: every report is sent 'private' (sealed for the team); 'public' only on older GitHub reports. */
   visibility?: FeedbackVisibility;
-  /** The report arrived, but without something it had (B-055: "The screenshot was too large and was not sent."). */
+  /** The report arrived, but without something it had (SCREENSHOT_DROPPED, AUDIO_DROPPED in feedback-delivery.ts). */
   deliveryWarning?: string;
   /** Agent reports: how often the same text was reported within 24 h (absent = once). */
   count?: number;
@@ -247,8 +277,10 @@ export interface SystemInfo {
   startedAt: number;
   /** Whether linked PCs can reach this PC right now (Settings › Devices shows it). */
   peer?: PeerListenerState;
-  /** RC1: what this start did after an update or a crash ("Updated to X · N tasks continued"), shown once. */
-  notice?: { id: string; text: string; at: number };
+  /** RC1: what this start did after an update or a crash ("Updated to X · N tasks continued"), shown once. F25: `failed` – an
+   *  install did not land ("The update to X did not install · …"): its line stays until Dismiss and Settings › About shows it;
+   *  `to` – the version it would have brought (main's updater does not install that one by itself again). */
+  notice?: { id: string; text: string; at: number; failed?: true; to?: string };
 }
 
 /** The dedicated peer listener: open while a pairing is in flight or a PC is linked. */
@@ -268,9 +300,9 @@ export interface ResourceState {
   freeMemoryMb: number;
   totalMemoryMb: number;
   cpuCount: number;
-  heavySlots: number; // admitted heavy agent processes right now
-  heavyInUse: number;
-  queued: number; // wakes waiting for capacity
+  heavySlots: number; // B-080: the parts an agent runs at once (SPLIT_LIMITS.runningPerAgent); no lane has a global limit
+  heavyInUse: number; // running heavy processes (engine CLIs)
+  queued: number; // due wakes not run yet
   processes: Array<{ kind: string; pid: number; accountId?: string; idleMs: number }>;
   /** Added by MM9: the runtime process itself. */
   runtime?: RuntimeUsage;
@@ -281,6 +313,9 @@ export interface RuntimeUsage {
   pid: number;
   rssMb: number;
   heapUsedMb: number;
+  /** V8's reserved heap and the memory outside it (Buffers, native objects such as SQLite's cache): with rss they say where the process's size sits. */
+  heapTotalMb?: number;
+  externalMb?: number;
   /** CPU time (user + system) since the process started. */
   cpuMs: number;
   uptimeMs: number;
@@ -305,7 +340,7 @@ export interface RootInfo {
 
 declare module '../api/methods.ts' {
   interface Methods {
-    /** B-044 (OPEN-FS), owner: where `<data>` and its map are (Settings › About "Autark folder"). */
-    'system.root': { params: void; result: RootInfo };
+    /** B-044 (OPEN-FS), owner: where `<data>` and its map are (Settings › About "Autark folder"); B-081 `device`: that linked CEO PC's. */
+    'system.root': { params: { device?: string } | void; result: RootInfo };
   }
 }

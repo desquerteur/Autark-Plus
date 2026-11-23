@@ -4,8 +4,8 @@
 // → 'gathered' (a parent turn with the results ended 'done'); or 'stopped' (the person stopped it, or the turn that split).
 // A split: 'pending' (its group waits, or the parts it builds on run) → 'queued' (ready, waiting for a lane) →
 // 'running' (on its lane) → 'done' | 'failed' | 'stopped' | 'skipped' (a part it builds on did not end done).
-// Owns: those sets, the dependencies' shape, the emit and the session release call. Never: a lifecycle step itself
-// (runner.ts, gather.ts).
+// Owns: those sets, the dependencies' shape, the emit, the session release call and the open waits of turns that split
+// with `wait` (wait.ts). Never: a lifecycle step itself (runner.ts, gather.ts).
 
 import type { Bus } from '../bus.ts';
 import type { Clock, Dispatcher, Logger, OrgService, RunJournal, RuntimeServices, WakeQueue } from '../contracts.ts';
@@ -14,6 +14,7 @@ import type { Db } from '../db/database.ts';
 import type { Split, SplitGroup, SplitGroupStatus, SplitStatus } from '../../shared/model/splits.ts';
 import type { SplitRepo } from '../store/splits.ts';
 import { releaseSessions, type ReleasedSession } from './release.ts';
+import { SplitWaits } from './wait.ts';
 import type { canIsolate, finishSplitWorktree, mergeSplit, openSplitWorktree, sweepSplitWorktrees } from '../git/split-worktree.ts';
 import { groupViews } from './views.ts';
 
@@ -50,10 +51,13 @@ export const isTerminal = (status: SplitStatus): boolean => status === 'done' ||
 export class SplitCore {
   readonly deps: SplitServiceDeps;
   readonly repo: SplitRepo;
+  /** Decision 10: the turns that wait for their parts inside their own turn (service.waitFor). */
+  readonly waits: SplitWaits;
 
   constructor(deps: SplitServiceDeps) {
     this.deps = deps;
     this.repo = deps.repo;
+    this.waits = new SplitWaits((splitId) => this.repo.getSplit(splitId));
   }
 
   now(): number { return this.deps.clock.now(); }

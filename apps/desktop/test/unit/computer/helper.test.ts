@@ -1,7 +1,10 @@
-// WindowsHelper process client against a fake child process (no PowerShell is started).
+// WindowsHelper process client against a fake child process (no PowerShell is started). B-080: the helper's C# as text –
+// focus_window gets past Windows' foreground lock by attaching to the front window's input thread (no key presses), and an
+// unsupported pattern names the computer.act actions the element takes (the broker compiles the same C#).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { WindowsHelper } from '../../../src/runtime/computer/helper.ts';
 import { HELPER_PROTOCOL } from '../../../src/runtime/computer/protocol.ts';
 import { MemoryLogger } from '../../../src/runtime/system/log.ts';
@@ -74,4 +77,51 @@ test('a helper that exits before it is ready reports unavailable and cools down 
   now += 61_000;
   await assert.rejects(helper.call('ping'), /could not start/);
   assert.equal(fake.calls.length, 4);
+});
+
+const SOURCE = readFileSync(new URL('../../../resources/computer/windows-helper.ps1', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+/** The body of one C# member of the helper, up to its closing brace at the class member indentation. */
+const method = (signature: string) => {
+  const start = SOURCE.indexOf(signature);
+  assert.ok(start >= 0, signature);
+  const end = SOURCE.slice(start).search(/\n {8}\};?\n/);
+  assert.ok(end > 0, `end of ${signature}`);
+  return SOURCE.slice(start, start + end);
+};
+
+test('B-080 focus_window: when another window stays in front, it attaches to that window\'s input thread around BringWindowToTop/SetForegroundWindow and detaches', () => {
+  for (const line of [
+    '[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);',
+    '[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool doAttach);',
+    '[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();',
+  ]) assert.ok(SOURCE.includes(line), line);
+  const focus = method('public static Dictionary<string, object> Focus(IntPtr hwnd)');
+  const order = [
+    'Native.SetForegroundWindow(hwnd);', 'IntPtr front = Native.GetForegroundWindow();', 'if (front != hwnd)',
+    'Native.GetWindowThreadProcessId(front, out frontPid)', 'Native.GetCurrentThreadId()', 'Native.AttachThreadInput(ownThread, frontThread, true)',
+    'Native.BringWindowToTop(hwnd);', 'Native.SetForegroundWindow(hwnd);', 'finally', 'if (attached) Native.AttachThreadInput(ownThread, frontThread, false);',
+    'AutomationElement.FromHandle(hwnd).SetFocus()', 'd["focused"] = Native.GetForegroundWindow() == hwnd;',
+  ];
+  let at = 0;
+  for (const step of order) {
+    const found = focus.indexOf(step, at);
+    assert.ok(found >= 0, `in order: ${step}`);
+    at = found + step.length;
+  }
+  assert.doesNotMatch(focus, /SendInput|keybd_event|Input\.Key/, 'no key presses');
+});
+
+test('B-080 an unsupported pattern names the computer.act actions of the element\'s patterns, and click where it has a point', () => {
+  const map = method('static readonly Dictionary<string, string> PatternActions');
+  assert.match(map, /\{ "ScrollItem", "scroll_into_view" \}/);
+  assert.match(map, /\{ "ExpandCollapse", "expand, collapse" \}/);
+  for (const [pattern, action] of [['Invoke', 'invoke'], ['Toggle', 'toggle'], ['SelectionItem', 'select'], ['Value', 'set_value'], ['Scroll', 'scroll']]) {
+    assert.ok(map.includes(`{ "${pattern}", "${action}" }`), pattern);
+  }
+  const hint = method('static object Pattern(AutomationElement el, AutomationPattern pattern, string label)');
+  assert.match(hint, /PatternActions\.TryGetValue\(name, out action\)/);
+  assert.match(hint, /if \(Clickable\(el\)\) actions\.Add\("click"\);/);
+  assert.match(hint, /" I reach it with computer\.act " \+ string\.Join\(", ", actions\.ToArray\(\)\)/);
+  assert.doesNotMatch(SOURCE, /Try action 'click'\./, 'no fixed click hint');
+  assert.match(method('static bool Clickable(AutomationElement el)'), /TryGetClickablePoint\(out point\) \|\| !el\.Current\.BoundingRectangle\.IsEmpty/);
 });

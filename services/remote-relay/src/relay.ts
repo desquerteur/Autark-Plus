@@ -4,8 +4,12 @@
 // its peer listener port; the server builds its public address from the source it sees and the
 // port, and shares it – with the box key – only between two devices that pinned each other
 // (presence). When no direct path answers, a tunnel forwards opaque binary frames (the devices'
-// own end-to-end-encrypted peer channel) as the last fallback. Devices that accept connection
-// requests are also found by their Remote ID, and sealed connect messages are passed to them
+// own end-to-end-encrypted peer channel) as the last fallback – within a daily byte budget per device key, per client
+// source and in total. Past a budget, or while `tunnels` is off (the emergency stop, RELAY_TUNNELS=off), a tunnel still
+// opens but only as a small signalling tunnel (SIGNAL_BYTES, one per minute per key and source): enough for the devices
+// to agree on a direct (WebRTC) path through it, never enough to carry their data. Devices that accept connection
+// requests are also found by their Remote ID (B-084: also by the person code their chain proves, the chain handed out
+// with the found entry), and sealed connect messages are passed to them
 // (rate-limited per key and per client source); each carries an opaque per-source tag (HMAC of
 // the source under a per-process secret, never the address) so the target PC counts requests per
 // real source. Nothing here can accept a request – the person on the target PC does.
@@ -19,9 +23,9 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { WebSocket, WebSocketServer } from 'ws';
-import { Bucket, DEFAULT_LIMITS, KeyedBuckets, sourceOf, type Limits } from './limits.ts';
+import { Bucket, DayCounter, DEFAULT_LIMITS, KeyedBuckets, sourceOf, type Limits } from './limits.ts';
 import {
-  DATA_HEADER, MAX_DATA_PAYLOAD, PROTOCOL, b64url, boxText, fingerprintOf, helloText, isFingerprint, isRef, key32,
+  DATA_HEADER, MAX_DATA_PAYLOAD, PROTOCOL, b64url, boxText, chainCode, fingerprintOf, helloText, isFingerprint, isRef, key32,
   newChallenge, opaque, parseControl, peerList, remoteIdOf, signed, tunnelOf, type Frame,
 } from './protocol.ts';
 
@@ -37,6 +41,8 @@ export interface RelayOptions {
    * Cloudflare address. Without the header the socket address counts.
    */
   ipHeader?: string;
+  /** false: the emergency stop (RELAY_TUNNELS=off) – only signalling tunnels; meeting, presence and Connect go on. */
+  tunnels?: boolean;
   /** Mounted on another HTTP server instead of listening: that server passes upgrades to `handleUpgrade`. */
   noServer?: boolean;
   log?: (message: string, data?: Record<string, number | string>) => void;
@@ -48,7 +54,7 @@ export interface RelayOptions {
 export interface Relay {
   /** The port it listens on (0 when mounted). */
   port: number;
-  stats(): { connections: number; devices: number; tunnels: number; pairs: number };
+  stats(): { connections: number; devices: number; tunnels: number; pairs: number; tunnelBytesToday: number; tunnelsOn: boolean };
   /** Mounted (noServer): takes one WebSocket upgrade from the host server. */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
   close(): Promise<void>;
@@ -69,7 +75,9 @@ interface Conn {
   boxSig?: string;
   peers: Set<string>;
   findable: boolean;
-  remoteId?: string;
+  /** The IDs it is found under while findable: its own Remote ID and (B-084) the person code its chain proves. */
+  ids: Set<string>;
+  code?: ReturnType<typeof chainCode>;
   tunnels: Set<number>;
   control: Bucket;
   bytes: Bucket;
@@ -86,6 +94,8 @@ interface Conn {
 interface Pending { from: Conn; ref: number; to: Conn; timer: ReturnType<typeof setTimeout> }
 
 const ERROR_CODE = /^[a-z_]{1,20}$/;
+/** Bytes a signalling tunnel carries (opened past a budget or while tunnels are off): handshake and WebRTC offer/answer. */
+export const SIGNAL_BYTES = 64 * 1024;
 
 export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
   const Server = options.WebSocketServer ?? (await import('ws')).WebSocketServer;
@@ -96,12 +106,17 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
   const perIp = new Map<string, number>();
   const byFp = new Map<string, Conn>();
   const byRemoteId = new Map<string, Set<Conn>>();
-  const tunnels = new Map<number, { a: Conn; b: Conn }>();
+  /** `left`: a signalling tunnel's remaining bytes (absent: a full tunnel within the budgets). */
+  const tunnels = new Map<number, { a: Conn; b: Conn; left?: number }>();
   const pairs = new Map<number, Pending>();
   const registrations = new KeyedBuckets(limits.registrationsPerMinute, now);
   const finds = new KeyedBuckets(limits.findsPerMinute, now);
   const pairsOut = new KeyedBuckets(limits.pairsPerMinute, now);
   const pairsIn = new KeyedBuckets(limits.pairsInPerMinute, now);
+  const tunnelsOn = options.tunnels !== false;
+  const signals = new KeyedBuckets(1, now); // signalling tunnels: one per minute per key and per source
+  const day = new DayCounter(now); // tunnel bytes today: per `k:<key>`, per `s:<source>` and under '*' in total
+  let spentLogged = '';
   const secret = randomBytes(32); // per process: tags cannot be linked across restarts
   const tagOf = (conn: Conn) => createHmac('sha256', secret).update(conn.source).digest('hex').slice(0, 16);
   /** Bucket keys of one connection: its device key and its client source. */
@@ -133,14 +148,9 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
   }
 
   function index(conn: Conn): void {
-    if (conn.remoteId) byRemoteId.get(conn.remoteId)?.delete(conn);
-    if (conn.remoteId && !byRemoteId.get(conn.remoteId)?.size) byRemoteId.delete(conn.remoteId);
-    conn.remoteId = conn.findable && conn.fp ? remoteIdOf(conn.fp) : undefined;
-    if (conn.remoteId) {
-      const set = byRemoteId.get(conn.remoteId) ?? new Set<Conn>();
-      set.add(conn);
-      byRemoteId.set(conn.remoteId, set);
-    }
+    for (const id of conn.ids) { const set = byRemoteId.get(id); set?.delete(conn); if (set && !set.size) byRemoteId.delete(id); }
+    conn.ids = new Set(conn.findable && conn.fp ? [remoteIdOf(conn.fp), ...(conn.code ? [conn.code.code] : [])] : []);
+    for (const id of conn.ids) byRemoteId.set(id, (byRemoteId.get(id) ?? new Set<Conn>()).add(conn));
   }
 
   /** New pin list: presence changes (and cut tunnels) for every device whose mutual pin changed. */
@@ -177,7 +187,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     const fp = fingerprintOf(pub);
     const old = byFp.get(fp);
     if (old) { old.ws.close(4009, 'replaced'); drop(old); }
-    Object.assign(conn, { fp, pub: b64url(pub), box: b64url(box), boxSig: frame.boxSig as string, findable: frame.findable === true, port: portOf(frame.port), peers: new Set<string>() });
+    Object.assign(conn, { fp, pub: b64url(pub), box: b64url(box), boxSig: frame.boxSig as string, findable: frame.findable === true, port: portOf(frame.port), peers: new Set<string>(), code: chainCode(frame.chain, fp) });
     byFp.set(fp, conn);
     index(conn);
     conn.peers = peers;
@@ -186,20 +196,27 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     for (const other of online) presence(other, conn, true);
   }
 
+  /** Over today's tunnel budget: this device key, its client source, or all devices together. */
+  function overBudget(conn: Conn): boolean {
+    return day.get(`k:${conn.fp}`) >= limits.tunnelBytesPerDay || day.get(`s:${conn.source}`) >= limits.tunnelBytesPerDay || day.get('*') >= limits.tunnelBytesPerDayTotal;
+  }
+
   function open(conn: Conn, frame: Frame): void {
     const ref = frame.ref;
     if (!isRef(ref)) return fail(conn, 'bad_request');
     const other = isFingerprint(frame.to) ? byFp.get(frame.to) : undefined;
     if (!other || !mutual(conn, other)) return fail(conn, 'unavailable', ref);
     if (conn.tunnels.size >= limits.maxTunnelsPerConnection || other.tunnels.size >= limits.maxTunnelsPerConnection) return fail(conn, 'limit', ref);
+    const held = !tunnelsOn ? 'off' : overBudget(conn) || overBudget(other) ? 'quota' : undefined;
+    if (held && !signals.takeAll(keysOf(conn))) return fail(conn, held, ref);
     if (frame.e !== undefined && !opaque(frame.e, 64)) return fail(conn, 'bad_request', ref);
     if (frame.es !== undefined && !opaque(frame.es, 128)) return fail(conn, 'bad_request', ref);
     const tid = nextTunnel;
     nextTunnel = nextTunnel >= 0xffff_fff0 ? 1 : nextTunnel + 1;
-    tunnels.set(tid, { a: conn, b: other });
+    tunnels.set(tid, { a: conn, b: other, ...(held ? { left: SIGNAL_BYTES } : {}) });
     conn.tunnels.add(tid);
     other.tunnels.add(tid);
-    send(conn, { t: 'opened', ref, tid });
+    send(conn, { t: 'opened', ref, tid, ...(held ? { held } : {}) });
     // e: the opener's ephemeral key, es: its device key's signature over it (checked by the receiver).
     send(other, { t: 'incoming', tid, from: conn.fp, ...(frame.e ? { e: frame.e } : {}), ...(frame.es ? { es: frame.es } : {}) });
   }
@@ -209,7 +226,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     if (typeof frame.id !== 'string' || !/^\d{9}$/.test(frame.id)) return fail(conn, 'bad_request', frame.ref);
     if (!finds.takeAll(keysOf(conn))) return fail(conn, 'rate_limited', frame.ref);
     const found = [...(byRemoteId.get(frame.id) ?? [])].filter((other) => other !== conn).slice(0, 4);
-    send(conn, { t: 'found', ref: frame.ref, entries: found.map((other) => ({ pub: other.pub, box: other.box, boxSig: other.boxSig })) });
+    send(conn, { t: 'found', ref: frame.ref, entries: found.map((other) => ({ pub: other.pub, box: other.box, boxSig: other.boxSig, ...(other.code ? { chain: other.code.chain } : {}) })) });
   }
 
   function pair(conn: Conn, frame: Frame): void {
@@ -252,7 +269,11 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
         const peers = peerList(frame.peers);
         if (!peers) return fail(conn, 'bad_request');
         setPeers(conn, peers);
-        if (typeof frame.findable === 'boolean' && frame.findable !== conn.findable) { conn.findable = frame.findable; index(conn); }
+        const findable = typeof frame.findable === 'boolean' ? frame.findable : conn.findable;
+        const code = chainCode(frame.chain, conn.fp);
+        const moved = findable !== conn.findable || code?.code !== conn.code?.code;
+        Object.assign(conn, { findable, code });
+        if (moved) index(conn);
         const port = portOf(frame.port);
         if (port !== conn.port) {
           conn.port = port; // its pinned peers learn the new address
@@ -300,6 +321,19 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     if (!tunnel || (tunnel.a !== conn && tunnel.b !== conn)) return; // closed a moment ago
     const other = tunnel.a === conn ? tunnel.b : tunnel.a;
     if (other.ws.bufferedAmount > limits.maxBufferedBytes) { closeTunnel(tid!, undefined, 'slow'); return; }
+    // Today's budget: counted on the sender's key and source and in total; past it, every tunnel of the sender closes.
+    day.add(`k:${conn.fp}`, frame.length);
+    day.add(`s:${conn.source}`, frame.length);
+    const total = day.add('*', frame.length);
+    if (tunnel.left !== undefined) {
+      tunnel.left -= frame.length;
+      if (tunnel.left < 0) { closeTunnel(tid!, undefined, tunnelsOn ? 'quota' : 'off'); return; }
+    } else if (overBudget(conn)) {
+      const today = new Date(now()).toISOString().slice(0, 10);
+      if (total >= limits.tunnelBytesPerDayTotal && spentLogged !== today) { spentLogged = today; log('tunnel budget of the day used up', { bytes: total }); }
+      for (const open of [...conn.tunnels]) if (tunnels.get(open)?.left === undefined) closeTunnel(open, undefined, 'quota');
+      return;
+    }
     other.ws.send(frame, () => drained(other));
     if (!conn.stalled && other.ws.bufferedAmount > limits.lowBufferedBytes) {
       // The receiver lags: stop reading from this sender until it caught up (or give up on this tunnel).
@@ -371,7 +405,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
     const source = sourceOf(ip);
     if (conns.size >= limits.maxConnections || (perIp.get(source) ?? 0) >= limits.maxPerIp) { ws.close(1013, 'busy'); return; }
     const conn: Conn = {
-      ws, source, ip, port: 0, challenge: newChallenge(), peers: new Set(), findable: false, tunnels: new Set(), paused: false, waiters: new Set(), alive: true,
+      ws, source, ip, port: 0, challenge: newChallenge(), peers: new Set(), findable: false, ids: new Set(), tunnels: new Set(), paused: false, waiters: new Set(), alive: true,
       control: new Bucket(limits.controlPerSecond, limits.controlPerSecond * 3, now),
       bytes: new Bucket(limits.bytesPerSecond, limits.bytesPerSecond * 8, now),
     };
@@ -397,7 +431,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<Relay> {
   keepalive.unref?.();
 
   function stats() {
-    return { connections: conns.size, devices: byFp.size, tunnels: tunnels.size, pairs: pairs.size };
+    return { connections: conns.size, devices: byFp.size, tunnels: tunnels.size, pairs: pairs.size, tunnelBytesToday: day.get('*'), tunnelsOn };
   }
 
   const close = () => new Promise<void>((done) => {

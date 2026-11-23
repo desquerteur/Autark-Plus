@@ -9,6 +9,8 @@
 // (ConnectCard.tsx) in the cards' column; Back returns to the step. B-078: a company started from the company menu's "+" as
 // my other device or as an employee (companies.list current entry's `start`) opens that card at once, preset that way.
 // The phone stack draws its own top row (shell/views.ts tabTitle), so the layer draws its header row on the desktop only.
+// Upstream 0.3.16's choice card (ChoiceCard.tsx, new company or my other PC) is this first step's "Connect to my other
+// device"; its feedback video is the tour's "Watch how", Settings › Feedback and the palette.
 // Owns: the layer's frame and the card switch. Never: a card's choices (the cards) or the step rules (first-run-model.ts).
 
 import { signal } from '@preact/signals';

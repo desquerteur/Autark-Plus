@@ -1,11 +1,12 @@
 // B-058 G10 (media/vision-image.ts): images bound for a model. PNG/JPEG/WebP/GIF within 3.75 MB and 1568 px go as
 // they are; others get a JPEG/PNG copy through the host's media analyzer (a fake Host.media.image here), cached by
 // blob id in <temp>/vision; headless, a PNG is shrunk or cut here. Without a copy, an image within the hard limit
-// (2000 px) still goes, anything else becomes a line naming media.view. Unknown files go as before.
+// (2000 px) still goes, anything else becomes a line naming media.view. Unknown files go as before. B-080: bytes
+// whose row came from another PC are pulled (FileStore.local) before media.view reads them.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { NormalizedImage } from '../../../src/shared/api/host-bridge.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
@@ -155,4 +156,26 @@ test('visionImage: a region goes to the analyzer; headless a PNG region is cut h
     const svg = await headless.stored(SVG, 'logo.svg', 'image/svg+xml');
     await assert.rejects(visionImage(headless.s, { fileId: svg.ref.id, mime: 'image/svg+xml' }), /This image cannot be shown: converting this image needs the desktop app/);
   } finally { headless.temp.cleanup(); }
+});
+
+test('B-080: a stored image whose row came from another PC without its bytes: `missing` pulls them before media.view shows it', async () => {
+  const h = harness();
+  const temp = tempDir();
+  try {
+    const bytes = halves(64, 32);
+    const pulled: string[] = [];
+    const files: Blobs = new Blobs({
+      db: h.db, blobs: path.join(temp.dir, 'blobs'), clock: h.clock, log: new MemoryLogger(),
+      missing: async (id) => { pulled.push(id); mkdirSync(path.dirname(files.path(id)), { recursive: true }); writeFileSync(files.path(id), bytes); return true; },
+    });
+    const ref = await files.put(bytes, 'from-the-server.png');
+    rmSync(files.path(ref.id)); // the row is here, the bytes are on the other PC
+    const s = { files, log: new MemoryLogger(), paths: { temp: path.join(temp.dir, 'tmp') }, host: {} } as unknown as VisionServices;
+    const shown = await visionImage(s, { fileId: ref.id, mime: 'image/png' });
+    assert.deepEqual(pulled, [ref.id], 'pulled once, before the read');
+    assert.deepEqual([shown.width, shown.height, shown.converted], [64, 32, false]);
+    assert.deepEqual(Buffer.from(shown.data), Buffer.from(bytes));
+    assert.equal(await files.local(ref.id), files.path(ref.id), 'there now: local() pulls nothing more');
+    assert.equal(pulled.length, 1);
+  } finally { temp.cleanup(); }
 });

@@ -5,6 +5,8 @@
 // and their subdomains; no user name, password or port). After that URL, or SCAN_CHARS of output, every
 // further chunk is dropped unread – the stream keeps draining so the CLI never blocks on a full pipe.
 // A sign-in URL is not a token, but it opens the person's sign-in: the caller keeps it in memory only.
+// B-091: a device sign-in (`codex login --device-auth`) also prints a one-time code after its "one-time code" label
+// (shape ABCD-EFGHI); with `code` the scan reads on until both the URL and that code showed.
 // Owns: the host allow-list, the line scan and its caps.
 // Never: logs, stores or forwards anything it reads.
 
@@ -35,9 +37,18 @@ export function findSignInUrl(text: string): string | undefined {
   return undefined;
 }
 
-/** Reads the streams' complete lines until the first sign-in URL (then `found` once) or the cap; the rest is dropped. */
-export function watchSignInUrl(streams: ReadonlyArray<Readable | null | undefined>, found: (url: string) => void): void {
+const CODE_LABEL = /one-time code/i;
+const CODE = /\b[A-Z0-9]{4,5}-[A-Z0-9]{4,6}\b/;
+
+/**
+ * Reads the streams' complete lines until the first sign-in URL (then `found` once) – and with `code` also the one-time
+ * code on the line(s) after its label (then `code` once) – or the cap; the rest is dropped.
+ */
+export function watchSignInUrl(streams: ReadonlyArray<Readable | null | undefined>, found: (url: string) => void, code?: (code: string) => void): void {
   let done = false;
+  let url: string | undefined;
+  let labelled = false;
+  let shown: string | undefined;
   for (const stream of streams) {
     if (!stream) continue;
     let pending = '';
@@ -49,9 +60,16 @@ export function watchSignInUrl(streams: ReadonlyArray<Readable | null | undefine
       pending += text;
       const end = Math.max(pending.lastIndexOf('\n'), pending.lastIndexOf('\r'));
       if (end >= 0) {
-        const url = findSignInUrl(pending.slice(0, end));
+        const lines = pending.slice(0, end);
         pending = pending.slice(end + 1);
-        if (url) { done = true; pending = ''; found(url); return; }
+        if (!url && (url = findSignInUrl(lines))) found(url);
+        if (code && !shown) {
+          const plain = lines.replace(ANSI, '');
+          const at = labelled ? 0 : plain.search(CODE_LABEL);
+          labelled = at >= 0;
+          if (labelled && (shown = CODE.exec(plain.slice(at))?.[0])) code(shown);
+        }
+        if (url && (!code || shown)) { done = true; pending = ''; return; }
       }
       if (pending.length > LINE_CHARS || seen > SCAN_CHARS) pending = '';
     });

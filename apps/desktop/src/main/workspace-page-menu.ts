@@ -73,7 +73,7 @@ export function isFillKey(input: { type: string; key: string; control: boolean; 
 
 /** Shows the menu on every right click in the tab's page; Fill login there and on its shortcut while main's RPC is set. */
 export function attachPageMenu(contents: WebContents, host: PageMenuHost): void {
-  const pick = (id: string) => { void fillLogin(fillRpc(), contents, id); };
+  const pick = (id: string) => { void fillLogin(fillRpc(), contents, id).catch(() => undefined); }; // never an unhandled rejection in main
   contents.on('context-menu', (_event, params) => {
     const window = host.window();
     if (!window || window.isDestroyed()) return;

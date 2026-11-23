@@ -19,7 +19,7 @@ let fail = false;
 };
 const { escapeStops, pruneStopping, runsAtWork, stopChat, stoppable, stopping } = await import('../../../src/ui/chat/composer/stop.ts');
 
-const run = (runId: string): LiveRun => ({ runId, agentId: 'ag_ava', messageId: `msg_${runId}`, startedAt: 1 });
+const run = (runId: string): LiveRun => ({ runId, agentId: 'ag_ava', startedAt: 1 });
 const chat = (id: string, live: LiveRun[]): Pick<ConversationSummary, 'id' | 'live' | 'working'> =>
   ({ id, live: live.length ? live : undefined, working: live.map((item) => item.agentId) });
 const atWork = (c: Pick<ConversationSummary, 'id' | 'live' | 'working'>) => stoppable(runsAtWork(c), stopping.value.get(c.id));

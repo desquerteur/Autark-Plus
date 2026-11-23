@@ -1,7 +1,7 @@
 // B-055 Q2/Q3, the team side: the service account JWT (RS256, verified with the account's public key), one token
-// per fetch, fetch → open → store → delete in that order (the file exists before the mailbox delete), unreadable
-// letters kept locally and out of the mailbox, ids we never make left alone, untrusted letters checked, the RPC
-// methods owner-only.
+// per fetch, fetch → open → store (16.11.2026: the letter stays in the mailbox for the team's other PCs and companies;
+// removing a report deletes its letter), unreadable letters kept locally (and, below the cap, in the mailbox), ids we
+// never make left alone, untrusted letters checked, the RPC methods owner-only.
 // Owns: these assertions. Never: contacts Google.
 
 import { after, test } from 'node:test';
@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { FeedbackService } from '../../../src/runtime/feedback/service.ts';
-import { INBOX_DIR, RECEIVER_KEY_ID, SERVICE_ACCOUNT_ID, SETUP_KEY, UNREADABLE_DIR, itemOf } from '../../../src/runtime/feedback/inbox.ts';
+import { RECEIVER_KEY_ID, SERVICE_ACCOUNT_ID, SETUP_KEY, UNREADABLE_DIR } from '../../../src/runtime/feedback/inbox.ts';
+import { itemOf } from '../../../src/runtime/feedback/letter.ts';
+import { INBOX_DIR } from '../../../src/shared/model/feedback-delivery.ts';
 import { DATASTORE_SCOPE, parseServiceAccount, serviceJwt } from '../../../src/runtime/feedback/google.ts';
 import { generateReceiverKeys, sealReport } from '../../../src/runtime/feedback/seal.ts';
 import { TOKEN_URL } from '../../../src/runtime/feedback/transport.ts';
@@ -54,17 +56,14 @@ test('the JWT: RS256 signed by the service account, iss/scope/aud/iat/exp as Goo
   }
 });
 
-test('fetch: open each letter, write its files, delete it in the mailbox only after – one token for the whole fetch', async () => {
+test('fetch: open each letter and write its files; the letter stays for the team\'s other PCs – one token for the whole fetch', async () => {
   const { env, box, letter, feedback, dir } = await team();
   letter('11111111-1111-4111-8111-111111111111', { createdAt: 5, kind: 'bug', text: 'Sidebar flickers\nwhen resizing', appVersion: '0.2.8', os: 'win32 10.0 x64', view: 'chat', screenshot: { mime: 'image/png', base64: PNG.toString('base64') } });
   letter('22222222-2222-4222-8222-222222222222', { createdAt: 6, kind: 'idea', text: 'Dark charts', appVersion: '0.2.8', os: 'darwin 25 arm64', fromAgent: true });
-  const deletedAfterWrite: boolean[] = [];
-  box.state.onDelete = (id) => deletedAfterWrite.push(existsSync(path.join(dir, `${id}.json`)));
   const result = await feedback.inbox.fetch();
   assert.deepEqual(result, { added: 2, unreadable: 0, more: false, total: 2 });
-  assert.deepEqual(deletedAfterWrite, [true, true], 'each file existed before its letter was deleted');
-  assert.deepEqual(box.log, ['list start', 'get 11111111-1111-4111-8111-111111111111', 'delete 11111111-1111-4111-8111-111111111111', 'get 22222222-2222-4222-8222-222222222222', 'delete 22222222-2222-4222-8222-222222222222']);
-  assert.equal(box.docs.size, 0, 'feedback ends up only with the team');
+  assert.deepEqual(box.log, ['list start', 'get 11111111-1111-4111-8111-111111111111', 'get 22222222-2222-4222-8222-222222222222']);
+  assert.equal(box.docs.size, 2, 'the letters stay: another PC or company with the team key fetches them too');
   assert.equal(box.state.tokens, 1);
   const list = box.calls.find((call) => call.method === 'GET' && !call.url.pathname.endsWith('1111'))!;
   assert.equal(list.url.searchParams.get('pageSize'), '50');
@@ -78,13 +77,18 @@ test('fetch: open each letter, write its files, delete it in the mailbox only af
   assert.deepEqual(first, { id: '11111111-1111-4111-8111-111111111111', receivedAt: env.clock.now(), createdAt: 5, kind: 'bug', text: 'Sidebar flickers\nwhen resizing', appVersion: '0.2.8', os: 'win32 10.0 x64', view: 'chat', screenshot: { mime: 'image/png', size: PNG.length } });
   assert.equal(items.find((item) => item.kind === 'idea')!.fromAgent, true);
   assert.deepEqual(feedback.inbox.screenshot(first.id), { mime: 'image/png', dataBase64: PNG.toString('base64') });
+  const again = await feedback.inbox.fetch();
+  assert.deepEqual(again, { added: 0, unreadable: 0, more: false, total: 2 }, 'a second fetch reads nothing it has');
+  assert.equal(box.log.filter((line) => line.startsWith('get')).length, 2);
   assert.deepEqual(feedback.inbox.remove(first.id), { ok: true });
-  assert.deepEqual(readdirSync(dir), ['22222222-2222-4222-8222-222222222222.json']);
+  assert.deepEqual(readdirSync(dir).sort(), ['11111111-1111-4111-8111-111111111111.gone', '22222222-2222-4222-8222-222222222222.json'], 'the report goes, its tombstone stays');
+  for (let wait = 0; wait < 50 && box.docs.has(first.id); wait++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual([...box.docs.keys()], ['22222222-2222-4222-8222-222222222222'], 'a removed report\'s letter leaves the mailbox, so no fetch brings it back');
   assert.throws(() => feedback.inbox.screenshot(first.id), /no screenshot/);
   assert.throws(() => feedback.inbox.remove('../workforce'), /Invalid report id/);
 });
 
-test('pages, letters for another key, damaged ones and ids we never make; a stored letter is only deleted again', async () => {
+test('pages, letters for another key, damaged ones and ids we never make; a stored letter is not read again', async () => {
   const { box, letter, feedback, dir } = await team();
   for (let index = 0; index < 55; index++) letter(`aaaaaaaa-0000-4000-8000-${String(index).padStart(12, '0')}`, { createdAt: index, text: `Report ${index}`, appVersion: '1', os: 'x' });
   letter('bbbbbbbb-0000-4000-8000-000000000000', { text: 'Sealed for an earlier key' }, generateReceiverKeys().publicKey);
@@ -97,7 +101,10 @@ test('pages, letters for another key, damaged ones and ids we never make; a stor
   assert.deepEqual(result, { added: 55, unreadable: 3, more: false, total: 56 });
   assert.equal(box.log.filter((line) => line.startsWith('list')).length, 2, 'two pages of 50');
   assert.equal(box.log.includes('get dddddddd-0000-4000-8000-000000000000'), false, 'already on this PC: not read again');
-  assert.deepEqual([...box.docs.keys()], ['odd.id with space'], 'only the id no sender of ours makes stays');
+  assert.equal(box.docs.has('bbbbbbbb-0000-4000-8000-000000000000') && box.docs.has('cccccccc-0000-4000-8000-000000000000'), true, 'unopenable letters stay for a team PC with the newer key');
+  assert.equal(box.docs.size, 59, 'the 55 new letters, the stored one, the two unopenable ones and the id no sender of ours makes stay');
+  await feedback.inbox.fetch();
+  assert.equal(box.log.filter((line) => line === 'get bbbbbbbb-0000-4000-8000-000000000000').length, 1, 'the local copy marks an unopenable letter seen');
   assert.deepEqual(readdirSync(path.join(dir, UNREADABLE_DIR)).sort(), ['bbbbbbbb-0000-4000-8000-000000000000.wfb', 'cccccccc-0000-4000-8000-000000000000.wfb']);
   assert.deepEqual(readFileSync(path.join(dir, UNREADABLE_DIR, 'cccccccc-0000-4000-8000-000000000000.wfb')), Buffer.from('WFB1 damaged'), 'kept as it came');
 });
@@ -144,16 +151,22 @@ test('an opened letter is untrusted: only v1 reports, bounded text, known kinds,
   assert.deepEqual(jpeg.item.screenshot, { mime: 'image/jpeg', size: 5 });
 });
 
-test('RPC: the inbox and setup are owner-only; ids are checked', async () => {
+test("RPC: the inbox is the owner's and the owner's secure phone's, setup the owner's; ids are checked", async () => {
   const table = new HandlerTable();
   registerInbox(table);
   const widest: ClientScope = { kind: 'device', deviceId: 'dev_x', capabilities: ['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'], secure: true };
-  for (const method of ['feedback.inboxList', 'feedback.inboxFetch', 'feedback.inboxRemove', 'feedback.inboxScreenshot', 'feedback.setup'] as const) {
+  const lan: ClientScope = { ...widest, secure: false };
+  const person = { kind: 'person', personId: 'per_anna000000', deviceId: 'dev_anna00000001', tokenId: 'tok_1', secure: true } as unknown as ClientScope;
+  for (const method of ['feedback.inboxList', 'feedback.inboxFetch', 'feedback.inboxRemove', 'feedback.inboxMark', 'feedback.inboxScreenshot', 'feedback.inboxAudio'] as const) {
     const entry = table.get(method)!;
-    assert.equal(entry.scope, 'owner', method);
-    assert.equal(allowedScope(entry.scope, widest), false, method);
+    assert.deepEqual(entry.scope, { capability: 'settings', secure: true }, method); // 16.11.2026: Settings › Feedback on the phone
+    assert.equal(allowedScope(entry.scope, widest), true, method);
+    assert.equal(allowedScope(entry.scope, lan), false, `${method}: never over plain LAN http`);
+    assert.equal(allowedScope(entry.scope, person), false, `${method}: never a person of the organisation`);
     assert.equal(allowedScope(entry.scope, { kind: 'owner' }), true, method);
   }
+  assert.equal(table.get('feedback.setup')!.scope, 'owner');
+  assert.equal(allowedScope(table.get('feedback.setup')!.scope, widest), false, 'setup stays on the PC');
   const removed: string[] = [];
   const ctx = { scope: { kind: 'owner' }, extras: { feedback: { inbox: { remove: (id: string) => { removed.push(id); return { ok: true }; } } } } } as unknown as HandlerContext;
   await assert.rejects(Promise.resolve().then(() => table.get('feedback.inboxRemove')!.handler({ id: '../../etc' } as never, ctx)), /report id/);

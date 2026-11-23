@@ -2,13 +2,14 @@
 // in sync with the open chat. Called once from main.tsx.
 // Owns: event → signal mapping, the `chat:<id>` topic lifecycle, the one start notice (RC1), when a toast is
 // seen already (its chat or My day open), the For-you clock's timing (F04); My day's calendar, briefing and
-// handed-off events are applied by lib/day-store.ts (wireDay, called here). B-075: a run's streaming answer arrives as
-// updates of its row (message.updated: body and live values), like any message – no event of its own; agent.activity
-// still feeds `activity` for Team, tasks and the work stop.
+// handed-off events are applied by lib/day-store.ts (wireDay, called here). Who works for a chat arrives
+// with its summary (conversation.upserted, its `live` – the live bar); agent.activity still feeds `activity` for Team, tasks and the work stop
+// (F10: with the runs of the person's other PCs, each with its deviceId). F25: a start notice saying an update did not install stays until Dismiss.
 // Never: fetches big snapshots on every event (only on reconnect, see store.loadAll).
 
 import { effect } from '@preact/signals';
 import type { TaskView } from '../../shared/model/tasks.ts';
+import type { Agent } from '../../shared/model/org.ts';
 import { rpc } from './rpc.ts';
 import {
   accounts, activeConversationId, activity, agents, archivedAgents, conversations, loadAll, messages, models, putMessage,
@@ -23,7 +24,7 @@ function forgetSignInFailure(id: string): void {
 }
 import { nextListChange, onForYouList } from '../tasks/todo-time.ts';
 import type { Topic } from '../../shared/api/protocol.ts';
-import { dismissToastsWhere, pushToast, toastNotification } from './toasts.ts';
+import { dismissToastsWhere, toastNotification, toastStartNotice } from './toasts.ts';
 import { wirePeople } from './people.ts';
 import { wireDay } from './day-store.ts';
 import { wireSplits } from '../splits/split-model.ts';
@@ -41,10 +42,14 @@ function rememberNotice(id: string): void {
   try { localStorage.setItem(NOTICE_KEY, id); } catch { /* storage blocked: shown again after a reload */ }
 }
 
-/** The person is where a toast's Open leads (shell/StatusLine.tsx): its chat, or My day for a to-do outside a chat. */
+/** The person is where a toast's Open leads (shell/StatusLine.tsx) or sees what it is about: its chat, or My day (also
+ *  as Home) for a to-do outside a chat and – 17.11.2026, a second line over My day said the list's rows again – for any
+ *  to-do its list shows. */
 function atToastTarget(item: { conversationId?: string; taskId?: string }): boolean {
   const at = route.peek();
-  return at.view === 'chat' ? item.conversationId === at.id : at.view === 'day' && !item.conversationId && item.taskId !== undefined;
+  if (at.view === 'chat') return item.conversationId === at.id;
+  const myDay = at.view === 'day' || at.view === 'home';
+  return myDay && item.taskId !== undefined && (!item.conversationId || todos.peek().some((task) => task.id === item.taskId));
 }
 
 /**
@@ -55,6 +60,14 @@ function atToastTarget(item: { conversationId?: string; taskId?: string }): bool
  */
 function isOpenTodo(task: TaskView): boolean {
   return onForYouList(task);
+}
+
+/** A phone hears an agent whose only news is its status without the instructions it already holds (runtime/rpc/scopes.ts
+ *  deviceAgent, 18.11.2026): they stay as known. */
+export function withInstructions(event: Agent | Omit<Agent, 'instructions'>): Agent {
+  if ('instructions' in event && typeof event.instructions === 'string') return event as Agent;
+  const known = agents.peek().find((agent) => agent.id === event.id) ?? archivedAgents.peek().find((agent) => agent.id === event.id);
+  return { ...event, instructions: known?.instructions ?? '' };
 }
 
 /** setTimeout's longest reliable delay is ~24.8 days; the clock re-arms after a day at most. */
@@ -98,7 +111,7 @@ export function wireEvents(): void {
 
   // tasks
   rpc.on('task.upserted', (task) => {
-    if (task.status === 'done' || task.status === 'cancelled') {
+    if (task.status === 'done' || task.status === 'dropped') {
       removeById(tasks, task.id);
       dismissToastsWhere((toast) => toast.taskId === task.id); // answered elsewhere (phone, an agent): its toast goes
     } else upsertById(tasks, task);
@@ -109,7 +122,11 @@ export function wireEvents(): void {
   wireDay(); // B-041: calendar.upserted/removed, day.briefing, handed-off work, the day clock
 
   // org
-  rpc.on('agent.upserted', (agent) => { upsertById(agents, agent); if (agent.archivedAt !== undefined) upsertById(archivedAgents, agent); else removeById(archivedAgents, agent.id); });
+  rpc.on('agent.upserted', (event) => {
+    const agent = withInstructions(event);
+    upsertById(agents, agent);
+    if (agent.archivedAt !== undefined) upsertById(archivedAgents, agent); else removeById(archivedAgents, agent.id);
+  });
   rpc.on('agent.removed', ({ id }) => { removeById(agents, id); removeById(archivedAgents, id); });
   rpc.on('agent.activity', ({ active }) => { activity.value = active; });
   wirePeople(); // F-52: person.upserted
@@ -134,12 +151,13 @@ export function wireEvents(): void {
     toastNotification(note);
   });
 
-  // RC1: the start notice ("Updated to X · N tasks continued") once per start, also after a reload.
+  // RC1: the start notice ("Updated to X · N tasks continued") once per start, also after a reload. F25: one saying an
+  // update did not install stays until Dismiss (toastStartNotice).
   effect(() => {
     const notice = systemInfo.value?.notice;
     if (!notice || Date.now() - notice.at > NOTICE_FRESH_MS || shownNotice() === notice.id) return;
     rememberNotice(notice.id);
-    pushToast({ title: notice.text });
+    toastStartNotice(notice);
   });
 
   // Keep exactly the open chat's topic subscribed.
@@ -154,7 +172,7 @@ export function wireEvents(): void {
   });
 
   // A toast goes once the person is where its Open leads, also when the window comes back to that view.
-  effect(() => { void route.value; dismissToastsWhere(atToastTarget); });
+  effect(() => { void route.value; void todos.value; dismissToastsWhere(atToastTarget); }); // a to-do reaching the list after its toast too
   window.addEventListener('focus', () => dismissToastsWhere(atToastTarget));
 
   wireTodoClock();

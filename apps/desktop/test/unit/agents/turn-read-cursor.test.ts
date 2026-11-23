@@ -75,27 +75,6 @@ test('round 4: without chat.read or after a failed turn nothing more counts as s
   assert.equal(failed.cursor(), before, 'a failed turn moves no cursor – its input and what it read come again');
   assert.ok(before < failed.input.seq);
 
-  // Live shape: Mira's next answer was still being written between Jonas's vote and the manager's read.
-  const writing = scene();
-  let mira = '';
-  let vote = 0;
-  await writing.turn('run_writing', async () => {
-    mira = writing.chats.beginAgentMessage(writing.room.id, 'ag_mira', 'run_mira').id; // Mira still writing
-    vote = writing.say('ag_jonas', '@Tom I agree with Mira.').seq;
-    await writing.readAs('run_writing');
-  });
-  assert.equal(writing.cursor(), vote, 'Jonas\'s finished vote after her open line counts as seen');
-  const done = writing.chats.finishAgentMessage(mira, { body: '@Tom Then we are agreed.', state: 'final' });
-  assert.ok(done.seq > writing.cursor(), 'her line moves behind what followed it once done');
-  assert.equal(isStaleMessageGroup(writing.chats, writing.tom.id, writing.wake()), false, 'so it still reaches Tom');
-
-  const last = scene(); // a line still being written with nothing finished after it ends the mark before it
-  let open = 0;
-  await last.turn('run_last', async () => {
-    open = last.chats.beginAgentMessage(last.room.id, 'ag_jonas', 'run_jonas').seq;
-    await last.readAs('run_last');
-  });
-  assert.ok(last.cursor() < open, `cursor ${last.cursor()} stays before the open line #${open}`);
 });
 
 test('round 4: readThrough – only a page that covers every line after the cursor counts, and only the turn\'s own chat', async () => {

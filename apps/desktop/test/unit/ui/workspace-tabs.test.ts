@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import type { ChatNotes } from '../../../src/shared/model/notes.ts';
 import type { MediaInfo } from '../../../src/shared/model/media.ts';
 import { NotesSync } from '../../../src/ui/workspace/notes-sync.ts';
-import { pickAfter, renderKey, shownVideo, videoRenders } from '../../../src/ui/workspace/video-versions.ts';
+import { pickAfter, playbackId, renderKey, shownVideo, videoRenders } from '../../../src/ui/workspace/video-versions.ts';
 import { durationLabel, mediaFacts, viewKind } from '../../../src/ui/workspace/media-facts.ts';
 
 class Conflict extends Error {}
@@ -114,7 +114,14 @@ test('media: how a file is shown and its facts', () => {
   assert.equal(viewKind('text/plain', 'notes.txt'), 'file');
   assert.equal(durationLabel(42_000), '0:42');
   assert.equal(durationLabel(3_729_000), '1:02:09');
+  assert.equal(durationLabel(14_900), '0:14', 'rounded down, like the player clock');
+  assert.equal(durationLabel(900), '0:00');
   assert.equal(mediaFacts({ width: 1280, height: 720, durationMs: 42_000, size: 3.2 * 1024 * 1024 }), '1280×720 · 0:42 · 3.2 MB');
   assert.equal(mediaFacts({ pages: 12, size: 840 * 1024 }), '12 pages · 840 KB');
   assert.equal(mediaFacts({}), '');
+});
+
+test('the Video tab plays the light preview copy of a video when it has one, the file itself otherwise (17.11.2026; Open and Download stay the original)', () => {
+  assert.equal(playbackId({ fileId: 'a'.repeat(64) }), 'a'.repeat(64));
+  assert.equal(playbackId({ fileId: 'a'.repeat(64), previewFileId: 'b'.repeat(64) }), 'b'.repeat(64));
 });

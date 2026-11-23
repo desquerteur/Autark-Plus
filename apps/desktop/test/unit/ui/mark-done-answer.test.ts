@@ -22,11 +22,10 @@ function markedDoneAnswer(): Record<string, unknown> {
     .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":');
   return JSON.parse(json) as Record<string, unknown>;
 }
-
 test('a hand-marked mini-app to-do says so in the person\'s line', () => {
   const answer = markedDoneAnswer();
   assert.deepEqual(answer, { done: true, manual: true, note: 'Marked done by hand (not finished in the app)' });
-  assert.match(item, /rpc\.call\('tasks\.complete', \{ id: task\.id, answer: MARKED_DONE_ANSWER,/, '"Mark done" sends exactly that answer');
+  assert.match(item, /rpc\.call\('tasks\.finish', \{ id: task\.id, answer: MARKED_DONE_ANSWER,/, '"Mark done" sends exactly that answer');
 
   const app = { type: 'app', app: 'counter' };
   assert.equal(answerText(app, answer), 'Marked done by hand (not finished in the app)', 'the agent sees that no app data came');

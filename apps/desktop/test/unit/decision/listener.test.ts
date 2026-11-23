@@ -7,7 +7,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { account, setup } from '../models/harness.ts';
-import { createListener, hearsAudio, listenOptions, NO_LISTENER, PAID_OFF } from '../../../src/runtime/decision/engine-runner.ts';
+import { createListener, hearsAudio, listenOptions, NO_LISTENER, PAID_OFF } from '../../../src/runtime/decision/listener.ts';
 import { Priors } from '../../../src/runtime/models/priors.ts';
 import type { EngineRegistry } from '../../../src/runtime/contracts.ts';
 import type { EngineTurnInput } from '../../../src/runtime/engines/types.ts';

@@ -10,7 +10,7 @@ const NOW = Date.UTC(2026, 10, 14, 12, 0, 0);
 const H = 3_600_000;
 
 function account(id: string, patch: Partial<Account> = {}): Account {
-  return { id, provider: 'claude', label: id, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: true, createdAt: 0, ...patch };
+  return { id, provider: 'claude', label: id, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: true, createdAt: 0, ...patch };
 }
 
 const plans = [

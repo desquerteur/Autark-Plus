@@ -1,6 +1,6 @@
 // AF-021: the effort slider's rules (EffortSlider.tsx draws it). Its stops are "Auto" (no effort chosen: the chat's
 // efforts[agentId] is absent, as when the old buttons were all off) and the efforts the model offers ('none' is no stop);
-// without a chosen model the four plain levels, as the old buttons showed. The stored value is the same as before:
+// without a chosen model the plain levels Low … Max with Very high, as upstream's effort cells show. The stored value is the same as before:
 // settings.efforts[agentId] = the effort, or no key for Auto.
 // Owns: the stops, the position of a stored value, pointer → stop, keys → stop and the patch. Never: draws or saves.
 
@@ -10,7 +10,7 @@ export const AUTO_STEP = 'auto';
 export type EffortStep = Effort | typeof AUTO_STEP;
 
 /** The plain levels when the model's own are unknown (the old buttons). */
-export const PLAIN_EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'max'];
+export const PLAIN_EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']; // upstream 0.3.16: Very high among them
 const ORDER: readonly Effort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 /** Auto, then the model's efforts in order (no 'none'); the plain levels when it names none. */

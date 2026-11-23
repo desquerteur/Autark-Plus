@@ -27,8 +27,9 @@ export class ActivityTracker {
     return [...new Set(this.active.filter(item => item.conversationId === conversationId).map(item => item.agentId))];
   }
 
-  running(taskId: string): boolean {
-    return this.active.some(item => item.taskId === taskId);
+  /** A turn runs on this task – with `agentId`, a turn of that agent (B-080 wave 3: the owner's own turn, tasks/transitions.ts). */
+  running(taskId: string, agentId?: string): boolean {
+    return this.active.some(item => item.taskId === taskId && (!agentId || item.agentId === agentId));
   }
 
   isActive(agentId: string, conversationId?: string): boolean {

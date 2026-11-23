@@ -3,7 +3,8 @@
 // Owns: param checks and scope rules. `pwa.exchange` is callable without a token (via `POST /rpc`);
 // `pwa.pushSubscribe`, `pwa.pushConfig` and `pwa.pushUnsubscribe` are open to every authenticated
 // device and bound to the caller's scope; computer.activity/stop/resume to every paired device
-// ('todo'). Everything else is owner-only.
+// ('todo'); B-084 (D6): devices.list/rename/revoke also to the owner's phone on a secure transport ('settings' + secure,
+// as remote.*). Everything else (pwa.state/enable/link/revoke, computer.preview) is owner-only.
 // Never: implements mesh/PWA behaviour.
 
 import { WorkforceError } from '../../../shared/errors.ts';
@@ -15,6 +16,8 @@ import { isPhoneRoute } from '../../../shared/api/phone-route.ts';
 import type { HandlerTable } from '../table.ts';
 
 const BINDS: readonly Settings['pwa']['bind'][] = ['localhost', 'lan', 'tailscale'];
+/** B-084 (D6): device administration for my phone on a secure transport, like the PC. */
+const DEVICE_ADMIN = { capability: 'settings', secure: true } as const;
 
 /** Phones name themselves "iPhone · Safari" / "Android · Chrome" (ui/pwa/install.ts). */
 function clientKind(name: string | undefined): 'phone' | 'browser' {
@@ -32,12 +35,12 @@ function pushEndpoint(params: unknown): string | undefined {
 
 export function register(table: HandlerTable): void {
   // ---------------------------------------------------------------- linked devices
-  table.add('devices.list', (_params, ctx) => ctx.services.devices.list());
+  table.add('devices.list', (_params, ctx) => ctx.services.devices.list(), DEVICE_ADMIN);
   table.add('devices.rename', (params, ctx) => {
     const o = input(params);
     onlyKeys(o, ['id', 'name']);
     return ctx.extras.mesh.rename(id(o), text(o, 'name', { max: 60 }));
-  });
+  }, DEVICE_ADMIN);
   table.add('devices.revoke', async (params, ctx) => {
     const deviceId = id(input(params));
     const device = ctx.services.devices.list().find((entry) => entry.id === deviceId);
@@ -46,7 +49,7 @@ export function register(table: HandlerTable): void {
     if (device.kind === 'phone' || device.kind === 'browser') await ctx.extras.pwa.revoke(deviceId);
     else ctx.extras.mesh.revoke(deviceId);
     return { ok: true };
-  });
+  }, DEVICE_ADMIN);
 
   // ---------------------------------------------------------------- phone / browser access
   table.add('pwa.state', (_params, ctx) => ctx.extras.pwa.state());

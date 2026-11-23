@@ -1,6 +1,6 @@
-// Pin helpers of the router (moved out of router.ts unchanged, RT1): the reason texts of pins,
+// Pin helpers of the router (moved out of router.ts unchanged, RT1): the reason texts of start models (B-083),
 // the Settings use pin (Work for agents, Decisions for runtime helper calls – shared/model/models-uses.ts),
-// why a pin is unusable, and how a pinned id finds its model.
+// why a pin is unusable, and how a named model is found (B-083 D5: one lookup for every place that names a model).
 // Owns: these lookups and texts. Never: decides whether a pin wins (router.ts does) or reads
 // state beyond the settings and catalog list it is given.
 
@@ -15,8 +15,10 @@ import { categoryLabel } from './categories.ts';
 /** Provider prefixes of catalog ids (`${provider}:${model}`). */
 const PROVIDER_IDS: ReadonlySet<string> = new Set(Object.values(ENGINE_PROVIDERS).flat());
 
-export const PIN_TEXT: Record<'chat' | 'agent' | 'settings' | 'helper', string> = {
-  chat: 'pinned in this chat', agent: 'pinned for this agent', settings: 'set in Settings',
+/** Route reasons of a start model (B-083: a suggestion and a start, no pin – the agent's own model.set changes it). */
+export const PIN_TEXT: Record<'agent' | 'settings' | 'decision' | 'helper', string> = {
+  agent: 'my start model', settings: 'the Work model in Settings',
+  decision: 'the Decisions model in Settings', // runtime helper calls' Settings use
   helper: 'helper default', // SG: runtime text calls on a Codex plan's small model (helper-default.ts)
 };
 
@@ -24,9 +26,10 @@ export const PIN_TEXT: Record<'chat' | 'agent' | 'settings' | 'helper', string> 
  * The Settings use of a route as a pin: agent turns take the Work model (every kind of work; a plan's provider id is
  * no pin – it is the work plan, preference.ts), runtime helper calls (agent 'system') the Decisions model. "auto" = none.
  */
-export function settingsPin(settings: RoutingSettings, request: RouteRequest): { modelId: string; source: 'settings' } | undefined {
-  const chosen = chosenFor(settings, request.agent.id === SYSTEM_ID ? 'decision' : 'work');
-  return chosen && !isProviderChoice(chosen) ? { modelId: chosen, source: 'settings' } : undefined;
+export function settingsPin(settings: RoutingSettings, request: RouteRequest): { modelId: string; source: 'settings' | 'decision' } | undefined {
+  const use = request.agent.id === SYSTEM_ID ? 'decision' : 'work';
+  const chosen = chosenFor(settings, use);
+  return chosen && !isProviderChoice(chosen) ? { modelId: chosen, source: use === 'work' ? 'settings' : 'decision' } : undefined;
 }
 
 export function pinProblem(why: string, category: string): string {
@@ -35,18 +38,35 @@ export function pinProblem(why: string, category: string): string {
   return `needs ${why}`;
 }
 
+/** D5: the plain form of a model name – "GPT-6 Luna" = "GPT-6-Luna" = "gpt-6-luna" (case, spaces, hyphens, underscores). */
+const plain = (value: string) => value.toLowerCase().replace(/[\s_-]+/g, '');
+
 /**
- * Exact model id; a bare provider model id from an old client ("claude-opus-5-5", "qwen3:8b")
- * matches any provider listing it. A provider-qualified id never moves to another provider –
- * e.g. a "codex:" plan pin must not silently become a pay-per-use "openai:" API-key model.
+ * Every catalog model `named` names, the one to take first: the exact id, the older "<provider>:<model>" (a connection
+ * that now names itself, settings.json providers), an id in plain form, then (never for a provider-qualified id – a
+ * "codex:" plan pin never becomes an "openai:" key) the provider's model id, then the display name, both in plain form;
+ * within each, available first, the catalog order breaks ties. B-083 D5: the one model lookup – pins, Settings uses,
+ * model.set, tasks.create / tasks.give, a split's part and my subconscious's turn (agents/next-route.ts catalogModel) name alike.
  */
+export function modelMatches(models: readonly ModelInfo[], named: string): ModelInfo[] {
+  const wanted = plain(named);
+  const colon = named.indexOf(':');
+  const qualified = colon > 0 && PROVIDER_IDS.has(named.slice(0, colon));
+  const steps: Array<(model: ModelInfo) => boolean> = [
+    (model) => model.id === named,
+    (model) => `${model.provider}:${model.model}` === named,
+    (model) => plain(model.id) === wanted,
+    ...(qualified ? [] : [(model: ModelInfo) => plain(model.model) === wanted, (model: ModelInfo) => plain(model.name ?? '') === wanted]),
+  ];
+  const found = new Set<ModelInfo>();
+  for (const step of steps) {
+    const hits = models.filter(step);
+    for (const model of [...hits.filter((item) => item.available), ...hits.filter((item) => !item.available)]) found.add(model);
+  }
+  return [...found];
+}
+
+/** The model a pin (or any named model) runs on: the first of modelMatches. */
 export function resolvePin(models: readonly ModelInfo[], pin: string): ModelInfo | undefined {
-  const exact = models.find((model) => model.id === pin);
-  if (exact) return exact;
-  // the older "<provider>:<model>" of a connection that now names itself (settings.json providers)
-  const older = models.filter((model) => `${model.provider}:${model.model}` === pin);
-  if (older.length) return older.find((model) => model.available) ?? older[0];
-  const colon = pin.indexOf(':');
-  if (colon > 0 && PROVIDER_IDS.has(pin.slice(0, colon))) return undefined;
-  return models.find((model) => model.model === pin && model.available) ?? models.find((model) => model.model === pin);
+  return modelMatches(models, pin)[0];
 }

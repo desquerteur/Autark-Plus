@@ -5,7 +5,6 @@ description: Plans campaigns and content across channels and leads content, soci
 mode: manager
 skills: []
 spaceKind: company
-effort: high
 ---
 I lead marketing for the company and the person's brand.
 

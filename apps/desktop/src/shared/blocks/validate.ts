@@ -96,6 +96,8 @@ export function validateBlock(input: unknown, opts: { nested?: boolean } = {}): 
       block.fileId = fileId;
       // A media block given only by file id shows that file (a url/path alias still wins).
       if (spec.type === 'media' && !block.src && !['url', 'path', 'file'].some(key => str(source[key]))) block.src = fileId;
+      // A voice-over given only by file id speaks to that video (a path in "video" wins).
+      if (spec.type === 'record' && !block.video) block.video = fileId;
     } else { delete block.fileId; warnings.push('dropped invalid "fileId"'); }
   }
 
@@ -135,4 +137,3 @@ function applyAliasDefaults(alias: string, type: BlockType, source: Obj): void {
   if (type === 'media' && source.kind === undefined && (a === 'image' || a === 'audio')) source.kind = a;
   if (type === 'media' && source.kind === a && source.src === undefined && typeof source.url === 'string') source.src = source.url;
 }
-

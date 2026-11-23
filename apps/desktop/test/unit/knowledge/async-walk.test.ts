@@ -1,4 +1,4 @@
-// knowledge.list, knowledge.remember and the word search walk a whole scope with the event loop free (at 100,000 files a sync walk
+// knowledge.list, memory.write and the word search walk a whole scope with the event loop free (at 100,000 files a sync walk
 // stops the app), and the async walk finds what the sync one finds: entries only, newest first.
 // Owns: these assertions only. Never: real models.
 
@@ -57,12 +57,12 @@ test('the word search without an embedder leaves the event loop free', async (t)
   assert.ok(found.turns > 20, `the loop came round ${found.turns} times`);
 });
 
-test('knowledge.remember leaves the event loop free', async (t) => {
+test('memory.write leaves the event loop free', async (t) => {
   const w = world(t);
-  const remember = memoryTools.find((tool) => tool.name === 'knowledge.remember')!;
+  const write = memoryTools.find((tool) => tool.name === 'memory.write')!;
   const ctx = { services: { knowledge: w.store, clock: new ManualClock() }, agent: { id: 'ag_a' }, runId: 'run_1' } as never;
-  const saved = await turnsDuring(() => remember.run({ title: 'Neu', body: 'Etwas ganz Neues.', scope: 'global' }, ctx));
-  assert.equal((saved.result.structured as { outcome: string }).outcome, 'added');
+  const saved = await turnsDuring(() => write.run({ folder: 'company', title: 'Neu', text: 'Etwas ganz Neues.' }, ctx));
+  assert.equal((saved.result.structured as { outcome: string }).outcome, 'created');
   assert.ok(saved.turns > 20, `the loop came round ${saved.turns} times`);
 });
 

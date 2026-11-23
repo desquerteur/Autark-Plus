@@ -1,6 +1,6 @@
-// Ending a person's access (people.revoke): after the tokens are cut, the person leaves every chat (their
-// messages stay), their open work goes back – a to-do an agent asked of them is cancelled, other tasks return to
-// the team of their chat – and the agents and people who reported to them move up to the person's own manager.
+// Ending a person's access (people.revoke, and F14 people.remove before their row goes): after the tokens are cut, the person leaves every chat (their
+// messages stay), their open work goes back – a to-do an agent asked of them is dropped, other tasks go to the one
+// owner Autark picks now (tasks/give.ts) – and the agents and people who reported to them move up to the person's own manager.
 // Each part runs on its own; a failure is logged and the rest still runs.
 // Owns: those steps. Never: deletes messages, tasks or people, or touches the tokens (people/tokens.ts).
 
@@ -10,7 +10,7 @@ import type { Logger, RuntimeServices } from '../contracts.ts';
 import type { PeopleRepo } from './repo.ts';
 import { chatIdsOf } from './access.ts';
 
-const OPEN: TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked'];
+const OPEN: TaskStatus[] = ['open', 'waiting'];
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export interface OffboardResult { chats: number; tasks: number; reports: number }
@@ -23,8 +23,8 @@ export function offboard(s: Pick<RuntimeServices, 'db' | 'chats' | 'tasks' | 'or
   }
   for (const task of s.tasks.list({ assigneeKind: 'human', assigneeId: personId, status: OPEN, includeSteps: true, limit: 1000 })) {
     step('returning a task', () => {
-      if (task.widget) s.tasks.setStatus(task.id, 'cancelled', HUMAN_ID, 'Access removed');
-      else s.tasks.assign(task.id, { kind: 'team' }, HUMAN_ID);
+      if (task.widget) s.tasks.finish(task.id, { status: 'dropped', summary: 'Access removed' }, HUMAN_ID);
+      else void s.tasks.give(task.id, 'team', HUMAN_ID).catch((error: unknown) => log.warn('offboarding: giving a task on failed', { personId, error: errorText(error) }));
       out.tasks++;
     });
   }

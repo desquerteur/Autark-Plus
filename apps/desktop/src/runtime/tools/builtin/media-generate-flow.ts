@@ -7,6 +7,8 @@
 // private: not linked, not described – and returned with its fileId and a ```ui media block.
 // Owns: the builder, the image a video starts from (read here, never by an adapter, and only one the agent may
 // read), storage and booking.
+// A failure is logged with its tool and cause, and the agent reads the cause after the tool's sentence (KI-Runde 17.11.2026:
+// ten media.speak calls failed as "Creating the speech failed." with nothing logged).
 // Never: hides a failure after the request went out – that is an 'unknown' effect (it may have been charged;
 // booked once the provider answered); a free fallback is never booked.
 
@@ -58,8 +60,10 @@ function recordSpend(ctx: ToolContext, usd: number, ref: string): void {
  * A failed paid call that reached the provider may have been charged: effect 'unknown' (no blind
  * retry or failover). Once the provider answered, it made and charged the result: booked as well.
  */
-function generationFailure(ctx: ToolContext, error: unknown, usd: number | undefined, answered: boolean, fallback: string): ToolOutput {
-  const message = error instanceof WorkforceError ? error.message : fallback;
+function generationFailure(ctx: ToolContext, error: unknown, usd: number | undefined, answered: boolean, fallback: string, tool: string): ToolOutput {
+  const cause = error instanceof Error ? error.message : String(error);
+  ctx.services.log.warn('generation failed', { tool, error: cause });
+  const message = error instanceof WorkforceError ? error.message : `${fallback} ${clip(cause, 400)}`.trim();
   const phase = answered ? 'answered' : generationPhase(error);
   if (usd === undefined || !phase) return failure(message);
   if (phase === 'answered') recordSpend(ctx, usd, `run:${ctx.runId}`);
@@ -171,7 +175,7 @@ export function generationTool<A extends object>(spec: GenerationToolSpec<A>): T
           ui: mediaSnippet(info), note: info.conversationId ? GENERATED_NOTE : UNLINKED_NOTE,
         });
       } catch (error) {
-        return generationFailure(ctx, error, usd, answered, `Creating the ${ABILITY[spec.kind].noun} failed.`);
+        return generationFailure(ctx, error, usd, answered, `Creating the ${ABILITY[spec.kind].noun} failed.`, spec.name);
       }
     },
   });

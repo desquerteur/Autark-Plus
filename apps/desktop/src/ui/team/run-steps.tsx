@@ -3,11 +3,14 @@
 // an ellipsis –, red when it failed, a click opens its details below (input and output, the reasoning
 // summary, the answer's text). Lines per kind: tool calls (step-view.ts callStep),
 // "Thought · <headline>" (muted, shimmering while written), plans ("Plan · 2 of 5 done"), errors, the final answer's branch ("Answer · Kept
-// internal / Posted quietly / Posted"); an agent's update stays its text.
+// internal / Posted quietly / Posted"); an agent's update stays its text; the runtime's own notes (a switched model, a
+// compacted session …) read as their line (shared/text/run-notes.ts). The activity log (AgentLog.tsx) opens answers
+// from the start (AnswersOpen), so an agent's words read there like its updates.
 // Owns: this markup. Never: shows more than the runtime journaled (outputs are already truncated and
 // secret-redacted there) or invents a thought.
 
 import type { ComponentChildren } from 'preact';
+import { createContext } from 'preact';
 import { useContext, useState } from 'preact/hooks';
 import type { RunItem } from '../../shared/model/runs.ts';
 import { Icon, Spinner } from '../lib/ui.tsx';
@@ -16,8 +19,12 @@ import { plainPreview } from '../lib/format.ts';
 import { previewData, type RunEntry } from './model.ts';
 import { isCommandText } from '../../shared/text/step-label.ts';
 import { STEP_ICONS, answerOf, callStep, thoughtLine, thoughtParts } from './step-view.ts';
-import { SplitStep, SplitStepRows } from '../splits/SplitRows.tsx'; // B-057
+import { SplitStep } from '../splits/SplitRows.tsx'; // B-057
 import { SPLIT_TOOL } from '../splits/split-text.ts';
+import { systemNoteText } from '../../shared/text/run-notes.ts';
+
+/** True where answers start open (the activity log): the agent's words are read, not looked up. */
+export const AnswersOpen = createContext(false);
 
 function Data(props: { label: string; value: unknown }) {
   const text = previewData(props.value);
@@ -92,7 +99,7 @@ function ThoughtEntry(props: { item: RunItem; live: boolean }) {
 
 /** Where the final answer went (D4): "Kept internal", "Posted quietly" or "Posted"; opens to its text. */
 function AnswerEntry(props: { answer: NonNullable<ReturnType<typeof answerOf>> }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(useContext(AnswersOpen));
   const { answer } = props;
   return (
     <li class={`run-item answer ${answer.branch}`}>
@@ -131,25 +138,25 @@ function OtherEntry(props: { item: RunItem; live: boolean }) {
           {open && <div class="run-item-body"><Data label="Details" value={data} /></div>}
         </li>
       );
-    default:
+    default: {
+      const system = systemNoteText(item);
       return (
-        <li class={`run-item ${item.kind}`}>
-          <StepHead icon={item.kind === 'effect' ? 'lightning' : 'info'} target={item.name ?? (item.kind === 'note' ? 'Note' : item.kind === 'effect' ? 'Effect' : item.kind)} open={open} onToggle={toggle}>
+        <li class={`run-item ${item.kind}${system ? ' system' : ''}`}>
+          <StepHead icon={item.kind === 'effect' ? 'lightning' : 'info'} target={system ?? item.name ?? (item.kind === 'effect' ? 'Effect' : item.kind)} open={open} onToggle={toggle}>
             {item.effectStatus && item.effectStatus !== 'none' && <span class={`run-effect ${item.effectStatus}`}>{item.effectStatus}</span>}
           </StepHead>
           {open && <div class="run-item-body"><Data label="Details" value={data} /></div>}
         </li>
       );
+    }
   }
 }
 
 /** One entry of a run (a call with its result, or another item) as its line. B-057: the parent's agents.split call is
- *  "Split · 3 of 5 done" with its split rows (splits/SplitRows.tsx); a refused one stays an ordinary call line, and so
- *  does every one in Team › agent › Runs (SplitStepRows false: RunSplits lists the run's splits below its steps). */
+ *  "Split · 3 of 5 done" with its split rows (splits/SplitRows.tsx); a refused one stays an ordinary call line. */
 export function StepEntry(props: { entry: RunEntry; live: boolean }) {
   const { entry, live } = props;
-  const splitRows = useContext(SplitStepRows); // B-057
-  if (splitRows && entry.kind === 'tool' && entry.call.name === SPLIT_TOOL && entry.result?.data.ok !== false) return <SplitStep call={entry.call} result={entry.result} live={live} />;
+  if (entry.kind === 'tool' && entry.call.name === SPLIT_TOOL && entry.result?.data.ok !== false) return <SplitStep call={entry.call} result={entry.result} live={live} />;
   return entry.kind === 'tool'
     ? <ToolEntry call={entry.call} result={entry.result} live={live} />
     : <OtherEntry item={entry.item} live={live} />;

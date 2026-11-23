@@ -45,7 +45,7 @@ interface Options {
 
 function setup(options: Options) {
   const data = tempData();
-  const account = { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/v1', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1 };
+  const account = { id: 'acc_1', provider: 'compatible', label: 'Groq', auth: 'api_key', baseUrl: 'https://api.groq.example/v1', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1 };
   const whisper = { id: 'compatible:whisper-1', provider: 'compatible', model: 'whisper-1', name: 'whisper-1', engine: 'compatible', efforts: [], caps: {}, tier: 'strong', strengths: {}, available: true, accounts: ['acc_1'], functions: ['stt'] };
   const decoded: unknown[] = [];
   const reads: string[] = [];
@@ -65,6 +65,7 @@ function setup(options: Options) {
       get: (id: string) => (id === FILE_ID ? { id, createdAt: 1, ...options.file } : undefined),
       read: async (id: string) => { reads.push(id); return options.bytes ?? new Uint8Array(5); },
       path: () => options.filePath ?? path.join(data.dir, 'missing'),
+      local: async () => options.filePath ?? path.join(data.dir, 'missing'), // B-080: the path with the bytes here
     },
     db: { get: () => undefined, run: (_sql: string, params: unknown[]) => { cached.push(String(params?.[0])); } },
   } as unknown as RuntimeServices;

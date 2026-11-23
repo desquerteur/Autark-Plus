@@ -11,11 +11,11 @@ const quarantine = `xattr -dr com.apple.quarantine "/Applications/${app.macBundl
 export const installSteps = {
   windows: () => `
     <ol>
-      <li><strong>Download</strong> <code>${files.windows}</code>. Your browser may warn that the file is not commonly downloaded; choose to keep it.</li>
+      <li><strong>Download</strong> <code>${files.windows}</code>. Your browser may warn that the file is not commonly downloaded. Read the security notice and verify the file before deciding whether to continue.</li>
       <li><strong>Start it.</strong> Windows shows a blue box, “Windows protected your PC”, with only a Don’t run button. Choose <em>More info</em>, then <em>Run anyway</em>.</li>
       <li><strong>Install.</strong> Keep “only for me”: no admin rights are needed. Pick a folder or keep the suggested one. A desktop shortcut is created.</li>
     </ol>
-    <p><strong>If <em>Run anyway</em> is not offered:</strong> with Smart App Control turned on, Windows can block an unsigned installer outright, and there is no button to get past it. Turning Smart App Control off is a change to your whole PC and your decision. Read Microsoft’s note on it first, or use another PC.</p>`,
+    <p><strong>If Windows blocks installation:</strong> stop and contact us. Do not turn off Smart App Control or other Windows protection to install this unsigned build. Organisation-managed PCs may require your IT administrator.</p>`,
   mac: () => `
     <ol>
       <li><strong>Download</strong> the DMG and open it. Drag the app into <em>Applications</em>${release.renamed ? '' : `. It appears as <em>${app.name}</em>, the working name, until the rename release`}.</li>
@@ -33,11 +33,12 @@ export const installSteps = {
   android: () => `
     <ol>
       <li><strong>Download</strong> <code>${files.android}</code> on the phone. Chrome may ask whether to keep the file; keep it.</li>
-      <li><strong>Open it.</strong> The first time, Android asks to allow installs from your browser: choose <em>Settings</em>, turn on <em>Allow from this source</em>, go back and choose <em>Install</em>. If Play Protect says it does not know the developer, choose <em>More details</em>, then <em>Install anyway</em>.</li>
+      <li><strong>Open it.</strong> The first time, Android asks to allow installs from your browser: choose <em>Settings</em>, turn on <em>Allow from this source</em>, go back and choose <em>Install</em>. Leave Play Protect on. If it only warns that it does not know the developer, choose <em>More details</em>, then <em>Install anyway</em>.</li>
       <li><strong>Connect it to your company.</strong> Open ${site.name} on the phone and type your PC’s <em>Remote ID</em> (on the PC: Settings → Devices), or scan the QR code shown there. Both screens show the same short code. Choose <em>Accept</em> on the PC.</li>
       <li><strong>Done.</strong> The phone now belongs to your company, not to one PC: the same chats, tasks and notifications as on every PC you linked. Read on one device, read everywhere.</li>
     </ol>
-    <p><strong>If you want agents to use your phone:</strong> turn on ${site.name} under <em>Settings → Accessibility</em>. It reads nothing until an agent asks, a small bubble shows while it acts, and tapping the bubble cancels. Android 13 and newer first want <em>App info → ⋮ → Allow restricted settings</em> for an app from outside the Play Store.</p>`,
+    <p><strong>Updates come inside the app:</strong> a line at the top says when a new version exists. <em>Update</em> downloads it with its progress, checks it against the published SHA-256 and hands it to Android; the first time Android asks you to allow installs from ${site.name}, then you confirm the update.</p>
+    <p><strong>No phone use by agents in this version:</strong> Play Protect blocks apps from outside the Play Store that ask for Accessibility, so the APK on this page leaves it out. Chats, tasks, notifications, the microphone and the camera work as before.</p>`,
   iphone: () => `
     <ol>
       <li><strong>Open <a href="${appUrl}/">${appUrl.replace(/^https?:\/\//, '')}/</a> in Safari</strong> on the iPhone. There is no App Store app and no Apple account is needed.</li>

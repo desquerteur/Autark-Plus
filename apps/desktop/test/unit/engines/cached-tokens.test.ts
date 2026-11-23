@@ -1,6 +1,7 @@
 // Cached input is counted, nothing else changes: Codex's `cachedInputTokens` and Claude's and the Anthropic API's cache reads and writes
 // reach the usage event, the turn's usage, the structured runner's answer (the helper-call log reads it there), its onUsage booking and the
-// subconscious's tally, while inputTokens stays the total of all input. Pricing takes a cached price only from a prior that has one.
+// subconscious's tally, while inputTokens stays the total of all input. Pricing (package C, 17.11.2026) counts the cached part at the
+// prior's cached price, else at a tenth of the input price, and a cache write at the prior's write price, else the input price.
 // Owns: these assertions only. Never: real models or network.
 
 import { test } from 'node:test';
@@ -55,6 +56,61 @@ test('codex: each request\'s cachedInputTokens rides on its usage event and the 
   await e.dispose();
 });
 
+test('codex (real run 18.11.2026): the thread\'s usage sent again unchanged – its total did not move – is no request of the turn', async () => {
+  // Turn 1 makes one request. Turn 2 is cut: Codex repeats turn 1's usage (same total), then reports turn 2's own request.
+  // Before the fix turn 2 counted the repeat too: 2 calls, 9,939 input – measured live as a cut run storing the run before's numbers.
+  const first = { inputTokens: 4839, cachedInputTokens: 2560, outputTokens: 44, totalTokens: 4883 };
+  const second = { inputTokens: 5100, cachedInputTokens: 4608, outputTokens: 30, totalTokens: 5130 };
+  const turns = [[{ last: first, total: { totalTokens: 4883 } }], [{ last: first, total: { totalTokens: 4883 } }, { last: second, total: { totalTokens: 10_013 } }]];
+  let turn = 0;
+  const { spawn } = fakeSpawn(({ child }) => {
+    child.onLine = (msg) => {
+      if (msg.id === undefined || !msg.method) return;
+      if (msg.method === 'initialize') child.send({ id: msg.id, result: { userAgent: 'fake' } });
+      else if (msg.method === 'thread/start' || msg.method === 'thread/resume') child.send({ id: msg.id, result: { thread: { id: 'thr_1' } } });
+      else if (msg.method === 'turn/start') {
+        const id = `turn_${++turn}`;
+        child.send({ id: msg.id, result: { turn: { id, status: 'inProgress' } } });
+        for (const tokenUsage of turns[turn - 1]) child.send({ method: 'thread/tokenUsage/updated', params: { threadId: 'thr_1', turnId: id, tokenUsage } });
+        child.send({ method: 'turn/completed', params: { threadId: 'thr_1', turn: { id, status: 'completed' } } });
+      } else child.send({ id: msg.id, error: { code: -32601, message: 'nope' } });
+    };
+  });
+  const e = new CodexEngine({ supervisor: testSupervisor(spawn), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0' });
+  const one = await e.run(turnInput().input);
+  assert.deepEqual(one.usage, { inputTokens: 4839, outputTokens: 44, cachedInputTokens: 2560 });
+  const { input, events } = turnInput();
+  const two = await e.run(input);
+  assert.deepEqual(two.usage, { inputTokens: 5100, outputTokens: 30, cachedInputTokens: 4608 }, 'only its own request');
+  assert.equal(events.filter((event: EngineEvent) => event.type === 'usage').length, 1, 'one request, one usage event');
+  await e.dispose();
+
+  // The app started anew: this process never counted the thread. The cut turn's first update repeats the request whose
+  // total the session's count holds (4,839 + 44 = 4,883) – measured live on the rerun: the cut run stored the run before's
+  // 29,525 in + 14 out = its session's 29,539.
+  turn = 1;
+  const { spawn: again } = fakeSpawn(({ child }) => {
+    child.onLine = (msg) => {
+      if (msg.id === undefined || !msg.method) return;
+      if (msg.method === 'initialize') child.send({ id: msg.id, result: { userAgent: 'fake' } });
+      else if (msg.method === 'thread/start' || msg.method === 'thread/resume') child.send({ id: msg.id, result: { thread: { id: 'thr_1' } } });
+      else if (msg.method === 'turn/start') {
+        child.send({ id: msg.id, result: { turn: { id: 'turn_2', status: 'inProgress' } } });
+        for (const tokenUsage of turns[1]) child.send({ method: 'thread/tokenUsage/updated', params: { threadId: 'thr_1', turnId: 'turn_2', tokenUsage } });
+        child.send({ method: 'turn/completed', params: { threadId: 'thr_1', turn: { id: 'turn_2', status: 'completed' } } });
+      } else child.send({ id: msg.id, error: { code: -32601, message: 'nope' } });
+    };
+  });
+  const fresh = new CodexEngine({ supervisor: testSupervisor(again), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0' });
+  const resumed = await fresh.run(turnInput({ session: { ref: 'thr_1', generation: 1, contextTokens: 4883 } }).input);
+  assert.deepEqual(resumed.usage, { inputTokens: 5100, outputTokens: 30, cachedInputTokens: 4608 }, 'a new process: the repeat is known by the session\'s count');
+  const other = new CodexEngine({ supervisor: testSupervisor(again), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0' });
+  const unknown = await other.run(turnInput().input);
+  assert.equal(unknown.usage?.inputTokens, 9939, 'without the session\'s count nothing tells the repeat: every update counts, as before');
+  await fresh.dispose();
+  await other.dispose();
+});
+
 test('codex: a usage update without cachedInputTokens adds no cache field', async () => {
   const e = codexWith([{ inputTokens: 900, outputTokens: 10, totalTokens: 910 }]);
   const { input, events } = turnInput();
@@ -93,19 +149,19 @@ test('the structured runner hands the engine\'s cached figure to its answer and 
 test('the flow tally: used stays input + output of every call, cached is the cached part of their input', async () => {
   const f = fixture();
   f.services.prompts = new PromptTemplates(() => path.join(RESOURCES, 'prompts'));
-  const script = [{ tool: 'agent.tell', args: { text: 'Notiz.' } }, { tool: 'done', args: {} }];
+  const script = [{ tool: 'agent.tell', args: { text: 'Notiz.' } }, { tool: 'done', args: { answer: 'x' } }];
   const decision: StructuredRunner = async () => {
     const next = script.shift()!;
     return { text: '', structured: { tool: next.tool, args: JSON.stringify(next.args) }, by: 'fake', usage: { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 640 } };
   };
-  const result = await runFlow(f.services, { decision }, { kind: 'after-turn', agent: f.vid, thread: 'th' });
+  const result = await runFlow(f.services, decision, { agent: f.vid, thread: 'th' });
   assert.equal(result.end, 'done');
   assert.deepEqual([result.used, result.cached], [2 * 1050, 2 * 640]);
 });
 
-test('pricing: the cached part counts at a cached price only when the prior has one; of the shipped priors only the new Terra and Grok entries have one', () => {
+test('pricing: the cached part counts at the prior’s cached price, else at a tenth; the shipped Claude, Terra and Grok priors carry one', () => {
   const usage = { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 600_000 };
-  assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8 }), 2, 'no cached price: every input token at the input price, as before');
+  assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8 }), 0.92, 'no cached price: a cached token at a tenth of the input price (package C; the old code: 2)');
   assert.equal(tokenPrice(usage, { inputPerM: 2, outputPerM: 8, cachedInputPerM: 0.2 }), 0.92);
   assert.equal(tokenPrice({ inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 900_000, cacheWriteTokens: 100_000 }, { inputPerM: 3, cachedInputPerM: 0.3 }), 0.57, 'reads at the cached price, writes at the input price');
   const prior = Priors.parse({ models: [{ match: 'm', strengths: {}, priceInputPerM: 2, priceOutputPerM: 8, priceCachedInputPerM: 0.2 }] }).forModel('m');
@@ -113,9 +169,18 @@ test('pricing: the cached part counts at a cached price only when the prior has 
   assert.deepEqual(listPrice(usage, undefined, prior), { usd: 0.92, basis: 'prior-price' });
   assert.deepEqual(attemptCost({ account: { auth: 'api_key', provider: 'openai' } as never, usage, prior }), { basis: 'prior-price', usd: 0.92 });
   const shipped = Priors.load(path.join(RESOURCES, 'model-priors.json'));
-  // B-078 D16: real list prices; only the new GPT-6.1 Terra entry and the Grok entries (#28, added with their cached
-  // price) ship one, so nothing booked before changes.
-  assert.deepEqual(shipped.data.models.filter((entry) => entry.priceCachedInputPerM !== undefined).map((entry) => entry.match), ['gpt-6.1-terra*', 'grok-4.7*', 'grok-4.6*', 'grok-4.5*', 'grok-build*', 'grok-4.3*'], 'nothing booked before changes');
+  // Package C: the Claude prices of Claude Code's own table (routing-cost.md section 2.1), Terra's curated cached price and
+  // the Grok entries (#28, added with their cached price).
+  assert.deepEqual(shipped.data.models.filter((entry) => entry.priceCachedInputPerM !== undefined).map((entry) => [entry.match, entry.priceInputPerM, entry.priceOutputPerM, entry.priceCachedInputPerM, entry.priceCacheWritePerM]), [
+    ['claude-opus-5-5*', 4, 20, 0.2, 8], ['claude-fable-5-2*', 8, 40, 0.2, 16], ['claude-fable-5-1*', 10, 50, 0.25, 20], ['claude-sonnet-5-5*', 2, 10, 0.1, 4], ['claude-haiku-5-5*', 0.1, 0.5, 0.01, 0.2], // FIXES-3 C2: the published list price, measured against Claude Code's own figure 18.11.2026
+    ['gpt-6.1-terra*', 1, 5, 0.05, undefined],
+    ['grok-4.7*', 2, 6, 0.5, undefined], ['grok-4.6*', 2, 6, 0.5, undefined], ['grok-4.5*', 2, 6, 0.3, undefined], ['grok-build*', 1, 2, 0.2, undefined], ['grok-4.3*', 1.25, 2.5, 0.2, undefined],
+  ]);
+  // Claude Code writes its agent sessions into the 1-hour cache at twice the input price: every priced Claude entry says so
+  // (review C, minor 5: Fable 5.1 priced its writes at the input price).
+  for (const entry of shipped.data.models.filter((model) => model.match.startsWith('claude-') && model.priceInputPerM !== undefined)) {
+    assert.equal(entry.priceCacheWritePerM, entry.priceInputPerM! * 2, entry.match);
+  }
 });
 
 test('a failover turn: the attempts\' cached parts add up, and the first attempt\'s is the total minus the last one\'s', () => {

@@ -50,7 +50,7 @@ test('the defaults the comments name are the defaults the app starts with', () =
     assert.equal(actual === undefined, Boolean(section.optional), `${section.key}: optional sections have no defaults`);
     for (const def of section.keys) if (actual && !def.keys) assert.deepEqual(actual[def.key], defaultOf(def, pc), `${section.key}.${def.key}`);
   }
-  assert.equal(defaultOf(SECTIONS[0].keys.find((def) => def.key === 'language')!, pc), 'de', 'from this PC');
+  assert.equal(defaultOf(SECTIONS[0].keys.find((def) => def.key === 'language')!, pc), 'en', 'owner 18.11.2026: English on a German PC too');
 });
 
 test('no monthly or spending limit is a setting', () => {
@@ -82,4 +82,15 @@ test('B-078: profile.notes (up to 600 characters, line breaks fine) and library.
   assert.throws(() => s.update({ profile: { notes: 'bell \u0007' } }), /profile\.notes/);
   assert.equal(s.update({ library: { publish: false } }).library?.publish, false);
   assert.throws(() => s.update({ library: { publish: 'yes' as never } }), /library\.publish/);
+});
+
+test('owner 16./18.11.2026: profile.forEveryAgent starts as the English robot line on every PC; "" is none; up to 4,000 characters', () => {
+  assert.equal(defaults.profile.forEveryAgent, 'I don\'t solve "I\'m not a robot" checks (CAPTCHAs).', 'owner 18.11.2026: English on a German PC too');
+  assert.equal(defaultSettings({ locale: 'en-US', timezone: 'UTC' }).profile.forEveryAgent, 'I don\'t solve "I\'m not a robot" checks (CAPTCHAs).');
+  const s = store();
+  assert.equal(s.update({ profile: { forEveryAgent: 'I answer in German.\n\tAnd I sign with my name.' } }).profile.forEveryAgent, 'I answer in German.\n\tAnd I sign with my name.');
+  assert.equal(s.update({ profile: { forEveryAgent: '' } }).profile.forEveryAgent, '', 'emptied stays empty, not the default');
+  assert.equal(s.update({ profile: { forEveryAgent: 'x'.repeat(4000) } }).profile.forEveryAgent?.length, 4000);
+  assert.throws(() => s.update({ profile: { forEveryAgent: 'x'.repeat(4001) } }), /profile\.forEveryAgent/);
+  assert.throws(() => s.update({ profile: { forEveryAgent: 'bell \u0007' } }), /profile\.forEveryAgent/);
 });

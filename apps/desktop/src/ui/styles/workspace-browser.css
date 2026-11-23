@@ -7,7 +7,7 @@
    controls kept free at its end, 34 px tabs, and its empty room moves the window. Then the list of all tabs (TabsMenu.tsx, from the surface's menu: one row per tab with a
    close cell at its end, the shown tab marked, in reserved columns so a closed tab moves nothing else), the address field
    (at rest a button showing the address alone, on a click the editable field in the same box) and the
-   new-tab page (NewTabPage.tsx).
+   new-tab page (NewTabPage.tsx; B-081: its Files row's PC cells, and the not-found page of PathMissing.tsx uses its rows).
    The field's suggestions (Omnibox.tsx), the history popover (HistoryPopover.tsx) and Mark a region's picture
    (RegionDialog.tsx) are here too.
    Owns: `browser-strip*`, `browser-address*`, `browser-url`, `browser-tabs-*`, `browser-tab-*`, `new-tab*`, `browser-omnibox`,
@@ -142,13 +142,27 @@
 .new-tab-icon { display: inline-grid; flex: none; place-items: center; width: 20px; height: 20px; color: var(--secondary); }
 .new-tab-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .new-tab-hint { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* B-081: a row with cells after it (the Files row's linked PCs): the row keeps its start, each cell its own width;
+   a PC offline is muted (colour only) */
+.new-tab-split { display: flex; align-items: center; gap: 2px; }
+.new-tab-split > .new-tab-row { flex: 1 1 auto; min-width: 0; }
+.new-tab-side {
+  display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; max-width: 40%; height: 36px; padding: 0 10px;
+  border-radius: var(--r-sm); color: var(--secondary); font-size: 12px;
+}
+.new-tab-side:hover { background: var(--hover); color: var(--text); }
+.new-tab-side:active { background: var(--selected); }
+.new-tab-side-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--remote); }
+.new-tab-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-tab-side.is-offline { color: var(--muted); }
+.new-tab-side.is-offline .new-tab-side-dot { background: var(--muted); }
 
 @media (pointer: coarse) {
   .browser-address { height: 36px; }
   .browser-tab-row { min-height: 48px; }
   .browser-strip { height: 44px; }
   .browser-strip-tab, .browser-strip-ghost { height: 38px; }
-  .new-tab-row { height: 44px; }
+  .new-tab-row, .new-tab-side { height: 44px; }
 }
 
 /* AF-010: a tab dragged over a strip (TabStrip.tsx) – a 2 px line at the edge of the tab it would land beside; the tab

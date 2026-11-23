@@ -12,4 +12,7 @@ export interface AskWidgetProps {
   busy: boolean;
   /** Snoozes the to-do behind this widget until `until` (epoch ms); absent when there is none. */
   snooze?(until: number): Promise<boolean>;
+  /** Who asked (the to-do's creator): a PC file it names opens on that agent's home PC first. In a chat the message's
+   *  `data-author` says it. */
+  authorId?: string;
 }

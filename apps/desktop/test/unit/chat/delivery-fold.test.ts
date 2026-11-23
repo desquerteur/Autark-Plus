@@ -31,14 +31,14 @@ test("1:1: the person's normal message is folded into the agent's running turn; 
   assert.deepEqual(h.urgent, [{ agentId: 'ag_tom', conversationId: chat.id }]);
 });
 
-test("group: only the addressed agent is folded; agents' normal messages and the provisional lead wake never are", async () => {
+test("group: only the addressed agent is folded – B-080 also on a colleague's line to it; the provisional lead wake never is", async () => {
   const decisions: DecisionService = { available: () => true, decide: async (): Promise<DecisionResult> => ({ choice: 'Mara', confidence: 0.9, by: 'fake' }) };
   const h = withFold({ decisions });
   const chat = h.chats.create({ agentIds: ['ag_tom', 'ag_mara'], createdBy: HUMAN_ID, lead: 'ag_tom' });
   h.chats.send({ conversationId: chat.id, authorId: HUMAN_ID, body: '@Mara the numbers please', mentions: ['ag_mara'] });
   assert.deepEqual(h.folded.map((item) => item.agentId), ['ag_mara']);
   h.chats.send({ conversationId: chat.id, authorId: 'ag_tom', authorKind: 'agent', body: '@Mara FYI', mentions: ['ag_mara'] });
-  assert.deepEqual(h.folded.map((item) => item.agentId), ['ag_mara'], "an agent's normal message is not folded");
+  assert.deepEqual(h.folded.map((item) => item.agentId), ['ag_mara', 'ag_mara'], "B-080: a colleague's normal line to Mara goes into her running turn too");
   h.folded.length = 0;
   h.chats.send({ conversationId: chat.id, authorId: HUMAN_ID, body: 'who has time?' });
   assert.equal(h.folded.length, 0, 'the provisional lead wake is not folded');

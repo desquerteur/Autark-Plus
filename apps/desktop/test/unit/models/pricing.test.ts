@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attemptCost, chargeOf, combineCosts, listPrice, tokenPrice } from '../../../src/runtime/models/pricing.ts';
+import { attemptCost, cachePrices, chargeOf, combineCosts, listPrice, tokenPrice } from '../../../src/runtime/models/pricing.ts';
 import { Priors } from '../../../src/runtime/models/priors.ts';
 import { firstUsage } from '../../../src/runtime/agents/turn-cost.ts';
 import { finishTurn } from '../../../src/runtime/agents/turn-finish.ts';
@@ -84,9 +84,8 @@ async function finish(input: { account: Account; modelId: string; catalog?: Mode
   runs.start({ id: request.runId, agentId: h.tom.id, conversationId: h.chat.id, trigger: 'message' });
   input.before?.(runs);
   const plan = (await planTurn(h.services, request))!;
-  const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
   const routed = { ...h.routed(), account: input.account, route: { ...h.route, modelId: input.modelId, accountId: input.account.id } };
-  finishTurn(h.services, plan, routed, request, h.attempt(input.result, { usage: input.usage, ...(input.lastUsage ? { lastUsage: input.lastUsage } : {}) }), messageId);
+  finishTurn(h.services, plan, routed, request, h.attempt(input.result, { usage: input.usage, ...(input.lastUsage ? { lastUsage: input.lastUsage } : {}) }));
   return { run: runs.get(request.runId)!, cost: new RunCostRepo(h.db).get(request.runId), spends };
 }
 
@@ -98,6 +97,8 @@ test('a Claude plan turn books no spend: costUsd stays empty, the notional price
   assert.equal(out.run.costUsd, undefined, 'no real charge on the run');
   assert.deepEqual(out.cost, { costBasis: 'plan', notionalUsd: 0.4 });
   assert.equal(runCostText({ ...out.run, ...out.cost }), '$0.400 · plan, no charge');
+  // first real run 18.11.2026: the run as every reader gets it (agents.runs, splits.list, the bench meter) carries the cost too
+  assert.deepEqual({ costBasis: out.run.costBasis, notionalUsd: out.run.notionalUsd }, { costBasis: 'plan', notionalUsd: 0.4 });
 });
 
 test('an OpenAI API-key turn books tokens × AA list prices', async () => {
@@ -120,6 +121,19 @@ test('a paid model without any price is booked with 0 and flagged unpriced', asy
   assert.equal(out.run.costUsd, 0);
   assert.deepEqual(out.cost, { costBasis: 'unpriced' });
   assert.equal(runCostText({ ...out.run, ...out.cost }), 'unpriced');
+});
+
+test("FIXES-3 C2: the shipped Haiku 5.5 prior prices a turn as Claude Code charged it – the published list price (0.10 / 0.50, cached 0.01, an hour's write 0.20)", () => {
+  // 18.11.2026, Claude Code's running total (engine_sessions.cost_total) on three Haiku 5.5 turns of the test profile; the prior before
+  // (0.50 / 2.50, cached 0.05, write 1 – the price above 100K-token prompts) gave 5× each.
+  const resources = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../resources');
+  const haiku = Priors.shipped(resources).data.models.find((entry) => entry.match === 'claude-haiku-5-5*');
+  const charged: Array<[{ inputTokens: number; cachedInputTokens: number; cacheWriteTokens: number; outputTokens: number }, number]> = [
+    [{ inputTokens: 42_792, cachedInputTokens: 0, cacheWriteTokens: 42_790, outputTokens: 15 }, 0.008566], // first run, R2-4
+    [{ inputTokens: 29_438, cachedInputTokens: 16_498, cacheWriteTokens: 12_938, outputTokens: 72 }, 0.002789], // W3-2
+    [{ inputTokens: 63_027, cachedInputTokens: 60_540, cacheWriteTokens: 2_483, outputTokens: 899 }, 0.001552], // W3-3
+  ];
+  for (const [usage, usd] of charged) assert.equal(Math.round(listPrice(usage, undefined, haiku)!.usd * 1e6) / 1e6, usd);
 });
 
 test('curated prior prices from the shipped file are the last source (none are shipped unverified)', () => {
@@ -149,4 +163,27 @@ test('run cost wording: old runs keep their stored cost, local runs show nothing
   assert.equal(runCostText({ costUsd: 0.05, costBasis: 'provider' }), '$0.050');
   assert.equal(runCostText({ costBasis: 'plan' }), 'plan, no charge');
   assert.equal(runCostText({ costBasis: 'free' }), '');
+});
+
+test('package C: every path discounts the cached part and prices the written part; no write price means the input price', () => {
+  // One Opus turn as Claude Code reports it: 9,000 uncached, 900,000 read, 100,000 written (1 h), 10,000 output.
+  const usage = { inputTokens: 1_009_000, outputTokens: 10_000, cacheReadTokens: 900_000, cacheWriteTokens: 100_000 };
+  const opus = Priors.parse({ models: [{ match: 'claude-opus-5-5*', strengths: {}, priceInputPerM: 4, priceOutputPerM: 20, priceCachedInputPerM: 0.2, priceCacheWritePerM: 8 }] }).forModel('claude-opus-5-5');
+  assert.equal(opus?.priceCacheWritePerM, 8, 'the priors parse the write price');
+  // 9k × 4 + 900k × 0.2 + 100k × 8 + 10k × 20 = 0.036 + 0.18 + 0.8 + 0.2 (the old code: 1,009k × 4 + 0.2 = 4.236)
+  assert.deepEqual(listPrice(usage, undefined, opus), { usd: 1.216, basis: 'prior-price' });
+  assert.deepEqual(attemptCost({ account: account('acc_plan', 'claude'), usage, prior: opus }), { basis: 'plan', notionalUsd: 1.216 });
+  // The feed path knows input and output only: reads at a tenth, writes at the input price (the old code: 2.12).
+  const fed = { ...model('codex:gpt-6.1-sol'), price: { source: 'feed', inputPerM: 2, outputPerM: 10 } } as unknown as ModelInfo;
+  assert.deepEqual(listPrice({ inputTokens: 1_000_000, outputTokens: 10_000, cachedInputTokens: 970_000 }, fed), { usd: 0.354, basis: 'list-price' }, '30k × 2 + 970k × 0.2 + 10k × 10');
+  // The list path (a row's own price) the same way.
+  assert.deepEqual(listPrice({ inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 500_000, cacheWriteTokens: 500_000 }, model('openai:x', AA)), { usd: 1.1, basis: 'list-price' }, '500k × 0.2 + 500k × 2');
+  assert.equal(tokenPrice({ inputTokens: 100, outputTokens: 0, cacheWriteTokens: 500 }, { inputPerM: 1_000_000 }), 100, 'a write report larger than the input counts no more than the input');
+});
+
+test('one lookup of a model\'s write and read price for the fork and the effort line: the prior\'s, else the input price and a tenth of it', () => {
+  assert.deepEqual(cachePrices({ priceInputPerM: 4, priceCachedInputPerM: 0.2, priceCacheWritePerM: 8 }, undefined), { write: 8, read: 0.2 });
+  assert.deepEqual(cachePrices({ priceInputPerM: 2 }, undefined), { write: 2, read: 0.2 });
+  assert.deepEqual(cachePrices(undefined, { price: { inputPerM: 0.25, outputPerM: 2, source: 'feed' } }), { write: 0.25, read: 0.025 });
+  assert.deepEqual(cachePrices(undefined, undefined), { write: undefined, read: undefined });
 });

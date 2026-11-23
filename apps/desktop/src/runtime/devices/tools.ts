@@ -2,7 +2,8 @@
 // connecting PCs is wired) and the peer handlers that let a linked PC run them here: 'tools.call' (remote tool execution – the tool registry forwards a
 // call whose `device` or the agent's home device names another PC), 'files.put' (a sent file: send-file.ts)
 // and 'computer.preview' (the live screen image). A call from a linked PC runs like a call of this PC's own agent (one log line);
-// computer.* tools show in the activity pill and end at the person's Stop (computer/activity.ts).
+// computer.* tools show in the activity pill and end at the person's Stop (computer/activity.ts). localCaps: what this PC
+// offers, with the app version it runs (F25).
 // Owns: the device tool list and the executor side of a remote call. Never: executes a tool that is
 // not marked remote, forwards a received call to a third PC, or sends values of this PC's secrets back.
 
@@ -17,6 +18,7 @@ import type { PeerHandler } from './rpc-peer.ts';
 import type { ComputerService } from '../computer/service.ts';
 import type { BrowserService } from '../browser/service.ts';
 import type { PhoneDriver, PhoneWireless } from '../phone/driver.ts';
+import type { PhonesHere } from '../phone/drivers.ts';
 import { computerTools } from '../computer/tools.ts';
 import { browserTools } from '../browser/tools.ts';
 import { phoneTools } from '../phone/tools.ts';
@@ -29,15 +31,16 @@ import { receivePiece, sendFile } from './send-file.ts';
 export interface DeviceToolDeps {
   computer: ComputerService;
   browser: BrowserService;
-  /** ADB and the Android app's phone use behind one driver (phone/drivers.ts mergedPhones). */
-  phone: PhoneDriver & PhoneWireless;
+  /** ADB and the Android app's phone use behind one driver (phone/drivers.ts mergedPhones; PhonesHere for the caps). */
+  phone: PhoneDriver & PhoneWireless & Partial<PhonesHere>;
   /** Connecting PCs (remote/service.ts, the meeting server): devices.connect, and devices.list's Remote ID and server state. */
   link?: DeviceLink;
 }
 
 export function deviceTools(deps: DeviceToolDeps): ToolDef[] {
   const computer = computerTools(deps.computer).map((tool) => watched(tool, deps.computer.activity));
-  return [...computer, ...browserTools(deps.browser), ...phoneTools(deps.phone), devicesList(deps.link), sendFile, ...(deps.link ? [devicesConnect(deps.link)] : [])];
+  // B-080: browser.open where: 'chrome' works in the person's own Chrome through this PC's computer use.
+  return [...computer, ...browserTools(deps.browser, deps.computer), ...phoneTools(deps.phone), devicesList(deps.link), sendFile, ...(deps.link ? [devicesConnect(deps.link)] : [])];
 }
 
 /** Which linked PC sent a call (set for the ctx a remote call runs with). */
@@ -58,11 +61,21 @@ export function watched(tool: ToolDef, activity: ComputerActivity): ToolDef {
   };
 }
 
-/** What this PC can do for agents (updateSelf); a phone list of an older run is cleared (phone.devices asks adb itself). */
-export async function localCaps(deps: DeviceToolDeps): Promise<DeviceCaps> {
+/**
+ * What this PC can do for agents (updateSelf), its phones among them: the ones attached here right now as the phone
+ * driver last saw them (phone/drivers.ts PhonesHere – no adb call of its own), so every PC of mine knows which PC a
+ * phone hangs off (phone/linked.ts). Both keys are always sent, so a list of an older run is replaced.
+ * F25 (16.11.2026): `version` – the app version this PC runs, so my other PCs see it (Settings › Devices, their update check).
+ */
+export async function localCaps(deps: DeviceToolDeps & { version?: string }): Promise<DeviceCaps> {
   let browser = false;
   try { detectChannel(); browser = true; } catch { browser = false; }
-  return { computerUse: deps.computer.canControl(), browser, os: deps.computer.platform, adbPhones: undefined };
+  const phones = deps.phone.here?.() ?? { app: [], adb: [] };
+  return {
+    computerUse: deps.computer.canControl(), browser, os: deps.computer.platform,
+    adbPhones: phones.adb.length ? phones.adb : undefined, appPhones: phones.app.length ? phones.app : undefined,
+    ...(deps.version ? { version: deps.version } : {}),
+  };
 }
 
 interface RemoteCall { name: string; args: Record<string, unknown>; agentId: string; agentName?: string; runId: string; conversationId?: string; taskId?: string; mode: string }

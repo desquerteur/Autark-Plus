@@ -69,24 +69,21 @@ test('app-change entry points are removed; feedback publishes marked images dire
   await shot('change-removed-settings');
   const cell = page.locator('.frame-feedback-cell').getByRole('button', { name: 'Feedback', exact: true });
   await cell.click();
-  const dialog = page.locator('.popover.feedback-menu'); // the header cell's menu
+  const dialog = page.locator('dialog.feedback-overlay[open]'); // the snapshot overlay (feedback 16.11.2026)
   await dialog.getByRole('textbox', { name: 'Your feedback' }).fill('The sidebar width needs attention');
-  // B-055 Q4: the screenshot is checked by default; its thumbnail opens "Paint over" (opaque black marks)
-  await dialog.locator('.feedback-thumb img').waitFor();
+  // the screenshot is checked by default; the person paints straight on the frozen window (opaque black marks)
+  await dialog.locator('.feedback-stage img').waitFor();
   assert.equal(await dialog.getByRole('checkbox', { name: 'Screenshot' }).isChecked(), true);
-  await dialog.getByRole('button', { name: 'Paint over the screenshot' }).click();
-  const paint = page.locator('dialog.paint-dialog[open]');
-  const canvas = paint.locator('canvas.paint-canvas'); await canvas.waitFor();
+  const canvas = dialog.locator('canvas.paint-canvas'); await canvas.waitFor();
   const box = await canvas.boundingBox(); assert.ok(box);
-  await page.mouse.move(box.x + 20, box.y + 20); await page.mouse.down();
-  await page.mouse.move(box.x + 100, box.y + 75); await page.mouse.up();
-  assert.equal(await paint.getByRole('button', { name: 'Undo', exact: true }).isEnabled(), true);
+  await page.mouse.move(box.x + 300, box.y + 120); await page.mouse.down();
+  await page.mouse.move(box.x + 380, box.y + 175); await page.mouse.up();
+  assert.equal(await dialog.getByRole('button', { name: 'Undo', exact: true }).isEnabled(), true);
   await shot('feedback-marked-light');
-  await paint.getByRole('button', { name: 'Done', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.feedback-menu .feedback-thumb img')?.getAttribute('src')?.startsWith('data:image/jpeg'));
   assert.equal(await dialog.getByRole('button', { name: 'Connect GitHub', exact: true }).count(), 0);
   await dialog.getByRole('button', { name: 'Send', exact: true }).click();
-  await dialog.locator('.feedback-done', { hasText: 'Sent to the team.' }).waitFor();
+  await page.locator('.status-note', { hasText: /^Feedback sent · No\. [0-9A-F]{8}/ }).waitFor(); // F11: the form closed at once
+  await dialog.waitFor({ state: 'hidden' });
   const saved = (await rpc.call('feedback.list')).find((report) => report.text === 'The sidebar width needs attention');
   assert.ok(saved.screenshotFileId); assert.equal(saved.annotationFileId, undefined, 'B-055: only the painted image'); assert.equal(saved.status, 'sent');
   assert.equal((await delivery.records()).reports.length, 1);
@@ -99,13 +96,13 @@ test('app-change entry points are removed; feedback publishes marked images dire
   await page.emulateMedia({ colorScheme: 'light' });
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => undefined);
-  // The menu at 640×480 and phone width (a bottom sheet there): no horizontal overflow.
-  for (const [width, height, name] of [[640, 480, 'feedback-menu-640x480'], [390, 844, 'feedback-menu-phone']]) {
+  // The overlay at 640×480 and phone width (the dock is the bottom edge there): no horizontal overflow.
+  for (const [width, height, name] of [[640, 480, 'feedback-overlay-640x480'], [390, 844, 'feedback-overlay-phone']]) {
     await size(width, height);
     await page.waitForTimeout(400); // let the shell switch between desktop and phone layouts
     assert.equal(await page.evaluate(() => innerWidth), width, 'the requested viewport width is real');
     await page.getByRole('button', { name: 'Feedback', exact: true }).first().click();
-    const menu = page.locator('.popover.feedback-menu');
+    const menu = page.locator('dialog.feedback-overlay[open] .feedback-dock');
     await menu.waitFor({ timeout: 5_000 });
     assert.equal(await menu.evaluate((el) => el.getBoundingClientRect().right <= innerWidth + 1 && el.scrollWidth <= el.clientWidth + 1), true, 'no horizontal overflow');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'no horizontal page scroll');
@@ -117,12 +114,12 @@ test('app-change entry points are removed; feedback publishes marked images dire
   await size(1280, 820); await page.waitForTimeout(400);
   delivery.setFailure(true);
   await cell.click();
-  const retry = page.locator('.popover.feedback-menu');
+  const retry = page.locator('dialog.feedback-overlay[open]');
   await retry.getByRole('textbox', { name: 'Your feedback' }).fill('Keep my report after an unconfirmed response');
   await retry.getByRole('button', { name: 'Send', exact: true }).click();
   await retry.locator('.feedback-done', { hasText: 'Not sent. Your report is saved on this PC.' }).waitFor();
   await retry.locator('.feedback-message').filter({ hasText: /\S/ }).waitFor(); // the reason, in the form's reserved line
-  assert.equal(await retry.getByText('Sent to the team.', { exact: true }).count(), 0);
+  assert.equal(await retry.getByText(/^Sent\./).count(), 0);
   await shot('feedback-unconfirmed');
   const kept = (await rpc.call('feedback.list')).find((report) => report.text === 'Keep my report after an unconfirmed response');
   assert.ok(kept, 'the report is kept'); assert.notEqual(kept.status, 'sent');

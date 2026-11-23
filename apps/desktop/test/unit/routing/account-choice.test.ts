@@ -32,14 +32,17 @@ test('a stop reads back from message meta; junk does not', () => {
   assert.match(stopText('fritz2', 'limit', 'chat'), /^fritz2 has used up its limit – the account chosen for this chat\. Choose another account or Automatic\.$/);
 });
 
-/** Two Claude plans (fritz1 the primary, fritz2 outside rotation) and the Codex plan; Tom pinned to Opus in ch_main. */
+/**
+ * Two Claude plans (fritz1 the primary, fritz2 outside rotation) and the Codex plan; Tom's start model is Opus (since
+ * upstream 0.3.12 a chat's model chip is a suggestion for the AI and never routes – router.ts, 13.11.2026).
+ */
 async function twoClaude(chat: Record<string, unknown> = {}, agentAccount?: string) {
   const h = await standardSetup();
   h.accounts.upsert(account('acc_claude', 'claude', { label: 'fritz1' }), false);
   h.accounts.upsert(account('acc_fritz2', 'claude', { label: 'fritz2', priority: 1, createdAt: T0 + 1 }), false);
   await h.catalog.refresh({ force: true });
-  h.agents.set(TOM, agent(TOM, { modelPolicy: agentAccount ? { account: agentAccount } : {} }));
-  h.addChat('ch_main', [TOM], { models: { [TOM]: OPUS }, ...chat });
+  h.agents.set(TOM, agent(TOM, { modelPolicy: { pin: OPUS, ...(agentAccount ? { account: agentAccount } : {}) } }));
+  h.addChat('ch_main', [TOM], { ...chat });
   const route = () => h.router.route({ agent: h.agents.get(TOM)!, conversationId: 'ch_main', mode: mode('chat'), text: 'hello' });
   return { h, route };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Org } from '../../../src/runtime/org/service.ts';
 import { initials, paletteIndex } from '../../../src/runtime/org/avatar.ts';
@@ -11,8 +11,9 @@ import { clock, memoryDb, recordingBus, RESOURCES } from '../store/helpers.ts';
 function setup(templatesDir = path.join(RESOURCES, 'agents')) {
   const recorder = recordingBus();
   const time = clock();
-  const org = new Org({ db: memoryDb(), bus: recorder.bus, clock: time, templatesDir });
-  return { org, time, ...recorder };
+  const db = memoryDb();
+  const org = new Org({ db, bus: recorder.bus, clock: time, templatesDir });
+  return { org, time, db, ...recorder };
 }
 
 const code = (expected: string) => (error: unknown) => error instanceof WorkforceError && error.code === expected;
@@ -59,13 +60,13 @@ test('all shipped templates parse with a known mode and instructions', () => {
   assert.equal(byKey['computer-operator'].mode, 'computer');
 });
 
-test('template parser: inline and block lists, quotes, effort, invalid files', () => {
+test('template parser: inline and block lists, quotes, an old effort line ignored (B-083), invalid files', () => {
   const parsed = parseTemplate('x', '---\nname: "Ed"\nskills:\n  - a\n  - b\neffort: high\nspaceKind: nowhere\n---\nBody\n')!;
   assert.deepEqual(parsed.skills, ['a', 'b']);
   assert.equal(parsed.name, 'Ed');
   assert.equal(parsed.role, 'Ed');
   assert.equal(parsed.mode, 'general');
-  assert.equal(parsed.effort, 'high');
+  assert.equal('effort' in parsed, false, 'a template carries no effort – the agent picks it per step');
   assert.equal(parsed.spaceKind, undefined);
   assert.equal(parsed.instructions, 'Body');
   assert.deepEqual(parseTemplate('y', '---\nname: Y\nskills: [one, "two"]\n---\n')!.skills, ['one', 'two']);
@@ -80,7 +81,7 @@ test('create from template: defaults, avatar, space by kind, unique names, event
   const secretary = org.create({ template: 'secretary', createdBy: 'human' });
   assert.equal(secretary.spaceId, privateSpace.id);
   assert.equal(secretary.mode, 'secretary');
-  assert.equal(secretary.modelPolicy.effort, 'medium');
+  assert.deepEqual(secretary.modelPolicy, {}, 'B-083: a hire starts without a fixed effort');
   assert.deepEqual(secretary.avatar, { kind: 'initials', value: secretary.name[0], color: paletteIndex(secretary.id) });
   assert.equal(secretary.role, 'Personal assistant', 'B-047: no name given – a human first name, the template role stays');
   const editor = org.create({ template: 'video-editor', createdBy: manager.id });
@@ -144,17 +145,43 @@ test('update: validation, no reporting cycles, initials follow renames, null cle
 });
 
 test('archive moves reports up and keeps at least one agent', () => {
-  const { org, of } = setup();
+  const { org, of, db } = setup();
   const manager = org.ensureSeed()!;
   assert.throws(() => org.archive(manager.id), code('conflict'));
   const lead = org.create({ template: 'marketing-lead', createdBy: manager.id });
   const creator = org.create({ template: 'content-creator', createdBy: lead.id });
+  db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES ('run_lead', ?, 'message', 'done')`, [lead.id]); // it worked: Archived lists it
   org.archive(lead.id);
   assert.equal(org.get(creator.id)?.managerId, manager.id);
   assert.equal(org.list().length, 2);
   assert.equal(org.list({ includeArchived: true }).length, 3);
   assert.deepEqual(of('agent.removed'), [{ id: lead.id }]);
   assert.throws(() => org.create({ name: 'Z', managerId: lead.id, createdBy: 'human' }), code('conflict'));
+});
+
+test('F14: the list with archived agents leaves out one that left no trace; a run, a chat or a task keeps it', () => {
+  const { org, db } = setup();
+  const manager = org.ensureSeed()!;
+  const hire = (name: string) => org.create({ name, createdBy: 'human' });
+  const untouched = hire('Seed copy');
+  const ran = hire('Ran once');
+  const chatted = hire('In a chat');
+  const tasked = hire('Has a task');
+  db.run(`INSERT INTO runs (id, agent_id, trigger, status) VALUES ('run_1', ?, 'message', 'done')`, [ran.id]);
+  db.run(`INSERT INTO conversations (id, title, created_by, created_at, updated_at) VALUES ('ch_1', '', 'human', 0, 0)`);
+  db.run(`INSERT INTO members (conversation_id, member_id, kind, joined_at) VALUES ('ch_1', ?, 'agent', 0)`, [chatted.id]);
+  db.run(`INSERT INTO tasks (id, conversation_id, title, assignee_kind, assignee_id, created_by, created_at, updated_at) VALUES ('task_1', 'ch_1', 'Do', 'agent', ?, 'human', 0, 0)`, [tasked.id]);
+  for (const agent of [untouched, ran, chatted, tasked]) org.archive(agent.id);
+  const listed = org.list({ includeArchived: true }).map((agent) => agent.name);
+  assert.deepEqual(listed, [manager.name, 'Ran once', 'In a chat', 'Has a task'], 'no "Archived" row for an agent that never did anything');
+  assert.equal(org.get(untouched.id)?.archivedAt !== undefined, true, 'its row stays (nothing is deleted)');
+  assert.equal(org.ensureSeed(), undefined, 'and it still counts: no second seed');
+});
+
+test('F14: a company started as my other device (--start=mine) gets no Manager of its own at start; every other start seeds', () => {
+  const main = readFileSync(new URL('../../../src/runtime/main.ts', import.meta.url), 'utf8');
+  assert.match(main, /\n {2}if \(options\.host\.app\.start !== 'mine'\) s\.org\.ensureSeed\(\);\n/);
+  assert.equal(main.match(/ensureSeed\(\)/g)?.length, 1, 'the one seed call');
 });
 
 test('setStatus emits agent.upserted and agent.activity (default and injected source)', () => {
@@ -170,6 +197,23 @@ test('setStatus emits agent.upserted and agent.activity (default and injected so
   assert.equal(org.get(manager.id)?.statusNote, undefined);
   assert.throws(() => org.setStatus('ag_missing', 'idle'), code('not_found'));
   assert.throws(() => org.setStatus(manager.id, 'dancing' as never), code('bad_request'));
+});
+
+test('phone traffic 18.11.: a new step note is agent.activity only – the whole agent (its SYSTEM.md) goes out when the status changes', () => {
+  const { org, of } = setup();
+  const manager = org.ensureSeed()!;
+  const upserts = () => of('agent.upserted').filter((agent) => (agent as { id: string }).id === manager.id).length;
+  const activities = () => of('agent.activity').length;
+  const start = upserts();
+  org.setStatus(manager.id, 'working', 'reading the brief');
+  assert.equal(upserts(), start + 1, 'idle → working announces the agent');
+  const [u, a] = [upserts(), activities()];
+  for (const step of ['running npm test', 'editing app.ts', 'thinking about the fix']) org.setStatus(manager.id, 'working', step);
+  assert.equal(upserts(), u, 'step notes of a running turn never resend the agent');
+  assert.equal(activities(), a + 3, 'each step note reaches the live rows');
+  assert.equal(org.get(manager.id)?.statusNote, 'thinking about the fix', 'the stored note is current');
+  org.setStatus(manager.id, 'idle');
+  assert.equal(upserts(), u + 1, 'working → idle announces the agent again');
 });
 
 test('spaces: create, update, archive', () => {

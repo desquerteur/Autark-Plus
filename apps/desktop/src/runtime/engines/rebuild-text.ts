@@ -61,6 +61,30 @@ export function outputNote(call: NonNullable<RebuildItem['call']>, stamp?: strin
   return withStamp(`[output of ${call.name}${failed}]\n${boundOutput(call.output || '(no output)')}`, stamp);
 }
 
+/**
+ * 17.11.2026 (BEFUND-RUNTIME-JAN §3): a call the target cannot replay natively, as ONE user-side record – what ran and
+ * its output. Before, "[ran Write: {…}]" stood as the model's own assistant text; models then "called" tools by writing
+ * that line and ended their turn, and nothing ran (6 turns on 16./17.11.). A record on the user side, worded as a
+ * record, is nothing the model said and nothing to imitate. `output`: the output text to show (default the call's).
+ */
+export function recordText(call: NonNullable<RebuildItem['call']>, options: { detail?: string; calls?: string; stamp?: string; output?: string } = {}): string {
+  const summary = argsSummary(call.args);
+  const failed = call.ok === false ? ' (failed)' : '';
+  return withStamp([
+    `[record of an earlier call, not replayable here – ${call.name}${summary ? `: ${summary}` : ''}]`,
+    options.detail, options.calls ? `Calls inside the script: ${options.calls}.` : '',
+    `[its output${failed}]`, boundOutput(options.output ?? (call.output || '(no output)')),
+  ].filter(Boolean).join('\n'), options.stamp);
+}
+
+/**
+ * A final text that begins with a call record or a "[ran …]" line – a turn that imitated a call instead of making it
+ * (nothing ran). The six real ones (16./17.11.) were each such a line with the call's JSON arguments, and nothing else.
+ */
+export function imitatedCall(text: string): boolean {
+  return /^\s*\[(ran|record of an earlier call|output of|its output)\b/.test(text);
+}
+
 /** A model's family: the provider prefix and the variant suffix dropped ("codex:gpt-6.1-sol-mini" → "gpt-6.1"). */
 export function modelFamily(model: string | undefined): string {
   const id = (model ?? '').toLowerCase().replace(/^[a-z0-9_-]+:/, '').replace(/\[.*\]$/, '');

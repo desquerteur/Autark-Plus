@@ -108,16 +108,12 @@ test('round 4, the one asymmetry: without a decision model, or when it fails, a 
   }
 });
 
-test("round 4: an agent's important chat.send line keeps T10's lead at once; a run's important answer goes through the pick, never urgent", async () => {
+test("13.11.2026: an agent's push line reaches every other agent of the room at once, the person as a push", async () => {
   const t = team(decisions([['Lin', 0.9]]).service);
-  t.post('ag_mara', 'The build is broken for everyone.', { priority: 'important', runId: 'run_mara', meta: { sentDuringRun: true } });
-  assert.deepEqual([t.woken(), t.urgent.map((item) => item.agentId)], [['ag_tom'], ['ag_tom']], 'the lead, at once and urgent');
-  t.clear();
-  t.urgent.length = 0;
-  t.chats.postAgentMessage(t.chat.id, 'ag_mara', 'run_mara', { body: 'The server is down, someone has to restart it.', priority: 'important' });
+  t.post('ag_mara', 'The build is broken for everyone.', { priority: 'important', runId: 'run_mara' });
   await tick();
-  assert.deepEqual([t.woken(), t.urgent], [['ag_lin'], []], 'the picked colleague, never steered: the answer is for the person');
-  assert.equal(t.notified.at(-1)?.kind, 'important', 'the person still gets it as important');
+  assert.deepEqual([t.woken(), t.urgent.map((item) => item.agentId).sort()], [['ag_lin', 'ag_tom'], ['ag_lin', 'ag_tom']]);
+  assert.equal(t.notified.at(-1)?.kind, 'important');
 });
 
 test('round 4: a line wakes at most two colleagues – never everyone of a larger group, whatever the pick names', async () => {

@@ -1,14 +1,11 @@
 // Base prompt templates (`resources/prompts/*.md`) and the tiny template language they use.
 // Owns: loading the shipped files once (HTML comments stripped, CRLF normalized), the person's own versions (the open
-// file system: <data>/prompts/<name>.md replaces the shipped prompt of that name - every prompt, rules.md included), and
-// rendering `{{key}}`, `{{#key}}...{{/key}}` (only when the value is non-empty) and `{{^key}}...{{/key}}` (only when it is
-// empty). Lines that become empty because a value or section was empty are dropped, so optional lines leave no gaps
-// (identity and rules also get the has_<tool> flags of the turn's tool offer, context/environment.ts toolFlags). An own
-// version is read once and kept until the data folder watcher reports a change in prompts/ (watch()), so the stable
-// prompt stays byte-identical until the file changes; an unusable file (too large, not text) is logged and the
-// shipped prompt used. A missing shipped file renders empty (a broken install; tests point at resources/).
-// B-076: rendering agent-default (the standard SYSTEM.md) fills {{rules}} with the rules in force, rendered for a hire
-// (the person's name, every tool flag on – standardRuleValues).
+// file system: <data>/prompts/<name>.md replaces the shipped prompt of that name - every prompt), and rendering `{{key}}`,
+// `{{#key}}...{{/key}}` (only when the value is non-empty) and `{{^key}}...{{/key}}` (only when it is empty). Lines that
+// become empty because a value or section was empty are dropped, so optional lines leave no gaps. An own version is read
+// once and kept until the data folder watcher reports a change in prompts/ (watch()), so the stable prompt stays
+// byte-identical until the file changes; an unusable file (too large, not text) is logged and the shipped prompt used.
+// A missing shipped file renders empty (a broken install; tests point at resources/).
 // Never: evaluates code, re-expands placeholders inside inserted values, or reads files per turn.
 
 import { readFileSync } from 'node:fs';
@@ -19,16 +16,16 @@ import { readText } from '../root/text-doc.ts';
 import type { RootWatcher } from '../root/watcher.ts';
 
 /** The prompts the context renders as templates. */
-export type TemplateName = 'identity' | 'rules' | 'skills' | 'compaction';
-const NAMES: readonly TemplateName[] = ['identity', 'rules', 'skills', 'compaction'];
+export type TemplateName = 'identity' | 'skills';
+const NAMES: readonly TemplateName[] = ['identity', 'skills'];
 const SECTION = /\{\{([#^])([a-z_]+)\}\}([\s\S]*?)\{\{\/\2\}\}/g;
 const VARIABLE = /\{\{([a-z_]+)\}\}/g;
 const GAP = '\u0000'; // marks text that rendered empty (dropped together with its line)
 
-/** Every shipped prompt by name: the templates plus the ones other modules read (onboarding, agent-default, subconscious). */
-export type PromptName = TemplateName | 'onboarding' | 'agent-default' | 'subconscious';
+/** Every shipped prompt by name: the templates plus the ones other modules read (onboarding, the two standards, subconscious). */
+export type PromptName = TemplateName | 'onboarding' | 'standard-agent' | 'standard-manager' | 'subconscious';
 /** The prompts an own file in <data>/prompts may replace: all of them. */
-export const OVERRIDABLE: ReadonlySet<PromptName> = new Set<PromptName>(['identity', 'rules', 'onboarding', 'compaction', 'skills', 'agent-default', 'subconscious']);
+export const OVERRIDABLE: ReadonlySet<PromptName> = new Set<PromptName>(['identity', 'onboarding', 'skills', 'standard-agent', 'standard-manager', 'subconscious']);
 /** An own prompt file is never larger. */
 export const OVERRIDE_MAX_BYTES = 256 * 1024;
 
@@ -43,21 +40,6 @@ function renderSections(template: string, values: Readonly<Record<string, string
     const show = kind === '#' ? present : !present;
     return show ? renderSections(inner, values) : GAP;
   });
-}
-
-/** The tool flags rules.md knows (context/environment.ts toolFlags); a hire's SYSTEM.md names every one of them. */
-const RULE_TOOL_FLAGS = ['has_files_search', 'has_web_search', 'has_models', 'has_human_ask', 'has_schedules', 'has_todos'] as const;
-
-/** B-076: the values the team's "How I work" is rendered with inside a standard SYSTEM.md (the person's name, all tools). */
-export function standardRuleValues(values: Readonly<Record<string, string>>): Record<string, string> {
-  const name = values.user_name?.trim() || values.owner?.trim() || 'the person';
-  return { ...Object.fromEntries(RULE_TOOL_FLAGS.map((flag) => [flag, 'yes'])), ...values, user_name: name };
-}
-
-/** `template` with its tool-flag sections decided as "offered" (the rest of its placeholders kept), as a hire renders them. */
-export function resolveToolFlags(template: string): string {
-  const flags: ReadonlySet<string> = new Set(RULE_TOOL_FLAGS);
-  return template.replace(SECTION, (all, kind: string, key: string, inner: string) => (flags.has(key) ? (kind === '#' ? resolveToolFlags(inner) : '') : all));
 }
 
 /** Renders a template with string values. Unknown placeholders render empty. */
@@ -78,7 +60,7 @@ export function renderTemplate(template: string, values: Readonly<Record<string,
 
 /** Loads every known template once; a missing or unreadable file renders empty (logged unless missing). */
 export function loadTemplates(dir: string | undefined, log?: Logger): Record<TemplateName, string> {
-  const out: Record<TemplateName, string> = { identity: '', rules: '', skills: '', compaction: '' };
+  const out: Record<TemplateName, string> = { identity: '', skills: '' };
   if (!dir) return out;
   for (const name of NAMES) {
     try {
@@ -132,19 +114,8 @@ export class PromptTemplates {
     return this.ownText(name) ?? cleanTemplate(this.shippedText(name) ?? '');
   }
 
-  /**
-   * B-076: the standard SYSTEM.md as one template – agent-default with its {{rules}} line replaced by the rules template
-   * in force (placeholders kept). Prompt updates remember and compare this text, so a change of the rules counts too.
-   */
-  standardTemplate(): string {
-    const rules = resolveToolFlags(this.get('rules'));
-    return this.text('agent-default').replace(/^[ \t]*\{\{rules\}\}[ \t]*$/m, () => rules);
-  }
-
   renderText(name: PromptName, values: Readonly<Record<string, string>>): string {
-    // B-076: the standard SYSTEM.md takes the team's "How I work" in whole – rendered for a hire, every tool named.
-    const filled = name === 'agent-default' && values.rules === undefined ? { ...values, rules: renderTemplate(this.get('rules'), standardRuleValues(values)) } : values;
-    return renderTemplate(this.text(name), filled);
+    return renderTemplate(this.text(name), values);
   }
 
   /** Forgets the own versions read so far (all, or the one of `file`, e.g. 'identity.md'); the next use reads again. */

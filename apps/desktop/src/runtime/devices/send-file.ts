@@ -51,9 +51,9 @@ export async function receivePiece(services: RuntimeServices, params: unknown, f
 
 export const sendFile = defineTool<{ to: string; path: string }>({
   name: 'devices.send_file',
-  description: "Send a file to a linked PC: it lands in inbox/<this PC>/ of that PC's workspace and the answer names the path. to: a name or id from devices.list. To bring a file here from a linked PC, pass device: that PC and to: this PC's name.",
-  inputSchema: { type: 'object', properties: { to: { type: 'string', minLength: 1, maxLength: 120 }, path: { type: 'string', minLength: 1, maxLength: 1024 } }, required: ['to', 'path'], additionalProperties: false },
-  category: 'write_local', remote: true, anyMode: true,
+  description: "Sends a file into a linked PC's workspace inbox. Run on that PC (device) with to: this PC, it fetches one instead.",
+  inputSchema: { type: 'object', properties: { to: { type: 'string', minLength: 1, maxLength: 120, description: 'A PC from devices.list.' }, path: { type: 'string', minLength: 1, maxLength: 1024 } }, required: ['to', 'path'], additionalProperties: false },
+  category: 'write_local', remote: true,
   describe: (args) => ({ summary: `Send ${clip(args.path, 80)} to ${clip(args.to, 40)}`, resource: args.path, reversible: true, external: false }),
   async run(args, ctx) {
     const target = resolveDevice(ctx.services, args.to);

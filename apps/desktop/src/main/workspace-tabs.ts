@@ -9,8 +9,10 @@
 // shared/api/workspace-browser.ts). No title, page content, cookies or form data here (those stay in the browser
 // session). Up to 30 websites per space (the memory saver discards hidden ones – workspace-discard.ts); a discarded tab
 // is an entry again with its whole address in memory (discard) – the file still keeps only the kept address.
-// Owns: the spaces, the not-yet-loaded entries and the saved file. Never: imports electron, reads pages, or writes when
-// nothing changed.
+// B-081: a website – this PC's or another PC's (a 'remote' panel) – leaves the spaces only by a close (closed()) or by
+// the file itself; the window's layout only orders it, and an id closed here never comes back (`gone`, the last 100).
+// Owns: the spaces, the not-yet-loaded entries, the ids closed here and the saved file. Never: imports electron, reads
+// pages, writes when nothing changed, or takes back a tab closed here.
 
 import { mkdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,9 +21,21 @@ import { GLOBAL_SPACE, isSpace, keptAddress as savedUrl, type SideEntry, type Si
 export const MAX_TABS = 30;
 const ID = /^web-[a-zA-Z0-9-]{1,80}$/;
 const PANEL_MAX = 2000;
+const GONE_MAX = 100;
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isWeb = (entry: SideEntry) => entry.panel === undefined;
+/** A website of this PC or of another (a 'remote' panel): the window only orders it; a close or the file takes it away. */
+const isPage = (entry: SideEntry) => entry.panel === undefined || entry.panel === 'remote';
+
+/** `spaces` without the websites (this PC's or another's) `out` names; a space left empty goes. */
+function withoutPages(spaces: SideSpaces, out: (id: string) => boolean): SideSpaces {
+  for (const [key, space] of Object.entries(spaces)) {
+    space.tabs = space.tabs.filter((tab) => !isPage(tab) || !out(tab.id));
+    if (!space.tabs.length) delete spaces[key];
+  }
+  return spaces;
+}
 
 /** One entry as the file may hold it (anything else is left out). */
 function readEntry(item: unknown): SideEntry | undefined {
@@ -97,6 +111,8 @@ export class PersonalTabs {
   private readonly restored = new Map<string, string>();
   /** The last address saved per tab: kept while a tab shows no web address yet (a page still starting to load). */
   private readonly known = new Map<string, string>();
+  /** Ids closed here, oldest first (web-<uuid> and remote:<pc>:web-<uuid> are never reused): no file or layout brings one back. */
+  private readonly gone = new Set<string>();
   private lastSaved = '';
   /** The file's text as last read or written here: anything else on disk is an outside edit. */
   private seen: string | undefined;
@@ -161,14 +177,14 @@ export class PersonalTabs {
     if (url && this.webs().some((tab) => tab.id === id)) this.restored.set(id, url);
   }
 
-  /** A tab was closed (live or not). */
+  /** A tab was closed (live or not; this PC's website or another PC's): it leaves every space and never comes back. */
   closed(id: string): void {
     this.restored.delete(id);
     this.known.delete(id);
-    for (const [key, space] of Object.entries(this.spaces)) {
-      space.tabs = space.tabs.filter((tab) => tab.id !== id || !isWeb(tab));
-      if (!space.tabs.length) delete this.spaces[key];
-    }
+    this.gone.delete(id);
+    this.gone.add(id);
+    if (this.gone.size > GONE_MAX) this.gone.delete(this.gone.values().next().value!);
+    withoutPages(this.spaces, (tab) => tab === id);
   }
 
   /** How many website tabs a space has (live and not yet loaded). */
@@ -182,25 +198,25 @@ export class PersonalTabs {
   }
 
   /**
-   * The window's panels, order and shown tabs. A website stays what it is here (the window never opens or closes one
-   * this way) and goes where the window lists it; one the window does not know of yet stays at its space's end.
+   * The window's panels, order and shown tabs. A website – this PC's or another PC's – stays what it is here (the window
+   * never opens or closes one this way: a close comes as closed()) and goes where the window lists it; one the window
+   * does not list stays at its space's end, one main does not hold is not added.
    */
   setLayout(next: SideSpaces): void {
-    const webs = new Map(Object.entries(this.spaces).flatMap(([key, space]) => space.tabs.filter(isWeb).map((tab) => [tab.id, { key, tab }] as const)));
+    const pages = new Map(Object.entries(this.spaces).flatMap(([key, space]) => space.tabs.filter(isPage).map((tab) => [tab.id, { key, tab }] as const)));
     const placed = new Set<string>();
     const out: SideSpaces = {};
     for (const [key, space] of Object.entries(next)) {
       if (!isSpace(key) || !Array.isArray(space?.tabs)) continue;
       const tabs: SideEntry[] = [];
       for (const item of space.tabs) {
-        const web = webs.get(item?.id);
-        if (web && item.panel === undefined) { if (!placed.has(item.id)) { placed.add(item.id); tabs.push(web.tab); } continue; }
+        if (item && isPage(item)) { const page = pages.get(item.id); if (page && !placed.has(item.id)) { placed.add(item.id); tabs.push(page.tab); } continue; }
         const panel = typeof item?.panel === 'string' ? readEntry(item) : undefined;
         if (panel && !tabs.some((tab) => tab.id === panel.id)) tabs.push(panel);
       }
       out[key] = { ...(typeof space.shown === 'string' ? { shown: space.shown } : {}), tabs };
     }
-    for (const [id, { key, tab }] of webs) if (!placed.has(id)) (out[key] ??= { tabs: [] }).tabs.push(tab);
+    for (const [id, { key, tab }] of pages) if (!placed.has(id)) (out[key] ??= { tabs: [] }).tabs.push(tab);
     for (const [key, space] of Object.entries(out)) if (!space.tabs.length) delete out[key];
     this.spaces = out;
   }
@@ -240,7 +256,7 @@ export class PersonalTabs {
     if (!next) return undefined;
     const before = new Set(this.ids());
     const navigate: TabsReload['navigate'] = [];
-    this.spaces = next;
+    this.spaces = withoutPages(next, (id) => this.gone.has(id)); // a stale copy still listing a tab closed here: it stays closed (the next save writes the file without it)
     for (const tab of this.webs()) {
       const url = tab.url!;
       if (!before.has(tab.id) || this.restored.has(tab.id)) this.restored.set(tab.id, url);

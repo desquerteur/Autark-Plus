@@ -44,7 +44,8 @@ test('anthropic: one assistant turn of tool_use blocks, all results in ONE user 
   const [user, assistant, results, ...rest] = body.messages;
   assert.equal(rest.length, 0, 'the model answers next');
   assert.equal(user.role, 'user');
-  assert.equal(user.content[0].text, 'hello');
+  assert.match(user.content[0].text, /^<live>/, 'the live context first');
+  assert.equal(user.content[1].text, 'hello');
   assert.equal(assistant.role, 'assistant');
   assert.deepEqual(assistant.content.map((block: any) => [block.type, block.name, block.input]), [['tool_use', 'vector__search', TRACE.calls[0].args], ['tool_use', 'agent__tell', {}]]);
   assert.equal(results.role, 'user');

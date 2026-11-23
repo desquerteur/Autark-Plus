@@ -39,6 +39,13 @@ test('#/team/person/<id>; an agent page stays as it was', () => {
   assert.equal(formatRoute({ view: 'team' }), '#/team');
 });
 
+test('F13: #/team/person/new is the Add person page – never looked up as a person id', () => {
+  assert.deepEqual(parseRoute('#/team/person/new'), { view: 'team', addPerson: true });
+  assert.equal(formatRoute({ view: 'team', addPerson: true }), '#/team/person/new');
+  assert.deepEqual(parseRoute(formatRoute({ view: 'team', addPerson: true })), { view: 'team', addPerson: true });
+  assert.deepEqual(parseRoute('#/team/person/per_new00001'), { view: 'team', personId: 'per_new00001' }, 'a person id stays one');
+});
+
 test('#/settings/agents opens Team; a settings page stays the section', () => {
   assert.deepEqual(parseRoute('#/settings/agents'), { view: 'team' });
   assert.deepEqual(parseRoute('#/settings/models'), { view: 'settings', section: 'models' });

@@ -5,7 +5,7 @@
 //   folder, a missing folder, '~'); a relative folder is inside the workspace; a folder that went away is 'missing';
 // - turnCwd: the usable home, else the workspace;
 // - a native write inside the approved home outside the workspace counts as a local write (judgeCall), elsewhere not;
-// - the prompt: "My folder" (path, keep it current, home project; the system map is in the environment section) and "Home project" with the
+// - the prompt: "# My SYSTEM.md" (the file with one line on its folder) and "Home project" with the
 //   skills found there; agents.update sets the home;
 // - skills.save with main: true writes a versioned Main Skill into the agent folder (a taken name is refused);
 // - RPC agents.setHome and agents.openHome are owner-only; openHome opens exactly the usable home (B-044 review).
@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CHECK_MS } from '../../../src/runtime/agent-core/home.ts';
-import { coreFolderSection, homeSection } from '../../../src/runtime/agent-core/prompt.ts';
+import { homeSection, systemMdSection } from '../../../src/runtime/agent-core/prompt.ts';
 import { turnCwd } from '../../../src/runtime/git/records.ts';
 import { HandlerTable, allowedScope, type HandlerContext } from '../../../src/runtime/rpc/table.ts';
 import { register } from '../../../src/runtime/rpc/handlers/agent-core.ts';
@@ -75,7 +75,8 @@ test('a home is any existing local folder; a relative folder is inside the works
   const { f, writer, project } = setup();
   try {
     assert.equal(f.core.setHome(writer.id, f.data)?.path, f.data, 'the data folder too: agents may do everything');
-    assert.throws(() => f.core.setHome(writer.id, '\\\\server\\share\\code'), /network/);
+    // A network path is one only on Windows (\\host\share); on Linux and macOS a share is a mounted folder.
+    if (process.platform === 'win32') assert.throws(() => f.core.setHome(writer.id, '\\\\server\\share\\code'), /network/);
     assert.throws(() => f.core.setHome(writer.id, path.join(f.temp.dir, 'nope')), /does not exist/);
     assert.throws(() => f.core.setHome(writer.id, '~/code'), /absolute/);
     mkdirSync(path.join(f.workspace, 'site'), { recursive: true });
@@ -107,20 +108,12 @@ test('the prompt: "My folder" names the folder (the map moved to the environment
   const { f, writer, project, services } = setup();
   try {
     const agent = f.org.get(writer.id)!;
-    const general = { key: 'general', tools: ['*'] } as never;
-    const folder = coreFolderSection(services, agent, general);
-    assert.ok(folder.startsWith('## My folder\n'), folder);
-    // B-059: SYSTEM.md changes with the role or standing rules; lessons go to memory.
-    // B-076: SYSTEM.md is the standing text above; the agent keeps its role and what it has here current.
-    assert.ok(folder.includes(`My folder: ${path.join(f.data, 'agents', writer.id)} – SYSTEM.md is my standing text above (my role and what I have here change when they change; lessons go to memory), skills/ my main skills; I keep them current myself (agents.update instructions writes my part of SYSTEM.md`), folder);
-    // B-047 D6: the map <data>/README.md is named by the environment section only when the file tools can read it.
-    assert.ok(folder.includes('agents.update home') && !folder.includes(path.join(f.data, 'README.md')));
-    assert.equal(coreFolderSection(services, agent, general), folder, 'deterministic');
-    assert.equal(coreFolderSection({ ...services, agentCore: undefined } as never, agent, general), '');
-    // A mode without agents.update / skills.save: the folder and the map, no tool it does not have.
-    const bare = coreFolderSection({ ...services, tools: { specsFor: () => [] } } as never, agent, general);
-    assert.ok(bare.includes(`My folder: ${path.join(f.data, 'agents', writer.id)} – SYSTEM.md is my standing text above (my role and what I have here change when they change; lessons go to memory), skills/ my main skills.`), bare);
-    assert.ok(!bare.includes('agents.update') && !bare.includes('skills.save') && !bare.includes(path.join(f.data, 'README.md')), bare);
+    const own = '## My role\nWriter.';
+    const section = systemMdSection(services, agent, own);
+    assert.equal(section, `# My SYSTEM.md\nMy whole standing text, in my folder ${path.join(f.data, 'agents', writer.id)} beside my main skills (skills/); the team's standard stands as a comment at its end. I rewrite it as I learn the work.\n${own}`);
+    assert.equal(systemMdSection(services, agent, own), section, 'deterministic');
+    assert.equal(systemMdSection({ ...services, agentCore: undefined } as never, agent, own), `# My SYSTEM.md\nMy whole standing text; the team's standard stands as a comment at its end. I rewrite it as I learn the work.\n${own}`, 'no folder: the file alone');
+    assert.equal(systemMdSection({ ...services, agentCore: undefined } as never, agent, ''), '', 'neither: no section');
     assert.equal(homeSection(services, agent), '', 'no home: no section');
     f.core.setHome(writer.id, project);
     const home = homeSection(services, agent);

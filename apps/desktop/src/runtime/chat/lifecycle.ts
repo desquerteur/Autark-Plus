@@ -1,7 +1,10 @@
 // Chat lifecycle around the message log (split from chat/service.ts): archive, unarchive and
 // remove a conversation, delete a message, the start-up reconcile of streaming messages, and
 // publishing a message – for agent messages after their outputs are stored (```ui blocks that
-// name local files, engine files such as Codex images; media/outputs.ts does the storing).
+// name local files, engine files such as Codex images; media/outputs.ts does the storing) and, B-080 (live: 198 reads
+// of guessed paths since 05.11., a colleague's relative path read from another folder), after a relative path in its
+// text that exists under the workspace became absolute (media/outputs.ts absolutePaths, stored before the announcement and
+// delivery, synchronously – chat.send's "who is woken" stays immediate) – one openable path for every reader.
 // Archive (C2) works like WhatsApp's: it only takes the chat out of the person's list – its
 // agents keep working there. It comes back by itself, with one quiet 'unarchived' line, when
 // something needs the person: an agent's important message or @mention of the person in a chat
@@ -18,9 +21,14 @@
 // its tasks live on chat-free – they keep the chat's space, lose the anchor, stay searchable (their FTS rows stay)
 // and keep their pending wakes and reminders (now chat-free), each re-emitted once ('task.upserted'); an open
 // mini-app to-do among them is cancelled (its fence went with the chat).
-// B-075: the start-up reconcile ends only this PC's streaming rows (a row synced from another PC's run is that PC's to
-// end): a run's row becomes 'stopped' with its steps kept (meta.live → meta.lines), a silent one – it only showed a
-// run's work – goes.
+// The start-up reconcile removes rows left 'streaming' by older versions (13.11.2026: no run writes such a row any more;
+// only this PC's – a row synced from another PC's run is that PC's to end). B-080 (live: 7 half-written or empty 'stopped' bubbles after kills, their runs re-run anyway): every one of them
+// goes – a killed run's steps and update notes stay in its run journal, the partial text it was streaming goes with its
+// row (the run never reached its finish, which journals the 'Answer'), and the run that continues the work answers.
+// B-080 wave 3 (live 08.11.: 26 empty red or stopped bubbles, each answered by its agent minutes later, their Retry still
+// able to start a turn): the start also removes this PC's empty failed or platform-stopped rows whose author answered
+// later in the same chat (MessageRepo.emptyAnswered) – as the system, so message.removed reaches every PC; a row with
+// text, one without a later answer, the person's own quiet Stop row and a row synced from another PC stay.
 // Owns: those writes and their events; the publish order (message event → auto-unarchive →
 // chat summary → delivery), which for an agent message with outputs runs once the files are
 // stored, so every client, bridge and woken agent sees the final body with fileIds exactly once.
@@ -37,12 +45,11 @@ import type { Attachment, Conversation, Message, StatusLine } from '../../shared
 import type { TaskStatus, TaskView } from '../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import type { EngineFile } from '../engines/types.ts';
-import { hasOutputRefs, importOutputs, saveOutputNotes, storeEngineFiles } from '../media/outputs.ts';
+import { absolutePaths, hasOutputRefs, hasRelativePaths, importOutputs, saveOutputNotes, storeEngineFiles } from '../media/outputs.ts';
 import { APP_FILES_NS } from '../tasks/app-files.ts';
 import type { ConversationRepo } from './conversation-repo.ts';
 import type { MessageRepo } from './message-repo.ts';
 import { OF_CHAT_MESSAGE, canReclaim, chatAppTakes, queueReclaim } from './reclaim.ts';
-import type { StreamingRows } from './streaming.ts';
 
 export type ChatDeps = Pick<RuntimeServices, 'db' | 'bus' | 'clock'> & Partial<Pick<RuntimeServices, 'org' | 'delivery' | 'log' | 'files' | 'paths' | 'tasks'>>;
 
@@ -51,7 +58,6 @@ export interface ChatCore {
   s: ChatDeps;
   convs: ConversationRepo;
   msgs: MessageRepo;
-  streams: StreamingRows;
   emitConversation(id: string): void;
   deliver(message: Message): void;
   /** A quiet status line from the system. */
@@ -59,7 +65,7 @@ export interface ChatCore {
   nameOf(memberId: string): string;
 }
 
-const OPEN: TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked'];
+const OPEN: TaskStatus[] = ['open', 'waiting'];
 /** Saved mini-app state (rpc/handlers/blocks.ts STATE_NS). */
 const BLOCK_STATE = 'block_state';
 
@@ -101,7 +107,7 @@ export function watchHumanTodos(core: ChatCore): () => void {
     if (task.assigneeKind !== 'human' || task.createdBy === HUMAN_ID || !OPEN.includes(task.status) || !task.conversationId) return;
     const conversation = core.convs.get(task.conversationId);
     if (conversation?.archivedAt === undefined || task.createdAt < conversation.archivedAt) return;
-    const reason = task.humanReason === 'approval' ? 'approval' : 'todo';
+    const reason = typeof task.widget?.accessRequestId === 'string' ? 'approval' : 'todo'; // the host's access request
     const text = reason === 'approval' ? 'Unarchived: an approval for you' : 'Unarchived: a to-do for you';
     unarchiveConversation(core, conversation, { type: 'unarchived', text, details: { reason, taskId: task.id } });
   });
@@ -138,7 +144,7 @@ export function removeConversation(core: ChatCore, id: string): void {
       const view = core.s.tasks?.get(taskId);
       if (!view) continue;
       // An open mini-app to-do's fence went with the chat: it cannot run any more (as for a deleted message).
-      if (appWidgetOf(view.widget) && OPEN.includes(view.status)) core.s.tasks!.setStatus(taskId, 'cancelled', SYSTEM_ID, 'Its chat was deleted');
+      if (appWidgetOf(view.widget) && OPEN.includes(view.status)) core.s.tasks!.finish(taskId, { status: 'dropped', summary: 'Its chat was deleted', quiet: true }, SYSTEM_ID);
       else core.s.bus.emit('task.upserted', view);
     } catch (error) {
       core.s.log?.warn('detached task not re-emitted', { taskId, error: String(error) });
@@ -148,7 +154,6 @@ export function removeConversation(core: ChatCore, id: string): void {
 
 export function removeMessage(core: ChatCore, message: Message, by: string): void {
   if (by !== message.authorId && by !== HUMAN_ID && by !== SYSTEM_ID) throw new WorkforceError('forbidden', 'Only the author can delete this message.');
-  core.streams.end(message.id);
   core.s.db.tx(() => {
     core.msgs.delete(message.id);
     core.s.db.run('DELETE FROM kv WHERE ns = ? AND substr(key, 1, ?) = ?', [BLOCK_STATE, message.id.length + 1, `${message.id}:`]);
@@ -165,23 +170,26 @@ function cancelAppTodos(core: ChatCore, message: Message, by: string): void {
   try {
     const open = tasks.list({ conversationId: message.conversationId, assigneeKind: 'human', status: OPEN, includeSteps: true, limit: 1000 });
     for (const todo of open) {
-      if (appWidgetOf(todo.widget)?.messageId === message.id) tasks.setStatus(todo.id, 'cancelled', by, 'Its message was deleted');
+      if (appWidgetOf(todo.widget)?.messageId === message.id) tasks.finish(todo.id, { status: 'dropped', summary: 'Its message was deleted', quiet: true }, by);
     }
   } catch (error) {
-    core.s.log?.warn('mini-app to-dos of a deleted message not cancelled', { messageId: message.id, error: String(error) });
+    core.s.log?.warn('mini-app to-dos of a deleted message not dropped', { messageId: message.id, error: String(error) });
   }
 }
 
-/** Startup: this PC's messages left 'streaming' by a crash become 'stopped' (keeps their text and steps); a silent one goes. */
+/**
+ * Startup: this PC's rows left 'streaming' by a kill or crash go, partial text included (B-080: their runs' journals keep the
+ * steps); the count. B-080 wave 3: so do its empty failed or platform-stopped rows that their author answered later.
+ */
 export function reconcileStreaming(core: ChatCore): number {
   const left = core.msgs.streaming();
-  for (const message of left) {
-    if (message.silent) { removeMessage(core, message, SYSTEM_ID); continue; }
-    const { live, ...meta } = message.meta;
-    message.state = 'stopped';
-    message.meta = { ...meta, ...(live?.steps.length ? { lines: live.steps } : {}), error: meta.error ?? 'Interrupted' };
-    core.msgs.update(message);
-    core.s.bus.emit('message.updated', message);
+  for (const message of left) removeMessage(core, message, SYSTEM_ID);
+  try {
+    const empty = core.msgs.emptyAnswered();
+    for (const message of empty) removeMessage(core, message, SYSTEM_ID);
+    if (empty.length) core.s.log?.info('empty answered bubbles removed', { count: empty.length });
+  } catch (error) {
+    core.s.log?.warn('empty answered bubbles not removed', { error: String(error) });
   }
   return left.length;
 }
@@ -196,7 +204,9 @@ type PublishEvent = 'message.created' | 'message.updated';
 export function publish(core: ChatCore, message: Message, event: PublishEvent, options: { deliver: boolean; files?: EngineFile[] }): void {
   const { s } = core;
   const files = options.files?.length ? options.files : undefined;
-  const refs = message.authorKind === 'agent' && message.kind === 'text' && message.state === 'final' && hasOutputRefs(message.body);
+  const agentText = message.authorKind === 'agent' && message.kind === 'text' && message.state === 'final';
+  if (agentText && s.paths) absolutize(core, message); // B-080: before anyone reads it
+  const refs = agentText && hasOutputRefs(message.body);
   if (!s.files || !s.paths || (!refs && !files)) { announce(core, message, event, options.deliver); return; }
   void storeOutputs(core, message, refs, files)
     .then((current) => { if (current) announce(core, current, event, options.deliver); })
@@ -208,6 +218,19 @@ function announce(core: ChatCore, message: Message, event: PublishEvent, deliver
   if (deliver) surface(core, message); // before delivery: a notification then leads to a listed chat
   core.emitConversation(message.conversationId);
   if (deliver) core.deliver(message);
+}
+
+/** B-080: the text's relative paths that exist under the workspace become absolute (media/outputs.ts), stored at once. */
+function absolutize(core: ChatCore, message: Message): void {
+  if (!hasRelativePaths(message.body)) return;
+  try {
+    const body = absolutePaths(core.s.paths!.workspace, message.body);
+    if (body === message.body) return;
+    message.body = body;
+    core.msgs.update(message);
+  } catch (error) {
+    core.s.log?.warn('message paths not made absolute', { messageId: message.id, error: String(error) });
+  }
 }
 
 /** Stores the outputs and writes the result; undefined when the message was deleted meanwhile. */
@@ -244,6 +267,6 @@ async function storeOutputs(core: ChatCore, message: Message, refs: boolean, fil
     current.attachments = attachments;
     core.msgs.update(current);
   }
-  if (notes.length) saveOutputNotes(s.db, s.clock.now(), message.authorId, message.conversationId, notes);
+  if (notes.length) saveOutputNotes(s.db, s.clock.now(), message.authorId, notes);
   return current;
 }

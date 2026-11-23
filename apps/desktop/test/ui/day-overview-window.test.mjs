@@ -5,9 +5,10 @@
 //   * About's Open and the Models row's menu open settings.json in the file tab; About's right click keeps the system's app;
 //   * Ctrl+L on a file tab and a folder tab focuses the path field, no new tab, Esc puts it back, Enter on another path keeps
 //     the keyboard in the pane; on My day a new tab as before;
-//   * My day in the pane: the briefing's place, the list, Ahead today, Chats that matter, Work (B-078 D10: the report's
-//     sentences, no stuck rows); Open Work opens the pane's Work tab and the chat stays, a sentence opens its task's chat;
-//     another day leaves the overview out;
+//   * My day in the pane: Next's place, the list, Ahead today, then one line "Chats that matter: …" (at most three names,
+//     no stuck rows – B-078 D10) and one line "What the team did today · Open Work" (17.11.2026: the report's sentences are
+//     Work's); Open Work opens the pane's Work tab and the chat stays, a chat's name opens that chat; another day leaves the
+//     overview out;
 //   * a deleted chat's space leaves side-tabs.json with its website tab closed, the other spaces stay;
 //   * light, dark and 640x480 screenshots, no horizontal scroll in the pane, no renderer errors.
 // Run through the lock: run.sh npm run build, then node --test test/ui/day-overview-window.test.mjs.  SCREENSHOTS=<dir> keeps them.
@@ -164,14 +165,13 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
   // ---- My day: seed real things
   const manager = (await rpc.call('agents.list')).find((agent) => agent.template === 'manager');
   const chat = await rpc.call('chats.create', { title: 'Launch plan', agentIds: [manager.id] });
-  const stuckTask = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Renew the domain', assigneeKind: 'agent', assigneeId: manager.id });
-  await rpc.call('tasks.setStatus', { id: stuckTask.id, status: 'blocked', note: 'No login for the registrar' });
-  await rpc.call('tasks.create', { conversationId: chat.id, title: 'Approve the logo', assigneeKind: 'human' });
+  const stuckTask = await rpc.call('tasks.create', { conversationId: chat.id, title: 'Renew the domain', to: manager.id });
+  await rpc.call('tasks.create', { conversationId: chat.id, title: 'Approve the logo' });
   const notes = await rpc.call('chats.create', { title: 'Press', agentIds: [manager.id] });
-  const finished = await rpc.call('tasks.create', { conversationId: notes.id, title: 'Write the launch note', assigneeKind: 'agent', assigneeId: manager.id });
-  // B-078 D10: My day's Work block is the report – the agent's own tasks.complete with alsoHandled (the demo engine runs the tool)
+  const finished = await rpc.call('tasks.create', { conversationId: notes.id, title: 'Write the launch note', to: manager.id });
+  // B-078 D10: My day's Work block is the report – the agent's own tasks.finish with alsoHandled (the demo engine runs the tool)
   const handled = 'Booked the room for the launch webinar';
-  await rpc.call('messages.send', { conversationId: notes.id, body: `Done [[tool:tasks.complete ${JSON.stringify({ taskId: finished.id, summary: 'The draft is in the chat', alsoHandled: [handled] })}]]` });
+  await rpc.call('messages.send', { conversationId: notes.id, body: `Done [[tool:tasks.finish ${JSON.stringify({ taskId: finished.id, status: 'done', summary: 'The draft is in the chat', alsoHandled: [handled] })}]]` });
   const now = Date.now();
   await rpc.call('calendar.add', { kind: 'event', text: 'Call with the tax advisor', startAt: now + 60 * 60_000, endAt: now + 90 * 60_000 });
 
@@ -181,44 +181,57 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
   await page.locator('.new-tab .new-tab-row', { hasText: 'My day' }).first().click();
   const panel = page.locator('.day-panel');
   await panel.waitFor();
-  const reportLine = panel.locator('.day-over .work-report-line', { hasText: handled });
-  await reportLine.waitFor({ timeout: 60_000 });
-  const heads = await panel.locator('.day-over .day-group-heading').allTextContents();
-  assert.ok(heads.includes('Chats that matter') && heads.includes('Work'), `blocks: ${heads}`);
-  assert.equal(await panel.locator('.day-over-row', { hasText: 'Launch plan' }).count(), 1, 'the chat with something waiting');
-  assert.equal(await panel.locator('.day-over-row', { hasText: 'Renew the domain' }).count(), 0, 'B-078 D10: no stuck rows on My day');
-  assert.match(await reportLine.getAttribute('title'), /^Write the launch note · /, 'the sentence names its task');
+  // 17.11.2026 (less on the page): the report and the money are one line "What the team did today · Open Work" (its
+  // sentences stay in Work), the chats that matter one line of at most three names.
+  const teamLine = panel.locator('.day-over-team');
+  await teamLine.waitFor({ timeout: 60_000 });
+  assert.match((await teamLine.textContent()) ?? '', /^What the team did today( · .+ spent)? · Open Work$/);
+  assert.equal(await panel.locator('.work-report-line').count(), 0, 'the report\'s sentences are Work\'s');
+  assert.equal(await panel.locator('.day-over .day-group-heading', { hasText: /^(Chats that matter|Work)$/ }).count(), 0, 'no blocks with headings for them');
+  const chatsLine = panel.locator('.day-over-chats');
+  await until('the chat with something waiting', async () => (await chatsLine.locator('.day-over-link', { hasText: 'Launch plan' }).count()) === 1);
+  assert.ok((await chatsLine.locator('.day-over-link').count()) <= 3, 'at most three chats');
+  const chatLinks = await chatsLine.locator('.day-over-link').count();
+  if (chatLinks > 1) assert.equal(await chatsLine.locator('span').filter({ hasText: /^, / }).count(), chatLinks - 1,
+    'chats are told apart by a comma – their names carry dots of their own ("Manager · Press")');
+  const nextTitle = ((await panel.locator('.day-next-title').first().textContent().catch(() => '')) ?? '').trim();
+  const aheadTitles = (await panel.locator('.day-over-event .day-over-title').allTextContents()).map((text) => text.trim());
+  assert.ok(!nextTitle || !aheadTitles.includes(nextTitle), `Ahead today does not name what the Next card names (${nextTitle} | ${aheadTitles.join(' | ')})`);
+  assert.equal(await panel.locator('.day-over-chats, .day-over-team', { hasText: 'Renew the domain' }).count(), 0, 'B-078 D10: no stuck rows on My day');
   assert.equal(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true, 'no sideways scroll');
   await shot('04-my-day-light');
-  await panel.locator('.day-over').last().scrollIntoViewIfNeeded();
+  await teamLine.scrollIntoViewIfNeeded();
   await shot('05-my-day-blocks-light');
   await scheme('dark'); await shot('06-my-day-blocks-dark'); await scheme('light');
   await go('#/day'); // at 640 x 480 the main zone takes the window
   await size(640, 480);
-  await page.locator('.day-view .day-over').last().scrollIntoViewIfNeeded();
+  await page.locator('.day-view .day-over-team').scrollIntoViewIfNeeded();
   await shot('07-my-day-640');
   await size(1280, 800);
 
   // ---- another day: the overview says what is now, so it stays out
   await go('#/day/2030-01-15');
   await page.locator('.day-view').waitFor();
-  await until('the overview gone on another day', async () => (await page.locator('.day-view .day-over').count()) === 0 && (await panel.locator('.day-over').count()) === 0);
+  const overview = '.day-over, .day-over-chats, .day-over-team';
+  await until('the overview gone on another day', async () => (await page.locator(`.day-view :is(${overview})`).count()) === 0 && (await panel.locator(overview).count()) === 0);
   await go('#/day');
-  await page.locator('.day-view .work-report-line').first().waitFor();
+  await page.locator('.day-view .day-over-team').waitFor();
   await shot('08-my-day-full');
 
   // ---- Open Work: the pane's Work tab, the chat stays
   await go(`#/chat/${chat.id}`);
-  await reportLine.waitFor();
+  await teamLine.waitFor();
   await panel.getByRole('button', { name: 'Open Work', exact: true }).click();
   await page.locator('.pane-work').waitFor();
   assert.equal(await shownTab(), 'work');
   assert.match(await page.evaluate(() => location.hash), new RegExp(chat.id), 'the main zone stays on the chat');
   await shot('09-work-tab');
 
-  // ---- a report sentence opens its task in its chat
+  // ---- a chat's name in the line opens that chat
   await page.locator('.browser-strip-tab[data-tab="day"]').click();
-  await reportLine.click();
+  const press = chatsLine.locator('.day-over-link', { hasText: 'Press' });
+  await press.waitFor();
+  await press.click();
   await until('the chat', async () => (await page.evaluate(() => location.hash)).includes(notes.id));
 
   // ---- a deleted chat's space leaves the file; the website tab closes through the watcher; the rest stays

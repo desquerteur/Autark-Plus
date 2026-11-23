@@ -1,17 +1,16 @@
 // The app's live state: what is really connected right now – first run, spaces, agents per space with their
 // managers, accounts, usable strong models, routing cost mode, linked PCs, paired phones/browsers,
-// chat bridges – returned by the read tool app.status (tools/builtin/app-status.ts; G1: was setup.status).
-// Manager-mode turns get a part of them in their volatile prompt (prompt-volatile.ts): '## Team and models (live)' –
-// the agents per space, the accounts, the usable strong models and the models that answer decisions and search by
-// meaning now, by name (usesLine, also models.list; B-072: was the stored "auto", which agents read as nothing chosen). E1 (01.11.2026):
-// the whole list under '## Setup (live)' in every manager turn (onboarding finished, spaces none yet, paid API fallback
-// off, phone access off, Telegram off …) read like a checklist of the app to work through: Codex took "Alles einrichten"
-// as configuring the app in every live test and named the off switches as reasons to ask. The rest stays one call away.
-// Every other mode gets the compact account line of context/environment.ts (B-047 D6), which reuses cleanLabel.
-// B-078 (D16): every agent's stable "My environment" also carries one models line (modelsFactsLine: price, smarts, plan/key/local).
+// chat bridges – returned by the read tool app.status (tools/builtin/app-status.ts; G1: was setup.status), one call away
+// for every agent; no turn carries them (E1, 01.11.2026: the list in every manager turn read like a checklist of the app
+// to work through). The models that answer decisions and search by meaning stand by name (usesLine, also models.list).
+// The live environment section (context/environment.ts) reuses cleanLabel and linkedPcs.
+// B-078 (D16): every agent's prompt also carries one models line (modelsFactsLine: price, smarts, plan/key/local) – since B-089
+// as a volatile section of its own (context/prompt-volatile.ts 'models'), so a catalog, price or account change renews no session.
 // Owns: collecting those facts from their services (each source in its own try/catch – a failing
 // source is left out, never fatal) and the compact renderings with their hard cap (SETUP_CAP).
-// Never: shows account emails, CLI homes, base URLs, secret ids, limit details or tokens, and
+// B-080: an account carries what holds it (accounts/plan-hold.ts): "at its limit until <time>" or "cooling until <time>" –
+// since 09.11.2026 each one its own, as every signed-in plan takes turns.
+// Never: shows account emails, CLI homes, base URLs, secret ids, limit percentages or tokens, and
 // never writes anything.
 
 import type { RuntimeServices } from '../contracts.ts';
@@ -29,19 +28,19 @@ import { helperModel } from '../routing/helper-default.ts';
 import { resolvePin } from '../routing/pins.ts';
 import { factsLine } from '../routing/model-facts.ts';
 import { LOCAL_EMBEDDING_NAME, LocalEmbedder } from '../vectors/local-model.ts';
+import { cleanLabel, holdState } from '../accounts/plan-hold.ts'; // B-080
+import { profileZone } from './time.ts';
 
 export const APP_STATUS_HEADER = '## App status (live)';
-/** The manager prompt's part of the facts (setupFactsSection). */
-export const TEAM_HEADER = '## Team and models (live)';
 /** Hard cap of the rendered section (header included). */
 export const SETUP_CAP = 1650;
-const EMAIL = /[^\s@<>()"',;]+@[^\s@<>()"',;]+\.[a-z]{2,}/gi;
 
 export interface SetupFacts {
   onboarding?: { completed: boolean };
   spaces?: Array<{ name: string; kind: Space['kind'] }>;
   agents?: { active: number; bySpace: Array<{ space: string; count: number; managers: string[] }> };
-  accounts?: Array<{ provider: ProviderId; label: string; state: AccountState; plan?: string }>;
+  /** B-080: `hold` – what holds a plan account (accounts/plan-hold.ts). */
+  accounts?: Array<{ provider: ProviderId; label: string; state: AccountState; plan?: string; hold?: string }>;
   models?: { strong: string[]; other: string[] };
   routing?: { costMode: string; paidFallback: boolean };
   /** What answers these two uses now, in words (useWords). */
@@ -52,13 +51,8 @@ export interface SetupFacts {
   bridges?: { telegram: number; byStatus: Partial<Record<BridgeStatus, number>> };
 }
 
-/** An account label without e-mail addresses (a label is free text; the email stays private). Also context/environment.ts. */
-export function cleanLabel(label: string, email?: string): string {
-  let out = label;
-  if (email?.trim()) out = out.split(email.trim()).join('');
-  out = out.replace(EMAIL, '').replace(/\s*[·(]\s*\)?\s*$/, '').trim();
-  return excerpt(out, 40) || 'unnamed';
-}
+/** An account label without e-mail addresses (accounts/plan-hold.ts); also context/environment.ts, accounts/relogin.ts, the accounts tools. */
+export { cleanLabel };
 
 /** What answers decisions and what searches by meaning now, each in a few words. */
 export interface UseWords { decision: string; embeddings: string }
@@ -92,12 +86,12 @@ function decisionWords(services: RuntimeServices): string {
 /** The embedding model vector.embed and vector.search use now (models/embeddings.ts). */
 function searchWords(services: RuntimeServices): string {
   const stored = useValue(services.settings.get().routing, 'embeddings');
-  if (stored === USE_OFF) return 'off';
+  if (stored === USE_OFF || stored === USE_AUTO) return 'off';
   const possible = quiet(() => new LocalEmbedder({ dataDir: services.paths.data }).possible(), false);
   const choice = embeddingChoice(services, possible);
   if (choice?.kind === 'local') return `${LOCAL_EMBEDDING_NAME} on this PC`;
   if (choice) return onAccount(services, choice.model, choice.accountId, choice.provider);
-  return stored === USE_AUTO ? 'no embedding model connected' : `${stored === USE_LOCAL ? LOCAL_EMBEDDING_NAME : stored} is not available now`;
+  return `${stored === USE_LOCAL ? LOCAL_EMBEDDING_NAME : stored} is not available now`;
 }
 
 /** Both, read now without a route (a turn's router can differ for a moment, routing/helper-default.ts helperModel). */
@@ -136,7 +130,7 @@ function modelFacts(services: RuntimeServices): NonNullable<SetupFacts['models']
 }
 
 /**
- * B-078 (D16): the models line of every agent's stable prompt ("My environment", context/environment.ts) – the connected
+ * B-078 (D16): the models line of every agent's prompt (B-089: the volatile section 'models', context/prompt-volatile.ts) – the connected
  * work models with list price, smarts and how a turn on each is paid (routing/model-facts.ts factsLine); '' when the catalog
  * cannot be read or nothing is connected. It changes only when connections or the priors change.
  */
@@ -166,13 +160,20 @@ export function collectSetupFacts(services: RuntimeServices): SetupFacts {
   read('onboarding', () => ({ completed: Boolean(services.settings.get().onboarding.completed) }));
   read('spaces', () => services.org.spaces().filter((space) => !space.archivedAt).map((space) => ({ name: space.name, kind: space.kind })));
   read('agents', () => agentFacts(services));
-  read('accounts', () => services.accounts.list().map((account) => {
-    const item: { provider: ProviderId; label: string; state: AccountState; plan?: string } = {
-      provider: account.provider, label: cleanLabel(account.label, account.email), state: account.enabled === false ? 'disabled' : account.state,
-    };
-    if (account.plan?.trim()) item.plan = excerpt(account.plan, 20);
-    return item;
-  }));
+  read('accounts', () => {
+    const list = services.accounts.list();
+    const now = quiet(() => services.clock.now(), Date.now());
+    const zone = profileZone(services);
+    return list.map((account) => {
+      const item: NonNullable<SetupFacts['accounts']>[number] = {
+        provider: account.provider, label: cleanLabel(account.label, account.email), state: account.enabled === false ? 'disabled' : account.state,
+      };
+      if (account.plan?.trim()) item.plan = excerpt(account.plan, 20);
+      const hold = holdState(account, now, zone);
+      if (hold) item.hold = hold;
+      return item;
+    });
+  });
   read('models', () => modelFacts(services));
   read('routing', () => {
     const routing = services.settings.get().routing;
@@ -221,9 +222,8 @@ function listLine(head: string, items: string[], budget: number, separator = ', 
 const name = (value: string) => excerpt(value, 32);
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-/** One "- " line per known fact, each within its own budget (the budgets, header and newlines sum below SETUP_CAP); `only`: these facts. */
-function lines(facts: SetupFacts, only?: ReadonlySet<keyof SetupFacts>): string[] {
-  if (only) facts = Object.fromEntries(Object.entries(facts).filter(([key]) => only.has(key as keyof SetupFacts))) as SetupFacts;
+/** One "- " line per known fact, each within its own budget (the budgets, header and newlines sum below SETUP_CAP). */
+function lines(facts: SetupFacts): string[] {
   const out: string[] = [];
   const add = (budget: number, line: string) => out.push(excerpt(`- ${line}`, budget));
   if (facts.onboarding) add(70, `First run: ${facts.onboarding.completed ? 'finished' : 'not finished'}`);
@@ -238,7 +238,7 @@ function lines(facts: SetupFacts, only?: ReadonlySet<keyof SetupFacts>): string[
     else out.push(listLine(`- Agents: ${facts.agents.active} active – `, facts.agents.bySpace.map((group) => `${name(group.space)} ${group.count}${managersOf(group.managers)}`), 230, ' · ', 'none'));
   }
   if (facts.accounts) {
-    const accounts = facts.accounts.map((account) => `${account.label} (${[account.provider, account.state, account.plan ? `plan ${account.plan}` : ''].filter(Boolean).join(', ')})`);
+    const accounts = facts.accounts.map((account) => `${account.label} (${[account.provider, account.state, account.plan ? `plan ${account.plan}` : '', account.hold ?? ''].filter(Boolean).join(', ')})`);
     out.push(listLine('- Accounts: ', accounts, 320, '; ', 'none connected'));
   }
   if (facts.models) {
@@ -271,17 +271,4 @@ function render(header: string, body: string[]): string {
 /** The '## App status (live)' text of app.status (≤ SETUP_CAP characters); '' when no source could be read. */
 export function renderSetupFacts(facts: SetupFacts): string {
   return render(APP_STATUS_HEADER, lines(facts));
-}
-
-/** The facts a manager's turn carries: the team, the accounts, the strong models and what answers decisions and search. */
-const TEAM_FACTS: ReadonlySet<keyof SetupFacts> = new Set(['agents', 'accounts', 'models', 'uses']);
-
-/** The '## Team and models (live)' part of the facts; '' when none of them could be read. */
-export function renderTeamFacts(facts: SetupFacts): string {
-  return render(TEAM_HEADER, lines(facts, TEAM_FACTS));
-}
-
-/** Collect + render the manager prompt's section in one call (prompt-volatile.ts). */
-export function setupFactsSection(services: RuntimeServices): string {
-  return renderTeamFacts(collectSetupFacts(services));
 }

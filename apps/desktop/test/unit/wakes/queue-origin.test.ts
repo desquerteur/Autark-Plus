@@ -12,6 +12,8 @@ import { WakeQueueImpl } from '../../../src/runtime/wakes/queue.ts';
 const T0 = Date.UTC(2026, 9, 29, 9, 0, 0);
 const MAIL = { source: 'app:ap_mail', label: 'New mail in office@example.com' };
 const NEWS = { source: 'news', label: 'Task news' };
+// A mail wake without a runtime-authored identity is read back as a legacy one: the app, no exact messages (mail-scope.ts).
+const LEGACY_MAIL = { ...MAIL, mailProvenance: { appId: 'ap_mail', messageIds: [] as string[] } };
 
 function setup() {
   const db = new Db(':memory:');
@@ -25,36 +27,42 @@ test('a wake keeps its origin; a wake without one has none', () => {
   wakes.wake({ agentId: 'ag_a', reason: 'event', note: 'Mail', origin: MAIL });
   wakes.wake({ agentId: 'ag_a', reason: 'message', conversationId: 'cv_1' });
   const [mail, chat] = [wakes.list('ag_a').find((w) => w.reason === 'event')!, wakes.list('ag_a').find((w) => w.reason === 'message')!];
-  assert.deepEqual(mail.origin, MAIL);
+  assert.deepEqual(mail.origin, LEGACY_MAIL);
   assert.equal('origin' in chat, false);
 });
 
-test('on a merge the older origin wins, like the chat; a later origin fills an empty one', () => {
+test('on a merge the older origin wins, like the chat; a mail wake never merges with other work', () => {
   const { wakes } = setup();
   wakes.wake({ agentId: 'ag_a', reason: 'event', coalesceKey: 'k', note: 'one', origin: MAIL });
   wakes.wake({ agentId: 'ag_a', reason: 'event', coalesceKey: 'k', note: 'two', origin: NEWS });
-  assert.equal(wakes.pending('ag_a'), 1);
-  assert.deepEqual(wakes.list('ag_a')[0].origin, MAIL);
-  assert.equal(wakes.list('ag_a')[0].note, 'one\n\ntwo');
-  wakes.wake({ agentId: 'ag_b', reason: 'task', taskId: 'tk_1', coalesceKey: 'k' });
-  wakes.wake({ agentId: 'ag_b', reason: 'task', taskId: 'tk_1', coalesceKey: 'k', origin: NEWS });
-  assert.deepEqual(wakes.list('ag_b')[0].origin, NEWS);
+  assert.equal(wakes.pending('ag_a'), 2, 'mail work stays in its own partition, apart from other work');
+  assert.deepEqual(wakes.list('ag_a').find((w) => w.note === 'one')!.origin, LEGACY_MAIL);
+  wakes.wake({ agentId: 'ag_a', reason: 'event', coalesceKey: 'k', note: 'three', origin: { source: 'app:ap_mail', label: 'New mail in office@example.com' } });
+  assert.equal(wakes.pending('ag_a'), 2, 'the same mail partition merges');
+  assert.equal(wakes.list('ag_a').find((w) => w.origin?.source === 'app:ap_mail')!.note, 'one\n\nthree');
+  wakes.wake({ agentId: 'ag_b', reason: 'event', coalesceKey: 'k', note: 'x', origin: NEWS });
+  wakes.wake({ agentId: 'ag_b', reason: 'event', coalesceKey: 'k', note: 'y', origin: { source: 'other', label: 'Other' } });
+  assert.equal(wakes.pending('ag_b'), 1);
+  assert.deepEqual(wakes.list('ag_b')[0].origin, NEWS, 'the older origin wins');
+  wakes.wake({ agentId: 'ag_c', reason: 'task', taskId: 'tk_1', coalesceKey: 'k' });
+  wakes.wake({ agentId: 'ag_c', reason: 'task', taskId: 'tk_1', coalesceKey: 'k', origin: NEWS });
+  assert.deepEqual(wakes.list('ag_c')[0].origin, NEWS, 'a later origin fills an empty one');
 });
 
 test('the origin survives claim, release (merged with a newer wake) and reconcile', () => {
   const { wakes } = setup();
   wakes.wake({ agentId: 'ag_a', reason: 'event', note: 'first', origin: MAIL });
   const [claimed] = wakes.claim('ag_a');
-  assert.deepEqual(claimed.origin, MAIL);
+  assert.deepEqual(claimed.origin, LEGACY_MAIL);
   wakes.wake({ agentId: 'ag_a', reason: 'event', note: 'second', origin: MAIL });
   wakes.release([claimed.id]);
   const [back] = wakes.list('ag_a');
   assert.equal(wakes.pending('ag_a'), 1);
-  assert.deepEqual(back.origin, MAIL);
+  assert.deepEqual(back.origin, LEGACY_MAIL);
   assert.equal(back.note, 'first\n\nsecond');
   wakes.claim('ag_a');
   assert.equal(wakes.reconcile(), 1);
-  assert.deepEqual(wakes.list('ag_a')[0].origin, MAIL);
+  assert.deepEqual(wakes.list('ag_a')[0].origin, LEGACY_MAIL);
 });
 
 test('chat-free, task-free wakes of two sources stay apart; chat and task wakes key as before', () => {
@@ -64,6 +72,9 @@ test('chat-free, task-free wakes of two sources stay apart; chat and task wakes 
   assert.equal(wakes.pending('ag_a'), 2);
   wakes.wake({ agentId: 'ag_b', reason: 'task', taskId: 'tk_1', origin: NEWS });
   wakes.wake({ agentId: 'ag_b', reason: 'task', taskId: 'tk_1', origin: MAIL });
-  assert.equal(wakes.pending('ag_b'), 1, 'a task wake keys by its task only');
-  assert.deepEqual(wakes.list('ag_b')[0].origin, NEWS);
+  assert.equal(wakes.pending('ag_b'), 2, 'a task wake keys by its task only – but mail work stays apart from it');
+  assert.deepEqual(wakes.list('ag_b').find((w) => w.origin?.source === 'news')!.origin, NEWS);
+  wakes.wake({ agentId: 'ag_c', reason: 'task', taskId: 'tk_1', origin: NEWS });
+  wakes.wake({ agentId: 'ag_c', reason: 'task', taskId: 'tk_1', origin: { source: 'other', label: 'Other' } });
+  assert.equal(wakes.pending('ag_c'), 1, 'two non-mail wakes of a task still merge');
 });

@@ -14,6 +14,9 @@
 ; Only for an install for the current user: that installer runs without elevation, so Exec starts the app as the
 ; person. An install for all users runs elevated; a plain Exec would start the app elevated too, so there StartApp's
 ; ExecShellAsUser (non-elevated, the person's own start) stays the only relaunch.
+; Broker: hash-addressed ProgramFiles service, no service start/stop in the user updater.
+; A legacy service (image in the app folder) is moved into the protected store before any file is replaced (one prompt).
+; Interactive install/app launch reconciles the broker; silent protected updates defer reconciliation.
 !macro customInstall
   StrCpy $launchLink "$appExe"
   !ifdef isForceRun & isUpdated
@@ -31,6 +34,11 @@
     nsExec::Exec '"$SYSDIR\ie4uinit.exe" -show'
     Pop $0
   ${EndIf}
+  ; Reconcile changed broker bits explicitly with UAC; silent setup defers this to interactive app start.
+  ${IfNot} ${Silent}
+    !insertmacro brokerPowerShell $0
+    ExecShellWait "" "$0" '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\app.asar.unpacked\resources\broker\install.ps1" -AppExe "$appExe"' SW_HIDE
+  ${EndIf}
 !macroend
 
 ; B-078: the check for a running app, fast and without PowerShell (electron-builder's default starts PowerShell and
@@ -45,10 +53,79 @@
 ;     (passes 0-1), then /F; a silent run without --updated skips the box.
 ; Eight passes after the first kill, a Retry/Cancel box; a silent update answers Cancel and leaves the old version.
 ; Other companies and the engines' Autark-as-node processes share the image name and end too, as before.
+; The 64-bit PowerShell: the installer is a 32-bit program, whose $SYSDIR is SysWOW64, and a 32-bit install.ps1 would
+; name "Program Files (x86)" as the broker's store, which the check below does not accept.
+!macro brokerPowerShell _VAR
+  ${If} ${FileExists} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    StrCpy ${_VAR} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  ${Else}
+    StrCpy ${_VAR} "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+!macroend
+
+; A legacy broker service moved into the protected store by this package's own install.ps1 and broker, unpacked into
+; the installer's temp folder (install.ps1 asks Windows for elevation itself, keeps the service's user and key, and puts
+; the old image back when a step fails); $R0 is its exit code. The uninstaller carries no copy (it answers 2).
+!ifmacrondef brokerMoveLegacy
+!macro brokerMoveLegacy
+  !ifdef BUILD_UNINSTALLER
+    StrCpy $R0 2
+  !else
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\install.ps1" "${PROJECT_DIR}\resources\broker\install.ps1"
+    File "/oname=$PLUGINSDIR\AutarkDesktopBroker.exe" "${PROJECT_DIR}\resources\broker\AutarkDesktopBroker.exe"
+    !insertmacro brokerPowerShell $R0
+    nsExec::Exec '"$R0" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\install.ps1" -AppExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+    Pop $R0
+  !endif
+!macroend
+!endif
+
 !macro customCheckAppRunning
   Push $R0
   Push $R1
   Push $R2
+  ; The NEW setup carries this check. A legacy/unknown service is moved BEFORE file replacement (below); an image in
+  ; the app tree is never started again.
+  ; B-084 (0.3.5 release): read the service's ImagePath from the registry (no script host, so a PC without the broker
+  ; updates as fast as before; resources/broker/preflight.ps1 holds the same rule for install.ps1). A service whose
+  ; image is not under "<Program Files>\AutarkDesktopBroker\" is a legacy one.
+  !ifndef BROKER_SERVICE_KEY
+    !define BROKER_SERVICE_KEY "SYSTEM\CurrentControlSet\Services\AutarkDesktopBroker"
+  !endif
+  StrCpy $R0 0
+  ReadRegStr $R1 HKLM "${BROKER_SERVICE_KEY}" "ImagePath"
+  ${If} $R1 != ""
+    StrCpy $R2 '"$PROGRAMFILES64\AutarkDesktopBroker\'
+    StrLen $R0 $R2
+    StrCpy $R1 $R1 $R0
+    StrCpy $R0 0
+    ${If} $R1 != $R2
+      StrCpy $R0 2
+    ${EndIf}
+  ${EndIf}
+  ; 14.11.2026: a legacy service (0.3.4 asked for it at start) runs its worker as SYSTEM from the app folder, which
+  ; holds that file and restarts the worker when it is ended: no installer could replace the files ("cannot be closed"),
+  ; and the person could not end it in Task Manager. The installer moves it itself, once, with one Windows prompt: this
+  ; package's own install.ps1 and broker (brokerMoveLegacy) put it into the protected store under Program Files.
+  ${DoWhile} $R0 != 0
+    !insertmacro brokerMoveLegacy
+    ReadRegStr $R1 HKLM "${BROKER_SERVICE_KEY}" "ImagePath"
+    StrCpy $R2 '"$PROGRAMFILES64\AutarkDesktopBroker\'
+    StrLen $R0 $R2
+    StrCpy $R1 $R1 $R0
+    StrCpy $R0 0
+    ${If} $R1 != $R2
+      StrCpy $R0 2
+      StrCpy $R1 cancel
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME}'s desktop helper still runs from the app folder, so its files cannot be replaced. Click Retry and allow the Windows prompt to move it." /SD IDCANCEL IDCANCEL +2
+      StrCpy $R1 retry
+      ${If} $R1 == cancel
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
   StrCpy $R1 0
   StrCpy $R2 0
   ${If} ${isUpdated}
@@ -143,6 +220,27 @@
 ; %APPDATA%, also for an install for all users) has its own task "<product> <id> Launcher (<user>)".
 !macro customUnInstall
   ${ifNot} ${isUpdated}
+    ; Remove the service before app files disappear. Silent uninstall cannot answer a required UAC prompt.
+    nsExec::Exec '"$SYSDIR\sc.exe" query AutarkDesktopBroker'
+    Pop $0
+    ${If} $0 == 0
+      ${If} ${Silent}
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+      !insertmacro brokerPowerShell $0
+      nsExec::Exec '"$0" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\app.asar.unpacked\resources\broker\install.ps1" -Uninstall'
+      Pop $0
+      ${If} $0 != 0
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Desktop broker removal failed or was cancelled. App files are retained."
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+    ${ElseIf} $0 != 1060
+      ; sc query returns 1060 when absent; unknown state is not evidence of absence.
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
     ExpandEnvStrings $0 "%USERNAME%"
     nsExec::Exec 'schtasks /Delete /TN "${PRODUCT_NAME} Launcher ($0)" /F'
     Pop $1

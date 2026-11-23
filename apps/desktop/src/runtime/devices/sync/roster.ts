@@ -9,6 +9,8 @@
 // (my other PC: one group instead of pairs; my employer's PC: this PC becomes the same employee there), a phone as a
 // client row with its tokens, so it opens here too. A removal wins over an older pairing, and a pairing after the
 // removal wins over it. What changed here goes on to my other PCs; the per-PC hash stops the echo.
+// B-084: it also carries my person code's tree (remote/code.ts), so a PC joined through any of my PCs answers for the same
+// code; two codes converge by its rank rule. Never over employer/employee links: there each person keeps their own code.
 // Introductions over employer/employee links ('device.sibling', with their removals) live in siblings.ts; this class
 // wires them to link-ups and removals.
 // Owns: the roster unit and its merge. Never: links a PC the sender did not already trust, sends it over any other
@@ -16,6 +18,7 @@
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import type { RuntimeServices } from '../../contracts.ts';
+import { codeFor, type Tree } from '../../remote/code.ts';
 import { KvRepo } from '../../store/kv.ts';
 import { fingerprintOf, fromB64url } from '../keys.ts';
 import type { DeviceMesh, LinkKind } from '../mesh.ts';
@@ -37,7 +40,8 @@ export interface RosterDevice {
   personId?: string; joinedAs?: 'ceo' | 'employee'; pairedAt?: number; revokedAt?: number;
 }
 export interface RosterToken { deviceId: string; kind: 'device' | 'person'; hash: string; scope: string; name?: string; createdAt: number; expiresAt?: number; revokedAt?: number }
-export interface Roster { v: 1; devices: RosterDevice[]; tokens: RosterToken[]; subs: HeldSub[]; keys: KeyPair[]; vapid?: string }
+/** `code`: my person code's tree (remote/code.ts; B-084), so every own PC answers for the same Remote ID. */
+export interface Roster { v: 1; devices: RosterDevice[]; tokens: RosterToken[]; subs: HeldSub[]; keys: KeyPair[]; vapid?: string; code?: Tree }
 
 export type RosterMesh = Pick<DeviceMesh, 'add' | 'revoke' | 'selfInfo'> & { register(method: string, handler: (params: unknown, from: string) => Promise<unknown>, kinds?: readonly LinkKind[]): void };
 
@@ -119,10 +123,20 @@ export class RosterSync {
     }));
     const own = await ownKey(this.s);
     const held = await heldKeys(this.s);
+    const code = this.code();
     return {
       v: 1, devices, tokens, subs: [...(own ? localSubs(this.s.db, own.pub, this.s.clock.now()) : []), ...heldSubs(this.s.db)],
       keys: [...(own ? [own] : []), ...[...held].map(([pub, priv]) => ({ pub, priv }))], ...(own ? { vapid: own.pub } : {}),
+      ...(code ? { code: code.tree() } : {}),
     };
+  }
+
+  /** My person code, read again (a removed PC drops out) and with every own PC of mine signed in (remote/code.ts). */
+  private code() {
+    const code = codeFor(fingerprintOf(fromB64url(this.mesh.selfInfo().pub)));
+    code?.refresh();
+    code?.signMissing(links(this.s.db).filter(({ link }) => link.kind === 'ceo').map(({ record }) => record.publicKey).filter((pub): pub is string => Boolean(pub)));
+    return code;
   }
 
   private later(): void {
@@ -162,6 +176,7 @@ export class RosterSync {
     const keys = (Array.isArray(roster.keys) ? roster.keys : []).filter((key): key is KeyPair => typeof key?.pub === 'string' && typeof key.priv === 'string');
     if (await keepKeys(this.s, keys, own)) changed++;
     changed += this.subs(Array.isArray(roster.subs) ? roster.subs : [], own, typeof roster.vapid === 'string' ? roster.vapid : undefined);
+    if (roster.code !== undefined && this.code()?.take(roster.code, new DevicesRepo(this.s.db).get(from)?.publicKey)) changed++;
     if (changed) this.later();
     await this.introduce();
     return { ok: true, changed };

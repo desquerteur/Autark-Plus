@@ -4,10 +4,8 @@
 // the list or its content changes size (a side panel opening, an image loading).
 // Bursts of status lines collapse into one expandable line; a jump to a line inside a collapsed
 // burst lands on the burst. The "New messages" divider sits before the first new message since the
-// start ChatView captured; "↓ N new" counts new messages below the visible part and goes to the newest. D5: live work
-// (B-075: the chat's rows that still stream, each with its run's live values, and running split groups) always
-// renders after all rows (PendingWork, ordered by start) – the newest activity is at the bottom –,
-// and each finished run's line "Worked … · N steps" sits on one message only (message-rows.ts runLineIds).
+// start ChatView captured; "↓ N new" counts new messages below the visible part and goes to the newest.
+// 13.11.2026: only real messages – who works shows in the live bar above the composer (LiveBar.tsx), never here.
 // Owns: windowing, scroll anchoring, the divider's place and the pill count.
 // Never: message markup (MessageItem), the grouping into rows (message-rows.ts) or what counts as new (catch-up.ts).
 
@@ -18,9 +16,8 @@ import { focusMessage } from '../lib/shell-state.ts';
 import { Spinner } from '../lib/ui.tsx';
 import { MessageItem, StatusGroup } from './MessageItem.tsx';
 import { catchUp, isNew, type CatchUpStart } from './catch-up.ts';
-import { burstLineFor, groupRows, isLiveWork, liveRunIds, rowHas, runLineIds, type Row } from './message-rows.ts';
+import { burstLineFor, groupRows, rowHas, type Row } from './message-rows.ts';
 import { NewPill, UnreadDivider } from './UnreadDivider.tsx';
-import { PendingWork } from './WorkingMessage.tsx';
 import { CallTranscript } from './call/CallTranscript.tsx';
 
 const WINDOW = 80; // rendered messages initially
@@ -52,7 +49,6 @@ export function MessageList(props: { conversationId: string; loading: boolean; s
   const start = Math.max(0, list.length - windowSize);
   const visible = list.slice(start);
   const rows = groupRows(visible);
-  const runLines = runLineIds(visible, liveRunIds(list)); // D5: one "Worked …" line per run (B-075: a run still streaming has its block instead)
   const lastSeq = list.length ? list[list.length - 1].seq : 0;
   const info = catchUp(list, props.start);
 
@@ -174,14 +170,12 @@ export function MessageList(props: { conversationId: string; loading: boolean; s
 
   const nodes: VNode[] = [];
   const divider = () => <UnreadDivider key="unread-divider" count={info!.count} />;
-  // The first new message may be a run's answer still being written: its live block is below every row.
-  const dividerAtLive = Boolean(info) && visible.some((message) => message.id === info!.dividerBefore && isLiveWork(message));
   for (const row of rows) {
     if (info && rowHas(row, info.dividerBefore)) nodes.push(divider());
     nodes.push(row.kind === 'call'
-      ? <CallTranscript key={row.callId} messages={row.messages} runLines={runLines} />
+      ? <CallTranscript key={row.callId} messages={row.messages} />
       : row.kind === 'message'
-      ? <MessageItem key={row.message.id} message={row.message} runLine={runLines.has(row.message.id)} />
+      ? <MessageItem key={row.message.id} message={row.message} />
       : <StatusGroup key={row.messages[0].id} messages={row.messages} />);
   }
 
@@ -191,8 +185,6 @@ export function MessageList(props: { conversationId: string; loading: boolean; s
         {loadingOlder && <div class="older-loading"><Spinner size={14} /></div>}
         {props.loading && <div class="older-loading"><Spinner size={16} /></div>}
         {nodes}
-        {dividerAtLive && divider()}
-        <PendingWork conversationId={conversationId} messages={list} />
         <NewPill count={below} onClick={toNewest} />
       </div>
     </div>

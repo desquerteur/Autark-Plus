@@ -17,6 +17,10 @@ export const TITLE_BAR_HEIGHT = 48;
  *  that holds the controls (styles/mobile.css). */
 export type TitleBarLayout = 'columns' | 'compact';
 
+/** The feedback shortcut's key going down or up (shared/api/workspace-browser-keys.ts FeedbackKey: auto-repeats never
+ *  arrive) – the feedback cell's press from the keyboard: short opens the snapshot, held is talk (ui/feedback/press.ts). */
+export type FeedbackKeyStep = 'down' | 'up';
+
 /** window.postMessage payload the preload uses to hand the runtime port to the page. */
 export const PORT_MESSAGE = 'workforce-port';
 
@@ -49,6 +53,8 @@ export const IPC = {
   openExternal: 'shell:open-external',
   navigate: 'app:navigate', // main → renderer (notification click)
   titleBarLayout: 'window:title-bar-layout', // renderer → main (send): TitleBarLayout, on change
+  titleBarDim: 'window:title-bar-dim', // renderer → main (send): boolean, on change – a modal's backdrop dims the window (main/title-bar.ts dimmedColors)
+  feedbackKey: 'feedback:key', // main → renderer: FeedbackKeyStep – Ctrl+Shift+F (Cmd on macOS) pressed or released anywhere in the window
   online: 'app:online', // renderer → main (send): the window's navigator 'online' event; main pushes host power 'online' (B-044)
 } as const;
 
@@ -68,7 +74,8 @@ export type PickKind = 'files' | 'folder' | 'images' | 'audio' | 'video';
 /** What a picked folder is for – main chooses the dialog's title and button from it (Settings › About: the backup to restore). */
 export type FolderPurpose = 'backup' | 'restore' | 'chats' | 'agent' | 'project'; // AF-014 'agent': the folder an agent works in; AF-018 'project': a folder to add as a project
 
-export interface NavigateRequest { conversationId?: string; taskId?: string; /** AF-014: the Explorer asked for an agent from this folder. */ agentFromFolder?: string }
+/** Where the app window opens: a chat or a task; `call` (the floating to-do button, owner 18.11.2026) starts the chat's call there. */
+export interface NavigateRequest { conversationId?: string; taskId?: string; call?: true; /** AF-014: the Explorer asked for an agent from this folder. */ agentFromFolder?: string }
 
 /**
  * `window.workforce` (desktop only; the PWA has no such object).
@@ -95,6 +102,12 @@ export interface WorkforceDesktopApi {
   titleBarHeight: number;
   /** Reports the UI's layout so the caption controls match its header row (send on change). */
   setTitleBarLayout?(layout: TitleBarLayout): void;
+  /** A modal dialog's backdrop dims the window (true) or none is open (false): the caption controls take the dimmed
+   *  colors, so they never stay bright over a dark window (send on change). */
+  setTitleBarDim?(dim: boolean): void;
+  /** The feedback shortcut (Ctrl+Shift+F, Cmd+Shift+F on macOS) went down or up – in the app's page or a side browser
+   *  page (main reads it in before-input-event; the page never gets it). */
+  onFeedbackKey?(listener: (step: FeedbackKeyStep) => void): () => void;
   /** Asks main for a fresh runtime port; resolves once the port was posted to the page. */
   connect(): Promise<void>;
   onRuntime(listener: (status: RuntimeStatus) => void): () => void;

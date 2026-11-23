@@ -6,16 +6,34 @@
 // (recorded, uploaded, voice.transcribe) where it gives text (dictationNote is empty).
 // B-055: the header cell's talk (press.ts recognizes the hold) drives a DictationButton through
 // beginHold/endHold; the window shot includes the side browser (main/capture.ts composites it).
+// Feedback 16.11.2026: the Android app (0.3.15+) takes the shot of its own window over the port
+// (native-port.ts requestNativeShot, at most 2 s); the iPhone web app and a browser offer the picker
+// ("Add photo"). The feedback dictation also keeps its voice (recording.ts recordingDictation, while
+// "Recording" is on): the take's recording joins the draft before its words are heard, so a take that
+// could not be transcribed still reaches the report.
 // Owns: the screenshot and picked-image helpers and the dictation button. Never: uploads anything
-// (the panel does, on its action button), records or sends audio itself – only text comes back.
+// (the panel does, on its action button) or sends audio itself.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { bridge } from '../lib/platform.ts';
 import { DictationCancelled, dictation, dictationNote } from '../lib/dictation.ts';
+import { hasNativePort, requestNativeShot } from '../pwa/native-port.ts';
+import { androidShell, versionAtLeast } from './client.ts';
+import { addRecording, feedbackDraft } from './draft.ts'; // a cycle (draft.ts takes the capture from here): a function and a signal read in calls
 import { HOLD_MS } from './press.ts';
+import { feedbackRecorder, recordingDictation } from './recording.ts';
+
+/** The first Android app that answers {t:'shot'} (older ones would only let the request time out). */
+export const NATIVE_SHOT_SINCE = '0.3.15';
+
+/** The Android app can take the shot of its window (its port is here and it is new enough). */
+export function nativeShotHere(userAgent: string = typeof navigator === 'undefined' ? '' : navigator.userAgent): boolean {
+  return hasNativePort() && versionAtLeast(androidShell(userAgent)?.version, NATIVE_SHOT_SINCE);
+}
 
 /** Takes a screenshot of the app window if the host can; null otherwise. */
 export async function captureWindow(): Promise<string | null> {
+  if (!bridge && nativeShotHere()) return requestNativeShot();
   try {
     return (await bridge?.capture.window()) || null;
   } catch {
@@ -23,9 +41,9 @@ export async function captureWindow(): Promise<string | null> {
   }
 }
 
-/** True when this host can screenshot the app window itself (desktop); else the panel offers a picker. */
+/** True when this host can screenshot the app window itself (desktop, the Android app); else the panel offers a picker. */
 export function canCaptureWindow(): boolean {
-  return typeof bridge?.capture?.window === 'function';
+  return typeof bridge?.capture?.window === 'function' || nativeShotHere();
 }
 
 /** Longest side of a picked image after scaling (enough to read a phone screenshot). */
@@ -103,11 +121,19 @@ export interface ButtonDictation {
   cancel(): void;
 }
 
-const pageButton: ButtonDictation = {
-  start: (onEnded) => dictation.start(() => onEnded()),
-  finish: async (language) => (await dictation.finish(language, { attachable: false })).text, // only text comes back
+/** The feedback mics' dictation: the page's words and, while "Recording" is on, the same take's voice (recording.ts). */
+const pageButton: ButtonDictation = recordingDictation({
+  start: (onEnded) => dictation.start(onEnded),
+  get stream() { return dictation.stream; },
+  finish: (language) => dictation.finish(language, { attachable: false }), // text; the voice comes from the recorder
   cancel: () => dictation.cancel(),
-};
+}, {
+  wanted: () => feedbackDraft.peek().withAudio,
+  begin: (stream) => feedbackRecorder.begin(stream),
+  keep: () => feedbackRecorder.keep(),
+  cancel: () => feedbackRecorder.cancel(),
+  add: addRecording,
+});
 
 /** The panel can dictate to text here now (reactive). */
 export function panelDictationAvailable(): boolean {

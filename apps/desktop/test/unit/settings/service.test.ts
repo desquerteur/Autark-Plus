@@ -26,7 +26,7 @@ test('defaults cover the full Settings shape with the confirmed values', () => {
   assert.deepEqual([s.onboarding.tour, s.onboarding.tourStep, s.onboarding.hints], ['new', '', []]); // AF-002: the tour not shown yet
   assert.equal(s.routing.work, 'auto');
   assert.equal(s.profile.timezone, 'Europe/Berlin');
-  assert.equal(s.profile.language, 'de');
+  assert.equal(s.profile.language, 'en'); // owner 18.11.2026: English on every PC
   assert.deepEqual(s.notifications.pushFor, ['todo', 'blocker', 'important']);
   assert.equal(s.preferences.sidebarWidth, 288);
   assert.equal(s.preferences.closeToTray, true);
@@ -68,6 +68,18 @@ test('null clears optional keys; arrays replace', () => {
   assert.deepEqual(settings.get().notifications.pushFor, ['todo']);
   settings.update({ notifications: { quietHours: null as never } });
   assert.equal(settings.get().notifications.quietHours, undefined);
+});
+
+test('null sets a key that has a default back to it, as settings.json and a restart do (profile.forEveryAgent)', () => {
+  const { settings } = setup();
+  const robot = settings.get().profile.forEveryAgent;
+  assert.ok(robot);
+  settings.update({ profile: { forEveryAgent: 'I answer in German.' } });
+  assert.equal(settings.update({ profile: { forEveryAgent: null as never } }).profile.forEveryAgent, robot, 'the default, not nothing');
+  assert.equal(settings.get().profile.forEveryAgent, robot);
+  assert.equal(settings.update({ profile: { pcAccess: null as never } }).profile.pcAccess, undefined, 'a key without a default is removed');
+  assert.deepEqual(deepMerge({ a: 1, b: { c: 2 } }, { a: null, b: { c: null } }, { a: 5, b: {} }), { a: 5, b: {} });
+  assert.deepEqual(deepMerge({ toString: 1 }, { toString: null }, {}), {}, 'only the defaults\' own keys');
 });
 
 test('B-044: preferences.suggestChanges is gone (the X04 suggestions were removed) – a patch naming it is refused', () => {

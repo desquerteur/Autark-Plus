@@ -1,15 +1,17 @@
 // B-044 engine stall watchdog (agents/stall-watch.ts, agents/turn-attempt.ts): an engine quiet for
 // 10 min (45 min while a tool call runs) is cut and the attempt ends 'unavailable' ("The engine stopped
 // responding.") – an account failure, so failover applies; events and call ends restart the quiet time;
-// the turn's own abort wins (no stall).
+// the turn's own abort wins (no stall). B-080: the cut names how long the engine was silent (quietMs); a stall is our own
+// engine process, so the account does not cool (accounts/failure.ts).
 // Owns: these assertions only. Never: real engines or real waiting (fake timers, a manual clock).
 
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { ManualClock } from '../../../src/runtime/system/clock.ts';
-import { STALL_IDLE_MS, STALL_MESSAGE, STALL_TOOL_MS, StallWatch, type StallTimers } from '../../../src/runtime/agents/stall-watch.ts';
+import { STALL_IDLE_MS, STALL_MESSAGE, STALL_TOOL_MS, StallWatch, stallError, type StallTimers } from '../../../src/runtime/agents/stall-watch.ts';
 import { canFailover, runAttempt } from '../../../src/runtime/agents/turn-attempt.ts';
-import { accountFailure } from '../../../src/runtime/accounts/failure.ts';
+import { accountFailure, recordAccountFailure } from '../../../src/runtime/accounts/failure.ts';
+import { account } from '../models/harness.ts';
 import { WorkforceError } from '../../../src/shared/errors.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import type { TurnPlan } from '../../../src/runtime/agents/turn-types.ts';
@@ -150,4 +152,23 @@ test('runAttempt: the person\'s Stop stays an interrupt, never a stall', async (
   });
   const result = await runAttempt(h.services, plan, h.routed(), h.request({ signal: stop.signal }), undefined);
   assert.equal(result.result.stop, 'interrupted');
+});
+
+test('B-080: the cut names how long the engine was silent – 70 min of activity, then 10 min of silence is 10 min, not 80', () => {
+  const { watch, run } = rig();
+  watch.start();
+  for (let minute = 0; minute < 70; minute++) { run(MINUTE); watch.activity(); }
+  assert.equal(watch.quietMs, undefined, 'no cut yet');
+  run(STALL_IDLE_MS);
+  assert.equal(watch.stalled, true);
+  assert.equal(watch.quietMs, STALL_IDLE_MS);
+});
+
+test('B-080: a stall is our own engine process – the turn may fail over once, the account stays usable', () => {
+  let cooled = false;
+  const accounts = { get: () => undefined, markLimited: () => { cooled = true; }, markUnavailable: () => { cooled = true; return true; } };
+  const result = { text: '', stop: 'error' as const, error: stallError() };
+  assert.equal(recordAccountFailure({ accounts: accounts as never, clock: new ManualClock(0) }, account('acc_claude', 'claude'), 'claude-opus-5-5', result), 'overload');
+  assert.equal(cooled, false, 'no cooling for any agent');
+  assert.equal(canFailover({ result, streamed: '', reasoning: '', toolCalls: 0, usage: { inputTokens: 0, outputTokens: 0 }, ms: 1 }, new AbortController().signal), true);
 });

@@ -1,5 +1,5 @@
-// B-049 F9 – Codex code mode over a scripted app-server: an agent thread/start asks for raw Responses items
-// (experimentalRawEvents; never on thread/resume or a helper thread; a refusal is remembered per server process); the
+// Codex code mode over a scripted app-server: an agent thread/start asks for raw Responses items
+// (experimentalRawEvents; never on thread/resume or a helper thread); the
 // turn's raw exec call becomes a native tool_start/tool_end (the printed text with its header as output), a wait call
 // too; calls made inside a script ("exec-" ids – ours and Codex's own) are marked nested with the open script as parent;
 // raw items of an injection or of another tool are ignored (no duplicates); a script still open at the end ends with
@@ -10,8 +10,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexEngine } from '../../../src/runtime/engines/codex/engine.ts';
 import { CodeCalls, codeOutputText, hostMissingText } from '../../../src/runtime/engines/code-mode.ts';
-import { openAgentThread } from '../../../src/runtime/engines/codex/helper-thread.ts';
-import { RpcError } from '../../../src/runtime/engines/codex/rpc.ts';
 import type { EngineEvent } from '../../../src/runtime/engines/types.ts';
 import { account, fakeFinder, fakeSpawn, testSupervisor, turnInput, type FakeChild } from './fakes.ts';
 
@@ -73,34 +71,6 @@ test('an agent thread/start asks for raw items; resume and helper threads do not
   await e.run(turnInput({ runId: 'run_3', tools: [] }).input);
   assert.equal('experimentalRawEvents' in fake.sent('thread/start')[1].params, false, 'a helper thread needs none');
   await e.dispose();
-});
-
-test('a Codex that refuses experimentalRawEvents opens the lean thread without it, remembered per server process', async () => {
-  const fake = appServer({ refuseRaw: true });
-  const e = engineOf(fake.spawn);
-  assert.equal((await e.run(turnInput({ runId: 'run_1' }).input)).stop, 'done');
-  const starts = fake.sent('thread/start');
-  assert.deepEqual(starts.map((s) => [Boolean(s.params.experimentalRawEvents), s.params.config?.include_environment_context === false]), [[true, true], [true, false], [false, true]],
-    'lean+raw, today\'s+raw (both refused), then lean without the field');
-  await e.run(turnInput({ runId: 'run_2', input: [{ type: 'text', text: 'again' }] }).input);
-  assert.equal(fake.sent('thread/start').length, 4, 'the next thread goes straight to the lean thread without the field');
-  assert.equal('experimentalRawEvents' in fake.sent('thread/start')[3].params, false);
-  assert.equal(fake.sent('thread/start')[3].params.config.include_environment_context, false, 'still lean');
-  await e.dispose();
-});
-
-test('openAgentThread: a lean refusal alone keeps the field; a timeout never falls back', async () => {
-  const sent: any[] = [];
-  const leanRefused = { request: async (_m: string, params: any) => { sent.push(params); if (params.config?.include_environment_context === false) throw new RpcError(-32602, 'unknown variant'); return { thread: { id: 't' } }; } };
-  const lean = new Set<string>();
-  const rawSet = new Set<string>();
-  await openAgentThread(leanRefused as any, 'thread/start', { cwd: '/w' }, lean, 'acc', rawSet);
-  assert.deepEqual(sent.map((p) => Boolean(p.experimentalRawEvents)), [true, true]);
-  assert.ok(lean.has('acc'), 'the lean settings are remembered as refused');
-  assert.equal(rawSet.size, 0, 'the field was not the problem');
-  const timeout = { request: async () => { throw new RpcError(-32000, 'codex did not answer'); } };
-  await assert.rejects(openAgentThread(timeout as any, 'thread/start', { cwd: '/w' }, new Set(), 'acc', rawSet), /did not answer/);
-  assert.equal(rawSet.size, 0);
 });
 
 test('a raw exec call becomes a native tool call; calls inside it are nested under it; injections and other raw items are ignored', async () => {

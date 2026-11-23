@@ -1,8 +1,8 @@
-// Migration 93 (official 0.3.5): a task carries its files itself (tasks.files, JSON list of attachments) – the files of
-// quick tasks move there from kv 'task_quick_post' (tasks/quick.ts quickFiles), whose rows then go.
-// Taken over unchanged from the official Autark 0.3.5 (teydra/OpenAutark, Apache-2.0, release build of 09.11.2026),
-// whose public source stopped at 091: a profile that official build migrated must open in this fork (AF-022).
-// Owns: this column and that move. Never: edits of shipped migrations.
+// Migration 93 (08.11.2026, B-080 F5): a task keeps the files it was posted with in its own row – `files`, JSON in the
+// shape of messages.attachments ([] = none). A quick task has no anchor message to carry them, and the per-PC kv
+// namespace 'task_quick_post' they lived in never reached the person's other PCs (live 05.11.: a dictated task kept
+// only its file's name). Each quick task's files there are copied into its row; then that namespace goes.
+// Owns: this column and that one copy. Never: other kv rows, or edits of shipped migrations.
 
 export const sql = /* sql */ `
 ALTER TABLE tasks ADD COLUMN files TEXT NOT NULL DEFAULT '[]';

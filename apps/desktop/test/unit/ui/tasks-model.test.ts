@@ -18,7 +18,7 @@ function task(patch: Partial<TaskView> = {}): TaskView {
   seq++;
   return {
     id: patch.id ?? `task_${seq}`, conversationId: 'ch_a', title: `Task ${seq}`, notes: '', status: 'open', assigneeKind: 'team',
-    createdBy: 'human', priority: 0, ledger: {}, attempts: 0, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
+    createdBy: 'human', priority: 0, ledger: {}, sort: seq, rev: 1, createdAt: NOW - 1000 * seq, updatedAt: NOW,
     steps: [], progress: { done: 0, total: 0 }, conversationTitle: 'Alpha', running: false,
     ...patch,
   };
@@ -87,16 +87,16 @@ test('recentDone: top-level finished inside the window, newest first', () => {
   const recent = task({ status: 'done', completedAt: NOW - DAY_MS });
   const newer = task({ status: 'done', completedAt: NOW - 1000 });
   const old = task({ status: 'done', completedAt: NOW - 5 * DAY_MS });
-  const cancelled = task({ status: 'cancelled', completedAt: NOW - 1000 });
+  const cancelled = task({ status: 'dropped', completedAt: NOW - 1000 });
   const stepDone = task({ status: 'done', completedAt: NOW, parentId: 'task_x' });
   assert.deepEqual(recentDone([recent, old, newer, cancelled, stepDone], NOW, 3).map((t) => t.id), [newer.id, recent.id]);
-  assert.deepEqual(recentDone([recent, cancelled], NOW, 3, ['done', 'cancelled']).map((t) => t.id), [cancelled.id, recent.id]);
+  assert.deepEqual(recentDone([recent, cancelled], NOW, 3, ['done', 'dropped']).map((t) => t.id), [cancelled.id, recent.id]);
 });
 
 test('steps: only human steps toggle; order and progress stay consistent', () => {
   assert.equal(canToggleStep({ assigneeKind: 'human', status: 'open' }), true);
   assert.equal(canToggleStep({ assigneeKind: 'agent', status: 'open' }), false);
-  assert.equal(canToggleStep({ assigneeKind: 'human', status: 'cancelled' }), false);
+  assert.equal(canToggleStep({ assigneeKind: 'human', status: 'dropped' }), false);
   const first = step({ sort: 2 });
   const second = step({ sort: 1 });
   assert.deepEqual(orderedSteps([first, second]).map((s) => s.id), [second.id, first.id]);

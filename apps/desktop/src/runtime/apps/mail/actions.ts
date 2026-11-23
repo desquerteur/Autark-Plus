@@ -13,6 +13,7 @@ import { buildMessage, quoteOriginal, replyRecipients, replySubject, replyThread
 import { decodeWords, formatAddress, parseAddressList, type MailAddress } from './mime-text.ts';
 import { parseMessage, snippet, type ParsedMail } from './mime.ts';
 import { sendMail, SmtpError } from './smtp.ts';
+import { assertContactRecipients } from './contact-stop.ts';
 import type { MailSockets } from './socket.ts';
 import { AUTO_REPLY_ARG, automaticMail } from './loops.ts';
 
@@ -108,7 +109,9 @@ async function search(ctx: MailContext, args: Args): Promise<McpCallResult> {
 }
 
 async function fetchFull(ctx: MailContext, ref: MessageRef): Promise<{ parsed: ParsedMail; flags: string[]; truncated: boolean }> {
+  ctx.target.assertCurrent?.();
   const rows = await ctx.mailbox.fetch([ref.uid], `FLAGS RFC822.SIZE BODY.PEEK[]<0.${FETCH_LIMIT}>`);
+  ctx.target.assertCurrent?.();
   const row = rows.get(ref.uid);
   if (!row) throw new MailError('That message is gone (moved or deleted) – search again.');
   const body = row.get('BODY[]');
@@ -163,9 +166,23 @@ async function original(ctx: MailContext, id: unknown): Promise<{ ref: MessageRe
 async function deliver(ctx: MailContext, raw: Buffer, recipients: MailAddress[], after: () => Promise<void>): Promise<string[]> {
   const notes: string[] = [];
   let result: { accepted: string[]; rejected: string[] };
+  const envelope = recipients.map((a) => a.address);
+  let guardFailure: unknown;
+  const assertAllowed = () => {
+    try {
+      ctx.target.assertCurrent?.();
+      assertContactRecipients(ctx.target.contactStopFile, envelope);
+    } catch (error) { guardFailure = error; throw error; }
+  };
   try {
-    result = await sendMail({ server: ctx.target.smtp, login: await ctx.target.login(), from: ctx.target.address, to: recipients.map((a) => a.address), raw, sockets: ctx.sockets, timeoutMs: ctx.timeoutMs });
+    assertAllowed();
+    const login = await ctx.target.login();
+    assertAllowed();
+    // Re-read stops at SMTP's existing checkpoints too, especially before DATA and after its 354 reply.
+    result = await sendMail({ assertCurrent: assertAllowed, server: ctx.target.smtp, login, from: ctx.target.address, to: envelope, raw, sockets: ctx.sockets, timeoutMs: ctx.timeoutMs });
   } catch (error) {
+    // SMTP's generic socket wrapper must not hide a policy refusal as a retryable connection failure.
+    if (guardFailure !== undefined) throw guardFailure;
     if (error instanceof SmtpError) throw new MailError(`Not sent: ${error.message}`);
     throw error;
   }
@@ -256,6 +273,7 @@ async function remove(ctx: MailContext, args: Args): Promise<McpCallResult> {
 
 export async function runMailTool(ctx: MailContext, name: string, args: Args): Promise<McpCallResult> {
   try {
+    ctx.target.assertCurrent?.();
     switch (name) {
       case 'search': return await search(ctx, args);
       case 'read': return await read(ctx, args);

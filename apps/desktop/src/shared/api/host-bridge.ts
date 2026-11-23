@@ -18,6 +18,7 @@ import type { SideBrowserCall, SideBrowserResult } from '../model/side-browser.t
 import type { PointerPoint } from '../model/pointers.ts'; // B-055 F1
 import type { SideCastUpdate, SideCommand, SidePage } from '../model/side-view.ts'; // B-076
 import type { CompanyStart } from '../model/companies.ts'; // B-078
+import type { VideoPreview } from '../model/video-preview.ts'; // 17.11.2026
 
 export const HOST_BRIDGE_PROTOCOL = 1;
 
@@ -26,6 +27,7 @@ export type PowerEvent = 'resume' | 'suspend' | 'lock' | 'unlock' | 'online';
 
 /** Ops the runtime may ask the host for, with argument and result types. */
 export interface HostOps {
+  'storage.ready': { args: Record<string, never>; result: { available: boolean } };
   encrypt: { args: { plain: string }; result: { cipher: Uint8Array } };
   decrypt: { args: { cipher: Uint8Array }; result: { plain: string } };
   /** Native notification; result.clicked is true when the user clicked it (false on close/timeout). */
@@ -54,19 +56,55 @@ export interface HostOps {
   'media.audio': { args: { fileId: string; mime?: string; startMs?: number; maxMs?: number }; result: DecodedAudio };
   /** B-058 G10: a stored image (blob id) normalized by main's media analyzer – JPEG/PNG, longest edge ≤ maxPx, optionally a region (IMAGE_LIMITS). */
   'media.image': { args: { fileId: string; mime?: string; maxPx?: number; region?: ImageRegion }; result: NormalizedImage };
+  /** 17.11.2026: a light copy of a stored video (blob id) made by main's hidden preview window (main/media-preview.ts) – H.264/MP4, short edge ≤ 720, ≈ 2.5 Mbit/s, index in front (PREVIEW_LIMITS); the result names a temp file the runtime stores and removes. */
+  'media.preview': { args: { fileId: string; mime?: string }; result: VideoPreview };
   /** B-072: opens a company on this PC (main/companies.ts; create: a new folder first); this window goes to the tray. */
   'company.open': { args: { id?: string | null; create?: boolean; start?: CompanyStart }; result: { ok: true; id: string | null } };
   /**
+   * 16.11.2026: takes a company off this PC (main/company-remove.ts): marks it, stops it, moves its folder to the recycle
+   * bin; `name` (its label) names it in the notice. Main answers first; the company open here quits on the next tick.
+   */
+  'company.remove': { args: { id: string | null; name?: string }; result: { ok: true } };
+  /**
    * B-076: someone watches side tab `tab` from another PC or a phone (main/side-driver/caster.ts): `on` wakes the page,
    * starts its screencast or renews it (it ends a minute after the last renewal), off ends it now. Frames reach the
-   * runtime as `side-view` messages.
+   * runtime as `side-view` messages. B-081: `view` – the watcher's picture box (whole CSS px); the page has it as its
+   * viewport while it is cast.
    */
-  sideCast: { args: { tab: string; on: boolean }; result: { ok: true; page?: SidePage } };
+  sideCast: { args: { tab: string; on: boolean; view?: { width: number; height: number } }; result: { ok: true; page?: SidePage } };
   /** B-076: the watcher's input in that tab – Input.dispatchMouseEvent, dispatchKeyEvent and insertText only; it counts as the person's. */
   sideInput: { args: { tab: string; commands: SideCommand[] }; result: { ok: true } };
   /** B-076: a new http(s) address, back, forward or reload in that tab, or the answer to its open dialog. */
   sideNav: { args: { tab: string; url?: string; action?: 'back' | 'forward' | 'reload'; dialog?: 'accept' | 'dismiss' }; result: { ok: true } };
+  /**
+   * Owner 07.11.2026: the person's Codex plan hears a dictation over WebRTC (runtime/voice/codex-hear.ts). Main's hidden
+   * voice window (main/voice-rtc.ts) decodes the take (blob id), feeds it into a peer connection – never a speaker – and
+   * answers with its offer once the ICE candidates are gathered.
+   */
+  'voice.rtcOffer': { args: { fileId: string; mime?: string }; result: { jobId: number; sdp: string; durationMs: number } };
+  /** The server's answer to that offer: the take is sent in real time with RTC_LIMITS' silence before and after; resolves once it is. */
+  'voice.rtcAnswer': { args: { jobId: number; sdp: string }; result: { durationMs: number } };
+  /** Ends the job: the connection closes and its window goes (also after a failure; an unknown job is fine). B-082: `sessionMs` – the voice's own meter (usage.audio_duration_ms) as the page saw it last; `windowMs` – the window's connection time (answer → close). */
+  'voice.rtcClose': { args: { jobId: number }; result: { ok: true; sessionMs?: number; windowMs?: number } };
+  /**
+   * B-080: installs an Autark build on this PC the way an update installs (main/updates-wiring.ts installFile: the same
+   * drain, the relaunch helper with this installer, quit). Main answers first and acts on the next tick, so the reply
+   * reaches the runtime before its shutdown; macOS and a build without the updater wiring refuse in main's log only.
+   */
+  'app.install': { args: { installer: string }; result: { ok: true } };
+  /**
+   * Feedback 1b136d01 (owner 19.11.2026: "wenn ein PC noch nicht geupdatet ist … per PC einfach updaten mit einem Klick"):
+   * this PC's Update button, pressed from elsewhere – a fresh check of the official feed, then the same download and
+   * install (main/updates-wiring.ts updateNow). Main answers first and acts on the next tick.
+   */
+  'app.update': { args: Record<string, never>; result: { ok: true } };
 }
+
+/**
+ * Limits of the voice.rtc* ops: the longest take sent (realtime costs plan usage per second), the silence before and
+ * after it, the wait for the page's offer, for the connection, for the answer after the offer, and an SDP's size.
+ */
+export const RTC_LIMITS = { maxMs: 10 * 60_000, leadMs: 1_000, tailMs: 2_000, offerMs: 20_000, connectMs: 15_000, answerMs: 60_000, sdpChars: 64 * 1024 } as const;
 
 /** MM4: limits of `media.analyze` – frames per call, longest image edge, one job's time, jobs waiting behind it. */
 export const KEYFRAME_LIMITS = { frames: 12, defaultFrames: 6, edge: 768, jobMs: 30_000, waiting: 3 } as const;
@@ -105,14 +143,19 @@ export interface NormalizedImage { data: Uint8Array; mime: 'image/jpeg' | 'image
 export type HostOp = keyof HostOps;
 
 export const HOST_OPS: readonly HostOp[] = [
-  'encrypt', 'decrypt', 'notify', 'openExternal', 'openPath', 'screenshot', 'displays', 'idleSeconds',
+  'storage.ready', 'encrypt', 'decrypt', 'notify', 'openExternal', 'openPath', 'screenshot', 'displays', 'idleSeconds',
   'keepAwake', 'releaseAwake', 'setBadge',
   'runtime.restart', 'runtime.booting', // MM7
   'media.analyze', // MM4
   'sideBrowser', // B-055
   'media.audio', 'media.image', // B-058
+  'media.preview', // 17.11.2026
   'company.open', // B-072
+  'company.remove', // 16.11.2026
   'sideCast', 'sideInput', 'sideNav', // B-076
+  'voice.rtcOffer', 'voice.rtcAnswer', 'voice.rtcClose', // owner 07.11.2026: dictation heard by the Codex plan
+  'app.install', // B-080
+  'app.update', // 19.11.2026
 ];
 
 export interface AppInfo {
@@ -125,6 +168,8 @@ export interface AppInfo {
   companies?: { first: string; dir: string };
   /** B-078: how this company's start was asked for (main/companies.ts startFlag of `--start=`); missing for a plain start. */
   start?: CompanyStart;
+  /** B-080: main's process id – every install ends it, so a runtime start under the same one followed no install. */
+  pid?: number;
 }
 
 // ------------------------------------------------------------------ runtime → main
@@ -176,7 +221,7 @@ export interface ShutdownMessage { type: 'shutdown'; reason: 'quit' | 'update' }
 export interface PointerMessage { type: 'pointer'; point: Omit<PointerPoint, 'at'> }
 
 /**
- * B-076: a frame or the page of a side tab someone watches (main/side-driver/caster.ts, at most one frame per 500 ms)
+ * B-076: a frame or the page of a side tab someone watches (main/side-driver/caster.ts, at most one frame per 100 ms)
  * for the runtime's side views. Like `pointer`: sent only while the runtime is up, never queued or replayed.
  */
 export interface SideViewMessage { type: 'side-view'; update: SideCastUpdate }

@@ -53,7 +53,7 @@ export interface DecisionTodosDeps {
   answered(key: string, choice: string | undefined, scope: ClientScope | undefined): boolean;
 }
 
-const isClosed = (view: Pick<TaskView, 'status'>): boolean => view.status === 'done' || view.status === 'cancelled';
+const isClosed = (view: Pick<TaskView, 'status'>): boolean => view.status === 'done' || view.status === 'dropped';
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Creates the human to-do for `text`; returns its id (undefined: only a notification went out). */
@@ -62,7 +62,7 @@ export function createDecisionTodo(s: TodoServices, log: Logger, text: DecisionT
   const widget: UiBlock = { type: 'choice', accessRequestId: binding, question, options };
   try {
     return s.tasks.create({
-      origin: { source: ORIGINS.system.source, label: 'Access request' }, title, notes, assigneeKind: 'human', humanReason: 'approval', priority: 1, widget, createdBy: SYSTEM_ID,
+      origin: { source: ORIGINS.system.source, label: 'Access request' }, title, notes, assigneeKind: 'human', priority: 1, widget, createdBy: SYSTEM_ID,
     }).id;
   } catch (error) {
     log.warn('decision to-do failed', { binding, error: errorText(error) });
@@ -189,7 +189,7 @@ export class DecisionTodos {
     this.closing.add(todoId);
     try {
       const todo = s.tasks.get(todoId);
-      if (todo && !isClosed(todo)) s.tasks.setStatus(todoId, 'cancelled', SYSTEM_ID, note);
+      if (todo && !isClosed(todo)) s.tasks.finish(todoId, { status: 'dropped', summary: note, quiet: true }, SYSTEM_ID);
     } catch (error) {
       this.deps.log.warn('decision to-do not closed', { todoId, error: errorText(error) });
     } finally {

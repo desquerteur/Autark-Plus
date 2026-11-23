@@ -1,6 +1,6 @@
 // Quick tasks (the person's task composer): one line of work becomes one plain task (runtime/tasks/quick.ts) – for an
 // agent, a manager's branch, a team, a person of the organisation, the person themselves ('me'), or (no target) the
-// team, where the responsible manager decides. tasks.route sends unowned work to a target or wakes that manager again.
+// team, where Autark picks one owner now (tasks/give.ts pickOwner).
 // Joins Methods by module augmentation.
 // Owns: the shapes only. Never: behaviour or a second task store.
 
@@ -18,7 +18,7 @@ export interface QuickTaskTarget {
   id: string;
 }
 
-/** `tasks.quickCreate`: one line of work for the company – returns at once (no model call). */
+/** `tasks.quickCreate`: one line of work for the company; without a target Autark picks its owner now. */
 export interface QuickTaskParams {
   text: string;
   /** Files uploaded with files.upload (kept with the task). */
@@ -40,7 +40,5 @@ declare module '../api/methods.ts' {
   interface Methods {
     /** 'tasks': a quick task (runtime/tasks/quick.ts). A person target: the owner only, straight into the 1:1 chat with her. */
     'tasks.quickCreate': { params: QuickTaskParams; result: QuickTaskResult };
-    /** 'tasks': unowned (or any unfinished) work to `target` (an agent, branch or team – never a person); no target: the responsible manager decides. */
-    'tasks.route': { params: { id: string; target?: QuickTaskTarget }; result: TaskView };
   }
 }

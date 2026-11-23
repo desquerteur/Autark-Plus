@@ -1,7 +1,7 @@
 // B-058 G14: the facts the abilities overview is computed from (status.ts abilityList), read from the runtime
 // without any network or model load: the local speech models (voice.localModels' rows and the chosen ones),
 // the function models (models/functions.ts), a model that hears audio
-// (decision/engine-runner.ts listenOptions), one that sees images (the catalog's vision flag, free
+// (decision/listener.ts listenOptions), one that sees images (the catalog's vision flag, free
 // connections first), what the host can do (decode audio, take video frames), whether the browser and
 // computer tools are registered (B-055 builds them; read only), and how each kind of media is made now
 // (media/generate-route.ts routesFor – the same rule the generation tools use). Every read is guarded: a
@@ -11,7 +11,7 @@
 import type { RuntimeServices } from '../contracts.ts';
 import { AUDIO_TAGGER, localSpeechModel, type LocalSpeechOffer } from '../../shared/model/local-speech-models.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
-import { listenOptions } from '../decision/engine-runner.ts';
+import { listenOptions } from '../decision/listener.ts';
 import { FUNCTION_OF } from '../media/generate.ts';
 import { routesFor } from '../media/generate-route.ts';
 import { GENERATION_KINDS, type GenerationKind } from '../media/providers/types.ts';

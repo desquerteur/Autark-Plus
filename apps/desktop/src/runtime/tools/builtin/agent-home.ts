@@ -10,9 +10,10 @@ import { WorkforceError } from '../../../shared/errors.ts';
 import { HOME_MAX_CHARS } from '../../../shared/model/agent-core.ts';
 import '../../contracts/agent-core.ts';
 
-export const HOME_ARG = { type: 'string', maxLength: HOME_MAX_CHARS } as const;
-
-export const HOME_HELP = "home: the project folder its turns start in ('' = none).";
+export const HOME_ARG = {
+  type: 'string', maxLength: HOME_MAX_CHARS,
+  description: "Project folder its turns start in, whose skills it then sees; work elsewhere stays open; '' = none.",
+} as const;
 
 function core(ctx: Pick<ToolContext, 'services'>) {
   const agentCore = ctx.services.agentCore;

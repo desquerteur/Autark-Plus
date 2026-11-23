@@ -1,14 +1,16 @@
 // Tests for how the agents' one `when` shape becomes a ScheduleSpec (B-044, src/runtime/schedules/when.ts,
-// parseWhen in src/runtime/tools/builtin/util.ts): { once } with an ISO time (a zone-less one in the
+// parseWhen in src/runtime/tools/builtin/util.ts): { at } with an ISO time (a zone-less one in the
 // profile time zone), an ISO duration or a relative form; { repeat } with every (anchored at its start),
 // times, cron, weekday names, a window, start, until (a date is its whole local day), count and ifMissed;
-// refusals in plain words; the rule's words and zone-offset ISO times of the tool results.
+// refusals in plain words; the rule's words and zone-offset ISO times of the tool results; the old spellings ({ once },
+// a bare string) are refused by the schema, naming the right one.
 // Owns: these assertions only. Never: real clocks or a real scheduler.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseWhen } from '../../../src/runtime/tools/builtin/util.ts';
-import { isoIn, parseEvery, parsePoint, ruleWords, specFromWhen } from '../../../src/runtime/schedules/when.ts';
+import { WHEN_SCHEMA, isoIn, parseEvery, parsePoint, ruleWords, specFromWhen } from '../../../src/runtime/schedules/when.ts';
+import { validate } from '../../../src/runtime/tools/validate.ts';
 
 const T0 = Date.UTC(2026, 9, 17, 9, 0, 0); // Sat 17 Oct 2026, 11:00 in Berlin
 const M = 60_000;
@@ -52,18 +54,28 @@ test('parsePoint: a time without a zone is in the given zone (DST-correct); with
   assert.equal(parseEvery('often'), undefined);
 });
 
-test('once: a one-off at that time in the profile zone; past or unreadable times are refused', () => {
-  assert.deepEqual(specFromWhen({ once: 'PT24H' }, T0, TZ), { at: T0 + 24 * H, tz: TZ, catchUp: 'once' });
-  assert.deepEqual(specFromWhen({ once: '2026-10-19T09:00' }, T0, TZ), { at: Date.UTC(2026, 9, 19, 7, 0), tz: TZ, catchUp: 'once' });
-  assert.deepEqual(specFromWhen({ once: '2026-10-19T09:00', tz: 'America/New_York' }, T0, TZ), { at: Date.UTC(2026, 9, 19, 13, 0), tz: 'America/New_York', catchUp: 'once' });
-  assert.deepEqual(specFromWhen({ once: '+2h' }, T0, undefined), { at: T0 + 2 * H, tz: undefined, catchUp: 'once' }, 'no profile zone: the OS zone');
-  assert.equal(specFromWhen({ once: 'next blue moon' }, T0, TZ), 'Cannot read the time "next blue moon".');
-  assert.equal(specFromWhen({ once: '2026-10-17T08:00:00Z' }, T0, TZ), 'That time is in the past.');
-  assert.equal(typeof specFromWhen({ once: '2026-10-17T08:59:30Z' }, T0, TZ), 'object', 'up to a minute in the past is tolerated (clock skew)');
+test('at: a one-off at that time in the profile zone; past or unreadable times are refused', () => {
+  assert.deepEqual(specFromWhen({ at: 'PT24H' }, T0, TZ), { at: T0 + 24 * H, tz: TZ, catchUp: 'once' });
+  assert.deepEqual(specFromWhen({ at: '2026-10-19T09:00' }, T0, TZ), { at: Date.UTC(2026, 9, 19, 7, 0), tz: TZ, catchUp: 'once' });
+  assert.deepEqual(specFromWhen({ at: '2026-10-19T09:00', tz: 'America/New_York' }, T0, TZ), { at: Date.UTC(2026, 9, 19, 13, 0), tz: 'America/New_York', catchUp: 'once' });
+  assert.deepEqual(specFromWhen({ at: '+2h' }, T0, undefined), { at: T0 + 2 * H, tz: undefined, catchUp: 'once' }, 'no profile zone: the OS zone');
+  assert.equal(specFromWhen({ at: 'next blue moon' }, T0, TZ), 'Cannot read the time "next blue moon".');
+  assert.equal(specFromWhen({ at: '2026-10-17T08:00:00Z' }, T0, TZ), 'That time is in the past.');
+  assert.equal(typeof specFromWhen({ at: '2026-10-17T08:59:30Z' }, T0, TZ), 'object', 'up to a minute in the past is tolerated (clock skew)');
   assert.match(specFromWhen(undefined, T0, TZ) as string, /^Give when:/);
   assert.match(specFromWhen({}, T0, TZ) as string, /^Give when:/);
-  assert.match(specFromWhen({ once: '+1h', repeat: { every: '1d' } }, T0, TZ) as string, /^Give when:/, 'either once or repeat');
-  assert.equal(specFromWhen({ once: '+1h', tz: 'Mars/Olympus' }, T0, TZ), 'Unknown time zone.');
+  assert.match(specFromWhen({ at: '+1h', repeat: { every: '1d' } }, T0, TZ) as string, /^Give when:/, 'either at or repeat');
+  assert.equal(specFromWhen({ at: '+1h', tz: 'Mars/Olympus' }, T0, TZ), 'Unknown time zone.');
+});
+
+test('when {at} with an offset; the old spellings once and a bare string fail the tool schema', () => {
+  assert.deepEqual(specFromWhen({ at: '2026-11-09T10:36:00+01:00' }, Date.UTC(2026, 10, 9, 8, 0), TZ), { at: Date.UTC(2026, 10, 9, 9, 36), tz: TZ, catchUp: 'once' });
+  assert.match(specFromWhen({ at: '+1h', repeat: { every: '1d' } }, T0, TZ) as string, /^Give when:/, 'either one time or repeat');
+  const schema = { type: 'object', properties: { when: WHEN_SCHEMA }, required: ['when'], additionalProperties: false };
+  for (const when of [{ at: '+2h' }, { repeat: { every: '1d' } }]) assert.deepEqual(validate({ when }, schema), [], JSON.stringify(when));
+  assert.deepEqual(validate({ when: { at: '+2h', in: '2h' } }, schema), ['when.in: unknown property – when takes at, repeat, tz']);
+  assert.deepEqual(validate({ when: { once: '+2h' } }, schema), ['when.once: unknown property – when takes at, repeat, tz']);
+  assert.notDeepEqual(validate({ when: '+2h' }, schema), [], 'a bare string is no when');
 });
 
 test('repeat every: an interval anchored at its start (default: one interval from now), weekdays, window, count', () => {

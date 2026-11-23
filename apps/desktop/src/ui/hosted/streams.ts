@@ -3,6 +3,8 @@
 // TCP connection to the PC's runtime port there), {t:'d',s,b} carries standard-base64 bytes, {t:'a',s,n} acknowledges n
 // bytes taken, {t:'e',s} ends it; each side keeps at most WINDOW bytes unacknowledged per stream. The PC takes 24 streams
 // per channel, so HTTP requests wait for one of HTTP_SLOTS slots (the RPC WebSocket stream stays outside them).
+// F25 P3: a lasting stream (the PC UI's WebSocket) ends when the page moves to the direct way (endLasting), so it reopens
+// there; an HTTP request on the old channel runs to its end.
 // Owns: stream ids, the window, the slots. Never: HTTP or WebSocket framing (http.ts, ws.ts) or holds unbounded bytes it sends.
 
 import { b64std, fromB64std, type Bytes } from './bytes.ts';
@@ -23,6 +25,8 @@ export interface StreamSink { data(bytes: Bytes): void; end(): void }
 
 export class Stream {
   readonly id: number;
+  /** The PC UI's WebSocket: it reopens on the channel the page moves to (StreamMux.endLasting). */
+  readonly lasting: boolean;
   ended = false;
   private readonly mux: StreamMux;
   private sink: StreamSink | undefined;
@@ -31,9 +35,10 @@ export class Stream {
   private unacked = 0;
   private waiters: Array<() => void> = [];
 
-  constructor(mux: StreamMux, id: number) {
+  constructor(mux: StreamMux, id: number, lasting = false) {
     this.mux = mux;
     this.id = id;
+    this.lasting = lasting;
   }
 
   /** Where the PC's bytes go; bytes that came before are handed over first. Each delivered chunk is acknowledged. */
@@ -115,13 +120,18 @@ export class StreamMux {
   /** Streams open now (tests, status). */
   get open(): number { return this.streams.size; }
 
-  /** A new stream to the PC's runtime port. */
-  openStream(): Stream {
-    const stream = new Stream(this, this.nextId++);
+  /** A new stream to the PC's runtime port (`lasting`: a WebSocket, see endLasting). */
+  openStream(lasting = false): Stream {
+    const stream = new Stream(this, this.nextId++, lasting);
     if (this.channel.closed) { stream.finish(); return stream; }
     this.streams.set(stream.id, stream);
     void this.send({ t: 'o', s: stream.id });
     return stream;
+  }
+
+  /** The page moved to another channel to this PC: its lasting streams end here (their sockets reopen there). */
+  endLasting(): void {
+    for (const stream of [...this.streams.values()]) if (stream.lasting) stream.end();
   }
 
   /** Waits for one of HTTP_SLOTS; the returned function gives it back. */

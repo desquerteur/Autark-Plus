@@ -6,13 +6,13 @@
 // unknown change (no file name, armed again, agents/ itself created or removed) hands over every agent ('*').
 // Owns: the path split and the registration. Never: reads files (service.ts reconciles), timers or a watch of its own.
 
-import { CORE_MANIFEST, MAIN_SKILLS_DIR, SYSTEM_FILE } from '../../shared/model/agent-core.ts';
+import { CORE_MANIFEST, HUMAN_FILE, MAIN_SKILLS_DIR, SYSTEM_FILE } from '../../shared/model/agent-core.ts';
 import { ROOT_AGENTS } from '../root/layout.ts';
 import type { RootWatcher } from '../root/watcher.ts';
 import { isCoreFolderName } from './layout.ts';
 
-/** What changed in one agent folder. `all`: the folder itself (created, removed, renamed); `manifest`: agent.json. */
-export interface CoreChange { system: boolean; skills: boolean; all: boolean; manifest?: true }
+/** What changed in one agent folder. `all`: the folder itself (created, removed, renamed); `manifest`: agent.json; `human`: HUMAN.md. */
+export interface CoreChange { system: boolean; skills: boolean; all: boolean; manifest?: true; human?: true }
 
 const ALL: CoreChange = { system: true, skills: true, all: true };
 
@@ -26,6 +26,7 @@ export function classify(rel: string): { agentId: string; change: CoreChange } |
   if (second === SYSTEM_FILE) return { agentId, change: { system: true, skills: false, all: false } };
   if (second === MAIN_SKILLS_DIR) return { agentId, change: { system: false, skills: true, all: false } };
   if (second === CORE_MANIFEST && parts.length === 2) return { agentId, change: { system: false, skills: false, all: false, manifest: true } }; // its home (the label is the app's)
+  if (second === HUMAN_FILE && parts.length === 2) return { agentId, change: { system: false, skills: false, all: false, human: true } };
   return undefined; // SYSTEM.rejected.md or other files
 }
 

@@ -6,11 +6,17 @@
 // them – and the listeners, attached only while a PC is linked (nothing runs without a link). <data>/side-tabs.json
 // gets its owner on the data folder watcher here: every change is told to this PC's window and phones (tabs.changed),
 // and goes to the linked PCs while one is. B-078: sync.roster and device.sibling (roster.ts) let my devices know each
-// other and their phones. A link that comes up (device.upserted 'online') runs its link-up: the roster first, then
-// the side pane (small, so a PC that just joined shows the other's pane at once), rows, secrets, settings and files
-// owed since that PC's cursor (stamps.ts) and every plan's login, then the wakes that waited for it; a complete link-up moves the cursor to its start. Removing a PC drops its cursor, so a
-// new link begins with everything again. A link that comes up or goes re-places the schedules' due times (one PC fires
-// each).
+// other and their phones. A link that comes up (device.upserted 'online') runs its link-up (linkUps): the roster
+// first, then the side pane (small, so a PC that just joined shows the other's pane at once), the rows and secrets owed
+// since that PC's cursor (stamps.ts) and every plan's login, then the wakes that waited for that PC (B-087: a woken
+// turn finds its login and key there; another PC's link-up leaves them), and last the settings and files (the file
+// rescan takes longest); a complete link-up moves the cursor to its start. B-087: one link-up per PC at a time – an
+// 'online' during a run (a link swap cut its calls) ends it before its next step and runs it again at once – and a run
+// whose link is gone ends before its next step (no step or page dials for it); a cut run leaves the cursor, so the
+// next run still owes the rest. Removing a PC drops its cursor, so a new link begins with everything again. A link
+// that comes up or goes re-places the schedules' due times (one PC fires each). F10 (16.11.2026): sync.live and
+// sync.live.cancel (live.ts, 'ceo' links only) – the live work goes to a CEO PC the moment its link is up, outside the
+// link-up's steps, and what that PC ran leaves when its link goes.
 // Owns: this wiring and the link-up order. Never: decides what a link carries (home.ts) or logs content.
 
 import type { RuntimeServices } from '../../contracts.ts';
@@ -29,6 +35,10 @@ import { RosterSync, type RosterMesh } from './roster.ts';
 import { placeSchedules } from './tables.ts';
 import { EVERY_LINK, type LinkKind } from '../mesh.ts';
 import { announcePane, TabSync } from './tabs.ts';
+import { CANCEL_METHOD, LIVE_METHOD, LiveSync, bindLiveSync } from './live.ts';
+import { chatLiveOf } from '../../chat/live.ts';
+import { cancelRunHere } from '../../rpc/handlers/org.ts';
+import { UPDATE_METHOD, serveUpdate } from './update.ts'; // 19.11.2026
 
 export interface SyncInput {
   s: RuntimeServices;
@@ -39,6 +49,69 @@ export interface SyncInput {
 }
 
 export interface Sync { stop(): void }
+
+const errorText = (error: unknown) => String((error as Error)?.message ?? error);
+
+/** What a link-up runs (startSync's syncs; a test stands them in). */
+export interface LinkUpParts {
+  roster?: Pick<RosterSync, 'linkUp'>;
+  tabs: Pick<TabSync, 'catchUp'>;
+  rows: Pick<RowSync, 'catchUp' | 'resume'>;
+  secrets: Pick<SecretSync, 'catchUp'>;
+  logins: Pick<LoginSync, 'catchUp'>;
+  files: Pick<FileSync, 'catchUp'>;
+}
+
+/**
+ * B-087: the link-ups, one per PC at a time. An 'online' that comes while that PC's link-up runs (a link swap cut the
+ * calls in flight) ends that run before its next step and runs it once more at once – what the swap cut goes again
+ * now, not after the file rescan – from the cursor a complete run moved (a cut run moves none). `linked`: whether the
+ * PC's link is still up; a run whose link is gone ends before its next step.
+ */
+export function linkUps(s: Pick<RuntimeServices, 'clock' | 'log'>, stamps: Pick<Stamps, 'cursor' | 'setCursor'>, parts: LinkUpParts, linked: (peer: string) => boolean): (peer: string) => void {
+  const running = new Map<string, boolean>(); // peer → an 'online' came while its link-up ran
+  const woke = new Set<string>(); // peers whose running link-up already released its waiting wakes (its last step)
+  const linkUp = async (peer: string) => {
+    const since = stamps.cursor(peer);
+    const started = s.clock.now();
+    let complete = true;
+    const owed = (done: boolean) => { complete &&= done; };
+    const steps: Array<() => Promise<unknown>> = [
+      async () => parts.roster?.linkUp(peer).catch((error: unknown) => s.log.warn('roster not exchanged', { peer, error: errorText(error) })), // small, first: my devices know each other at once
+      () => parts.tabs.catchUp(peer), // every space, at every link-up, first: no part of the cursor, and a PC that joined has the pane at once
+      async () => owed(await parts.rows.catchUp(peer, since)),
+      async () => owed(await parts.secrets.catchUp(peer, since)), // small, before the wakes: an API key travels as a secret
+      () => parts.logins.catchUp(peer), // every login, at every link-up: no part of the cursor; before the wakes, which may need it
+      async () => { woke.add(peer); parts.rows.resume(peer); owed(await parts.files.catchUp(peer, since)); }, // B-077/B-087: the wakes that wait for this PC go before the file rescan, not after it
+    ];
+    for (const step of steps) {
+      if (!linked(peer)) { s.log.info('link-up ended, link gone', { peer }); return; } // no dial per step; the cursor stays
+      if (running.get(peer)) { s.log.info('link-up again after a link swap', { peer }); return; } // the rerun starts at once, from the same cursor
+      await step();
+    }
+    if (complete) stamps.setCursor(peer, started);
+    s.log.info('linked PC caught up', { peer, first: since === undefined, complete });
+  };
+  const run = (peer: string): void => {
+    if (running.has(peer)) {
+      running.set(peer, true);
+      // A swap during the last step (the file rescan) may have cut the wakes' hand-over: release them again on the new
+      // link right after the cut call has settled, not only after the rescan and the rerun.
+      if (woke.delete(peer)) setTimeout(() => { if (linked(peer)) parts.rows.resume(peer); }, 0); // once per run
+      return;
+    }
+    running.set(peer, false);
+    void linkUp(peer)
+      .catch((error: unknown) => s.log.warn('linked PC not caught up', { peer, error: errorText(error) }))
+      .finally(() => {
+        const again = running.get(peer);
+        running.delete(peer);
+        woke.delete(peer);
+        if (again && linked(peer)) run(peer);
+      });
+  };
+  return run;
+}
 
 export function startSync(input: SyncInput): Sync {
   const { s, mesh } = input;
@@ -57,7 +130,15 @@ export function startSync(input: SyncInput): Sync {
   mesh.register('sync.login', (params, from) => logins.receive(params, from));
   mesh.register('sync.tabs', (params, from) => tabs.receive(params, from));
   mesh.register('files.path', (params, from) => paths.serve(params, from));
+  mesh.register(UPDATE_METHOD, (_params, from) => serveUpdate(s, from), ['ceo']); // 19.11.2026: Update pressed on another own PC
   mesh.register('tabs.position', (params, from) => tabPositions(s).receive(params, from));
+  const chatLive = chatLiveOf(s.bus);
+  const live = chatLive ? new LiveSync(s, chatLive, (runId) => cancelRunHere(s, runId)) : undefined;
+  if (live) {
+    mesh.register(LIVE_METHOD, async (params, from) => live.receive(params, from), ['ceo']);
+    mesh.register(CANCEL_METHOD, (params, from) => live.cancel(params, from), ['ceo']);
+    bindLiveSync(s, live);
+  }
   const unwatch = s.rootWatcher?.register(ROOT_SIDE_TABS, () => { announcePane(s); tabs.changed(); });
 
   let detach: (() => void) | undefined;
@@ -65,40 +146,32 @@ export function startSync(input: SyncInput): Sync {
   const refresh = () => {
     const linked = links(s.db).length > 0;
     if (linked && !detach) {
-      const offs = [rows.attach(), secrets.attach(), files.attach(input.tap), logins.attach(), tabs.attach(), ...(roster ? [roster.attach()] : [])];
+      const offs = [rows.attach(), secrets.attach(), files.attach(input.tap), logins.attach(), tabs.attach(), ...(roster ? [roster.attach()] : []), ...(live ? [live.attach()] : [])];
       detach = () => { for (const off of offs) off(); };
     } else if (!linked && detach) {
       detach();
       detach = undefined;
     }
   };
-  const linkUp = async (peer: string) => {
-    const since = stamps.cursor(peer);
-    const started = s.clock.now();
-    await roster?.linkUp(peer).catch((error: unknown) => s.log.warn('roster not exchanged', { peer, error: String((error as Error)?.message ?? error) })); // small, first: my devices know each other at once
-    await tabs.catchUp(peer); // every space, at every link-up, first: no part of the cursor, and a PC that joined has the pane at once
-    const rowsDone = await rows.catchUp(peer, since);
-    rows.resume(); // B-077: waiting wakes go as soon as the rows are there, not after secrets, the file rescan and logins
-    const done = [rowsDone, await secrets.catchUp(peer, since), await files.catchUp(peer, since)];
-    await logins.catchUp(peer); // every login, at every link-up: no part of the cursor
-    if (done.every(Boolean)) stamps.setCursor(peer, started);
-    s.log.info('linked PC caught up', { peer, first: since === undefined, complete: done.every(Boolean) });
-  };
+  const run = linkUps(s, stamps, { roster, tabs, rows, secrets, logins, files }, (peer) => online.has(peer));
   // Which PC fires a schedule follows the links (tables.ts placeSchedules).
-  const place = () => { try { placeSchedules(s); } catch (error) { s.log.warn('schedules not placed', { error: String((error as Error)?.message ?? error) }); } };
+  const place = () => { try { placeSchedules(s); } catch (error) { s.log.warn('schedules not placed', { error: errorText(error) }); } };
   const off = s.bus.on('device.upserted', (device) => {
     if (device.kind !== 'pc' || device.self) return;
     refresh();
     if (device.status !== 'online') {
       online.delete(device.id);
+      live?.linkDown(device.id);
       if (device.status === 'revoked') { stamps.dropCursor(device.id); place(); }
       return;
     }
     if (online.has(device.id)) return;
     online.add(device.id);
     place();
-    void linkUp(device.id).catch((error: unknown) => s.log.warn('linked PC not caught up', { peer: device.id, error: String((error as Error)?.message ?? error) }));
+    live?.linkUp(device.id);
+    run(device.id);
   });
+  const offRemoved = s.bus.on('device.removed', ({ id }) => live?.linkDown(id));
   refresh();
-  return { stop: () => { off(); unwatch?.(); detach?.(); detach = undefined; } };
+  return { stop: () => { off(); offRemoved(); online.clear(); unwatch?.(); detach?.(); detach = undefined; bindLiveSync(s, undefined); } }; // a link-up still running ends at its next step
 }

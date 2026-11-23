@@ -13,8 +13,8 @@ export interface DictationTarget { start: number; end: number; focused: boolean 
 /** The result: the new draft text, where the dictated words begin in it, and the caret after them. */
 export interface Inserted { text: string; offset: number; caret: number; dictated: string }
 
-/** The common prefix and suffix lengths of two texts (non-overlapping). */
-function diff(before: string, after: string): { prefix: number; suffix: number } {
+/** The common prefix and suffix lengths of two texts (non-overlapping; draft-marks.ts shifts its spans with it, too). */
+export function diff(before: string, after: string): { prefix: number; suffix: number } {
   const max = Math.min(before.length, after.length);
   let prefix = 0;
   while (prefix < max && before[prefix] === after[prefix]) prefix++;

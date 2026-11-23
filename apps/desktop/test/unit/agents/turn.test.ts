@@ -8,12 +8,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { tempDir } from '../store/helpers.ts';
-import { setNextRoute } from '../../../src/runtime/agents/next-route.ts';
+import { setNextRoute, takeNextModel, takeNextRoute } from '../../../src/runtime/agents/next-route.ts';
 import { mergeAttempts, TurnExecutor } from '../../../src/runtime/agents/turn.ts';
 import { Journal } from '../../../src/runtime/runs/journal.ts';
 import { buildTurn, planTurn, routeRequest } from '../../../src/runtime/agents/turn-prepare.ts';
 import { canFailover, runAttempt } from '../../../src/runtime/agents/turn-attempt.ts';
 import { finishTurn } from '../../../src/runtime/agents/turn-finish.ts';
+import { MessageRepo } from '../../../src/runtime/chat/message-repo.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import type { EngineTurnInput, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
 import type { RouteRequest } from '../../../src/runtime/contracts.ts';
@@ -22,13 +23,19 @@ import { setup } from './fixture.ts';
 
 const LIMIT: EngineTurnResult = { text: '', stop: 'limit', error: { code: 'rate_limited', message: 'The usage limit of this account was reached.' } };
 
-test('spoken answers carry the call id, typed messages during a call remain normal answers', async () => {
+test('spoken answers carry the call id while that call runs, typed messages during a call remain normal answers', async () => {
   const h = setup();
   h.services.router = { route: async () => h.route } as typeof h.services.router;
   h.state.script = async input => {
     input.onEvent({ type: 'commentary', text: 'Checking the plan.' });
     return { text: 'Ready.', stop: 'done' };
   };
+  // KI-Runde 17.11.2026 (decision 8.3): the call's own row says whether it still runs; without it no turn is a call turn.
+  const callRow = (id: string, endedAt?: number) => h.chats.send({
+    conversationId: h.chat.id, body: `Call ${id}`, kind: 'status', silent: true, authorId: 'system', authorKind: 'system',
+    meta: { status: { type: 'note', text: `Call ${id}` }, call: { id, participant: 'device:pc', name: 'You', startedAt: 1, lines: [], ...(endedAt ? { endedAt } : {}) } },
+  });
+  callRow('call_one');
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken question', meta: { call: { id: 'call_one', participant: 'device:pc', name: 'You' } } });
   const spoken = await new TurnExecutor(() => h.services).execute(h.request());
   assert.equal(spoken.status, 'done');
@@ -40,9 +47,60 @@ test('spoken answers carry the call id, typed messages during a call remain norm
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Typed question' });
   const typed = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_2' }));
   assert.equal(h.chats.message(typed.messageId!)?.meta.call, undefined);
+
+  // A line of a call that has ended: its turn is no call turn any more, so the answer carries no call and is not read aloud.
+  callRow('call_two', 5);
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Said in the ended call', meta: { call: { id: 'call_two', participant: 'device:pc', name: 'You' } } });
+  const stale = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_3' }));
+  assert.ok(stale.messageId, 'the person\'s line said in an ended call gets this turn\'s answer');
+  assert.equal(h.chats.message(stale.messageId)?.body, 'Ready.');
+  assert.equal(h.chats.message(stale.messageId)?.meta.call, undefined);
+
+  // A call that ends while its turn runs: the answer is no longer spoken in it.
+  const three = callRow('call_three');
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken, then hung up', meta: { call: { id: 'call_three', participant: 'device:pc', name: 'You' } } });
+  h.state.script = async () => {
+    new MessageRepo(h.services.db).update({ ...three, meta: { ...three.meta, call: { ...three.meta.call!, endedAt: 9 } } as typeof three.meta });
+    return { text: 'Ready.', stop: 'done' };
+  };
+  const late = await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_4' }));
+  assert.equal(late.status, 'done');
+  assert.ok(late.messageId, 'a line whose call ended during its turn still gets that turn\'s answer');
+  assert.equal(h.chats.message(late.messageId)?.body, 'Ready.');
+  assert.equal(h.chats.message(late.messageId)?.meta.call, undefined);
+
+  // A call that ends while its turn runs: what the turn addressed to the call's chat is posted there as a normal line (review r2-4 finding 2).
+  const four = callRow('call_four');
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Spoken, hung up, answered in a block', meta: { call: { id: 'call_four', participant: 'device:pc', name: 'You' } } });
+  h.state.script = async () => {
+    new MessageRepo(h.services.db).update({ ...four, meta: { ...four.meta, call: { ...four.meta.call!, endedAt: 9 } } as typeof four.meta });
+    return { text: `<chat to="${h.chat.id}">Die Zahlen sind da: 3,2 Mio.</chat>`, stop: 'done' };
+  };
+  await new TurnExecutor(() => h.services).execute(h.request({ runId: 'run_5' }));
+  const posted = h.chats.messages(h.chat.id, { limit: 5 }).filter((message) => message.authorKind === 'agent' && message.body.includes('3,2 Mio.'));
+  assert.equal(posted.length, 1, 'the addressed block is not lost');
+  assert.equal(posted[0].meta.call, undefined, 'a normal line, not spoken in the ended call');
+  assert.equal(posted[0].silent, false);
 });
 
-test('the subconscious gets the mode the turn runs in, before and after it', async () => {
+test('a line of a running call does not wait for the subconscious, also when it resumes my task (FIXES-3 D2, review R2)', async () => {
+  const h = setup();
+  const heard: Array<string | undefined> = [];
+  h.services.subconscious.beforeTurn = async (input) => { heard.push(input.callId); return undefined; };
+  h.chats.send({
+    conversationId: h.chat.id, body: 'Call call_one', kind: 'status', silent: true, authorId: 'system', authorKind: 'system',
+    meta: { status: { type: 'note', text: 'Call call_one' }, call: { id: 'call_one', participant: 'device:pc', name: 'You', startedAt: 1, lines: [] } },
+  });
+  const task = h.tasks.create({ conversationId: h.chat.id, title: 'VAT rate', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: 'human' });
+  h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Neunzehn Prozent.', meta: { call: { id: 'call_one', participant: 'device:pc', name: 'You' } } });
+  const plain = await planTurn(h.services, h.request());
+  const onTask = await planTurn(h.services, h.request({ runId: 'run_2', taskId: task.id }));
+  assert.deepEqual(heard, ['call_one', 'call_one']);
+  assert.equal(plain?.callId, 'call_one');
+  assert.equal(onTask?.callId, undefined, 'a task turn\'s answer is no spoken call answer');
+});
+
+test('the subconscious gets the mode the turn runs in before it; nothing of it runs after', async () => {
   const h = setup();
   const seen: Array<[string, string | undefined]> = [];
   Object.assign(h.services, {
@@ -50,30 +108,42 @@ test('the subconscious gets the mode the turn runs in, before and after it', asy
     modes: { get: (key: string) => (key === 'video' ? { ...GENERAL_MODE, key: 'video' } : GENERAL_MODE) },
     subconscious: {
       beforeTurn: async (input: { mode?: string }) => { seen.push(['before', input.mode]); return undefined; },
-      afterTurn: (input: { mode?: string }) => { seen.push(['after', input.mode]); },
     },
   });
-  h.chats.update(h.chat.id, { settings: { mode: 'video' } }, 'human');
+  h.chats.update(h.chat.id, { settings: { mode: 'general' } }, 'human'); // a chat's old mode setting changes nothing
+  h.org.add({ ...h.org.require(h.tom.id), mode: 'video' });
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Cut the intro' });
   const outcome = await new TurnExecutor(() => h.services).execute(h.request());
   assert.equal(outcome.status, 'done');
-  assert.deepEqual(seen, [['before', 'video'], ['after', 'video']], 'the chat\'s mode (plan.mode.key), not the agent\'s general');
+  assert.deepEqual(seen, [['before', 'video']], 'the agent\'s own mode (plan.mode.key), never a chat\'s');
 });
 
-test('a model.set request reaches the router as an explicit previous choice, once', async () => {
+test('a model.set request reaches the router as an explicit previous choice: its effort for one turn, its model until a turn could apply it', async () => {
   const h = setup();
   h.runs.push({ id: 'run_0', agentId: h.tom.id, conversationId: h.chat.id, model: 'codex:gpt-6.1-sol', effort: 'low', status: 'done' });
 
-  setNextRoute(h.db, h.tom.id, h.chat.id, { modelId: 'claude:claude-opus-5-5', effort: 'high', at: h.clock.now() });
+  setNextRoute(h.db, h.tom.id, { modelId: 'claude:claude-opus-5-5', effort: 'high', at: h.clock.now() });
   const asked = (await planTurn(h.services, h.request()))!;
-  assert.deepEqual(asked.previous, { modelId: 'claude:claude-opus-5-5', effort: 'high', explicit: true });
+  // B-083 D1: `from` – the model I am on (my newest done run); the turn stays there off a boundary and while the named one cannot run
+  assert.deepEqual(asked.previous, { modelId: 'claude:claude-opus-5-5', effort: 'high', explicit: true, from: 'codex:gpt-6.1-sol' });
   assert.equal(routeRequest(asked).previous?.explicit, true);
+  assert.equal(routeRequest(asked).boundary, true, 'no session yet: the turn stands at a boundary (agents/boundary.ts)');
 
-  // Effort only: the new effort, still the agent's own choice; the model follows the usual rules (RT2).
-  setNextRoute(h.db, h.tom.id, h.chat.id, { effort: 'xhigh', at: h.clock.now() });
-  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'xhigh', explicit: true, asked: 'effort' });
+  // 17.11.2026: an effort alone replaces my step; the model I asked for keeps waiting in its own row.
+  h.clock.advance(1_000);
+  setNextRoute(h.db, h.tom.id, { effort: 'xhigh', at: h.clock.now() });
+  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'claude:claude-opus-5-5', effort: 'xhigh', explicit: true, from: 'codex:gpt-6.1-sol' });
 
-  // The request was consumed: the plain return rule is not explicit.
+  // B-080: planning leaves both (a turn that fails before its engine keeps them); taken as the engine starts, the plain
+  // choice is not explicit.
+  const again = (await planTurn(h.services, h.request()))!;
+  assert.equal(again.previous?.explicit, true);
+  assert.equal(again.nextStepAt, h.clock.now(), 'the plan carries the at of the step it read');
+  assert.equal(again.nextModelAt, h.clock.now() - 1_000, 'and of the model I asked for, since this turn can apply it');
+  assert.equal(takeNextRoute(h.db, h.tom.id, again.nextStepAt! - 1), undefined, 'another step (an older at) is not taken');
+  takeNextRoute(h.db, h.tom.id, again.nextStepAt);
+  assert.deepEqual((await planTurn(h.services, h.request()))!.previous, { modelId: 'claude:claude-opus-5-5', effort: 'low', explicit: true, asked: 'model', from: 'codex:gpt-6.1-sol' }, 'the step is used up; the model is still asked for');
+  takeNextModel(h.db, h.tom.id, again.nextModelAt!);
   const plain = (await planTurn(h.services, h.request()))!;
   assert.deepEqual(plain.previous, { modelId: 'codex:gpt-6.1-sol', effort: 'low' });
   assert.equal(routeRequest(plain).previous?.explicit, undefined);
@@ -150,7 +220,7 @@ test('attachments are extracted before the delta; a failed extraction does not s
   assert.deepEqual(h.contextCalls, []);
 });
 
-test('last-prompt.md holds what is sent: stable, volatile and the "My final text" line', async () => {
+test('last-prompt.md holds what is sent: the system prompt, then the input with the live context first', async () => {
   const h = setup();
   const temp = tempDir('wf-last-turn-');
   try {
@@ -159,9 +229,9 @@ test('last-prompt.md holds what is sent: stable, volatile and the "My final text
     const plan = (await planTurn(h.services, h.request()))!;
     const turn = await buildTurn(h.services, plan, h.request(), h.route, []);
     const written = readFileSync(path.join(temp.dir, 'agents', h.tom.id, 'last-prompt.md'), 'utf8');
-    assert.match(turn.prompt.volatile ?? '', /My final text/);
-    assert.ok(written.includes(turn.prompt.stable));
-    assert.ok(written.includes(turn.prompt.volatile ?? ''), written);
+    assert.ok(written.includes(`# System prompt\n\n${turn.prompt.stable}\n\n# Input\n\n<live>\n${turn.prompt.volatile}\n</live>`), written);
+    const text = turn.input.map((part) => (part.type === 'text' ? part.text : '')).join('');
+    assert.ok(written.includes(text), 'the turn input as it goes out');
   } finally { temp.cleanup(); }
 });
 
@@ -242,24 +312,22 @@ test('an account limit reported as an error reaches ownership as a limit, not as
   assert.deepEqual(outcomes, ['limit', 'limit', 'failed']);
 });
 
-test('engine output files reach the message; an answer that is only an image is kept, not removed', async () => {
+test('engine output files reach the message; an answer that is only an image is posted', async () => {
   const h = setup();
   const request = h.request({ runId: 'run_files' });
   const plan = (await planTurn(h.services, request))!;
-  const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
   const calls: Array<{ body: string; files?: unknown[] }> = [];
-  const real = h.services.chats.finishAgentMessage.bind(h.services.chats);
-  h.services.chats.finishAgentMessage = (id, final) => { calls.push({ body: final.body, files: final.files }); return real(id, { ...final, files: undefined }); };
+  const real = h.services.chats.postAgentMessage.bind(h.services.chats);
+  h.services.chats.postAgentMessage = (chat, agentId, runId, final) => { calls.push({ body: final.body, files: final.files }); return real(chat, agentId, runId, { ...final, files: undefined }); };
   const image = { name: 'generated-image-1.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' };
-  finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: '', stop: 'done', files: [image] }), messageId);
+  const messageId = finishTurn(h.services, plan, h.routed(), request, h.attempt({ text: '', stop: 'done', files: [image] })).messageId;
   assert.deepEqual(calls, [{ body: '', files: [image] }], 'files are handed to the chat with the final message');
-  assert.ok(h.chats.messages(h.chat.id).some((message) => message.id === messageId), 'the message stays');
+  assert.ok(h.chats.messages(h.chat.id).some((message) => message.id === messageId), 'the message is posted');
 
-  // Without text and without files an empty answer is still removed.
+  // Without text and without files nothing is posted.
   const again = h.request({ runId: 'run_empty' });
-  const second = h.chats.beginAgentMessage(h.chat.id, h.tom.id, again.runId).id;
-  finishTurn(h.services, (await planTurn(h.services, again))!, h.routed(), again, h.attempt({ text: '', stop: 'done' }), second);
-  assert.ok(!h.chats.messages(h.chat.id).some((message) => message.id === second));
+  finishTurn(h.services, (await planTurn(h.services, again))!, h.routed(), again, h.attempt({ text: '', stop: 'done' }));
+  assert.ok(!h.chats.messages(h.chat.id).some((message) => message.runId === again.runId));
 });
 
 test('a failover after tool calls books both attempts: tools, plan, tokens and cost (regression)', async () => {
@@ -344,27 +412,4 @@ test('a failed or refused call of ours is no progress: its output decides, else 
     input.onEvent({ type: 'tool_end', callId: 'toolu_4', ok: true, summary: 'created' });
   });
   assert.deepEqual(ran, { tools: [['shell.exec', true], ['tasks.create', true]], progressed: true });
-});
-
-test('B-047: a bare task wake for work its owner set aside starts no turn; a note brings it back; an empty input is the app\'s note', async () => {
-  const h = setup();
-  const task = h.tasks.create({ conversationId: h.chat.id, title: 'Compare STT models', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: h.tom.id });
-  // The person said "stop": the owner set its own task to waiting while the creation's task wake was still queued.
-  h.tasks.setStatus(task.id, 'waiting', h.tom.id, 'Stopped at the person\'s request.');
-  assert.equal(await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })), undefined, 'the stale wake restarts nothing');
-  for (const status of ['blocked', 'needs_you'] as const) {
-    h.tasks.setStatus(task.id, status, h.tom.id, 'set aside');
-    assert.equal(await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })), undefined, status);
-  }
-  h.tasks.setStatus(task.id, 'waiting', h.tom.id, 'Stopped.');
-  const news = await planTurn(h.services, h.request({ taskId: task.id, reason: 'task', notes: [{ text: 'The human marked a step as done: Draft', at: h.clock.now() }] }));
-  assert.ok(news, 'a wake with news still runs');
-  h.tasks.setStatus(task.id, 'working', h.tom.id);
-  const plan = (await planTurn(h.services, h.request({ taskId: task.id, reason: 'task' })))!;
-  assert.ok(plan, 'work in progress still continues');
-  h.context.delta = () => { h.contextCalls.push('delta'); return { text: '', images: [], lastSeq: 0 }; };
-  const turn = await buildTurn(h.services, plan, h.request({ taskId: task.id, reason: 'task' }), h.route, []);
-  const text = (turn.input[0] as { text: string }).text;
-  assert.match(text, /^Note from the app – nobody wrote anything new: my task \S+ "Compare STT models" is working;/);
-  assert.doesNotMatch(text, /^Continue your task/);
 });

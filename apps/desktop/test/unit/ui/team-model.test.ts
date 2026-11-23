@@ -9,7 +9,8 @@ import type { ConversationSummary } from '../../../src/shared/model/chat.ts';
 import type { RunItem } from '../../../src/shared/model/runs.ts';
 import type { OrgEntry } from '../../../src/ui/team/model.ts';
 import {
-  agentStatusLine, applyArchived, buildOrg, countReports, effectiveStatus, groupBySpace, interactionScores, matchesAgent, previewData, runEntries,
+  activeSpace, agentStatusLine, applyArchived, buildOrg, countReports, effectiveStatus, groupBySpace, interactionScores, matchesAgent, previewData,
+  reportSpace, runEntries, teamHeadline,
 } from '../../../src/ui/team/model.ts';
 
 const NOW = Date.UTC(2026, 9, 18, 12);
@@ -68,7 +69,7 @@ test('buildOrg nests reports, ranks siblings by score and survives cycles and ar
   assert.deepEqual(seen.slice().sort(), ['m', 'p', 'q', 'r', 'x', 'y', 'z']);
 });
 
-test('groupBySpace: space-less roots first without a heading, then one group per active space in order', () => {
+test('groupBySpace: space-less roots first, then one group per active space in order', () => {
   const spaces: Space[] = [
     { id: 'sp_b', name: 'Brand', kind: 'brand', sort: 2, createdAt: 0 },
     { id: 'sp_a', name: 'Company', kind: 'company', sort: 1, createdAt: 0 },
@@ -82,80 +83,59 @@ test('groupBySpace: space-less roots first without a heading, then one group per
   assert.deepEqual(groupBySpace([], spaces), []);
 });
 
-test('groupBySpace: area agents hired by the space-less Manager show under their area, branches stay together', () => {
+test('groupBySpace: only roots are grouped – reports always stay under their manager, whatever their space', () => {
   const spaces: Space[] = [
     { id: 'sp_priv', name: 'Private', kind: 'private', sort: 0, createdAt: 0 },
     { id: 'sp_brand', name: 'Personal brand', kind: 'brand', sort: 1, createdAt: 0 },
   ];
+  const ids = (entries: OrgEntry[]) => entries.map((entry) => entry.agent.id);
   const tree = buildOrg([
     agent('m', { name: 'Manager' }),
     agent('sec', { name: 'Secretary', managerId: 'm', spaceId: 'sp_priv' }),
     agent('ed', { name: 'Editor', managerId: 'm', spaceId: 'sp_brand' }),
-    agent('cut', { name: 'Cutter', managerId: 'ed', spaceId: 'sp_brand' }), // same space: stays nested
-    agent('help', { name: 'Helper', managerId: 'ed' }), // no space: stays in the branch
-    agent('ops', { name: 'Ops', managerId: 'm' }), // no space: stays under the Manager
-    agent('own', { name: 'Own', spaceId: 'sp_brand' }), // a root of the space comes first
+    agent('cut', { name: 'Cutter', managerId: 'ed', spaceId: 'sp_brand' }),
+    agent('help', { name: 'Helper', managerId: 'ed' }),
+    agent('ops', { name: 'Ops', managerId: 'm' }),
+    agent('am', { name: 'Brand lead', managerId: 'm' }), // a space-less area manager stays under the Manager too
+    agent('so', { name: 'Social', managerId: 'am', spaceId: 'sp_brand' }),
+    agent('own', { name: 'Own', spaceId: 'sp_brand' }), // a root of the space: under its heading
   ]);
   const groups = groupBySpace(tree, spaces);
-  assert.deepEqual(groups.map((group) => group.space?.name ?? null), [null, 'Private', 'Personal brand']);
-  assert.deepEqual(groups[0].entries.map((entry) => entry.agent.id), ['m']);
-  assert.deepEqual(groups[0].entries[0].reports.map((entry) => entry.agent.id), ['ops']);
-  assert.equal(countReports(groups[0].entries[0]), 1, 'counts follow what is shown');
-  assert.deepEqual(groups[1].entries.map((entry) => entry.agent.id), ['sec']);
-  assert.deepEqual(groups[2].entries.map((entry) => entry.agent.id), ['own', 'ed']);
-  assert.deepEqual(groups[2].entries[1].reports.map((entry) => entry.agent.id).sort(), ['cut', 'help']);
-  // Archiving the Private space only removes its heading: the secretary goes back under the Manager.
-  const archived = groupBySpace(tree, [{ ...spaces[0], archivedAt: 1 }, spaces[1]]);
-  assert.deepEqual(archived.map((group) => group.space?.name ?? null), [null, 'Personal brand']);
-  assert.deepEqual(archived[0].entries[0].reports.map((entry) => entry.agent.id).sort(), ['ops', 'sec']);
+  assert.deepEqual(groups.map((group) => [group.space?.name ?? null, ids(group.entries)]), [[null, ['m']], ['Personal brand', ['own']]]);
+  const manager = groups[0].entries[0];
+  assert.deepEqual(ids(manager.reports), ['am', 'ed', 'ops', 'sec']);
+  assert.equal(countReports(manager), 7, 'the whole branch stays under the Manager');
+  assert.deepEqual(ids(manager.reports[1].reports), ['cut', 'help']);
+  assert.deepEqual(ids(manager.reports[0].reports), ['so']);
+  // Archiving a space only removes its heading: its roots join the space-less group, nothing else moves.
+  const archived = groupBySpace(tree, [spaces[0], { ...spaces[1], archivedAt: 1 }]);
+  assert.deepEqual(archived.map((group) => [group.space?.name ?? null, ids(group.entries)]), [[null, ['m', 'own']]]);
   // Every agent appears exactly once.
   const seen: string[] = [];
-  const walk = (entries: typeof tree) => { for (const entry of entries) { seen.push(entry.agent.id); walk(entry.reports); } };
+  const walk = (entries: OrgEntry[]) => { for (const entry of entries) { seen.push(entry.agent.id); walk(entry.reports); } };
   for (const group of groups) walk(group.entries);
-  assert.deepEqual(seen.sort(), ['cut', 'ed', 'help', 'm', 'ops', 'own', 'sec']);
+  assert.deepEqual(seen.sort(), ['am', 'cut', 'ed', 'help', 'm', 'ops', 'own', 'sec', 'so']);
 });
 
-test('groupBySpace: a space-less area manager moves into its team\'s area; branches never split', () => {
+test('reportSpace: a row names its space only where it differs from the one it sits in', () => {
   const spaces: Space[] = [
     { id: 'sp_brand', name: 'Personal brand', kind: 'brand', sort: 0, createdAt: 0 },
-    { id: 'sp_co', name: 'Company', kind: 'company', sort: 1, createdAt: 0 },
+    { id: 'sp_old', name: 'Old', kind: 'custom', sort: 1, createdAt: 0, archivedAt: 1 },
   ];
-  const ids = (entries: OrgEntry[]) => entries.map((entry) => entry.agent.id);
-  // Manager → area manager (no space) → area agents: the area manager leads its team under the heading.
-  const lead = groupBySpace(buildOrg([
-    agent('m', { name: 'Manager' }),
-    agent('am', { name: 'Brand lead', managerId: 'm' }),
-    agent('ed', { name: 'Editor', managerId: 'am', spaceId: 'sp_brand' }),
-    agent('so', { name: 'Social', managerId: 'am', spaceId: 'sp_brand' }),
-    agent('note', { name: 'Notes', managerId: 'am' }), // space-less leaf: neutral, stays with its manager
-  ]), spaces);
-  assert.deepEqual(lead.map((group) => group.space?.id ?? null), [null, 'sp_brand']);
-  assert.deepEqual(ids(lead[0].entries), ['m']);
-  assert.equal(countReports(lead[0].entries[0]), 0);
-  assert.deepEqual(ids(lead[1].entries), ['am']);
-  assert.deepEqual(ids(lead[1].entries[0].reports), ['ed', 'note', 'so']);
-  assert.equal(countReports(lead[1].entries[0]), 3, 'the area manager keeps its caret and count');
+  // Manager (no space) → Editor (brand): named; Editor → Cutter (brand): not again; Editor → Helper (none): nothing.
+  const editor = reportSpace({ spaceId: 'sp_brand' }, '', spaces);
+  assert.deepEqual(editor, { name: 'Personal brand', context: 'sp_brand' });
+  assert.deepEqual(reportSpace({ spaceId: 'sp_brand' }, editor.context, spaces), { name: '', context: 'sp_brand' });
+  assert.deepEqual(reportSpace({}, editor.context, spaces), { name: '', context: 'sp_brand' }, 'a space-less report sits in its manager\'s');
+  assert.deepEqual(reportSpace({ spaceId: 'sp_old' }, '', spaces), { name: '', context: '' }, 'an archived space counts as none');
+  assert.equal(activeSpace({ spaceId: 'sp_gone' }, spaces), undefined);
+});
 
-  // Manager → Ed(brand) → Help(no space) → Cut(brand): one brand branch, compared with the group shown.
-  const chain = groupBySpace(buildOrg([
-    agent('m', { name: 'Manager' }),
-    agent('ed', { name: 'Editor', managerId: 'm', spaceId: 'sp_brand' }),
-    agent('help', { name: 'Helper', managerId: 'ed' }),
-    agent('cut', { name: 'Cutter', managerId: 'help', spaceId: 'sp_brand' }),
-  ]), spaces);
-  assert.deepEqual(chain.map((group) => [group.space?.id ?? null, ids(group.entries)]), [[null, ['m']], ['sp_brand', ['ed']]]);
-  assert.deepEqual(ids(chain[1].entries[0].reports), ['help']);
-  assert.deepEqual(ids(chain[1].entries[0].reports[0].reports), ['cut']);
-
-  // A space-less manager with a mixed team stays with its own manager; its reports go to their areas.
-  const mixed = groupBySpace(buildOrg([
-    agent('m', { name: 'Manager' }),
-    agent('ops', { name: 'Ops lead', managerId: 'm' }),
-    agent('ed', { name: 'Editor', managerId: 'ops', spaceId: 'sp_brand' }),
-    agent('dev', { name: 'Dev', managerId: 'ops', spaceId: 'sp_co' }),
-  ]), spaces);
-  assert.deepEqual(mixed.map((group) => [group.space?.id ?? null, ids(group.entries)]), [[null, ['m']], ['sp_brand', ['ed']], ['sp_co', ['dev']]]);
-  assert.deepEqual(ids(mixed[0].entries[0].reports), ['ops']);
+test('teamHeadline: agents, then working and waiting from the live state, zero counts left out', () => {
+  const list = [agent('a'), agent('b', { status: 'waiting' }), agent('c', { status: 'waiting' }), agent('d', { archivedAt: 1, status: 'working' }), agent('e', { status: 'working' })];
+  assert.equal(teamHeadline(list, new Map([['a', {}], ['b', {}]])), '4 agents · 3 working · 1 waiting', 'a live run wins over waiting');
+  assert.equal(teamHeadline([agent('a')], new Map()), '1 agent');
+  assert.equal(teamHeadline([], new Map()), '0 agents');
 });
 
 test('status: live activity wins; the line prefers the live note, then status note, then role', () => {
@@ -211,4 +191,14 @@ test('applyArchived: an archived agent comes in newest first, a restored one goe
   list = applyArchived(list, { ...one, archivedAt: undefined });
   assert.deepEqual(list.map((entry) => entry.id), ['ag_2'], 'restored: out');
   assert.deepEqual(applyArchived(list, agent('ag_3')).map((entry) => entry.id), ['ag_2'], 'active agents never join');
+});
+
+test('F18: the Team page line is the structure – role and direct reports – whatever the agent does right now', async () => {
+  const { structureLine } = await import('../../../src/ui/team/model.ts');
+  const manager = agent('ag_konrad', { role: 'Personal manager', status: 'working', statusNote: 'Reviewing the launch plan' });
+  const [root] = buildOrg([manager, agent('ag_nora', { managerId: 'ag_konrad' }), agent('ag_mara', { managerId: 'ag_konrad' }), agent('ag_ida', { managerId: 'ag_nora' })]);
+  assert.equal(structureLine(manager, root.reports.length), 'Personal manager · 2 reports', 'direct reports; the live note stays out');
+  assert.equal(structureLine(agent('ag_nora'), 1), 'Role · 1 report');
+  assert.equal(structureLine(agent('ag_ida'), 0), 'Role', 'a leaf: the role alone');
+  assert.equal(structureLine(agent('ag_x', { role: ' ' }), 3), '3 reports');
 });

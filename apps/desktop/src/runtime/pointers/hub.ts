@@ -1,12 +1,13 @@
 // Named pointers in the runtime (B-055): the last pointer of every person and agent per surface, in
 // memory. Browsers and computer use report agent moves; the UI and main report the person's pointer
 // (rpc pointers.point); viewers get 'pointers.changed' (at most one per surface every 100 ms);
-// agents read pointersLine() in their tool results.
+// agents read pointersLine() in their tool results. B-081: a person's pointer is kept 5 minutes for those lines (liveFor),
+// an agent's 15 s; what viewers get (on: pointers.list, pointers.changed) stays at most POINTER_TTL_MS old.
 // Owns: the in-memory table, expiry by age and the event throttle. Never: storage, polling loops
 // (one trailing timer per surface only while changes are pending) or deciding what agents may do.
 
 import type { Bus } from '../bus.ts';
-import { POINTER_PATH_MAX, POINTER_TTL_MS, pointersLine, type PointerPoint } from '../../shared/model/pointers.ts';
+import { POINTER_PATH_MAX, POINTER_TTL_MS, liveFor, pointersLine, type PointerPoint } from '../../shared/model/pointers.ts';
 import { thinSteps } from '../../shared/model/pointer-motion.ts';
 
 const EMIT_GAP_MS = 100;
@@ -45,13 +46,13 @@ export class PointerHub {
     if (this.surfaces.get(surface)?.delete(actorId)) this.changed(surface);
   }
 
-  /** Live pointers of a surface. */
+  /** Live pointers of a surface as viewers draw them (each under POINTER_TTL_MS old). */
   on(surface: string): PointerPoint[] {
-    const table = this.surfaces.get(surface);
-    if (!table) return [];
     const now = this.now();
-    return [...table.values()].filter((p) => now - p.at < POINTER_TTL_MS);
+    return this.all(surface).filter((p) => now - p.at < POINTER_TTL_MS);
   }
+
+  private all(surface: string): PointerPoint[] { return [...(this.surfaces.get(surface)?.values() ?? [])]; }
 
   /** Live pointers of every surface whose key starts with `prefix` (e.g. 'chat:c1/'). */
   under(prefix: string): PointerPoint[] {
@@ -60,9 +61,9 @@ export class PointerHub {
     return out;
   }
 
-  /** The line an agent reads about the others on a surface ('' when nobody else is there). */
+  /** The line an agent reads about the others on a surface ('' when nobody else is there; a person's for 5 minutes). */
   line(surface: string, selfId: string): string {
-    return pointersLine(this.on(surface), selfId, this.now());
+    return pointersLine(this.all(surface), selfId, this.now());
   }
 
   stop(): void {
@@ -74,7 +75,7 @@ export class PointerHub {
   private prune(): void {
     const now = this.now();
     for (const [key, table] of this.surfaces) {
-      for (const [id, p] of table) if (now - p.at >= POINTER_TTL_MS) table.delete(id);
+      for (const [id, p] of table) if (!liveFor(p, now)) table.delete(id);
       if (table.size === 0) this.surfaces.delete(key);
     }
     if (this.surfaces.size < MAX_SURFACES) return;

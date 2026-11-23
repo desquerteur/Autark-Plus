@@ -3,13 +3,14 @@
 // Browser · Open in side panel (its browser as a tab of the side pane) · Connect Telegram… · Duplicate… and
 // Change reports-to… (both "set up with AI": the Manager's chat opens with
 // the request, the skill agent-duplicate does the copy) · Export · Archive; an archived agent offers Restore.
-// Person: Message · Edit · Invite a device · Devices and chats · Remove access. Text only, no icons.
+// Person: Message · Edit · Invite a device · Devices and chats · Remove access – F14: for someone who never joined
+// "Remove" instead (people.remove: they leave the team for good). Text only, no icons.
 // Owns: which items an agent or a person offers and what they call. Never: draws a menu or a dialog (the
 // person dialogs are mounted by person-dialogs.tsx; Browser is shown by AgentView).
 
 import { signal } from '@preact/signals';
 import type { Agent } from '../../shared/model/org.ts';
-import type { Person } from '../../shared/model/people.ts';
+import { hasJoined, type Person } from '../../shared/model/people.ts';
 import type { MenuSection } from '../lib/popover.tsx';
 import { confirm } from '../lib/dialog.tsx';
 import { platform } from '../lib/platform.ts';
@@ -18,7 +19,7 @@ import { go, navigate, route } from '../lib/router.ts';
 import { can } from '../lib/session.ts';
 import { setChatPanel } from '../lib/shell-state.ts';
 import { agents, conversations, isMobile, removeById, upsertById } from '../lib/store.ts';
-import { upsertPerson } from '../lib/people.ts';
+import { dropPerson, upsertPerson } from '../lib/people.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
 import { directReachable, messageMember, openDirect } from '../chat/direct.ts';
 import { openAgentBrowser } from '../workspace/pages.ts';
@@ -91,16 +92,39 @@ async function removeAccess(person: Person): Promise<void> {
   try { upsertPerson(await rpc.call('people.revoke', { id: person.id })); } catch (error) { toastError(error, 'Could not remove the access'); }
 }
 
+/** F14: a person who never joined leaves the team for good (people.remove; PersonInvite's Withdraw invite does the same). */
+async function removePerson(person: Person): Promise<void> {
+  if (!(await confirm({ title: `Remove ${person.name}?`, body: 'They never joined: their invite ends and they leave the team. Anyone who reported to them moves up.', confirmLabel: 'Remove', danger: true }))) return;
+  try {
+    await rpc.call('people.remove', { id: person.id });
+    dropPerson(person.id);
+    const current = route.value;
+    if (current.view === 'team' && current.personId === person.id) navigate({ view: 'team' }, { replace: true });
+  } catch (error) {
+    toastError(error, 'Could not remove');
+  }
+}
+
+/** 17.11.2026: the invite is a card on the person's page (PersonInvite.tsx) – that page opens with it, no modal. */
+function inviteDevice(person: Person): void {
+  const current = route.value;
+  if (!(current.view === 'team' && current.personId === person.id)) navigate({ view: 'team', personId: person.id });
+  personDialog.value = { kind: 'invite', id: person.id };
+}
+
 export function personMenu(person: Person): MenuSection[] {
   const admin = can('people.save');
   const others = admin && !person.owner;
+  const joined = hasJoined(person);
   return [
     { items: person.id !== 'human' && person.status === 'active' && directReachable(person.id) ? [{ label: 'Message', onSelect: () => void openDirect(person.id) }] : [] },
     { items: [
       ...(admin ? [{ label: 'Edit', onSelect: () => { personDialog.value = { kind: 'edit', id: person.id }; } }] : []),
-      ...(others ? [{ label: person.status === 'revoked' ? 'Invite again' : 'Invite a device', onSelect: () => { personDialog.value = { kind: 'invite', id: person.id }; } }] : []),
+      ...(others ? [{ label: person.status === 'revoked' ? 'Invite again' : 'Invite a device', onSelect: () => inviteDevice(person) }] : []),
       ...(others ? [{ label: 'Devices and chats', onSelect: () => { personDialog.value = { kind: 'details', id: person.id }; } }] : []),
     ] },
-    { items: others && person.status !== 'revoked' ? [{ label: 'Remove access', danger: true, onSelect: () => void removeAccess(person) }] : [] },
+    { items: !others ? []
+      : !joined ? [{ label: 'Remove', danger: true, onSelect: () => void removePerson(person) }]
+      : person.status !== 'revoked' ? [{ label: 'Remove access', danger: true, onSelect: () => void removeAccess(person) }] : [] },
   ];
 }

@@ -9,8 +9,8 @@ interface CaptureTab { view: WebContentsView; error?: string }
 
 /** The visible page of a loaded tab. */
 export async function captureTab(id: string, tab: CaptureTab | undefined): Promise<WorkspaceCapture> {
-  if (!tab || tab.view.webContents.isDestroyed() || tab.error) throw new Error('Open the page first.');
-  const contents = tab.view.webContents;
+  const contents = tab?.view?.webContents; // undefined once the page closed itself
+  if (!tab || !contents || contents.isDestroyed() || tab.error) throw new Error('Open the page first.');
   const image = await contents.capturePage();
   if (image.isEmpty()) throw new Error('This page cannot be captured right now.');
   const { width, height } = tab.view.getBounds();

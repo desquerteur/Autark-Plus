@@ -30,7 +30,7 @@ test('acp: resume after a restart uses session/load (replay dropped, context blo
   assert.equal(load.params.mcpServers[0].type, 'http');
   assert.ok(!events.some((e: any) => e.type === 'text' && e.delta.includes('OLD HISTORY')));
   const prompt = requests('session/prompt')[0].params.prompt;
-  assert.equal(prompt[0].text, '<workforce-context>\nVOLATILE\n</workforce-context>');
+  assert.equal(prompt[0].text, '<live>\nVOLATILE\n</live>');
   assert.equal(requests('session/new').length, 0);
   // Same process: the session is live, no second load.
   await engine.run(turnInput({ session: { ref: 'sess_old', generation: 3 } }).input);

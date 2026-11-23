@@ -2,10 +2,10 @@
 //   dictation        – microphone floats at any sample rate → 16 kHz mono PCM16 little-endian with a
 //                      windowed-sinc low-pass (`lowPass`), so 8–24 kHz content does not fold into the
 //                      speech band, and the take as a 16 kHz WAV (wavFile);
-//   conversation     – a tiny level-based utterance detector (speech start / end of speech);
+//   conversation     – the block level (rms) the turn detector (turn-detect.ts) and barge-in start from;
 //   realtime voice   – the same encoder at 24 kHz (`targetRate`) and PCM16 back to floats for playback;
 //   level meter      – block levels as 0..1 bars (meterLevel) in a fixed-size history (LevelHistory).
-// Owns: resampling, sample encoding and the detector rules. Never: touches the DOM, the microphone or
+// Owns: resampling, sample encoding and the level. Never: touches the DOM, the microphone or
 // the bridge (lib/microphone.ts and the callers do), so tests run in Node.
 
 export const PCM_RATE = 16_000;
@@ -171,51 +171,4 @@ export function rms(samples: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
   return Math.sqrt(sum / samples.length);
-}
-
-export interface DetectorOptions {
-  /** Level above which a block counts as speech. */
-  threshold?: number;
-  /** Silence after speech that ends the utterance. */
-  silenceMs?: number;
-  /** Hard cap of one utterance. */
-  maxMs?: number;
-}
-
-/**
- * Speech start / end from block levels (the legacy rules: 0.018 RMS, 1.1 s silence, 120 s cap).
- * `feed` answers 'start' when speech begins, 'end' when the utterance is over, else null.
- */
-export class UtteranceDetector {
-  private readonly threshold: number;
-  private readonly silenceMs: number;
-  private readonly maxMs: number;
-  private startedAt: number | null = null;
-  private lastSound = 0;
-
-  constructor(options: DetectorOptions = {}) {
-    this.threshold = options.threshold ?? 0.018;
-    this.silenceMs = options.silenceMs ?? 1100;
-    this.maxMs = options.maxMs ?? 120_000;
-  }
-
-  get speaking(): boolean { return this.startedAt !== null; }
-
-  feed(level: number, now: number): 'start' | 'end' | null {
-    const loud = level > this.threshold;
-    if (loud) this.lastSound = now;
-    if (this.startedAt === null) {
-      if (!loud) return null;
-      this.startedAt = now;
-      return 'start';
-    }
-    if (now - this.lastSound > this.silenceMs || now - this.startedAt >= this.maxMs) {
-      this.startedAt = null;
-      return 'end';
-    }
-    return null;
-  }
-
-  /** Forget a running utterance (e.g. while the reply is spoken). */
-  reset(): void { this.startedAt = null; }
 }

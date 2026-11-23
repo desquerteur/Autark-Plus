@@ -1,6 +1,7 @@
 // Anthropic Messages API engine (raw HTTP; no SDK dependency).
-// Owns: request shape (cached stable system block + volatile block, tools, adaptive thinking with
-// summarized display, output_config.effort, structured output, B-078: the agent's temperature on models without thinking), SSE assembly of content blocks
+// Owns: request shape (the cached stable system block, the live context first in the user message, tools, adaptive thinking with
+// summarized display, output_config.effort, structured output, B-078/B-083: the agent's temperature on the models that sample
+// without thinking anyway – thinking is never turned off for it, owner 09.11.), SSE assembly of content blocks
 // (thinking blocks as reasoning with an id per round and block, D5) and the tool_use loop. Assistant content (incl. thinking blocks + signatures) is appended unchanged.
 // A request's inputTokens counts its cache reads and writes; both also stand on their own in its usage when the API reports them.
 // Never: forces tool_choice (rejected by current models) or edits earlier turns (preserved thinking).
@@ -9,7 +10,7 @@ import type { EngineId, Effort } from '../../../shared/model/providers.ts';
 import type { CacheTokens, EngineEvent, EngineTurnInput } from '../types.ts';
 import type { ToolOutput } from '../../tools/types.ts';
 import { traceCallId, type TraceCall } from '../../../shared/model/subconscious.ts';
-import { ToolNames, addCache, isRecord, nearestEffort, num, outputImages, outputText, str, tryJson } from '../shared.ts';
+import { ToolNames, addCache, contextText, isRecord, nearestEffort, num, outputImages, outputText, str, tryJson } from '../shared.ts';
 import { HttpEngine, splitInput, type LoopStep } from './base.ts';
 import { HttpEngineError, postJson, readSse } from './common.ts';
 
@@ -24,13 +25,34 @@ export function anthropicProfile(model: string): { adaptive: boolean; efforts: E
   return { adaptive: false, efforts: ['none'] };
 }
 
+/** A Claude id as the Anthropic API names it: a provider prefix goes and dots read as dashes (anthropic/claude-opus-4.7 is claude-opus-4-7). */
+function claudeId(model: string): string {
+  return model.toLowerCase().replace(/^.*[/.](?=claude-)/, '').replace(/\./g, '-'); // anthropic/claude-opus-4.7, us.anthropic.claude-…
+}
+
 /**
- * B-078 (D14, D16): the temperature this model gets (0..1, the API's range), undefined where it is dropped: the adaptive
- * models think on every turn here and thinking refuses a changed temperature (Opus 4.7+, Sonnet/Haiku 5+ and Fable dropped
- * the sampling fields entirely), so only the models without thinking (Opus 4.5, Haiku 4.5 …) take one.
+ * B-083 (live 09.11.2026, 240 + 52 requests through Claude Code: .local/b083/experiments/deep/claude-matrix.md, verify.md):
+ * the Claude models that still sample with a temperature – the 4.6 generation and older (Sonnet and Opus 4.6, Haiku 4.5,
+ * Opus/Sonnet 4.5 and before, the 3.x ids), each only with thinking off (thinking on: 400 "temperature may only be set to 1
+ * when thinking is enabled or in adaptive mode", on the plan and the API alike). Opus 4.7 and 4.8, every 5.x model, Fable and
+ * Mythos answer any value but 1 with 400 "temperature is deprecated for this model", whatever the thinking mode; an unknown
+ * family counts as new. One rule for the Anthropic API here, http/temperature.ts and a gateway's Claude ids (compatible.ts).
+ */
+export function claudeSamples(model: string): boolean {
+  const id = claudeId(model);
+  if (/^claude-[0-3]-/.test(id)) return true; // claude-3-5-sonnet, claude-3-opus …
+  const named = /^claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d{1,2})(?!\d))?/.exec(id); // a date after the major is no minor
+  return named !== null && (Number(named[1]) < 4 || (Number(named[1]) === 4 && Number(named[2] ?? 0) <= 6));
+}
+
+/**
+ * B-078 (D14, D16), B-083: the temperature this model gets (0..1, the API's range – 1.5 is a 400), undefined where the model
+ * no longer samples (claudeSamples) or thinks: owner 09.11. – "Es ist unbedingt wichtig. Ohne das funktioniert das nicht gut.
+ * Mach das bitte nicht." Thinking is never turned off for a temperature, so a 4.6 model keeps its adaptive thinking and its
+ * own setting; the older models, which run here without thinking anyway (anthropicProfile), take it.
  */
 export function anthropicTemperature(model: string, value: number | undefined): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || anthropicProfile(model).adaptive) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || !claudeSamples(model) || anthropicProfile(claudeId(model)).adaptive) return undefined;
   return Math.max(0, Math.min(1, value));
 }
 
@@ -52,6 +74,8 @@ export class AnthropicEngine extends HttpEngine {
 
   protected async startConversation(input: EngineTurnInput, names: ToolNames, base: string) {
     const content: Array<Record<string, unknown>> = [];
+    const context = contextText(input.system.volatile);
+    if (context) content.push({ type: 'text', text: context });
     for (const part of splitInput(input.input).parts) {
       if (part.type === 'text') content.push({ type: 'text', text: part.text });
       else content.push({ type: 'image', source: { type: 'base64', media_type: part.mime, data: await this.image(part.path) } });
@@ -59,18 +83,17 @@ export class AnthropicEngine extends HttpEngine {
     const messages: Array<Record<string, unknown>> = [{ role: 'user', content: content.length ? content : [{ type: 'text', text: '(continue)' }] }];
     const system: Array<Record<string, unknown>> = [];
     if (input.system.stable) system.push({ type: 'text', text: input.system.stable, cache_control: { type: 'ephemeral' } });
-    if (input.system.volatile) system.push({ type: 'text', text: input.system.volatile });
     const body: Record<string, unknown> = { model: input.model, max_tokens: 64_000, stream: true, system, cache_control: { type: 'ephemeral' } };
     if (input.tools.length) body.tools = input.tools.map((tool) => ({ name: names.wire(tool.name), description: tool.description, input_schema: tool.inputSchema }));
     const profile = anthropicProfile(input.model);
+    const temperature = anthropicTemperature(input.model, input.temperature);
     const output: Record<string, unknown> = {};
     if (profile.adaptive) {
-      body.thinking = { type: 'adaptive', display: 'summarized' };
+      body.thinking = { type: 'adaptive', display: 'summarized' }; // B-083: never off for a temperature (anthropicTemperature)
       output.effort = nearestEffort(input.effort === 'none' ? 'low' : input.effort, profile.efforts);
     }
     if (input.outputSchema) output.format = { type: 'json_schema', schema: input.outputSchema };
     if (Object.keys(output).length) body.output_config = output;
-    const temperature = anthropicTemperature(input.model, input.temperature);
     if (temperature !== undefined) body.temperature = temperature;
 
     let round = 0; // D5: reasoning block ids stay unique across tool rounds
@@ -109,7 +132,7 @@ export class AnthropicEngine extends HttpEngine {
           }
           case 'content_block_stop': {
             const block = blocks[index];
-            if (block?.type === 'tool_use') block.input = tryJson(json.get(index) || '{}') ?? {};
+            if (block?.type === 'tool_use' && json.has(index)) block.input = tryJson(json.get(index)!);
             if (block?.type === 'thinking') emit({ type: 'reasoning_end', id: thought(index) });
             break;
           }
@@ -130,8 +153,10 @@ export class AnthropicEngine extends HttpEngine {
       if (!stopReason) throw new HttpEngineError({ code: 'internal', message: 'The model response did not complete.' });
       if (stopReason === 'refusal') throw new HttpEngineError({ code: 'forbidden', message: 'The model declined this request.' }, usage);
       const assistant = blocks.filter(Boolean);
-      messages.push({ role: 'assistant', content: assistant });
-      const calls = assistant.filter((b) => b.type === 'tool_use').map((b) => ({ id: str(b.id) ?? '', name: str(b.name) ?? '', args: b.input ?? {} }));
+      // Messages history requires an object input. A placeholder pairs the rejected call with its error result;
+      // execution still receives the original parsed value, so invalid JSON cannot become a default action.
+      messages.push({ role: 'assistant', content: assistant.map((b) => b.type === 'tool_use' && !isRecord(b.input) ? { ...b, input: {} } : b) });
+      const calls = assistant.filter((b) => b.type === 'tool_use').map((b) => ({ id: str(b.id) ?? '', name: str(b.name) ?? '', args: b.input }));
       if (stopReason === 'pause_turn') {
         // Server paused a long turn: continue by re-sending (no new user content needed).
         return { text, calls: [], done: false, continue: true, usage };

@@ -1,13 +1,15 @@
-// Owns: the Electron check of B-055 Q4 – the feedback cell in the window header: one fixed frame
-// cell right of the workspace cell, before the caption, at the same place in every view; a click opens the ~360 px menu
-// right-aligned under it and a second click closes it, moving no neighbour (expectStable); Escape
-// closes, Enter/Space toggle; the window shot is taken before the menu appears (the menu's region
-// in the shot equals a capture without it, while a capture with the menu differs) and includes
-// the side browser's native view; the "Screenshot" box is checked by default; Bug | Idea (AF-003, Bug first); the
-// Profile menu has no Feedback item, the command palette opens the menu; the draft survives closing;
-// painting a box in "Paint over" and Save creates a report whose one image is the painted JPEG
-// (≤ 1600 px, the box black) and no second image; light, dark, 640×480 and phone width, where the
-// cell sits before Profile. Needs a build without WORKFORCE_FEEDBACK_ORIGIN (the default build).
+// Owns: the Electron check of B-055 Q4 and the snapshot overlay (feedback 16.11.2026, F11/F13/F15) – the feedback cell in
+// the window header: one fixed frame cell right of the workspace cell, before the caption, at the same place in every
+// view; a click freezes the window – the overlay shows the shot over the whole window at 1:1 with the slim dock at the
+// bottom – moving no neighbour (expectStable); Escape closes, Enter/Space open; the shot is taken before the overlay
+// appears (the dock's region in the shot equals a capture without it, while a capture with the overlay differs) and
+// includes the side browser's native view; pressing the cell again inside the overlay snapshots the overlay itself and
+// keeps the words; an open dialog draws the cell at the same spot and its press opens the overlay above the dialog; the
+// "Screenshot" box is checked by default; Bug | Idea (AF-003, Bug first) is the one choice of kind; the Profile menu has
+// no Feedback item, the command palette opens the overlay; the draft survives closing; painting a box straight on the
+// frozen screen and Save creates a report whose one image is the painted JPEG (≤ 1600 px, the box black) and no second
+// image; light, dark, 640×480 and phone width, where the cell sits before Profile. Needs a build without
+// WORKFORCE_FEEDBACK_ORIGIN (the default build).
 // Talk (press and hold) is not exercised here: it would open the PC's real microphone
 // (test/unit/ui/feedback-press.test.ts and feedback-dictation.test.ts cover it).
 // Never: publishes anything, opens a browser or touches the person's profile (isolated demo profile).
@@ -60,7 +62,7 @@ async function imageFacts(page, url, regions) {
   }, [url, regions]);
 }
 
-test('the feedback cell: one place in every view, a stable menu, the shot before the menu, painted image only', { timeout: 300_000 }, async (t) => {
+test('the feedback cell: one place in every view, the frozen window, the shot before the overlay, painted image only', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-feedback-cell-'));
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
@@ -68,6 +70,9 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, WORKFORCE_TEST_DATA: profile, WORKFORCE_FAKE_ENGINE: '1', ELECTRON_ENABLE_LOGGING: '0' };
   delete env.WORKFORCE_FEEDBACK_ORIGIN; // nothing is sent: Save keeps the report on this PC
+  // the build ships the team's receiver (resources/feedback/receiver.json) since 16.11.2026: point at none, so this run
+  // stays "not set up" and never drops a letter into the real mailbox
+  env.WORKFORCE_FEEDBACK_RECEIVER = path.join(profile, 'no-receiver.json');
   const app = await electron.launch({ executablePath: electronPath, args: [root], cwd: root, timeout: 60_000, env });
   let rpc;
   t.after(async () => {
@@ -94,8 +99,15 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
 
   const cell = page.locator('.frame-feedback-cell');
   const button = cell.getByRole('button', { name: 'Feedback', exact: true });
-  const menu = page.locator('.popover.feedback-menu');
-  const field = menu.getByRole('textbox', { name: 'Your feedback' });
+  const overlay = page.locator('dialog.feedback-overlay[open]');
+  const dock = overlay.locator('.feedback-dock');
+  const field = dock.getByRole('textbox', { name: 'Your feedback' });
+  const frozen = overlay.locator('.feedback-stage img');
+  const canvas = overlay.locator('canvas.paint-canvas');
+  const slotButton = overlay.locator('.dialog-slot').getByRole('button', { name: 'Feedback', exact: true });
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const open = async (press) => { await press(); await overlay.waitFor(); await frozen.waitFor(); await canvas.waitFor(); };
+  const close = async () => { await page.keyboard.press('Escape'); await overlay.waitFor({ state: 'detached' }); };
 
   // ---- one fixed frame cell, the same place in every view, right of the workspace cell
   const first = (await rpc.call('chats.list'))[0];
@@ -106,7 +118,7 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
     places.push({ where, box: await cell.boundingBox() });
   }
   for (const entry of places) assert.deepEqual(entry.box, places[0].box, `the cell sits at one place (${entry.where})`);
-  assert.equal(await button.getAttribute('title'), 'Feedback');
+  assert.match(await button.getAttribute('title'), process.platform === 'darwin' ? /^Feedback – ⌘⇧F/ : /^Feedback – Ctrl\+Shift\+F/, 'the shortcut in the tooltip');
   const workspace = await page.locator('.frame-workspace-cell').boundingBox();
   assert.equal(Math.round(workspace.x + workspace.width + 4), Math.round(places[0].box.x), 'right beside the workspace cell, 4 px apart');
   const headerCells = await page.locator('.main-slot .frame-header .frame-header-cells').last().boundingBox();
@@ -120,74 +132,95 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   assert.equal(await page.getByRole('menuitem', { name: 'Feedback', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
 
-  // ---- a click opens the menu, a second click closes it; nothing beside it moves
+  // ---- a click freezes the window: the shot over the whole window at 1:1, the dock at the bottom; nothing moves
   await hash('#/home'); await page.waitForTimeout(250); await settle();
   const neighbours = ['.frame-feedback-cell', '.frame-workspace-cell', '.main-slot .frame-header', '.main-slot .frame-header-title', '.rail', '.sidebar .frame-header'];
-  await expectStable(page, neighbours, async () => { await button.click(); await menu.waitFor(); });
-  await menu.locator('.feedback-thumb img').waitFor();
-  const opened = await menu.boundingBox();
-  const at = await button.boundingBox();
-  assert.ok(Math.abs(opened.width - 360) <= 1, `about 360 px wide (${opened.width})`);
-  assert.ok(Math.abs(opened.x + opened.width - (at.x + at.width)) <= 1, 'right-aligned with the cell');
-  assert.ok(opened.y >= at.y + at.height, 'below the cell');
+  await expectStable(page, neighbours, async () => { await open(() => button.click()); });
+  const view = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  const still = await frozen.boundingBox();
+  assert.ok(still.x <= 0.5 && still.y <= 0.5 && Math.abs(still.width - view.width) <= 1 && Math.abs(still.height - view.height) <= 1, `the shot covers the window at 1:1 (${JSON.stringify(still)})`);
+  const docked = await dock.boundingBox();
+  assert.ok(view.height - (docked.y + docked.height) <= 16 && docked.height <= 140, `a slim dock at the bottom (${JSON.stringify(docked)})`);
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Your feedback', 'the field has the focus');
-  assert.equal(await menu.getByRole('checkbox', { name: 'Screenshot' }).isChecked(), true, 'checked by default');
-  await menu.getByText('Paint over anything private.', { exact: true }).waitFor();
-  assert.deepEqual(await menu.getByRole('radiogroup', { name: 'Kind of feedback' }).getByRole('radio').allTextContents(), ['Bug', 'Idea'], 'AF-003: Bug or Idea');
-  assert.equal(await menu.getByRole('radio', { name: 'Bug', exact: true }).getAttribute('aria-checked'), 'true', 'Bug by default');
-  assert.equal(await menu.getByRole('button', { name: 'Save', exact: true }).count(), 1, 'sending is not set up: Save');
-  assert.equal(await menu.getByRole('button', { name: 'Send', exact: true }).count(), 0);
+  assert.equal(await dock.getByRole('checkbox', { name: 'Screenshot' }).isChecked(), true, 'checked by default');
+  assert.equal(await dock.getByRole('button', { name: 'Pen', exact: true }).getAttribute('aria-pressed'), 'true', 'Pen is the default');
+  assert.deepEqual(await dock.getByRole('radiogroup', { name: 'Kind of feedback' }).getByRole('radio').allTextContents(), ['Bug', 'Idea'], 'AF-003: Bug or Idea');
+  assert.equal(await dock.getByRole('radio', { name: 'Bug', exact: true }).getAttribute('aria-checked'), 'true', 'Bug by default');
+  assert.equal(await dock.locator('[role=radiogroup]').count(), 1, 'no other categories');
+  assert.equal(await dock.getByRole('button', { name: 'Save', exact: true }).count(), 1, 'sending is not set up: Save');
+  assert.equal(await dock.getByRole('button', { name: 'Send', exact: true }).count(), 0);
   assert.equal(await button.getAttribute('aria-expanded'), 'true');
-  await shot('feedback-menu-light');
-  const taken = await menu.locator('.feedback-thumb img').getAttribute('src');
-  const withMenu = await page.evaluate(() => window.workforce.capture.window());
-  await expectStable(page, neighbours, async () => { await button.click(); await menu.waitFor({ state: 'detached' }); });
+  await shot('feedback-overlay-light');
+  const taken = await frozen.getAttribute('src');
+  const withOverlay = await page.evaluate(() => window.workforce.capture.window());
+  await expectStable(page, neighbours, close);
   await settle();
-  const withoutMenu = await page.evaluate(() => window.workforce.capture.window());
-  const shotDiff = await regionDiff(page, taken, withoutMenu, opened);
-  const menuDiff = await regionDiff(page, withMenu, withoutMenu, opened);
-  t.diagnostic(`menu region, pixels changed: shot vs no menu ${shotDiff.toFixed(2)} %, menu vs no menu ${menuDiff.toFixed(2)} %`);
-  assert.ok(menuDiff > 3, 'the comparison sees a menu');
-  // AF-003: the Bug | Idea row makes the menu one row taller, so its region covers more of the animated tour below
-  // (0.32 % → 0.50 % on a 125 % display); the relative bound still requires the shot to be ten times closer.
-  assert.ok(shotDiff < 1 && shotDiff < menuDiff / 10, 'the screenshot was taken before the menu appeared');
+  const withoutOverlay = await page.evaluate(() => window.workforce.capture.window());
+  const shotDiff = await regionDiff(page, taken, withoutOverlay, docked);
+  const dockDiff = await regionDiff(page, withOverlay, withoutOverlay, docked);
+  t.diagnostic(`dock region, pixels changed: shot vs no overlay ${shotDiff.toFixed(2)} %, overlay vs no overlay ${dockDiff.toFixed(2)} %`);
+  assert.ok(dockDiff > 3, 'the comparison sees the dock');
+  // AF-003: the Bug | Idea switch sits in the dock; the relative bound still requires the shot to be ten times closer.
+  assert.ok(shotDiff < 1 && shotDiff < dockDiff / 10, 'the screenshot was taken before the overlay appeared');
 
-  // ---- Escape closes (focus back on the cell), Enter and Space toggle
-  await button.click(); await menu.waitFor();
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+  // ---- the cell again inside the overlay: a snapshot of the overlay itself, the words stay
+  await open(() => button.click());
+  await field.fill('The dock itself');
+  const firstShot = await frozen.getAttribute('src');
+  await slotButton.click();
+  await page.waitForFunction((old) => document.querySelector('dialog.feedback-overlay[open] .feedback-stage img')?.getAttribute('src') !== old, firstShot);
+  assert.equal(await field.inputValue(), 'The dock itself', 'the words stay');
+  assert.ok(await regionDiff(page, await frozen.getAttribute('src'), firstShot, docked) > 3, 'the overlay and its dock are in the new snapshot');
+  await field.fill('');
+  await close();
+
+  // ---- Escape closes (focus back on the cell), Enter and Space open; the shortcut opens it too
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Feedback');
-  await page.keyboard.press('Enter'); await menu.waitFor();
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
-  await page.keyboard.press('Space'); await menu.waitFor();
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+  await open(() => page.keyboard.press('Enter'));
+  await close();
+  await open(() => page.keyboard.press('Space'));
+  await close();
+  await page.keyboard.press(`${mod}+Shift+F`);
+  if (await overlay.waitFor({ timeout: 3000 }).then(() => true, () => false)) await close();
+  else t.diagnostic('Ctrl+Shift+F not exercised: the synthetic key did not pass main\'s before-input-event');
 
-  // ---- the command palette opens the same menu; the draft survives closing
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+  // ---- an open dialog draws the cell at its spot; its press opens the overlay above the dialog
+  await page.keyboard.press(`${mod}+K`);
+  const palette = page.locator('dialog.palette[open]');
+  await palette.waitFor();
+  const inDialog = palette.locator('.dialog-slot').getByRole('button', { name: 'Feedback', exact: true });
+  if (await inDialog.waitFor({ timeout: 3000 }).then(() => true, () => false)) {
+    const slotBox = await inDialog.boundingBox();
+    const cellBox = await button.boundingBox();
+    for (const side of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(slotBox[side] - cellBox[side]) <= 1, `the slot lies on the cell (${side})`);
+    await open(() => inDialog.click());
+    await shot('feedback-overlay-over-dialog-light');
+    await close();
+    assert.equal(await palette.count(), 1, 'Escape closed the overlay only; the dialog stays');
+  } else {
+    t.diagnostic('the palette reaches the cell\'s spot at this size: no slot over it (the dialog keeps its controls)');
+  }
+  await page.keyboard.press('Escape'); await palette.waitFor({ state: 'detached' });
+
+  // ---- the command palette opens the same overlay; the draft survives closing
+  await page.keyboard.press(`${mod}+K`);
   await page.locator('.palette-input').fill('Feedback');
   await page.locator('.palette-row', { hasText: 'Feedback' }).first().click();
-  await menu.waitFor();
+  await overlay.waitFor();
   await field.fill('The total is wrong here');
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
-  await button.click(); await menu.waitFor();
+  await close();
+  await open(() => button.click());
   assert.equal(await field.inputValue(), 'The total is wrong here', 'the draft survives closing');
 
-  // ---- Paint over: Pen is the default, a Box covers a part; Save keeps only the painted image
-  await menu.getByRole('button', { name: 'Paint over the screenshot' }).click();
-  const paint = page.locator('dialog.paint-dialog[open]');
-  const canvas = paint.locator('canvas.paint-canvas'); await canvas.waitFor();
-  assert.equal(await menu.count(), 0, 'the menu steps aside while painting');
-  assert.equal(await paint.getByRole('button', { name: 'Pen', exact: true }).getAttribute('aria-pressed'), 'true', 'Pen is the default');
-  await paint.getByRole('button', { name: 'Box', exact: true }).click();
+  // ---- paint straight on the frozen screen: Pen is the default, a Box covers a part; Save keeps only the painted image
+  await dock.getByRole('button', { name: 'Box', exact: true }).click();
   const area = await canvas.boundingBox();
   await page.mouse.move(area.x + area.width * 0.1, area.y + area.height * 0.1); await page.mouse.down();
   await page.mouse.move(area.x + area.width * 0.4, area.y + area.height * 0.3, { steps: 4 }); await page.mouse.up();
-  assert.equal(await paint.getByRole('button', { name: 'Undo', exact: true }).isEnabled(), true);
+  assert.equal(await dock.getByRole('button', { name: 'Undo', exact: true }).isEnabled(), true);
   await shot('feedback-paint-light');
-  await paint.getByRole('button', { name: 'Done', exact: true }).click();
-  await menu.waitFor();
-  await page.waitForFunction(() => document.querySelector('.feedback-menu .feedback-thumb img')?.getAttribute('src')?.startsWith('data:image/jpeg'));
-  await menu.getByRole('button', { name: 'Save', exact: true }).click();
-  await menu.locator('.feedback-done', { hasText: 'Saved on this PC – sending is not set up.' }).waitFor();
+  await dock.getByRole('button', { name: 'Save', exact: true }).click();
+  await overlay.locator('.feedback-done', { hasText: 'Saved on this PC – sending is not set up.' }).waitFor();
   await shot('feedback-saved-light');
   const report = (await rpc.call('feedback.list')).find((entry) => entry.text === 'The total is wrong here');
   assert.equal(report?.status, 'local');
@@ -199,10 +232,10 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   assert.ok(Math.max(facts.width, facts.height) <= 1600, `within 1600 px (${facts.width}×${facts.height})`);
   assert.ok(facts.means[0].every((value) => value < 24), `the painted box is black in the sent image (${facts.means[0]})`);
   assert.ok(facts.means[1].some((value) => value > 60), `the rest is the window (${facts.means[1]})`);
-  await menu.getByRole('button', { name: 'Close', exact: true }).click(); await menu.waitFor({ state: 'detached' });
-  await button.click(); await menu.waitFor();
+  await overlay.getByRole('button', { name: 'Close', exact: true }).click(); await overlay.waitFor({ state: 'detached' });
+  await open(() => button.click());
   assert.equal(await field.inputValue(), '', 'a saved report leaves a fresh draft');
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+  await close();
 
   // ---- a noisy screenshot needs compression; its painted coverage survives inside the mailbox's image budget
   await size(1600, 1200);
@@ -222,9 +255,9 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
     context.putImageData(pixels, 0, 0); document.body.append(noise);
   });
   await settle();
-  await button.click(); await menu.waitFor(); await menu.locator('.feedback-thumb img').waitFor();
+  await open(() => button.click());
   await page.evaluate(() => document.getElementById('feedback-test-noise')?.remove());
-  const initialBytes = await menu.locator('.feedback-thumb img').evaluate(async (thumb) => {
+  const initialBytes = await frozen.evaluate(async (thumb) => {
     const image = new Image(); image.src = thumb.src; await image.decode();
     const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
     const sample = document.createElement('canvas'); sample.width = Math.round(image.naturalWidth * scale); sample.height = Math.round(image.naturalHeight * scale);
@@ -233,20 +266,18 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   });
   assert.ok(initialBytes > 600_000, `fixture requires compression (${initialBytes} bytes)`);
   await field.fill('Noisy screenshot keeps its painted coverage');
-  await menu.getByRole('button', { name: 'Paint over the screenshot' }).click(); await canvas.waitFor();
-  await paint.getByRole('button', { name: 'Box', exact: true }).click();
+  await dock.getByRole('button', { name: 'Box', exact: true }).click();
   const noisyArea = await canvas.boundingBox();
   await page.mouse.move(noisyArea.x + noisyArea.width * 0.1, noisyArea.y + noisyArea.height * 0.1); await page.mouse.down();
   await page.mouse.move(noisyArea.x + noisyArea.width * 0.4, noisyArea.y + noisyArea.height * 0.3, { steps: 4 }); await page.mouse.up();
-  await paint.getByRole('button', { name: 'Done', exact: true }).click(); await menu.waitFor();
-  await menu.getByRole('button', { name: 'Save', exact: true }).click(); await menu.locator('.feedback-done').waitFor();
+  await dock.getByRole('button', { name: 'Save', exact: true }).click(); await overlay.locator('.feedback-done').waitFor();
   const noisyReport = (await rpc.call('feedback.list')).find((entry) => entry.text === 'Noisy screenshot keeps its painted coverage');
   const noisyFile = await rpc.call('files.read', { id: noisyReport.screenshotFileId });
   assert.ok(Buffer.from(noisyFile.dataBase64, 'base64').length <= 600_000, 'the complete image fits the mailbox budget');
   const noisyFacts = await imageFacts(page, `data:image/jpeg;base64,${noisyFile.dataBase64}`, [[0.15, 0.13, 0.35, 0.27], [0.6, 0.6, 0.9, 0.9]]);
   assert.ok(noisyFacts.means[0].every((value) => value < 24), `paint still covers the same pixels (${noisyFacts.means[0]})`);
   assert.ok(noisyFacts.means[1].every((value) => value > 90 && value < 165), 'the rest still contains the noisy screenshot');
-  await menu.getByRole('button', { name: 'Close', exact: true }).click(); await menu.waitFor({ state: 'detached' });
+  await overlay.getByRole('button', { name: 'Close', exact: true }).click(); await overlay.waitFor({ state: 'detached' });
   await size(1280, 820); await settle();
 
   // ---- the side browser's native view is in the shot (composited)
@@ -268,9 +299,10 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
     await page.waitForFunction(() => document.querySelector('.browser-strip-tab.selected .browser-strip-title')?.textContent === 'Pink site', undefined, { timeout: 15_000 });
     await page.waitForTimeout(600); // the native view is placed on its slot
     const slot = await page.locator('.browser-native-slot').boundingBox();
-    await button.click(); await menu.waitFor(); await menu.locator('.feedback-thumb img').waitFor();
-    const pane = await menu.locator('.feedback-thumb img').getAttribute('src');
-    await page.keyboard.press('Escape');
+    await open(() => button.click());
+    const pane = await frozen.getAttribute('src');
+    await shot('feedback-side-browser-frozen-light'); // the frozen pink page in the overlay (the native view hides under it)
+    await close();
     const box = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
     const pink = await imageFacts(page, pane, [[(slot.x + slot.width * 0.4) / box.width, (slot.y + slot.height * 0.4) / box.height, (slot.x + slot.width * 0.6) / box.width, (slot.y + slot.height * 0.6) / box.height]]);
     const [r, g, b] = pink.means[0];
@@ -281,13 +313,13 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
   }
   await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); // the global pane (in a chat the one globe is Chat tabs)
 
-  // ---- dark, 640×480 and phone width (the cell before Profile, the menu as a sheet)
+  // ---- dark, 640×480 and phone width (the cell before Profile, the overlay over the whole window, the dock at its foot)
   await page.emulateMedia({ colorScheme: 'dark' });
-  await button.click(); await menu.waitFor(); await menu.locator('.feedback-thumb img').waitFor();
-  await shot('feedback-menu-dark');
-  await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+  await open(() => button.click());
+  await shot('feedback-overlay-dark');
+  await close();
   await page.emulateMedia({ colorScheme: 'light' });
-  for (const [width, height, name] of [[640, 480, 'feedback-menu-640x480'], [390, 844, 'feedback-menu-phone']]) {
+  for (const [width, height, name] of [[640, 480, 'feedback-overlay-640x480'], [390, 844, 'feedback-overlay-phone']]) {
     await size(width, height);
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => innerWidth), width);
@@ -296,12 +328,20 @@ test('the feedback cell: one place in every view, a stable menu, the shot before
     const order = await top.locator('.frame-header-cells > .frame-header-cell').evaluateAll((cells) => cells.map((item) => item.getAttribute('data-cell')));
     assert.deepEqual(order.slice(-2), ['feedback', 'profile'], `the cell before Profile (${order})`);
     const phoneButton = top.getByRole('button', { name: 'Feedback', exact: true });
-    await expectStable(page, ['.mobile-top [data-cell="feedback"]', '.mobile-top [data-cell="profile"]', '.mobile-top .frame-header-title'], async () => { await phoneButton.click(); await menu.waitFor(); });
-    await menu.locator('.feedback-thumb img').waitFor(); // a desktop window captures in the compact layout too
+    await expectStable(page, ['.mobile-top [data-cell="feedback"]', '.mobile-top [data-cell="profile"]', '.mobile-top .frame-header-title'], async () => { await open(() => phoneButton.click()); });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'no horizontal page scroll');
-    assert.equal(await menu.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, 'nothing overflows the sheet');
+    assert.equal(await dock.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, 'nothing overflows the dock');
+    // feedback 16.11.2026 C2CC3D50: the phone paints with the pen only (Undo stays), the field starts two lines tall,
+    // the note is one line, the attachments row needs no sideways scroll
+    assert.equal(await dock.getByRole('group', { name: 'Paint' }).count(), 0, 'no Pen/Box choice on a phone');
+    assert.equal(await dock.getByRole('button', { name: 'Undo' }).count(), 1, 'Undo stays');
+    assert.ok((await dock.locator('.feedback-input textarea').boundingBox()).height >= 60, 'the field starts two lines tall');
+    assert.ok((await dock.locator('.feedback-privacy-note').boundingBox()).height <= 18, 'the note is one line');
+    assert.equal(await dock.locator('.feedback-dock-row').evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, 'the attachments row fits');
+    const foot = await dock.boundingBox();
+    assert.ok(height - (foot.y + foot.height) <= 16, `the dock sits at the foot (${JSON.stringify(foot)})`);
     await shot(name);
-    await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+    await close();
   }
   assert.deepEqual(await app.evaluate(() => globalThis.__opened), [], 'nothing opens a browser');
   assert.deepEqual(errors, []);

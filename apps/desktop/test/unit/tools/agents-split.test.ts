@@ -1,10 +1,10 @@
 // B-057 – the split tools through the real tool registry (fake split service):
 // - agents.split validates its schema (goal, 1–12 parts, the exact context / effort enums, after, worktree), hands the
 //   service the calling turn's facts (agent, run, chat, task, origin, thread = the turn's threadKey, mode, working
-//   folder) and answers {ok, groupId, parts, next} with the "I end my turn now" line; a refusal of the service says
-//   nothing was split; a split's own call is refused at the gate (split lock) and by the tool itself;
-// - agents.split_results reads the thread's results (a split: its parent's thread); agents.split_stop stops only the
-//   agent's own groups, a part by its number, or every active group of this thread;
+//   folder) and answers {ok, groupId, parts, next} with the "so I end it now" line; a refusal of the service says
+//   nothing was split; B-083: a part's own call goes to the service with its split (its parts join its group);
+// - agents.split_results reads the thread's results (a split: its parent's thread); agents.split_tell's stop ends only
+//   the agent's own parts, one by its number, or – to "all" without a group – every active group of this thread;
 // - agents.split is lean (≤ 900 characters of description: it is offered on every turn), found by tools.find, and its
 //   step reads "Split into N parts"; agents.split_merge's reads "Merged / Discarded split part #k" (the offer in every
 //   shipped mode: agents-split-offer.test.ts).
@@ -76,6 +76,7 @@ function rig(options: { refuse?: string; noService?: boolean; groups?: SplitGrou
 }
 
 const TWO = [{ title: 'Search the docs', brief: 'Find every mention of X.' }, { title: 'Check #1', brief: 'Try to refute part #1.', context: 'brief', model: 'cheap', effort: 'low', after: [1] }];
+const SPLIT: SplitTurn = { splitId: 'spl_x', groupId: 'sgr_x', idx: 1, of: 2, title: 't', parentRunId: 'run_p', parentThread: 'conv_parent', parentConversationId: 'conv_parent', context: 'fork', firstTurn: true };
 
 test('the schema: goal and 1–12 parts with the exact enums; nothing reaches the service when it fails', async () => {
   const r = rig();
@@ -86,7 +87,7 @@ test('the schema: goal and 1–12 parts with the exact enums; nothing reaches th
     { goal: 'x', parts: [{ title: 'a', brief: 'b', effort: 'minimal' }] }, { goal: 'x', parts: [{ title: 'a', brief: 'b', after: [0] }] },
     { goal: 'x', parts: [{ title: 'a', brief: 'b', worktree: 'yes' }] }, { goal: 'x', parts: [{ title: 'a', brief: 'b', mode: 'web' }] },
     { goal: 'x'.repeat(401), parts: TWO }, { goal: 'x', parts: [{ title: 't'.repeat(81), brief: 'b' }] },
-    { goal: 'x', parts: [{ title: 'a', brief: 'b'.repeat(4001) }] }, { goal: 'x', parts: TWO, extra: 1 },
+    { goal: 'x', parts: [{ title: 'a', brief: 'b'.repeat(12_001) }] }, { goal: 'x', parts: TWO, extra: 1 },
   ];
   for (const args of bad) {
     const out = await r.call('agents.split', args);
@@ -104,19 +105,27 @@ test('create gets the calling turn\'s facts; the result lists the parts and tell
   const out = await r.call('agents.split', { goal: 'Audit the docs', parts: TWO }, { taskId: 'task_1', origin, mode: 'research' });
   assert.equal(out.failed, false, out.text);
   const [{ ctx, input }] = r.created;
-  assert.deepEqual(ctx, { agentId: 'ag_tom', runId: 'run_1', thread: 'conv_1', modeKey: 'research', conversationId: 'conv_1', taskId: 'task_1', origin, cwd: WORKSPACE });
+  assert.deepEqual(ctx, { agentId: 'ag_tom', runId: 'run_1', thread: 'main', modeKey: 'research', conversationId: 'conv_1', taskId: 'task_1', origin, cwd: WORKSPACE });
   assert.equal(input.goal, 'Audit the docs');
   assert.deepEqual(input.parts, TWO);
   assert.deepEqual(out.data, {
     ok: true, groupId: 'sgr_1',
     parts: [{ idx: 1, title: 'Search the docs', id: 'spl_sgr_1_1' }, { idx: 2, title: 'Check #1', id: 'spl_sgr_1_2' }],
-    next: 'My 2 splits start as soon as this turn ends. I end my turn now (a short line to the person fits). Their results come back to me in one block.',
+    next: 'My 2 parts start as soon as this turn ends, so I end it now (a short line to the person fits). Each part comes back to me on its own as soon as it ends – its last words and what it did; a note from a part wakes me for a whole turn in between.',
   });
-  assert.equal(nextText(1), 'My split starts as soon as this turn ends. I end my turn now (a short line to the person fits). Their results come back to me in one block.');
+  assert.equal(nextText(1), 'My part starts as soon as this turn ends, so I end it now (a short line to the person fits). Each part comes back to me on its own as soon as it ends – its last words and what it did; a note from a part wakes me for a whole turn in between.');
+  assert.equal(nextText(2, true), 'My 2 new parts start now beside me in my group; like mine, their notes and last words go to my origin.');
+
+  // B-083: a part's own call goes to the service with its split (the service adds the parts to its group); the answer lists the new ones.
+  const part = await r.call('agents.split', { goal: 'More hands', parts: [TWO[0]] }, { conversationId: undefined, split: SPLIT });
+  assert.equal(part.failed, false, part.text);
+  assert.deepEqual(r.created[1].ctx.split, SPLIT);
+  assert.equal(r.created[1].ctx.thread, 'conv_parent', 'its origin\'s thread');
+  assert.match(part.data?.next, /^My new part starts now beside me in my group/);
 
   await r.call('agents.split', { goal: 'g', parts: TWO }, { conversationId: undefined, taskId: 'task_9' });
-  assert.equal(r.created[1].ctx.thread, 'task:task_9', 'a chat-free task: its thread');
-  assert.ok(!('conversationId' in r.created[1].ctx));
+  assert.equal(r.created[2].ctx.thread, 'main', 'a chat-free task: the one main thread too');
+  assert.ok(!('conversationId' in r.created[2].ctx));
 });
 
 test('a refusal of the service says nothing was split; without a split service the agent does the parts itself', async () => {
@@ -127,52 +136,43 @@ test('a refusal of the service says nothing was split; without a split service t
   assert.ok(missing.failed && /not available here/.test(missing.text));
 });
 
-const SPLIT: SplitTurn = { splitId: 'spl_x', groupId: 'sgr_x', idx: 1, of: 2, title: 't', parentRunId: 'run_p', parentThread: 'conv_parent', parentConversationId: 'conv_parent', context: 'fork', firstTurn: true };
 
 test('agents.split_results reads the thread\'s results – a split reads its parent\'s thread', async () => {
   const r = rig();
   const out = await r.call('agents.split_results', { groupId: 'sgr_1', idx: 2 });
   assert.equal(out.text, 'Split results: #1 done.');
-  assert.deepEqual(r.asked[0], { agentId: 'ag_tom', q: { groupId: 'sgr_1', idx: 2, thread: 'conv_1' } });
+  assert.deepEqual(r.asked[0], { agentId: 'ag_tom', q: { groupId: 'sgr_1', idx: 2, thread: 'main', runId: 'run_1' } }, 'FIXES-3 A3: my turn read it, so it is gathered with it');
   await r.call('agents.split_results', {}, { conversationId: undefined, split: SPLIT });
-  assert.deepEqual(r.asked[1].q, { thread: 'conv_parent' });
+  assert.deepEqual(r.asked[1].q, { thread: 'conv_parent' }, 'a part reading gathers nothing');
   assert.ok((await r.call('agents.split_results', { idx: 13 })).failed, 'idx ≤ 12');
 });
 
-test('agents.split_stop stops only the agent\'s own groups: a part by number, a group, or every active group of this thread', async () => {
-  const mine = group('sgr_a', 'ag_tom', 'conv_1', ['a', 'b']);
-  const elsewhere = group('sgr_b', 'ag_tom', 'conv_other', ['c']);
-  const foreign = group('sgr_c', 'ag_ann', 'conv_1', ['d']);
+test('agents.split_tell stop ends only the agent\'s own parts: one by number, or every active group of this thread', async () => {
+  const mine = group('sgr_a', 'ag_tom', 'main', ['a', 'b']);
+  const elsewhere = group('sgr_b', 'ag_tom', 'split:spl_x', ['c']);
+  const foreign = group('sgr_c', 'ag_ann', 'main', ['d']);
   const r = rig({ groups: [mine, elsewhere, foreign] });
-  const part = await r.call('agents.split_stop', { groupId: 'sgr_a', idx: 2 });
-  assert.deepEqual(part.data, { ok: true, stopped: 1 });
+  const part = await r.call('agents.split_tell', { to: 2, groupId: 'sgr_a', stop: true });
+  assert.deepEqual(part.data, { ok: true, groupId: 'sgr_a', told: [{ idx: 2, stopped: true }] });
   assert.deepEqual(r.stopped[0], { q: { splitId: 'spl_sgr_a_2' }, by: 'ag_tom' });
-  assert.deepEqual((await r.call('agents.split_stop', { groupId: 'sgr_a' })).data, { ok: true, stopped: 2 });
-  assert.deepEqual(r.stopped[1].q, { groupId: 'sgr_a' });
-  const theirs = await r.call('agents.split_stop', { groupId: 'sgr_c' });
+  const theirs = await r.call('agents.split_tell', { to: 1, groupId: 'sgr_c', stop: true });
   assert.ok(theirs.failed && /no split group sgr_c/.test(theirs.text), 'another agent\'s group');
-  assert.ok((await r.call('agents.split_stop', { groupId: 'sgr_a', idx: 5 })).failed, 'no such part');
-  assert.ok((await r.call('agents.split_stop', { idx: 1 })).failed, 'a part needs its group');
+  assert.ok((await r.call('agents.split_tell', { to: 5, groupId: 'sgr_a', stop: true })).failed, 'no such part');
   const before = r.stopped.length;
-  await r.call('agents.split_stop', {});
+  assert.deepEqual((await r.call('agents.split_tell', { to: 'all', stop: true })).data, { ok: true, stopped: 2 });
   assert.deepEqual(r.stopped.slice(before).map((entry) => entry.q), [{ groupId: 'sgr_a' }], 'only this thread\'s own groups');
 });
 
 test('lean, teaching when and how, found by tools.find, and its steps read "Split into N parts"', () => {
   const split = splitTools.find((tool) => tool.name === 'agents.split')!;
   const spec = JSON.stringify({ name: split.name, description: split.description, inputSchema: split.inputSchema });
-  // Offered on every turn of every agent (BASE_CORE): the description stays ≤ 900 characters, the spec under ~425 tokens.
+  // Lean: the description stays ≤ 900 characters, the spec under ~600 tokens with its argument meanings in the schema.
   assert.ok(split.description.length <= 900, `${split.description.length} characters of description`);
-  assert.ok(spec.length / 4 < 425, `${spec.length} characters of spec`);
-  assert.doesNotMatch(JSON.stringify(split.inputSchema), /"description"/, 'no property descriptions: the description says it once');
-  for (const word of [
-    'code changes on separate files', 'broad searches', 'many analyses', 'collating data', 'independent checks', 'when this turn ends', 'end my turn',
-    'fork (default: knows this conversation)', 'brief (fresh, cheaper, independent)', 'same|cheap|strong|<id>', 'effort', 'after = parts it runs after, getting their results',
-    'pipelines', 'worktree: true = own git branch from my last commit', 'commit first', 'agents.split_merge', 'separate files',
-    'browser work goes to one part only', 'never split, talk to people or remember',
-  ]) {
-    assert.ok(split.description.includes(word), word);
-  }
+  assert.ok(spec.length / 4 < 600, `${spec.length} characters of spec`);
+  // The owner's 13.11. wording: parts of me that come back into me (one being).
+  assert.match(split.description, /^Splits my work into parts of me that run in parallel and come back into me\. /);
+  assert.match(split.description, /They start when my turn ends, so I end it/);
+  assert.doesNotMatch(split.description, /never split, talk to people or remember/, 'no bans: a part is me');
   const specs = [...splitTools, ...['agents.delegate', 'agents.list', 'tasks.create'].map((name) => ({ name, description: 'Give work to a colleague.', inputSchema: {} }))]
     .map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }));
   assert.equal(rankTools(specs, 'parallel workers fan-out', 3)[0]?.name, 'agents.split');
@@ -182,7 +182,6 @@ test('lean, teaching when and how, found by tools.find, and its steps read "Spli
   assert.equal(stepText(stepLabel('agents.split', undefined, { summary: 'Split into 3 parts: a, b, c' })), 'Split into 3 parts');
   assert.equal(stepText(stepLabel('agents.split', { parts: [TWO[0]] })), 'Split into 1 part');
   assert.equal(stepText(stepLabel('agents.split_results', { groupId: 'sgr_1' })), 'Read split results');
-  assert.equal(stepText(stepLabel('agents.split_stop', {})), 'Stopped splits');
   assert.equal(stepLabel('agents.split', {}).kind, 'agent');
   // agents.split_merge by its action (agents-split-merge.ts), else by its summary ("Discard part #2 …").
   assert.equal(stepText(stepLabel('agents.split_merge', { groupId: 'sgr_1', idx: 2, action: 'merge' })), 'Merged split part #2');

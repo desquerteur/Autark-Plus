@@ -14,7 +14,7 @@ import type { Account } from '../../../src/shared/model/providers.ts';
 const choice: DecisionRequest = { purpose: 'other', type: 'choice', question: 'Which?', context: 'ctx', options: ['alpha', 'none'] };
 const connection: Account = {
   id: 'typesafe', provider: 'decision-api', label: 'TypeSafe', auth: 'api_key', baseUrl: 'https://api.typesafe.ai/v1', secretId: 'secret://k', state: 'unknown',
-  priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1,
+  priority: 0, enabled: true, detected: false, createdAt: 1,
 };
 const services = (decision: string, models: string[] = [], list: Account[] = [connection]) => ({
   accounts: { list: () => list, apiKey: async () => 'sk-test' },

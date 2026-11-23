@@ -19,10 +19,10 @@ export const UI_HELP_TOOL = 'ui.help';
 
 const help = defineTool<{ topic: string }>({
   name: UI_HELP_TOOL,
-  description: 'The rich-answer guide by topic: "blocks" (quick reference and every topic), "app" (```app mini-tools), "mermaid" or a ```ui block type such as "chart" (its props, the answer I get, an example).',
+  description: 'Explains rich answer blocks – charts, tables, mini-apps, mermaid – with examples.',
   inputSchema: {
     type: 'object',
-    properties: { topic: { type: 'string', minLength: 1, maxLength: 40 } },
+    properties: { topic: { type: 'string', minLength: 1, maxLength: 40, description: '"blocks" (overview), "app", "mermaid" or a ```ui block type.' } },
     required: ['topic'],
     additionalProperties: false,
   },

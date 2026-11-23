@@ -43,7 +43,7 @@ test('an agent\'s click reports its named pointer; results name the others on th
   pointers.point({ surface: 'agent:ag_ada/t1', actor: { kind: 'person', id: 'human', name: 'Lukas' }, x: 341, y: 116, target: { role: 'button', name: 'Pay', ref: 'e31' } });
   advance(2000);
   const text = textOf(await tool(tools, 'browser.snapshot').run({}, ctx));
-  assert.match(text, /\n\nLukas \(person\) is pointing at button "Pay" \[ref=e31\], 2 s ago$/);
+  assert.match(text, /\n\nLukas \(person\) rests on button "Pay" \[ref=e31\], last move 2 s ago$/); // B-081 wording: pointer-lines.test.ts
   assert.ok(!text.includes('Ada (agent)'), 'never the agent itself');
   await browser.close();
 });
@@ -90,4 +90,3 @@ test('rpc pointers.point: a person only in the browsers of their chats; phones n
   const phone: ClientScope = { kind: 'device', deviceId: 'dev_phone', capabilities: ['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'], secure: true };
   for (const method of ['pointers.point', 'pointers.list']) assert.equal(scopeDenial(table.get(method)!.scope, phone), 'scope', method);
 });
-

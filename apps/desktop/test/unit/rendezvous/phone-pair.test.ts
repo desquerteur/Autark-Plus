@@ -14,13 +14,16 @@ import { isPhoneStep, RemoteWithPhones } from '../../../src/runtime/devices/rend
 import { phoneInfo, TargetRequests } from '../../../src/runtime/remote/requests.ts';
 import { bytes, commitment, matchCode, newEphemeral, newNonce, sessionKey, signedBytes, transcript, verifySide } from '../../../src/runtime/remote/sas.ts';
 import { PwaService } from '../../../src/runtime/pwa/service.ts';
-import type { RemoteState } from '../../../src/shared/model/remote.ts';
+import { PeopleRepo, cleanScopes } from '../../../src/runtime/people/repo.ts';
+import { PersonTokens } from '../../../src/runtime/people/tokens.ts';
+import type { RemoteDeps } from '../../../src/runtime/remote/service.ts';
+import type { NewPerson, RemoteState } from '../../../src/shared/model/remote.ts';
 import { HandTimers } from '../remote/rig.ts';
 import { ManualClock, fakeHost, memoryDb, recordingBus, silentLog } from '../devices/fakes.ts';
 
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-async function pcWithPhones() {
+async function pcWithPhones(deps: Partial<RemoteDeps> = {}) {
   const db = memoryDb();
   const { bus, events } = recordingBus();
   const clock = new ManualClock();
@@ -32,13 +35,15 @@ async function pcWithPhones() {
   const pwa = new PwaService({ db, clock, bus, log: silentLog, settings, push, port: () => 1, qr: async () => '', serveStatus: async () => undefined, interfaces: () => ({}) });
   const shown: unknown[] = [];
   const notes: Array<{ title: string; body: string }> = [];
+  const admitted: string[] = [];
   const remote = new RemoteWithPhones({
+    ...deps,
     identity, clock, bus, log: silentLog, mesh, timers, findable: () => true,
     post: async () => { throw new Error('unused'); },
-    notify: (view) => shown.push(view), linked: (note) => notes.push(note),
+    notify: (view) => shown.push(view), linked: (note) => notes.push(note), admitted: (personId) => admitted.push(personId),
     pair: (phone) => pwa.pairPhone(phone),
   });
-  return { remote, pwa, repo: new DevicesRepo(db), identity, events, shown, notes, mesh };
+  return { remote, pwa, repo: new DevicesRepo(db), identity, events, shown, notes, mesh, db, clock, admitted };
 }
 
 /** The Android app's side of the exchange. */
@@ -95,6 +100,83 @@ test('a phone pairs by Remote ID: same code on both screens, Accept on the PC, i
 
   await pc.pwa.revoke(phone.info.id);
   assert.equal(pc.pwa.authenticate(answer.token as string), undefined, 'Remove ends the access');
+});
+
+const ANNA = 'per_anna000000001';
+function addAnna(db: ReturnType<typeof memoryDb>): void {
+  new PeopleRepo(db).save({ id: ANNA, name: 'Anna', title: '', avatar: { kind: 'initials', value: 'A' }, status: 'invited', owner: false, scopes: cleanScopes({}), createdAt: 0, updatedAt: 0 });
+}
+
+test('F1: a phone accepted for an employee gets that person\'s token and row, never my access', async () => {
+  const pc = await pcWithPhones();
+  addAnna(pc.db);
+  const phone = await phoneAsks(pc.remote, 'Galaxy');
+  const waiting = phone.wait();
+  pc.remote.decide(pc.remote.state().incoming[0].id, true, ANNA);
+  const answer = await waiting;
+  assert.equal(answer.status, 'accepted');
+  const token = answer.token as string;
+  assert.equal(pc.pwa.authenticate(token), undefined, 'no device (owner phone) token');
+  const tokens = new PersonTokens(pc.db, pc.clock);
+  const scope = tokens.authenticate(token);
+  assert.equal(scope?.personId, ANNA, 'the person token a join issues');
+  assert.equal(scope?.deviceId, answer.deviceId, 'the phone gets the device id its token carries');
+  const record = pc.repo.get(answer.deviceId as string)!;
+  assert.equal(record.kind, 'phone');
+  assert.equal(record.publicKey, phone.info.pub, 'pinned by its own key');
+  assert.equal(JSON.parse((pc.db.get<{ allow: string }>('SELECT allow FROM devices WHERE id = ?', [record.id]))!.allow).personId, ANNA, 'the row carries the person');
+  const anna = new PeopleRepo(pc.db).get(ANNA)!;
+  assert.equal(anna.status, 'active');
+  assert.equal(new PeopleRepo(pc.db).auditOf(ANNA)[0].action, 'joined');
+  assert.match(pc.notes[0].title, /Galaxy is now linked as Anna's phone/);
+  assert.deepEqual(pc.admitted, [ANNA], 'the personal manager hears once, as for an employee\'s PC');
+  assert.deepEqual(tokens.devices(ANNA).map((entry) => entry.id), [answer.deviceId], 'Team › People lists it');
+
+  await pc.pwa.revoke(answer.deviceId as string);
+  assert.equal(tokens.authenticate(token), undefined, 'Remove in Settings › Devices ends the person token too');
+});
+
+test('F1: Me (no person) keeps the phone mine; re-pairing a key for a person ends its earlier access here', async () => {
+  const pc = await pcWithPhones();
+  addAnna(pc.db);
+  const mine = await phoneAsks(pc.remote, 'Pixel');
+  const first = mine.wait();
+  pc.remote.decide(pc.remote.state().incoming[0].id, true);
+  const own = await first;
+  assert.equal(pc.pwa.authenticate(own.token as string)?.kind, 'device', 'my own phone as today');
+  assert.match(pc.notes[0].title, /Pixel is now linked$/);
+  assert.deepEqual(pc.admitted, []);
+
+  const issued = pc.pwa.pairPhone({ id: mine.info.id, name: 'Pixel', publicKey: mine.info.pub, personId: ANNA });
+  assert.equal(issued.person, 'Anna');
+  assert.notEqual(issued.deviceId, mine.info.id);
+  assert.equal(pc.pwa.authenticate(own.token as string), undefined, 'the earlier owner token of that key ended');
+  assert.ok(pc.repo.get(mine.info.id)?.revokedAt, 'its earlier row is removed');
+  assert.equal(pc.repo.byFingerprint(fingerprintOf(fromB64url(mine.info.pub)))?.id, issued.deviceId, 'one live row per key');
+  assert.equal(pc.pwa.pairPhone({ id: 'dev_phonepair09', name: 'Mine', publicKey: b64url(Buffer.alloc(32, 4)), personId: 'human' }).person, undefined, 'the owner as person = my phone');
+  assert.throws(() => pc.pwa.pairPhone({ id: 'dev_phonepair10', name: 'X', publicKey: b64url(Buffer.alloc(32, 5)), personId: 'per_gone000000001' }), (error: { code?: string }) => error.code === 'forbidden');
+});
+
+test('F13: a phone accepted for a new person makes that person once, and the phone gets only their token', async () => {
+  const made: NewPerson[] = [];
+  let db: ReturnType<typeof memoryDb> | undefined;
+  const pc = await pcWithPhones({ createPerson: (input) => { made.push(input); addAnna(db!); return ANNA; } });
+  db = pc.db;
+  const phone = await phoneAsks(pc.remote, 'Galaxy');
+  const [request] = pc.remote.state().incoming;
+  const waiting = phone.wait();
+  pc.remote.decide(request.id, true, undefined, { name: 'Anna' });
+  assert.deepEqual(made, [], 'nobody is made before the phone collects its answer');
+  const answer = await waiting;
+  assert.equal(answer.status, 'accepted');
+  assert.deepEqual(made, [{ name: 'Anna' }]);
+  const token = answer.token as string;
+  assert.equal(pc.pwa.authenticate(token), undefined, 'never my access');
+  assert.equal(new PersonTokens(pc.db, pc.clock).authenticate(token)?.personId, ANNA, 'the person token');
+  assert.equal(new PeopleRepo(pc.db).get(ANNA)?.status, 'active', 'she is in now');
+  assert.deepEqual(pc.admitted, [ANNA]);
+  await phone.wait();
+  assert.equal(made.length, 1, 'a repeated wait makes nobody again');
 });
 
 test('a declined phone gets no token; a wrong session key cannot collect the answer', async () => {

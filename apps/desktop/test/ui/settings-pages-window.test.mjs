@@ -32,7 +32,7 @@ import { MODEL_USES, USE_LABELS } from '../../src/shared/model/models-uses.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
-const PAGES = ['General', 'Appearance', 'Personality', 'Models', 'Calendar', 'Secrets', 'Connectors', 'Skills & memory', 'Devices', 'Feedback', 'Updates', 'About']; // AF-005: Apps is Connectors
+const PAGES = ['General', 'Appearance', 'Personality', 'Models', 'Calendar', 'Secrets', 'Security', 'Connectors', 'Skills & memory', 'Devices', 'Feedback', 'Updates', 'About']; // AF-005: Apps is Connectors
 
 test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, async (t) => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'workforce-settings-pages-'));
@@ -132,8 +132,8 @@ test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, as
   const answer = (label) => page.locator('dialog[open]').last().locator('button.button').filter({ hasText: new RegExp(`^${label}$`) }).click();
   const row = (scope, label) => page.locator(`${scope} .set-row`, { has: page.locator('.set-row-label', { hasText: label }) });
   const pick = async (scope, label, option) => { await scope.getByRole('combobox', { name: label }).click(); await page.getByRole('option', { name: option, exact: true }).click(); };
-  const until = async (check, what) => {
-    for (const end = Date.now() + 20_000; Date.now() < end; await page.waitForTimeout(150)) if (await check()) return;
+  const until = async (check, what, ms = 20_000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await page.waitForTimeout(150)) if (await check()) return;
     assert.fail(`timed out: ${what}`);
   };
 
@@ -288,11 +288,14 @@ test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, as
   assert.equal(added.url, 'http://127.0.0.1:9/mcp');
   assert.match(added.headers.Authorization, /^Bearer secret:\/\//, 'the file holds the handle');
   assert.ok(!(await readFile(mcpFile, 'utf8')).includes('token-never-in-a-file'));
+  // 16.11.2026: the page is the clock, not the file. apps.setEnabled writes mcp.json before it answers, so the row says Off
+  // only when the file already holds it; waiting on the file first timed out on a loaded PC without telling which side was slow.
   await appRow.getByRole('switch').click();
-  await until(async () => (await mcp())['Local test'].disabled === true, 'disabled in the file');
-  await until(async () => (await appRow.locator('.set-row-hint').textContent()).includes('Off'), 'the row says Off');
+  await until(async () => (await appRow.locator('.set-row-hint').textContent()).includes('Off'), 'the row says Off', 60_000);
+  assert.equal((await mcp())['Local test'].disabled, true, 'Off on the page means disabled in the file');
   await appRow.getByRole('switch').click();
-  await until(async () => !('disabled' in (await mcp())['Local test']), 'on again');
+  await until(async () => !(await appRow.locator('.set-row-hint').textContent()).includes('Off'), 'the row no longer says Off', 60_000);
+  assert.ok(!('disabled' in (await mcp())['Local test']), 'on again in the file');
   const listBox = await page.locator('.apps-list').boundingBox();
   await page.locator('.apps-search').fill('notion');
   assert.equal(await page.locator('.apps-list .set-row').count(), 1);
@@ -313,6 +316,19 @@ test('settings: the pages, their nav and the use rows', { timeout: 300_000 }, as
 
   // Feedback: its own page; a report in the list and in full.
   await rpc.call('feedback.create', { kind: 'idea', text: `A whole idea ${'with many words '.repeat(12)}at its end` });
+  // 17.11.2026 Security: sharing in the public library has its switch (on by default); off lands in settings.json and
+  // in the Changes group, with the person named.
+  await open('security');
+  const librarySwitch = page.getByRole('switch', { name: 'Share in the public library' });
+  assert.equal(await librarySwitch.getAttribute('aria-checked'), 'true', 'sharing is on by default');
+  const librarySetting = async () => (await rpc.call('settings.get')).library?.publish;
+  await librarySwitch.click();
+  await until(async () => (await librarySetting()) === false, 'library.publish false');
+  await page.locator('.set-row', { hasText: 'Share in the public library: On → Off' }).first().waitFor({ timeout: 15_000 });
+  await shot('settings-security-library-off');
+  await librarySwitch.click();
+  await until(async () => (await librarySetting()) === true, 'library.publish true again');
+
   await open('feedback');
   const report = page.locator('#settings-feedback .set-row', { hasText: 'A whole idea' });
   await report.waitFor({ timeout: 10_000 });

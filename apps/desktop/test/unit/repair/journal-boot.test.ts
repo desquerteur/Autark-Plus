@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { UpgradeError } from '../../../src/runtime/db/upgrade.ts';
@@ -91,4 +91,33 @@ test('guardedBoot: runtime → up + one stable timer; upgrade error → repair i
   const next = await guardedBoot({ journal: fresh, version: '3.0.0', start: async () => 'never', repair: (problem) => problem, later });
   assert.equal(next.kind, 'repair', 'the start after three failures shows the repair screen');
   assert.equal(next.kind === 'repair' && next.problem.detail, 'port busy');
+});
+
+test('an unavailable Linux keyring shows setup without opening data or marking a crash, and is checked again', async (t) => {
+  const journal = journalIn(t);
+  const db = path.join(path.dirname(journal.file), 'workforce.db');
+  writeFileSync(db, 'sentinel: never opened');
+  let keyring = false;
+  let starts = 0;
+  let stableTimers = 0;
+  const deps = {
+    journal, version: '3.0.0',
+    keyringAvailable: async () => keyring,
+    start: async () => { starts++; return 'full'; },
+    repair: (problem: { code: string }) => problem.code,
+    later: () => { stableTimers++; },
+  };
+  for (let i = 0; i < MAX_ATTEMPTS + 1; i++) {
+    const outcome = await guardedBoot(deps);
+    assert.equal(outcome.kind, 'repair');
+    assert.equal(outcome.kind === 'repair' && outcome.problem.code, 'keyring_unavailable');
+  }
+  assert.equal(starts, 0);
+  assert.equal(stableTimers, 0);
+  assert.equal(journal.read(), undefined);
+  assert.equal(readFileSync(db, 'utf8'), 'sentinel: never opened');
+  keyring = true;
+  assert.deepEqual(await guardedBoot(deps), { kind: 'runtime', runtime: 'full' });
+  assert.equal(starts, 1);
+  assert.equal(stableTimers, 1);
 });

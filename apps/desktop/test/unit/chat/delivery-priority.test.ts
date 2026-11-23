@@ -1,7 +1,6 @@
 // Tests for priority in chat delivery (T10: src/runtime/chat/delivery.ts, loop-guard.ts
-// ImportantBrake): an agent's important message without mentions reaches the other agent of a
-// two-agent room or else the lead (wake plus urgent) – a run's final answer marked [[important]]
-// is for the person and reaches no agent unless it mentions one – while a normal one still wakes nobody,
+// ImportantBrake): an agent's important message reaches every other
+// group's agents at once (13.11.2026: a push line, wake plus urgent) – while a normal one still wakes nobody,
 // mentions win, a message that mentions only the person addresses no agent and the lead's own
 // reaches nobody; the person's important message also steers agents already running in that chat
 // (at once, also while the decision model picks, never twice; a normal one does not); the brake:
@@ -71,40 +70,18 @@ test('a two-agent room without the person works the same way', () => {
   assert.deepEqual(h.notified, [], 'an agent-only room never notifies');
 });
 
-test("group: an agent's important message without mentions reaches the lead; mentions win; the lead's own and one to the person reach no agent", () => {
+test("13.11.2026: an agent's push line reaches every other agent of the group at once; a normal one stays mention-only", () => {
   const t = team();
   t.clear();
   t.post('ag_mara', 'The build is broken for everyone.', { priority: 'important' });
-  assert.deepEqual(t.woken(), ['ag_tom'], 'the lead');
-  assert.deepEqual(t.urgent, [{ agentId: 'ag_tom', conversationId: t.chat.id }]);
+  assert.deepEqual(t.woken(), ['ag_lin', 'ag_tom'], 'every other agent');
+  assert.deepEqual(t.urgent.map((item) => item.agentId).sort(), ['ag_lin', 'ag_tom'], 'into their running turns at once');
+  assert.equal(t.notified.at(-1)?.kind, 'important', 'the person gets a push');
   t.clear();
-  t.post('ag_mara', '@Lin the build is broken, please revert.', { priority: 'important' });
-  assert.deepEqual(t.woken(), ['ag_lin'], 'the mentioned agent, not the lead');
-  assert.deepEqual(t.urgent, [{ agentId: 'ag_lin', conversationId: t.chat.id }]);
-  t.clear();
-  t.post('ag_tom', 'Everyone stop deploying.', { priority: 'important' });
-  assert.deepEqual(t.woken(), [], 'the lead itself addresses nobody without mentions');
-  assert.deepEqual(t.urgent, []);
-  t.post('ag_mara', 'Please approve the payment.', { priority: 'important', mentions: [HUMAN_ID] });
-  assert.deepEqual(t.woken(), [], 'a message to the person wakes no agent');
-  assert.deepEqual(t.urgent, []);
-  assert.equal(t.notified.at(-1)?.kind, 'important');
   t.post('ag_mara', 'The build is green again.');
   assert.deepEqual(t.woken(), [], 'a normal message without mentions stays mention-only');
-});
-
-test("a run's final answer marked [[important]] is for the person: it neither wakes nor steers the lead; a chat.send post of the run still does", () => {
-  const t = team();
-  t.clear();
-  t.chats.postAgentMessage(t.chat.id, 'ag_mara', 'run_mara', { body: 'The server is down, decide today.', priority: 'important' });
-  assert.deepEqual(t.woken(), [], 'no agent is addressed by an answer to the person');
-  assert.equal(t.urgent.length, 0, 'the lead keeps working');
-  assert.equal(t.notified.at(-1)?.kind, 'important', 'the person gets it as important');
-  t.chats.postAgentMessage(t.chat.id, 'ag_mara', 'run_mara', { body: '@Lin please restart it.', priority: 'important' });
-  assert.deepEqual([t.woken(), t.urgent.map((item) => item.agentId)], [['ag_lin'], ['ag_lin']], 'a mention still reaches that agent');
-  t.clear();
-  t.post('ag_mara', 'The build is broken for everyone.', { priority: 'important', runId: 'run_mara', meta: { sentDuringRun: true } });
-  assert.deepEqual([t.woken(), t.urgent.map((item) => item.agentId)], [['ag_tom'], ['ag_tom']], 'chat.send important: the lead (T10)');
+  t.post('ag_mara', '@Lin the build is green again.');
+  assert.deepEqual(t.woken(), ['ag_lin'], 'an @mention reaches exactly that agent');
 });
 
 test("the person's important message also steers agents already running in that chat – after the addressed ones, never twice", () => {

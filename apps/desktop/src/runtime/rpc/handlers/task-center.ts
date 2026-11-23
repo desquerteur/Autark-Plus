@@ -1,13 +1,11 @@
-// RPC handlers: quick tasks (tasks.quickCreate, 'tasks') and "Send to…" (tasks.route, 'tasks') – runtime/tasks/quick.ts.
-// Files are checked like a chat message's (chats.ts attachmentsOf: stored files only). tasks.route gives work to
-// agents only (a task for a person is given in a chat with them).
+// RPC handler: quick tasks (tasks.quickCreate, 'tasks') – runtime/tasks/quick.ts. Files are checked like a chat
+// message's (chats.ts attachmentsOf: stored files only). Giving work on is tasks.give (handlers/tasks.ts).
 // Owns: param checks and scope rules. Never: business logic.
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
-import { WorkforceError } from '../../../shared/errors.ts';
 import { QUICK_TARGET_KINDS, type QuickTaskTarget } from '../../../shared/model/task-center.ts';
-import { quickCreate, routeTask } from '../../tasks/quick.ts';
-import { id, input, notFound, oneOf, onlyKeys, optId, optNum, optObj, optText, text, type Obj } from '../params.ts';
+import { quickCreate } from '../../tasks/quick.ts';
+import { input, oneOf, onlyKeys, optId, optNum, optObj, optText, text, type Obj } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
 import { attachmentsOf } from './chats.ts';
 
@@ -32,15 +30,5 @@ export function register(table: HandlerTable): void {
       ...(target ? { target } : {}), priority: priority === undefined ? undefined : PRIORITIES[priority],
       spaceId: optId(o, 'spaceId'), dueAt: optNum(o, 'dueAt', { min: 0 }), clientId: optText(o, 'clientId', { max: 100 }),
     }, HUMAN_ID);
-  }, TASKS);
-
-  table.add('tasks.route', (params, ctx) => {
-    const o = input(params);
-    onlyKeys(o, ['id', 'target']);
-    const taskId = id(o);
-    ctx.services.tasks.get(taskId) ?? notFound('Task', { taskId });
-    const target = targetOf(o);
-    if (target?.kind === 'person' || target?.kind === 'me') throw new WorkforceError('bad_request', 'A task for a person is given in a chat with them.', { details: { param: 'target' } });
-    return routeTask(ctx.services, taskId, target, HUMAN_ID);
   }, TASKS);
 }

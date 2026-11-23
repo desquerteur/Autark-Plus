@@ -103,8 +103,8 @@ test('dropped when the chat moved on; not for unknown effects, setup errors or t
   assert.equal(h.retries().length, 0);
   assert.equal(new KvRepo(h.db).list('redelivery').length, 0, 'the entry is gone');
 
-  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: 'run_x', cursor: 0, error: LOST.error, toolCalls: 2 }), false, 'effects of its tools unknown');
-  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: 'run_y', cursor: 0, error: { code: 'unavailable', message: 'x', details: { setup: true } }, toolCalls: 0 }), false);
+  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: 'run_x', cursor: 0, error: LOST.error, toolCalls: 2 }), 0, 'effects of its tools unknown');
+  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: 'run_y', cursor: 0, error: { code: 'unavailable', message: 'x', details: { setup: true } }, toolCalls: 0 }), 0);
 
   const task = h.tasks.create({ conversationId: h.chat.id, title: 'Cut the intro', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: 'human' });
   h.state.script = async () => LOST;
@@ -259,7 +259,7 @@ test('the earliest eligible account cooling schedules recovery; signed-out and m
   assert.equal(h.retries().length, 1);
 });
 
-test('timeout and internal failures retry; a new input resets backoff and a provider hint is respected', async () => {
+test("timeout and internal failures retry; a new input resets backoff; B-083: an engine's retry hint is the account's cooling, not the retry's", async () => {
   const h = rig();
   h.usable();
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Finish the report' });
@@ -271,7 +271,7 @@ test('timeout and internal failures retry; a new input resets backoff and a prov
   assert.equal(h.onlineTimers.only()?.ms, 120_000);
   h.chats.send({ conversationId: h.chat.id, authorId: 'human', body: 'Use the updated report' });
   await h.turn({ text: '', stop: 'error', error: { code: 'unavailable', message: 'Wait for provider.', retryAfterMs: 240_000 } });
-  assert.equal(h.onlineTimers.only()?.ms, 240_000);
+  assert.equal(h.onlineTimers.only()?.ms, 60_000, 'the retry waits for the earliest usable account (accounts/failure.ts cools the one that failed)');
   assert.equal(new KvRepo(h.db).list<{ attempts: number }>('redelivery')[0]?.value.attempts, 1);
 });
 
@@ -297,9 +297,9 @@ test('noting the same failed attempt twice keeps the queued retry and backoff un
   h.clock.advance(60_000);
   h.onlineTimers.fire();
   const before = new KvRepo(h.db).list('redelivery')[0]?.value;
-  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: result.runId, cursor: 0, error: LOST.error, toolCalls: 0 }), true);
+  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: result.runId, cursor: 0, error: LOST.error, toolCalls: 0 }), 1, 'B-080 wave 3: its attempt number');
   assert.deepEqual(new KvRepo(h.db).list('redelivery')[0]?.value, before);
-  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: result.runId, cursor: 0, error: { code: 'bad_request', message: 'Duplicate report' }, toolCalls: 1 }), true);
+  assert.equal(noteChatOutage(h.services, { agentId: h.tom.id, conversationId: h.chat.id, runId: result.runId, cursor: 0, error: { code: 'bad_request', message: 'Duplicate report' }, toolCalls: 1 }), 1);
   assert.deepEqual(new KvRepo(h.db).list('redelivery')[0]?.value, before, 'a duplicate report cannot change the queued attempt');
   h.redelivery.deliver();
   assert.equal(h.retries().length, 1);

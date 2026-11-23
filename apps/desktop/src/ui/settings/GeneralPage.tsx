@@ -1,10 +1,13 @@
 // Settings › General (B-078, D17 – owner 06.11.2026: only what is really worth it): profile (photo, name, company),
-// appearance (the theme; finer looks are <data>/theme.css), notifications (the sound – to-dos, blockers and important
+// appearance (the theme, on the PC's window only – a phone follows its own light/dark; finer looks are <data>/theme.css),
+// notifications (the sound – to-dos, blockers and important
 // messages always arrive, notify/service.ts) and behaviour (start at login and keep running when closed – desktop window
 // only –, keep the screen on while agents work, Enter sends). Language and time zone come from the PC; the AI notices the
 // language the person speaks and keeps profile.language and profile.notes itself (skill app-settings). The removed rows'
-// keys stay in settings.json for the AI. Every row is a view on settings.json. A phone changes appearance and
-// notifications only (its profile is read-only); the rows about the PC's window show only in the desktop window.
+// keys stay in settings.json for the AI. Every row is a view on settings.json. A securely paired owner phone
+// also edits profile and day, and (owner 12.11.2026) the PC's own behaviour rows – start at login, keep running when
+// closed, automatic update download – each marked as changing the PC; colleagues and plain-LAN devices do not.
+// 16.11.2026: last, the companies on this PC like accounts – export, import, leave, delete (CompaniesGroup.tsx).
 // Owns: these rows and their mapping onto Settings fields. Never: invents options without effect.
 
 import type { DaySettings } from '../../shared/model/day-settings.ts';
@@ -14,8 +17,9 @@ import { HumanAvatar } from '../lib/avatar.tsx';
 import { uploadFile } from '../lib/files.ts';
 import { isPersonSession } from '../lib/people.ts';
 import { bridge, os } from '../lib/platform.ts';
-import { isOwner, PC_NOTE } from '../lib/session.ts';
+import { canEditOwnerSettings, canUploadOwnerPhoto, HTTPS_NOTE, PC_NOTE, session } from '../lib/session.ts';
 import { settings, systemInfo, updateSettings } from '../lib/store.ts';
+import { CompaniesGroup } from './CompaniesGroup.tsx';
 import { act, CLEAR, Group, Row, Segmented, TextField, Toggle } from './controls.tsx';
 import { GettingStarted } from './GettingStarted.tsx';
 
@@ -40,12 +44,18 @@ export function GeneralPage() {
   const setPrefs = (patch: Partial<Preferences>) => act(() => updateSettings({ preferences: patch }), 'Could not save');
   const setNotes = (patch: Partial<NotificationSettings>) => act(() => updateSettings({ notifications: patch }), 'Could not save');
   const setDay = (patch: Partial<DaySettings>) => act(() => updateSettings({ day: patch }), 'Could not save');
-  const locked = !isOwner();
+  const locked = !canEditOwnerSettings();
+  const photoUpload = canUploadOwnerPhoto();
+  const lockNote = session.value?.kind === 'device' && session.value.capabilities.includes('settings') && !session.value.secure ? HTTPS_NOTE : PC_NOTE;
   const person = isPersonSession();
   const installed = systemInfo.value?.packaged === true; // the launcher registers only in the installed app
-  const start = os === 'windows' ? 'Start with Windows' : 'Start at login';
+  const pcOs = bridge ? os : systemInfo.value?.platform === 'win32' ? 'windows' : 'other'; // the PC's, not this phone's
+  const start = pcOs === 'windows' ? 'Start with Windows' : 'Start at login';
+  const remote = !bridge && !locked; // my secure phone changes the PC's behaviour from here
+  const onPc = (hint: string) => (remote ? `On your PC: ${hint}` : hint);
 
   const pickPhoto = () => {
+    if (!canUploadOwnerPhoto()) return;
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -58,11 +68,11 @@ export function GeneralPage() {
 
   return (
     <>
-      <Group title="Profile" hint={locked ? (person ? 'Your name and title are set by the owner of the organisation' : PC_NOTE) : undefined}>
-        <Row label="Photo">
+      <Group title="Profile" hint={locked ? (person ? 'Your name and title are set by the owner of the organisation' : lockNote) : undefined}>
+        <Row label="Photo" hint={!locked && !photoUpload ? 'Uploading a photo needs file access on this device' : undefined}>
           <div class="set-inline">
             <HumanAvatar size={36} />
-            {!locked && <button type="button" class="button secondary small" onClick={pickPhoto}>Change</button>}
+            {photoUpload && <button type="button" class="button secondary small" onClick={pickPhoto}>Change</button>}
             {!locked && <button type="button" class="button ghost small" disabled={!profile.avatarFileId} onClick={() => void setProfile({ avatarFileId: CLEAR })}>Remove</button>}
           </div>
         </Row>
@@ -70,30 +80,40 @@ export function GeneralPage() {
         <Row label="Company" hint="Used by your agents"><TextField label="Company" value={profile.company} disabled={locked} onCommit={(company) => void setProfile({ company: company.trim() })} /></Row>
       </Group>
 
-      <Group title="Appearance">
-        <Row label="Theme" hint="More of the look is theme.css in the data folder – ask your AI" reserve>
-          <Segmented label="Theme" value={prefs.theme} options={[...THEMES]} onChange={(theme) => void setPrefs({ theme })} />
-        </Row>
-      </Group>
+      {bridge && ( // feedback 16.11.2026 F15: a phone follows its own light/dark (lib/theme.ts), so the setting is the PCs'
+        <Group title="Appearance">
+          <Row label="Theme" hint="More of the look is theme.css in the data folder – ask your AI" reserve>
+            <Segmented label="Theme" value={prefs.theme} options={[...THEMES]} onChange={(theme) => void setPrefs({ theme })} />
+          </Row>
+        </Group>
+      )}
 
       <Group title="Notifications">
         <Row label="Sound" hint="To-dos for you, blockers and important messages always arrive">
           <Toggle label="Sound" checked={notes.sound} onChange={(sound) => void setNotes({ sound })} />
         </Row>
+        <Row label="While an agent uses this PC" hint="A line at the bottom says who and what, with Watch to open the screen">
+          <Toggle label="Show a line while an agent uses this PC" checked={notes.computerUse} onChange={(computerUse) => void setNotes({ computerUse })} />
+        </Row>
       </Group>
 
       <Group title="Behavior">
-        {bridge && (
+        {(bridge || remote) && (
           <>
-            <Row label={start} hint={installed ? START_HINT : `${START_HINT} – in the installed app`} disabled={!installed}>
+            <Row label={start} hint={onPc(installed ? START_HINT : `${START_HINT} – in the installed app`)} disabled={!installed}>
               <Toggle label={start} checked={prefs.openAtLogin} disabled={!installed} onChange={(openAtLogin) => void setPrefs({ openAtLogin })} />
             </Row>
-            <Row label="Keep running when the window is closed" hint="Agents and schedules continue in the tray">
+            <Row label="Keep running when the window is closed" hint={onPc('Agents and schedules continue in the tray')}>
               <Toggle label="Keep running when closed" checked={prefs.closeToTray} onChange={(closeToTray) => void setPrefs({ closeToTray })} />
             </Row>
+            {remote && (
+              <Row label="Download updates automatically" hint={onPc('Restarts only when you are idle')} disabled={!installed}>
+                <Toggle label="Download updates automatically" checked={prefs.autoDownloadUpdates} disabled={!installed} onChange={(autoDownloadUpdates) => void setPrefs({ autoDownloadUpdates })} />
+              </Row>
+            )}
           </>
         )}
-        <Row label="Keep the screen on while agents work" hint={locked ? PC_NOTE : 'Also keeps this PC awake for agent work at night'}>
+        <Row label="Keep the screen on while agents work" hint={locked ? lockNote : 'Also keeps this PC awake for agent work at night'}>
           <Toggle label="Keep the screen on while agents work" checked={day.keepAwake} disabled={locked} onChange={(keepAwake) => void setDay({ keepAwake })} />
         </Row>
         <Row label="Enter sends" hint={prefs.enterSends ? 'Shift+Enter for a new line' : 'Ctrl+Enter sends'}>
@@ -104,6 +124,8 @@ export function GeneralPage() {
         </Row>
       </Group>
       <GettingStarted /> {/* AF-002: show the tour again, run setup again */}
+
+      <CompaniesGroup />
     </>
   );
 }

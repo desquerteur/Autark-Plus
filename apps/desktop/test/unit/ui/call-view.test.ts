@@ -17,7 +17,7 @@ import { TONE_GAIN, toneLength, tonePlan } from '../../../src/ui/chat/call/call-
 import { MOCK_CONNECT_MS, MOCK_LINES, MOCK_PAUSE_MS, MOCK_REPLY_WAIT_MS, MockCall, mockLevel, speakingMs } from '../../../src/ui/chat/call/call-mock.ts';
 import type { MockCallDeps } from '../../../src/ui/chat/call/call-mock.ts';
 import type { CallPhase } from '../../../src/ui/chat/call/call-model.ts';
-import { ConversationCapture, type RecorderLike } from '../../../src/ui/chat/composer/conversation-audio.ts';
+import { ConversationCapture } from '../../../src/ui/chat/composer/conversation-audio.ts';
 import { RealtimeCall } from '../../../src/ui/chat/call/realtime-call.ts';
 import type { RealtimeDeps } from '../../../src/ui/chat/call/realtime-call.ts';
 
@@ -233,26 +233,15 @@ test('mock engine: hung up while it still connects, the call row still ends', as
 
 // ------------------------------------------------------------------ mute in the real engines
 
-class FakeRecorder implements RecorderLike {
-  state: RecorderLike['state'] = 'inactive';
-  mimeType = 'audio/webm';
-  ondataavailable: ((event: BlobEvent) => void) | null = null;
-  onstop: ((event: Event) => void) | null = null;
-  start(): void { this.state = 'recording'; }
-  stop(): void { this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['voice']) } as BlobEvent); this.onstop?.(new Event('stop')); }
-}
-
 test('voice conversation: a muted call takes nothing and reports silence; unmuted it takes the next words', async () => {
   let now = 0;
   let muted = true;
   let feed: ((samples: Float32Array, rate: number) => void) | undefined;
   const levels: number[] = [];
-  const recorders: FakeRecorder[] = [];
   const utterances: string[] = [];
   const stream = { getAudioTracks: () => [] } as unknown as MediaStream;
   const capture = new ConversationCapture({ utterance: async (_id, fileId) => { utterances.push(fileId); } }, () => undefined, {
     openMicrophone: async (listener) => { feed = listener; return { stream, close: () => undefined }; },
-    newRecorder: () => { const recorder = new FakeRecorder(); recorders.push(recorder); return recorder; },
     upload: async () => ({ id: 'file_1' }),
     now: () => now,
     level: (value) => levels.push(value),
@@ -260,14 +249,16 @@ test('voice conversation: a muted call takes nothing and reports silence; unmute
   });
   await capture.open();
   capture.follow({ id: 'mic_1', conversationId: CHAT, status: 'listening' });
-  const run = (level: number, ms: number) => { for (let t = 0; t < ms; t += 85) { now += 85; feed!(new Float32Array(4096).fill(level), 48_000); } };
+  // a voice-like tone (upstream 0.3.16's capture ignores a constant signal): `level` is its amplitude
+  const tone = (level: number) => Float32Array.from({ length: 4096 }, (_, i) => level * Math.sin((2 * Math.PI * 220 * i) / 48_000));
+  const run = (level: number, ms: number) => { for (let t = 0; t < ms; t += 85) { now += 85; feed!(tone(level), 48_000); } };
   run(0.3, 400);
   run(0, 1400);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(recorders.length, 0, 'muted: no take started');
+  assert.deepEqual(utterances, [], 'muted: no take sent (0.3.16 captures PCM, no recorder)');
   assert.ok(levels.length > 0 && levels.every((level) => level === 0), 'the call view sees silence');
   muted = false;
-  run(0.3, 300);
+  run(0.3, 1200);
   run(0, 1400);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(utterances, ['file_1']);

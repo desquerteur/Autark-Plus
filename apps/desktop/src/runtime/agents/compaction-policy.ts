@@ -1,99 +1,75 @@
-// Compaction policy (CTX7): when an agent's view of a long chat is condensed, so the active
-// context stays small and cheap on every engine. A native session is renewed (turn-prepare.ts
-// renewSession: compaction + dropped binding + full projection) once its context passes
-// renewalLimit – 60 % of the model's window, never more than WORKING_SET_TOKENS (also on 1M
-// windows); this holds for every engine with sessions. A session-less engine
-// (HTTP APIs, local models) gets the full projection – observation + ~30 earlier lines + new
-// lines – every turn, so after its done turn the chat is compacted once more than KEEP_RECENT + 40
-// seen messages lie past the agent's own observation: low priority, fire-and-forget; the next
-// projection carries the summary. A session renewed only because its turn runs in another folder
-// (a Codex thread keeps its cwd: chat turns in the workspace, task turns in a worktree) compacts by
-// the same session-less rule (statelessDue), not every time. A compaction that moved the
-// observation is journaled as the run note {compacted: reason, coveredSeq}.
-// This renewal is the hard backstop: an agent nearing it (nearLimit) wakes the subconscious first (subconscious/wake.ts), which
-// keeps the context lean all along by item ids (context/ledger, agents/rebuild.ts).
-// Owns: the working-set constant, the renewal limit, what counts as near it, the session-less trigger and the note.
-// Never: compacts itself (ContextService.compact, one at a time per agent and chat), lets a
-// session-less compaction delay or fail a turn, or deletes chat messages.
-
-import type { RuntimeServices } from '../contracts.ts';
-import { KEEP_RECENT } from '../context/compact.ts';
-import { ownCoveredSeq } from '../context/observations.ts';
+// Compaction policy (CTX7, B-080; KI-Runde 17.11.2026): how big an agent's context may get and when it is made small.
+// Two rules, both in the engine's own token count (SessionBinding.contextTokens – every estimate beside it counts in
+// shared/model/context-ledger.ts CHARS_PER_TOKEN, measured against that count):
+// - The fold (owner 17.11.2026: "immer mal wieder Compactings … vor allem wenn Schritte aufhören … ein bisschen mehr
+//   Thinking"): when a piece of work ends and the context has grown past FOLD_STEP, at FOLD_IDLE whatever the turn did, and
+//   after the engine compacted by itself, the agent writes its own hand-over in one more turn on the warm session
+//   (agents/context-fold.ts) and the next turn starts from it.
+// - The fit (owner 08.11.2026: "keine Verdichtung bei 150k oder 128k … das muss komplett dynamisch sein"): the backstop at the
+//   model's window. A session whose context no longer fits (pastFit: above FIT_SHARE of the window) is rebuilt with the oldest
+//   tool work hidden – restorable like any mark – and only when even that does not bring it in, it is renewed
+//   (session-choice.ts renewSession: dropped binding; the next turn gets the agent's record as text).
+// Inside one turn the engine keeps its own limit at the edge of the window, as in the plain CLI.
+// Owns: the fit of the window, when a provider's cache counts as cold, and the fold's sizes and causes.
 
 /**
- * The most context tokens a native session carries before it is renewed (ARCHITECTURE §13). 64k: the fixed part
- * (system prompt, tool specs, the agent's files) takes roughly 15–25k, so about 40k of chat and tool output stay
- * for the work – several turns of a busy task between renewals, while every turn stays fast and cheap and well
- * below the length where models start to lose details in the middle (the owner disliked waiting for 60 % of a
- * 200k–1M window). A renewal keeps the compaction state and the recent lines, so lower would mostly add renewals.
+ * The share of the model's window a session's context may fill between turns (ARCHITECTURE §13). The rest is room for the
+ * next turn's own work: the engines compact a session themselves near the edge (Claude Code at about 967k of a 1M window),
+ * all at once – the oldest tool work hidden here comes first and leaves the person's words and the recent work in place.
  */
-export const WORKING_SET_TOKENS = 64_000;
-const RENEW_RATIO = 0.6;
-/** From this share of the renewal limit on an agent's context counts as near its limit. */
-const NEAR_RATIO = 0.8;
-/** Seen messages past the observation, beyond the kept recent ones, before a session-less chat compacts. */
-const STATELESS_SLACK = 40;
+export const FIT_SHARE = 0.8;
+/** The window assumed for a model whose window is unknown: the smallest of today's frontier models. */
+export const DEFAULT_WINDOW = 200_000;
 
-export type CompactionReason = 'context' | 'overflow' | 'mode' | 'prompt' | 'stateless' | 'folder';
-
-/** Context tokens above which a native session is renewed: 60 % of the window, at most the working set. */
-export function renewalLimit(contextWindow: number | undefined): number {
-  return contextWindow && contextWindow > 0 ? Math.min(RENEW_RATIO * contextWindow, WORKING_SET_TOKENS) : WORKING_SET_TOKENS;
-}
-
-export function needsRenewal(contextTokens: number | undefined, contextWindow: number | undefined): boolean {
-  return (contextTokens ?? 0) > renewalLimit(contextWindow);
-}
-
-/** The context is close to its renewal: the subconscious gets a run first. */
-export function nearLimit(contextTokens: number | undefined, contextWindow: number | undefined): boolean {
-  return (contextTokens ?? 0) >= NEAR_RATIO * renewalLimit(contextWindow);
+/** The most context tokens a session carries between turns: FIT_SHARE of the model's window (DEFAULT_WINDOW when unknown). */
+export function fitLimit(contextWindow: number | undefined): number {
+  return Math.floor(FIT_SHARE * (contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_WINDOW));
 }
 
 /**
- * Compacts the agent's chat (before a session renewal); the run note when the observation moved.
- * A 'folder' renewal compacts only when statelessDue – the same rule as a session-less engine's turns.
+ * How far an engine's own count of a session may lie above the ledger's estimate of the same session and still be the unit's
+ * doing (measured 15.–17.11.2026 per model, at two characters per token: Fable 0.82, Sonnet and Haiku 0.95, Opus 1.04 times
+ * the estimate). A rebuild past the fit shrinks its room by that ratio up to this bound (agents/rebuild.ts); what lies beyond
+ * it is content the session holds and a rebuild does not replay.
  */
-export async function compactNoted(services: RuntimeServices, input: { agentId: string; conversationId: string; runId: string; reason: CompactionReason }): Promise<void> {
-  if (input.reason === 'folder' && !statelessDue(services, input.agentId, input.conversationId)) return;
-  const before = ownCoveredSeq(services, input.conversationId, input.agentId);
-  await services.context.compact({ agentId: input.agentId, conversationId: input.conversationId });
-  const after = ownCoveredSeq(services, input.conversationId, input.agentId);
-  if (after > before) services.runs.item(input.runId, { kind: 'note', data: { compacted: input.reason, coveredSeq: after }, effectStatus: 'none' });
-}
+export const UNIT_DRIFT = 1.25;
 
-/** More than KEEP_RECENT + 40 messages the agent has seen lie past its own observation. */
-export function statelessDue(services: RuntimeServices, agentId: string, conversationId: string): boolean {
-  const member = services.chats.members(conversationId).find((item) => item.memberId === agentId && !item.leftAt);
-  if (!member) return false;
-  const limit = KEEP_RECENT + STATELESS_SLACK;
-  const past = services.chats.messages(conversationId, { afterSeq: ownCoveredSeq(services, conversationId, agentId), limit: limit + 1 });
-  return past.filter((message) => message.seq <= member.readSeq).length > limit;
+/** The context no longer fits the model's window with room for the next turn. */
+export function pastFit(contextTokens: number | undefined, contextWindow: number | undefined): boolean {
+  return (contextTokens ?? 0) > fitLimit(contextWindow);
 }
 
 /**
- * After a done turn on a session-less engine: compacts at low priority when statelessDue. The
- * note is written as the compaction starts (inside the run's time span, so the answer's "Worked …"
- * line stays true) and gets its coveredSeq when the compaction is done.
+ * A provider's prompt cache lives about an hour: a session resting longer meets a cold cache on its next call, so starting it
+ * anew costs nothing extra then. Measured 15.–17.11.2026 (15,439 Claude calls up to 60 min after the call before read their
+ * context from the cache, the 4 calls after more than 65 min none; Codex: 31 of 33 runs after a 5–60 min pause started warm).
  */
-export function compactAfterTurn(services: RuntimeServices, input: { agentId: string; conversationId: string; runId: string }): void {
-  setImmediate(() => {
-    const { agentId, conversationId, runId } = input;
-    let noteId: string | undefined;
-    try {
-      if (!statelessDue(services, agentId, conversationId)) return;
-      noteId = services.runs.item(runId, { kind: 'note', data: { compacted: 'stateless' }, effectStatus: 'none' })?.id;
-    } catch (error) {
-      services.log.warn('checking the chat for compaction failed', { agentId, conversationId, error: String(error) });
-      return;
-    }
-    const settle = (data: Record<string, unknown>) => { if (noteId) services.runs.updateItem(noteId, { data }); };
-    Promise.resolve()
-      .then(() => services.context.compact({ agentId, conversationId }))
-      .then(() => settle({ coveredSeq: ownCoveredSeq(services, conversationId, agentId) }))
-      .catch((error) => {
-        services.log.warn('compaction after the turn failed', { agentId, conversationId, error: String(error) });
-        try { settle({ failed: true }); } catch { /* the warning above is the record */ }
-      });
-  });
+export const CACHE_COLD_MS = 60 * 60_000;
+
+/**
+ * The fold's sizes, in the engine's own count of the session. Measured 15.–17.11.2026 (15,801 Claude calls of 17 agents): a
+ * call carried 430k tokens on average, a main-lane run makes 13 calls, and a written token costs 40 read ones – so a session
+ * written anew at about 60k (prompt and tools about 44k, the hand-over, the chat lines in reach) and read small on every later
+ * call has paid for its one write after 40 × 60k / (C − 60k) calls: within one run from FOLD_IDLE on, within three at FOLD_STEP,
+ * where the end of a task is the moment the record of that work is no longer needed whole.
+ * Replayed on 15,807 real Claude calls of 16.–17.11.2026 at the CLI's own prices (review of 18.11.2026): the two sizes take
+ * 43–49 % off the whole bill, and 180,000 for FOLD_IDLE saves $68–77 more over those two days than 250,000 did, because the
+ * managers who rarely finish a task sat at 120k–250k for most of their calls; FOLD_STEP barely moves the result (90k, 120k and
+ * 160k are within one point of each other).
+ */
+export const FOLD_STEP = 120_000;
+export const FOLD_IDLE = 180_000;
+
+/** A hand-over shorter than this cannot stand for a context of FOLD_STEP tokens: the fold marks nothing and the next trigger tries again. */
+export const FOLD_MIN_CHARS = 400;
+
+/** Why a fold runs: a task ended ('step'), the size alone ('size'), the engine compacted the session by itself ('engine'). */
+export type FoldWhy = 'step' | 'size' | 'engine';
+
+/** Whether the turn that just ended calls for a fold, and why: `tokens` – the engine's count of its session now. */
+export function foldWhy(turn: { tokens?: number; finishedTask: boolean; compacted: boolean }): FoldWhy | undefined {
+  if (turn.compacted) return 'engine';
+  const tokens = turn.tokens ?? 0;
+  if (tokens >= FOLD_IDLE) return 'size';
+  return turn.finishedTask && tokens >= FOLD_STEP ? 'step' : undefined;
 }

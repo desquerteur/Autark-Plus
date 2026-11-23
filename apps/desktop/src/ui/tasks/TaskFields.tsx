@@ -9,7 +9,7 @@ import { rpc } from '../lib/rpc.ts';
 import { toastError } from '../lib/toasts.ts';
 import { putTask } from './task-cache.ts';
 
-type Patch = Partial<Pick<Task, 'title' | 'notes' | 'dueAt' | 'priority' | 'doneWhen' | 'assigneeKind' | 'assigneeId'>>;
+type Patch = Partial<Pick<Task, 'title' | 'notes' | 'dueAt' | 'priority' | 'doneWhen'>> & { plan?: string[] };
 
 export async function updateTask(task: TaskView, patch: Patch, guardRev = false): Promise<boolean> {
   try {

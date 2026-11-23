@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const finalFrom = (chatId, agentId, pattern) => (message) =>
   message.conversationId === chatId && message.authorId === agentId && message.state === 'final' && pattern.test(message.body);
@@ -62,7 +62,7 @@ test('a mini-app to-do hands a WAV take back to its agent', { timeout: 240_000 }
   assert.ok(!(await client.call('todos.list')).some((item) => item.id === todo.id), 'the to-do left the list');
 
   // B-076: the person's line ("Done in mini-app" + the app's data) is what wakes the agent – no [ui-answer] note.
-  const woken = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Done in mini-app\ntake: take\.wav/), 90_000);
+  const woken = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Done in mini-app\ntake: take\.wav/), 90_000);
   assert.match(woken.body, /\[Audio: take\.wav\] \([^\n]*stored at /, 'the woken input names the stored take with its path');
   assert.doesNotMatch(woken.body, /ui-answer/);
   const messages = await client.call('messages.list', { conversationId: chat.id, limit: 50 });

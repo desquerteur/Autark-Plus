@@ -2,65 +2,41 @@
 // shared/model/side-browser.ts). The person works there with the AI all day, so an agent works like a careful colleague:
 // it reads the page as an accessibility snapshot and then only what changed, finds elements by words, acts in batches
 // that stop at the first failure, debugs with console, network and eval, and waits on page events. Its mouse moves along
-// the shared motion model and its named cursor is drawn in the page. The person goes first: a step within 2 s of their input
-// in that tab is refused (personActive); a page showing a human check says so (humanCheck). A tab an agent opens
+// the shared motion model and always travels here – a glide, a hand when the call asks for one, never a jump (B-081), so the
+// person sees where it goes – and its named cursor (shared/model/agent-cursor.ts, leaning) is drawn in the page.
+// The person goes first: a step within 2 s of their input in that tab is refused (personActive); a page showing a human check says so (humanCheck). A tab an agent opens
 // carries the agent and its chat; without newTab it is the agent's preview tab there until the person's click or key in
 // it keeps it (sideKeep). The person's pointer and every agent move go to the runtime's pointer hub
 // (deps.pointer: host bridge message 'pointer', surface side:<tabId>). A call without a tab means its space's tab
 // (call.space: global or chat:<id>; each space shows its own tab); a given tab id works from anywhere. B-076: `side` hands
-// a tab to the caster (caster.ts) when the person watches it from another PC or a phone.
+// a tab to the caster (caster.ts) when the person watches it from another PC or a phone. B-081: `pick` switches a tab's
+// Pin button picker (tab.ts, pick-script.ts; an act batch holds it, so agents' input reaches the page); pins: sidePicked.
 // Owns: the call dispatch, the tab registry, the agents' last looks and the pointer reports.
-// Never: imports electron (the workspace browser hands in the tabs), or hands out field values of passwords
+// Never: imports electron (the workspace browser hands in the tabs, surface.ts), or hands out field values of passwords
 // (snapshot.ts / logs.ts redact).
 
 import { GLOBAL_SPACE, browserUrl } from '../../shared/api/workspace-browser.ts';
-import { DEFAULT_MOTION, thinSteps, type MotionStep } from '../../shared/model/pointer-motion.ts';
-import { POINTER_PATH_MAX, surfaceKey, type PointerAction, type PointerActor, type PointerPoint } from '../../shared/model/pointers.ts';
+import { cursorColor, tilted } from '../../shared/model/agent-cursor.ts';
+import { thinSteps, type MotionStep } from '../../shared/model/pointer-motion.ts';
+import { POINTER_PATH_MAX, surfaceKey, type PointerAction } from '../../shared/model/pointers.ts';
 import type { SideBrowserCall, SideBrowserResult } from '../../shared/model/side-browser.ts';
 import type { PageOpener } from '../../shared/api/workspace-browser.ts';
 import { SideError, type ContentsLike } from './cdp.ts';
 import { dialogError, evaluate, pageText, responseBody, screenshot, takeLook } from './read.ts';
 import { changeList, findLines, maskUrl, type Look } from './snapshot.ts';
-import { release, runStep, type StepContext } from './steps.ts';
+import { newStepGroup, release, runStep, type StepContext } from './steps.ts';
+import type { SideDriverDeps } from './surface.ts';
 import { SideTab, type PersonInput } from './tab.ts';
 import { checkCall } from './validate.ts';
 import { waitFor } from './wait.ts';
 
-/** The workspace browser's surface for the driver (main/workspace-browser.ts). */
-export interface SideTabsLike {
-  /** Every tab with its space. `active`: the tab the person looks at in `space` now (its slot's tab); `last`: the one side-tabs.json names for it. */
-  sideTabs(space?: string): { pages: Array<{ id: string; url: string; title: string; space?: string; opener?: PageOpener }>; active: string | null; last?: string | null };
-  /** The tab's page (a restored tab loads); undefined when it cannot be reached. `watcher`: the person watching it from elsewhere wakes it, no agent uses it. */
-  sideContents(id: string, watcher?: boolean): ContentsLike | undefined;
-  /** Opens a page in `space` (in the background unless `show`) with its opener – in the agent's preview tab there unless `newTab`; returns its id. */
-  sideOpen(url: string, opener: PageOpener, show?: boolean, space?: string, newTab?: boolean): string;
-  sideKeep?(id: string): void; // the person used the tab (a click or a key in it): an agent's preview stays as a tab of its own
-  /** Closes a tab. */
-  sideClose(id: string): void;
-}
-
-export interface SideDriverDeps {
-  browser(): SideTabsLike | null;
-  /** A pointer for the runtime's hub (best effort). */
-  pointer?(point: Omit<PointerPoint, 'at'>): void;
-  /** The person at this PC as a pointer actor. */
-  person?(): PointerActor;
-  now?(): number;
-  sleep?(ms: number): Promise<void>;
-}
+export type { SideDriverDeps, SideTabsLike } from './surface.ts';
 
 export const PERSON_PRIORITY_MS = 2000;
 const LOAD_MS = 15_000;
 const LOOKS_MAX = 64;
-const COLORS = ['#2f6fed', '#d9480f', '#2b8a3e', '#ae3ec9', '#c2255c', '#0b7285', '#e67700', '#5f3dc4'];
 const BUSY = 'The person is using this tab right now – wait a moment, then try again.';
 const NO_BROWSER = 'The side browser is not available right now.';
-
-function colorOf(id: string): string {
-  let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return COLORS[h % COLORS.length]!;
-}
 
 export class SideDriver {
   private readonly deps: SideDriverDeps;
@@ -91,9 +67,19 @@ export class SideDriver {
   }
 
   private make(id: string, contents: ContentsLike): SideTab {
-    const tab = new SideTab(id, contents, { now: () => this.now(), person: (from, input) => this.personInput(from, input) });
+    const tab = new SideTab(id, contents, {
+      now: () => this.now(), person: (from, input) => this.personInput(from, input),
+      pick: (from, pick) => this.deps.browser()?.sidePicked?.(from.id, pick), // a pin (or the picker's end) for the app window
+    });
     this.tabs.set(id, tab);
     return tab;
+  }
+
+  /** B-081: the Pin button – tab `id`'s picker on or off; false when its page cannot take it (the button goes back). */
+  async pick(id: string, on: boolean): Promise<boolean> {
+    const tab = this.tabs.get(id), ok = await tab?.setPicking(on) ?? false;
+    if (on && !tab?.picking) this.deps.browser()?.sidePicked?.(id, null); // (a later off or on of the button decides itself)
+    return ok;
   }
 
   private personInput(tab: SideTab, input: PersonInput): void {
@@ -105,7 +91,7 @@ export class SideDriver {
   }
 
   /** The tab a call means: the given one, else in its space the one this agent last named or opened, the one the person looks at (or the shown or used last), else the first. */
-  private pick(id: string | undefined, space: string, agentId: string): SideTab {
+  private choose(id: string | undefined, space: string, agentId: string): SideTab {
     const browser = this.deps.browser();
     if (!browser) throw new SideError(NO_BROWSER);
     const { pages, active, last } = browser.sideTabs(space);
@@ -157,7 +143,7 @@ export class SideDriver {
       try { browser.sideClose(call.tab!); } catch (error) { throw new SideError(error instanceof Error ? error.message : 'This tab could not be closed.'); }
       return this.tabList(call.space);
     }
-    const tab = this.pick(call.tab, call.space ?? GLOBAL_SPACE, call.agent.id);
+    const tab = this.choose(call.tab, call.space ?? GLOBAL_SPACE, call.agent.id);
     await tab.cdp.ready();
     const key = `${call.agent.id}|${tab.id}`;
     switch (call.action) {
@@ -232,11 +218,11 @@ export class SideDriver {
       let id: string;
       const opener: PageOpener = { agentId: call.agent.id, agentName: call.agent.name, ...(call.chat ? { chatId: call.chat } : {}) };
       try { id = browser.sideOpen(url, opener, call.show === true, call.space, call.newTab === true); } catch (error) { throw new SideError(error instanceof Error ? error.message : 'The page could not be opened.'); }
-      tab = this.pick(id, call.space ?? GLOBAL_SPACE, call.agent.id);
+      tab = this.choose(id, call.space ?? GLOBAL_SPACE, call.agent.id);
       tab.domReady = false; // the load already started: its document counts as not parsed until it says so (a reused preview tab still holds its last one)
       await tab.cdp.ready();
     } else {
-      tab = this.pick(call.tab, call.space ?? GLOBAL_SPACE, call.agent.id);
+      tab = this.choose(call.tab, call.space ?? GLOBAL_SPACE, call.agent.id);
       if (tab.personActive(PERSON_PRIORITY_MS)) throw new SideError(BUSY, { personActive: true });
       tab.domReady = false;
       const out = await tab.cdp.send('Page.navigate', { url }) as { errorText?: string };
@@ -251,15 +237,17 @@ export class SideDriver {
   /** Steps in order, stopping at the first that fails; then what changed since the agent's last look. */
   private async act(tab: SideTab, call: SideBrowserCall, key: string): Promise<SideBrowserResult> {
     const agent = call.agent;
-    const style = call.motion ?? DEFAULT_MOTION;
+    const style = call.motion === 'human' ? 'human' : 'glide'; // the person's browser never jumps, whatever a batch passes
+    const group = newStepGroup(); // this act's own object group, so a parallel act's release never frees these nodes
     const ctx: StepContext = {
-      tab, agentId: agent.id, style, now: () => this.now(), sleep: (ms) => this.sleep(ms),
+      tab, agentId: agent.id, style, group, now: () => this.now(), sleep: (ms) => this.sleep(ms),
       moved: (path, action, ref) => this.agentMoved(tab, agent, path, action, ref),
     };
     const steps = call.steps!;
     let done = 0;
     let failure: SideError | undefined;
     try {
+      await tab.holdPicking(true); // B-081: my clicks and keys reach the page, never the person's Pin picker there
       for (const step of steps) {
         if (tab.personActive(PERSON_PRIORITY_MS)) { failure = new SideError(BUSY, { personActive: true }); break; }
         try { await runStep(ctx, step); } catch (error) {
@@ -269,7 +257,7 @@ export class SideDriver {
         done += 1;
         await this.settle(tab, done < steps.length ? 40 : 120);
       }
-    } finally { release(tab); }
+    } finally { release(tab, group); void tab.holdPicking(false); }
     if (failure && done > 0 && !/^Step \d/.test(failure.message)) failure = new SideError(`Step ${done + 1} (${steps[done]!.action}): ${failure.message}`, failure);
     const result: SideBrowserResult = { ok: !failure, ...this.where(tab), done, ...(failure ? { error: failure.message } : {}), ...(failure?.personActive ? { personActive: true } : {}) };
     // A page dialog blocks the page: it is the change (the page itself cannot be read until it is answered).
@@ -290,12 +278,12 @@ export class SideDriver {
     if (tab.navigating && !tab.dialog) await this.loaded(tab, 10_000);
   }
 
-  /** The agent's cursor moves: drawn in the page and reported to the runtime (surface side:<tab>). */
+  /** The agent's cursor moves: drawn in the page with its lean and reported to the runtime (surface side:<tab>). */
   private agentMoved(tab: SideTab, agent: { id: string; name: string }, path: MotionStep[], action: PointerAction, ref?: string): void {
     const last = path[path.length - 1];
     if (!last) return;
-    const drawn = JSON.stringify(thinSteps(path, 80).map((s) => ({ x: Math.round(s.x * 10) / 10, y: Math.round(s.y * 10) / 10, t: Math.round(s.t) })));
-    void tab.cdp.inWorld(`__wfSide.cursor(${JSON.stringify(agent.id)}, ${JSON.stringify(agent.name.slice(0, 40))}, ${JSON.stringify(colorOf(agent.id))}, ${drawn}, ${action === 'click'})`).catch(() => {});
+    const drawn = JSON.stringify(tilted(thinSteps(path, 80)).map((s) => ({ x: Math.round(s.x * 10) / 10, y: Math.round(s.y * 10) / 10, t: Math.round(s.t), r: s.r })));
+    void tab.cdp.inWorld(`__wfSide.cursor(${JSON.stringify(agent.id)}, ${JSON.stringify(agent.name.slice(0, 40))}, ${JSON.stringify(cursorColor(agent.id))}, ${drawn}, ${action === 'click'})`).catch(() => {});
     const info = ref ? tab.refs.get(ref) : undefined;
     this.deps.pointer?.({
       surface: surfaceKey('side', tab.id), actor: { kind: 'agent', id: agent.id, name: agent.name }, x: last.x, y: last.y, action,

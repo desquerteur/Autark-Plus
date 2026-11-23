@@ -2,7 +2,8 @@
 // attachments (Plus menu, drag/drop, paste), @mentions and /commands, dictation into the caret (the
 // waveform sits in the action row's spacer) and one primary button: Send, disabled without content.
 // AF-012: while an agent works in the chat and nothing is to be sent, that button is Stop (a square, data-tour="run-stop"),
-// and Esc stops too – in the field after its own uses, and in the chat column outside a field (composer/stop.ts).
+// and Esc stops too – in the field after its own uses, and in the chat column outside a field (composer/stop.ts). Each
+// agent's own Stop sits at its line in the live bar above (LiveBar.tsx, F21).
 // AF-016: while an agent works (or messages wait), Enter does the person's default – send now or add to the chat's queue
 // (composer/queue.ts) – and Ctrl+Enter the other; the caret right of Send offers both (SendSplit.tsx); the queued
 // messages show right above the composer (QueueList.tsx).
@@ -10,7 +11,8 @@
 // preferences.dictationSend: keep, send, or send after a 2 s countdown chip that Cancel, Esc or typing stops) and Send (➤)
 // sends the transcript; holding the mic or Ctrl+Shift+Space in the field is push-to-talk (release = send). Every send
 // goes through send() below, so while an agent works it follows the AF-016 choice (now or queue) – composer/dictation-send.ts.
-// Action row, fixed cells: [+] [Access mode] [spacer] [Ultra] [Model] [Mic] [Send] – nothing in it moves on a click (AF-013: the mode cell).
+// Action row, fixed cells: [+] [Access mode] [spacer] [Model] [Mic] [Send] – nothing in it moves on a click (AF-013: the
+// mode cell; B-083: no Ultra cell – the agent splits itself when it pays, owner 08.11.).
 // How a message goes out: /important, /silent, or the Plus menu's and the Send button's right-click menu's "Send as important",
 // "Send silently" (with nothing to send yet: the draft's level) and "Schedule…": that switches the composer into schedule
 // mode (composer/ScheduleBar.tsx above the text, the field taller, Send = Schedule; Esc or × leaves; text only – a draft
@@ -18,6 +20,12 @@
 // ChatSecretBar above the text: each row becomes a chip).
 // A reply shows its quote chip above the field (X or Esc cancels it) and goes out as `replyTo`.
 // A one-shot fill ("/task ") goes only into an empty composer – it never overwrites the person's draft.
+// B-082: unsure places of dictated text are highlighted behind the field (composer/MarkLayer.tsx); a click or tap with
+// the caret in one opens its menu (composer/MarkMenu.tsx). The text itself stays plain. A kept take's chip has
+// "Transcribe again" (composer/voice.ts retryTake: the words go in at the caret).
+// F23: Plus › Record audio / Record video open composer/RecordBar.tsx in the same slot above the text (the take goes in
+// as a chip, a recording or video not bound to the 20 MB of other files; Send waits while a take records, attaches or
+// waits there); Photos & videos takes both; on a phone Take photo and Record video are the camera app's.
 // Owns: input handling and when to send (the send itself: composer/send.ts). Never: message rendering or chat settings UI.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -41,18 +49,23 @@ import { findToken, suggestionsFor, SuggestionList, useSuggestions } from './com
 import type { Suggestion } from './composer/Suggestions.tsx';
 import { ModelChip } from './composer/ModelChip.tsx';
 import { PlusMenu } from './composer/PlusMenu.tsx';
+import { useRecordSlot } from './composer/RecordBar.tsx';
+import { isMedia, uploadMedia } from './composer/record-take.ts';
 import { ScheduleBar } from './composer/ScheduleBar.tsx';
 import { leaveScheduleMode, openScheduleMode, scheduleDraft, scheduleModeFor } from './composer/schedule-mode.ts';
 import { scheduleSpec } from './composer/schedule-form.ts';
 import { useNextRun } from './composer/schedule-next.ts';
-import { UltraCell, ultraOffered } from './composer/UltraCell.tsx';
-import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, transcribing } from './composer/voice.ts';
-import { MicButton, talkPress, useDictationField, waveState } from './composer/MicButton.tsx';
+import { cancelDictation, clearDraftSpeech, dictateIntoDraft, dictating, retryTake, transcribing } from './composer/voice.ts';
+import { MicButton, talkPress, targetOf, useDictationField, waveState } from './composer/MicButton.tsx';
 import { afterTake, cancelCountdown, countdowns, isTalkKey, startCountdown, type TakeEnd } from './composer/dictation-send.ts'; // AF-017
 import type { PressTracker } from '../feedback/press.ts';
 import { DictationWave } from './composer/DictationWave.tsx';
 import { mentionsIn, targetAgent } from './composer/target.ts';
 import { composerControls } from './composer/controls.ts';
+import type { SpanMark } from '../../shared/voice/marks.ts';
+import { markAt } from './composer/draft-marks.ts';
+import { MarkLayer } from './composer/MarkLayer.tsx';
+import { MarkMenu } from './composer/MarkMenu.tsx';
 import { escapeStops, stopChat, useChatStop } from './composer/stop.ts';
 import type { SendWhileWorking } from '../../shared/model/prompt-queue.ts';
 import { preferredMode, queueDraft, queueFor, sendMode, setPreferredMode } from './composer/queue.ts';
@@ -63,9 +76,11 @@ import { AccessModeCell } from './composer/AccessModeCell.tsx'; // AF-013
 export function Composer(props: { chat: ConversationSummary }) {
   const { chat } = props;
   const draft = draftFor(chat.id);
-  const { text, attachments, level, replyTo, secrets = [], ultra = false } = draft.value;
+  const { text, attachments, level, replyTo, secrets = [], marks } = draft.value;
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const areaRef = useRef<HTMLDivElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const [openMark, setOpenMark] = useState<SpanMark | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const [caret, setCaret] = useState(0);
@@ -77,6 +92,7 @@ export function Composer(props: { chat: ConversationSummary }) {
   const mode = scheduleModeFor(chat.id).value; // schedule mode (null = a normal composer)
   const scheduling = mode !== null;
   const suggest = useSuggestions();
+  const record = useRecordSlot(chat.id, (files) => void addFiles(files)); // F23: the RecordBar, the camera input
   const isDictating = dictating.value === chat.id;
   const transcribingHere = transcribing.value.has(chat.id); // the stopped take's text is still on its way
   const hasContent = text.trim().length > 0 || attachments.length > 0 || secrets.length > 0;
@@ -137,7 +153,8 @@ export function Composer(props: { chat: ConversationSummary }) {
     setUploading((current) => [...current, ...list.map((file) => file.name)]);
     for (const file of list) {
       try {
-        const attachment = await uploadFile(file, undefined, { conversationId: chat.id }); // F-52: a person's file goes into this chat
+        const attachment = isMedia(file) ? await uploadMedia(file, file.name, chat.id) // a recording or video: chunked, no 20 MB cap
+          : await uploadFile(file, undefined, { conversationId: chat.id }); // F-52: a person's file goes into this chat
         updateDraft(chat.id, { attachments: [...draft.value.attachments, attachment] });
       } catch (error) { toastError(error, 'Upload failed'); }
       setUploading((current) => { const index = current.indexOf(file.name); return index === -1 ? current : [...current.slice(0, index), ...current.slice(index + 1)]; });
@@ -157,11 +174,11 @@ export function Composer(props: { chat: ConversationSummary }) {
   };
 
   // The whole draft goes out – files, secrets, reply – also at another level (composer/send.ts).
-  const sendAs = (body: string, sentLevel: MessageLevel) => sendDraft({ conversationId: chat.id, body, level: sentLevel, mentions: (sent) => mentionsIn(sent, chat), ultraOffered: ultraOffered(chat) });
+  const sendAs = (body: string, sentLevel: MessageLevel) => sendDraft({ conversationId: chat.id, body, level: sentLevel, mentions: (sent) => mentionsIn(sent, chat) });
 
   /** `sentLevel`: the Plus menu's "Send as important" / "Send silently" (no slash command then); `how`: AF-016 now, queue or the other one than the default. */
   const send = async (sentLevel?: MessageLevel, how?: SendWhileWorking | 'other') => {
-    if (sending || transcribing.peek().has(chat.id)) return; // never sends without the dictated words
+    if (sending || record.held || transcribing.peek().has(chat.id)) return; // never sends without the dictated words or the take
     cancelCountdown(chat.id); // AF-017: sent now, by hand or by the countdown itself
     setSending(true); // also while a dictation is transcribed first (a second tap sends nothing twice)
     try {
@@ -213,7 +230,7 @@ export function Composer(props: { chat: ConversationSummary }) {
     try {
       if (isDictating && !(await dictateIntoDraft())) return;
       if (sentLevel) updateDraft(chat.id, { level: sentLevel });
-      await scheduleDraft(chat, draft.peek().ultra === true && ultraOffered(chat));
+      await scheduleDraft(chat);
     } finally {
       setSending(false);
       fieldRef.current?.focus();
@@ -226,6 +243,7 @@ export function Composer(props: { chat: ConversationSummary }) {
       if (!event.repeat && !talkKeyDown.current) { talkKeyDown.current = true; talk.current.down(); }
       return;
     }
+    if (openMark) { setOpenMark(null); if (event.key === 'Escape') { event.preventDefault(); return; } } // typing closes the mark menu
     if (event.key === 'Escape' && cancelCountdown(chat.id)) { event.preventDefault(); return; } // AF-017: the words stay
     if (suggest.onKeyDown(event, visibleItems, accept)) { event.preventDefault(); return; }
     if (event.key === 'Escape' && scheduling) { event.preventDefault(); leaveScheduleMode(chat.id); return; }
@@ -284,12 +302,12 @@ export function Composer(props: { chat: ConversationSummary }) {
     scheduling,
   };
   const sendMenu = useContextMenu(() => [{ items: sendMenuItems(sendActions) }]);
-  // Schedule mode: the same round cell with a clock (a wider label would move Ultra, the model and the mic)
+  // Schedule mode: the same round cell with a clock (a wider label would move the model and the mic)
   const primary = controls.primary === 'stop'
     // AF-012: the same round cell, a square – Send comes back at once after the click (composer/stop.ts)
     ? <button type="button" class="send-button stop-button" aria-label="Stop" title="Stop (Esc)" data-tour="run-stop" onClick={() => void stopChat(chat)}><span class="stop-square" aria-hidden="true" /></button>
     : <button type="button" class="send-button" aria-label={scheduling ? 'Schedule' : 'Send'} title={scheduling ? 'Schedule' : undefined} data-tour="composer-send" {...sendMenu}
-    disabled={(scheduling ? !scheduleReady || transcribingHere : controls.primary === 'send-disabled') || sending || uploading.length > 0}
+    disabled={(scheduling ? !scheduleReady || transcribingHere : controls.primary === 'send-disabled') || sending || uploading.length > 0 || record.held}
     onClick={() => void (scheduling ? scheduleNow() : send())}><Icon name={scheduling ? 'clock' : 'arrow-up'} size={19} /></button>;
 
   return (
@@ -302,11 +320,14 @@ export function Composer(props: { chat: ConversationSummary }) {
         {mode && <ScheduleBar conversationId={chat.id} mode={mode} next={next} note={note} onLeave={() => leaveScheduleMode(chat.id)} />}
         {secretOpen && <ChatSecretBar key={chat.id} conversationId={chat.id} room={20 - secrets.length} onLeave={() => { setSecretOpen(false); fieldRef.current?.focus(); }}
           onAttach={(id) => updateDraft(chat.id, { secrets: [...(draft.peek().secrets ?? []), id] })} />}
+        {record.bar}
         {replyTo && <ReplyQuote conversationId={chat.id} messageId={replyTo} onCancel={() => { setReply(chat.id, null); fieldRef.current?.focus(); }} />}
         <SecretAttachments ids={secrets} onRemove={id => updateDraft(chat.id, { secrets: secrets.filter(entry => entry !== id) })} />
-        <ComposerAttachments attachments={attachments} uploading={uploading}
+        <ComposerAttachments attachments={attachments} uploading={uploading} conversationId={chat.id}
+          onRetry={(attachment) => retryTake(chat.id, attachment, targetOf(fieldRef.current))}
           onRemove={(fileId) => updateDraft(chat.id, { attachments: draft.value.attachments.filter((entry) => entry.fileId !== fileId) })} />
         <div class="composer-field">
+          {marks?.uncertain?.length ? <MarkLayer field={fieldRef} layer={layerRef} text={text} marks={marks.uncertain} /> : null}
           <textarea
             ref={fieldRef}
             class="composer-input"
@@ -314,13 +335,19 @@ export function Composer(props: { chat: ConversationSummary }) {
             value={text}
             placeholder={placeholder}
             aria-label={placeholder}
-            onInput={(event) => { const field = event.target as HTMLTextAreaElement; cancelCountdown(chat.id); setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); }}
+            onInput={(event) => { const field = event.target as HTMLTextAreaElement; cancelCountdown(chat.id); setText(field.value); setCaret(field.selectionStart); suggest.dismiss(null); setOpenMark(null); }}
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
             onBlur={onBlur}
-            onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
+            onClick={(event) => {
+              const field = event.target as HTMLTextAreaElement;
+              setCaret(field.selectionStart);
+              const index = field.selectionStart === field.selectionEnd ? markAt(draft.peek().marks, field.selectionStart) : -1;
+              setOpenMark(index < 0 ? null : draft.peek().marks?.uncertain?.[index] ?? null);
+            }}
             onPaste={onPaste}
           />
+          {openMark && <MarkMenu key={`${openMark.start}:${openMark.end}`} conversationId={chat.id} field={fieldRef} layer={layerRef} mark={openMark} onClose={() => setOpenMark(null)} onCaret={setCaret} />}
         </div>
         <div class="composer-actions">
           <PlusMenu chat={chat} actions={{
@@ -329,13 +356,13 @@ export function Composer(props: { chat: ConversationSummary }) {
             pickImages: () => void pickFiles(true),
             secret: secrets.length < 20 ? () => setSecretOpen(true) : undefined,
             makeTask: () => void makeTask(),
+            ...record.actions,
             ...sendActions,
           }} />
           <AccessModeCell chat={chat} agentId={agentId} />{/* AF-013: the access mode (click / Shift+Tab) */}
           <div class="composer-spacer"><DictationWave state={waveState(chat.id)} /></div>
           {countdown && <button type="button" class="dictation-countdown" title="The dictated message goes out – Cancel keeps it in the field (Esc)"
             onClick={() => { cancelCountdown(chat.id); fieldRef.current?.focus({ preventScroll: true }); }}><span class="dictation-countdown-bar" />Sending · Cancel</button>}
-          <UltraCell chat={chat} on={ultra} onToggle={(next) => updateDraft(chat.id, { ultra: next || undefined })} />
           <ModelChip chat={chat} agentId={agentId} openSignal={modelSignal} />
           <MicButton draftKey={chat.id} field={fieldRef} onStop={() => void (scheduling ? dictateIntoDraft() : finishTake('done'))}
             onHoldSend={scheduling ? undefined : () => void finishTake('release')} tracker={talk.current} />
@@ -345,7 +372,8 @@ export function Composer(props: { chat: ConversationSummary }) {
         </div>
       </div>
       <input ref={fileRef} type="file" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
-      <input ref={imageRef} type="file" accept="image/*" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
+      <input ref={imageRef} type="file" accept="image/*,video/*" multiple hidden onChange={(event) => { const input = event.target as HTMLInputElement; void addFiles([...(input.files ?? [])]); input.value = ''; }} />
+      {record.input}
     </div>
   );
 }

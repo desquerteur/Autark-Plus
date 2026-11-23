@@ -1,0 +1,61 @@
+# Review and install as .github/workflows/windows-release-unpacked.yml before creating the release tag.
+name: Windows release unpacked (unsigned)
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+jobs:
+  unpacked:
+    if: github.repository == 'teydra/OpenAutark'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.2'
+      - name: Verify source and build the unsigned app folder
+        working-directory: apps/desktop
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $p = Get-Content -Raw package.json | ConvertFrom-Json
+          if ($env:GITHUB_REF_NAME -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -or $env:GITHUB_REF_NAME -cne ('v' + $p.version) -or
+              (git rev-parse HEAD) -cne $env:GITHUB_SHA) { throw 'Unexpected tag, package version or checkout' }
+          foreach ($name in 'WIN_CSC_LINK','CSC_LINK','WIN_CSC_KEY_PASSWORD','CSC_KEY_PASSWORD','AUTARK_WINDOWS_SIGNING') {
+            if ([Environment]::GetEnvironmentVariable($name)) { throw "Unexpected signing setting: $name" }
+          }
+          npm ci --no-fund --no-audit
+          npm run build
+          # NSIS target writes app-update.yml and elevate.exe; retain only the unpacked folder.
+          npx --no-install electron-builder --win nsis --x64 --publish never
+      - name: Seal the app folder and bind it to this exact tag and run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = 'apps/desktop/dist/win-unpacked'
+          foreach ($name in 'Autark.exe','resources/app.asar','resources/elevate.exe','resources/app-update.yml','resources/app.asar.unpacked/resources/broker/AutarkDesktopBroker.exe') {
+            if (!(Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { throw "Missing payload: $name" }
+          }
+          if ((Get-AuthenticodeSignature -LiteralPath "$dir/Autark.exe").Status -ne 'NotSigned') { throw 'Unexpected signature' }
+          $null = New-Item -ItemType Directory -Path evidence
+          [IO.Compression.ZipFile]::CreateFromDirectory((Resolve-Path -LiteralPath $dir).Path, (Join-Path (Resolve-Path evidence).Path 'win-unpacked.zip'))
+          [ordered]@{
+            source_commit=(git rev-parse HEAD);run_id=$env:GITHUB_RUN_ID;run_attempt=$env:GITHUB_RUN_ATTEMPT
+            version=$env:GITHUB_REF_NAME.Substring(1);signing='none';archive='win-unpacked.zip'
+            sha256=(Get-FileHash -LiteralPath evidence/win-unpacked.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/manifest.json -Encoding utf8
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-win-unpacked-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

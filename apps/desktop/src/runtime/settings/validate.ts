@@ -4,7 +4,8 @@
 // Never: persistence or events (service.ts).
 //
 // Merge semantics: plain objects merge recursively; arrays and primitives replace; `null`
-// removes an optional key (JSON has no undefined, so null is how clients clear a field).
+// (JSON has no undefined, so null is how clients clear a field) sets a key back to its default, as settings.json and a
+// restart read it, and removes a key that has none.
 
 import { WorkforceError } from '../../shared/errors.ts';
 import type { Settings } from '../../shared/model/system.ts';
@@ -20,6 +21,9 @@ import { MAX_HINTS, NOTES_MAX, PATTERNS, SECTIONS, optionsOf, rangeOf } from './
 import { validatePersonality } from '../personality/settings-section.ts'; // AF-006
 import { validateAppearance } from './appearance-schema.ts'; // AF-010/AF-008
 
+const STUN_URL = new RegExp(PATTERNS.stun); // F25: settings.devices.stun
+import { MAX_HUMAN_MD } from '../../shared/model/agent-core.ts';
+
 type Plain = Record<string, unknown>;
 
 const isPlain = (value: unknown): value is Plain =>
@@ -34,15 +38,19 @@ function bad(path: string, expected: string): never {
   throw new WorkforceError('bad_request', `Invalid setting ${path}: expected ${expected}.`, { details: { path } });
 }
 
-/** Deep merge (see header). Returns a new object; inputs are not mutated. */
-export function deepMerge<T>(base: T, patch: unknown): T {
+/** Deep merge (see header); `defaults` (the same shape): what a null key becomes. Returns a new object; inputs are not mutated. */
+export function deepMerge<T>(base: T, patch: unknown, defaults?: unknown): T {
   if (!isPlain(patch) || !isPlain(base)) return (patch === undefined ? base : patch) as T;
   const out: Plain = { ...base };
+  const own = (key: string): unknown => (isPlain(defaults) && Object.prototype.hasOwnProperty.call(defaults, key) ? defaults[key] : undefined);
   for (const [key, value] of Object.entries(patch)) {
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-    if (value === null) delete out[key];
-    else if (value === undefined) continue;
-    else if (isPlain(value) && isPlain(out[key])) out[key] = deepMerge(out[key], value);
+    if (value === null) {
+      const fallback = own(key);
+      if (fallback === undefined) delete out[key];
+      else out[key] = structuredClone(fallback);
+    } else if (value === undefined) continue;
+    else if (isPlain(value) && isPlain(out[key])) out[key] = deepMerge(out[key], value, own(key));
     else out[key] = structuredClone(value);
   }
   return out as T;
@@ -121,6 +129,9 @@ export function validateSettings(s: Settings): void {
   if (!validTimezone(p.timezone)) bad('profile.timezone', 'an IANA time zone');
   // B-078: the AI's note (line breaks and tabs are fine, other control characters are not)
   if (p.notes !== undefined && (typeof p.notes !== 'string' || p.notes.length > NOTES_MAX || /[\u0000-\u0008\u000b-\u001f]/.test(p.notes))) bad('profile.notes', `text up to ${NOTES_MAX} characters`);
+  if (p.pcAccess !== undefined) oneOf(p.pcAccess, 'profile.pcAccess'); // B-085: absent = whole
+  // owner 16.11.2026: the lines for every agent (line breaks and tabs are fine, like the notes)
+  if (p.forEveryAgent !== undefined && (typeof p.forEveryAgent !== 'string' || p.forEveryAgent.length > MAX_HUMAN_MD || /[\u0000-\u0008\u000b-\u001f]/.test(p.forEveryAgent))) bad('profile.forEveryAgent', `text up to ${MAX_HUMAN_MD} characters`);
 
   const ui = s.preferences;
   oneOf(ui.theme, 'preferences.theme');
@@ -134,6 +145,7 @@ export function validateSettings(s: Settings): void {
   const n = s.notifications;
   boolean(n.enabled, 'notifications.enabled');
   boolean(n.sound, 'notifications.sound');
+  boolean(n.computerUse, 'notifications.computerUse');
   subset(n.pushFor, 'notifications.pushFor');
   if (n.quietHours !== undefined) {
     if (!isPlain(n.quietHours) || !HHMM.test(String(n.quietHours.from)) || !HHMM.test(String(n.quietHours.to)) || Object.keys(n.quietHours).length !== 2) {
@@ -171,6 +183,9 @@ export function validateSettings(s: Settings): void {
   intIn(s.devices.peerPort, 'devices.peerPort'); // 0 = any free port
   if (s.devices.findable !== undefined) boolean(s.devices.findable, 'devices.findable'); // Remote (absent = on)
   if (s.devices.relay !== undefined && (typeof s.devices.relay !== 'string' || (s.devices.relay !== '' && relayAddress(s.devices.relay) !== s.devices.relay))) bad('devices.relay', 'a relay address (wss://…) or empty');
+  if (s.devices.rtc !== undefined) boolean(s.devices.rtc, 'devices.rtc'); // F25 (absent = on)
+  const stun = s.devices.stun;
+  if (stun !== undefined && (!Array.isArray(stun) || stun.length > 4 || stun.some((url) => typeof url !== 'string' || !STUN_URL.test(url)))) bad('devices.stun', 'up to 4 "stun:host:port" addresses, or [] (none)');
   if (s.lifecycle !== undefined) validateLifecycle(s.lifecycle); // LIFECYCLE: retention days
   if (s.day !== undefined) validateDay(s.day);
   if (s.calendar !== undefined) {

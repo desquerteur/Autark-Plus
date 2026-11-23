@@ -3,7 +3,9 @@
 // login wins by its own time, an older one never replaces it; a change the CLI writes (the home's watch) goes on its
 // own; a login found in a CLI's default home travels and comes back into that home only when the file there is the
 // same account; a PC that has the same login itself (provider and e-mail) takes it into its own account; never over
-// a file of another account (in any home); a plan signed out here takes none until one is made here again; nothing
+// a file of another account (in any home), nor a refresh token another plan here holds or one list carries for two plans
+// (one login in two plans), and two calls at once take one login once; a plan
+// signed out here takes none until one is made here again; nothing
 // goes to or comes from an employee's PC, an emptied login never travels, Claude Code on a Mac has none to send or take.
 
 import { test } from 'node:test';
@@ -26,7 +28,7 @@ const record = (id: string, extra: Partial<DeviceRecord> = {}): DeviceRecord => 
 });
 
 const plan = (id: string, provider: Account['provider'], extra: Partial<Account> = {}): Account => ({
-  id, provider, label: provider, auth: 'cli', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 0, ...extra,
+  id, provider, label: provider, auth: 'cli', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 0, ...extra,
 });
 
 const codexLogin = (refresh: string, at: string, accountId = 'org-1') =>
@@ -76,6 +78,10 @@ const put = async (file: string, text: string) => { await mkdir(path.dirname(fil
 const read = (file: string) => readFile(file, 'utf8').catch(() => undefined);
 const temps = async (dir: string) => (await readdir(dir).catch(() => [] as string[])).filter((name) => name.endsWith('.tmp'));
 const settle = (ms = 700) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits until `check` holds (a send gathers 500 ms first; a busy machine adds more), at most 10 s. */
+async function until(check: () => Promise<boolean>): Promise<void> {
+  for (const end = Date.now() + 10_000; !(await check()) && Date.now() < end;) await settle(50);
+}
 
 /** `b` joined `a` as one of the CEO's PCs. */
 function link(a: Pc, b: Pc): void {
@@ -109,7 +115,7 @@ test('a plan\'s login reaches the other PC\'s own home whole and the account is 
   await put(there, codexLogin('r2', '2026-11-04T11:00:00Z')); // Codex refreshed on B
   b.watchers.get(b.own('acc_cx'))!('rename', 'auth.json');
   b.watchers.get(b.own('acc_cx'))!('change', 'history.jsonl'); // not a login file: nothing
-  await settle();
+  await until(async () => await read(path.join(a.own('acc_cx'), 'auth.json')) === codexLogin('r2', '2026-11-04T11:00:00Z'));
   assert.equal(await read(path.join(a.own('acc_cx'), 'auth.json')), codexLogin('r2', '2026-11-04T11:00:00Z'), 'the refresh came back at once');
   const sent = b.calls.length;
   a.watchers.get(a.own('acc_cx'))!('rename', 'auth.json'); // A's own write of what came: no echo
@@ -248,7 +254,8 @@ test('a plan signed out here takes no login from a linked PC until one is made h
   const mine = path.join(a.own('acc_cx'), 'auth.json');
   const theirs = path.join(b.own('acc_cx'), 'auth.json');
   await put(theirs, codexLogin('r2', '2026-11-04T11:00:00Z'));
-  signedOut.mark(a.s.db, 'acc_cx', 1); // the person signed out on A (accounts.logout: the CLI removed the file)
+  await mkdir(a.own('acc_cx'), { recursive: true });
+  signedOut.mark(a.s.db, a.accounts[0], 1); // the person signed out on A (accounts.logout: the CLI removed the file; the mark is the home's)
 
   await b.logins.catchUp('dev_a');
   assert.equal(await read(mine), undefined, 'A stays signed out');
@@ -256,9 +263,125 @@ test('a plan signed out here takes no login from a linked PC until one is made h
 
   await put(mine, codexLogin('r3', '2026-11-04T12:00:00Z')); // the person signed in on A again
   await a.logins.catchUp('dev_b');
-  assert.equal(signedOut.has(a.s.db, 'acc_cx'), false, 'a login here ends the mark');
+  assert.equal(signedOut.has(a.s.db, a.accounts[0]), false, 'a login here ends the mark');
   assert.equal(await read(theirs), codexLogin('r3', '2026-11-04T12:00:00Z'), 'and goes to B');
   await put(theirs, codexLogin('r4', '2026-11-04T13:00:00Z'));
   await b.logins.catchUp('dev_a');
   assert.equal(await read(mine), codexLogin('r4', '2026-11-04T13:00:00Z'), 'B\'s refresh reaches A again');
+});
+
+test('B-080 (live 09.11.2026): one login in two plans – a refresh token another plan here holds is neither sent nor taken', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b');
+  t.after(async () => { for (const pc of [a, b]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  const cred = (refresh: string, expiresAt: number) => JSON.stringify({ claudeAiOauth: { accessToken: `a-${refresh}`, refreshToken: refresh, expiresAt, scopes: [], subscriptionType: 'max' } });
+  const file = (pc: Pc, account: string) => path.join(pc.own(account, 'claude'), '.credentials.json');
+  for (const pc of [a, b]) pc.accounts.push(plan('acc_c2', 'claude', { home: pc.own('acc_c2', 'claude') }), plan('acc_c3', 'claude', { home: pc.own('acc_c3', 'claude') }));
+  // On A, Claude Code 2's home holds Claude Code 3's login: whose it is stays unclear, so A sends neither.
+  await put(file(a, 'acc_c2'), cred('r3', 1_793_900_000_000));
+  await put(file(a, 'acc_c3'), cred('r3', 1_793_900_000_000));
+  await put(file(b, 'acc_c2'), cred('r2', 1_793_800_000_000));
+  await put(file(b, 'acc_c3'), cred('r3', 1_793_800_000_000));
+  assert.equal(await a.logins.catchUp('dev_b'), true);
+  assert.deepEqual(a.calls, [], 'nothing sent');
+
+  // A PC on an older version sends it anyway: B keeps Claude Code 2's own login (Claude Code 3 here holds that token).
+  const login = (refresh: string, at: number) => ({ account: 'acc_c2', provider: 'claude', at, files: [{ name: '.credentials.json', data: Buffer.from(cred(refresh, at)).toString('base64') }] });
+  assert.deepEqual(await b.logins.receive({ logins: [login('r3', 1_793_900_000_000)] }, 'dev_a'), { ok: true, applied: 0 });
+  assert.equal(await read(file(b, 'acc_c2')), cred('r2', 1_793_800_000_000));
+  // Its own newer login (a token no other plan here holds) still comes.
+  assert.deepEqual(await b.logins.receive({ logins: [login('r2b', 1_793_950_000_000)] }, 'dev_a'), { ok: true, applied: 1 });
+  assert.equal(await read(file(b, 'acc_c2')), cred('r2b', 1_793_950_000_000));
+});
+
+test('B-087: a list from an older PC that carries one login for two plans gives it to neither, also alone later; two calls at once take it once', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b');
+  t.after(async () => { for (const pc of [a, b]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  const cred = (refresh: string, expiresAt: number) => JSON.stringify({ claudeAiOauth: { accessToken: `a-${refresh}`, refreshToken: refresh, expiresAt, scopes: [], subscriptionType: 'max' } });
+  const file = (account: string) => path.join(b.own(account, 'claude'), '.credentials.json');
+  // Not signed in yet: a login taken here would also ask for the account check.
+  b.accounts.push(plan('acc_c2', 'claude', { home: b.own('acc_c2', 'claude'), state: 'needs_login' }), plan('acc_c3', 'claude', { home: b.own('acc_c3', 'claude'), state: 'needs_login' }));
+  const file1 = (refresh: string, at: number) => ({ name: '.credentials.json', data: Buffer.from(cred(refresh, at)).toString('base64') });
+  const login = (account: string, refresh: string, at: number) => ({ account, provider: 'claude', at, files: [file1(refresh, at)] });
+  await put(file('acc_c2'), cred('r2', 1_793_800_000_000));
+  await put(file('acc_c3'), cred('r3old', 1_793_800_000_000));
+
+  // The live shape of 09.11.: the catch-up list of a PC whose Claude Code 2 home holds Claude Code 3's login, plan 2 first.
+  assert.deepEqual(await b.logins.receive({ logins: [login('acc_c2', 'T', 1_793_960_000_000), login('acc_c3', 'T', 1_793_960_000_000)] }, 'dev_a'), { ok: true, applied: 0 });
+  // Later that PC sends one copy alone (a change in one home): still no plan's login.
+  assert.deepEqual(await b.logins.receive({ logins: [login('acc_c2', 'T', 1_793_965_000_000)] }, 'dev_a'), { ok: true, applied: 0 });
+  // A login that names its file twice (the first checked, the last written) is no login.
+  assert.deepEqual(await b.logins.receive({ logins: [{ ...login('acc_c3', 'fresh', 1_793_965_000_000), files: [file1('fresh', 1_793_965_000_000), file1('T', 1_793_965_000_000)] }] }, 'dev_a'), { ok: true, applied: 0 });
+  assert.equal(await read(file('acc_c2')), cred('r2', 1_793_800_000_000), 'plan 2 keeps its own login');
+  assert.equal(await read(file('acc_c3')), cred('r3old', 1_793_800_000_000), 'plan 3 too');
+  assert.deepEqual(b.checked, []);
+
+  // Two calls at once, each with one plan's copy of one new token: one plan takes it, the other finds it held.
+  const [one, two] = await Promise.all([
+    b.logins.receive({ logins: [login('acc_c2', 'X', 1_793_970_000_000)] }, 'dev_a'),
+    b.logins.receive({ logins: [login('acc_c3', 'X', 1_793_970_000_000)] }, 'dev_a'),
+  ]);
+  assert.equal(one.applied + two.applied, 1, 'one login in one plan');
+  const holders = [await read(file('acc_c2')), await read(file('acc_c3'))].filter((text) => text === cred('X', 1_793_970_000_000));
+  assert.equal(holders.length, 1);
+  assert.equal(b.checked.length, 1, 'and only that plan is checked');
+});
+
+test('16.11.2026: two companies on one PC share one home – both LoginSyncs write it whole, the newer login wins, a refresh there reaches the linked PC once', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b'); // company 1 on PC B
+  const b2 = await makePc(pcs, 'dev_b2'); // company 2 on PC B: its row points at the same home
+  t.after(async () => { for (const pc of [a, b, b2]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  link(a, b2);
+  const shared = b.own('acc_cx');
+  a.accounts.push(plan('acc_cx', 'codex', { home: a.own('acc_cx'), email: 'lena@example.com' }));
+  b.accounts.push(plan('acc_cx', 'codex', { home: shared, email: 'lena@example.com' }));
+  b2.accounts.push(plan('acc_c2', 'codex', { home: shared, email: 'lena@example.com' })); // its own row, the same login
+  await put(path.join(shared, 'auth.json'), codexLogin('r1', '2026-11-04T10:00:00Z'));
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r2', '2026-11-04T11:00:00Z'));
+
+  await Promise.all([a.logins.catchUp('dev_b'), a.logins.catchUp('dev_b2')]); // both companies take it at once
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r2', '2026-11-04T11:00:00Z'), 'the newer login, whole');
+  assert.deepEqual(await temps(shared), [], 'no temp file stays');
+  assert.deepEqual((await readdir(path.join(b2.root, 'data', 'accounts')).catch(() => [])), [], 'no second home for that login');
+
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r0', '2026-11-04T09:00:00Z'));
+  await Promise.all([a.logins.catchUp('dev_b'), a.logins.catchUp('dev_b2')]);
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r2', '2026-11-04T11:00:00Z'), 'an older login never replaces it');
+
+  const offs = [a.logins.attach(), b.logins.attach(), b2.logins.attach()];
+  assert.ok(b.watchers.has(shared) && b2.watchers.has(shared), 'both companies watch the one home');
+  await put(path.join(shared, 'auth.json'), codexLogin('r3', '2026-11-04T12:00:00Z')); // a turn of company 2 refreshed it
+  b.watchers.get(shared)!('rename', 'auth.json');
+  b2.watchers.get(shared)!('rename', 'auth.json');
+  await until(async () => await read(path.join(a.own('acc_cx'), 'auth.json')) === codexLogin('r3', '2026-11-04T12:00:00Z'));
+  assert.equal(await read(path.join(a.own('acc_cx'), 'auth.json')), codexLogin('r3', '2026-11-04T12:00:00Z'), 'the refresh reached the linked PC');
+  assert.equal(await read(path.join(shared, 'auth.json')), codexLogin('r3', '2026-11-04T12:00:00Z'), 'and nothing older came back');
+  for (const off of offs) off();
+});
+
+test('a login kept "Only on this PC" (17.11.2026, Account.thisPcOnly) is not sent – not at a link-up, not on a change of its file – until it is shared', async (t) => {
+  const pcs = new Map<string, Pc>();
+  const a = await makePc(pcs, 'dev_a');
+  const b = await makePc(pcs, 'dev_b');
+  t.after(async () => { for (const pc of [a, b]) await rm(pc.root, { recursive: true, force: true }); });
+  link(a, b);
+  const kept = plan('acc_cx', 'codex', { home: a.own('acc_cx'), email: 'lena@example.com', thisPcOnly: true });
+  a.accounts.push(kept);
+  b.accounts.push(plan('acc_cx', 'codex', { home: b.own('acc_cx'), email: 'lena@example.com', state: 'needs_login' }));
+  await put(path.join(a.own('acc_cx'), 'auth.json'), codexLogin('r1', '2026-11-04T10:00:00Z'));
+  await a.logins.catchUp('dev_b');
+  assert.equal(await read(path.join(b.own('acc_cx'), 'auth.json')), undefined, 'kept on this PC: the login does not go');
+  assert.deepEqual(a.calls, [], 'no call at all');
+
+  delete kept.thisPcOnly; // "On all PCs of this company"
+  assert.equal(await a.logins.catchUp('dev_b'), true);
+  assert.equal(await read(path.join(b.own('acc_cx'), 'auth.json')), codexLogin('r1', '2026-11-04T10:00:00Z'), 'shared: it goes');
 });

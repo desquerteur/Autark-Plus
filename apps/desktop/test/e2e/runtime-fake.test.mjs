@@ -1,11 +1,11 @@
 // End-to-end: the real headless runtime (built app/runtime-cli.mjs) with the deterministic fake
 // engine, driven over the real WebSocket RPC – the same path the PWA and phone use.
-// Covers: seed manager, model catalog, chat → agent reply (streaming → final), an agent tool call
+// Covers: seed manager, model catalog, chat → agent reply (posted as one final message), an agent tool call
 // creating a task, an agent ask block marked "todo": true or important (B-078 D9: plain blocks stay quick replies)
 // becoming a human to-do with the right widget, the human's
 // answer completing the to-do and waking the agent with the person's own line (B-076; F06: the recording attached
 // to that line and its stored path in the woken input), the person declining a to-do ("Can't do
-// this…", F06: cancelled, the agent woken with their line "I can't do this: <reason>"), an agent's mini-app to-do
+// this…", F06: dropped, the agent woken with their line "I can't do this: <reason>"), an agent's mini-app to-do
 // (```app todo=true, F01) reaching the For-you list and finishing through blocks.answer (what its
 // wf.complete sends) with the line "Done in mini-app" and its data, a free-text to-do as a plain Done (no guessing), schedules,
 // knowledge, an agent's own task getting a quiet turn of its own with its continuations bounded (tasks/ownership.ts: a
@@ -16,7 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const CONTINUATION_WINDOW_MS = 30_000;
 // Text-only turns: the own-task turn and one 1 s continuation count as progress, then stalls back
@@ -50,7 +50,7 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
 
   await t.test('plain message → streamed agent reply', async () => {
     await client.call('messages.send', { conversationId: chat.id, body: 'Hello team', clientId: 'e2e-1' });
-    const reply = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Echo: /), 90_000);
+    const reply = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Echo: /), 90_000);
     assert.match(reply.body, /Hello team/);
   });
 
@@ -68,10 +68,10 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
     const todos = await client.call('todos.list');
     assert.ok(todos.some((item) => item.id === todo.id), 'the to-do is on the For-you list');
     const file = await client.call('files.upload', { name: 'voice.webm', mime: 'audio/webm', dataBase64: Buffer.from('fake audio').toString('base64') });
-    await client.call('tasks.complete', { id: todo.id, answer: { file: file.id, seconds: 3, mime: 'audio/webm' }, clientId: 'e2e-answer' });
+    await client.call('tasks.finish', { id: todo.id, answer: { file: file.id, seconds: 3, mime: 'audio/webm' }, clientId: 'e2e-answer' });
     await client.waitFor('task.upserted', (item) => item.id === todo.id && item.status === 'done', 30_000);
     // F06: the recording reaches the agent – B-076: as the person's line, which names where it is stored.
-    const woken = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Recorded 0:03/), 90_000);
+    const woken = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Recorded 0:03/), 90_000);
     assert.match(woken.body, /\[Audio: voice\.webm\] \([^\n]*stored at /, 'the woken input names the stored recording with its path');
     assert.doesNotMatch(woken.body, /ui-answer/);
     const messages = await client.call('messages.list', { conversationId: chat.id, limit: 50 });
@@ -79,14 +79,14 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
     assert.deepEqual(receipt?.attachments.map((attachment) => attachment.fileId), [file.id], 'the receipt carries the recording');
   });
 
-  await t.test("the person declines a to-do (\"Can't do this…\") → cancelled → agent woken with the reason", async () => {
+  await t.test("the person declines a to-do (\"Can't do this…\") → dropped → agent woken with the reason", async () => {
     await client.call('messages.send', { conversationId: chat.id, body: 'Plug it in [[ui:{"type":"confirm","instructions":"Plug in the camera","important":true}]]' });
     const todo = await client.waitFor('task.upserted', (item) => item.assigneeKind === 'human' && item.widget?.type === 'confirm', 90_000);
     const declined = await client.call('todos.decline', { id: todo.id, reason: 'No camera here', clientId: 'e2e-decline' });
-    assert.equal(declined.status, 'cancelled');
+    assert.equal(declined.status, 'dropped');
     assert.deepEqual(declined.result?.answer, { declined: true, reason: 'No camera here' });
     assert.ok(!(await client.call('todos.list')).some((item) => item.id === todo.id), 'the to-do left the list');
-    const woken = await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /I can't do this: No camera here/), 90_000);
+    const woken = await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /I can't do this: No camera here/), 90_000);
     assert.doesNotMatch(woken.body, /ui-answer/);
   });
 
@@ -95,7 +95,6 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
     await client.call('messages.send', { conversationId: chat.id, body: `Your take [[app:title="Voice take" todo=true reason=physical permissions="microphone"|${html}]]` });
     const todo = await client.waitFor('task.upserted', (item) => item.assigneeKind === 'human' && item.widget?.type === 'app', 90_000);
     assert.equal(todo.title, 'Voice take');
-    assert.equal(todo.humanReason, 'physical');
     assert.deepEqual(todo.widget.permissions, ['microphone']);
     assert.equal(todo.messageId, todo.widget.messageId, 'anchored to the agent message that holds the app');
     const todos = await client.call('todos.list');
@@ -108,7 +107,7 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
     const done = await client.waitFor('task.upserted', (item) => item.id === todo.id && item.status === 'done', 30_000);
     assert.equal(done.result?.summary, 'Done in mini-app · take: 1');
     assert.ok(!(await client.call('todos.list')).some((item) => item.id === todo.id), 'the to-do left the list');
-    await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /Done in mini-app\ntake: 1/), 90_000);
+    await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /Done in mini-app\ntake: 1/), 90_000);
   });
 
   await t.test('a free-text to-do is a plain Done – no guessing of widgets or times (tasks/todo-draft.ts)', async () => {
@@ -120,8 +119,8 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
   });
 
   await t.test('agent self-reminder becomes a visible schedule', async () => {
-    await client.call('messages.send', { conversationId: chat.id, body: 'Follow up [[tool:schedules.remind {"note":"Check comments","when":{"once":"PT2H"}}]]' });
-    await client.waitFor('message.updated', finalFrom(chat.id, manager.id, /schedules\.remind/), 90_000);
+    await client.call('messages.send', { conversationId: chat.id, body: 'Follow up [[tool:schedules.remind {"note":"Check comments","when":{"at":"+2h"}}]]' });
+    await client.waitFor(MESSAGE_EVENTS, finalFrom(chat.id, manager.id, /schedules\.remind/), 90_000);
     const schedules = await client.call('schedules.list', { ownerId: manager.id });
     assert.ok(schedules.length >= 1, 'the reminder is listed');
   });
@@ -161,7 +160,7 @@ test('agent OS end-to-end over WebSocket RPC with the fake engine', { timeout: 3
       assert.ok(turns >= 1, `the own task got its turn (${turns})`);
       assert.ok(turns <= MAX_TURNS_IN_WINDOW, `${turns} turns on the task within 30 s – continuations must back off`);
     } finally {
-      await client.call('tasks.setStatus', { id: task.id, status: 'cancelled' }); // the echo would keep re-checking it
+      await client.call('tasks.finish', { id: task.id, status: 'dropped' }); // the echo would keep re-checking it
     }
   });
 });

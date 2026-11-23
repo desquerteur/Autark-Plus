@@ -3,7 +3,8 @@
 // a small static server – localhost is a secure context), the real meeting server (services/remote-relay), a headless
 // runtime whose devices.relay points at it, and Chromium with iPhone emulation (WebKit is not installed here). The phone
 // types the PC's Remote ID, both screens show the same code, the PC accepts, the PC's own UI renders through the tunnel
-// and the service worker, a chat line reaches the PC, a reload comes back from IndexedDB without pairing, the edge
+// and the service worker, a chat line reaches the PC, a reload comes back from IndexedDB without pairing, F29: a
+// tampered copy of main.js never runs and a script the PC does not list shows "Autark stopped a file", the edge
 // swipe calls the layered Back, and Forget removes the phone on the PC and returns to the start. The app runs on an
 // origin of its own (127.0.0.1, the site on localhost). What stays unverified: real iOS (WebKit's service
 // worker, standalone storage, background kill, Apple push, the microphone).
@@ -130,6 +131,20 @@ test('the iPhone web app pairs by Remote ID and shows the PC\'s own UI through t
   await phone.reload();
   await phone.locator('.mobile-shell').waitFor({ timeout: 90_000 });
   assert.equal(await phone.locator('.hs-title', { hasText: 'Connect to your PC' }).count(), 0);
+
+  // F29: the PC's list of its UI files is kept; a tampered copy in the phone's cache never runs (the worker fetches the
+  // PC's own file again), and a script the PC does not list is refused with the shell's screen.
+  const copyOf = (file) => phone.evaluate(async (name) => (await (await caches.open('autark-pc')).match(new URL(name, location.href).href))?.text(), file);
+  assert.match(await copyOf('ui-hashes.json'), /"main\.js":"[0-9a-f]{64}"/);
+  await phone.evaluate(async () => { await (await caches.open('autark-pc')).put(new URL('main.js', location.href).href, new Response('document.body.dataset.tampered = "1"', { headers: { 'content-type': 'text/javascript' } })); });
+  await phone.reload();
+  await phone.locator('.mobile-shell').waitFor({ timeout: 90_000 });
+  assert.equal(await phone.evaluate(() => document.body.dataset.tampered), undefined, 'the tampered copy did not run');
+  assert.notEqual(await copyOf('main.js'), 'document.body.dataset.tampered = "1"', 'the PC\'s own main.js replaced it');
+  await phone.evaluate(() => { const script = document.createElement('script'); script.type = 'module'; script.src = new URL('not-listed.js', location.href).href; document.head.append(script); });
+  await phone.locator('.hs-title', { hasText: 'Autark stopped a file' }).waitFor({ timeout: 30_000 });
+  await phone.reload();
+  await phone.locator('.mobile-shell').waitFor({ timeout: 90_000 });
 
   // The left-edge swipe is the layered Back the Android app calls.
   const backs = await phone.evaluate(() => {

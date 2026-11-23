@@ -5,12 +5,19 @@
 // never a text field, a refused field writes nothing, card hints, the upgrade from a
 // version-30 database; form capture of a login with a 2FA key as ONE group (one-time codes in
 // fields named TOTP stay passwords); a single secret changes to or from a 2FA key only with a value;
-// a key grouped with no-break, thin or double spaces is redacted; the RPC tiers.
+// a key grouped with no-break, thin or double spaces is redacted; the RPC tiers; B-080: a group's description takes
+// 4000 characters like a single secret's, also from its route file.
 // Owns: these assertions only. Never: a real keychain, browser or network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { MemoryLogger } from '../../../src/runtime/system/log.ts';
+import { SecretFiles } from '../../../src/runtime/secrets/files.ts';
+import { RootWatcher } from '../../../src/runtime/root/watcher.ts';
+import { ROOT_SECRETS } from '../../../src/runtime/root/layout.ts';
+import { tempDir } from '../store/helpers.ts';
 import { Db } from '../../../src/runtime/db/database.ts';
 import { migrate, SCHEMA_VERSION } from '../../../src/runtime/db/migrate.ts';
 import { ManualClock } from '../../../src/runtime/system/clock.ts';
@@ -154,6 +161,30 @@ test('one invalid 2FA key writes nothing; removeGroup removes fields and redacti
   await t.vault.save({ id: field('cvc').id, label: 'ignored', kind: 'card' });
 });
 
+test('B-080: a login\'s description takes 4000 characters like a single secret – saved and taken over from its route file without a notice; 4001 refused', async (t) => {
+  const temp = tempDir('wf-secret-groups-');
+  t.after(temp.cleanup);
+  const s = setup();
+  const log = new MemoryLogger();
+  const root = new RootWatcher({ root: temp.dir, clock: s.clock, log, watch: false });
+  root.start();
+  const files = new SecretFiles({ dataDir: temp.dir, vault: s.vault, clock: s.clock, log, root });
+  t.after(() => { files.stop(); root.stop(); });
+  const { saved } = await login(s.vault);
+  const long = `IONOS webmail for hello@ – ${'out of office and absences. '.repeat(70)}`.slice(0, 2000);
+  await s.vault.saveGroup({ id: saved.group.id, description: long });
+  assert.equal(s.vault.groups()[0].description, long.trim(), 'saved');
+  await files.start();
+  const file = path.join(temp.dir, ROOT_SECRETS, 'logins.md');
+  const edited = `${long.trim().slice(0, 1990)} – edited.`;
+  writeFileSync(file, readFileSync(file, 'utf8').replace(long.trim(), edited));
+  root.nudge(ROOT_SECRETS, ['logins.md']);
+  await files.flush();
+  assert.equal(s.vault.groups()[0].description, edited, 'taken over from the route file');
+  assert.deepEqual(files.notices(), [], 'no invalid notice');
+  await assert.rejects(s.vault.saveGroup({ id: saved.group.id, description: 'x'.repeat(4001) }), /at most 4000 characters/);
+});
+
 test('migrate() upgrades a version-30 database; its single secrets keep working', async () => {
   const db = new Db(':memory:');
   const dir = new URL('../../../src/runtime/db/migrations/', import.meta.url);
@@ -212,7 +243,7 @@ function rig() {
   Object.assign(f.services, { secrets: vault });
   const ask = (body = FORM) => {
     const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
-    return f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body, state: 'final' });
+    return f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body, state: 'final' });
   };
   return { ...f, table, vault, ask };
 }
@@ -262,22 +293,20 @@ test('capture: one-time codes in fields named TOTP or authenticator are stored a
 
 const device = (secure = true): ClientScope => ({ kind: 'device', deviceId: 'dev_phone', capabilities: ['todo', 'chat', 'tasks', 'settings', 'manage', 'permissions'], secure });
 
-test('rpc: groups and saveGroup on the permissions tier over HTTPS, deleteGroup on the PC; a phone only creates; no value comes back', async (t) => {
+test('rpc: secure permissions devices manage groups without returned values; LAN remains refused', async (t) => {
   const f = rig();
   t.after(f.cleanup);
   assert.deepEqual(f.table.get('secrets.groups')?.scope, { capability: 'permissions', secure: true });
   assert.deepEqual(f.table.get('secrets.saveGroup')?.scope, { capability: 'permissions', secure: true });
-  assert.equal(f.table.get('secrets.deleteGroup')?.scope, 'owner');
+  assert.deepEqual(f.table.get('secrets.deleteGroup')?.scope, { capability: 'permissions', secure: true });
   const create = { label: 'Shop', kind: 'login', fields: [{ field: 'username', kind: 'text', value: USERNAME }, { field: 'password', kind: 'password', value: PASSWORD }, { field: 'totp', kind: 'totp', value: URI }] };
   await assert.rejects(f.server.call('secrets.saveGroup', create, device(false)), /./, 'plain LAN http');
   const saved = await f.server.call('secrets.saveGroup', create, device()) as { group: { id: string }; fields: Array<{ id: string; field: string }> };
   const field = saved.fields[0];
-  for (const params of [{ id: saved.group.id, label: 'Mine now' }, { label: 'x', fields: [{ id: field.id, field: field.field, kind: 'text', value: 'y' }] }, { label: 'x', remove: [field.id] }]) {
-    await assert.rejects(f.server.call('secrets.saveGroup', params, device()), (error: unknown) => error instanceof WorkforceError && error.code === 'forbidden');
-  }
-  await assert.rejects(f.server.call('secrets.deleteGroup', { id: saved.group.id }, device()), /./);
+  await f.server.call('secrets.saveGroup', { id: saved.group.id, label: 'Renamed', fields: [{ id: field.id, field: field.field, kind: 'text', value: 'changed' }] }, device());
+  await f.server.call('secrets.saveGroup', { id: saved.group.id, remove: [field.id] }, device());
   const results = JSON.stringify([saved, await f.server.call('secrets.groups', undefined, device()), await f.server.call('secrets.list', undefined, OWNER)]);
   assert.deepEqual(leaks(results), []);
-  assert.deepEqual(await f.server.call('secrets.deleteGroup', { id: saved.group.id }, OWNER), { ok: true });
+  assert.deepEqual(await f.server.call('secrets.deleteGroup', { id: saved.group.id }, device()), { ok: true });
   assert.deepEqual(f.vault.list(), []);
 });

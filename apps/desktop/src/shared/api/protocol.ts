@@ -69,10 +69,12 @@ export type DeviceCapability = 'todo' | 'chat' | 'tasks' | 'settings' | 'manage'
 export type ClientScope =
   /**
    * Desktop window / local CLI with the launch token: full access. `main` marks Electron main's own port (entry-electron).
-   * AF-001 `agentId`: the local CLI an agent runs (wf with AUTARK_AGENT_TOKEN, checked by the transport – runtime/agents/
-   * agent-token.ts): still full access, but what it writes into chats is that agent's (rpc/handlers/agent-send.ts).
+   * B-085: `agentId` – an agent's own `wf` (Hello `agent`, checked by http/ws.ts): its chat lines are that agent's
+   * (AF-001: also from its signed identity token, engines/agent-token.ts – rpc/handlers/chats.ts sendAsAgent posts as the agent).
+   * 16.11.2026: `window` marks the desktop window's own port (entry-electron) – the person at the PC, where the launch
+   * token alone (a `wf` outside an agent's turn, a script) names nobody (settings/security-log.ts).
    */
-  | { kind: 'owner'; main?: true; agentId?: string }
+  | { kind: 'owner'; main?: true; window?: true; agentId?: string }
   /**
    * PWA / phone. `secure` is set by the transport: true for loopback (incl. the local
    * `tailscale serve` https proxy) and tailnet peers that reached this PC's tailnet address;
@@ -83,8 +85,12 @@ export type ClientScope =
   | { kind: 'agent'; agentId: string; runId: string } // MCP lease of a running agent
   /** C8: an external agent docked into one chat as member `memberId` (bridges/external-agents.ts). */
   | { kind: 'external'; memberId: string; conversationId: string; tokenId: string }
-  /** F-52: a person of the organisation (not the owner) on one of their devices; `secure` as for devices (runtime/people). */
-  | { kind: 'person'; personId: string; deviceId: string; tokenId: string; secure?: boolean };
+  /**
+   * F-52: a person of the organisation (not the owner) on one of their devices; `secure` as for devices (runtime/people).
+   * F13: `role` – the person's role (shared/model/people.ts PersonRole) when the token was checked ('ceo' opens the CEO's
+   * methods; absent = 'member').
+   */
+  | { kind: 'person'; personId: string; deviceId: string; tokenId: string; secure?: boolean; role?: 'member' | 'ceo' };
 
 /** First frame on a WebSocket connection. */
 export interface Hello {
@@ -92,9 +98,14 @@ export interface Hello {
   token: string; // launch token, device token or peer session token
   client: 'desktop' | 'pwa' | 'peer' | 'cli' | 'external'; // 'external': C8 external agent
   deviceName?: string;
-  /** AF-001: the agent's identity token (AGENT_TOKEN_ENV) beside the owner token – wf run by an agent writes as that agent. */
+  /**
+   * B-085: the agent an owner-token client runs for (its AGENT_ENV); http/ws.ts takes it only for a live agent.
+   * AF-001: or that agent's identity token (AGENT_TOKEN_ENV), taken only when this runtime issued it.
+   */
   agent?: string;
 }
 
+/** B-085: the env variable that names the agent whose process it is (engines/wf-shim.ts sets it, wf-cli/discover.ts reads it). */
+export const AGENT_ENV = 'AUTARK_AGENT';
 /** AF-001: the variable the app sets in an agent's shells and engine processes; its wf sends it as Hello `agent`. */
 export const AGENT_TOKEN_ENV = 'AUTARK_AGENT_TOKEN';

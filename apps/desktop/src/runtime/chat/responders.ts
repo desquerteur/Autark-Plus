@@ -20,7 +20,7 @@ export const NOBODY = 'Nobody needs to reply';
  * un-addressed group line as not meant for it (rules: in groups speak when addressed or leading) and stayed silent.
  * The dispatcher treats such a wake like a plain line wake (dispatch-groups.ts plainMessage).
  */
-export const PICKED_NOTE = 'The app picked me to answer the newest line in this chat that names no one: it is mine to act on.';
+export const PICKED_NOTE = 'The newest line here names no one, and it came to me: it is mine.';
 /** "Nobody" counts from this confidence on (the decision hub's sure answer); below it the pick is unsure. */
 const SURE_NOBODY = 0.55;
 

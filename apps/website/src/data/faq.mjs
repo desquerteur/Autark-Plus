@@ -42,7 +42,7 @@ export const faq = [
   { q: 'How do updates work?',
     a: `The app checks GitHub Releases every minute while the window is open and every 15 minutes from the tray. On Windows and Linux a small icon appears when an update exists; one click downloads it, verifies it against the SHA-512 in the update manifest, installs it and restarts. ${release.renamed ? 'On macOS the app replaces itself where macOS allows it, and otherwise the icon leads to the download. A Mac with a version from before the rename gets this one once by hand.' : 'On macOS the icon leads to the download for now, and you replace the app by hand.'}` },
   { q: 'Can I use it from my phone?',
-    a: 'Yes. On Android, install the app (an APK from the download page), type your PC’s Remote ID, compare the code and accept on the PC; it then works in any network and belongs to your whole company, not one PC. On an iPhone there is no App Store app: your PC serves the same app to Safari over Wi-Fi or Tailscale, and your manager sets that up. Agents and data stay on your PCs either way.' },
+    a: 'Yes. On Android, install the app (an APK from the download page), type your PC’s Remote ID, compare the code and accept on the PC; it then works in any network and belongs to your whole company, not one PC. On an iPhone it is a web app from this site: open it in Safari, add it to the Home Screen and type your PC’s Remote ID. It pairs like Android over the meeting server and works in any network, with no App Store and no Apple account. Agents and data stay on your PCs either way.' },
   { q: 'Can colleagues join my company?',
     a: 'Yes. Invite people by link or QR code. They work in the chats and tasks they belong to, next to your agents, and all data stays on your PC. This is early: it is built for one person first.' },
   { q: 'What hardware do I need?',
@@ -50,7 +50,7 @@ export const faq = [
   { q: 'Is Autark open source?',
     a: `Yes. The source code is public under the Apache-2.0 license at ${release.repoUrl}, together with the installers and the shared library of skills.` },
   { q: 'Who makes Autark?',
-    a: 'Teydra Lab from Salzburg, Austria, founded by Stanislaus Hees. Autark grew up in Meta Jarvis, the Teydra Lab family of projects around AI agents and the human who stays in charge of them.' },
+    a: 'Teydra Lab from Austria, founded by Stanislaus Hees. Autark grew up in Meta Jarvis, the Teydra Lab family of projects around AI agents and the human who stays in charge of them.' },
   { q: 'Was "Proactive Agent Workforce" the same product?',
     a: release.renamed
       ? 'Yes. Proactive Agent Workforce was the working name. Updating from an older version moves the data folder to the new name, so there is no second app.'

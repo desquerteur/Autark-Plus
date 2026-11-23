@@ -1,7 +1,7 @@
 {
   "$comment": "Curated routing priors of the Autark project: OUR OWN judgement (public evidence + user experience, state 2026-11-06). NOT Artificial Analysis data. strengths: category -> prior in [-1, 1]. smarts: how capable the model is overall, 0..100, curated from public rankings (LMArena, Artificial Analysis) and our own use – a newer, cheaper model that is as smart ranks above an older, pricier one (Fable 5.1 and GPT-6 Astra sit below Opus 5.5 and GPT-6.1 Sol). relCost: relative marginal price 0..1 – derived from the list prices when both are given ((3 x input + output) / 4 per 1M, $20 = 1.0), else set by hand; subscriptions are discounted by the router while quota remains. First matching entry wins; 'match' is a provider model id or a glob with '*'.",
-  "$prices": "Optional per model: priceInputPerM / priceOutputPerM = API list price in USD per 1M input/output tokens; priceCachedInputPerM = the list price per 1M cached input tokens (cache reads), for the cached part of the input the engine reports. Used to book pay-per-use turns whose provider reported no cost (runtime/models/pricing.ts) and shown to the agents (models.list, the models line of 'My environment'). Only verified list prices; leave them out when unsure (a keyless daily OpenRouter price list fills missing ones, runtime/models/price-feed.ts; an unpriced turn is booked with amount 0 and flagged, never guessed).",
-  "version": "2026-11-06",
+  "$prices": "Optional per model: priceInputPerM / priceOutputPerM = API list price in USD per 1M input/output tokens; priceCachedInputPerM = the list price per 1M cached input tokens (cache reads), for the cached part of the input the engine reports (without it a cached token counts a tenth of the input price); priceCacheWritePerM = the list price per 1M input tokens written into the cache (Claude Code: the 1-hour write, from the CLI's own price table, KI-Runde 17.11.2026) – without it a written token counts at the input price. Used to book pay-per-use turns whose provider reported no cost (runtime/models/pricing.ts) and shown to the agents (models.list, the models line of 'My environment'). Only verified list prices; leave them out when unsure (a keyless daily OpenRouter price list fills missing ones, runtime/models/price-feed.ts; an unpriced turn is booked with amount 0 and flagged, never guessed).",
+  "version": "2026-11-17",
   "categories": {
     "chat": "Everyday conversation and quick answers",
     "manager-planner": "Planning, delegation, review and final judgement",
@@ -20,7 +20,7 @@
   },
   "models": [
     {
-      "match": "claude-opus-5-5*", "name": "Claude Opus 5.5", "tier": "frontier", "smarts": 94, "priceInputPerM": 4, "priceOutputPerM": 20,
+      "match": "claude-opus-5-5*", "name": "Claude Opus 5.5", "tier": "frontier", "smarts": 94, "priceInputPerM": 4, "priceOutputPerM": 20, "priceCachedInputPerM": 0.2, "priceCacheWritePerM": 8,
       "caps": { "vision": true, "tools": true, "computerUse": true, "structuredOutput": true, "contextTokens": 1000000 },
       "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultEffort": "high",
       "strengths": {
@@ -31,7 +31,17 @@
       "note": "The smartest Claude model now: best animation, video pacing, UI taste, writing and computer use in public comparisons."
     },
     {
-      "match": "claude-fable-5-1*", "name": "Claude Fable 5.1", "tier": "frontier", "smarts": 92, "priceInputPerM": 10, "priceOutputPerM": 50,
+      "match": "claude-fable-5-2*", "name": "Claude Fable 5.2", "tier": "frontier", "smarts": 92, "priceInputPerM": 8, "priceOutputPerM": 40, "priceCachedInputPerM": 0.2, "priceCacheWritePerM": 16,
+      "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultEffort": "high",
+      "strengths": {
+        "writing": 0.8, "manager-planner": 0.6, "research": 0.5, "coding": 0.4, "video-animation": 0.5,
+        "frontend-ui": 0.5, "chat": 0.2, "cheap-chat": -0.8, "decision": -0.7
+      },
+      "note": "Twice the price of Opus 5.5 and not smarter now; a distinct writing voice when a text asks for it. Prices from Claude Code's own table."
+    },
+    {
+      "match": "claude-fable-5-1*", "name": "Claude Fable 5.1", "tier": "frontier", "smarts": 92, "priceInputPerM": 10, "priceOutputPerM": 50, "priceCachedInputPerM": 0.25, "priceCacheWritePerM": 20,
       "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
       "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultEffort": "high",
       "strengths": {
@@ -41,7 +51,7 @@
       "note": "Older and 2.5x the price of Opus 5.5, not smarter now; a distinct writing voice when a text asks for it."
     },
     {
-      "match": "claude-sonnet-5-5*", "name": "Claude Sonnet 5.5", "tier": "strong", "smarts": 88, "priceInputPerM": 2, "priceOutputPerM": 10,
+      "match": "claude-sonnet-5-5*", "name": "Claude Sonnet 5.5", "tier": "strong", "smarts": 88, "priceInputPerM": 2, "priceOutputPerM": 10, "priceCachedInputPerM": 0.1, "priceCacheWritePerM": 4,
       "caps": { "vision": true, "tools": true, "computerUse": true, "structuredOutput": true, "contextTokens": 1000000 },
       "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultEffort": "high",
       "strengths": {
@@ -52,14 +62,14 @@
       "note": "Cost-efficient Anthropic coding point (xhigh)."
     },
     {
-      "match": "claude-haiku-5-5*", "name": "Claude Haiku 5.5", "tier": "small", "smarts": 74, "priceInputPerM": 0.1, "priceOutputPerM": 0.5,
+      "match": "claude-haiku-5-5*", "name": "Claude Haiku 5.5", "tier": "small", "smarts": 74, "priceInputPerM": 0.1, "priceOutputPerM": 0.5, "priceCachedInputPerM": 0.01, "priceCacheWritePerM": 0.2,
       "caps": { "vision": true, "tools": true, "structuredOutput": true, "contextTokens": 1000000 },
       "efforts": ["low", "medium", "high", "xhigh", "max"], "defaultEffort": "low",
       "strengths": {
         "cheap-chat": 0.8, "chat": 0.4, "decision": 0.5, "personal-assistant": 0.3, "social-media": 0.2,
         "coding": -0.2, "video-animation": -0.5, "frontend-ui": -0.3, "manager-planner": -0.3
       },
-      "note": "Fast and cheap: summaries, extraction, compaction, helper calls."
+      "note": "Fast and cheap: summaries, extraction, compaction, helper calls. Its prices hold for prompts up to 100K tokens; above that 5x."
     },
     {
       "match": "gpt-6.1-sol*", "name": "GPT-6.1 Sol", "tier": "frontier", "relCost": 0.3, "smarts": 93,

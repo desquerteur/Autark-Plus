@@ -3,9 +3,8 @@
 // what is already embedded under the given places, like grep over meaning. Nothing is ever scanned or embedded by itself,
 // with two exceptions by design: the memory tree when its files change (onFileChanged; writing memory makes it findable)
 // and, after somebody chose another embedding model in settings, the files embedded with the old one (kv: the choice and whether
-// that work is open). A model that only stands in for a failed one answers queries it can and starts no background work: what
-// changed waits for the chosen model, nothing is paid for twice when the local model fails and comes back. One embedding job at
-// a time; a query does not wait for it. B-078: virtual entries (embedTexts, vectors/virtual.ts – the knowledge catalog, no
+// that work is open). Only a model a person chose embeds (models/embeddings.ts); without one, finding goes by words
+// (knowledge/words.ts) and nothing here runs. One embedding job at a time; a query does not wait for it. B-078: virtual entries (embedTexts, vectors/virtual.ts – the knowledge catalog, no
 // files) and multi-hop search (hops, vectors/hops.ts); a virtual row of an old model goes, its owner embeds it again.
 // Owns: the two public calls, the job queue, the background re-embedding. Never: what a model should embed or search.
 
@@ -50,8 +49,6 @@ export interface VectorDeps {
   embedder: () => Embedder | undefined;
   /** What settings say for embeddings; a change is what re-embeds the existing files. Default (tests): the embedder's id. */
   choice?: () => string;
-  /** The embedder only stands in for a failed one (auto, this PC's model gave up). */
-  standIn?: () => boolean;
   /** Removes secrets from a text that leaves this PC and from stored snippets. */
   redact?: (text: string) => string;
   readFile?: ReadFile;
@@ -95,22 +92,21 @@ export class VectorSystem implements VectorService {
 
   /**
    * Files or folders, whole, stored from now on. What the budget does not reach is reported; the next call goes on.
-   * `notYet` (the memory tree's own pass): a file embedded with another model stays as it is, and a stand-in does nothing.
+   * `notYet` (the memory tree's own pass): a file embedded with another model stays as it is.
    */
   embed(paths: string[], opts: { budgetMs?: number; notYet?: boolean } = {}): Promise<VectorEmbedResult & { failed?: boolean }> {
     const embedder = this.embedder();
     if (!embedder) {
       return Promise.resolve({ ...emptyResult(), skipped: paths.map((path) => ({ path, reason: NO_EMBEDDER })) });
     }
-    if (opts.notYet && this.standingIn()) return Promise.resolve({ ...emptyResult(), failed: true });
     const budget = opts.budgetMs ?? EMBED_BUDGET_MS;
     return this.enqueue(() => runEmbed(paths, this.now() + budget, { store: this.store, places: this.places, embedder, now: this.now, keepOtherModel: opts.notYet, ...this.jobDeps() }));
   }
 
-  /** B-078: virtual entries ("catalog/…" keys, no file), in the same one-at-a-time queue; a stand-in does nothing. */
+  /** B-078: virtual entries ("catalog/…" keys, no file), in the same one-at-a-time queue. */
   embedTexts(items: readonly VectorText[], opts: { budgetMs?: number } = {}): Promise<VirtualResult> {
     const embedder = this.embedder();
-    if (!embedder || this.standingIn()) return Promise.resolve({ embedded: 0, unchanged: 0, remaining: items.length, failed: true });
+    if (!embedder) return Promise.resolve({ embedded: 0, unchanged: 0, remaining: items.length, failed: true });
     const budget = opts.budgetMs ?? EMBED_BUDGET_MS;
     return this.enqueue(() => runEmbedTexts(items, this.now() + budget, { store: this.store, embedder, now: this.now, keyOf: (stored) => this.places.keyOf(stored), ...(this.deps.redact ? { redact: this.deps.redact } : {}) }));
   }
@@ -138,7 +134,7 @@ export class VectorSystem implements VectorService {
     if (bad.length) notes.push(`Not a place: ${bad.join(', ')} – use absolute paths or "memory/…".`);
 
     let rows = places.flatMap((entry) => (entry.place ? this.store.filesUnder(entry.place.key) : []));
-    const changed = this.standingIn() ? 0 : await this.lookAt(rows.filter((row) => row.model === embedder.id && !isVirtual(row.path)));
+    const changed = await this.lookAt(rows.filter((row) => row.model === embedder.id && !isVirtual(row.path)));
     // Rule (a): no count of what is embedded reaches a context – the notes say what holds, not how many.
     if (changed) notes.push('Some of these files changed since they were embedded, so hits in them may be out of date.');
     const usable = new Map<number, string>();
@@ -233,20 +229,16 @@ export class VectorSystem implements VectorService {
     try { return this.deps.embedder(); } catch { return undefined; }
   }
 
-  private standingIn(): boolean {
-    try { return this.deps.standIn?.() === true; } catch { return false; }
-  }
-
-  /** Files of another model are to be re-embedded: somebody chose another model in settings, and that work is not finished (and no stand-in serves). */
+  /** Files of another model are to be re-embedded: somebody chose another model in settings, and that work is not finished. */
   private redoDue(): boolean {
     let value: string | undefined;
     try { value = this.deps.choice ? this.deps.choice() : this.embedder()?.id; } catch { return false; }
     if (value === undefined) return false;
     const held = this.deps.db.get<{ value: string }>('SELECT value FROM kv WHERE ns = ? AND key = ?', [CHOICE_NS, CHOICE_KEY]);
     const seen = held ? JSON.parse(held.value) as typeof NO_CHOICE : NO_CHOICE;
-    if (seen.value === value) return seen.redo && !this.standingIn();
+    if (seen.value === value) return seen.redo;
     this.noteChoice(value, true);
-    return !this.standingIn();
+    return true;
   }
 
   private noteChoice(value: string, redo: boolean): void {
@@ -323,7 +315,7 @@ export class VectorSystem implements VectorService {
     (this.timer as { unref?: () => void }).unref?.();
   }
 
-  /** Works off the changed memory files and, after a choice in settings, the stale files until nothing is left or the model fails. A stand-in waits. */
+  /** Works off the changed memory files and, after a choice in settings, the stale files until nothing is left or the model fails. */
   private drain(): Promise<void> {
     this.draining ??= this.drainNow().catch((error: unknown) => {
       this.deps.log?.warn('background embedding failed', { error: String(error) });
@@ -335,7 +327,6 @@ export class VectorSystem implements VectorService {
     while (!this.stopped) {
       const embedder = this.embedder();
       if (!embedder) return; // a model comes back with a change, a search or the next start
-      if (this.standingIn()) { this.later(); return; }
       const changed = [...this.changed];
       this.changed.clear(); // what changes while this job runs comes back in here
       const redo = this.redoDue();

@@ -24,16 +24,14 @@ const ollama = account('a_ollama', 'ollama', { auth: 'local', baseUrl: 'http://1
 const openai = account('a_openai', 'openai', { baseUrl: 'https://api.openai.com/v1' });
 const codex = account('a_codex', 'codex', { auth: 'cli' });
 
-test('auto: this PC first, then a local server, then an API key, then nothing', () => {
+test('auto (nothing chosen) embeds with nothing – not this PC\'s model, a local server or an API key: finding goes by words', () => {
   const all = services('auto', [codex, openai, ollama], [model('ollama', 'bge-m3:latest', ['a_ollama']), model('ollama', 'llama3', ['a_ollama'])]);
-  assert.deepEqual(embeddingChoice(all, true), { kind: 'local' });
-  const server = embeddingChoice(all, false);
-  assert.equal(server?.kind === 'http' && server.model, 'bge-m3:latest');
-  assert.equal(server?.kind === 'http' && server.local, true);
-  const key = embeddingChoice(services('auto', [codex, openai]), false);
-  assert.equal(key?.kind === 'http' && key.model, 'text-embedding-3-small');
-  assert.equal(key?.kind === 'http' && key.local, false);
-  assert.equal(embeddingChoice(services('auto', [codex]), false), undefined, 'a plan alone does not embed');
+  assert.equal(embeddingChoice(all, true), undefined, 'this PC could run MiniLM: it is not loaded unless chosen');
+  assert.equal(embeddingChoice(all, false), undefined);
+  assert.equal(embeddingChoice(services('auto', [codex, openai]), false), undefined);
+  const listed = embeddingChoice(services('ollama:bge-m3:latest', [codex, openai, ollama], [model('ollama', 'bge-m3:latest', ['a_ollama'])]), true);
+  assert.equal(listed?.kind === 'http' && listed.model, 'bge-m3:latest', 'a chosen server model');
+  assert.equal(listed?.kind === 'http' && listed.local, true);
 });
 
 test('off is off; a named model is that model or nothing, never another', () => {

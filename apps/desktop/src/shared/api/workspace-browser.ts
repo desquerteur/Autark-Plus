@@ -9,9 +9,13 @@
 // a picture of a tab's visible page (Send page to chat, Mark a region); 'key' tells the app about a browser shortcut
 // pressed inside a page (workspace-browser-keys.ts) or the page menu's Send page to chat; 'history' reads or clears the
 // person's history (main/workspace-history.ts). The address field takes an address or a search (omniboxUrl).
+// B-081: 'pick' switches a tab's Pin button picker (`picking` on its page entry); each pin comes back as the key
+// event 'pick' with the pin (shared/model/page-pick.ts) for the chat (ui/workspace/pin.ts).
 // keptAddress is the one rule for an address saved for a restart or the history: no user info, no token-like query or
 // fragment, a credential link as its site only.
 // Owns: its IPC contract, URL validation and the kept-address rule. Never: agent browser sessions or credentials.
+
+import type { PagePick } from '../model/page-pick.ts';
 
 export const WORKSPACE_BROWSER = {
   command: 'workspace-browser:command', changed: 'workspace-browser:changed', capture: 'workspace-browser:capture', key: 'workspace-browser:key',
@@ -67,10 +71,12 @@ export interface WorkspaceBrowserPage {
   zoom?: number;
   /** An agent's preview tab (see the header); not kept over a restart. */
   transient?: true;
+  /** B-081: the Pin button's picker is on in this tab. */
+  picking?: true;
 }
-/** A browser shortcut pressed inside a page that the app acts on, or the page menu's Send page to chat (`url`). */
-export type BrowserKeyAction = 'new-tab' | 'close-tab' | 'next-tab' | 'previous-tab' | `tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}` | 'address' | 'find' | 'history' | 'send-page';
-export interface BrowserKeyEvent { id: string; action: BrowserKeyAction; url?: string }
+/** A browser shortcut pressed inside a page that the app acts on, the page menu's Send page to chat (`url`), or a pin (`pick`). */
+export type BrowserKeyAction = 'new-tab' | 'close-tab' | 'next-tab' | 'previous-tab' | `tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}` | 'address' | 'find' | 'history' | 'send-page' | 'pick';
+export interface BrowserKeyEvent { id: string; action: BrowserKeyAction; url?: string; pick?: PagePick }
 /** One page of the person's history: its last title and visit, how often it was shown. */
 export interface HistoryEntry { url: string; title: string; at: number; visits: number }
 /** What the window asks of the history: a search (newest first), or `clear`. */
@@ -98,6 +104,8 @@ export type WorkspaceBrowserCommand =
   | { action: 'zoom'; id: string; step: 1 | -1 | 0 }
   /** Sound off or on again; DevTools open or shut. */
   | { action: 'mute' | 'devtools'; id: string }
+  /** B-081: the Pin button – the tab's element picker on or off. */
+  | { action: 'pick'; id: string; on: boolean }
   /** The tab closed last in `space` opens again. */
   | { action: 'reopen'; space: string };
 /** A picture of a tab's visible page: JPEG, and the viewport's size in CSS px. */

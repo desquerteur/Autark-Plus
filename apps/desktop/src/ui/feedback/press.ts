@@ -4,6 +4,8 @@
 // when the hold is recognized – dictation starts –, `holdEnd` on release, `holdCancel` when the
 // pointer is taken away or Escape ends it). Without dictation (`canHold` false) every press is a
 // tap, however long. Enter/Space (a click without a pointer) is always a tap.
+// Feedback 16.11.2026 (F15): the feedback shortcut (Ctrl+Shift+F, main forwards its going down and up) is the same press
+// from the keyboard (KeyPress): a short press is a tap, held HOLD_MS it is talk.
 // Owns: the press/hold decision. Never: captures, dictates or opens anything itself.
 
 /** Pressing longer than this is a hold (talk here, hold-to-talk on the mic button); shorter is a tap. */
@@ -86,5 +88,36 @@ export class PressTracker {
     this.disarm?.();
     this.disarm = null;
     return was;
+  }
+}
+
+/**
+ * The feedback shortcut's press on a tracker, like a pointer's: `down` presses (unless a pointer press runs), `up`
+ * releases only the press the key started. A `down` while its own press still runs (the release was lost: the window
+ * lost the focus) releases that one first; `blur` (the window lost the keyboard) releases it too.
+ */
+export class KeyPress {
+  private readonly tracker: PressTracker;
+  private held = false;
+
+  constructor(tracker: PressTracker) {
+    this.tracker = tracker;
+  }
+
+  down(): void {
+    if (this.held) this.up();
+    if (this.tracker.phase !== 'idle') return;
+    this.held = true;
+    this.tracker.down();
+  }
+
+  up(): void {
+    if (!this.held) return;
+    this.held = false;
+    this.tracker.up();
+  }
+
+  blur(): void {
+    this.up();
   }
 }

@@ -3,7 +3,14 @@
 // or a long press (touch) opens the shared Menu at the pointer. <ContextMenuHost/> is mounted once in
 // App.tsx. Builders run when the menu opens, so they always see current state.
 // A row inside a modal keeps the menu's anchor and popover inside that dialog's top layer.
-// Owns: where the menu opens and the touch long-press. Never: what an item does (the caller's builder).
+// B-084: a long press that opens the menu gives a light haptic tick (the Android app's, else navigator.vibrate).
+// F30 (16.11.2026): the builder learns how the menu was opened ({ touch, at: the row }) – a message's Copy takes the
+// mouse selection inside it, and touch offers "Select text"; a touch open clears the one-word selection the browser made
+// under the finger, so only this menu shows (the phone's own copy bar does not stack on it).
+// 17.11.2026 (the owner twice, "soll einfach so sein, wie es normalerweise ist"): a row of text (a message) takes `{ touchByButton: true }` – a finger's
+// long press then opens nothing of ours and the phone's own selection (handles, its copy bar) works as everywhere; the menu is the row's own button
+// (message tools "More"). The mouse's right click still opens it.
+// Owns: where the menu opens, the touch long-press and its tick. Never: what an item does (the caller's builder).
 
 import { signal } from '@preact/signals';
 import { addBackLayer } from './back-layers.ts';
@@ -11,6 +18,7 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Menu } from './popover.tsx';
 import type { MenuSection } from './popover.tsx';
+import { sendNative } from '../pwa/native-port.ts';
 import { unzoom } from './platform.ts';
 
 interface OpenMenu { x: number; y: number; sections: MenuSection[]; host?: HTMLElement | null }
@@ -34,30 +42,58 @@ export function closeContextMenu(): void {
 
 addBackLayer({ open: () => current.peek() !== null, close: closeContextMenu }); // the phone's Back closes it first
 
+/** The light tick a native app gives when a long press opens a menu (or a swipe replies): the Android app's own (over
+ *  its port), else the browser's vibrate where it has one. */
+export function buzz(): void {
+  if (sendNative({ t: 'haptic' })) return;
+  try { navigator.vibrate?.(8); } catch { /* no vibration here */ }
+}
+
+/** How a menu was opened: by touch (a long press), and on which row. */
+export interface MenuOpen { touch: boolean; at: HTMLElement | null }
+
+/** The selection a long press made under the finger is the browser's, not a choice: gone once this menu opens. */
+function dropTouchSelection(): void {
+  try { getSelection()?.removeAllRanges(); } catch { /* no selection here */ }
+}
+
 /** Props for an element: right-click and touch long-press open `build()`'s sections. */
-export function useContextMenu(build: () => MenuSection[]) {
+export function useContextMenu(build: (open: MenuOpen) => MenuSection[], options: { touchByButton?: boolean } = {}) {
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const fired = useRef(false);
+  const touch = useRef(false); // the last press on this row was a finger (a long press's own contextmenu event comes too)
   const cancel = () => { if (press.current) clearTimeout(press.current.timer); press.current = null; };
   useEffect(() => cancel, []);
   const native = (event: Event) => Boolean((event.target as Element | null)?.closest?.(NATIVE));
   const host = (event: Event) => (event.target as Element | null)?.closest?.<HTMLElement>('dialog[open]');
+  const open = (x: number, y: number, at: HTMLElement | null, container: HTMLElement | null | undefined) => {
+    if (touch.current) dropTouchSelection();
+    openContextMenu(x, y, build({ touch: touch.current, at }), container);
+  };
   return {
     onContextMenu: (event: MouseEvent) => {
       if (native(event)) return;
+      if (options.touchByButton && touch.current) return; // a finger's long press selects text natively: nothing of ours, and the event is not stopped
       event.preventDefault();
       event.stopPropagation();
       cancel();
-      if (fired.current) return; // the long press already opened it
-      openContextMenu(event.clientX, event.clientY, build(), host(event));
+      if (fired.current) { if (touch.current) dropTouchSelection(); return; } // the long press already opened it
+      open(event.clientX, event.clientY, event.currentTarget as HTMLElement | null, host(event));
     },
     onPointerDown: (event: PointerEvent) => {
       fired.current = false;
       cancel();
-      if (event.pointerType !== 'touch' || native(event)) return;
+      touch.current = event.pointerType === 'touch';
+      if (!touch.current || native(event) || options.touchByButton) return;
       const { clientX: x, clientY: y } = event;
       const container = host(event);
-      press.current = { x, y, timer: setTimeout(() => { fired.current = true; press.current = null; openContextMenu(x, y, build(), container); }, LONG_PRESS_MS) };
+      const at = event.currentTarget as HTMLElement | null;
+      press.current = { x, y, timer: setTimeout(() => {
+        fired.current = true;
+        press.current = null;
+        open(x, y, at, container);
+        if (current.peek()) buzz();
+      }, LONG_PRESS_MS) };
     },
     onPointerMove: (event: PointerEvent) => {
       const at = press.current;

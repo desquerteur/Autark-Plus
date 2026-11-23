@@ -10,47 +10,50 @@
 // again (`release` – it stays there while an agent used it lately). Input is the person's own: agents wait
 // (SideTab.personAt, PERSON_PRIORITY_MS) and an agent's preview tab stays (`keep`). A dialog the page opens (alert,
 // confirm …) travels with the page; the watcher answers it (sideNav `dialog`), and input waits for that answer.
-// Owns: the casts, their throttle and end, and the checks of these three ops. Never: imports electron, runs any
-// DevTools command a watcher names other than the three Input ones and the dialog's answer, or keeps a frame or what
-// is typed.
+// B-081: the watcher names its picture box (`view`); while the cast runs, a page on the off-screen host has that box as
+// its size (`size`, workspace-host.ts – a DevTools viewport override was measured to leave the screencast at the view's
+// own box), so frames fill the watcher's box; a page the person here shows in their pane keeps the pane's size. A
+// changed box applies at once and the end of the cast clears it. If the person here uses the page too: a press here (SideTab.localPress – not within tab.ts WATCHER_ECHO_MS of the
+// watcher's own input, SideTab.watcherAt) gives the page back its pane's size GIVE_BACK_MS later (after its up), the
+// end of the watcher's next press takes it again; a renewal that names no box (no watcher has one) gives it back too.
+// B-081 T9: a watcher's press that ends asks the page if its focus takes text (page-script.ts): each yes a new stamp.
+// B-081: a watcher's input goes past this PC's Pin picker (SideTab.holdPicking), as an agent's act batch does.
+// Owns: the casts, their viewport, throttle and end. Never: imports electron, runs any DevTools command a watcher names
+// other than the three Input ones and the dialog's answer, or keeps a frame or what is typed.
 
-import { browserUrl } from '../../shared/api/workspace-browser.ts';
 import { WorkforceError } from '../../shared/errors.ts';
-import type { SideCastUpdate, SideCommand, SideDialog, SidePage } from '../../shared/model/side-view.ts';
-import { TAB_ID } from './validate.ts';
+import { sameView, type SideCastUpdate, type SideDialog, type SidePage, type SideViewSize } from '../../shared/model/side-view.ts';
+import { castCommands, castNav, castView, endsPress, finite, frameFits, isPress, pageOf, record, tabOf, bad, type CastContents } from './cast-params.ts';
 
-/** At most one frame per this many ms goes to the runtime (2 per second, like the agents' live view). */
-export const CAST_FRAME_GAP_MS = 500;
+export { CAST_INPUT_METHODS, castCommands, castNav, castView, pageOf, type CastContents } from './cast-params.ts';
+
+/** At most one frame per this many ms goes to the runtime (B-081: up to 10 per second; was 500). */
+export const CAST_FRAME_GAP_MS = 100;
 /** A cast nobody renewed this long ends (the runtime renews it with every pull). */
 export const CAST_IDLE_MS = 60_000;
 export const CAST_MAX_SIDE = 1280;
+/** B-081: a press here gives the page its pane's size back this long after it (a click's up comes ~100 ms after its down). */
+export const GIVE_BACK_MS = 500;
 const SCREENCAST = { format: 'jpeg', quality: 60, maxWidth: CAST_MAX_SIDE, maxHeight: CAST_MAX_SIDE, everyNthFrame: 1 };
-/** The only DevTools commands a watcher's input becomes. */
-export const CAST_INPUT_METHODS: ReadonlySet<string> = new Set(['Input.dispatchMouseEvent', 'Input.dispatchKeyEvent', 'Input.insertText']);
-const MAX_COMMANDS = 8;
-const MAX_PARAMS = 8192;
 const CLOSED = 'This tab is not open on its PC any more.';
 const IN_DIALOG = 'The page shows a dialog – answer it first.';
-const NO_PAGE: SidePage = { url: '', title: '', back: false, forward: false, loading: false };
-
-/** The part of a tab's WebContents a cast reads (navigationHistory: Electron's, missing in fakes). */
-export interface CastContents {
-  isDestroyed(): boolean;
-  getURL(): string;
-  getTitle(): string;
-  isLoading(): boolean;
-  getZoomFactor?(): number;
-  readonly navigationHistory?: { canGoBack(): boolean; canGoForward(): boolean };
-}
 
 /** A side tab as the driver keeps it (side-driver/tab.ts SideTab). */
 export interface CastTab {
   readonly id: string;
   readonly contents: CastContents;
-  readonly cdp: { send(method: string, params?: object): Promise<any>; on(method: string, listener: (params: any) => void): () => void };
+  readonly cdp: { send(method: string, params?: object): Promise<any>; on(method: string, listener: (params: any) => void): () => void; inWorld?(expression: string): Promise<unknown> };
   personAt: number;
   /** The page's open dialog (the tab's own DevTools events keep it). */
   dialog?: SideDialog;
+  /** B-081: when the watcher's input last went to the page (its echo is no press here). */
+  watcherAt: number;
+  /** B-081: the watcher's box the page has now (its size on the off-screen host, workspace-host.ts). */
+  watcherView?: SideViewSize;
+  /** B-081: the tab calls it for the person's own press here (a click's up or a key that is neither an agent's nor the watcher's). */
+  localPress?: () => void;
+  /** B-081: the tab's Pin picker lets this input through while it goes in (SideTab.holdPicking). */
+  holdPicking?(hold: boolean): Promise<void>;
 }
 
 export interface CasterDeps {
@@ -60,6 +63,8 @@ export interface CasterDeps {
   keep?(id: string): void;
   /** Nobody watches the tab any more: its page leaves the off-screen host unless an agent used it lately. */
   release?(id: string): void;
+  /** B-081: the watcher's box as the page's size while it is on the off-screen host (undefined: its own size again). */
+  size?(id: string, box: SideViewSize | undefined): boolean;
   /** To the runtime (best effort, only while it is up). */
   send(update: SideCastUpdate): void;
   now?(): number;
@@ -80,71 +85,11 @@ interface Cast {
   starting: Promise<void>;
   error?: string;
   ended: boolean;
+  /** The watcher's picture box (B-081), the press handler here and its give-back that waits; T9: focus takes text. */
+  view?: SideViewSize;
+  local?: () => void;
+  back?: unknown; editing?: number;
 }
-
-function bad(what: string): never {
-  throw new WorkforceError('bad_request', `Invalid side view request (${what}).`);
-}
-
-function record(value: unknown, what: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) bad(what);
-  return value as Record<string, unknown>;
-}
-
-function tabOf(o: Record<string, unknown>): string {
-  if (typeof o.tab !== 'string' || !TAB_ID.test(o.tab)) bad('tab');
-  return o.tab;
-}
-
-/** sideInput's commands: 1–8, each one of the three Input methods with plain params of at most 8 KB. */
-export function castCommands(value: unknown): SideCommand[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_COMMANDS) bad('commands');
-  return value.map((item) => {
-    const command = record(item, 'command');
-    if (typeof command.method !== 'string' || !CAST_INPUT_METHODS.has(command.method)) bad('method');
-    const params = record(command.params, 'params');
-    if (JSON.stringify(params).length > MAX_PARAMS) bad('params');
-    return { method: command.method, params };
-  });
-}
-
-/** sideNav: exactly one of an http(s) address (made absolute like the address field does), back / forward / reload, or the dialog's answer. */
-export function castNav(value: unknown): { tab: string; url?: string; action?: 'back' | 'forward' | 'reload'; dialog?: 'accept' | 'dismiss' } {
-  const o = record(value, 'nav');
-  const tab = tabOf(o);
-  const given = (key: string) => o[key] !== undefined && o[key] !== null;
-  const hasUrl = given('url');
-  if ([hasUrl, given('action'), given('dialog')].filter(Boolean).length !== 1) bad('url, action or dialog');
-  if (given('dialog')) {
-    if (o.dialog !== 'accept' && o.dialog !== 'dismiss') bad('dialog');
-    return { tab, dialog: o.dialog };
-  }
-  if (hasUrl) {
-    if (typeof o.url !== 'string') bad('url');
-    try { return { tab, url: new URL(browserUrl(o.url)).href }; } catch (error) {
-      throw new WorkforceError('bad_request', error instanceof Error ? error.message : 'Use an HTTP or HTTPS address.');
-    }
-  }
-  if (o.action !== 'back' && o.action !== 'forward' && o.action !== 'reload') bad('action');
-  return { tab, action: o.action };
-}
-
-const finite = (value: unknown, fallback = 0): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
-
-/** The page as the watcher sees it named, with its open dialog. */
-export function pageOf(contents: CastContents, dialog?: SideDialog): SidePage {
-  if (contents.isDestroyed()) return NO_PAGE;
-  const history = contents.navigationHistory;
-  return {
-    url: contents.getURL(), title: contents.getTitle(), back: Boolean(history?.canGoBack()), forward: Boolean(history?.canGoForward()), loading: contents.isLoading(),
-    ...(dialog ? { dialog: { type: dialog.type, message: dialog.message } } : {}),
-  };
-}
-
-/** A press that makes the tab the person's own (a click, a key, typed text) – moves and wheel turns do not. */
-const isPress = (command: SideCommand): boolean => command.method === 'Input.insertText'
-  || (command.method === 'Input.dispatchMouseEvent' && command.params.type === 'mousePressed')
-  || (command.method === 'Input.dispatchKeyEvent' && command.params.type !== 'keyUp');
 
 export class SideCaster {
   private readonly deps: CasterDeps;
@@ -157,18 +102,20 @@ export class SideCaster {
   /** Someone watches this tab now (the workspace browser keeps its page loaded). */
   watched(id: string): boolean { return this.casts.has(id); }
 
-  /** sideCast: on – wake, start or renew; off – end now. */
+  /** sideCast: on – wake, start or renew (a changed `view` applies at once); off – end now. */
   async cast(args: unknown): Promise<{ ok: true; page?: SidePage }> {
     const o = record(args, 'cast');
     const id = tabOf(o);
     if (typeof o.on !== 'boolean') bad('on');
+    const view = castView(o.view);
     // Off with no cast left (its start failed and kept the page for the next try): the page may still leave now.
     if (!o.on) { const held = this.casts.has(id); this.stop(id); if (!held) this.deps.release?.(id); return { ok: true }; }
     const tab = this.deps.tab(id);
     if (!tab) { this.stop(id); throw new WorkforceError('not_found', CLOSED); }
     let cast = this.casts.get(id);
     if (cast && cast.tab !== tab) { this.stop(id, undefined, true); cast = undefined; } // its page was made anew: cast that one
-    cast ??= this.start(id, tab);
+    if (!cast) cast = this.start(id, tab, view);
+    else if (view ? !sameView(view, cast.view) : cast.view) { cast.view = view; if (view) void this.fit(cast); else this.unfit(cast); } // a new box, or none any more
     this.renew(cast);
     await cast.starting;
     if (cast.error) throw new WorkforceError('unavailable', cast.error);
@@ -184,14 +131,19 @@ export class SideCaster {
     if (!tab) throw new WorkforceError('not_found', CLOSED);
     if (tab.dialog) throw new WorkforceError('unavailable', IN_DIALOG); // the page takes no input until it is answered
     tab.personAt = this.now(); // the person goes first: an agent's next step there waits
-    if (commands.some(isPress)) this.deps.keep?.(id);
     const cast = this.casts.get(id);
+    if (commands.some(isPress)) { this.deps.keep?.(id); if (cast) this.hold(cast); } // used there last: the size stays the watcher's
     if (cast) this.renew(cast);
     try {
-      for (const command of commands) await tab.cdp.send(command.method, command.params);
+      await tab.holdPicking?.(true); // the watcher's input reaches the page as it is, never this PC's Pin picker
+      for (const command of commands) { tab.watcherAt = this.now(); await tab.cdp.send(command.method, command.params); }
     } catch {
       throw new WorkforceError('unavailable', 'The page did not take that input. Try again.'); // never the input itself
-    }
+    } finally { void tab.holdPicking?.(false); }
+    tab.watcherAt = this.now();
+    // Given back by a press here: the END of the watcher's next press takes the size again (it lands where it was seen).
+    if (cast?.tab === tab && cast.view && !tab.watcherView && commands.some(endsPress)) await this.fit(cast);
+    if (cast?.tab === tab && commands.some(endsPress)) void tab.cdp.inWorld?.('__wfSide.editing()').then((on) => { if (!cast.ended && (on === true || cast.editing)) { cast.editing = on === true ? Math.max(this.now(), (cast.editing ?? 0) + 1) : undefined; this.tell(id, cast); } }, () => undefined);
     return { ok: true };
   }
 
@@ -229,21 +181,24 @@ export class SideCaster {
 
   // ------------------------------------------------------------------ internals
 
-  private start(id: string, tab: CastTab): Cast {
-    const cast: Cast = { id, tab, offs: [], lastAt: Number.NEGATIVE_INFINITY, starting: Promise.resolve(), ended: false };
+  private start(id: string, tab: CastTab, view?: SideViewSize): Cast {
+    const cast: Cast = { id, tab, offs: [], lastAt: Number.NEGATIVE_INFINITY, starting: Promise.resolve(), ended: false, view };
     this.casts.set(id, cast);
     const page = () => this.tell(id, cast);
     cast.offs.push(
       tab.cdp.on('Page.screencastFrame', (event: ScreencastFrame) => this.frame(cast, event)),
-      tab.cdp.on('Page.frameNavigated', (event: { frame?: { parentId?: string } }) => { if (!event?.frame?.parentId) page(); }),
+      tab.cdp.on('Page.frameNavigated', (event: { frame?: { parentId?: string } }) => { if (!event?.frame?.parentId) { cast.editing = undefined; page(); } }),
       tab.cdp.on('Page.navigatedWithinDocument', page),
       tab.cdp.on('Page.loadEventFired', page),
       tab.cdp.on('Page.javascriptDialogOpening', page), // the tab's own listener (side-driver/tab.ts) noted it first
       tab.cdp.on('Page.javascriptDialogClosed', page),
     );
+    cast.local = () => this.giveBack(cast);
+    tab.localPress = cast.local;
     cast.starting = (async () => {
       await tab.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined); // the caret shows
       if (cast.ended) return;
+      if (cast.view) await this.fit(cast);
       await tab.cdp.send('Page.startScreencast', SCREENCAST);
       if (cast.ended) await tab.cdp.send('Page.stopScreencast').catch(() => undefined); // stopped while it started
     })().catch((error: unknown) => {
@@ -254,14 +209,41 @@ export class SideCaster {
     return cast;
   }
 
+  /** The page takes the watcher's box as its size where it sits on the off-screen host (workspace-host.ts). */
+  private fit(cast: Cast): Promise<void> {
+    const view = cast.view;
+    if (!view || cast.ended) return Promise.resolve();
+    this.hold(cast);
+    cast.tab.watcherView = view;
+    this.deps.size?.(cast.id, view);
+    return Promise.resolve();
+  }
+
+  /** A press here (SideTab.localPress): the pane's size again GIVE_BACK_MS after the last one – never between its down and up. */
+  private giveBack(cast: Cast): void {
+    if (this.casts.get(cast.id) !== cast || !cast.tab.watcherView) return;
+    this.hold(cast);
+    cast.back = this.setTimer(() => { cast.back = undefined; if (!cast.ended) this.unfit(cast); }, GIVE_BACK_MS);
+  }
+
+  private hold(cast: Cast): void { this.clearTimer(cast.back); cast.back = undefined; } // a give-back that waits is off
+
+  /** The page's own size again (the box of its view here). */
+  private unfit(cast: Cast): void {
+    if (!cast.tab.watcherView) return;
+    cast.tab.watcherView = undefined;
+    this.deps.size?.(cast.id, undefined);
+  }
+
   private renew(cast: Cast): void {
     this.clearTimer(cast.idle);
     cast.idle = this.setTimer(() => { if (this.casts.get(cast.id) === cast) this.stop(cast.id); }, CAST_IDLE_MS);
   }
 
   /** The page (and its dialog) to the runtime while the cast runs. */
-  private tell(id: string, cast = this.casts.get(id)): void {
-    if (cast && !cast.ended) this.deps.send({ tab: id, page: pageOf(cast.tab.contents, cast.tab.dialog), live: true });
+  private tell(id: string, cast = this.casts.get(id), frame?: SideCastUpdate['frame']): void {
+    const page = cast && { ...pageOf(cast.tab.contents, cast.tab.dialog), ...(cast.editing ? { editing: cast.editing } : {}) }; // T9: its focus takes text
+    if (cast && page && !cast.ended) this.deps.send({ tab: id, page, live: true, ...(frame ? { frame } : {}) });
   }
 
   /** `again`: a new cast of the tab follows at once, so its page stays where it paints. */
@@ -269,19 +251,23 @@ export class SideCaster {
     const cast = this.casts.get(id);
     if (!cast || (only && cast !== only)) return;
     this.casts.delete(id);
+    try { this.unfit(cast); } catch { /* the page is gone: nothing to give back */ }
     cast.ended = true;
     for (const off of cast.offs) off();
+    if (cast.tab.localPress === cast.local) cast.tab.localPress = undefined;
+    this.hold(cast);
     this.clearTimer(cast.timer);
     this.clearTimer(cast.idle);
     cast.pending = undefined;
     void cast.tab.cdp.send('Page.stopScreencast').catch(() => undefined);
     void cast.tab.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
-    if (!again) this.deps.release?.(id);
+    if (!again) { try { this.deps.release?.(id); } catch { /* the page is gone with its window */ } }
   }
 
   private frame(cast: Cast, event: ScreencastFrame): void {
+    if (this.gone(cast)) return;
     if (typeof event?.sessionId === 'number') void cast.tab.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
-    if (cast.ended || typeof event?.data !== 'string') return;
+    if (cast.ended || typeof event?.data !== 'string' || !frameFits(event.data, event.metadata ?? {})) return; // B-081: no squeezed in-between frame
     const wait = cast.lastAt + CAST_FRAME_GAP_MS - this.now();
     if (cast.timer === undefined && wait <= 0) { this.pass(cast, event); return; }
     cast.pending = event; // the newest waits for the next slot
@@ -295,30 +281,35 @@ export class SideCaster {
   }
 
   private pass(cast: Cast, event: ScreencastFrame): void {
+    if (this.gone(cast)) return; // 17.11.2026: a frame waited for its slot while its window closed – nobody to send it to
     cast.lastAt = this.now();
     const m = event.metadata ?? {};
-    const zoom = finite(cast.tab.contents.getZoomFactor?.(), 1);
-    this.deps.send({
-      tab: cast.id, page: pageOf(cast.tab.contents, cast.tab.dialog), live: true,
-      frame: {
-        data: event.data as string,
-        meta: { deviceWidth: finite(m.deviceWidth), deviceHeight: finite(m.deviceHeight), offsetTop: finite(m.offsetTop), pageScaleFactor: finite(m.pageScaleFactor, 1), zoom: zoom > 0 ? zoom : 1 },
-      },
+    let zoom: number;
+    try { zoom = finite(cast.tab.contents.getZoomFactor?.(), 1); } catch { this.stop(cast.id, cast); return; } // closed between the check and the read
+    this.tell(cast.id, cast, {
+      data: event.data as string,
+      meta: { deviceWidth: finite(m.deviceWidth), deviceHeight: finite(m.deviceHeight), offsetTop: finite(m.offsetTop), pageScaleFactor: finite(m.pageScaleFactor, 1), zoom: zoom > 0 ? zoom : 1 },
     });
+  }
+
+  /**
+   * The tab's page is gone (its window or tab was closed): the cast ends with it. Electron throws "Object has been
+   * destroyed" on every read of a destroyed page, and a timer that threw it showed the app's default error dialog in front
+   * of the shared screen (feedback 17.11.2026), so nothing here reads a page without asking first.
+   */
+  private gone(cast: Cast): boolean {
+    let destroyed: boolean;
+    try { destroyed = cast.tab.contents.isDestroyed(); } catch { destroyed = true; }
+    if (destroyed) this.stop(cast.id, cast);
+    return destroyed;
   }
 
   private now(): number { return this.deps.now?.() ?? Date.now(); }
 
-  private setTimer(fn: () => void, ms: number): unknown {
-    if (this.deps.setTimer) return this.deps.setTimer(fn, ms);
-    const timer = setTimeout(fn, ms);
-    timer.unref?.();
-    return timer;
-  }
+  /** Unref'd: a waiting frame or give-back never keeps the app alive. */
+  private setTimer(fn: () => void, ms: number): unknown { return this.deps.setTimer ? this.deps.setTimer(fn, ms) : setTimeout(fn, ms).unref(); }
 
   private clearTimer(handle: unknown): void {
-    if (handle === undefined) return;
-    if (this.deps.clearTimer) this.deps.clearTimer(handle);
-    else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    if (handle !== undefined) (this.deps.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)))(handle);
   }
 }

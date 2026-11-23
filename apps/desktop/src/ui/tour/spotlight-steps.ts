@@ -1,7 +1,8 @@
 // AF-002: the app tour's steps and the first-visit hints (spotlight-model.ts types, spotlight.ts runs them). Targets are
 // the agreed `data-tour` names (docs: .claude/agents/autark-developer.md), with stable selectors of today's markup after
 // them where an element has no name yet (the Call cell, the side pane, the Apps page). Steps for features other builds
-// add – the composer's queue, start/stop, the permission mode, personality, appearance – stay in the list: where their
+// add – the composer's queue, start/stop, the permission mode, personality, appearance, upstream's careful-access notice
+// ("Give full access", shown only while the PC access is careful) – stay in the list: where their
 // element is missing the tour skips them silently. Every text is one or two sentences and says what a part is for.
 // Owns: the steps, their order, texts and places. Never: runs or draws them.
 
@@ -54,6 +55,11 @@ export const TOUR_STEPS: readonly TourStepDef[] = [
   {
     id: 'permission-mode', targets: [tour('permission-mode')], place: { kind: 'manager-chat' }, title: 'Permissions',
     text: 'Choose how freely agents may act before they ask you.',
+  },
+  {
+    // upstream B-085: only while the team works carefully (settings.profile.pcAccess, onboarding/ai-notice.ts accessNotice)
+    id: 'full-access', targets: ['.status-note[data-notice="pc-access"] .status-action'], place: { kind: 'manager-chat' }, title: 'Full access',
+    text: 'The team checks with you before changes outside its folders. Give it full access to let it work anywhere on this PC.',
   },
   {
     id: 'call-button', targets: [tour('call-button'), '.chat-header [data-cell="call"] button'], place: { kind: 'manager-chat' }, title: 'Calls',

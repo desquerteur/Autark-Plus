@@ -83,11 +83,11 @@ test('registry: a tool with an agent rule is offered to and callable by those ag
   const registry = new Registry({ services: () => ({}) as RuntimeServices });
   let ran = 0;
   registry.register({
-    name: 'app.crm.find_customer', description: 'Finds a customer', inputSchema: { type: 'object' }, category: 'read', anyMode: true,
+    name: 'app.crm.find_customer', description: 'Finds a customer', inputSchema: { type: 'object' }, category: 'read',
     forAgent: (who) => who.id === ANNA.id,
     run: async () => { ran += 1; return { content: [{ type: 'text', text: 'found' }] }; },
   });
-  registry.register({ name: 'app.crm.broken', description: 'x', inputSchema: { type: 'object' }, category: 'read', anyMode: true, forAgent: () => { throw new Error('boom'); }, run: async () => ({ content: [] }) });
+  registry.register({ name: 'app.crm.broken', description: 'x', inputSchema: { type: 'object' }, category: 'read', forAgent: () => { throw new Error('boom'); }, run: async () => ({ content: [] }) });
   assert.deepEqual(registry.specsFor(ANNA, MODE).map((spec) => spec.name), ['app.crm.find_customer']);
   assert.deepEqual(registry.specsFor(BEN, MODE).map((spec) => spec.name), [], 'a rule that throws offers nothing');
   const refused = await registry.call('app.crm.find_customer', {}, { agent: BEN, mode: 'general', runId: 'run_1' } as never, 'call_1');

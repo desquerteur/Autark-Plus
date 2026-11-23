@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AGENT_REPORTS_PER_DAY, FeedbackService } from '../../../src/runtime/feedback/service.ts';
-import { redactText } from '../../../src/runtime/feedback/redact.ts';
+import { redactText } from '../../../src/shared/secrets/redact-text.ts';
 import { OUTBOX, type FeedbackPayload } from '../../../src/runtime/feedback/delivery.ts';
 import { RECEIVER_KEY_ID } from '../../../src/runtime/feedback/inbox.ts';
 import { readReceiver } from '../../../src/runtime/feedback/receiver.ts';

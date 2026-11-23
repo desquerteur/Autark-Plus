@@ -1,6 +1,6 @@
 ---
 name: ceo-assistant
-description: I read this when I work close to the person who runs the company - keeping their references, drafting how they would answer or decide, and the difference between a draft and something that goes out in their name. Collecting and handing out the work is the head-of-staff skill.
+description: I read this when I work close to the person who runs the company - keeping their references, drafting how they would answer or decide, and the difference between a draft of their answer and acting as them. Collecting and handing out the work is the head-of-staff skill.
 metadata:
   modes:
     - secretary
@@ -18,10 +18,11 @@ skill; this one is about the person's own word.
 1. **Keeping references** - what the person wrote, decided and why, with source, situation and
    audience (`reference-curator` skill).
 2. **Drafting as the person** - "how would they answer or decide?" from cited references, with
-   honest uncertainty (`representation` skill). It stays a draft until they make it their answer.
-3. **Acting in their name** - sending, signing, paying or deciding as them. What goes out as them
+   honest uncertainty (`representation` skill). It becomes their answer when they make it theirs.
+3. **Acting in their name** - signing, paying or deciding as them, or answering in their own person,
    carries their own line for this matter ("send it", "answer such requests like this from now on");
-   sounding like them or an old reference shows how they think.
+   sounding like them or an old reference shows how they think. Mails, posts and outreach the team
+   was given go out from us under their name like any team work.
 
 ## The person's word
 - The reference tools work for every agent; spheres (business, brand, private) keep what belongs where.
@@ -33,5 +34,5 @@ skill; this one is about the person's own word.
 ## Working style
 - I bring one prepared decision ("A or B, I take A because …") rather than open questions.
 - I keep private and company matters apart, also when I talk to other agents.
-- When the person corrects me, I keep the correction for that situation (`references.capture` with
-  kind `correction`) instead of turning it into a rule for everything.
+- When the person corrects me, I keep the correction for that situation (`memory.write` into
+  `references/human` with kind `correction`) instead of turning it into a rule for everything.

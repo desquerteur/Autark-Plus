@@ -1,23 +1,26 @@
 // B-078: the phone.* tools' one driver over both ways to a phone – ADB (USB or wireless debugging, adb.ts) and the
 // Autark Android app's phone use (app-driver.ts, serial = the phone's device id). phone.devices lists both; a step with
-// a serial goes to the phone that carries it; without one it goes to the only phone there is (an app phone counts when
-// ADB has no ready phone). Wireless pairing (pair, connect, disconnect, discover) stays ADB's.
+// a serial goes to the phone that carries it; without one it goes to the app phone whenever one is attached (the
+// person's own link, owner 10.11.2026: "Mach das über das Remote-System"), and to ADB only when no app phone is there.
+// say follows the same rule (only the app has a bubble). Wireless pairing (pair, connect, disconnect, discover) stays ADB's.
+// Which phones hang off this PC right now (PhonesHere) says so without asking a phone again: the device caps carry it to
+// my other PCs (devices/tools.ts localCaps), so every PC's prompt names the PC a phone is attached to.
 // Owns: that choice. Never: drives a phone itself.
 
 import type { PhoneDriver, PhoneShot, PhoneStepOptions, PhoneTree, PhoneWireless } from './driver.ts';
 import type { PhoneDevice } from './uiautomator.ts';
 import type { AppPhones } from './app-driver.ts';
+import type { AdbPhone } from './adb.ts';
 
 type Adb = PhoneDriver & PhoneWireless;
 
-export function mergedPhones(adb: Adb, app: Pick<AppPhones, keyof PhoneDriver | 'has' | 'serials'>): Adb {
-  const adbReady = async (): Promise<boolean> => (await adb.devices().catch(() => [] as PhoneDevice[])).some((device) => device.state === 'device');
-  /** The driver for a step: the app phone named (or the only phone, when ADB has none ready), else ADB. */
-  const of = async (serial: string | undefined): Promise<PhoneDriver> => {
-    if (serial) return app.has(serial) ? app : adb;
-    if (app.serials().length && !(await adb.available().catch(() => false) && await adbReady())) return app;
-    return adb;
-  };
+/** Which phones hang off this PC right now: `app` by device id (the Autark app's socket), `adb` by serial; and whether
+ *  adb is installed here (phone.* can work then, and says when no phone is on the cable). */
+export interface PhonesHere { here(): { app: string[]; adb: string[] }; adbInstalled(): boolean }
+
+export function mergedPhones(adb: Adb & Pick<AdbPhone, 'attached' | 'installed'>, app: Pick<AppPhones, keyof PhoneDriver | 'has' | 'serials'>): Adb & PhonesHere {
+  /** The driver for a step: the app phone named, or any attached app phone when none is named; else ADB. */
+  const pick = (serial: string | undefined): PhoneDriver => ((serial ? app.has(serial) : app.serials().length > 0) ? app : adb);
   return {
     available: async () => (await app.available()) || adb.available().catch(() => false),
     devices: async () => {
@@ -25,16 +28,19 @@ export function mergedPhones(adb: Adb, app: Pick<AppPhones, keyof PhoneDriver | 
       const viaAdb = (await adb.available().catch(() => false)) ? await adb.devices().catch(() => [] as PhoneDevice[]) : [];
       return [...own, ...viaAdb];
     },
-    screenshot: async (serial?: string, step?: PhoneStepOptions): Promise<PhoneShot> => (await of(serial)).screenshot(serial, step),
-    uiTree: async (serial?: string, step?: PhoneStepOptions): Promise<PhoneTree> => (await of(serial)).uiTree(serial, step),
-    tap: async (serial, x, y, step) => (await of(serial)).tap(serial, x, y, step),
-    swipe: async (serial, from, to, durationMs, step) => (await of(serial)).swipe(serial, from, to, durationMs, step),
-    type: async (serial, value, step) => (await of(serial)).type(serial, value, step),
-    key: async (serial, name, step) => (await of(serial)).key(serial, name, step),
-    open: async (serial, target, step) => (await of(serial)).open(serial, target, step),
+    screenshot: (serial?: string, step?: PhoneStepOptions): Promise<PhoneShot> => pick(serial).screenshot(serial, step),
+    uiTree: (serial?: string, step?: PhoneStepOptions): Promise<PhoneTree> => pick(serial).uiTree(serial, step),
+    tap: (serial, x, y, step) => pick(serial).tap(serial, x, y, step),
+    swipe: (serial, from, to, durationMs, step) => pick(serial).swipe(serial, from, to, durationMs, step),
+    type: (serial, value, step) => pick(serial).type(serial, value, step),
+    key: (serial, name, step) => pick(serial).key(serial, name, step),
+    open: (serial, target, step) => pick(serial).open(serial, target, step),
+    say: (serial, value, ask, step) => pick(serial).say(serial, value, ask, step),
     pair: (address, code) => adb.pair(address, code),
     connect: (address) => adb.connect(address),
     disconnect: (serial) => adb.disconnect(serial),
     discover: () => adb.discover(),
+    here: () => ({ app: app.serials(), adb: adb.attached() }),
+    adbInstalled: () => adb.installed(),
   };
 }

@@ -61,10 +61,13 @@ export function parseCombo(combo: string): number[] {
   return [...modifiers, ...others];
 }
 
-/** Combos the agent must never send: they would reach the secure desktop or log the person out. */
+/**
+ * Combos that are not sent: Ctrl+Alt+Delete counts only from a real keyboard (Windows' secure attention sequence),
+ * Win+L would lock the screen. B-080: the answer names the way on the lock screen itself.
+ */
 export function forbiddenCombo(codes: number[]): string | undefined {
   const set = new Set(codes);
-  if (set.has(0x11) && set.has(0x12) && set.has(0x2e)) return 'Ctrl+Alt+Delete opens the secure screen; I ask the person instead.';
+  if (set.has(0x11) && set.has(0x12) && set.has(0x2e)) return 'Ctrl+Alt+Delete counts only from a real keyboard; on the lock screen I click it or press space to reach the password field.';
   if (set.has(0x5b) && set.has(0x4c)) return 'Win+L locks the computer; I keep the screen unlocked.';
   return undefined;
 }

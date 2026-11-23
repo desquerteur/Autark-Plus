@@ -9,9 +9,10 @@
 //       "1 of 3 parts working"; it opens to the group's split rows (spinner / done / waiting) and a part row to its
 //       steps; the popover keeps its place and width (a phone's sheet its sides and bottom), its title and the row's
 //       avatar, name and toggle keep their boxes;
-//   (b) Team › agent › Runs: the run that split opens to its steps and below them its group ("Split · 1 of 3 done" and
-//       the rows; its agents.split call stays a plain step line there); opening, a part row and closing move nothing
-//       above;
+//   (b) Team › agent › Activity log: the turn that split shows its agents.split call as "Split · 1 of 3 done" (spinner,
+//       the goal as title), open from the start as columns – #1 and #2 side by side, then #1 alone once #2 is back
+//       ("Done · … · back to <agent>"), #3 waiting below, the parts' own steps in their columns; closing and opening
+//       move nothing above; no sideways page scroll at phone width;
 //   (c) the worktree parts: each branch holds its own title; the main checkout is untouched (merging is the agent's
 //       job – split_merge – the split page has no Merge / Discard cell any more); scrolled to its end in a low window,
 //       closing a step and the brief moves nothing above (lib/kept-page.ts, as on the agent page);
@@ -82,7 +83,7 @@ function layoutProblems() {
   for (const el of [document.documentElement, ...document.querySelectorAll('.shell, .mobile-shell, .message-scroller, .agent-scroll, .team-nav, .team-splits, .working-popover')]) {
     if (shown(el) && el.scrollWidth > el.clientWidth + 1) out.push(`${el.className || el.tagName} scrolls sideways (${el.scrollWidth} > ${el.clientWidth})`);
   }
-  for (const box of document.querySelectorAll('.split-rows, .run-splits, .run-split-group, .split-facts, .team-split-group, .working-row-detail')) {
+  for (const box of document.querySelectorAll('.split-rows, .split-facts, .team-split-group, .working-row-detail')) {
     if (!shown(box)) continue;
     const b = box.getBoundingClientRect();
     for (const kid of box.children) {
@@ -90,7 +91,7 @@ function layoutProblems() {
       if (r.width && (r.right > b.right + 0.5 || r.left < b.left - 4.5)) out.push(`${kid.className || kid.tagName} sticks out of ${box.className} (${Math.round(r.left)}–${Math.round(r.right)} in ${Math.round(b.left)}–${Math.round(b.right)})`);
     }
   }
-  for (const head of document.querySelectorAll('.split-row-head, .team-split-row, .run-split-head, .working-row-head, .split-branch-line')) {
+  for (const head of document.querySelectorAll('.split-row-head, .team-split-row, .working-row-head, .split-branch-line')) {
     if (!shown(head)) continue;
     const box = head.getBoundingClientRect();
     const kids = [...head.children].filter((kid) => shown(kid) && kid.getBoundingClientRect().width > 0);
@@ -101,7 +102,7 @@ function layoutProblems() {
       if (next && next.top < r.bottom - 0.5 && r.right > next.left + 0.5) out.push(`${kid.className} overlaps ${kids[index + 1].className} in ${head.className}`);
     });
   }
-  for (const el of document.querySelectorAll('.split-row-model, .split-row-time, .team-split-time, .split-branch, .split-branch-cell, .split-facts dd, .run-split-head .run-item-target')) {
+  for (const el of document.querySelectorAll('.split-row-model, .split-row-time, .team-split-time, .split-branch, .split-branch-cell, .split-facts dd, .split-step > .run-item-head .run-item-target')) {
     if (shown(el) && el.scrollWidth > el.clientWidth + 1) out.push(`${el.className || el.tagName} cut: "${el.textContent?.trim()}" (${el.scrollWidth} > ${el.clientWidth})`);
   }
   for (const el of document.querySelectorAll('.team-split-goal-text, .split-row-title, .team-split-title, .working-row-note, .working-row-model')) {
@@ -238,53 +239,60 @@ test('splits, part 2: popover group row, Runs › parts, merge conflict and side
   await page.keyboard.press('Escape');
   await popover.waitFor({ state: 'detached', timeout: 5_000 });
 
-  // (b) Team › agent › Runs: the run that split; its parts below its steps; nothing above moves.
+  // (b) Team › agent › Activity log: the turn that split; its "Split" line opens to the parts; nothing above moves.
+  const STEP = '[data-test-run="split"] .run-item.split-step';
   const runsOf = async () => {
-    await go(`#/team/${manager.id}`, '.agent-runs .run-row');
-    // the one run in "Launch check" is the run that split there (group 1 was split in "Site title")
-    const row = page.locator('.agent-runs .run-row', { has: page.locator('.run-meta', { hasText: 'Launch check' }) });
+    await go(`#/team/${manager.id}`, '.agent-log .log-turn');
+    // the one turn in "Launch check" is the run that split there (group 1 was split in "Site title")
+    const row = page.locator('.agent-log .log-turn', { has: page.locator('.log-system-text', { hasText: 'Launch check' }) });
     await row.first().waitFor({ timeout: 15_000 });
-    assert.equal(await row.count(), 1, 'one run of that chat');
+    assert.equal(await row.count(), 1, 'one turn of that chat');
     const above = await row.evaluate((el) => {
-      const rows = [...document.querySelectorAll('.agent-runs .run-row')];
+      const rows = [...document.querySelectorAll('.agent-log .log-turn')];
       const index = rows.indexOf(el);
       rows.slice(0, index).forEach((other, i) => other.setAttribute('data-test-run', `above-${i}`));
       el.setAttribute('data-test-run', 'split');
       return index;
     });
-    await row.scrollIntoViewIfNeeded();
-    const fixed = await present(['.agent-header', '.agent-runs .agent-section-title', ...Array.from({ length: above }, (_, i) => `[data-test-run="above-${i}"]`), '[data-test-run="split"] .run-head']);
-    return { row, fixed };
+    await row.locator('.run-item.split-step').waitFor({ timeout: 15_000 });
+    await row.locator('.run-item.split-step').scrollIntoViewIfNeeded();
+    const fixed = await present(['.agent-header', '.agent-log .agent-section-title', ...Array.from({ length: above }, (_, i) => `[data-test-run="above-${i}"]`), '[data-test-run="split"] > .log-system', `${STEP} > .run-item-head`]);
+    return { row, fixed, step: row.locator('.run-item.split-step') };
   };
   let runs = await runsOf();
-  await expectStable(page, runs.fixed, async () => { await runs.row.locator('.run-toggle').click(); await runs.row.locator('.run-splits .split-row').nth(2).waitFor({ timeout: 15_000 }); });
-  const parts = runs.row.locator('.run-splits');
-  await runs.row.locator(':scope > .run-items').waitFor({ timeout: 15_000 });
-  assert.equal(await parts.locator('.run-split-group').count(), 1);
-  assert.equal((await parts.locator('.run-split-head .run-item-verb').textContent())?.trim(), 'Split');
-  assert.equal((await parts.locator('.run-split-head .run-item-target').textContent())?.trim(), '· 1 of 3 done');
-  assert.equal(await parts.locator('.run-split-head .spinner').count(), 1, 'a running group spins in its icon slot');
-  assert.equal(await parts.locator('.run-split-head').getAttribute('title'), G2);
-  assert.equal(await runs.row.locator('.run-item.split-step').count(), 0, 'its agents.split call stays a plain step here (the parts show once)');
-  assert.deepEqual((await parts.locator('.split-row-title').allTextContents()).map((s) => s.trim()), ['#1 Draft the landing copy', '#2 Collect the screenshots', '#3 Review the draft']);
-  assert.ok((await box('[data-test-run="split"] > .run-splits'))[1] >= (await box('[data-test-run="split"] > .run-items'))[4] - 8, 'the parts sit below the run\'s steps');
-  await parts.locator('.split-row-head').nth(1).scrollIntoViewIfNeeded(); // below the fold at 800 px: in view first (the click would scroll)
-  await expectStable(page, [...runs.fixed, '[data-test-run="split"] > .run-items', '[data-test-run="split"] .run-split-head', '[data-test-run="split"] .split-row:nth-child(2) > .split-row-head'], async () => {
-    await parts.locator('.split-row-head').nth(1).click();
-    await parts.locator('.split-row-body .run-items').waitFor({ timeout: 15_000 });
-  });
-  await noProblems('runs 1280×800');
+  assert.equal(await runs.step.count(), 1, 'one Split line in the turn');
+  assert.equal((await runs.step.locator(':scope > .run-item-head .run-item-verb').textContent())?.trim(), 'Split');
+  assert.equal((await runs.step.locator(':scope > .run-item-head .run-item-target').textContent())?.trim(), '· 1 of 3 done');
+  assert.equal(await runs.step.locator(':scope > .run-item-head .spinner').count(), 1, 'a running group spins in its icon slot');
+  assert.equal(await runs.step.locator(':scope > .run-item-head').getAttribute('title'), G2);
+  // open from the start as columns: #1 and #2 side by side, then #1 alone after #2 is back; #3 waits for #1
+  const parts = runs.step.locator('.split-step-body.columns');
+  await parts.locator('.split-lane-row').nth(1).waitFor({ timeout: 15_000 });
+  assert.equal(await runs.step.locator(':scope > .run-item-head').getAttribute('aria-expanded'), 'true', 'open from the start');
+  const laneTitles = () => parts.locator('.split-lane-row').evaluateAll((rows) => rows.map((row) => [...row.querySelectorAll(':scope > .split-lane .split-lane-title')].map((t) => t.textContent.trim())));
+  assert.deepEqual(await laneTitles(), [['#1 Draft the landing copy', '#2 Collect the screenshots'], ['#1 Draft the landing copy']], 'two columns, then one when #2 is back');
+  assert.match(((await parts.locator('.split-lane-end').first().textContent()) ?? '').trim(), new RegExp(`^Done · .*back to ${manager.name}$`));
+  assert.match((await parts.locator('.split-lane-waiting').textContent()) ?? '', /#3 Review the draft · /);
+  await parts.locator('.split-lane .run-item').first().waitFor({ timeout: 15_000 }); // the parts' own steps
+  const firstRow = await parts.locator('.split-lane-row').first().locator(':scope > .split-lane').evaluateAll((lanes) => lanes.map((lane) => Math.round(lane.getBoundingClientRect().top)));
+  assert.equal(firstRow[0], firstRow[1], 'side by side');
+  await noProblems('log 1280×800');
   await shots2('more-03-runs-parts');
-  // the page scrolled to its end, the run's head in view (at the page's top the Runs sit below the fold of 800 px): closing
-  // shortens the page under the view and the page keeps its height (lib/kept-page.ts) – the browser would pull everything
-  // down by what is gone; scrolling up gives the empty room back
+  await expectStable(page, runs.fixed, async () => { await runs.step.locator(':scope > .run-item-head').click(); await parts.waitFor({ state: 'detached', timeout: 5_000 }); });
+  await expectStable(page, runs.fixed, async () => { await runs.step.locator(':scope > .run-item-head').click(); await parts.locator('.split-lane-row').nth(1).waitFor({ timeout: 5_000 }); });
+  // the page scrolled to its end, the Split line in view: closing shortens the page under the view and the page keeps its
+  // height (lib/kept-page.ts) – the browser would pull everything down by what is gone; scrolling up gives the room back
   const scroller = page.locator('.agent-scroll');
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await page.waitForTimeout(200);
   const openHeight = await scroller.evaluate((el) => el.scrollHeight);
-  const headTop = (await box('[data-test-run="split"] .run-head'))[1];
-  assert.ok(headTop >= (await box('.agent-scroll'))[1] && headTop + 52 <= (await box('.agent-scroll'))[4], `the run's head is in view (top ${headTop}), so the click scrolls nothing itself`);
-  await expectStable(page, runs.fixed, async () => { await runs.row.locator('.run-toggle').click(); await parts.waitFor({ state: 'detached', timeout: 5_000 }); });
+  let headTop = (await box(`${STEP} > .run-item-head`))[1];
+  if (headTop < (await box('.agent-scroll'))[1] || headTop + 24 > (await box('.agent-scroll'))[4]) {
+    await runs.step.locator(':scope > .run-item-head').scrollIntoViewIfNeeded();
+    headTop = (await box(`${STEP} > .run-item-head`))[1];
+  }
+  assert.ok(headTop >= (await box('.agent-scroll'))[1] && headTop + 24 <= (await box('.agent-scroll'))[4], `the Split line is in view (top ${headTop}), so the click scrolls nothing itself`);
+  await expectStable(page, runs.fixed, async () => { await runs.step.locator(':scope > .run-item-head').click(); await parts.waitFor({ state: 'detached', timeout: 5_000 }); });
   await scroller.evaluate((el) => { el.scrollTop = 0; });
   await page.waitForTimeout(200);
   assert.ok(await scroller.evaluate((el) => el.scrollHeight) < openHeight - 50, 'scrolled up, the page is its natural height again');
@@ -363,8 +371,8 @@ test('splits, part 2: popover group row, Runs › parts, merge conflict and side
   await page.keyboard.press('Escape');
   await popover.waitFor({ state: 'detached', timeout: 5_000 });
   runs = await runsOf();
-  await expectStable(page, runs.fixed, async () => { await runs.row.locator('.run-toggle').click(); await runs.row.locator('.run-splits .split-row').nth(2).waitFor({ timeout: 15_000 }); });
-  await runs.row.locator('.run-splits').scrollIntoViewIfNeeded();
+  await runs.step.locator('.split-lane-row').nth(1).waitFor({ timeout: 15_000 });
+  await runs.step.locator('.split-step-body').scrollIntoViewIfNeeded();
   await noProblems('runs phone');
   await shots2('more-09-runs-parts-phone');
   await go(`#/team/${manager.id}/split/${partC.id}`, '.split-page-name');

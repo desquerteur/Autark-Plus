@@ -10,9 +10,9 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { companyWorkspace, listCompanies } from '../../../src/runtime/root/companies.ts';
+import { companyWorkspace, listCompanies, loginsFolder, withOtherFacts } from '../../../src/runtime/root/companies.ts';
 import { createHandlerTable } from '../../../src/runtime/rpc/handlers/index.ts';
-import { companyLabel, isCompanyId } from '../../../src/shared/model/companies.ts';
+import { companyLabel, isCompanyId, REMOVED_FILE } from '../../../src/shared/model/companies.ts';
 import type { WorkforceError } from '../../../src/shared/errors.ts';
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'wf-root-companies-'));
@@ -28,20 +28,21 @@ settingsIn(path.join(dir, 'company-2'), '{ "profile": { "company": "  Side Shop 
 mkdirSync(path.join(dir, 'company-3'), { recursive: true }); // new: no settings yet
 settingsIn(path.join(dir, 'broken'), 'not json');
 mkdirSync(path.join(dir, 'Not An Id'), { recursive: true });
+mkdirSync(path.join(dir, 'logins', 'claude'), { recursive: true }); // 16.11.2026: this PC's plan logins beside the companies, no company
 writeFileSync(path.join(dir, 'notes.txt'), 'a file, no company');
 
 test('the list: the first company first, the others by id, each named from its profile, the current one ticked', () => {
   const companies = { first, dir };
   assert.deepEqual(listCompanies({ dataDir: first, companies }), [
-    { id: null, label: 'Teydra Lab', current: true },
-    { id: 'broken', label: 'broken', current: false },
-    { id: 'company-2', label: 'Side Shop', current: false },
-    { id: 'company-3', label: 'company-3', current: false },
-    { id: 'company-10', label: 'Ann B.', current: false },
+    { id: null, label: 'Teydra Lab', folder: 'first', current: true },
+    { id: 'broken', label: 'broken', folder: 'broken', current: false },
+    { id: 'company-2', label: 'Side Shop', folder: 'company-2', current: false },
+    { id: 'company-3', label: 'company-3', folder: 'company-3', current: false },
+    { id: 'company-10', label: 'Ann B.', folder: 'company-10', current: false },
   ]);
   const fromThird = listCompanies({ dataDir: path.join(dir, 'company-3'), companies });
   assert.deepEqual(fromThird.filter((entry) => entry.current).map((entry) => entry.id), ['company-3']);
-  assert.deepEqual(listCompanies({ dataDir: first, companies: { first, dir: path.join(tmp, 'none yet') } }), [{ id: null, label: 'Teydra Lab', current: true }]);
+  assert.deepEqual(listCompanies({ dataDir: first, companies: { first, dir: path.join(tmp, 'none yet') } }), [{ id: null, label: 'Teydra Lab', folder: 'first', current: true }]);
   assert.deepEqual(listCompanies({ dataDir: first }), [], 'a test profile or headless: no companies');
 });
 
@@ -52,7 +53,25 @@ test('labels and ids: company, else the name, else the folder; ids are short low
   assert.equal(companyLabel(null, null), 'First company');
   assert.equal(companyLabel({ company: 'x'.repeat(200) }, null).length, 80);
   for (const id of ['company-2', 'teydra', 'a', '9x']) assert.ok(isCompanyId(id), id);
-  for (const id of ['', '-a', 'A', 'a b', '../a', 'a/b', 'a\\b', 'a.b', 'a'.repeat(41), 7, null, 'con', 'nul', 'com1', 'lpt9']) assert.ok(!isCompanyId(id), String(id));
+  for (const id of ['', '-a', 'A', 'a b', '../a', 'a/b', 'a\\b', 'a.b', 'a'.repeat(41), 7, null, 'con', 'nul', 'com1', 'lpt9', 'logins']) assert.ok(!isCompanyId(id), String(id));
+  assert.equal(loginsFolder({ companies: { first: path.join(tmp, 'Autark'), dir } }), path.join(dir, 'logins'), 'the logins folder beside the companies');
+  assert.equal(loginsFolder({}), undefined, 'a test profile or headless: <data>/accounts');
+});
+
+test('16.11.2026 a company being removed is no longer listed – the first one too; with facts, the others say whether they run', async () => {
+  const pcFirst = path.join(tmp, 'pc2', 'Autark');
+  const pcDir = path.join(tmp, 'pc2', 'Autark Companies');
+  settingsIn(pcFirst, '{ "profile": { "company": "Teydra Lab" } }');
+  settingsIn(path.join(pcDir, 'company-2'), '{ "profile": { "company": "Teydra Lab" } }');
+  settingsIn(path.join(pcDir, 'company-3'), '{ "profile": { "company": "Old" } }');
+  writeFileSync(path.join(pcDir, 'company-3', REMOVED_FILE), '{"at":1}\n');
+  const app = { dataDir: path.join(pcDir, 'company-2'), companies: { first: pcFirst, dir: pcDir } };
+  assert.deepEqual(listCompanies(app).map((entry) => `${entry.label} (${entry.folder})`), ['Teydra Lab (first)', 'Teydra Lab (company-2)'], 'the same name, told apart by the folder');
+  writeFileSync(path.join(pcFirst, REMOVED_FILE), '{"at":1}\n');
+  assert.deepEqual(listCompanies(app).map((entry) => entry.folder), ['company-2']);
+  rmSync(path.join(pcFirst, REMOVED_FILE));
+  const facts = await withOtherFacts(app, listCompanies(app), { timeoutMs: 500 });
+  assert.deepEqual(facts.map((entry) => [entry.folder, entry.running]), [['first', false], ['company-2', undefined]], 'not running: no role or linked PCs; this one stays as it is');
 });
 
 test("another company's workspace is its own folder; the first keeps the default", () => {
@@ -86,4 +105,24 @@ test('companies.list / companies.open: owner scope; open checks the id and hands
   assert.equal(await code({ create: 'yes' }), 'bad_request');
   assert.equal(await code({}, { app: { dataDir: first } }), 'unavailable', 'headless or a test profile');
   assert.equal(asked.length, 3, 'nothing refused reached the host');
+});
+
+test('16.11.2026 companies.remove / export / import: owner scope; remove names the company to main, the params are checked first', async () => {
+  const table = createHandlerTable();
+  for (const name of ['companies.remove', 'companies.export', 'companies.import']) assert.equal(table.get(name)!.scope, 'owner', name);
+  const removed: unknown[] = [];
+  const host = { app: { dataDir: first, companies: { first, dir } }, removeCompany: async (input: unknown) => { removed.push(input); return { ok: true }; } };
+  const ctx = (h: unknown) => ({ scope: { kind: 'owner' }, services: { host: h }, extras: {}, topics: new Set(), signal: new AbortController().signal }) as never;
+  const call = async (method: string, params: unknown, h: unknown = host) => { try { return await table.get(method)!.handler(params as never, ctx(h)); } catch (error) { return (error as WorkforceError).code; } };
+  assert.deepEqual(await call('companies.remove', { id: 'company-2' }), { ok: true });
+  assert.deepEqual(await call('companies.remove', { id: null }), { ok: true });
+  assert.deepEqual(removed, [{ id: 'company-2', name: 'Side Shop' }, { id: null, name: 'Teydra Lab' }]);
+  assert.equal(await call('companies.remove', {}), 'bad_request', 'the id is always named: null is the first company');
+  assert.equal(await call('companies.remove', { id: '../x' }), 'bad_request');
+  assert.equal(await call('companies.remove', { id: 'company-2' }, { app: { dataDir: first } }), 'unavailable', 'headless or a test profile');
+  assert.equal(removed.length, 2);
+  assert.equal(await call('companies.export', { dir: 'relative/folder' }), 'bad_request', 'paths on this PC are absolute');
+  assert.equal(await call('companies.export', { id: 'company-9', dir: path.join(tmp, 'out') }), 'not_found');
+  assert.equal(await call('companies.import', { path: 'relative' }), 'bad_request');
+  assert.equal(await call('companies.import', { path: path.join(tmp, 'no-export') }), 'unavailable', 'no openCompany on this host');
 });

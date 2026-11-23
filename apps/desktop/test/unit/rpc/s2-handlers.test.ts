@@ -32,10 +32,13 @@ function setup() {
   const recordAsync = (name: string, result?: unknown) => async (...args: unknown[]) => { calls.push([name, ...args]); return result; };
   const db = memoryDb();
   const data = tempDir('wf-s2-');
-  const agent = { id: 'ag_01jab3k9z7mx2c4q', name: 'Manager', mode: 'manager' };
+  const agent: { id: string; name: string; mode: string; modelPolicy?: Record<string, unknown> } = { id: 'ag_01jab3k9z7mx2c4q', name: 'Manager', mode: 'manager' };
+  const profile = { name: 'Stanislaus' };
   const services = {
     db,
     paths: { data: data.dir },
+    clock: { now: () => 1_000 },
+    settings: { get: () => ({ profile }) },
     accounts: {
       list: record('accounts.list', []),
       detect: recordAsync('accounts.detect', { clis: [] }),
@@ -106,7 +109,7 @@ function setup() {
     return entry.handler(params as never, ctx);
   }
   const named = (name: string) => calls.filter((entry) => entry[0] === name);
-  return { table, call, calls, named, db, services, data: data.dir };
+  return { table, call, calls, named, db, services, data: data.dir, agent, profile };
 }
 
 async function rejectsCode(promise: Promise<unknown>, code: string): Promise<void> {
@@ -117,13 +120,16 @@ test('all S2 methods are registered once with the specified scopes', () => {
   const { table } = setup();
   const expected = [
     'accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.logout', 'accounts.remove', 'accounts.install',
+    'accounts.loginCode', // B-091: the Claude page's code from the phone (handler: rpc/phone-access.test.ts)
+    'accounts.useFound', 'accounts.declineFound', // 17.11.2026: the person's "Use" / "Not here" for a found plan login (accounts/consent.test.ts)
     'usage.list', 'models.list', 'models.recent', 'models.getPolicy', 'models.setPolicy', 'routing.preview', 'catalog.refresh', 'efforts.forModel',
     'catalog.status',
     'accounts.useReset', 'accounts.test', // B-044 (owner)
     'accounts.try', // B-051 (owner): one tiny real turn on one account (handler: accounts/try-rpc.test.ts)
-    'models.uses', // owner: what each use resolves to now (models/uses.test.ts)
+    'models.uses', // what each use resolves to now (models/uses.test.ts) – the owner and the secure phone, like accounts.*
     'spend.list',
     'secrets.list', 'secrets.save', 'secrets.delete', 'secrets.capture',
+    'secrets.fromMessage', // 16.11.2026: a key or a marked piece of a message into the catalog (secrets/text-capture.test.ts)
     'secrets.groups', 'secrets.saveGroup', 'secrets.deleteGroup', // X05
     'secrets.folder', 'secrets.openFolder', // B-044 (SECRETS): the metadata files' state; open <data>/secrets (owner)
     'secrets.import', // 29.10.2026: a password export into the catalog
@@ -133,7 +139,7 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'pwa.state', 'pwa.enable', 'pwa.link', 'pwa.revoke', 'pwa.pushSubscribe', 'pwa.pushConfig', 'pwa.pushUnsubscribe', 'pwa.exchange', 'computer.preview',
     'computer.activity', 'computer.stop', 'computer.resume',
     'feedback.create', 'feedback.list', 'feedback.send', 'feedback.dismiss', 'feedback.status', 'feedback.issuePreview', 'feedback.fileIssue', 'feedback.issueRefresh',
-    'theme.get', 'import.legacy', 'voice.transcribe',
+    'theme.get', 'import.legacy', 'voice.transcribe', 'voice.retranscribe', // B-082: Transcribe again on a sent recording
     'onboarding.reset', 'onboarding.start', // B-044 first run
     'voice.localModels', 'voice.pullLocal', 'voice.speak', // B-047 D14 local speech
   ];
@@ -143,9 +149,10 @@ test('all S2 methods are registered once with the specified scopes', () => {
   const PERMISSIONS = { capability: 'permissions', secure: true };
   const ACCOUNTS = { capability: 'settings', secure: true }; // B-078: plans and keys from the owner's phone app
   const special: Record<string, unknown> = {
-    ...Object.fromEntries(['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.logout', 'accounts.remove',
-      'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try'].map((method) => [method, ACCOUNTS])),
+    ...Object.fromEntries(['accounts.list', 'accounts.detect', 'accounts.add', 'accounts.update', 'accounts.login', 'accounts.loginCode', 'accounts.logout', 'accounts.remove',
+      'accounts.install', 'accounts.useReset', 'accounts.test', 'accounts.try', 'accounts.useFound', 'accounts.declineFound', 'models.uses'].map((method) => [method, ACCOUNTS])), // B-084: models.uses for the phone's Settings › Models
     'secrets.capture': { capability: 'chat', secure: true },
+    'secrets.fromMessage': { capability: 'chat', secure: true },
     'pwa.pushSubscribe': 'any', 'pwa.pushConfig': 'any', 'pwa.pushUnsubscribe': 'any', 'pwa.exchange': 'any',
     'theme.get': { person: true, base: 'any' }, // also an employee's device
     // DEV2 tiers
@@ -153,12 +160,15 @@ test('all S2 methods are registered once with the specified scopes', () => {
     'models.setPolicy': MANAGE, 'routing.preview': MANAGE,
     'catalog.status': CHAT,
     'spend.list': PERMISSIONS, 'secrets.list': PERMISSIONS, 'secrets.save': PERMISSIONS, 'secrets.folder': PERMISSIONS,
-    'secrets.groups': PERMISSIONS, 'secrets.saveGroup': PERMISSIONS, // X05 (deleteGroup stays on the PC)
+    'secrets.groups': PERMISSIONS, 'secrets.saveGroup': PERMISSIONS, 'secrets.delete': PERMISSIONS, 'secrets.deleteGroup': PERMISSIONS,
     'secrets.import': PERMISSIONS, // 29.10.2026: creates only, like a phone's saveGroup
+    'secrets.export': PERMISSIONS, // 16.11.2026: from the owner's phone too (the file stays on the PC)
     'computer.activity': { capability: 'todo' }, 'computer.stop': { capability: 'todo' }, 'computer.resume': { capability: 'todo' },
     'feedback.create': CHAT, 'feedback.list': CHAT, 'feedback.send': CHAT, 'feedback.dismiss': CHAT, 'feedback.status': CHAT, 'feedback.issuePreview': CHAT, 'feedback.fileIssue': CHAT, 'feedback.issueRefresh': CHAT,
-    'voice.transcribe': CHAT,
-    'voice.localModels': CHAT, 'voice.speak': CHAT, // B-047 D14 (voice.pullLocal stays with the owner)
+    'voice.transcribe': CHAT, 'voice.retranscribe': CHAT,
+    'voice.localModels': CHAT, 'voice.speak': CHAT, // B-047 D14
+    // B-084 (D6): Settings › Devices and the voice download from the owner's phone app (secure transport, 'settings')
+    'devices.list': ACCOUNTS, 'devices.rename': ACCOUNTS, 'devices.revoke': ACCOUNTS, 'voice.pullLocal': ACCOUNTS,
   };
   for (const method of expected) assert.deepEqual(table.get(method)!.scope, special[method] ?? 'owner', method);
 });
@@ -206,7 +216,7 @@ test('secrets never leave the runtime: list/save return metadata only', async ()
 test('accounts: add hands the API key to the service; update/install validate', async () => {
   const { call, named } = setup();
   await call('accounts.add', { provider: 'openai', label: 'Work', apiKey: 'sk-test', baseUrl: 'https://api.example.com/v1' });
-  assert.deepEqual(named('accounts.add')[0][1], { provider: 'openai', label: 'Work', apiKey: 'sk-test', baseUrl: 'https://api.example.com/v1', rotation: undefined });
+  assert.deepEqual(named('accounts.add')[0][1], { provider: 'openai', label: 'Work', apiKey: 'sk-test', baseUrl: 'https://api.example.com/v1' });
   await rejectsCode(call('accounts.add', { provider: 'myspace' }), 'bad_request');
   await rejectsCode(call('accounts.add', { provider: 'compatible', baseUrl: 'file:///etc/passwd' }), 'bad_request');
   await call('accounts.update', { id: 'acc_1', priority: 2, enabled: false });
@@ -218,6 +228,18 @@ test('accounts: add hands the API key to the service; update/install validate', 
   assert.deepEqual(named('accounts.usage')[0], ['accounts.usage', true]);
   await rejectsCode(call('accounts.install', { provider: 'opencode' }), 'bad_request');
   await rejectsCode(call('accounts.add', { provider: 'opencode' }), 'bad_request');
+});
+
+test('B-083 accounts.update: an Anthropic API key holding plan credits is marked and unmarked through the handler', async () => {
+  const { call, services } = setup();
+  const key = { id: 'acc_anthropic', provider: 'anthropic', auth: 'api_key', enabled: true };
+  const sent: unknown[] = [];
+  (services.accounts as unknown as { update: unknown }).update = (accountId: string, patch: Record<string, unknown>) => { sent.push([accountId, patch]); return { ...key, ...patch }; };
+  assert.deepEqual(await call('accounts.update', { id: 'acc_anthropic', credits: true }), { ...key, credits: true });
+  assert.deepEqual(await call('accounts.update', { id: 'acc_anthropic', credits: false }, FULL_SECURE), { ...key, credits: false }, "the owner's phone too");
+  assert.deepEqual(sent, [['acc_anthropic', { credits: true }], ['acc_anthropic', { credits: false }]]);
+  await rejectsCode(call('accounts.update', { id: 'acc_anthropic', credits: 'x' }), 'bad_request');
+  assert.equal(sent.length, 2, 'a refused value never reaches the service');
 });
 
 test('B-044 accounts.useReset and accounts.test: the owner and the secure phone (B-078), checked params, the service answers', async () => {
@@ -245,7 +267,7 @@ test('models, policies, routing preview and efforts', async () => {
   assert.deepEqual(await call('efforts.forModel', { modelId: 'openrouter:anthropic/unknown' }), []);
 
   await call('models.setPolicy', { agentId: 'ag_01jab3k9z7mx2c4q', policy: { pin: 'claude:claude-opus-5-5', effort: 'high', avoid: ['codex:gpt-6.1-sol'] } });
-  assert.deepEqual(named('policies.set')[0], ['policies.set', { agentId: 'ag_01jab3k9z7mx2c4q' }, { pin: 'claude:claude-opus-5-5', effort: 'high', avoid: ['codex:gpt-6.1-sol'] }]);
+  assert.deepEqual(named('policies.set')[0], ['policies.set', { agentId: 'ag_01jab3k9z7mx2c4q' }, { pin: 'claude:claude-opus-5-5', effort: 'high', avoid: ['codex:gpt-6.1-sol'], pinBy: { name: 'Stanislaus', at: 1_000 } }]);
   await rejectsCode(call('models.setPolicy', { policy: { floorTier: 'frontier', ceilingTier: 'small' } }), 'bad_request');
   await rejectsCode(call('models.setPolicy', { policy: { effort: 'turbo' } }), 'bad_request');
   assert.equal(await call('models.getPolicy'), null);
@@ -313,20 +335,57 @@ test('app: feedback authored by the human, onboarding, import, voice', async () 
   assert.deepEqual(await call('voice.transcribe', { fileId: 'c'.repeat(64), language: 'de-DE' }), { text: 'hallo' });
   await rejectsCode(call('voice.transcribe', { fileId: 'nope' }), 'bad_request');
   await rejectsCode(call('voice.transcribe', { fileId: 'c'.repeat(64), language: 'de; rm -rf' }), 'bad_request');
+  // B-082: the take's earlier text (context, ≤ 2000 chars) and a live conversation line
+  await call('voice.transcribe', { fileId: 'c'.repeat(64), before: 'Erster Teil.\nZweiter.', live: true });
+  assert.deepEqual(named('voice.transcribe').at(-1)![1], { fileId: 'c'.repeat(64), language: undefined, before: 'Erster Teil.\nZweiter.', live: true });
+  await call('voice.transcribe', { fileId: 'c'.repeat(64), before: '' });
+  assert.deepEqual(named('voice.transcribe').at(-1)![1], { fileId: 'c'.repeat(64), language: undefined }, 'an empty before is none');
+  await rejectsCode(call('voice.transcribe', { fileId: 'c'.repeat(64), before: 'x'.repeat(2_001) }), 'bad_request');
+  await rejectsCode(call('voice.transcribe', { fileId: 'c'.repeat(64), live: false }), 'bad_request');
 });
 
-test('DEV2: the permissions tier needs a secure transport; a phone may only create secrets', async () => {
+test('DEV2: the permissions tier needs a secure transport; a secure owner device may edit, delete and (16.11.2026) export', async () => {
   const { call, named } = setup();
   await rejectsCode(call('secrets.list', undefined, FULL_LAN), 'forbidden');
   await rejectsCode(call('secrets.list', undefined, PHONE), 'forbidden');
   assert.equal((await call('secrets.list', undefined, FULL_SECURE))[0].value, undefined);
   const created = await call('secrets.save', { label: 'Shop', kind: 'password', value: 'pw-1' }, FULL_SECURE);
   assert.equal(created.value, undefined);
-  await rejectsCode(call('secrets.save', { id: 'sec_1', label: 'Visa', kind: 'card', value: 'overwrite' }, FULL_SECURE), 'forbidden');
-  assert.equal(named('secrets.save').length, 1, 'the overwrite never reached the vault');
-  await rejectsCode(call('secrets.delete', { id: 'sec_1' }, FULL_SECURE), 'forbidden');
+  await call('secrets.save', { id: 'sec_1', label: 'Visa', kind: 'card', value: 'overwrite' }, FULL_SECURE);
+  assert.equal(named('secrets.save').length, 2, 'secure owner-device update reaches the vault');
+  await call('secrets.delete', { id: 'sec_1' }, FULL_SECURE);
+  await rejectsCode(call('secrets.export', {}, FULL_LAN), 'forbidden'); // the plaintext file never over plain LAN http
   assert.deepEqual(await call('spend.list', undefined, FULL_SECURE), []);
   await rejectsCode(call('spend.list', undefined, FULL_LAN), 'forbidden');
+});
+
+test('B-083 models.setPolicy: an agent\'s start model names who set it; an unchanged pin keeps its origin, a chat choice and Auto carry none', async () => {
+  const { call, named, agent, profile } = setup();
+  const AGENT = 'ag_01jab3k9z7mx2c4q';
+  const stored = () => named('policies.set').at(-1)?.slice(1);
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'claude:claude-opus-5-5' } }, FULL_SECURE);
+  assert.deepEqual(stored(), [{ agentId: AGENT }, { pin: 'claude:claude-opus-5-5', pinBy: { name: 'Stanislaus', at: 1_000 } }], 'the owner\'s phone sets it in the owner\'s name');
+  agent.modelPolicy = { pin: 'claude:claude-opus-5-5', pinBy: { name: 'Manager', at: 5, self: true } };
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'claude:claude-opus-5-5', effort: 'high' } });
+  assert.deepEqual(stored()?.[1], { pin: 'claude:claude-opus-5-5', effort: 'high', pinBy: { name: 'Manager', at: 5, self: true } }, 'the same start model keeps who set it');
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'codex:gpt-6.1-sol' } });
+  assert.deepEqual(stored()?.[1], { pin: 'codex:gpt-6.1-sol', pinBy: { name: 'Stanislaus', at: 1_000 } }, 'a new one names the person');
+  await call('models.setPolicy', { agentId: AGENT, policy: {} });
+  assert.deepEqual(stored()?.[1], {}, 'Auto: no start model, no origin');
+  await call('models.setPolicy', { agentId: AGENT, conversationId: 'cv_01jab3k9z7mx2c4q', policy: { pin: 'codex:gpt-6.1-sol' } });
+  assert.deepEqual(stored()?.[1], { pin: 'codex:gpt-6.1-sol' }, 'a chat choice is no start model');
+  profile.name = '  ';
+  agent.modelPolicy = undefined;
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'codex:gpt-6.1-sol' } });
+  assert.deepEqual(stored()?.[1], { pin: 'codex:gpt-6.1-sol', pinBy: { name: 'the person', at: 1_000 } }, 'no profile name');
+  profile.name = 'Stanislaus';
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'codex:gpt-6.1-sol', pinBy: { name: 'Mallory', at: 1 } } });
+  assert.deepEqual(stored()?.[1], { pin: 'codex:gpt-6.1-sol', pinBy: { name: 'Stanislaus', at: 1_000 } }, 'a sent pinBy is ignored: the runtime writes its own');
+  agent.modelPolicy = { pin: 'codex:gpt-6.1-sol', pinBy: { name: 'Manager', at: 5, self: true } };
+  await call('models.setPolicy', { agentId: AGENT, policy: { ...agent.modelPolicy, effort: 'low' } });
+  assert.deepEqual(stored()?.[1], { pin: 'codex:gpt-6.1-sol', effort: 'low', pinBy: { name: 'Manager', at: 5, self: true } }, 'getPolicy → one field edited → setPolicy keeps the stored origin');
+  await call('models.setPolicy', { agentId: AGENT, policy: { pin: 'auto' } });
+  assert.deepEqual(stored()?.[1], { pin: 'auto' }, "'auto' is no start model: no origin");
 });
 
 test('DEV2: chat devices read usage and models without refreshing; manage refreshes and sets policies', async () => {
@@ -344,7 +403,8 @@ test('DEV2: chat devices read usage and models without refreshing; manage refres
   assert.deepEqual(named('accounts.usage')[1], ['accounts.usage', true]);
   await call('models.setPolicy', { agentId: 'ag_01jab3k9z7mx2c4q', policy: { effort: 'high' } }, FULL_LAN);
   assert.equal(named('policies.set').length, 1);
-  for (const method of ['catalog.refresh', 'pwa.state', 'devices.list']) await rejectsCode(call(method, undefined, FULL_SECURE), 'forbidden');
+  for (const method of ['catalog.refresh', 'pwa.state']) await rejectsCode(call(method, undefined, FULL_SECURE), 'forbidden');
+  await rejectsCode(call('devices.list', undefined, FULL_LAN), 'forbidden'); // B-084: secure phone yes, plain LAN no
   for (const method of ['accounts.list', 'accounts.install']) await rejectsCode(call(method, method === 'accounts.install' ? { provider: 'codex' } : undefined, FULL_LAN), 'forbidden');
 });
 
@@ -368,7 +428,8 @@ test('DEV2: feedback and dictation from a chat device; onboarding and the import
   assert.deepEqual(named('feedback.send')[0].slice(1), ['fb_1', { reveal: false, visibility: 'public' }]);
   assert.deepEqual(await call('voice.transcribe', { fileId: 'c'.repeat(64) }, BROWSER), { text: 'hallo' });
   await rejectsCode(call('voice.transcribe', { fileId: 'c'.repeat(64) }, PHONE), 'forbidden'); // todo only
-  for (const method of ['onboarding.reset', 'onboarding.start', 'voice.pullLocal', 'import.legacy']) {
+  await rejectsCode(call('voice.pullLocal', { id: 'kokoro' }, FULL_LAN), 'forbidden'); // B-084: the secure phone may download, plain LAN not
+  for (const method of ['onboarding.reset', 'onboarding.start', 'import.legacy']) {
     await rejectsCode(call(method, undefined, FULL_SECURE), 'forbidden');
   }
 });

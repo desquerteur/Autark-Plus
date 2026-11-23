@@ -1,6 +1,6 @@
 // B-059 #184/#10: a provider's transient failure – overloaded, a 5xx, the connection or the stream lost, a request that
 // timed out – is an outage of the account, not a failure of the model: it is classified 'unavailable', so the existing
-// outage path applies (accounts/failure.ts: a short cooling and one failover; tasks/ladder.ts: no stall and no attempt;
+// outage path applies (accounts/failure.ts: a short cooling – B-080: none for our own engine's timeout, details.local – and one failover; tasks/ladder.ts: no stall and no attempt;
 // agents/turn-finish.ts: the model's rating stays; agents/redelivery.ts: a chat turn is delivered again). The one place
 // for these signals – structured ones or narrow, anchored texts only: a lasting error read as an outage would be retried
 // quietly instead of escalating.
@@ -34,12 +34,17 @@ function localRuntime(account: Pick<Account, 'provider' | 'baseUrl'>): boolean {
   try { return account.baseUrl !== undefined && LOOPBACK.has(new URL(account.baseUrl).hostname); } catch { return false; }
 }
 
-/** An engine's 'timeout', or a cloud provider's HTTP 500/502/504, as 'unavailable' (its text kept); any other result unchanged. */
+/**
+ * An engine's 'timeout', or a cloud provider's HTTP 500/502/504, as 'unavailable' (its text kept); any other result unchanged.
+ * B-080: the engine's timeout is our own engine process not answering, marked details.local – the turn's outage handling
+ * applies, the account does not cool (accounts/failure.ts).
+ */
 export function providerOutage(result: EngineTurnResult, account: Pick<Account, 'provider' | 'baseUrl'>): EngineTurnResult {
   const error = result.stop === 'error' ? result.error : undefined;
   if (!error || error.details?.setup === true) return result;
+  if (error.code === 'timeout') return { ...result, error: { ...error, code: 'unavailable', details: { ...error.details, local: true } } };
   const httpDown = error.code === 'internal' && HTTP_DOWN.test(error.message) && !localRuntime(account);
-  if (error.code === 'timeout' || httpDown) return { ...result, error: { ...error, code: 'unavailable' } };
+  if (httpDown) return { ...result, error: { ...error, code: 'unavailable' } };
   return result;
 }
 

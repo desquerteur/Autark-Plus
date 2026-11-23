@@ -17,6 +17,7 @@ import { WorkforceError, type ErrorCode } from '../../shared/errors.ts';
 import { plainLabel } from '../../shared/text/device-label.ts';
 import { b64url, fingerprintOf, fromB64url } from '../devices/keys.ts';
 import { mac, macOk, parseInfo, workingFirst, type PeerInfo } from '../devices/pair-proof.ts';
+import { belongs } from './code.ts';
 import { parseTarget, remoteIdOf, type RemoteTarget } from './id.ts';
 import { notFoundText, type Found } from './find.ts';
 import type { Timers } from './requests.ts';
@@ -136,7 +137,9 @@ export class RemoteJoiner {
     const session = typeof first.reply.session === 'string' ? first.reply.session : '';
     if (!info || !ephA || !commit || !session) throw new WorkforceError('bad_request', 'Update Autark on the other PC.');
     const fingerprint = fingerprintOf(fromB64url(info.pub));
-    if (info.id !== candidate.deviceId || fingerprint !== candidate.fingerprint || ('remoteId' in target && remoteIdOf(fingerprint) !== target.remoteId)) {
+    // B-084: a PC answering for the person code proves it with its chain (remote/code.ts); its own ID needs none.
+    const proven = (id: string) => belongs(id, fingerprint, first.reply.chain) || belongs(id, fingerprint, candidate.chain);
+    if (info.id !== candidate.deviceId || fingerprint !== candidate.fingerprint || ('remoteId' in target && !proven(target.remoteId))) {
       throw new WorkforceError('forbidden', 'A different PC answered than the one that was found.');
     }
     const nb = newNonce();
@@ -147,7 +150,7 @@ export class RemoteJoiner {
       throw new WorkforceError('forbidden', 'The other PC could not prove its identity.');
     }
     const view: RemoteOutgoing = {
-      id: `ro_${randomBytes(8).toString('hex')}`, role, deviceId: info.id, name: labelOf(info.name), remoteId: remoteIdOf(fingerprint), fingerprint,
+      id: `ro_${randomBytes(8).toString('hex')}`, role, deviceId: info.id, name: labelOf(info.name), remoteId: 'remoteId' in target ? target.remoteId : remoteIdOf(fingerprint), fingerprint,
       code: matchCode(t, na, nb), status: 'waiting', expiresAt: this.deps.now() + REQUEST_TTL_MS,
     };
     this.deps.log.info('connect request sent', { id: view.id, role });

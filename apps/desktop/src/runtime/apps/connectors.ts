@@ -10,8 +10,8 @@
 // migrateRecords() turns the records of the old Settings › Apps (kv 'apps', keys 'app:<id>') into these files once.
 // Owns: reading, checking and writing these files, the id a key gets. Never: resolves a handle, logs a value.
 
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { APP_ID_MAX, APP_ID_PATTERN, type ConnectedApp, type MailServer } from '../../shared/model/apps.ts';
 import { agentsOf } from './agent-access.ts';
@@ -42,6 +42,12 @@ export function slug(name: string): string {
   return out.slice(0, APP_ID_MAX).replace(/-+$/, '');
 }
 
+/** JavaScript enumerates array-index object keys before ordinary names, regardless of insertion order. */
+function isArrayIndexKey(name: string): boolean {
+  const value = Number(name);
+  return Number.isInteger(value) && value >= 0 && value < 0xffff_ffff && String(value) === name;
+}
+
 /** A free id for `name` (its slug, else with -2, -3 …). */
 function freeId(name: string, taken: Set<string>): string {
   const base = slug(name);
@@ -53,6 +59,23 @@ function freeId(name: string, taken: Set<string>): string {
   return `app-${createHash('sha256').update(name).digest('hex').slice(0, 8)}`;
 }
 
+type NamedTransport = Pick<Connector, 'name' | 'transport'>;
+
+function idsFor(items: readonly NamedTransport[]): Map<string, string> {
+  const taken = new Set<string>();
+  return new Map(items.map((item) => [`${item.transport}\0${item.name}`, freeId(item.name, taken)]));
+}
+
+/** A structural edit must not silently rebind any existing app/tool id. */
+function assertStableExistingIds(before: readonly NamedTransport[], after: readonly NamedTransport[], action: string): void {
+  const oldIds = idsFor(before);
+  const newIds = idsFor(after);
+  for (const [key, oldId] of oldIds) {
+    const nextId = newIds.get(key);
+    if (nextId !== undefined && nextId !== oldId) throw new Error(`${action} would change another app id; rename the colliding app on the PC first.`);
+  }
+}
+
 function server(value: unknown): MailServer | undefined {
   if (!isRecord(value) || !text(value.host)) return undefined;
   const port = Number(value.port);
@@ -61,11 +84,12 @@ function server(value: unknown): MailServer | undefined {
 }
 
 /** Reads one JSON file of the folder: its object, undefined when it does not exist, or the problem. */
-function readJson(file: string): { value?: Record<string, unknown>; problem?: string } {
+function readJson(file: string): { value?: Record<string, unknown>; source?: string; problem?: string } {
   if (!existsSync(file)) return {};
   try {
-    const value: unknown = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, '') || '{}');
-    return isRecord(value) ? { value } : { problem: `${path.basename(file)}: the top level must be an object.` };
+    const source = readFileSync(file, 'utf8');
+    const value: unknown = JSON.parse(source.replace(/^﻿/, '') || '{}');
+    return isRecord(value) ? { value, source } : { source, problem: `${path.basename(file)}: the top level must be an object.` };
   } catch (error) {
     return { problem: `${path.basename(file)}: ${error instanceof Error ? error.message.slice(0, 200) : 'not valid JSON'}` };
   }
@@ -114,7 +138,7 @@ export function readConnectors(dataDir: string): { connectors: Connector[]; prob
       const smtp = server(raw.smtp);
       connectors.push({
         id: freeId(name, taken), name, transport: 'mail', enabled: raw.disabled !== true && raw.enabled !== false, fingerprint: fingerprint(raw), ...agentsOf(raw),
-        mail: { address, password, ...(text(raw.user) ? { user: text(raw.user) } : {}), ...(imap ? { imap } : {}), ...(smtp ? { smtp } : {}), ...(text(raw.agent) ? { agent: text(raw.agent) } : {}) },
+        mail: { address, password, ...(raw.contactStopFile !== undefined ? { contactStopFile: typeof raw.contactStopFile === 'string' ? raw.contactStopFile : '' } : {}), ...(text(raw.user) ? { user: text(raw.user) } : {}), ...(imap ? { imap } : {}), ...(smtp ? { smtp } : {}), ...(text(raw.agent) ? { agent: text(raw.agent) } : {}) },
       });
     }
   }
@@ -127,6 +151,121 @@ function writeFile(file: string, content: string): void {
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, content, 'utf8');
   renameSync(tmp, file);
+}
+
+/**
+ * Compare all connector bytes immediately before atomic replacement, catching edits already visible at that point.
+ * This is not an OS compare-and-swap: an unrelated external writer in the final compare/rename window is uncoordinated.
+ */
+function writeMutation(file: string, before: string | undefined, content: string, guards: Array<{ file: string; source: string | undefined }> = []): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+    const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+    if (current !== before) throw new Error('Connector file changed; refresh the list and try again.');
+    for (const guard of guards) {
+      const latest = existsSync(guard.file) ? readFileSync(guard.file, 'utf8') : undefined;
+      if (latest !== guard.source) throw new Error('Connector files changed; refresh the list and try again.');
+    }
+    renameSync(tmp, file);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* already renamed or removed */ }
+    throw error;
+  }
+}
+
+export type ConnectorMutation =
+  | { kind: 'add'; entries: Array<{ name: string; entry: Record<string, unknown> }> }
+  | { kind: 'setEnabled'; id: string; name: string; transport: 'http' | 'stdio' | 'mail'; enabled: boolean }
+  | { kind: 'remove'; id: string; name: string; transport: 'http' | 'stdio' | 'mail'; allowMailRemoval?: true }
+  | { kind: 'setToken'; id: string; name: string; transport: 'http'; secretId: string };
+
+/** Mutates only named connector entries and preserves every other raw JSON field. No parser projection is serialized. */
+export function mutateConnectors(dataDir: string, mutation: ConnectorMutation, options: { validateOnly?: boolean } = {}): void {
+  const file = mutation.kind === 'add' ? MCP_FILE : mutation.kind === 'setToken' || mutation.transport !== 'mail' ? MCP_FILE : MAIL_FILE;
+  const section = file === MCP_FILE ? 'mcpServers' : 'mailboxes';
+  const pathAt = path.join(connectorsDir(dataDir), file);
+  const parsed = readJson(pathAt);
+  if (parsed.problem) throw new Error(`${file} is invalid.`);
+  const before = parsed.source;
+  const otherFile = file === MCP_FILE ? MAIL_FILE : MCP_FILE;
+  const otherPath = path.join(connectorsDir(dataDir), otherFile);
+  const other = readJson(otherPath);
+  if (other.problem) throw new Error(`${otherFile} is invalid.`);
+  const current = readConnectors(dataDir);
+  if (current.problems.length) throw new Error('Connector files have problems; fix them before changing apps.');
+  const root = parsed.value ?? {};
+  const rawSection = root[section] ?? {};
+  if (!isRecord(rawSection)) throw new Error(`${file} has an invalid ${section} section.`);
+  const entries: Record<string, unknown> = Object.assign(Object.create(null) as Record<string, unknown>, rawSection);
+  if (mutation.kind === 'add') {
+    if (!mutation.entries.length) throw new Error('No connectors to add.');
+    if (mutation.entries.length > 40) throw new Error('A maximum of 40 connectors can be added at once.');
+    const existingNames = new Set(current.connectors.map((item) => item.name));
+    const names = new Set<string>();
+    const addedNames: string[] = [];
+    for (const { name, entry } of mutation.entries) {
+      if (!name.trim() || name.length > 120 || names.has(name) || existingNames.has(name) || Object.hasOwn(entries, name) || !isRecord(entry)) throw new Error('Connector names must be unique and entries valid.');
+      if (isArrayIndexKey(name)) throw new Error('Integer connector names change object order; rename them on the PC first.');
+      names.add(name);
+      addedNames.push(name);
+      const allowed = new Set(['url', 'serverUrl', 'command', 'args', 'cwd', 'env', 'headers']);
+      if (Object.keys(entry).some((key) => !allowed.has(key))) throw new Error('Connector entry has unsupported fields.');
+      const http = typeof entry.url === 'string' || typeof entry.serverUrl === 'string';
+      const stdio = typeof entry.command === 'string';
+      if (Object.hasOwn(entry, 'url') && Object.hasOwn(entry, 'serverUrl')) throw new Error('Use either url or serverUrl, not both.');
+      if (http === stdio || (http && (Object.hasOwn(entry, 'command') || Object.hasOwn(entry, 'args') || Object.hasOwn(entry, 'cwd') || Object.hasOwn(entry, 'env'))) ||
+          (stdio && (Object.hasOwn(entry, 'url') || Object.hasOwn(entry, 'serverUrl') || Object.hasOwn(entry, 'headers')))) {
+        throw new Error('Connector entry must describe either one HTTP server or one local command.');
+      }
+      const urlValue = typeof entry.url === 'string' ? entry.url : entry.serverUrl;
+      if (http) {
+        let url: URL;
+        try { url = new URL(urlValue as string); } catch { throw new Error('Connector URL is invalid.'); }
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname) throw new Error('Connector URL must be HTTP(S) without embedded credentials.');
+      } else if (typeof entry.command !== 'string' || !entry.command.trim()) throw new Error('Connector command is required.');
+      if (Object.hasOwn(entry, 'args') && (!Array.isArray(entry.args) || entry.args.some((arg) => typeof arg !== 'string'))) throw new Error('Connector arguments must be strings.');
+      for (const field of ['headers', 'env'] as const) {
+        if (!Object.hasOwn(entry, field)) continue;
+        if (!isRecord(entry[field]) || Object.values(entry[field]).some((value) => typeof value !== 'string')) throw new Error(`Connector ${field} must contain text values.`);
+      }
+      if (Object.hasOwn(entry, 'cwd') && (typeof entry.cwd !== 'string' || !entry.cwd.trim())) throw new Error('Connector working directory must be text.');
+      const secretHandle = (value: unknown) => typeof value === 'string' && /^(?:(?:Bearer|Token|Basic)\s+)?secret:\/\/[A-Za-z0-9_-]+$/i.test(value.trim());
+      if (isRecord(entry.headers)) for (const [key, value] of Object.entries(entry.headers)) if (/authorization|token|secret|password|api[-_]?key/i.test(key) && !secretHandle(value) && !(typeof value === 'string' && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value))) throw new Error('Sensitive headers must use a Secrets handle.');
+      if (isRecord(entry.env)) for (const [key, value] of Object.entries(entry.env)) if (/token|secret|password|api[-_]?key/i.test(key) && !secretHandle(value) && !(typeof value === 'string' && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value))) throw new Error('Sensitive environment values must use a Secrets handle.');
+      entries[name] = entry;
+    }
+    const after = [
+      ...current.connectors.filter((item) => item.transport !== 'mail').map((item) => ({ name: item.name, transport: item.transport })),
+      ...addedNames.map((name) => ({ name, transport: 'http' as const })),
+      ...current.connectors.filter((item) => item.transport === 'mail').map((item) => ({ name: item.name, transport: item.transport })),
+    ];
+    assertStableExistingIds(current.connectors, after, 'Adding this name');
+  } else {
+    const raw = entries[mutation.name];
+    if (!isRecord(raw)) throw new Error('Connector no longer exists.');
+    const actualTransport = section === 'mailboxes' ? 'mail' : typeof raw.url === 'string' || typeof raw.serverUrl === 'string' ? 'http' : typeof raw.command === 'string' ? 'stdio' : undefined;
+    const actualId = current.connectors.find((item) => item.name === mutation.name && item.transport === mutation.transport)?.id;
+    if (actualId !== mutation.id || actualTransport !== mutation.transport) throw new Error('Connector changed; refresh the list.');
+    if (mutation.kind === 'remove') {
+      if (actualTransport === 'mail' && mutation.allowMailRemoval !== true) throw new Error('Mobile mailbox removal is not supported.');
+      const after = current.connectors.filter((item) => !(item.name === mutation.name && item.transport === mutation.transport));
+      assertStableExistingIds(current.connectors, after, 'Removing this app');
+      delete entries[mutation.name];
+    } else if (mutation.kind === 'setEnabled') {
+      if (mutation.enabled) { delete raw.disabled; delete raw.enabled; }
+      else { raw.disabled = true; delete raw.enabled; }
+    } else {
+      if (actualTransport !== 'http' || !/^[A-Za-z0-9_-]{1,120}$/.test(mutation.secretId)) throw new Error('A valid HTTP connector and secret handle are required.');
+      const headers = isRecord(raw.headers) ? { ...raw.headers } : {};
+      for (const key of Object.keys(headers)) if (key.toLowerCase() === 'authorization') delete headers[key];
+      headers.Authorization = `Bearer secret://${mutation.secretId}`;
+      raw.headers = headers;
+    }
+  }
+  root[section] = entries;
+  if (!options.validateOnly) writeMutation(pathAt, before, `${JSON.stringify(root, null, 2)}\n`, [{ file: otherPath, source: other.source }]);
 }
 
 /** Creates the folder and the two files when they are missing (so the AI finds them). */

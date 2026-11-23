@@ -13,7 +13,7 @@ function pc(id: string, extra: Partial<DeviceRecord> = {}): DeviceRecord {
 }
 
 test('only agents whose home is this PC (or no CEO PC) start turns here', async () => {
-  const h = setup({ maxConcurrent: 6 });
+  const h = setup();
   const repo = new DevicesRepo(h.db);
   repo.upsert(pc('dev_here', { self: true }));
   repo.upsert(pc('dev_tower'));

@@ -1,7 +1,8 @@
 // Secrets between the CEO's PCs (devices/sync/secrets.ts): two vaults with the fake keychain on a fake mesh that
 // passes JSON. A value arrives under the same id and works there; it is never in a log, in the kv store or in a
 // call's answer; an employee's PC gets none and may send none; at the first link the PC that joined takes the other's
-// entry for a shared id and keeps its own, when it differs, under a new id.
+// entry for a shared id and keeps its own, when it differs, under a new id. B-087: a catch-up whose link goes sends no
+// further page.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -114,4 +115,21 @@ test('at the first link the PC that joined takes the other PC\'s value for an id
     assert.equal(await pc.vault.use('sec_shared-key', 'ag_test'), 'value-of-b', `${pc.id}: B's own value stays and travels`);
   }
   for (const pc of [a, b]) assert.ok(!JSON.stringify(pc.logs).includes('value-of-b'), `${pc.id}: no value in the logs`);
+});
+
+test('B-087: a catch-up whose link goes sends no further page – no dial or decrypt for each; the next link-up owes the rest', async () => {
+  const net = new Net();
+  const a = makePc(net, 'dev_a');
+  const b = makePc(net, 'dev_b');
+  for (let i = 0; i < 120; i++) await a.vault.save({ label: `Key ${i}`, kind: 'api_key', value: `value-${i}` }); // three pages
+  link(a, b);
+  const receive = b.handlers.get('sync.secret')!;
+  b.handlers.set('sync.secret', async (params, from) => { const answer = await receive(params, from); net.pcs.delete('dev_b'); return answer; }); // the link goes after the first page
+  assert.equal(await a.sync.catchUp('dev_b', undefined), false, 'incomplete: the cursor stays');
+  assert.equal(net.calls.length, 1);
+  assert.equal(a.logs.filter((entry) => (entry as unknown[])[0] === 'secrets not sent').length, 0, 'no call after it, so none dials');
+  b.handlers.set('sync.secret', receive);
+  net.pcs.set('dev_b', b);
+  assert.ok(await a.sync.catchUp('dev_b', undefined), 'the next link-up');
+  assert.equal(b.vault.list().length, 120);
 });

@@ -1,20 +1,26 @@
 // The commands of the wf terminal client (C7): call, chats, read, send (B-050 K4: --important or
 // --silent), todos, tasks, agents here; the streaming ones (watch, events, send --wait) in stream.ts;
 // export and import of chat folders (B-050 K8) in chat-files.ts; the team's feedback mailbox (B-055:
-// feedback setup | receive | status) in feedback.ts. Every command goes through the
+// feedback setup | receive | status; 16.11.2026: list | show | mark) in feedback.ts. Every command goes through the
 // runtime's normal RPC with owner scope – the same methods and checks as the desktop window;
 // nothing here skips a runtime rule.
+// B-080: `wf call` reads its params as JSON or in the shapes Windows shells deliver (parseParams).
+// B-085: run by an agent (discover.ts agentOf), `send` writes as that agent – the runtime's messages.send does that;
+// its --wait then skips that agent's own later lines (withoutAuthor).
 // Owns: what each command calls and prints. Never: marks chats as read, retries a call, or
-// prints params (they may hold keys the person typed).
+// prints params (they may hold keys the person typed) – B-080: params that are no JSON in any shape show their first
+// 80 characters in the error, so the caller sees what its shell delivered (run.ts redacts the owner token there too).
 
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { ConversationSummary, Message } from '../../shared/model/chat.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { TaskStatus, TaskView } from '../../shared/model/tasks.ts';
-import { flag, integer, text, type Parsed } from './args.ts';
+import { flag, integer, text, values, type Parsed } from './args.ts';
 import type { Rpc } from './client.ts';
 import { exportCommand } from './chat-files.ts';
-import { feedbackCommand } from './feedback.ts'; // B-055: wf feedback setup | receive | status
+import { feedbackCommand } from './feedback.ts'; // B-055: wf feedback setup | receive | status | list | show | mark
 import { CliError } from './errors.ts';
 import { chatTitle, formatAgents, formatChats, formatMessage, formatMessages, formatTasks, formatTodos, namesOf } from './format.ts';
 import { loadAgents, resolveChat } from './resolve.ts';
@@ -39,6 +45,8 @@ export interface Ctx {
   timedOut(): boolean;
   stdin(): Promise<string>;
   now(): number;
+  /** The data dir of the runtime reached (its runtime.json lies there): wf feedback show names the inbox's files in it. */
+  dataDir: string;
 }
 
 export interface Command {
@@ -58,7 +66,7 @@ export interface Command {
 }
 
 const METHOD = /^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$/;
-const ACTIVE: readonly TaskStatus[] = ['open', 'working', 'waiting', 'needs_you', 'blocked'];
+const ACTIVE: readonly TaskStatus[] = ['open', 'waiting'];
 const SEND_WAIT_MS = 300_000;
 const NO_REPLY = 'No reply arrived before the timeout.';
 
@@ -74,12 +82,42 @@ function statuses(parsed: Parsed): string[] | undefined {
   return status;
 }
 
-function parseParams(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new CliError('bad_request', 'The params are not valid JSON. Pass one JSON value, or - to read it from stdin.');
+/** B-085 review: the rpc as the reply waiter sees it, without the sending agent's own later lines (its turn may answer in that chat). */
+function withoutAuthor(rpc: Rpc, author: () => string | undefined): Rpc {
+  return {
+    call: (method, params) => rpc.call(method, params),
+    onEvent: (listener) => rpc.onEvent((event, data) => {
+      const by = author();
+      if (by === undefined || (data as Partial<Message>)?.authorId !== by) listener(event, data);
+    }),
+    lost: rpc.lost,
+    close: () => rpc.close(),
+  };
+}
+
+/** {mine:true,status:[done],limit:5} → {"mine":true,"status":["done"],"limit":5}: every bare word quoted but true, false, null and numbers. */
+function quoteBare(text: string): string {
+  return text.replace(/[^{}[\],:\s]+(?:\s+[^{}[\],:\s]+)*/g, (word) => (/^(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(word) ? word : JSON.stringify(word)));
+}
+
+/**
+ * B-080 (live 05.–07.11.2026: 48 "params are not valid JSON" – Windows PowerShell 5.1 drops the inner double quotes of a
+ * native argument, cmd keeps the outer single quotes): JSON first, then the shapes those shells deliver – one pair of
+ * outer single quotes dropped (cmd), and where no " is left, bare keys and words quoted (PowerShell 5.1:
+ * {match:tasks} → {"match":"tasks"}). B-080 review: a ',' or ':' with whitespace beside it may be prose inside a value
+ * ("Done, next: tests" would read as one more key and a cut message), so such a shape gets no repair; a ',' or ':'
+ * without spaces inside a value (a URL, a time) mostly breaks the JSON as well. Either way the error names the stdin form.
+ */
+export function parseParams(raw: string, method: string): unknown {
+  const shapes = [raw];
+  const unquoted = /^\s*'([\s\S]*)'\s*$/.exec(raw)?.[1];
+  if (unquoted !== undefined) shapes.push(unquoted);
+  for (const shape of [...shapes]) if (!shape.includes('"') && !/\s[,:]|[,:]\s/.test(shape)) shapes.push(quoteBare(shape));
+  for (const shape of shapes) {
+    try { return JSON.parse(shape); } catch { /* the next shape */ }
   }
+  const shown = raw.replace(/\s+/g, ' ').trim().slice(0, 80);
+  throw new CliError('bad_request', `The params arrived as ${shown} – no JSON. In Windows PowerShell they go on stdin: '<json>' | wf call ${method} -`);
 }
 
 const call: Command = {
@@ -91,7 +129,7 @@ const call: Command = {
   async run(ctx) {
     const [method, raw] = ctx.parsed.args;
     checkMethod(method);
-    const params = raw === undefined ? undefined : parseParams(raw === '-' ? await ctx.stdin() : raw);
+    const params = raw === undefined ? undefined : parseParams(raw === '-' ? await ctx.stdin() : raw, method);
     ctx.out.json(await ctx.rpc.call(method, params), !ctx.json);
   },
 };
@@ -128,9 +166,9 @@ const read: Command = {
 };
 
 const send: Command = {
-  usage: 'send <chat> <text… | -> [--important | --silent] [--wait [--timeout s]]',
-  summary: 'Send a message as you – run by an agent (AUTARK_AGENT_TOKEN), as that agent, into a chat it is a member of (@Name in the text mentions an agent). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s).',
-  options: ['important', 'silent', 'wait', 'timeout'],
+  usage: 'send <chat> <text… | -> [--file <path>]… [--important | --silent] [--wait [--timeout s]]',
+  summary: 'Send a message as the agent running it (from an agent\'s own shell or script), otherwise as the person who owns this PC (@Name in the text mentions an agent). --file attaches a file on this PC (repeat it for more; a missing one sends nothing). --silent posts it quietly: it wakes only the members it @mentions. --wait prints the first agent reply (default timeout 300 s). From Python on Windows call wf.cmd.',
+  options: ['important', 'silent', 'wait', 'timeout', 'file'],
   arity: [2, Number.POSITIVE_INFINITY],
   defaultTimeoutMs: (parsed) => (flag(parsed, 'wait') ? SEND_WAIT_MS : undefined),
   timeoutMessage: (parsed) => (flag(parsed, 'wait') ? NO_REPLY : undefined),
@@ -145,17 +183,34 @@ const send: Command = {
     if (!body.trim()) throw new CliError('bad_request', 'Nothing to send.');
     const { chat, name } = await resolveChat(ctx.rpc, ref);
     const title = chatTitle(chat, name);
-    // Subscribe before sending, so a fast reply is not missed.
-    const waiter = flag(ctx.parsed, 'wait') ? await replyWaiter(ctx, chat.id) : undefined;
+    // 17.11.2026 (BEFUND-RUNTIME-JAN §4): --file – every file is checked first and stored (files.uploadPath), then the one
+    // message carries them; a missing file sends nothing, so there is never a half message.
+    const paths = values(ctx.parsed, 'file').map((file) => path.resolve(file));
+    for (const file of paths) {
+      let ok = false;
+      try { ok = (await stat(file)).isFile(); } catch { /* missing */ }
+      if (!ok) throw new CliError('bad_request', `No file at ${file}; nothing was sent.`);
+    }
+    const attachments: Array<{ fileId: string; name: string }> = [];
+    for (const file of paths) {
+      const stored = await ctx.rpc.call('files.uploadPath', { path: file }) as { id: string };
+      attachments.push({ fileId: stored.id, name: path.basename(file) });
+    }
+    // Subscribe before sending, so a fast reply is not missed. Sent by an agent, its own later lines are no reply.
+    let sender: string | undefined;
+    const waiter = flag(ctx.parsed, 'wait') ? await replyWaiter({ ...ctx, rpc: withoutAuthor(ctx.rpc, () => sender) }, chat.id) : undefined;
     const message = await ctx.rpc.call('messages.send', {
       conversationId: chat.id, body, priority: flag(ctx.parsed, 'important') ? 'important' : undefined, silent: flag(ctx.parsed, 'silent') || undefined, clientId: `wf-${randomUUID()}`,
+      ...(attachments.length ? { attachments } : {}),
     }) as Message;
+    if (message.authorKind === 'agent') sender = message.authorId;
+    const sent = `Sent to ${title} (#${message.seq}, ${message.id}${attachments.length ? `, ${attachments.length} file${attachments.length === 1 ? '' : 's'}` : ''})`;
     if (!waiter) {
       if (ctx.json) ctx.out.json(message);
-      else ctx.out.line(`Sent to ${title} (${message.id}).`);
+      else ctx.out.line(`${sent}.`);
       return;
     }
-    ctx.out.note(`Sent to ${title} (${message.id}). Waiting for a reply…`);
+    ctx.out.note(`${sent}. Waiting for a reply…`);
     const reply = await waiter.after(message.seq);
     if (ctx.json) ctx.out.json({ message, reply });
     else ctx.out.lines(formatMessage(reply, name, ctx.now()));

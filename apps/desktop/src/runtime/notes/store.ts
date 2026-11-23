@@ -3,13 +3,13 @@
 // (chat.notes.* tools). Last write wins; every write bumps the version and sends 'notes.updated' on the chat's
 // topic (ids and numbers only). A person sees ids from their side (people/perspective.ts).
 // Owns: the row, the version and the event. Never: history, merges or refusals beyond "the chat exists" and,
-// for a person, "you are in it".
+// for a person, "you are in it" (F13: or, as a CEO, it is a company chat – people/access.ts chatAccess).
 
 import { WorkforceError } from '../../shared/errors.ts';
 import type { ChatNotes, NotesMeta } from '../../shared/model/notes.ts';
 import type { RuntimeServices } from '../contracts.ts';
 import type { Db } from '../db/database.ts';
-import { membership } from '../people/access.ts';
+import { chatAccess } from '../people/access.ts';
 import { viewId } from '../people/perspective.ts';
 
 type Services = Pick<RuntimeServices, 'db' | 'clock' | 'bus' | 'chats'>;
@@ -57,9 +57,10 @@ export function openChat(s: Pick<Services, 'chats'>, conversationId: string): vo
   if (!s.chats.get(conversationId)) throw new WorkforceError('not_found', 'Chat not found.', { details: { conversationId } });
 }
 
-/** A person opens only chats they are an active member of. */
+/** A person opens only chats they are an active member of (F13: a CEO also every company chat). */
 export function personOpens(s: Pick<Services, 'db' | 'chats'>, personId: string, conversationId: string): void {
-  if (!membership(s.db, personId, conversationId) || !s.chats.get(conversationId)) {
+  const chat = s.chats.get(conversationId);
+  if (!chat || !chatAccess(s.db, personId, chat)) {
     throw new WorkforceError('forbidden', 'Only people in this chat open its notes.', { details: { conversationId } });
   }
 }

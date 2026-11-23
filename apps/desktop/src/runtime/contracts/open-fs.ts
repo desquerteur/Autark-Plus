@@ -8,7 +8,7 @@ import type { RootMaps } from '../root/readme.ts';
 
 declare module '../contracts.ts' {
   interface RuntimeServices {
-    /** The shipped prompts plus the person's own versions (<data>/prompts/<name>.md; any prompt, rules.md included). Missing = not wired (fakes). */
+    /** The shipped prompts plus the person's own versions (<data>/prompts/<name>.md; any prompt). Missing = not wired (fakes). */
     prompts?: PromptTemplates;
     /** <data>/README.md and agents/README.md, kept current. Missing = not wired (fakes). */
     rootMaps?: RootMaps;

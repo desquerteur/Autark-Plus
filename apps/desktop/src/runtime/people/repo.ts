@@ -2,7 +2,8 @@
 // small reads the org service uses to accept a person as an agent's manager (activePerson,
 // personManagerId for the one cycle walk across people and agents, people/manager.ts).
 // The owner's row ('human') holds title, avatar, manager and scopes; its name is the profile name
-// (the service fills it in).
+// (the service fills it in). F13: a person's role is stored in the scopes column as `role: 'ceo'` (no column of its
+// own, so it travels to my other PCs with the row); the owner's row is always 'ceo'.
 // Owns: SQL for these two tables. Never: tokens (people/tokens.ts), events or policy.
 
 import { HUMAN_ID } from '../../shared/ids.ts';
@@ -29,6 +30,7 @@ export function cleanScopes(value: unknown): PersonScopes {
 
 function toPerson(row: Row): Person {
   const id = String(row.id);
+  const scopes = json<{ role?: unknown } | null>(row.scopes, {});
   const person: Person = {
     id,
     name: String(row.name),
@@ -36,7 +38,8 @@ function toPerson(row: Row): Person {
     avatar: json<Avatar>(row.avatar, { kind: 'initials', value: '' }),
     status: (STATUSES as readonly string[]).includes(String(row.status)) ? row.status as PersonStatus : 'revoked',
     owner: id === HUMAN_ID,
-    scopes: cleanScopes(json<unknown>(row.scopes, {})),
+    role: id === HUMAN_ID || scopes?.role === 'ceo' ? 'ceo' : 'member',
+    scopes: cleanScopes(scopes),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -85,9 +88,18 @@ export class PeopleRepo {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, title = excluded.title, avatar = excluded.avatar, manager_id = excluded.manager_id,
          scopes = excluded.scopes, status = excluded.status, updated_at = excluded.updated_at, joined_at = excluded.joined_at, revoked_at = excluded.revoked_at`,
-      [person.id, person.name, person.title, toJson(person.avatar), person.managerId ?? null, toJson(person.scopes), person.status,
+      [person.id, person.name, person.title, toJson(person.avatar), person.managerId ?? null,
+        toJson(person.role === 'ceo' && person.id !== HUMAN_ID ? { ...person.scopes, role: 'ceo' } : person.scopes), person.status,
         person.createdAt, person.updatedAt, person.joinedAt ?? null, person.revokedAt ?? null],
     );
+  }
+
+  /** F14: a removed person's row and audit lines go. */
+  remove(id: string): void {
+    this.db.tx(() => {
+      this.db.run('DELETE FROM people_audit WHERE person_id = ?', [id]);
+      this.db.run('DELETE FROM people WHERE id = ?', [id]);
+    });
   }
 
   /** People (and the owner) who report to `managerId`. */

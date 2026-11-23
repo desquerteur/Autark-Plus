@@ -1,10 +1,13 @@
 // Speech meta of a human message: a dictated or spoken message (SendMessageInput.speech) becomes meta.via 'voice' +
 // meta.speech { source, live? } – `live`: said in a live conversation or call, not dictated (such lines are never
-// folded into a running turn). Older rows may say source 'windows'.
-// Owns: that validation. Never: trusts more than these two fields from the client.
+// folded into a running turn). Older rows may say source 'windows'. B-082: the hidden marks beside the plain body
+// (SendMessageInput.marks – unsure and dictated spans) are kept as meta.marks after cleanMarks checked them against the
+// body; an edit changes the words they were made for, so it drops them (unmarked).
+// Owns: that validation. Never: trusts more than these fields from the client, or puts marks into the body.
 
 import { WorkforceError } from '../../shared/errors.ts';
-import type { MessageMeta, SpeechMeta } from '../../shared/model/chat.ts';
+import type { Message, MessageMeta, SpeechMeta } from '../../shared/model/chat.ts';
+import { cleanMarks } from '../../shared/voice/marks.ts';
 
 const SOURCES: ReadonlyArray<SpeechMeta['source']> = ['endpoint', 'windows'];
 
@@ -21,8 +24,16 @@ export function speechMeta(value: unknown): SpeechMeta | undefined {
   return { source: source as SpeechMeta['source'], ...(live === true ? { live: true as const } : {}) };
 }
 
-/** Message meta with the speech applied (via 'voice'); unchanged without speech. */
-export function withSpeech(meta: MessageMeta, value: unknown, _body?: string): MessageMeta {
+/** Message meta with the speech applied (via 'voice') and the body's checked marks; unchanged without either. */
+export function withSpeech(meta: MessageMeta, value: unknown, body = '', marks?: unknown): MessageMeta {
   const speech = speechMeta(value);
-  return speech ? { ...meta, via: 'voice', speech } : meta;
+  const kept = marks === undefined || marks === null ? undefined : cleanMarks(body, marks);
+  return { ...meta, ...(speech ? { via: 'voice' as const, speech } : {}), ...(kept ? { marks: kept } : {}) };
+}
+
+/** The message without its marks when `body` replaces its words (messages.edit). */
+export function unmarked(message: Message, body: string): Message {
+  if (body === message.body || !message.meta?.marks) return message;
+  const { marks: _marks, ...meta } = message.meta;
+  return { ...message, meta };
 }

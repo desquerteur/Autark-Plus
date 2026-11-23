@@ -42,8 +42,8 @@ const facts = {
     lead: `Your company in your pocket. The app joins your whole company, not one PC: the same chats, tasks and notifications as every PC you linked. Agents and data stay on your PCs.`,
     needs: ['Android 8 or newer.', `${site.name} running on at least one of your PCs. The phone finds it by its Remote ID, in any network.`],
     check: `sha256sum ${files.android}`,
-    update: 'When a new version exists, the app shows Update and opens the new APK; Android installs it over the old one. Most changes need no new APK at all, because the interface comes from your PC.',
-    note: 'This is a preview, signed with our own key and installed from outside the Play Store. Tell us what breaks on your phone.',
+    update: 'When a new version exists, a line at the top of the app says so. Update downloads it in the app with its progress, checks it against the published SHA-256, and Android installs it over the old one after you confirm. Most changes need no new APK at all, because the interface comes from your PC.',
+    note: 'This is a preview, signed with our own key and installed from outside the Play Store, without phone use by agents (Play Protect blocks that outside the Play Store). Tell us what breaks on your phone.',
   },
   iphone: {
     title: `${site.name} on iPhone`,
@@ -59,7 +59,7 @@ function bigButton(p, rel) {
   if (!p.file) return `<a class="btn btn--ink btn--lg" href="${appUrl}/" data-app-link>${icon('phone')}<span>Open the iPhone app</span></a><a class="btn btn--ghost btn--lg" href="#steps">${icon('arrowDown')}<span>How to add it</span></a>`;
   const v = rel[p.id];
   const meta = v ? `<span class="btn__meta"${p.id === 'windows' ? ' data-rel="windows-meta"' : ''}>v${esc(v.version)} · ${v.sizeMb} MB</span>` : '';
-  return `<a class="btn btn--ink btn--lg plat-hero__btn" href="${release.asset(p.file)}" data-dl="${p.id}" rel="nofollow">${icon(p.icon)}<span>Download for ${p.short || p.os}</span>${meta}</a>${p.alt ? `<a class="btn btn--ghost btn--lg" href="${release.asset(p.alt.file)}" rel="nofollow">${p.alt.label}</a>` : ''}`;
+  return `<a class="btn btn--ink btn--lg plat-hero__btn" href="${release.latestUrl}" data-dl="${p.id}" rel="noopener">${icon(p.icon)}<span>Download for ${p.short || p.os}</span>${meta}</a>${p.alt ? `<a class="btn btn--ghost btn--lg" href="${release.latestUrl}" rel="noopener">${p.alt.label}</a>` : ''}`;
 }
 
 function fileFacts(p, rel) {
@@ -70,7 +70,9 @@ function fileFacts(p, rel) {
     <div><dt>Released</dt><dd>${esc(v.date || '–')}</dd></div>
     <div><dt>Size</dt><dd>${v.sizeMb ? `about ${v.sizeMb} MB` : '–'}</dd></div>
     <div><dt>File</dt><dd><code>${esc(p.file)}</code></dd></div>
-  </dl>`;
+    ${rel.sums?.[p.file] ? `<div><dt>SHA-256</dt><dd><code class="plat-hash">${esc(rel.sums[p.file])}</code></dd></div>` : ''}
+  </dl>
+  <p class="small muted" style="margin:14px 0 0">The download button opens the release page on GitHub: take <code>${esc(p.file)}</code> from its Assets list${rel.sums?.[p.file] ? ' and compare it with the SHA-256 above' : ''}.</p>`;
 }
 
 function platformPage(p, rel) {
@@ -85,12 +87,13 @@ function platformPage(p, rel) {
     '@type': 'HowTo', name: p.file ? `How to install ${site.name} on ${p.os}` : `How to use ${site.name} on an iPhone`, totalTime: 'PT5M',
     step: stepTexts(steps).map((text, i) => ({ '@type': 'HowToStep', position: i + 1, text })),
   }];
-  if (p.file) ld.push({ '@type': 'SoftwareApplication', '@id': `${site.url}/${slug}/#app`, name: `${site.name} for ${p.os}`, operatingSystem: p.os, applicationCategory: 'BusinessApplication', downloadUrl: release.asset(p.file), ...(v ? { softwareVersion: v.version, fileSize: `${v.sizeMb} MB` } : {}), isAccessibleForFree: true, offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' }, isPartOf: { '@id': `${site.url}/#software` } });
+  if (p.file) ld.push({ '@type': 'SoftwareApplication', '@id': `${site.url}/${slug}/#app`, name: `${site.name} for ${p.os}`, operatingSystem: p.os, applicationCategory: 'BusinessApplication', downloadUrl: `${site.url}/${slug}/`, ...(v ? { softwareVersion: v.version, fileSize: `${v.sizeMb} MB` } : {}), isAccessibleForFree: true, offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' }, isPartOf: { '@id': `${site.url}/#software` } });
 
   return page({
     slug, rel, title: f.title, description, ld, trail: [['Download', 'download']],
     body: (root) => `
 ${pageHero({ root, crumb: p.os, trail: [['Download', 'download']], title: f.h1, lead: f.lead, actions: bigButton(p, rel) })}
+${p.id === 'windows' ? `<aside class="wrap" aria-label="Windows security notice"><p><strong>Windows security notice:</strong> This installer is not code-signed yet. Edge may warn that it is not commonly downloaded. Open Downloads (Ctrl+J) to inspect the warning; repeated downloads will not resolve it. Before deciding whether to continue, verify the source and <a href="#verify">compare the SHA-256 with the release checksums</a>. A matching hash confirms the published file, not its safety. Do not disable Windows protection. If installation is blocked, stop and <a href="https://teydralab.com/kontakt">contact us</a>.</p></aside>` : ''}
 <section class="section section--tight">
   <div class="wrap">
     ${fileFacts(p, rel)}

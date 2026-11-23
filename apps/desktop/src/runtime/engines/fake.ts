@@ -15,7 +15,7 @@
 //                              size of its output: `<name> size → {"chars":…,"items":…,
 //                              "truncated":…,"error":…}` (items for a JSON array; truncated when
 //                              the registry moved the text into a file),
-//   `[[prompt:<text>]]`      → (O8) quotes each line of the system prompt (stable, then volatile)
+//   `[[prompt:<text>]]`      → (O8) quotes each line of the stable prompt and the live context
 //                              containing <text> as "prompt → <line>", or says that none does,
 //   "$task" in tool args     → (O8) the turn's current task id (the volatile prompt's
 //                              "## Current task" section), so a scripted handoff can finish it,
@@ -52,7 +52,7 @@ const HANG = /\[\[hang:([a-zA-Z0-9_.-]+)\s*(\{[\s\S]*?\})?\]\]/;
 const APP = /\[\[app:([^|\]\n]*)\|([\s\S]*?)\]\]/g;
 const NOTHING_NEW = '(no new input)';
 /** The echo says what was written: context/render.ts neutralize()'s "\" before quoted chat lines comes off again. */
-const echoText = (text: string): string => text.replace(/^(\s*)\\(?=\[[^\]\n]{1,40}\]\s|·\s)/gm, '$1');
+const echoText = (text: string): string => text.replace(/^(\s*)\\(?=\[[^\]\n]{1,200}\]\s|·\s)/gm, '$1');
 
 /** Tool names the input says to verify before repeating ("- 14:02 bash: … verify before repeating"). */
 function toVerify(text: string): Set<string> {

@@ -17,6 +17,8 @@ export interface MediaInfo {
   height?: number;
   durationMs?: number;
   pages?: number;
+  /** 17.11.2026: a heavy video's light copy (H.264/MP4, short edge ≤ 720 px, ≈ 2.5 Mbit/s – shared/model/video-preview.ts) the players stream instead of `fileId`; the original stays the download. */
+  previewFileId?: string;
   description?: string; // what the file shows/contains, written by the human or an agent
   tags?: string[];
   describedBy?: string; // 'human' or an agent id
@@ -28,6 +30,8 @@ export interface MediaInfo {
 /** Filter of media.list (all fields optional; `text` searches name, description and tags). */
 export interface MediaFilter {
   conversationId?: string;
+  /** These stored files only (a file has one owner chat, the first it was seen in – the same bytes sent in another chat are found by id). At most 100. */
+  fileIds?: string[];
   kind?: MediaKind;
   text?: string;
   limit?: number;

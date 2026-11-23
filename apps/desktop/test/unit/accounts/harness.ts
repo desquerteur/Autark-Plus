@@ -22,7 +22,7 @@ export const ACCOUNTS = path.resolve('data', 'accounts');
 export const ENV_KEY = 'sk-env-test-0123456789abcdef';
 
 /** Browser sign-ins stay open until a test exits them; sign-outs finish at once. */
-const SIGN_INS = new Set(['login', 'auth login --claudeai']);
+const SIGN_INS = new Set(['login', 'auth login --claudeai', 'login --device-auth']);
 
 export interface HarnessOptions {
   env?: NodeJS.ProcessEnv;
@@ -43,6 +43,13 @@ export interface HarnessOptions {
   install?: (call: SpawnCall) => void;
   /** #24: the demo runtime (WORKFORCE_FAKE_ENGINE) – nothing is installed or signed in. */
   demo?: boolean;
+  /** The accounts folder and the user's home folder (default: folders below `data` with no login in them). */
+  accounts?: string;
+  homeDir?: string;
+  /** The company's data folder (its homes of before in <data>/accounts move into `accounts` at the start: bridge/logins-1611.ts). */
+  data?: string;
+  /** Homes are made on disk (a temporary `accounts` folder), not only recorded in `made`. */
+  realMkdir?: boolean;
 }
 
 export function harness(options: HarnessOptions = {}) {
@@ -90,21 +97,20 @@ export function harness(options: HarnessOptions = {}) {
     dispose: async () => {},
   });
   const made: string[] = [];
-  const removed: string[] = [];
   const offline = async (): Promise<Response> => { throw new Error('offline'); };
   service = new AccountServiceImpl({
-    db, bus, clock, paths: { accounts: ACCOUNTS }, env, finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0, demo: options.demo,
+    db, bus, clock, paths: { accounts: options.accounts ?? ACCOUNTS, ...(options.data ? { data: options.data } : {}) }, env, homeDir: options.homeDir ?? path.resolve('data', 'home'), finder: options.finder ?? fakeFinder(clis), supervisor, secrets, signInUrlMs: options.signInUrlMs ?? 0, demo: options.demo,
     engines: () => ({ get: engine, all: () => [], disposeIdle: async () => {} }),
-    mkdir: async (dir) => { made.push(dir); }, rmdir: async (dir) => { removed.push(dir); },
+    mkdir: options.realMkdir ? undefined : async (dir) => { made.push(dir); },
     detectDeps: { fetch: options.fetch ?? offline, probeTimeoutMs: 1 },
   });
   const upserts: Account[] = [];
   bus.on('account.upserted', (account) => upserts.push(account));
   const settle = async () => { for (let i = 0; i < 10; i++) await tick(); await service!.monitor.idle(); };
-  return { db, bus, clock, login, signIns, calls, clis, env, vault, checks, answers, made, removed, upserts, settle, service, repo: new AccountRepo(db) };
+  return { db, bus, clock, login, signIns, calls, clis, env, vault, checks, answers, made, upserts, settle, supervisor, service, repo: new AccountRepo(db) };
 }
 
 /** A stored account row (as a restore or another path could write it). */
 export function row(id: string, patch: Partial<Account> = {}): Account {
-  return { id, provider: 'openai', label: id, auth: 'api_key', state: 'ok', priority: 0, rotation: false, enabled: true, detected: false, createdAt: 1, ...patch };
+  return { id, provider: 'openai', label: id, auth: 'api_key', state: 'ok', priority: 0, enabled: true, detected: false, createdAt: 1, ...patch };
 }

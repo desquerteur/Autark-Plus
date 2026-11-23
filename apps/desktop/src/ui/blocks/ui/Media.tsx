@@ -13,10 +13,11 @@
 import { useContext, useEffect, useState } from 'preact/hooks';
 import type { UiBlock } from '../../../shared/blocks/catalog.ts';
 import { showMedia } from '../../chat/side-pane.ts';
-import { fileUrl } from '../../lib/files.ts';
+import { useFileUrl } from '../../lib/files.ts';
 import { playerGuard, streamUrl } from '../../lib/media-stream.ts';
 import { platform } from '../../lib/platform.ts';
 import { rpc } from '../../lib/rpc.ts';
+import { learnKinds, videoFacts } from '../../lib/media-kinds.ts';
 import { activeConversationId } from '../../lib/store.ts';
 import { Icon } from '../../lib/ui.tsx';
 import { openMedia } from '../../workspace/pages.ts';
@@ -52,7 +53,7 @@ export function useMediaUrl(src: string, preferred?: string, options: { stream?:
   }, [src, stored]);
   const id = stored ?? imported;
   const streamed = options.stream && id ? streamUrl(id) : null;
-  const blobUrl = id && !streamed ? fileUrl(id).value : null;
+  const blobUrl = useFileUrl(id && !streamed ? id : null);
   const url = remote ? (clicked ? src : null) : !stored && src.startsWith('data:image/') ? src : streamed ?? blobUrl;
   return { url, remote, load: () => setClicked(true), failed };
 }
@@ -85,7 +86,12 @@ export function MediaImage(props: { src: string; fileId?: string; alt?: string }
 }
 
 export function MediaPlayer(props: { src: string; fileId?: string; kind: 'audio' | 'video' }) {
-  const media = useMediaUrl(props.src, props.fileId, { stream: true });
+  // 17.11.2026: a stored heavy video plays its light copy (the library's previewFileId); the file itself stays what "Open" and downloads give
+  const stored = props.fileId && isFileId(props.fileId) ? props.fileId : isFileId(props.src) ? props.src : null;
+  const conversationId = activeConversationId.value;
+  useEffect(() => { if (props.kind === 'video' && stored) learnKinds(conversationId ?? undefined); }, [props.kind, stored, conversationId]);
+  const copy = props.kind === 'video' && stored ? videoFacts.value.get(stored)?.previewFileId : undefined;
+  const media = useMediaUrl(props.src, copy ?? props.fileId, { stream: true });
   if (media.url) {
     const guard = playerGuard(media.url);
     return props.kind === 'audio'

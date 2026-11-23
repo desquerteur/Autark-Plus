@@ -15,7 +15,7 @@ type StripTodo = Pick<TaskView, 'id' | 'status' | 'priority' | 'widget' | 'messa
 
 /** Open, important and anchored to a chat message. */
 export function isStripAsk(todo: StripTodo): boolean {
-  if (todo.assigneeKind !== 'human' || todo.status === 'done' || todo.status === 'cancelled') return false;
+  if (todo.assigneeKind !== 'human' || todo.status === 'done' || todo.status === 'dropped') return false;
   if (!todo.messageId || !todo.conversationId || String(todo.widget?.type) === 'app') return false;
   return todo.priority >= 1 || isImportantAsk(todo.widget ?? {});
 }

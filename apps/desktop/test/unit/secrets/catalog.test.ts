@@ -1,7 +1,7 @@
 // The secrets catalog for agents (owner 29.10.2026, a catalog like skills):
 // secrets.save adds an entry with a description – the route chosen automatically (or named), the id generated (or
 // suggested), for every agent, the value straight into the vault and never in the result or the journal; entries are
-// found like skills (skills.find's catalog lines – single secrets and logins, never a value);
+// found like skills (knowledge.find's catalog lines – single secrets and logins, never a value);
 // a stored value never lands anywhere else: every tool argument passes the leak redactor before the tool runs (the
 // registry guard), so a note, memory, file or message gets the handle; the agent guidance says so.
 // Owns: these assertions only. Never: a real keychain, model or network.
@@ -15,8 +15,8 @@ import { ManualClock } from '../../../src/runtime/system/clock.ts';
 import { SecretVault } from '../../../src/runtime/secrets/service.ts';
 import { newEntryId, slugOf } from '../../../src/runtime/secrets/entry-id.ts';
 import { withoutSecretValues } from '../../../src/runtime/secrets/guard.ts';
-import { findSecrets } from '../../../src/runtime/tools/builtin/skills-find.ts';
-import { secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
+import { findSecretLines } from '../../../src/runtime/secrets/metadata.ts';
+import { NOTE, secretTools } from '../../../src/runtime/tools/builtin/secrets.ts';
 import { HIDDEN_ARGS, Registry } from '../../../src/runtime/tools/registry.ts';
 import { journalArgs } from '../../../src/runtime/tools/journal.ts';
 import { autoSecretRoute } from '../../../src/shared/model/security.ts';
@@ -76,20 +76,47 @@ test('automatic routes and ids', () => {
   assert.equal(newEntryId([], [], '!!!'), 'sec_secret');
 });
 
-test('found like skills: skills.find lines name single secrets and logins with their handles – never a value', async () => {
+test('found like skills: the catalog lines name single secrets and logins with their handles – never a value', async () => {
   const t = setup();
   await t.vault.save({ label: 'GitHub CI token', kind: 'token', value: TOKEN, description: 'Releases from the CI pipeline.' });
   const login = await t.vault.saveGroup({ label: 'Support mailbox login', kind: 'login', description: 'Customer support inbox at mail.example', fields: [
     { field: 'username', kind: 'text', value: 'support@mail.example' }, { field: 'password', kind: 'password', value: 'pw-support-inbox-9' },
   ] });
   await t.vault.save({ label: 'Ben\'s mailbox', kind: 'password', value: 'pw-ben-mailbox-1', description: 'Support inbox of Ben' });
-  const lines = findSecrets(t.services, 'answer the customer support inbox mail.example');
-  assert.equal(lines.length, 2, lines.join('\n'));
-  assert.match(lines[0], new RegExp(`^- secret://${login.group.id} "Support mailbox login" \\(route logins\\) – Customer support inbox at mail\\.example fields: `));
+  const lines = findSecretLines(t.services, 'answer the customer support inbox mail.example');
+  assert.equal(lines.length, 1, 'a find gives the entries the text names – Ben\'s mailbox holds the words only in its purpose');
+  const listed = (await tool('secrets.list').run({ query: 'support inbox' }, t.ctx())).structured as { secrets: Array<{ name: string }> };
+  assert.deepEqual(listed.secrets.map((entry) => entry.name), ['Support mailbox login', 'Ben\'s mailbox'], 'secrets.list searches the purposes too');
+  // a login's line starts with its id (no value stands behind it), each field with its handle
+  assert.match(lines[0], new RegExp(`^- ${login.group.id} "Support mailbox login" \\(route logins\\) – Customer support inbox at mail\\.example fields: `));
   assert.match(lines[0], /username secret:\/\/\S+/);
   assert.match(lines[0], /password secret:\/\/\S+/);
   assert.ok(!lines.join('').includes('pw-support') && !lines.join('').includes('pw-ben'), 'no value');
-  assert.deepEqual(findSecrets(t.services, 'ci releases token').map((line) => /secret:\/\/(\S+)/.exec(line)![1]), ['sec_github-ci-token']);
+  assert.deepEqual(findSecretLines(t.services, 'ci releases token').map((line) => /secret:\/\/(\S+)/.exec(line)![1]), ['sec_github-ci-token']);
+});
+
+test('F19: use() counts the field and its login; an edit – the person\'s, an agent\'s or the device sync\'s save – leaves the count', async () => {
+  const t = setup();
+  const key = await t.vault.save({ label: 'Shop key', kind: 'api_key', value: 'sk-shop-count-1' });
+  const login = await t.vault.saveGroup({ label: 'Shop login', kind: 'login', fields: [
+    { field: 'username', kind: 'text', value: 'shop@example.com' }, { field: 'password', kind: 'password', value: 'pw-shop-count-2' },
+  ] });
+  const password = login.fields.find((field) => field.field === 'password')!;
+  const username = login.fields.find((field) => field.field === 'username')!;
+  assert.equal(t.vault.list().find((info) => info.id === key.id)!.uses, undefined, 'never used: no count');
+  await t.vault.use(key.id, 'ag_mira');
+  await t.vault.use(key.id, 'ag_ben');
+  await t.vault.use(password.id, 'ag_mira');
+  await t.vault.use(username.id, 'ag_mira');
+  const count = (id: string) => t.vault.list().find((info) => info.id === id)!.uses;
+  assert.deepEqual([count(key.id), count(password.id), count(username.id)], [2, 1, 1]);
+  assert.equal(t.vault.groups().find((group) => group.id === login.group.id)!.uses, 2, 'the login counts each of its fields\' uses');
+  // what the device sync writes (devices/sync/secrets.ts apply → save / saveGroup with the other PC's metadata and value)
+  await t.vault.save({ id: key.id, label: 'Shop key (renamed)', kind: 'api_key', value: 'sk-shop-count-3', description: 'Synced' });
+  await t.vault.saveGroup({ id: login.group.id, label: 'Shop login', description: 'Synced', tags: ['shop'], fields: [{ id: password.id, field: 'password', kind: 'password', value: 'pw-shop-count-4' }] });
+  assert.equal(count(key.id), 2, 'a save leaves the count');
+  assert.equal(t.vault.groups().find((group) => group.id === login.group.id)!.uses, 2, 'a group save leaves the count');
+  assert.equal(count(password.id), 1);
 });
 
 test('a stored value never lands anywhere else: every tool argument passes the leak redactor before the tool runs', async () => {
@@ -119,6 +146,6 @@ test('a stored value never lands anywhere else: every tool argument passes the l
 });
 
 test('the agent guidance: save a secret straight into the catalog and use its id – never copy it elsewhere', () => {
-  assert.match(tool('secrets.list').description, /values stay out of my notes, memory, rules, files and messages/);
-  assert.match(tool('secrets.save').description, /I keep the value here, nowhere else/);
+  assert.match(NOTE, /values stay out of my notes, memory, rules, files and messages/);
+  assert.match(tool('secrets.save').description, /the moment I get one .*I keep the value here, nowhere else/);
 });

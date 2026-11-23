@@ -1,22 +1,16 @@
-// TaskService.create (split out of tasks/service.ts): checks, the row and its checklist steps in
-// one transaction, the anchoring 'task' message for top-level work and the human to-do's armed
-// widget. B-047 D4: an
-// anchor made during a run in that chat carries meta.fromRun – the run named by the caller (an
-// approval to-do), else the creating agent's running turn in this chat (dispatcher.activity) – so
-// the chat can fold it into that run's steps.
-// B-054 (owner 29.10.2026 "To-dos gehören ja nicht zum Chat … nur ein Übermittlungsweg"): a chat is only where a
-// task is handed over. With a conversationId: as before (the chat must exist, the anchor is posted, an agent
-// owner joins, a colleague must be a member). Without one: a chat-free task – no anchor, nobody joins; its
-// space comes from input.spaceId (runtime callers only: a quick task's chosen space), else the parent, else the creating agent; its origin from the input, else from the creating
-// run, else 'todo-list' (the person) or 'system'. A step without an explicit chat takes its parent's chat only
-// when its creator is a current member there (or the system), else none – never out of a bounded (people's) chat:
-// such a step is refused (F-52). A colleague (per_) gets chat-free work
-// only from the owner (P3). The anchor is sent after the transaction; when that send throws, the inserted row
-// and its steps are deleted again (compensation) and the error is re-thrown.
-// B-078: an agent's new ask in a chat replaces its older open asks there (tasks/supersede.ts). D7: a task for an
-// agent out of a 1:1 it is not in is handed over in the creator's own 1:1 with that agent (workRoomFor).
-// Owns: building and inserting a new task. Never: gives a task to an unknown or archived agent, or takes an
-// origin from an agent's or a person's text (runtime code sets it).
+// TaskService.create (split out of tasks/service.ts): checks, the row, the anchoring 'task' message for top-level work and
+// a human to-do's armed widget. A chat is only where a task is handed over: with a conversationId the chat must exist and
+// the anchor is posted there (an anchor made during a run in that chat carries meta.fromRun); without one it is
+// chat-free – its space from input.spaceId (runtime callers only), else the parent's, else the creating agent's; its
+// origin from the input, else from the creating run, else 'todo-list' (the person) or 'system'. A piece without a chat
+// takes its parent's when its creator is a member there. An agent receiver out of a 1:1 or a chat a person is in that it
+// is not in gets it in the creator's own 1:1 with it (chat/direct.ts workRoomFor; nobody is seated there by a task); a colleague gets it where people/task-rules.ts says. The owner is resolved before (team
+// goes through tasks/give.ts pickOwner – TaskService.createTo). The anchor is sent after the insert; when that send
+// throws, the row is deleted again and the error re-thrown. Its owner hears of it at once (lifecycle.created). The card of a
+// task an agent owns is silent (KI-Runde 17.11.2026): it stands in the chat for whoever looks, counts no unread, moves no
+// row and notifies nobody; a task for a person, and the card of work a person hands an agent themselves, stays loud.
+// Owns: building and inserting a new task. Never: gives a task to an unknown or archived agent, leaves it without an
+// owner, or takes an origin from an agent's or a person's text (runtime code sets it).
 
 import { HUMAN_ID, SYSTEM_ID, newId } from '../../shared/ids.ts';
 import { WorkforceError } from '../../shared/errors.ts';
@@ -27,13 +21,12 @@ import type { TaskServiceImpl } from './service.ts';
 import { joinChat } from './owners.ts';
 import { workRoomFor } from '../chat/direct.ts';
 import { armTimer, prepareWidget } from './timers.ts';
-import { isHumanActor, isPersonId } from '../../shared/model/people.ts';
-import { checkPersonAssignee } from '../people/task-rules.ts';
-import { activePerson } from '../people/repo.ts';
+import { isHumanActor } from '../../shared/model/people.ts';
+import { checkMayGive } from '../people/task-rules.ts';
+import { nextLook } from './next.ts';
 import { dayFieldsOf } from './patch-fields.ts';
 import { taskSpace } from './space.ts';
 import { applyDepends, checkDepends } from './depends.ts';
-import { supersedeAsks } from './supersede.ts';
 
 /** `anchorWith` (task center): who posts the anchor message and its files – the Inbox anchor of an agent's
  *  tasks.submit is the system's (the agent is no member there), a quick task's anchor carries its attachments,
@@ -88,19 +81,6 @@ function workRoom(t: TaskServiceImpl, given: string | undefined, by: string, age
   }
 }
 
-/**
- * F-52: a colleague gets a task in a chat they are in; chat-free work only from the owner (P3). Shared with
- * TaskService.assign.
- */
-export function checkPersonWorkFor(t: TaskServiceImpl, personId: string, conversationId: string | undefined, by: string): void {
-  const name = t.s.people?.nameOf(personId);
-  if (conversationId) { checkPersonAssignee(t.s.db, personId, conversationId, name); return; }
-  if (!activePerson(t.s.db, personId)) throw new WorkforceError('not_found', 'This person is no longer in the organisation.', { details: { personId } });
-  if (by !== HUMAN_ID) {
-    throw new WorkforceError('conflict', `${name ?? 'This person'} gets work through a chat with them. Give the task in a chat with them.`, { details: { personId } });
-  }
-}
-
 export function createTask(t: TaskServiceImpl, input: CreateTaskInput & { createdBy: string }, options: CreateOptions = {}): TaskView {
   const s = t.s;
   if (input.conversationId && !s.chats.get(input.conversationId)) {
@@ -112,24 +92,26 @@ export function createTask(t: TaskServiceImpl, input: CreateTaskInput & { create
     const existing = t.repo.byClientId(clientId);
     if (existing) return t.views([existing])[0];
   }
-  const assigneeKind = input.assigneeKind ?? (input.assigneeId ? 'agent' : 'team');
-  const toPerson = assigneeKind === 'human' && isPersonId(input.assigneeId); // F-52: a colleague's task, not the owner's To-do list
+  const assigneeKind = input.assigneeKind ?? (input.assigneeId ? 'agent' : 'human');
+  if (assigneeKind === 'team') throw new WorkforceError('bad_request', 'A task gets its owner first (TaskService.createTo picks one for "team").');
   const parent = input.parentId ? t.repo.get(input.parentId) : undefined;
   if (input.parentId && !parent) throw new WorkforceError('not_found', 'Parent task not found.');
   if (assigneeKind === 'agent' && input.assigneeId && s.org) {
     const owner = s.org.get(input.assigneeId);
     if (!owner || owner.archivedAt !== undefined) throw new WorkforceError('not_found', 'Agent not found.');
   }
-  // D7: work for an agent out of a 1:1 it is not in is handed over in the creator's own 1:1 with it (chat/direct.ts).
+  // An agent out of a 1:1 or a person's chat it is not in gets the work in the creator's own 1:1 with it; a colleague where task-rules.ts says.
   const given = chatFor(t, input, parent);
-  const conversationId = assigneeKind === 'agent' && input.assigneeId ? workRoom(t, given, input.createdBy, input.assigneeId) : given;
-  if (toPerson) checkPersonWorkFor(t, input.assigneeId!, conversationId, input.createdBy);
+  const receiver = assigneeKind === 'agent' ? { kind: 'agent' as const, id: input.assigneeId! } : { kind: 'human' as const, ...(input.assigneeId && input.assigneeId !== HUMAN_ID ? { id: input.assigneeId } : {}) };
+  const placed = checkMayGive(s, input.createdBy, receiver, { conversationId: given, widget: input.widget });
+  const conversationId = assigneeKind === 'agent' && input.assigneeId ? workRoom(t, placed, input.createdBy, input.assigneeId) : placed;
   const now = s.clock.now();
   const armed = input.widget && assigneeKind === 'human' ? prepareWidget(input.widget, now, options.runtimeWidget ? SYSTEM_ID : input.createdBy) : undefined;
   const task: Task = {
     id: newId('task', now), title: input.title.trim(), notes: input.notes ?? '',
-    status: 'open', assigneeKind, createdBy: input.createdBy, priority: input.priority ?? 0, ledger: {},
-    attempts: 0, sort: now, rev: 0, createdAt: now, updatedAt: now,
+    status: 'open', assigneeKind, createdBy: input.createdBy, priority: input.priority ?? 0,
+    ledger: { movedAt: now, ...(input.plan?.length ? { plan: input.plan.map((line) => line.trim()).filter(Boolean).slice(0, 20) } : {}), ...(input.givenIn && input.givenIn !== input.conversationId ? { givenIn: input.givenIn } : {}) },
+    sort: now, rev: 0, createdAt: now, updatedAt: now,
   };
   if (conversationId) {
     task.conversationId = conversationId;
@@ -140,41 +122,28 @@ export function createTask(t: TaskServiceImpl, input: CreateTaskInput & { create
     if (spaceId) task.spaceId = spaceId;
     task.origin = originFor(t, input);
   }
-  if (assigneeKind !== 'team' && input.assigneeId) task.assigneeId = input.assigneeId;
+  if (input.assigneeId && input.assigneeId !== HUMAN_ID) task.assigneeId = input.assigneeId;
   if (input.dueAt !== undefined || armed?.dueAt !== undefined) task.dueAt = input.dueAt ?? armed?.dueAt;
   if (input.doneWhen) task.doneWhen = input.doneWhen;
-  if (input.mode) task.mode = input.mode;
   if (input.widget) task.widget = armed?.widget ?? input.widget;
-  if (input.humanReason) task.humanReason = input.humanReason;
-  Object.assign(task, dayFieldsOf(input)); // B-041 day fields (estimate, window, prep, private …)
+  if (input.files?.length) task.files = input.files.map((file) => ({ ...file })); // a quick task's files
+  Object.assign(task, dayFieldsOf(input)); // My day's fields (estimate, window, prep, private …)
   if (input.dependsOn?.length) applyDepends(t.repo, task, checkDepends(t.repo, undefined, parent?.id, input.dependsOn), now);
-  if (parent) { task.parentId = parent.id; task.goal = parent.title; }
+  if (parent) task.parentId = parent.id;
   if (options.anchor) task.messageId = options.anchor.id;
-  const steps = (input.steps ?? []).map(line => line.trim()).filter(Boolean);
   if (assigneeKind === 'agent' && task.assigneeId) joinChat(t, task.conversationId, task.assigneeId, input.createdBy);
-  s.db.tx(() => {
-    t.repo.insert(task, clientId);
-    steps.forEach((title, index) => {
-      t.repo.insert({
-        ...task, id: newId('task', now), title, notes: '', parentId: task.id, goal: task.title, messageId: undefined,
-        widget: undefined, doneWhen: undefined, sort: index, ledger: {}, status: 'open', waitingOn: undefined, dependsOn: undefined,
-        // Steps keep only 'private' of the B-041 day fields.
-        estimateMin: undefined, estimateSource: undefined, spentMs: undefined, timerStartedAt: undefined, window: undefined, prep: undefined,
-      });
-    });
-  });
-  // Top-level tasks handed over in a chat are anchored by a 'task' message there (steps, block to-dos and
-  // chat-free tasks are not).
+  task.nextAt = nextLook(task, now);
+  t.repo.insert(task, clientId);
+  // Top-level tasks handed over in a chat are anchored by a 'task' message there (pieces, block to-dos and chat-free tasks are not).
   if (!parent && !options.anchor && task.conversationId) anchorTask(t, task, input, options, task.conversationId);
   armTimer(s, task);
   const view = t.emit(task);
-  if (parent) { const fresh = t.repo.get(parent.id); if (fresh) t.emit(fresh); } // its steps changed: Work's card and detail show the new one at once
+  if (parent) { const fresh = t.repo.get(parent.id); if (fresh) t.emit(fresh); } // its pieces changed: Work's card and detail show the new one at once
   t.life.created(task);
-  supersedeAsks(t, task); // B-078: an agent's newer question replaces its older open ones at the same place
   return view;
 }
 
-/** Posts the anchor (outside the transaction: delivery side effects never fire for a rolled-back message). */
+/** Posts the anchor (after the insert: delivery side effects never fire for a row that is gone again). */
 function anchorTask(t: TaskServiceImpl, task: Task, input: CreateTaskInput & { createdBy: string }, options: CreateOptions, conversationId: string): void {
   const s = t.s;
   try {
@@ -182,7 +151,8 @@ function anchorTask(t: TaskServiceImpl, task: Task, input: CreateTaskInput & { c
     const fromRun = runOf(t, options, input.createdBy, conversationId);
     const meta = { ...(options.anchorWith?.meta ?? {}), ...(fromRun ? { fromRun } : {}) };
     const message = s.chats.send({
-      conversationId, body: options.anchorWith?.body ?? task.title, kind: 'task', taskId: task.id,
+      // an agent's bookkeeping card is silent; the person's own hand-over of work is their act and stays loud
+      conversationId, body: options.anchorWith?.body ?? task.title, kind: 'task', taskId: task.id, silent: task.assigneeKind === 'agent' && !isHumanActor(author),
       authorId: author, authorKind: isHumanActor(author) ? 'human' : author === SYSTEM_ID ? 'system' : 'agent',
       ...(options.anchorWith?.attachments?.length ? { attachments: options.anchorWith.attachments } : {}),
       ...(Object.keys(meta).length ? { meta } : {}),
@@ -190,7 +160,7 @@ function anchorTask(t: TaskServiceImpl, task: Task, input: CreateTaskInput & { c
     task.messageId = message.id;
     t.repo.save(task, task.rev);
   } catch (error) {
-    // Compensation: no task without its handover message – the row and its steps go (steps by cascade).
+    // Compensation: no task without its handover message – the row goes.
     try { t.repo.delete(task.id); } catch (cleanup) { s.log?.warn('task not removed after a failed anchor', { taskId: task.id, error: String(cleanup) }); }
     throw error;
   }

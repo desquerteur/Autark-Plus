@@ -6,7 +6,8 @@
 // errors; a right-click (long press) on the rows' band lists where each browser exports, whole, and copies its address;
 // the slot and the catalog under it take a dropped file (colour only). ChatSecretBar is
 // the composer's secret mode (Plus › Secret) above the text: each row goes to secrets.capture and comes back as a chip;
-// × or Esc leaves it. Both keep one fixed height, so nothing below or beside them moves.
+// × or Esc leaves it. Both keep one fixed height, so nothing below or beside them moves. NameValueRows also serves the
+// own-server form's env and header rows (apps-add.tsx), which show a plain setting's value unmasked.
 // Owns: these rows and their actions. Never: puts a value in a draft, a message, storage or a log – values live only in
 // this component's state until they are sent.
 
@@ -22,15 +23,16 @@ import { BandFoot, SecretForm, type SecretTarget } from './SecretForm.tsx';
 import { BAND_HINT, exportMenu, importLine, pastedRows, readyRows, withEmptyRow, type KvRow } from './secret-groups.ts';
 
 const MAX_BYTES = 5 * 1024 * 1024;
-/** AF-005: the same rows for a connector's headers and variables (apps-server.tsx). */
-export { Rows as NameValueRows };
 const fresh = (): KvRow => ({ id: newId('req'), name: '', value: '' });
 const textOf = (event: Event) => (event.currentTarget as HTMLInputElement | HTMLTextAreaElement).value;
 
 interface Line { text: string; tone: 'muted' | 'error' | 'ok' }
 
-/** The rows of both variants; Enter in a field is `onEnter` (Shift+Enter: a line break in a value). */
-function Rows(props: { rows: KvRow[]; onChange: (rows: KvRow[]) => void; onEnter: () => void }) {
+/**
+ * The rows of both variants and of the own-server form's env/headers (apps-add.tsx); Enter in a field is `onEnter` (Shift+Enter:
+ * a line break in a value). Every value is masked unless `masked` says a row's value is plain (the own-server form's NODE_ENV).
+ */
+export function NameValueRows(props: { rows: KvRow[]; onChange: (rows: KvRow[]) => void; onEnter: () => void; masked?: (row: KvRow) => boolean }) {
   const { rows, onChange } = props;
   const set = (index: number, patch: Partial<KvRow>) => onChange(withEmptyRow(rows.map((row, at) => (at === index ? { ...row, ...patch } : row)), fresh));
   const paste = (index: number, field: 'name' | 'value') => (event: ClipboardEvent) => {
@@ -48,6 +50,7 @@ function Rows(props: { rows: KvRow[]; onChange: (rows: KvRow[]) => void; onEnter
           <input class="input" aria-label={`Name ${index + 1}`} placeholder="Name" maxLength={120} autocomplete="off" spellcheck={false}
             value={row.name} onInput={(event) => set(index, { name: textOf(event) })} onPaste={paste(index, 'name')} />
           <textarea class="input secret-kv-value" rows={1} aria-label={`Value ${index + 1}`} placeholder="Value" autocomplete="off" spellcheck={false} maxLength={16_384}
+            {...(props.masked && !props.masked(row) ? { style: { WebkitTextSecurity: 'none' } } : {})}
             value={row.value} onInput={(event) => set(index, { value: textOf(event) })} onPaste={paste(index, 'value')} />
           {index === rows.length - 1 && !row.name && !row.value
             ? <span class="secret-kv-gap" aria-hidden="true" />
@@ -128,7 +131,7 @@ export function SecretBand(props: { form?: BandForm; onForm: (open: boolean) => 
           ? <SecretForm key={props.form.key} target={props.form.target} onCancel={() => props.onForm(false)} onDone={() => { props.onForm(false); props.onSaved(); }} />
           : (
             <>
-              <div class="secret-band-body"><Rows rows={rows} onChange={(next) => { setRows(next); setLine(undefined); }} onEnter={add} /></div>
+              <div class="secret-band-body"><NameValueRows rows={rows} onChange={(next) => { setRows(next); setLine(undefined); }} onEnter={add} /></div>
               <BandFoot line={line?.text ?? BAND_HINT} tone={line?.tone ?? 'muted'}>
                 <Button variant="primary" class="small" busy={busy === 'add'} disabled={!ready.length || busy !== ''} onClick={add}>Add</Button>
                 {canImport && (
@@ -179,7 +182,7 @@ export function ChatSecretBar(props: { conversationId: string; room: number; onA
   return (
     <div ref={ref} class="secret-band chat" role="group" aria-label="Secret"
       onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onLeave(); } }}>
-      <div class="secret-band-body"><Rows rows={rows} onChange={(next) => { setRows(next); setLine(undefined); }} onEnter={() => void attach()} /></div>
+      <div class="secret-band-body"><NameValueRows rows={rows} onChange={(next) => { setRows(next); setLine(undefined); }} onEnter={() => void attach()} /></div>
       <BandFoot line={line?.text ?? 'Stored encrypted; agents use it by its handle'} tone={line?.tone ?? 'muted'}>
         <Button variant="primary" class="small" busy={busy} disabled={!ready.length} onClick={() => void attach()}>Attach</Button>
         <button type="button" class="icon-button small secret-band-close" aria-label="Leave secret mode" title="Back to the message (Esc)" onClick={props.onLeave}><Icon name="x" size={16} /></button>

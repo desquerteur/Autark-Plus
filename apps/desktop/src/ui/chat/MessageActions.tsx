@@ -1,31 +1,39 @@
-// Message actions: the message's right-click (long-press) menu – Reply, Start thread (B-078: or Open thread), Copy, Edit,
-// Remember why…, Delete, each only where
-// it applies – and the inline editor. Reply sets the composer's reply (draft.ts setReply) for a finished
+// Message actions: the message's right-click (long-press) menu – B-080: first, for each attachment, "Open <name>" and
+// (desktop) "Show <name> in folder"; then Reply, Start thread (B-078: or Open thread), Copy, Edit, Remember why…, Delete,
+// each only where it applies – and the inline editor. Reply sets the composer's reply (draft.ts setReply) for a finished
 // text message; Edit and Delete are offered for the caller's own text messages only, where this connection
 // may call them. Edit opens the inline editor in place (Esc cancels, Ctrl+Enter or Save saves; the message
 // then shows "edited"); Remember why… (own text messages) opens its one-field dialog (RememberWhy.tsx); Delete asks
 // first, the runtime leaves a "Message deleted" tombstone.
-// Owns: the menu entries and the inline editor. Never: decides who may edit (the runtime refuses others'
-// messages) or renders the message itself (MessageItem).
+// F30 (owner 16.11.2026: "man soll unten drunter ein Copy-Symbol haben", "antworten können … auf dem PC unten drunter
+// Buttons"): Copy takes the mouse selection inside the message when there is one, else the whole message; on touch the
+// menu adds "Select text" (SelectText.tsx). MessageTools puts Copy and Reply as two small icons into the message's meta
+// row. Which text Copy takes and how a message is answered (reply(), also the phone's swipe): message-tools.ts.
+// 16.11.2026: with a piece of the message marked, "Save as secret" stores it and puts its handle there (message-keys.ts).
+// Owns: the menu entries, the meta row's two tools and the inline editor. Never: decides who may edit (the runtime
+// refuses others' messages) or renders the message itself (MessageItem).
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { Message } from '../../shared/model/chat.ts';
 import { HUMAN_ID } from '../../shared/ids.ts';
 import { personalText } from '../../shared/model/message-changes.ts';
-import { confirm, type MenuItem, type MenuSection } from '../lib/ui.tsx';
+import { confirm, IconButton, type MenuItem, type MenuSection } from '../lib/ui.tsx';
+import { openContextMenu, type MenuOpen } from '../lib/context-menu.tsx';
 import { modKey } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
 import { can } from '../lib/session.ts';
 import { pushToast, toastError } from '../lib/toasts.ts';
-import { setReply } from './composer/draft.ts';
 import { offersRemember } from './remember.ts';
 import { rememberTarget } from './RememberWhy.tsx';
 import { isThread, startThread, threadsByAnchor } from './threads.ts';
 import { conversationMap } from '../lib/store.ts';
+import { platform } from '../lib/platform.ts';
+import { openAttachment, showAttachment } from './Attachments.tsx';
+import { canReply, copyable, copyText, menuSelection, reply } from './message-tools.ts';
+import { markedSecret, saveAsSecret } from './message-keys.ts';
 
 /** The caller's own finished text message ('human' is the caller on every device) – the runtime's rule (chat/message-edits.ts). */
 const own = (message: Message) => personalText(message) && message.authorId === HUMAN_ID && message.state === 'final';
-const canReply = (message: Message) => message.kind === 'text' && message.state !== 'streaming' && can('messages.send');
 const canEdit = (message: Message) => own(message) && message.body.trim().length > 0 && can('messages.edit');
 const canDelete = (message: Message) => own(message) && can('messages.delete');
 
@@ -42,20 +50,59 @@ async function copy(text: string): Promise<void> {
   try { await navigator.clipboard.writeText(text); pushToast({ title: 'Copied', tone: 'info' }, 1500); } catch (error) { toastError(error, 'Copy failed'); }
 }
 
-/** The message's menu: Reply, Copy, Edit, Remember why…, Delete – each only where it applies. */
-export function messageMenu(message: Message, onEdit: () => void): MenuSection[] {
+/** B-080: a message's files as menu entries – Open <name>, and on the desktop Show <name> in folder. */
+function fileItems(message: Message): MenuItem[] {
+  const reveal = platform === 'desktop' && can('files.open');
+  return (message.attachments ?? []).flatMap((attachment) => [
+    { label: `Open ${attachment.name}`, onSelect: () => openAttachment(attachment, message.conversationId) },
+    ...(reveal ? [{ label: `Show ${attachment.name} in folder`, onSelect: () => showAttachment(attachment) }] : []),
+  ]);
+}
+
+/**
+ * The message's menu: its files first (B-080), then Reply, Start/Open thread, Copy (F30: the mouse selection inside the
+ * message when there is one), Select text (touch), Edit, Remember why…, Delete – each only where it applies.
+ */
+export function messageMenu(message: Message, open: MenuOpen, actions: { edit: () => void; selectText: () => void }): MenuSection[] {
+  const files = fileItems(message);
   const items: MenuItem[] = [];
-  if (canReply(message)) items.push({ label: 'Reply', onSelect: () => setReply(message.conversationId, message.id) });
+  if (canReply(message)) items.push({ label: 'Reply', onSelect: () => { reply(message); } });
   // B-078: a thread on this message – never inside a thread (the thread itself answers it)
   const chat = conversationMap.peek().get(message.conversationId);
   if (canReply(message) && chat && !isThread(chat) && !chat.settings.system) {
     items.push({ label: threadsByAnchor.peek().has(message.id) ? 'Open thread' : 'Start thread', onSelect: () => void startThread(message) });
   }
-  if (message.body && message.state !== 'streaming') items.push({ label: 'Copy', onSelect: () => void copy(message.body) });
-  if (canEdit(message)) items.push({ label: 'Edit', onSelect: onEdit });
+  const selected = menuSelection(open); // read now: the menu's own clicks may move the selection
+  if (message.body && message.state !== 'streaming') items.push({ label: 'Copy', onSelect: () => void copy(copyText(message.body, selected)) });
+  const secret = markedSecret(message, selected);
+  if (secret) items.push({ label: 'Save as secret', onSelect: () => void saveAsSecret(message, secret) });
+  if (open.touch && copyable(message)) items.push({ label: 'Select text', onSelect: actions.selectText });
+  if (canEdit(message)) items.push({ label: 'Edit', onSelect: actions.edit });
   if (can('references.remember') && offersRemember(message, HUMAN_ID)) items.push({ label: 'Remember why…', onSelect: () => { rememberTarget.value = message; } });
   if (canDelete(message)) items.push({ label: 'Delete', danger: true, onSelect: () => void remove(message) });
-  return [{ items }];
+  return files.length ? [{ items: files }, { items }] : [{ items }];
+}
+
+/**
+ * F30: Copy (the whole message) and Reply as two small icons in the message's meta row – on every finished text message
+ * (Copy where it has words, Reply where this connection may send), always rendered, so nothing moves: seen on hover or
+ * focus with a mouse, always on touch (chat.css .message-tool). Status lines, task cards and streaming rows have none.
+ */
+export function MessageTools(props: { message: Message; menu?: (open: MenuOpen) => MenuSection[] }) {
+  const { message } = props;
+  if (message.kind !== 'text' || message.state !== 'final') return null;
+  return (
+    <>
+      {copyable(message) && <IconButton icon="copy" label="Copy" size="small" iconSize={14} class="message-tool" onClick={() => void copy(message.body)} />}
+      {canReply(message) && <IconButton icon="arrow-bend-up-left" label="Reply" size="small" iconSize={14} class="message-tool" onClick={() => { reply(message); }} />}
+      {props.menu && (
+        <IconButton icon="dots-three" label="More" size="small" iconSize={14} class="message-tool" aria-haspopup="menu" onClick={(event) => {
+          const box = (event.currentTarget as HTMLElement).getBoundingClientRect(); // the phone's menu: the button's, not a long press's
+          openContextMenu(box.left, box.bottom, props.menu!({ touch: false, at: (event.currentTarget as HTMLElement).closest<HTMLElement>('.message') }));
+        }} />
+      )}
+    </>
+  );
 }
 
 /** The person's own message edited in place: Esc cancels, Ctrl+Enter (⌘+Enter) or Save saves. */

@@ -22,7 +22,8 @@ export interface SubconsciousTrace {
 
 /** The most a trace may cost the main AI's context, in tokens (a token ≈ 4 characters). */
 export const TRACE_TOKENS = 600;
-const CHARS_PER_TOKEN = 4;
+/** B-080 wave 3: sizes only the trace's text; never compared with an engine's count (that unit is context-ledger.ts CHARS_PER_TOKEN). */
+const TRACE_CHARS_PER_TOKEN = 4;
 /** Below this many characters left a call is dropped rather than cut to nothing. */
 const MIN_OUTPUT_CHARS = 80;
 const CUT = ' … [cut]';
@@ -34,7 +35,7 @@ export function hasTrace(trace: SubconsciousTrace | undefined): trace is Subcons
 
 /** The trace within `maxTokens`: earlier calls first, the call that does not fit cut (and saying so), later ones dropped. */
 export function capTrace(trace: SubconsciousTrace, maxTokens = TRACE_TOKENS): SubconsciousTrace {
-  let left = maxTokens * CHARS_PER_TOKEN;
+  let left = maxTokens * TRACE_CHARS_PER_TOKEN;
   const calls: TraceCall[] = [];
   for (const call of trace.calls) {
     left -= call.tool.length + JSON.stringify(call.args).length;

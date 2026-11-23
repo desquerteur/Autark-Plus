@@ -1,6 +1,7 @@
 // #34: My day actions belong to the exact reminder occurrence, not the schedule's latest run.
 // Observe the existing task flow; never complete or snooze work on the person's behalf.
 // Owns: bounded per-occurrence action history and restart reconciliation. Never: task mutations or timing.
+import { SNOOZED_REASON } from '../../shared/model/todo-later.ts';
 import type { TaskView, ScheduleRun } from '../../shared/model/tasks.ts';
 import type { SchedulerDeps } from './scheduler.ts';
 import type { ScheduleRepo } from './repo.ts';
@@ -42,8 +43,8 @@ export function watchPersonReminders(s: SchedulerDeps, repo: ScheduleRepo): Arra
 }
 
 function actionOf(task: TaskView | undefined, removed: boolean, at: number): Action {
-  if (removed || task?.status === 'cancelled') return { state: 'skipped', at };
+  if (removed || task?.status === 'dropped') return { state: 'skipped', at };
   if (task?.status === 'done') return { state: 'done', at };
-  if (task?.status === 'waiting' && task.waitingOn?.reason === 'Snoozed') return { state: 'snoozed', at, until: task.waitingOn.until };
+  if (task?.status === 'waiting' && task.waitingOn?.why === SNOOZED_REASON) return { state: 'snoozed', at, until: task.waitingOn.until };
   return { state: 'pending', at };
 }

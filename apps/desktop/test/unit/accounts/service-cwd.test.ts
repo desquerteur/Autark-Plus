@@ -31,7 +31,7 @@ function setup(check: (id: EngineId) => Promise<AccountCheck> = async () => ({ s
     listModels: async () => [], checkAccount: () => check(id), run: async () => { throw new Error('not used'); }, dispose: async () => {},
   });
   const service = new AccountServiceImpl({
-    db, bus: new Bus((error) => { throw error; }), clock: new ManualClock(), paths: PATHS, env: { PATH: '/usr/bin' },
+    db, bus: new Bus((error) => { throw error; }), clock: new ManualClock(), paths: PATHS, env: { PATH: '/usr/bin' }, homeDir: path.join(DATA, 'home'),
     finder: fakeFinder({ codex: '/bin/codex', claude: '/bin/claude', kimi: '/bin/kimi' }), supervisor: testSupervisor(spawn), terminal: { platform: 'win32' },
     secrets: { save: async () => ({ id: 'none' }), read: async () => undefined, remove: () => {} },
     engines: () => ({ get: engine, all: () => [], disposeIdle: async () => {} }), mkdir: async () => {}, signInUrlMs: 0,

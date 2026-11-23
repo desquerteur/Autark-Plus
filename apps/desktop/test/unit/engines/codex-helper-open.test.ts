@@ -7,6 +7,10 @@
 // chat failed with "limited" (Claude's weekly window was used up). Now every thread open (start or resume, agent or helper) waits 120 s
 // (helper-thread.ts THREAD_OPEN_MS) and a timeout is the turn's own: no account cools, the chat's redelivery retries it. The turn's own
 // signal still ends the open at once (a Stop; a helper call's shorter time limit, e.g. a phone call's talker).
+// B-080 (live 08.11.2026: a starved PC; Codex queued every request on a thread behind an abort that took minutes): an agent
+// turn's open waits for Codex's answer, past THREAD_OPEN_MS, until the turn's signal ends it (the stall watch, a Stop); a
+// helper thread keeps THREAD_OPEN_MS. Through providerOutage an engine timeout is 'unavailable' with details.local: the turn
+// fails over once, no account cools – two agents on one Codex account: A's local failure leaves B's next route on Codex.
 // A refused helper thread and a real overload keep their account consequence.
 
 import { afterEach, after, test, mock } from 'node:test';
@@ -14,6 +18,7 @@ import assert from 'node:assert/strict';
 import { CodexEngine } from '../../../src/runtime/engines/codex/engine.ts';
 import { THREAD_OPEN_MS } from '../../../src/runtime/engines/codex/helper-thread.ts';
 import { accountFailure, recordAccountFailure } from '../../../src/runtime/accounts/failure.ts';
+import { providerOutage } from '../../../src/runtime/engines/provider-outage.ts';
 import { createEngineRunner } from '../../../src/runtime/decision/engine-runner.ts';
 import type { EngineRegistry } from '../../../src/runtime/contracts.ts';
 import type { EngineModel, EngineTurnResult } from '../../../src/runtime/engines/types.ts';
@@ -85,17 +90,40 @@ test('a helper thread the app-server does not open in time is the call\'s own ti
   assert.equal(accountFailure(result), undefined);
 });
 
-test('B-075: an agent thread whose thread/start times out is the turn\'s own timeout – the account is not cooled', async () => {
-  const result = await unopened(turnInput({ runId: 'run_a' }).input);
-  assert.equal(result.stop, 'error');
-  assert.deepEqual([result.error?.code, result.error?.message], TIMED_OUT);
+test('B-075 through the attempt: a helper thread\'s timeout becomes a local outage (providerOutage) – one failover, no cooling', async () => {
+  const result = providerOutage(await unopened(turnInput({ runId: 'run_h2', agentId: 'system', tools: [], outputSchema: { type: 'object' } }).input), account('acc_codex', 'codex'));
+  assert.deepEqual([result.error?.code, result.error?.message, result.error?.details?.local], ['unavailable', TIMED_OUT[1], true]);
+  assert.deepEqual(recorded(result), ['overload', false], 'an overload for the failover, but other chats keep routing to Codex');
+});
+
+/** B-080: an agent turn whose open stays unanswered still waits long after THREAD_OPEN_MS; its signal ends it. */
+async function waiting(patch: Record<string, unknown>): Promise<EngineTurnResult> {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const fake = appServer();
+  const controller = new AbortController();
+  let ended = false;
+  const running = fake.engine.run(turnInput({ ...patch, signal: controller.signal }).input).finally(() => { ended = true; });
+  await until(() => fake.opens() > 0);
+  mock.timers.tick(THREAD_OPEN_MS * 5); // also past the app-server's 10-min idle shutdown, which the open holds off
+  await tick();
+  assert.equal(ended, false, 'still waiting for Codex long after THREAD_OPEN_MS');
+  controller.abort(); // the stall watch's cut or a Stop
+  const result = await running;
+  mock.timers.reset();
+  await fake.engine.dispose();
+  return result;
+}
+
+test('B-080: an agent thread/start waits past THREAD_OPEN_MS until the turn\'s signal ends it – interrupted, the account is not cooled', async () => {
+  const result = await waiting({ runId: 'run_a' });
+  assert.deepEqual([result.stop, result.error?.code], ['interrupted', 'cancelled']);
   assert.deepEqual(recorded(result), [undefined, false], 'no overload, no cooling: other chats keep routing to Codex');
 });
 
-test('B-075: an agent thread whose thread/resume times out is a timeout too, not a renewal and not an account failure', async () => {
-  const result = await unopened(turnInput({ runId: 'run_r', session: { ref: 'thr_old', generation: 1 } }).input);
-  assert.deepEqual([result.error?.code, result.error?.message], TIMED_OUT);
-  assert.equal(result.error?.details?.rebase, undefined, 'the thread is not given up: the retry resumes it on the warm server');
+test('B-080: an agent thread/resume waits the same way – not a renewal and not an account failure', async () => {
+  const result = await waiting({ runId: 'run_r', session: { ref: 'thr_old', generation: 1 } });
+  assert.deepEqual([result.stop, result.error?.code], ['interrupted', 'cancelled']);
+  assert.equal(result.error?.details?.rebase, undefined, 'the thread is not given up: the retry resumes it');
   assert.deepEqual(recorded(result), [undefined, false]);
 });
 
@@ -122,7 +150,7 @@ test('unchanged: a refused helper thread stays an account failure', async () => 
   const fake = appServer(true);
   const refused = await fake.engine.run(turnInput({ runId: 'run_h', agentId: 'system', tools: [], outputSchema: { type: 'object' } }).input);
   await fake.engine.dispose();
-  assert.equal(fake.opens(), 2, 'the lean helper thread, then the plain one');
+  assert.equal(fake.opens(), 1, 'the lean helper thread only – no plainer one');
   assert.deepEqual([refused.error?.code, refused.error?.message], ['unavailable', 'Codex could not open the session.']);
   assert.equal(accountFailure(refused), 'overload');
 });
@@ -146,9 +174,16 @@ test('through the runner, on the only account: the timed-out call fails alone an
   assert.deepEqual(next.structured, { ok: true });
   assert.equal(timedOut.calls(), 2);
 
+  // B-080: two agents on one Codex account – A's turn/start whose app-server connection on this PC closed leaves B's next route on Codex.
+  const local = await world({ text: '', stop: 'error', error: { code: 'unavailable', message: 'The Codex connection on this PC closed before the turn started.', details: { local: true } } });
+  await assert.rejects(local.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }), /closed before the turn started/);
+  assert.equal(local.h.accounts.get('acc_codex')?.state, 'ok', 'our own engine process: the account does not cool');
+  assert.deepEqual((await local.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' }, effort: 'medium' })).structured, { ok: true });
+  assert.equal(local.calls(), 2, 'the next call routes to Codex again');
+
   const overload = await world({ text: '', stop: 'error', error: { code: 'unavailable', message: 'OpenAI is overloaded right now.' } });
   await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }));
   assert.equal(overload.h.accounts.get('acc_codex')?.state, 'cooling', 'a real overload cools the account as before');
-  await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }), /limited right now/);
+  await assert.rejects(overload.runner({ purpose: 'subconscious', system: 'S', prompt: 'P', schema: { type: 'object' } }), /limited right now|paused for a few minutes after a provider error|paused until/); // B-083's unfit.ts names a cooling as a pause (F28: by account)
   assert.equal(overload.calls(), 1);
 });

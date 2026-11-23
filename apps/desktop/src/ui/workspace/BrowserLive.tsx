@@ -159,7 +159,7 @@ export function BrowserLive(props: { target: BrowserTarget; openAt?: string; chi
   const { state, frame, error } = useBrowserView(target, visible);
   const [inputError, setInputError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [zoom, setZoom] = useState<1 | 2>(1);
+  const [zoom, setZoom] = useState(1);
   const keys = useRef<HTMLInputElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
   const touch = useCoarsePointer();
@@ -227,9 +227,9 @@ export function BrowserLive(props: { target: BrowserTarget; openAt?: string; chi
         {open && touch && usable && shown && (
           <>
             <Button variant="ghost" onClick={() => keys.current?.focus({ preventScroll: true })} title="Open the keyboard and type into the page">Type</Button>
-            <Button variant="ghost" aria-pressed={zoom === 2} onClick={() => setZoom(zoom === 2 ? 1 : 2)}
-              title={zoom === 2 ? 'Fit the page into the view' : 'Show the page at twice the size – drag to move around'}>
-              <SwapLabel on={zoom === 2} off="Zoom" onLabel="Fit" />
+            <Button variant="ghost" aria-pressed={zoom > 1} onClick={() => setZoom(zoom > 1 ? 1 : 2)}
+              title={zoom > 1 ? 'Fit the page into the view' : 'Show the page at twice the size – drag to move around, pinch to zoom'}>
+              <SwapLabel on={zoom > 1} off="Zoom" onLabel="Fit" />
             </Button>
           </>
         )}
@@ -239,7 +239,7 @@ export function BrowserLive(props: { target: BrowserTarget; openAt?: string; chi
       </div>
       <div class="workspace-screen-view" ref={viewRef}>
         {shown
-          ? <BrowserSurface frame={shown} alt={`Browser of ${name}${active?.title ? `: ${active.title}` : ''}`} takeover={usable} zoom={touch ? zoom : 1} keys={touch ? keys : undefined}
+          ? <BrowserSurface frame={shown} alt={`Browser of ${name}${active?.title ? `: ${active.title}` : ''}`} takeover={usable} zoom={touch ? zoom : 1} onZoom={setZoom} keys={touch ? keys : undefined}
               send={(tab, input) => rpc.call('browser.input', { agentId: target.agentId, tab, input })} onError={(failure) => setInputError(errorText(failure))} />
           : <Placeholder state={state} name={name} reopen={reopen} />}
         {shown && <PointerLayer agentId={target.agentId} frame={shown} view={viewRef} />}

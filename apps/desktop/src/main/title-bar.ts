@@ -3,7 +3,10 @@
 // compact window (phone stack), whose top bar is a row of the same height and color (mobile.css) –
 // painted in that row's color. macOS traffic lights are centered in that same row. CSS reserves
 // the native controls' left and right edges, without adding a strip above the content.
-// Owns: overlay/traffic-light options per theme and layout. Never: imports electron, creates
+// Feedback 16.11.2026 (F13: "alles dunkel, bis auf oben … die Minus und so weiter"): while a modal dialog's backdrop
+// dims the window (the page says so, IPC titleBarDim), the controls take the dimmed colors – the row's color and the
+// glyphs' gray under --backdrop, fixed values a unit test keeps equal to tokens.css.
+// Owns: overlay/traffic-light options per theme, layout and dimming. Never: imports electron, creates
 // windows (window.ts does), defines UI colors (styles/tokens.css is the source; a unit test
 // keeps both equal).
 
@@ -22,6 +25,12 @@ export function titleBarColors(dark: boolean): TitleBarColors {
   return dark ? { color: '#202020', symbolColor: '#afafaf' } : { color: '#f3f3f3', symbolColor: '#5b5c5f' };
 }
 
+/** The same colors under a modal's backdrop (--backdrop over them: #0005 light, #0009 dark), so the controls dim
+ *  with the rest of the window. */
+export function dimmedColors(dark: boolean): TitleBarColors {
+  return dark ? { color: '#0d0d0d', symbolColor: '#464646' } : { color: '#a2a2a2', symbolColor: '#3d3d3f' };
+}
+
 /** The overlay ends one pixel above its row's end: Windows rounds the overlay up at fractional
  *  scale factors (48 px at 150 % covered 73 device rows), which would hide the sheet's top edge
  *  line (the first pixel row below the header row) under the caption buttons. The half-pixel
@@ -32,8 +41,8 @@ export function overlayHeight(_layout: TitleBarLayout): number {
 }
 
 /** BrowserWindow.titleBarOverlay / setTitleBarOverlay options for Windows and Linux. */
-export function titleBarOverlay(dark: boolean, layout: TitleBarLayout = 'columns'): TitleBarColors & { height: number } {
-  return { ...titleBarColors(dark), height: overlayHeight(layout) };
+export function titleBarOverlay(dark: boolean, layout: TitleBarLayout = 'columns', dim = false): TitleBarColors & { height: number } {
+  return { ...(dim ? dimmedColors(dark) : titleBarColors(dark)), height: overlayHeight(layout) };
 }
 
 /** macOS traffic lights, vertically centered in the shared header row. */

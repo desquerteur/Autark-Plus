@@ -32,39 +32,18 @@ const VOICE_APP = [
   '```',
 ].join('\n');
 
-/** One finished agent turn of Tom with `text` as its answer; returns the final message. */
+/** One finished agent turn of Tom with `text` as its answer to the person's line (13.11.2026: the safety net posts it); returns the final message. */
 async function finish(h: ReturnType<typeof setup>, text: string, runId: string, patch: { reason?: WakeReason; taskId?: string } = {}): Promise<Message> {
+  h.chats.send({ conversationId: h.chat.id, authorId: HUMAN_ID, body: 'Please go on.' });
   const request = h.request({ runId, ...patch });
   const plan = await planTurn(h.services, request);
   assert.ok(plan, 'the turn is planned');
-  const messageId = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
-  finishTurn(h.services, plan, h.routed(), request, h.attempt({ text, stop: 'done' }), messageId);
-  const message = h.chats.message(messageId);
+  const messageId = finishTurn(h.services, plan, h.routed(), request, h.attempt({ text, stop: 'done' })).messageId;
+  const message = messageId ? h.chats.message(messageId) : undefined;
   assert.ok(message, 'the answer stays');
   return message;
 }
 
-test('a final agent message with ```app todo=true becomes exactly one human to-do; re-finishing is idempotent', async () => {
-  const h = setup();
-  const message = await finish(h, VOICE_APP, 'run_1');
-  const todos = h.tasks.todos();
-  assert.equal(todos.length, 1);
-  const [todo] = todos;
-  assert.equal(todo.assigneeKind, 'human');
-  assert.equal(todo.title, 'Voice take');
-  assert.equal(todo.humanReason, 'physical');
-  assert.equal(todo.createdBy, h.tom.id);
-  assert.equal(todo.conversationId, h.chat.id);
-  assert.equal(todo.messageId, message.id, 'anchored to the message that holds the app (no extra task bubble)');
-  assert.deepEqual(todo.widget, { type: 'app', messageId: message.id, index: 0, title: 'Voice take', permissions: ['microphone'] },
-    'the widget points at the fence; only known permissions are kept');
-  assert.equal(h.chats.messages(h.chat.id).filter((item) => item.kind === 'task').length, 0);
-
-  // The same final message ingested again (a repeated finish) creates nothing new.
-  const again = h.tasks.ingestBlocks(message, [], []);
-  assert.deepEqual(again.map((item) => item.id), [todo.id]);
-  assert.equal(h.tasks.todos().length, 1);
-});
 
 test('blocks.answer (the app\'s wf.complete) finishes the to-do with "Done in mini-app" and wakes the author once', async (t) => {
   const f = rpcFixture();
@@ -72,7 +51,7 @@ test('blocks.answer (the app\'s wf.complete) finishes the to-do with "Done in mi
   f.org.add(agent('ag_ava', 'Ava'));
   const chat = f.chats.create({ agentIds: ['ag_ava'], createdBy: 'human' });
   const body = 'Two things:\n```ui\n{"type":"confirm","important":true,"instructions":"Plug in the microphone"}\n```\n```app todo=true\n<button>Done</button>\n```';
-  const message = f.chats.finishAgentMessage(f.chats.beginAgentMessage(chat.id, 'ag_ava', 'run_1').id, { body, state: 'final' });
+  const message = f.chats.postAgentMessage(chat.id, 'ag_ava', 'run_1', { body, state: 'final' });
   const blocks = uiBlocksOf(body);
   const views = f.tasks.ingestBlocks(message, blocks.map((item) => item.block), blocks.map((item) => item.index));
   assert.equal(views.length, 2, 'the confirm block and the mini-app');
@@ -80,7 +59,6 @@ test('blocks.answer (the app\'s wf.complete) finishes the to-do with "Done in mi
   const confirm = views.find((view) => !appWidgetOf(view.widget))!;
   assert.equal(appWidgetOf(app.widget)?.index, 1, 'the app after the ui block has parse index 1');
   assert.equal(app.title, 'Mini-app', 'no title= → the default title');
-  assert.equal(app.humanReason, 'taste', 'no reason= → taste');
   f.db.run('DELETE FROM wakes');
 
   const phone = new TestClient(f.server, TODO_ONLY); // a To-do-only link may finish it too
@@ -137,7 +115,7 @@ test('a fence or block that cannot become a to-do is logged and skipped; the tur
   const ask = await finish(h, '```ui\n{"type":"confirm","important":true,"instructions":"Plug in the microphone"}\n```', 'run_2');
   assert.equal(ask.state, 'final');
   assert.ok(ask.body.length > 0);
-  assert.deepEqual(warnings, ['mini-app to-do failed', 'turn to-dos failed']);
+  assert.deepEqual(warnings, ['mini-app to-do failed', 'chat block to-dos failed']);
 });
 
 test('fences the person or a bridge wrote, and apps without todo=true, become no to-dos', () => {
@@ -156,20 +134,6 @@ test('fences the person or a bridge wrote, and apps without todo=true, become no
   assert.equal(h.tasks.ingestBlocks(fromAgent, [], []).length, 1, 'the same fence from the agent itself is one');
 });
 
-test('a background task turn that leaves a mini-app to-do posts loudly (it asks the person)', async () => {
-  const h = setup();
-  const task = h.tasks.create({ conversationId: h.chat.id, title: 'Cut the intro', assigneeKind: 'agent', assigneeId: h.tom.id, createdBy: 'human' });
-  h.tasks.claim(task.id, h.tom.id);
-  // B-047 D4: a plain retry answer stays in the run journal – its (here hand-made) placeholder goes.
-  const request = h.request({ runId: 'run_1', reason: 'retry', taskId: task.id });
-  const placeholder = h.chats.beginAgentMessage(h.chat.id, h.tom.id, request.runId).id;
-  finishTurn(h.services, (await planTurn(h.services, request))!, h.routed(), request, h.attempt({ text: 'Still cutting.', stop: 'done' }), placeholder);
-  assert.equal(h.chats.message(placeholder), undefined, 'a plain retry answer is not posted');
-  assert.ok(h.items.some((item) => item.kind === 'note' && (item.data as { visibility?: string }).visibility === 'internal'), 'it is journaled');
-  const loud = await finish(h, VOICE_APP, 'run_2', { reason: 'retry', taskId: task.id });
-  assert.equal(loud.silent, false);
-  assert.equal(h.tasks.todos().length, 1);
-});
 
 test('a mini-app to-do keeps its widget: no "Show as…", its own icon, and todos.changeWidget refuses', async () => {
   const h = setup();
@@ -190,34 +154,4 @@ test('appWidgetOf reads only well-formed mini-app widgets', () => {
   assert.equal(appWidgetOf({ type: 'app', messageId: 'msg_1', index: -1, permissions: [] }), undefined);
   assert.deepEqual(appWidgetOf({ type: 'app', messageId: 'msg_1', index: 2, permissions: ['camera', 'usb', 3], expand: true, approvalId: 'apr_1' }),
     { type: 'app', messageId: 'msg_1', index: 2, permissions: ['camera'], expand: true }, 'unknown permissions and extra props are dropped');
-});
-
-test('reason= takes physical, identity, taste or review; approvals, credentials and other words are ignored', () => {
-  assert.equal(parseAppInfo('todo=true reason=physical').reason, 'physical');
-  assert.equal(parseAppInfo("todo reason='Review'").reason, 'review');
-  assert.equal(parseAppInfo('todo reason="identity"').reason, 'identity');
-  for (const word of ['approval', 'credential', 'urgent']) assert.equal(parseAppInfo(`todo=true reason=${word}`).reason, undefined, word);
-  assert.deepEqual(parseAppInfo(''), { todo: false, expand: false, permissions: [] });
-});
-
-test('the fake engine turns [[app:<attrs>|<html>]] into an ```app fence', async () => {
-  const input = {
-    input: [{ type: 'text', text: 'Your take [[app:title="Take" todo=true reason=physical|<button onclick="wf.complete({take:1})">Done</button>]]' }],
-    signal: new AbortController().signal, onEvent: () => {}, callTool: async () => ({ content: [] }),
-  } as unknown as EngineTurnInput;
-  const result = await new FakeEngine().run(input);
-  assert.equal(result.stop, 'done');
-  assert.ok(result.text.startsWith('Echo: Your take'), result.text);
-  assert.doesNotMatch(result.text, /\[\[app:/);
-  assert.deepEqual(appTodosOf(result.text).map(({ index, attrs }) => [index, attrs.title, attrs.reason]), [[0, 'Take', 'physical']]);
-  assert.equal(appHtmlOf(result.text, 0), '<button onclick="wf.complete({take:1})">Done</button>');
-});
-
-test('the prompt and the app guide teach todo=true and reason=', () => {
-  assert.match(blockPrompt({ tier: 'full' }), /todo=true reason=physical\|taste\|review\|identity/);
-  assert.match(blockPrompt({ tier: 'full' }), /wf\.complete\(data\) finishes it/);
-  assert.doesNotMatch(blockPrompt({ tier: 'lite' }), /reason=/);
-  const guide = blockHelp('app');
-  assert.match(guide, /reason=/);
-  assert.match(guide, /the data reaches me as the person's line "Done in mini-app" with one\n"key: value" line each/);
 });

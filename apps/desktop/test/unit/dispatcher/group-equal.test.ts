@@ -2,18 +2,13 @@
 // fake decision model for the responder pick). Owner: "kein Unterschied, ob der CEO da dabei ist oder nicht. Das ist
 // halt einfach wie wenn eine KI dabei ist oder nicht." – in an AI work group of three a line that @mentions nobody
 // reaches the colleague the pick names after the sender's turn, and "nobody needs to reply" ends the exchange; a
-// three-agent discussion ends in the loop guard instead of running on, also when every line names everyone it may.
-// Live round 3 (A3): a colleague's quiet answer reaches the free asker within seconds, not after two minutes. chat.send
-// says when a pick decides. Round 5: a quiet answer sent mid-turn is picked up after that turn (dispatch-groups.ts
-// waitsFor), and every chat.send note says a closing note names nobody with @.
+// three-agent discussion without @mentions ends in the loop guard instead of running on, also when the pick names
+// everyone it may (B-080: one where every line @mentions the next keeps waking – an @mention always wakes).
 // Owns: these assertions only. Never: real engines, timers or network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DecisionRequest, DecisionService, RuntimeServices } from '../../../src/runtime/contracts.ts';
-import { QUIET_NOTE } from '../../../src/runtime/chat/quiet-pickup.ts';
-import { chatTools } from '../../../src/runtime/tools/builtin/chat.ts';
-import type { ToolContext, ToolOutput } from '../../../src/runtime/tools/types.ts';
 import { agent } from '../chat/harness.ts';
 import { flush, openWakes, setup, type FakeCall } from './fakes.ts';
 
@@ -73,35 +68,17 @@ test('round 4: in a work group of three a line that @mentions nobody reaches the
   await h.dispatcher.stop();
 });
 
-test('round 4: chat.send says a pick decides when one will – and still names whom a mention woke', async () => {
-  const h = scene(() => 'Mira');
-  const send = chatTools.find((tool) => tool.name === 'chat.send')!;
-  const ctx = { agent: h.org.get('ag_mgr')!, runId: 'run_mgr', conversationId: h.room.id, mode: 'general', services: h.services as RuntimeServices, signal: new AbortController().signal, status: () => {} } as ToolContext;
-  const run = async (args: Record<string, unknown>) => JSON.parse(((await send.run(args as never, ctx)) as ToolOutput).content.map((part) => (part as { text?: string }).text ?? '').join(''));
-  const open = await run({ chatId: h.room.id, text: 'Which name fits best?' });
-  assert.deepEqual(open.woken, []);
-  assert.match(open.note, /^No colleague is woken yet: a pick decides who should answer this line, or that nobody needs to – a reply comes to me as a new turn .*I @mention a colleague whose answer I need\.$/);
-  assert.match(open.note, /\. An @mention wakes that colleague even in a quiet line \(level "silent"\) or a \[\[silent\]\] note, so my closing note names nobody with @\. I @mention/, 'round 5');
-  await flush();
-  assert.deepEqual(openWakes(h.db).map((wake) => wake.agent_id), ['ag_mira'], 'then the pick woke Mira');
-  const named = await run({ chatId: h.room.id, text: 'Tom, yours?', mentions: ['ag_tom'] });
-  assert.deepEqual(named.woken, ['Mira', 'Tom'], 'Mira for the line before, Tom for this one');
-  assert.match(named.note, /^Mira and Tom answer after this turn of mine/);
-});
-
-/** Runs every open turn: each posts one line (`line` decides it) and ends; 10 s per line. Stops when nothing runs or after `max` lines. */
-async function discuss(h: ReturnType<typeof scene>, line: (call: FakeCall, n: number) => string, max = 60): Promise<{ lines: number; ended: boolean }> {
+/** The room's open turns, one after another: each says one line (the clock moves 10 s) and ends; stops when no turn is open (ended) or after `max` lines. */
+async function discuss(h: ReturnType<typeof scene>, text: (call: FakeCall, n: number) => string, max = 60): Promise<{ lines: number; ended: boolean }> {
   let lines = 0;
   for (;;) {
-    const open = h.executor.calls.filter((call) => !call.done);
-    if (!open.length) return { lines, ended: true };
-    for (const call of open) {
-      if (lines >= max) return { lines, ended: false };
-      h.clock.advance(10_000);
-      if (call.request.conversationId === h.room.id) { h.say(call, line(call, ++lines)); await flush(); }
-      call.finish();
-      await flush();
-    }
+    const open = h.executor.calls.find((call) => !call.done && call.request.conversationId === h.room.id);
+    if (!open) return { lines, ended: true };
+    if (lines >= max) return { lines, ended: false };
+    h.clock.advance(10_000);
+    h.say(open, text(open, ++lines));
+    open.finish();
+    await flush();
   }
 }
 
@@ -115,7 +92,7 @@ test('round 4: a three-agent discussion ends – even when every line names ever
   assert.ok(ended, `the discussion ended (${lines} lines)`);
   assert.ok(lines >= 10, `it was a discussion (${lines} lines)`);
   const all = h.chats.messages(h.room.id, { limit: 200 });
-  const pause = all.findIndex((message) => message.kind === 'status' && message.body === 'Agent replies paused: back-and-forth without progress');
+  const pause = all.findIndex((message) => message.kind === 'status' && message.body === 'Agent replies paused: back-and-forth without work in between');
   assert.ok(pause > 0, 'the loop guard stopped it');
   const before = all.slice(0, pause).filter((message) => message.kind === 'text').map((message) => message.authorId);
   assert.equal(before.filter((author, i) => i > 0 && author !== before[i - 1]).length, 12, 'at the twelfth change of speaker');
@@ -127,78 +104,16 @@ test('round 4: a three-agent discussion ends – even when every line names ever
   await h.dispatcher.stop();
 });
 
-test('round 4: three agents passing the word in a circle with @mentions stop too – before, only the rate limit could', async () => {
+test('B-080 (wake-routing A): three agents passing the word in a circle with @mentions keep waking each other – an @mention always wakes', async () => {
   const h = scene();
   const next: Record<string, string> = { ag_mgr: 'Mira', ag_mira: 'Tom', ag_tom: 'Manager' };
   h.dispatcher.start();
   h.say('ag_mgr', '@Mira your idea?');
   await flush();
   const { lines, ended } = await discuss(h, (call, n) => `@${next[call.request.agentId]} idea ${n}, yours?`, 40);
-  assert.ok(ended, `the circle ended (${lines} lines)`);
-  assert.ok(lines <= 13, `after twelve changes of speaker (${lines} lines)`);
-  assert.deepEqual(openWakes(h.db), []);
-  await h.dispatcher.stop();
-});
-
-test("round 4 (live run A3): a colleague's quiet answer reaches the free asker within seconds, once", async () => {
-  const h = setup();
-  h.org.add(agent('ag_mgr', 'Manager', { mode: 'manager' }));
-  h.org.add(agent('ag_mira', 'Mira', { managerId: 'ag_mgr' }));
-  const room = h.chats.create({ title: 'Naming', agentIds: ['ag_mgr', 'ag_mira'], humans: false, createdBy: 'ag_mgr', lead: 'ag_mgr' });
-  const turnsOf = (agentId: string) => h.executor.calls.filter((item) => item.request.agentId === agentId);
-  h.dispatcher.start();
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mgr', authorKind: 'agent', body: 'Notelo or Jotnest – your pick?' });
-  await flush();
-  const [mira] = turnsOf('ag_mira');
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mira', authorKind: 'agent', body: 'Notelo.', silent: true, runId: mira.request.runId });
-  mira.finish();
-  await flush();
-  assert.equal(turnsOf('ag_mgr').length, 0, 'a quiet answer wakes nobody at once');
-  h.clock.advance(FEW_SECONDS);
-  h.scheduler.tick();
-  await flush();
-  const back = turnsOf('ag_mgr');
-  assert.equal(back.length, 1, 'picked up within seconds – before, after QUIET_DELAY_MS (2 of the 2:34 min of run A3)');
-  assert.deepEqual([back[0].request.conversationId, back[0].request.reason, back[0].request.notes.map((note) => note.text)], [room.id, 'review', [QUIET_NOTE]]);
-  back[0].finish();
-  await flush();
-  h.clock.advance(2 * 60_000);
-  h.scheduler.tick();
-  await flush();
-  assert.equal(turnsOf('ag_mgr').length, 1, 'once');
-  assert.deepEqual(openWakes(h.db), []);
-  await h.dispatcher.stop();
-});
-
-test("round 5: a colleague's quiet answer sent mid-turn is picked up once her turn ended – the asker answers once, not before", async () => {
-  const h = setup();
-  h.org.add(agent('ag_mgr', 'Manager', { mode: 'manager' }));
-  h.org.add(agent('ag_mira', 'Mira', { managerId: 'ag_mgr' }));
-  const room = h.chats.create({ title: 'Naming', agentIds: ['ag_mgr', 'ag_mira'], humans: false, createdBy: 'ag_mgr', lead: 'ag_mgr' });
-  const turnsOf = (agentId: string) => h.executor.calls.filter((item) => item.request.agentId === agentId);
-  h.dispatcher.start();
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mgr', authorKind: 'agent', body: 'Notelo or Jotnest – your pick?' });
-  await flush();
-  const [mira] = turnsOf('ag_mira');
-  // Her quiet answer by chat.send while her turn still runs (a [[silent]] final would end the turn at once).
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mira', authorKind: 'agent', body: 'Notelo.', silent: true, runId: mira.request.runId });
-  await flush();
-  h.clock.advance(FEW_SECONDS);
-  h.scheduler.tick();
-  await flush();
-  assert.equal(turnsOf('ag_mgr').length, 0, 'her turn still runs: the pickup waits for it – before, the manager started now');
-  h.chats.send({ conversationId: room.id, authorId: 'ag_mira', authorKind: 'agent', body: 'Jotnest reads like a bird.', silent: true, runId: mira.request.runId });
-  mira.finish();
-  await flush();
-  const back = turnsOf('ag_mgr');
-  assert.equal(back.length, 1, 'picked up right after her turn ended');
-  assert.deepEqual([back[0].request.conversationId, back[0].request.reason, back[0].request.notes.map((note) => note.text)], [room.id, 'review', [QUIET_NOTE]]);
-  back[0].finish();
-  await flush();
-  h.clock.advance(2 * 60_000);
-  h.scheduler.tick();
-  await flush();
-  assert.equal(turnsOf('ag_mgr').length, 1, 'one turn for everything her turn said');
-  assert.deepEqual(openWakes(h.db), []);
-  await h.dispatcher.stop();
+  assert.equal(ended, false, `the circle goes on (${lines} lines): before B-080 the guard ended it after twelve changes of speaker`);
+  assert.equal(lines, 40);
+  const all = h.chats.messages(h.room.id, { limit: 200 });
+  assert.equal(all.some((message) => message.kind === 'status' && message.meta.status?.details?.guard), false, 'no pause line: 6 lines a minute stay under the rate cap');
+  await h.dispatcher.stop(); // the turns still running end as interrupted
 });

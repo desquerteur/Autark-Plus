@@ -6,22 +6,52 @@
 // PC's shown tab as it is; a blank tab shown on the PC (its space names no shown tab) leaves the phone's as it is, and
 // that one never goes back to pull the PC's away. While the connection is down nothing goes: the read on reconnect
 // brings the PC's spaces as they are now, so a stale whole space never replaces newer tabs. Nothing of it is kept on
-// the phone.
+// the phone. 16.11.2026: a page that has to run on the PC – a sign-in whose answer returns to the PC's own address (Google
+// Calendar, an app's OAuth) – opens in the PC's pane (side.open, shown there at once) and this phone's pane sheet opens on it
+// (openInPcPane), so the person finishes it from the phone. A page the runtime itself already opened there for the phone (a
+// plan sign-in, accounts.* – rpc/handlers/providers.ts openOnPc) only opens the sheet (showOpenedOnPc), never a second tab.
+// 18.11.2026: a person's device (a colleague, scope 'person') reads the same way only the websites shared in the areas of
+// its chats (people/rpc-pane.ts); they come into its own spaces (withShared) and nothing goes back.
 // Owns: that link. Never: tab logic (pages.ts) or a tab's picture.
 
 import '../../shared/api/methods-tabs.ts';
+import '../../shared/model/side-view.ts'; // side.open
 import type { PaneTabs } from '../../shared/api/methods-tabs.ts';
 import type { SideSpace, SideSpaces } from '../../shared/api/workspace-browser.ts';
 import { bridge } from '../lib/platform.ts';
 import { rpc } from '../lib/rpc.ts';
-import { can } from '../lib/session.ts';
+import { can, isOwner, session } from '../lib/session.ts';
 import { toastError } from '../lib/toasts.ts';
 import { fromSideSpace, toSideSpace } from './browser-model.ts';
-import { acceptLayout, linkPhone, pagesListed, shownOf } from './pages.ts';
+import { acceptLayout, linkPhone, ownLayout, pagesListed, shownOf } from './pages.ts';
+import { phonePaneOpen } from './phone-pane.ts';
 
 /** This pane shows its PC's side pane: no browser of its own here, and the session reads the PC's. */
 export function phonePane(): boolean {
   return !bridge?.workspaceBrowser && can('tabs.get');
+}
+
+/** A page that runs on the PC opens in the PC's pane from here (the phone): true when side.open may be called. */
+export function opensInPcPane(): boolean {
+  return phonePane() && can('side.open');
+}
+
+/** Opens `url` in a new tab of the PC's pane, shown there, and opens this phone's pane sheet on it; a failure is a toast. */
+export async function openInPcPane(url: string): Promise<void> {
+  try {
+    await rpc.call('side.open', { url });
+    phonePaneOpen.value = true;
+  } catch (error) { toastError(error, 'The PC could not open that page'); }
+}
+
+/**
+ * A page the runtime already opened in the PC's pane for this phone (a device's sign-in, providers.ts openOnPc): this
+ * phone's sheet opens on it – true; false in the owner's window or without the PC's pane here (the caller opens the page).
+ */
+export function showOpenedOnPc(): boolean {
+  if (isOwner() || !phonePane()) return false;
+  phonePaneOpen.value = true;
+  return true;
 }
 
 /** A space as this pane would send it back (what it shows of it, in its order). */
@@ -44,6 +74,17 @@ export function phoneChanges(known: SideSpaces, next: SideSpaces): { spaces: Sid
   return { spaces, closed: [...new Set(closed)] };
 }
 
+/** `own` (this device's spaces) with the shared websites of `shared` in place of those `own` had: the rest stays this device's – pure. */
+export function withShared(own: SideSpaces, shared: SideSpaces): SideSpaces {
+  const next: SideSpaces = {};
+  for (const key of new Set([...Object.keys(own), ...Object.keys(shared)])) {
+    const tabs = [...(shared[key]?.tabs ?? []), ...(own[key]?.tabs ?? []).filter((tab) => tab.panel !== 'remote')];
+    const shown = own[key]?.shown ?? shared[key]?.shown;
+    if (tabs.length) next[key] = { ...(shown !== undefined && tabs.some((tab) => tab.id === shown) ? { shown } : {}), tabs };
+  }
+  return next;
+}
+
 let started = false;
 
 /** Keeps this pane in step with its PC (idempotent; the phone only). */
@@ -58,6 +99,7 @@ export function watchPhoneTabs(): void {
     rpc.call('tabs.set', change).catch((error: unknown) => toastError(error, 'The PC did not take that tab change'));
   };
   const take = (pane: PaneTabs) => {
+    if (session.peek()?.kind === 'person') { acceptLayout(withShared(ownLayout(), pane.spaces)); pagesListed.value = true; return; }
     // first: taking them over below sends nothing back – where the PC shows a blank tab, the tab shown here stays
     // (acceptLayout) and counts as the PC's
     known = Object.fromEntries(Object.entries(pane.spaces).map(([key, space]) => [key, space.shown === undefined && shownOf(key) ? { ...space, shown: shownOf(key) } : space]));

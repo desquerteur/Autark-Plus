@@ -50,7 +50,6 @@ export interface DayService {
   focus(taskId: string, action: FocusAction, by: string): TaskView;
   briefing(ownerId: string, date: string): Briefing | null;
   handedOff(ownerId: string, since?: number): TaskView[];
-  sendToTeam(taskId: string, by: string): Promise<TaskView>;
 }
 
 export interface Estimates {

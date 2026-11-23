@@ -156,27 +156,6 @@ test('an occurrence fires once even when two processes tick the same database', 
   assert.equal(h.posts().length, 1);
 });
 
-test('effects per kind: message posts, reminder wakes privately, routine creates a task, timer notifies', () => {
-  const h = setup();
-  h.scheduler.start();
-  h.message({ at: NINE + M }, 'Post this');
-  const reminder = h.scheduler.create({ ownerId: 'ag_tom', conversationId: h.chat.id, kind: 'reminder', title: 'Look', spec: { at: NINE + M }, payload: { note: 'Look at the numbers' } });
-  h.scheduler.create({ ownerId: 'ag_tom', conversationId: h.chat.id, kind: 'routine', title: 'Comments', spec: { at: NINE + M }, payload: { taskTemplate: { title: 'Answer YouTube comments' } } });
-  const todo = h.tasks.create({ conversationId: h.chat.id, title: 'Take the bread out', assigneeKind: 'human', createdBy: 'human' });
-  h.scheduler.create({ ownerId: 'human', kind: 'timer', title: 'Bread', taskId: todo.id, spec: { at: NINE + M }, payload: {} });
-  const statusLines = h.chats.messages(h.chat.id).filter(m => m.kind === 'status' && m.meta.status?.type === 'schedule_created');
-  assert.equal(statusLines.length, 2, 'message and routine are announced; reminder and timer are not');
-  h.clock.advance(M);
-  h.timers.fire();
-  assert.deepEqual(h.posts().map(p => [p.body, p.authorId, p.meta.scheduleId !== undefined]), [['Post this', 'ag_tom', true]]);
-  const wakes = h.wakeRows().filter(w => w.reason === 'schedule');
-  assert.ok(wakes.some(w => w.note === 'Look at the numbers'), `reminder wake (${reminder.id})`);
-  const routineTask = h.tasks.list({ conversationId: h.chat.id }).find(t => t.title === 'Answer YouTube comments')!;
-  assert.equal(routineTask.assigneeId, 'ag_tom');
-  assert.ok(wakes.some(w => w.task_id === routineTask.id), 'the owner is woken for the new task');
-  assert.deepEqual(h.notified.map(n => [n.kind, n.title]).filter(([kind]) => kind === 'todo'), [['todo', 'Bread']]);
-  assert.equal(h.tasks.get(todo.id)!.status, 'needs_you');
-});
 
 test('a schedule whose chat is gone deactivates instead of failing every time', () => {
   const h = setup();

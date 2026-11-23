@@ -9,13 +9,18 @@
 // what only it had (at 0 the joiner merges, and an empty or null text there never clears a text it has – its own
 // name stays; the merged copy then travels back as its change); a section only the joiner has reaches the other PC.
 // API connections (`providers`) travel here; their keys are handles, the values go with the secrets. B-078: profile.notes
-// travels as its own unit 'profile.notes' (OWN_UNITS), so PCs on 0.3.2/0.3.3 skip it like the new section library.
+// travels as its own unit 'profile.notes' (OWN_UNITS), so PCs on 0.3.2/0.3.3 skip it like the new section library;
+// B-085: profile.pcAccess the same way for PCs up to 0.3.4; 16.11.2026: profile.forEveryAgent for PCs up to 0.3.8;
+// 17.11.2026: notifications.computerUse for PCs up to 0.3.9; Autark-Plus: its preferences and routing keys for upstream PCs.
+// B-080 (live 07.11.–08.11.: a newer PC's voice.dictation made an older one refuse every section of each link-up): a key
+// of a known section this PC does not know is left out of the patch, as settings.json leaves it out (settings/read.ts),
+// and the rest of the section applies.
 // Owns: that cut, the section stamps and the patch. Never: writes settings.json itself or sends to a PC that is no
 // 'ceo' link.
 
 import type { RuntimeServices } from '../../contracts.ts';
 import type { Settings, SettingsPatch } from '../../../shared/model/system.ts';
-import { isSettingsSection } from '../../settings/validate.ts';
+import { isSettingsSection, unknownKeys } from '../../settings/validate.ts';
 import { hashOf, wins, type Stamp, type Stamps } from './stamps.ts';
 
 /**
@@ -24,7 +29,21 @@ import { hashOf, wins, type Stamp, type Stamps } from './stamps.ts';
  * (it refuses a patch naming one, settings/validate.ts checkPatchShape); its copies of the section lack the key and the
  * section's hash stays what it was, so they never clear the key here. A new section (library) is skipped the same way.
  */
-const OWN_UNITS: Readonly<Record<string, readonly [section: string, key: string]>> = { 'profile.notes': ['profile', 'notes'] };
+const OWN_UNITS: Readonly<Record<string, readonly [section: string, key: string]>> = {
+  'profile.notes': ['profile', 'notes'],
+  'profile.pcAccess': ['profile', 'pcAccess'], // B-085: a PC on 0.3.4 that wins the profile never clears it
+  'profile.forEveryAgent': ['profile', 'forEveryAgent'], // 16.11.2026: a PC on 0.3.8 that wins the profile never resets it
+  'notifications.computerUse': ['notifications', 'computerUse'], // 17.11.2026: the same for PCs up to 0.3.9 and the notifications section
+  // Autark-Plus keys in sections upstream Autark PCs know (AF-016, AF-017, AF-021/AF-023, the fallback order): they skip them
+  'preferences.whileWorking': ['preferences', 'whileWorking'],
+  'preferences.dictationSend': ['preferences', 'dictationSend'],
+  'routing.accountFallback': ['routing', 'accountFallback'],
+  'routing.fallbacks': ['routing', 'fallbacks'],
+  'feedback.githubRepo': ['feedback', 'githubRepo'], // AF-003: where Report issue files into
+  'onboarding.tour': ['onboarding', 'tour'], // AF-002: the app tour and its first-visit hints
+  'onboarding.tourStep': ['onboarding', 'tourStep'],
+  'onboarding.hints': ['onboarding', 'hints'],
+};
 const isUnit = (name: string): boolean => Object.prototype.hasOwnProperty.call(OWN_UNITS, name);
 
 const PREFIX = 'settings/';
@@ -99,6 +118,7 @@ export function settingsPatch(local: Settings, incoming: Plain, merge = false): 
       continue;
     }
     const change = diff(plain(mine[section]) ? mine[section] : {}, plain(incoming[section]) ? incoming[section] : {}, merge);
+    for (const key of unknownKeys(section, change)) delete change[key]; // B-080: a newer PC's key (see the header)
     if (Object.keys(change).length) addPart(patch, section, change);
   }
   return patch as SettingsPatch;

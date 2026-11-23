@@ -14,11 +14,14 @@ someone who only reads the results, find what a single careful try misses. It co
 work where being wrong costs more than that.
 
 ## How I run one
-`agents.split` is the tool. I give each part `context: brief` so it starts fresh and independent, and:
+`agents.split` is the tool: each attempt is a part of me. I give each part `context: brief` so it starts fresh and
+independent, and:
 - **A really different approach in each brief.** A different hypothesis or method, not the same plan in other words: "assume
   the data is wrong" against "assume the model is wrong". Two are often enough, three is plenty.
 - **The same `returns` for all:** the conclusion first, then the evidence for it, so the results can be laid side by side.
-- **Mixed strengths where it helps:** `model: strong` on one, another model on another. Different models fail differently.
+- **Mixed strengths where it helps:** `model: strong` on one, another model on another, a different `temperature` where the
+  model takes one. Different models fail differently.
+- **Blind to each other while they run:** a note from one attempt to another (`agents.split_tell`) would make them one attempt.
 - **A last part as judge:** `after` the attempts, `context: brief`, reading only their results. It scores them against
   what the task needs and names a pick with its reason, or says that none holds.
 

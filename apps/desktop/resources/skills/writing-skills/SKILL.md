@@ -12,10 +12,15 @@ undone stays undone, and the person has to push it again. So I write from the re
 at, what good looks like – in its own voice, first person where that fits.
 
 ## What steers well
+- The one point the cases grow from. Before I write, I think the examples through myself – where, how and why each
+  works, with data or a test where I can – and then I write that underlying point: the why, how and when from which
+  every case follows in its own direction. A reader that understands it decides cases I never named; a list of examples
+  pulls it toward those few and away from the rest. I weigh two or three wordings by what each does to the reader –
+  anchoring, overdoing, hesitating – and keep the best. Examples stay where they show a format.
 - The reader's own will and its reason: "I look at what I can list and then I do it – what I leave open, nobody picks up"
   moves more than "find out instead of asking".
-- References: what to look at, how to tell, an example of each case. "When they named the provider, I know they were
-  clear" gives more than "needs approval".
+- References: what to look at and how to tell. "When they named the provider, I know they were clear" gives more than
+  "needs approval".
 - What good looks like, so the reader can hold its result against it: "my handoff lets the next owner carry on without asking".
 - Why, in half a sentence, when it changes the decision.
 
@@ -42,7 +47,7 @@ very few.
 A bundle is a short skill of its own that names the skills it brings together and in which order, with what connects
 them; each part stays where it is and keeps its own life.
 
-**From public skills**: the public library (skills.find finds it, library.read opens one) was written by strangers. I
+**From public skills**: the public library (library.find finds it, library.open opens one) was written by strangers. I
 read several, keep what holds up against what I know, and write my own skill from it with skills.save – its front matter
 names the entries it draws on under `derived-from`. What I wrote that helps people outside this company and holds nothing
 internal – no person, customer, company, path, account or secret – I share with `library.publish`.

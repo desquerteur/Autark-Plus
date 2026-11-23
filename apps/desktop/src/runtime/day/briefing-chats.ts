@@ -40,14 +40,3 @@ export function rankChats(chats: readonly ConversationSummary[], signals: ChatSi
   }
   return scored.sort(compareRanked).slice(0, BRIEFING_LIMITS.chats).map(({ chat, reason }) => ({ conversationId: chat.id, reason }));
 }
-
-/** The ranking in the order a helper model proposed (1-based positions of `ranked`); unknown or repeated positions are skipped, the rest keep their place after. */
-export function reorder(ranked: readonly RankedChat[], order: unknown): RankedChat[] {
-  if (!Array.isArray(order)) return [...ranked];
-  const picked: RankedChat[] = [];
-  for (const position of order) {
-    const chat = Number.isInteger(position) ? ranked[(position as number) - 1] : undefined;
-    if (chat && !picked.includes(chat)) picked.push(chat);
-  }
-  return [...picked, ...ranked.filter((chat) => !picked.includes(chat))];
-}

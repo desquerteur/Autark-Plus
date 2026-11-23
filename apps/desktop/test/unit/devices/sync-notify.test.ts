@@ -85,7 +85,7 @@ test('a notification that pushes on A reaches the phones of the CEO PC B once â€
   assert.deepEqual(b.desktop, [], 'no second desktop notification or sound');
   assert.equal(b.phones.length, 1);
   const [mine, theirs] = [a.phones[0], b.phones[0]];
-  assert.equal(theirs.id, mine.id, 'the same id on both PCs: a phone shows it once');
+  assert.equal(theirs.id, mine.id, 'the same id on both PCs: a service worker shows it once within its origin');
   assert.deepEqual({ ...theirs }, { ...mine });
   assert.deepEqual(b.calls, [], 'B does not relay it again');
   assert.deepEqual(e.phones, []);
@@ -149,6 +149,9 @@ test('the receiver takes a notification only from a CEO link, and skips it witho
   assert.deepEqual(await receiveNotification(b.s, b.notifications, pushed, 'dev_ceo'), { ok: true });
   assert.deepEqual(b.phones.map((input) => [input.id, input.title, input.silent, input.tag, input.conversationId]), [['n1', 'Hello', true, 'ch_1', 'ch_1']]);
   assert.deepEqual(b.desktop, []);
+
+  await receiveNotification(b.s, b.notifications, { ...pushed, id: 'n2', route: '#/settings/devices' }, 'dev_ceo');
+  assert.equal(b.phones[1]?.route, '#/settings/devices', 'B-084: a connect request\'s place reaches the phones of my other PCs');
 
   const bare = new Notifications({ bus: recordingBus().bus, settings: { get: () => { throw new Error('not read'); } }, clock: clock(), log: b.s.log, host: { notify: async () => { throw new Error('no desktop'); } } });
   bare.relayed(pushed); // no channels: nothing to do

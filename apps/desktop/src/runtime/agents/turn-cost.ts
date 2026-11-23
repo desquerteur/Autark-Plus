@@ -3,9 +3,13 @@
 // usage as `lastUsage`, the difference is the first attempt's, and the run's 'failover' note
 // names that attempt's account and model. Each attempt is priced on its own account and model
 // (models/pricing.ts with the catalog's Artificial Analysis prices and the shipped priors'
-// curated prices; the cached input an attempt reported at the prior's cached price, when it has one); the paid amount is
+// curated prices; the cached and the written input an attempt reported at their own prices); the paid amount is
 // booked as the agent's 'tokens' spend, the cost basis and a plan's notional list-price cost are stored on the run (store/run-cost.ts).
-// Owns: the attempt split, the price lookups and the booking.
+// B-089 (11.11.2026: what a run costs, written down): runTokens gives the finish the run's cached input and model calls;
+// package C (17.11.2026) its cache writes too. An engine that reports a session's running total (Claude Code) gets the
+// turn's own cost from turnOwnCost (agents/attempt-cost.ts ownCost applies it); notionalOf prices tokens alone at list price (the
+// one-time repair of bridge/cost-1117.ts).
+// Owns: the attempt split, the price lookups, the turn's own share of a running total and the booking.
 // Never: books a plan's or a local model's cost, invents a price, or fails the turn (a lookup or
 // write that fails is logged; without the failover note the whole turn counts on its account).
 
@@ -13,7 +17,7 @@ import type { RuntimeServices } from '../contracts.ts';
 import { priorFor } from '../models/catalog-merge.ts';
 import { Priors } from '../models/priors.ts';
 import { attemptCost, combineCosts, type AttemptCost, type RunCost, type TokenUsage } from '../models/pricing.ts';
-import { addCache } from '../engines/shared.ts';
+import { addCache, cachedInput } from '../engines/shared.ts';
 import { RunCostRepo } from '../store/run-cost.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import type { AttemptResult, RoutedTurn } from './turn-types.ts';
@@ -49,6 +53,34 @@ function priceAttempts(services: RuntimeServices, turn: Pick<RoutedTurn, 'accoun
   return { run: combineCosts(parts), last };
 }
 
+/**
+ * B-089: the run's cached input (a part of its inputTokens, over its attempts – cachedInput of the merged usage) and its
+ * model calls, each only where the engine reported it. After a failover the count stays out (mergeAttempts keeps only the
+ * final attempt's) – a part is no count.
+ */
+export function runTokens(attempt: Pick<AttemptResult, 'usage' | 'lastUsage' | 'modelCalls'>): { cachedTokens?: number; cacheWriteTokens?: number; modelCalls?: number } {
+  const { usage } = attempt;
+  const cached = usage.cachedInputTokens !== undefined || usage.cacheReadTokens !== undefined;
+  return {
+    ...(cached ? { cachedTokens: cachedInput(usage) } : {}),
+    ...(usage.cacheWriteTokens !== undefined ? { cacheWriteTokens: usage.cacheWriteTokens } : {}), // package C
+    ...(attempt.modelCalls !== undefined && !attempt.lastUsage ? { modelCalls: attempt.modelCalls } : {}),
+  };
+}
+
+/**
+ * Package C: a turn's own cost from the running total its engine reported for the session and the total kept from the
+ * session's turn before (none: a new count; a total below the kept one: the engine started counting anew).
+ */
+export function turnOwnCost(total: number, kept: number | undefined): number {
+  return kept !== undefined && total >= kept ? Math.round((total - kept) * 1e6) / 1e6 : total;
+}
+
+/** Package C: the list-price cost of `usage` on `modelId`, as a plan turn's notional cost (undefined: no price known). */
+export function notionalOf(services: Pick<RuntimeServices, 'catalog'>, priors: Priors, modelId: string, usage: TokenUsage): number | undefined {
+  return priceAttempt(services, priors, undefined, modelId, usage).notionalUsd;
+}
+
 /** Stores the basis and notional cost on the run (before runs.finish, so its event can carry them). */
 export function saveRunCost(services: RuntimeServices, runId: string, cost: RunCost): void {
   try { new RunCostRepo(services.db).save(runId, { basis: cost.basis, notionalUsd: cost.notionalUsd }); } catch (error) {
@@ -64,7 +96,7 @@ export function bookTurnCost(services: RuntimeServices, agentId: string, runId: 
   }
 }
 
-function priceAttempt(services: RuntimeServices, priors: Priors, account: Account | undefined, modelId: string, usage: TokenUsage): AttemptCost {
+function priceAttempt(services: Pick<RuntimeServices, 'catalog'>, priors: Priors, account: Account | undefined, modelId: string, usage: TokenUsage): AttemptCost {
   let model: ModelInfo | undefined;
   try { model = services.catalog.get(modelId); } catch { model = undefined; }
   const providerModel = model?.model ?? modelId.slice(modelId.indexOf(':') + 1);

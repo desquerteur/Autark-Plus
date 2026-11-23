@@ -2,7 +2,8 @@
 // - learned from use over the real chat store, context service and session rows with a Codex-like engine: a tool run
 //   through tools.call joins the offer at the next fresh session (here a context renewal), never in a resumed one –
 //   the resumed session keeps its tools and prompt key; a stateless engine takes it at its next turn;
-// - a tools.call counts (progress, the human.ask must-see rule) and shows as the tool it runs (turn-attempt).
+// - a tools.call counts (progress, the human.ask must-see rule) and shows as the tool it runs (turn-attempt);
+// - B-080: effectful leaves out Codex code mode's native exec/wait wrapper (its nested calls count on their own).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -68,8 +69,8 @@ function setup(sessions = true) {
       runId: `run_${++runs}`, agentId: vic.id, conversationId: chat.id, reason: 'message', notes: [],
       signal: new AbortController().signal, control: { lastSeq: 0, steeredSeq: 0 },
     }),
-    binding: () => store.get(vic.id, chat.id, 'codex'),
-    learn: (name: string) => noteLearned(s, vic.id, chat.id, name),
+    binding: () => store.get(vic.id, 'main', 'codex'),
+    learn: (name: string) => noteLearned(s, vic.id, name),
   };
 }
 
@@ -139,4 +140,15 @@ test('a tools.call counts and shows as the tool it runs (progress, asking the pe
   assert.deepEqual(called, ['tools.call'], 'the registry gets the tools.call (it unwraps it)');
   assert.equal(attempt.tools!.some(effectful), true, 'a write through tools.call counts as progress');
   assert.ok(!statuses.some((note) => /tools\.call/.test(note)), `the status names the real step: ${statuses.join(' | ')}`);
+});
+
+test('B-080: Codex code mode\'s script wrapper is no work in itself – the calls it makes count', () => {
+  assert.equal(effectful({ name: 'exec', native: true, ok: true }), false, 'a script that only read');
+  assert.equal(effectful({ name: 'wait', native: true }), false);
+  assert.equal(effectful({ name: 'shell', native: true, ok: true }), true, 'its nested shell is journaled as its own call');
+  assert.equal(effectful({ name: 'apply_patch', native: true }), true);
+  assert.equal(effectful({ name: 'files.read', native: false, category: 'read' }), false);
+  assert.equal(effectful({ name: 'files.write', native: false, category: 'write_local' }), true);
+  assert.equal(effectful({ name: 'tasks.update', native: false, category: 'think' }), true, 'task work stays work (tasks.*)');
+  assert.equal(effectful({ name: 'exec', native: false, category: 'write_local' }), true, 'only the native wrapper name');
 });

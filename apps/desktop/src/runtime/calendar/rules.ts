@@ -30,7 +30,7 @@ const NONE: BlockChange = { action: 'none' };
 export function blockChange(
   block: Pick<CalendarEvent, 'startAt' | 'endAt' | 'state'>, task: Pick<Task, 'status' | 'completedAt' | 'assigneeKind' | 'estimateMin'>, now: number,
 ): BlockChange {
-  if (task.status === 'cancelled') return { action: 'remove' };
+  if (task.status === 'dropped') return { action: 'remove' };
   if (task.status === 'done') {
     if (block.state !== 'planned') return NONE;
     const at = task.completedAt ?? now;

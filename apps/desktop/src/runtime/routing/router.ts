@@ -1,21 +1,42 @@
-// The router: picks model, engine, account and effort for one turn. One route, in this order:
+// The router: picks model, engine, account and effort for one turn.
+// 17.11.2026 (the model settles; measured 15.–17.11.: 177 model switches in 1,474 runs, 147 on a live one-hour cache, 60 %
+// undone within two runs, each one writing the whole context again): the model changes where a context starts anew
+// anyway, the effort on every turn. One route, in this order:
 //   category: the mode's, refined by keywords for generic modes (categories.ts), else 'chat'
 //   → candidates (pool.ts: connected, not excluded, needs, the mode's tier as a preference, policy band, "never" priors)
-//   → pin (chat choice > agent policy) – the person's or the agent's explicit choice
-//   → the agent's own model.set: the kind of model it asked for (need.ts: stronger, cheaper, faster, vision, long
-//     context) or the model it named
-//   → the Settings use (settings.json Models: agents the Work model, runtime helper calls the Decisions model –
-//     routing/pins.ts), then for helper calls the helper default (helper-default.ts) on its qualifying plan accounts only
-//   → a person's own request (a new line of a person in the chat): the strongest model the Work use allows, effort ≥ high,
-//     its smarts weighed against its list price (person-turn.ts; not in the cheaper cost mode) – background turns and
-//     helper calls go on below
-//   → the previous model continues unless it is weak for the work (previous.ts)
-//   → the deterministic score (score.ts: curated prior + tier fit + plan headroom − cost, work plan bonus for agents)
-//   → effort (previous.ts startEffort), clamped to the model's efforts; account: the healthy accounts of that model.
+//   → off a boundary (RouteRequest.boundary false – agents/boundary.ts: a live session) the turn runs on the model that
+//     session is on, whoever asks for another: a start model set since, the Work model, my own model.set – they wait and
+//     the reason names what waits. Two things move it there: that model cannot run now (no usable account, a need such
+//     as images it cannot meet – the reason leads with it, unfit.ts cannotRun) and my own model.set with now.
+//   → at a boundary (no session, a cold cache, a fold; also a preview and a part's first turn):
+//     my own model.set – the kind of model I asked for (need.ts) or the model I named (B-079: it beats my start model; a
+//       request nothing meets leaves the start model in place; D1: a named model that cannot run now leaves the turn on
+//       the model it is on, else on the strongest model at least at its tier and at most its list price)
+//     → the agent's start model (the person's or a lead's choice for this agent, or its own – ModelPolicy.pin)
+//     → the Settings use (settings.json Models: agents the Work model, runtime helper calls the Decisions model –
+//       routing/pins.ts), then for helper calls the helper default (helper-default.ts) on its qualifying plan accounts
+//     → B-080/D3: a pin that cannot run now gets a stand-in from the strongest tier at most at its own list price
+//       (score.ts listPrice) – Auto below chooses inside that set; none that cheap → the whole pool
+//     → Auto: the model I am on while it fits my kind – that is its tier and nothing else (kind.ts: leading the
+//       strongest tier, executing the strong one; an older version runs as its family's newest) – else my kind's
+//       default; a model I only stand on because mine cannot run (`standIn`) is no model of mine, so my kind decides
+//       again. A kind's default other than the one it is when every account runs (pool.ts whole) stands in too. The reason says which and why. A part starts on its origin's model; a fresh one that names none runs
+//       on the executing default when its origin is above it. AF-023: after a pin whose accounts all cannot run, or a
+//       failover off the model I am on, the same model on another connection goes first (closestModel distance 0).
+//     → a runtime helper call without any of these: the deterministic score (score.ts)
+//   → effort (previous.ts startEffortBy), clamped to the model's efforts; a person's new line in the chat raises it to
+//     high or above (person-turn.ts) unless my own request or my fixed effort set it; account: the healthy accounts of
+//     that model – plans keep rotating as before.
 //   → AF-021: a chosen account (chat choice → agent default) of the picked model's provider replaces that account,
 //     or stops / switches with a notice when it cannot run; AF-023: the same for the account a route was meant for –
-//     the use's fallback order in Settings, else the automatic pick, marked so the chat says so (account-fallback.ts).
-//     A pin whose accounts all cannot run falls back to the nearest model (closestModel), so does a failover.
+//     the use's fallback order in Settings, else the automatic pick, marked so the chat says so (account-fallback.ts
+//     settleAccount, applied to every decision in route()).
+// 13.11.2026 (owner: the chat's model choice is "einfach nur da, wird der KI so erklärt"): the person's suggestion in a
+// chat (the composer chip, policies.ts chatChoice) never routes – it stands on their line (context/render.ts); a
+// temperature comes only from my own request (TurnPlan.temperature).
+// The reason names its source: "continues on my model", "requested by the agent", "my start model", the kind's default,
+// and for an effort someone asked for whose it is – mine, my task's with who gave it, my subconscious's with its why
+// (previous.ts effortSource).
 // A split's turn (RouteRequest.split) has no agent pin and keeps an effort it names (split-route.ts).
 // Owns: that order and the user-facing reason. Never: changes state, asks a model, or exceeds the policy band
 // silently (it fails with a clear message instead).
@@ -24,25 +45,32 @@ import type { RouteRequest, Router, RuntimeServices } from '../contracts.ts';
 import type { Account, ModelInfo, RouteDecision } from '../../shared/model/providers.ts';
 import { WorkforceError } from '../../shared/errors.ts';
 import { SYSTEM_ID } from '../../shared/ids.ts';
-import { clampEffort } from '../models/efforts.ts';
+import { clampEffort, effortRank } from '../models/efforts.ts';
 import { categoryLabel, resolveCategory } from './categories.ts';
 import { effectivePolicy } from './policies.ts';
 import { PIN_TEXT, pinProblem, resolvePin, settingsPin } from './pins.ts';
-import { BY_REQUEST, EFFORT_REQUESTED, modelAsked, returnBlocked, startEffort } from './previous.ts';
-import { NO_MODEL_MESSAGE, nothingFits } from './unfit.ts';
+import { BY_REQUEST, MODEL_REQUESTED, effortSource, modelAsked, startEffortBy } from './previous.ts';
+import { NO_MODEL_MESSAGE, askedMiss, cannotRun, nothingFits } from './unfit.ts';
 import { buildPool, type PoolEntry } from './pool.ts';
 import { helperDefault } from './helper-default.ts';
 import { workPlanOf } from './preference.ts';
-import { marginalCost, scoreModel, strengthOf, tierRank, type CostMode } from './score.ts';
+import { listPrice, marginalCost, scoreModel, strengthOf, tierRank, type CostMode, type Tier } from './score.ts';
 import { NEED_TEXT, NO_FIT_TEXT, needChoice, raisedText, stepUpEffort } from './need.ts';
 import { splitPolicy } from './split-route.ts';
-import { PERSON_TEXT, personAsks, personEffort, strongestPick, topTier } from './person-turn.ts';
+import { PERSON_EFFORT, PERSON_TEXT, personAsks, personEffort, topTier } from './person-turn.ts';
+import { kindDefault, kindTier } from './kind.ts';
+import { leads } from '../org/standard.ts';
 import { chosenAccount } from './account-choice.ts'; // AF-021
 import { closestModel, settleAccount } from './account-fallback.ts'; // AF-023
 import { fallbackOrder, fallbackUseOf } from '../../shared/model/account-fallback.ts'; // AF-023
 
 export { NO_MODEL_MESSAGE };
 const ALTERNATIVES = 3;
+
+/** The reason of a turn that goes on where I am. */
+export const ON_TEXT = 'continues on my model';
+/** The reason of a part's first turn on the model its origin runs on. */
+export const ORIGIN_TEXT = "my origin's model";
 
 interface Ranked { model: ModelInfo; accounts: Account[]; score: number }
 /** AF-023: what pick saw that the account step needs: a pin whose accounts all cannot run, and the turn's model filter. */
@@ -81,78 +109,141 @@ export class RouterImpl implements Router {
 
     const now = s.clock.now();
     const settings = s.settings.get().routing;
-    const policy = splitPolicy(effectivePolicy(s, request.agent, request.conversationId), request);
+    const runtime = request.agent.id === SYSTEM_ID;
+    const person = !runtime && personAsks(s, request); // a person's own line: its effort floor
+    const policy = splitPolicy(effectivePolicy(s, request.agent), request);
     const category = resolveCategory(request.mode.category, request.text);
     const costMode: CostMode = policy.costMode ?? settings.costMode ?? 'balanced';
-    const runtime = request.agent.id === SYSTEM_ID;
     const workPlan = runtime ? undefined : workPlanOf(s); // agent work prefers that plan; helpers stay on the helper default
     const minTier = tierRank(request.needs?.tier) > tierRank(request.mode.minTier) ? request.needs?.tier : request.mode.minTier;
 
     const candidates = buildPool({ s, models, category, policy, needs: request.needs, minTier, exclude: new Set(request.exclude ?? []) });
     const { accountsFor, unusable, inBand } = candidates;
     seen.runnable = (model) => !unusable(model); // AF-023: a fallback step must serve this turn too (needs, availability)
-    const pool = candidates.entries;
+    let pool = candidates.entries;
     const prefer = new Set(policy.prefer);
     const rank = (entries: readonly PoolEntry[], mode: CostMode): Ranked[] => entries
       .map((entry) => ({ ...entry, score: scoreModel({ model: entry.model, account: entry.accounts[0], category, costMode: mode, preferred: prefer.has(entry.model.id), now, workPlan }) }))
       .sort((a, b) => b.score - a.score || a.model.id.localeCompare(b.model.id));
-    const ranked = rank(pool, costMode);
+    let ranked = rank(pool, costMode);
+    /** B-080/D1/D3: who stands in for a model that cannot run now – at most its list price (at least `tier`), the strongest tier of those. */
+    const standIns = (price: number, tier?: Tier): PoolEntry[] =>
+      topTier(pool.filter((entry) => listPrice(entry.model) <= price + 1e-9 && tierRank(entry.model.tier) >= tierRank(tier)));
 
-    let needNote: string | undefined; // nothing met the agent's need – it leads the reason of the route the rules pick
+    const previous = request.previous;
+    const asking = !runtime && (previous?.need !== undefined || modelAsked(previous)); // my own model.set names a model or a kind of one
+    // The model I am on – under a request that names another it rides on `from` – and whether it can run this turn.
+    const onId = asking ? previous?.from : previous?.modelId;
+    const onModel = onId ? resolvePin(models, onId) : undefined;
+    const on = onModel ? candidates.runs(onModel) : undefined;
+
+    let leadNote: string | undefined; // what I asked for that nothing meets, or the model that cannot run – it leads every reason
+    // The model I am on cannot run now: whatever runs instead stands in for it (and a turn that stays on a stand-in
+    // stands in too), so my next boundary looks past it and my kind decides again.
+    const cannotRunOn = onModel !== undefined && on === undefined;
+    // Step 5's own answer, once Auto picks by my kind: its pick differs from the one it makes when every account runs.
+    let kindStandIn: boolean | undefined;
+    const standsIn = (chosen: ModelInfo): boolean => cannotRunOn || (kindStandIn ?? (previous?.standIn === true && chosen.id === onModel?.id));
     const decide = (chosen: { model: ModelInfo; accounts: Account[] }, by: RouteDecision['by'], reason: string, keptPrevious: boolean): RouteDecision => {
-      const start = startEffort(policy, request.previous, category, keptPrevious);
-      const notes = [...(needNote ? [needNote] : []), reason];
-      if (start.requested && by !== BY_REQUEST) notes.push(EFFORT_REQUESTED);
+      // B-089: the origin of the effort rides on the decision (effortBy), so a run's stored route says where it came from
+      const start = startEffortBy(policy, previous, category, keptPrevious);
+      const notes = [...(leadNote ? [leadNote] : []), reason];
+      // an effort someone asked for names whose it is – unless the whole route is my own request
+      if (start.requested && (by !== BY_REQUEST || previous?.by)) notes.push(effortSource(previous));
+      let effort = clampEffort(start.effort, chosen.model.efforts);
+      // A person's new line: effort high or above, unless my own request or my fixed effort set it. It is that turn's –
+      // the run says the effort was asked for, so my next wake starts from my settled effort again (next-route.ts ownEffort).
+      const fixed = start.by === 'agent' || (start.requested && !previous?.by);
+      let lifted = false;
+      if (person && !fixed && effortRank(effort) < effortRank(PERSON_EFFORT)) {
+        effort = clampEffort(personEffort(effort), chosen.model.efforts);
+        lifted = true;
+        notes.push(PERSON_TEXT);
+      }
       return {
-        modelId: chosen.model.id, engine: chosen.model.engine, accountId: chosen.accounts[0].id, effort: clampEffort(start.effort, chosen.model.efforts), category,
-        reason: notes.join(' · '), by: start.requested ? BY_REQUEST : by,
+        modelId: chosen.model.id, engine: chosen.model.engine, accountId: chosen.accounts[0].id, effort, category,
+        reason: notes.join(' · '), by: start.requested ? BY_REQUEST : by, effortBy: lifted ? 'request' : start.by,
+        ...(standsIn(chosen.model) ? { standIn: true as const } : {}),
         alternatives: ranked.filter((entry) => entry.model.id !== chosen.model.id).slice(0, ALTERNATIVES).map((entry) => entry.model.id),
       };
     };
 
-    // 1. Pins win when usable. Explicit choices (chat, agent pin) may leave the policy band and cost preferences;
-    //    default pins stay inside the agent's band. `only`: the accounts that may run this pin (the helper default's
-    //    plan logins); none of them left → undefined without a fallback note.
+    // 1. Off a boundary the turn runs on the model its session is on; what asks for another waits for my next fresh
+    //    context, and the reason names it. My own model.set with now moves it at once; a model that cannot run moves on below.
+    if (request.boundary === false && !runtime) {
+      if (on && !(asking && previous?.now)) {
+        const usePin = settingsPin(settings, request);
+        const wish = asking ? previous!.modelId : policy.pin?.modelId ?? usePin?.modelId;
+        const waiting = wish ? resolvePin(models, wish) : undefined;
+        const waits = waiting && waiting.id !== on.model.id ? `${waiting.name} from my next context` : undefined;
+        return decide(on, 'previous', [ON_TEXT, waits, categoryLabel(category)].filter(Boolean).join(' · '), true);
+      }
+      if (!on && onModel) leadNote = cannotRun({ s, request, pool: candidates, named: onModel, category, now });
+    }
+
+    // 2. The start model runs when usable and I ask for nothing myself. It may leave the policy band and cost
+    //    preferences; default pins stay inside the agent's band, and so does a start model the agent set itself
+    //    (model.set), on the accounts Auto uses (pool.ts runs: pay-per-use keys only as a spill-over).
+    //    `only`: the accounts that may run this pin (the helper default's plan logins); none left → undefined, no note.
     let fallbackReason: string | undefined;
-    const tryPin = (pin: { modelId: string; source: keyof typeof PIN_TEXT }, banded: boolean, only?: ReadonlySet<string>): RouteDecision | undefined => {
+    let failedPrice: number | undefined; // B-080: the list price of the first pin that cannot run now
+    const tryPin = (pin: { modelId: string; source: keyof typeof PIN_TEXT; self?: true }, banded: boolean, only?: ReadonlySet<string>): RouteDecision | undefined => {
       const pinned = resolvePin(models, pin.modelId);
       let why = pinned ? unusable(pinned) : 'unavailable';
-      if (!why && banded && pinned && !inBand(pinned)) why = 'policy';
-      const accounts = pinned && !why ? accountsFor(pinned).filter((account) => !only || only.has(account.id)) : [];
+      if (!why && (banded || pin.self) && pinned && !inBand(pinned)) why = 'policy';
+      const usable = pinned && !why ? (pin.self ? candidates.runs(pinned)?.accounts ?? [] : accountsFor(pinned)) : [];
+      const accounts = usable.filter((account) => !only || only.has(account.id));
       if (pinned && !why && !accounts.length && !only) seen.blocked ??= pinned; // AF-023: every account of the pin is used up
       if (pinned && accounts.length) {
         const reason = [fallbackReason, `${PIN_TEXT[pin.source]} · ${categoryLabel(category)}`].filter(Boolean).join(' · ');
-        return decide({ model: pinned, accounts }, fallbackReason ? 'fallback' : 'pin', reason, request.previous?.modelId === pinned.id);
+        return decide({ model: pinned, accounts }, fallbackReason ? 'fallback' : 'pin', reason, onModel?.id === pinned.id);
       }
       if (only) return undefined;
-      fallbackReason ??= why && why !== 'unavailable' ? `pinned model unsuitable (${pinProblem(why, category)})` : 'pinned model unavailable';
+      const unsuitable = why && why !== 'unavailable' ? why : undefined;
+      if (pinned && !unsuitable) failedPrice ??= listPrice(pinned); // B-080: it cannot run now (not: unfit for this work)
+      fallbackReason ??= unsuitable ? `pinned model unsuitable (${pinProblem(unsuitable, category)})` : 'pinned model unavailable';
       return undefined;
     };
-    const pinned = policy.pin ? tryPin(policy.pin, false) : undefined;
+    const startPin = () => (policy.pin ? tryPin(policy.pin, false) : undefined);
+    const pinned = !asking ? startPin() : undefined; // B-079: it yields to my own request
     if (pinned) return pinned;
 
-    // 2. The agent's own model.set: the kind of model it asked for, else the model it named.
-    const need = runtime ? undefined : request.previous?.need;
+    // 3. My own model.set: the kind of model I asked for, else the model I named.
+    const need = runtime ? undefined : previous?.need;
     if (need) {
       const from = need.from ? models.find((model) => model.id === need.from) : undefined;
       const choice = needChoice({
         need: need.kind, from, category, cost: (entry: PoolEntry) => marginalCost(entry.model, entry.accounts[0], now),
-        scope: pool, rank, costMode, named: request.previous?.modelId,
+        scope: pool, rank, costMode, named: previous?.modelId,
       });
       const entry = choice.named ?? choice.raised ?? choice.ranked[0];
       if (entry) {
         const lead = choice.raised ? raisedText(need.kind) : NEED_TEXT[need.kind];
         const decision = decide(entry, BY_REQUEST, [fallbackReason, `${lead} · ${categoryLabel(category)}`].filter(Boolean).join(' · '), entry.model.id === need.from);
-        // stronger without a stronger model: one effort step up – unless the effort is fixed or was asked.
-        const lift = choice.raised && policy.agentEffort === undefined && policy.chatEffort === undefined && request.previous?.asked === 'model';
+        // stronger without a stronger model: one effort step up – unless the agent fixed its effort or asked for one.
+        const lift = choice.raised && policy.agentEffort === undefined && previous?.asked === 'model';
         return lift ? { ...decision, effort: stepUpEffort(decision.effort, entry.model.efforts) } : decision;
       }
-      needNote = NO_FIT_TEXT[need.kind];
+      leadNote = NO_FIT_TEXT[need.kind];
     }
-    const asked = !need && modelAsked(request.previous) ? ranked.find((entry) => entry.model.id === request.previous?.modelId) : undefined;
-    if (asked) return decide(asked, BY_REQUEST, [fallbackReason, `requested by the agent · ${categoryLabel(category)}`].filter(Boolean).join(' · '), true);
+    const named = !need && asking ? resolvePin(models, previous!.modelId) : undefined; // D5: older id forms too
+    const runs = named ? candidates.entryFor(named) : undefined; // an older version I named runs as its family's newest
+    const asked = runs ? ranked.find((entry) => entry.model.id === runs.model.id) : undefined;
+    if (asked) return decide(asked, BY_REQUEST, [fallbackReason, `${MODEL_REQUESTED} · ${categoryLabel(category)}`].filter(Boolean).join(' · '), true); // same kind of work: my settled effort goes with me
+    // D1: a model I named that cannot run now – my turn stays on the model it is on (its session and cache), else the strongest
+    // model at least at its tier and at most its list price, else Auto below. The reason says first what I asked for and
+    // why it cannot run.
+    if (!need && asking) {
+      leadNote = askedMiss({ s, request, pool: candidates, named, category, now });
+      if (on) return decide(on, 'previous', `${ON_TEXT} · ${categoryLabel(category)}`, true);
+      const like = named ? rank(standIns(listPrice(named), named.tier), 'best')[0] : undefined;
+      if (like) return decide(like, BY_REQUEST, `${categoryLabel(category)} · strongest stand-in`, false);
+    }
+    // B-083: a request nothing meets leaves the start model in place.
+    const started = asking ? startPin() : undefined;
+    if (started) return started;
 
-    // 3. The Settings use: agents the Work model (it stays inside the agent's band), runtime helper calls the Decisions
+    // 4. The Settings use: agents the Work model (it stays inside the agent's band), runtime helper calls the Decisions
     //    model (it may leave the helper band); then helper calls take the helper default on its plan logins only.
     const usePin = settingsPin(settings, request);
     const byUse = usePin ? tryPin(usePin, !runtime) : undefined;
@@ -161,41 +252,51 @@ export class RouterImpl implements Router {
     const byHelper = helper ? tryPin(helper, true, helper.accountIds) : undefined;
     if (helper && byHelper) return { ...byHelper, effort: clampEffort(helper.effort, resolvePin(models, helper.modelId)?.efforts ?? []) };
 
+    // B-080/D3: a pin that cannot run now gets a stand-in from the strongest tier at most at its own list price (live
+    // 07.11.: Sol at its limit → Opus max for hours; 08.11.: Luna or an unprofiled nano for an Opus or Terra pin in economy).
+    // Auto chooses inside that set; my own model.set and the Settings Work model above choose freely. Nothing that
+    // cheap connected → the whole pool runs.
+    if (failedPrice !== undefined) {
+      const within = standIns(failedPrice);
+      if (within.length) { pool = within; ranked = rank(within, costMode); }
+    }
+
     if (!ranked.length) throw nothingFits({ ...candidates, s, request, category, now });
 
-    // 4. A person's own request (person-turn.ts): the strongest model the Work use allows, at effort high or above –
-    //    unless the person chose the cheaper cost mode. Background turns and helper calls go on below.
-    if (!runtime && costMode !== 'economy' && personAsks(s, request)) {
-      const pick = strongestPick(rank(topTier(pool), 'best'), category, request.previous?.modelId);
-      if (pick) {
-        const weak = !pick.left ? undefined : pick.why === 'value' // B-078: as capable for less
-          ? `${pick.entry.model.name} does this as well for less than ${pick.left.model.name}`
-          : pick.why === 'stronger' // B-078: clearly more capable at the same or a higher price
-            ? `${pick.entry.model.name} is stronger at ${categoryLabel(category)} than ${pick.left.model.name}`
-            : `${pick.left.model.name} is weak at ${categoryLabel(category)}`; // like returnBlocked
-        const decision = decide(pick.entry, 'rules', [fallbackReason, weak, `${categoryLabel(category)} · ${PERSON_TEXT}`].filter(Boolean).join(' · '), pick.kept);
-        const fixed = policy.agentEffort !== undefined || policy.chatEffort !== undefined || decision.by === BY_REQUEST;
-        return fixed ? decision : { ...decision, effort: clampEffort(personEffort(decision.effort), pick.entry.model.efforts) };
-      }
+    // A runtime helper call that nothing above answered: the best score.
+    if (runtime) {
+      const chosen = ranked[0];
+      return decide(chosen, fallbackReason ? 'fallback' : 'rules', [fallbackReason, `${categoryLabel(category)} · ${ruleReason(chosen, category, costMode)}`].filter(Boolean).join(' · '), false);
     }
 
-    // 5. The previous model continues unless it is weak for this work (or, after a change of work, far from the best).
-    const previous = request.previous ? ranked.find((entry) => entry.model.id === request.previous!.modelId) : undefined;
-    let switchNote: string | undefined;
-    if (previous) {
-      switchNote = returnBlocked({ previous, best: ranked[0], category, from: request.previous?.category });
-      if (!switchNote) return decide(previous, fallbackReason ? 'fallback' : 'previous', [fallbackReason, `continues on the previous model · ${categoryLabel(category)}`].filter(Boolean).join(' · '), true);
+    // 5. Auto: the model I am on while it fits my kind – its tier, nothing else – and is not one I only stand on,
+    //    an older version as its family's newest; else my kind's default. A part past its start stays where its session
+    //    is; a fresh one that names no model starts on its origin's unless that is above what executing needs.
+    const lead = !request.split && leads(s.org, request.agent); // a part executes
+    const newest = onModel ? candidates.entryFor(onModel) : undefined;
+    const mine = newest ? ranked.find((entry) => entry.model.id === newest.model.id) : undefined;
+    const tier = kindTier(pool, lead, costMode);
+    const fits = mine !== undefined && previous?.standIn !== true && ((request.split !== undefined && !request.split.fresh)
+      || (request.split ? tierRank(mine.model.tier) <= tierRank(tier) : mine.model.tier === tier));
+    if (mine && fits) {
+      const kept = mine.model.id === onModel!.id;
+      const why = kept ? (request.split?.fresh ? ORIGIN_TEXT : ON_TEXT) : `${mine.model.name} replaces ${onModel!.name}`;
+      return decide(mine, fallbackReason ? 'fallback' : 'previous', [fallbackReason, why, categoryLabel(category)].filter(Boolean).join(' · '), kept);
     }
-
-    // 6. The best score – AF-023: after a pin whose accounts all cannot run, or a failover off a model no account can run
-    //    now, the nearest model to it (the same model elsewhere, else the same tier; the score breaks ties).
-    const failedModel = request.exclude?.length && request.previous && !previous ? models.find((model) => model.id === request.previous!.modelId) : undefined;
-    const target = seen.blocked ?? failedModel;
-    const chosen = (target ? closestModel(target, ranked, (entry) => entry.model) : undefined) ?? ranked[0];
-    if (chosen.model.id === previous?.model.id) switchNote = undefined; // weak, but nothing better is allowed
-    const nearest = target && chosen !== ranked[0] ? `nearest to ${target.name}` : undefined;
-    const reason = [fallbackReason, switchNote, `${categoryLabel(category)} · ${nearest ?? ruleReason(chosen, category, costMode)}`].filter(Boolean).join(' · ');
-    return decide(chosen, fallbackReason ? 'fallback' : 'rules', reason, request.previous?.modelId === chosen.model.id);
+    // AF-023: after a pin whose accounts all cannot run, or a failover off the model I am on that cannot run now, the same
+    // model on another connection goes first (the score breaks ties); any other stand-in is my kind's pick below.
+    // A model left out itself (it declined the conversation, turn.ts) gets no twin: the next model takes it (0.3.12).
+    const target = seen.blocked ?? (request.exclude?.length && cannotRunOn && onModel && !request.exclude.includes(onModel.id) ? onModel : undefined);
+    const nearest = target ? closestModel(target, ranked, (entry) => entry.model) : undefined;
+    if (target && nearest && sameModel(target, nearest.model)) {
+      kindStandIn = true;
+      return decide(nearest, 'fallback', [fallbackReason, `nearest to ${target.name}`, categoryLabel(category)].filter(Boolean).join(' · '), nearest.model.id === onModel?.id);
+    }
+    const pick = kindDefault({ pool, rank, lead, costMode });
+    if (!pick) throw nothingFits({ ...candidates, s, request, category, now });
+    // My kind's own model was left out only because it cannot run now (a first turn in an outage too): the pick stands in.
+    kindStandIn = kindDefault({ pool: candidates.whole(), rank, lead, costMode })?.entry.model.id !== pick.entry.model.id;
+    return decide(pick.entry, fallbackReason ? 'fallback' : 'rules', [fallbackReason, pick.why, categoryLabel(category)].filter(Boolean).join(' · '), pick.entry.model.id === onModel?.id);
   }
 }
 
@@ -204,4 +305,10 @@ function ruleReason(entry: Ranked, category: string, costMode: CostMode): string
   if (costMode === 'economy') return 'best value';
   if (costMode === 'best' && entry.model.tier === 'frontier') return 'top tier';
   return 'best fit';
+}
+
+/** AF-023: the same model on another connection (closestModel's distance 0; the Gemini API's "models/…" path ignored). */
+function sameModel(target: ModelInfo, model: ModelInfo): boolean {
+  const bare = (id: string) => id.slice(id.lastIndexOf('/') + 1).toLowerCase();
+  return model.model === target.model || bare(model.model) === bare(target.model);
 }

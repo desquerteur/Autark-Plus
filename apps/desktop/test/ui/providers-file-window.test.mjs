@@ -128,16 +128,20 @@ test('settings: providers as a file, free model names, protocols', { timeout: 30
   assert.equal(uses.accountId, 'mine');
   assert.equal(uses.gone, undefined);
 
-  // "Other…" on a listed connection (with nothing picked the row shows what runs: the model `uses` names); Esc goes back without writing.
+  // "Other…" on a listed connection; Esc goes back without writing. Since the word index (14.11.2026) "auto" is no embedding model: with nothing
+  // picked the row says Off and `models.uses` agrees – the connection's model is listed, never used unasked.
   const embeddings = row('embeddings');
   await embeddings.scrollIntoViewIfNeeded();
+  await until('the row says Off', async () => /Off/.test((await embeddings.locator('.set-row-control').textContent()) ?? ''));
+  assert.equal((await rpc.call('models.uses')).find((entry) => entry.use === 'embeddings').kind, 'off');
+  await choose(embeddings, 'Embeddings: provider', 'My server'); // the person picks the connection: its listed model is now the one that runs
   await until('the row shows the model', async () => /x-vec-2/.test((await embeddings.locator('.set-row-control').textContent()) ?? ''));
   await choose(embeddings, 'Embeddings: model', 'Other…');
   const other = embeddings.getByRole('textbox', { name: 'Embeddings: model name', exact: true });
   await other.fill('never-written');
   await other.press('Escape');
   await embeddings.getByRole('combobox', { name: 'Embeddings: model', exact: true }).waitFor();
-  assert.equal((await rpc.call('settings.get')).routing.embeddings, 'auto');
+  assert.doesNotMatch(String((await rpc.call('settings.get')).routing.embeddings), /never-written/, 'Esc wrote nothing');
 
   // A decision connection: Decisions lists it, Work does not. Its address is this PC's closed port.
   await rpc.call('settings.update', { providers: { typesafe: { name: 'Decision server', protocol: 'decision', url: 'http://127.0.0.1:9/v1', models: ['jev-latest'] } } });

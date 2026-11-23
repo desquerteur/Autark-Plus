@@ -1,12 +1,12 @@
 // One knowledge catalog (B-078 D12, owner 06.11.2026: "nicht so getrennt … wie aktuell Skills und Memory"): every text the
 // AI can reach, as one list – the skills of every root (skills/service.ts), the home project's instruction files and
-// SKILL.md skills (agent-core/home.ts) and the public library (library/sources.ts). Memory is the same kind of text and is
-// already embedded by the memory tree; a find searches "catalog" and "memory" together (knowledge/find.ts). Each entry:
+// SKILL.md skills (agent-core/home.ts); the public library is its own search (library.find). Memory is the same kind of text; a find
+// searches "catalog" and "memory" together (find/service.ts), both by their words (knowledge/words.ts). Each entry:
 // key, title, description (given, else generated – knowledge/describe.ts – else heading + first sentence), size, origin
-// (own | project | public), always, path. syncCatalog embeds the entries as virtual vector entries (vectors/virtual.ts: a
-// short text whole, a big one by title + description) and removes the ones that are gone; it runs when a find asks and
-// the last sync is older than SYNC_MS or something changed (catalogChanged), in the vector system's one queue, never on a
-// timer of its own. Afterwards it describes a few entries that have no description.
+// (own | project), always, path. syncCatalog runs when a find asks and the last sync is older than SYNC_MS or
+// something changed (catalogChanged), never on a timer of its own: where a person chose an embedding model it embeds the
+// entries as virtual vector entries (vectors/virtual.ts: a short text whole, a big one by title + description) and removes
+// the ones that are gone, in the vector system's one queue; then it describes a few entries that have no description.
 // Owns: the entry list, the sync and when descriptions are asked for. Never: reads a body into a prompt or treats a text as an instruction.
 
 import { readFileSync } from 'node:fs';
@@ -14,7 +14,6 @@ import path from 'node:path';
 import type { RuntimeServices } from '../contracts.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import type { SkillInfo } from '../../shared/model/knowledge.ts';
-import type { LibraryEntry } from '../../shared/model/library.ts';
 import { fallbackDescription } from '../../shared/text/external.ts';
 import '../contracts/vectors.ts';
 import '../contracts/agent-core.ts';
@@ -23,15 +22,14 @@ import { sha256 } from '../skills/import-text.ts';
 import { readSkillBody } from '../skills/discover.ts';
 import { CHUNK_CHARS } from '../vectors/chunk.ts';
 import { embedTextOf } from '../vectors/virtual.ts';
-import { libraryEntries } from '../library/sources.ts';
 import { helperOf } from '../day/helper.ts';
 import { describeFile, describedText, describeText, rememberDescribed } from './describe.ts';
 
-export type CatalogOrigin = 'own' | 'project' | 'public';
-export type CatalogKind = 'skill' | 'project' | 'library';
+export type CatalogOrigin = 'own' | 'project';
+export type CatalogKind = 'skill' | 'project';
 
 export interface CatalogEntry {
-  /** The virtual vector key: catalog/skill/<owner>/<name>, catalog/project/<home>/<route>, catalog/public/<source>/<name>. */
+  /** The virtual vector key: catalog/skill/<owner>/<name>, catalog/project/<home>/<route>. */
   key: string;
   kind: CatalogKind;
   title: string;
@@ -47,7 +45,6 @@ export interface CatalogEntry {
   /** The text itself when it is short enough to be embedded whole. */
   body?: string;
   skill?: SkillInfo;
-  library?: LibraryEntry;
   /** An own file: a generated description goes into its front matter. */
   writable?: boolean;
 }
@@ -55,7 +52,7 @@ export interface CatalogEntry {
 export const SYNC_MS = 10 * 60_000;
 const BUDGET_MS = 60_000;
 const DESCRIBE_BATCH = 6;
-const PREFIXES = ['catalog/skill', 'catalog/public'] as const;
+const PREFIXES = ['catalog/skill', 'catalog/public'] as const; // catalog/public: the old cloned library's vectors go at the next sync
 
 const shortHash = (text: string): string => sha256(text).slice(0, 10);
 
@@ -116,20 +113,9 @@ export function projectEntries(services: RuntimeServices, agent: Agent | undefin
   return [...files, ...skills];
 }
 
-/** The public library's entries on this PC. */
-export function publicEntries(services: RuntimeServices): CatalogEntry[] {
-  let entries: LibraryEntry[];
-  try { entries = libraryEntries(services.paths.data, services.clock.now()); } catch { return []; }
-  return entries.map((entry): CatalogEntry => ({
-    key: `catalog/public/${entry.source}/${entry.name}`, kind: 'library', title: entry.name,
-    description: (entry.sha256 ? describedText(services, entry.sha256) : undefined) ?? entry.description, given: !entry.fallback,
-    origin: 'public', always: false, path: entry.file ?? entry.url ?? '', size: entry.size ?? entry.description.length, ...(entry.sha256 ? { sha: entry.sha256 } : {}), library: entry,
-  }));
-}
-
 /** The whole catalog a viewer reaches (its home project only for an agent). */
 export function catalogEntries(services: RuntimeServices, viewer?: Agent): CatalogEntry[] {
-  return [...skillEntries(services), ...projectEntries(services, viewer), ...publicEntries(services)];
+  return [...skillEntries(services), ...projectEntries(services, viewer)];
 }
 
 // ------------------------------------------------------------------ sync
@@ -143,7 +129,7 @@ function stateOf(services: RuntimeServices): SyncState {
   return state;
 }
 
-/** Something in the catalog changed (a skill saved, a library synced): the next find syncs again. */
+/** Something in the catalog changed (a skill saved): the next find syncs again. */
 export function catalogChanged(services: RuntimeServices): void {
   stateOf(services).dirty = true;
 }
@@ -151,7 +137,6 @@ export function catalogChanged(services: RuntimeServices): void {
 /** Starts a sync in the background when one is due; the find goes on with what is embedded. */
 export function kickCatalog(services: RuntimeServices, viewer?: Agent): Promise<void> | undefined {
   const state = stateOf(services);
-  if (!services.vectors?.embedTexts || !services.vectors.available()) return undefined;
   if (state.running) return state.running;
   const home = viewer ? projectEntries(services, viewer)[0]?.key.split('/').slice(0, 3).join('/') : undefined;
   const newHome = home !== undefined && !state.homes.has(home);
@@ -164,11 +149,15 @@ export function kickCatalog(services: RuntimeServices, viewer?: Agent): Promise<
   return state.running;
 }
 
-/** Embeds what changed, removes what is gone, then describes a few entries without a description. */
+/** With an embedding model: embeds what changed and removes what is gone; then describes a few entries without a description. */
 export async function syncCatalog(services: RuntimeServices, viewer?: Agent): Promise<void> {
-  const vectors = services.vectors;
-  if (!vectors?.embedTexts) return;
   const entries = catalogEntries(services, viewer);
+  const vectors = services.vectors;
+  if (vectors?.embedTexts && vectors.available()) await embedCatalog(services, vectors, entries);
+  await describeSome(services, entries);
+}
+
+async function embedCatalog(services: RuntimeServices, vectors: NonNullable<RuntimeServices['vectors']>, entries: readonly CatalogEntry[]): Promise<void> {
   const state = stateOf(services);
   const projectPrefix = entries.find((entry) => entry.kind === 'project')?.key.split('/').slice(0, 3).join('/');
   if (projectPrefix) state.homes.add(projectPrefix);
@@ -178,11 +167,10 @@ export async function syncCatalog(services: RuntimeServices, viewer?: Agent): Pr
   }
   const items = entries.map((entry) => ({ key: entry.key, text: embedTextOf({ title: entry.title, description: entry.description, ...(entry.body ? { body: entry.body } : {}) }) }));
   for (let at = 0; at < items.length;) {
-    const result = await vectors.embedTexts(items.slice(at), { budgetMs: BUDGET_MS });
+    const result = await vectors.embedTexts!(items.slice(at), { budgetMs: BUDGET_MS });
     if (result.failed || !result.remaining) break;
     at = items.length - result.remaining;
   }
-  await describeSome(services, entries);
 }
 
 /** A few entries without a written description get a generated one (decision model); none without a model. */
@@ -198,19 +186,16 @@ export async function describeSome(services: RuntimeServices, entries: readonly 
     if (!description || !entry.sha) continue;
     rememberDescribed(services, entry.sha, description, services.clock.now()); // also an own file: the same text is not asked again
     if (entry.writable && entry.skill) describeFile(entry.path, entry.skill.name, description, sha256, entry.sha); // the skill library sees the new mtime on its next read
+    skillCache.delete(services); // KV-backed descriptions can change without any skill file mtime change.
     changed.push({ ...entry, description });
   }
-  if (changed.length) await services.vectors?.embedTexts?.(changed.map((entry) => ({ key: entry.key, text: embedTextOf({ title: entry.title, description: entry.description, ...(entry.body ? { body: entry.body } : {}) }) })));
+  if (changed.length && services.vectors?.available()) await services.vectors.embedTexts?.(changed.map((entry) => ({ key: entry.key, text: embedTextOf({ title: entry.title, description: entry.description, ...(entry.body ? { body: entry.body } : {}) }) })));
   return changed.length;
 }
 
-/** An entry's text for its description (a library file through the external read; an index-only entry has none). */
-function entryText(entry: CatalogEntry): string | undefined {
+/** An entry's text for its description and the word index. */
+export function entryText(entry: CatalogEntry): string | undefined {
   if (entry.body) return entry.body;
-  if (!entry.path || /^https?:/.test(entry.path)) return undefined;
-  if (entry.kind === 'library' && entry.sha) {
-    const read = readSkillBody({ file: entry.path, sha256: entry.sha, authority: 'external' });
-    return 'body' in read ? read.body : undefined;
-  }
+  if (!entry.path) return undefined;
   try { return parseFrontMatter(readFileSync(entry.path, 'utf8')).body; } catch { return undefined; }
 }

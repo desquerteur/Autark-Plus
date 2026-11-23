@@ -112,9 +112,9 @@
    the area in full view) at the zone's top as above, and so where anchor positioning is missing */
 .message-scroller { anchor-name: --status-top; }
 .main-slot > .status-host { top: calc(anchor(--status-top top, var(--header-h)) + 8px); }
-/* where the global pane lies over the chat (full view, a narrow window's floating pane) they keep the zone's top */
+/* where the global pane lies over the chat (full view) they keep the zone's top; B-080: in a narrow window the pane
+   yields its width (shell.css --pane-size) – the chat keeps 340 px, the list 200 px – so nothing floats over the chat there */
 .app-frame.pane-full > .main-slot > .status-host { top: calc(var(--header-h) + 8px); }
-@media (max-width: 875px) { .app-frame.with-pane > .main-slot > .status-host { top: calc(var(--header-h) + 8px); } }
 .status-note {
   display: flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; padding: 3px 4px 3px 12px; pointer-events: auto;
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-popover);

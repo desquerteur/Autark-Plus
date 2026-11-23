@@ -9,8 +9,9 @@
    the pane moves no header cell. The pane lies below the row with its tab strip as its first line; where
    the row leaves the strip room for three titled tabs (.pane-row-room, Shell.tsx `strip-in-row`) the pane
    starts at the window's top and its strip is the row's part above it, like Chrome's (B-072,
-   workspace-browser.css; the main views keep their cells left of it); in a narrow window it floats below
-   the row. The caption controls' room is assigned once: the main zone is `.rightmost` (Shell.tsx), which becomes
+   workspace-browser.css; the main views keep their cells left of it). B-080 (live at 150 %: a 1100 px window's pane
+   floated over the chat and its composer): in a narrow window the pane yields its width – the chat keeps 340 px, the
+   list 200 px; full view gives a page the whole zone. The caption controls' room is assigned once: the main zone is `.rightmost` (Shell.tsx), which becomes
    --caption-space (the header grid's caption track) – the controls plus the frame's workspace cell
    (WindowBar.tsx), one element at the far right of the row in both states; the status line
    (StatusLine.tsx) lies over the main zone's top.
@@ -44,9 +45,11 @@
 /* The pane's width in viewport terms (the frame is 100vw minus the rail): one length wherever it
    is used – the pane's own width, the main zone's reserve (a percentage would resolve against a
    different box in each place) and a chat's side panel (chat.css), so every right pane is one width
-   and the chat column ends at the same x whichever is open. */
-.shell > .app-frame { --pane-size: clamp(280px, var(--pane-width, 400px), min(800px, calc(100vw - var(--rail-w) - 540px))); }
-.shell > .app-frame.sidebar-closed { --pane-size: clamp(280px, var(--pane-width, 400px), min(800px, calc(100vw - var(--rail-w) - 340px))); }
+   and the chat column ends at the same x whichever is open. B-080: its stored width (280–800) yields to the room the
+   chat (340 px) and the list (200 px) keep – below 280 in a narrow window, never over the chat; the same numbers as
+   before above 875 px, and continuous there. */
+.shell > .app-frame { --pane-size: min(clamp(280px, var(--pane-width, 400px), 800px), calc(100vw - var(--rail-w) - 540px)); }
+.shell > .app-frame.sidebar-closed { --pane-size: min(clamp(280px, var(--pane-width, 400px), 800px), calc(100vw - var(--rail-w) - 340px)); }
 .shell > .app-frame.with-pane { --pane-reserve: var(--pane-size); }
 
 /* The caption controls' room at either edge and the frame's own cells before the right controls:
@@ -71,11 +74,12 @@
 }
 /* The tab room the pane's strip has in the title row: the pane less its 1 px padding, the strip's 6 px and 12 px, the
    caption controls and the frame's two cells (workspace-browser.css), at the pane's width beside the open sidebar, so the
-   sidebar's toggle never moves the strip; none in a narrow window. Shell.tsx measures it: three titled tabs fit
+   sidebar's toggle never moves the strip; a narrow window's smaller pane has less (B-080: by the same min() as the pane,
+   so the strip leaves the row there by itself). Shell.tsx measures it: three titled tabs fit
    (strip-slots.ts ROW_ROOM) → `strip-in-row`. Open or closed alike, so opening the pane moves nothing. */
 .shell > .app-frame > .pane-row-room {
   position: absolute; top: 0; left: 0; height: 0; pointer-events: none;
-  width: max(0px, clamp(280px, var(--pane-width, 400px), min(800px, 100vw - var(--rail-w) - 540px)) - 19px - var(--native-caption-space, 0px) - var(--workspace-cell) - var(--feedback-cell));
+  width: max(0px, min(clamp(280px, var(--pane-width, 400px), 800px), 100vw - var(--rail-w) - 540px) - 19px - var(--native-caption-space, 0px) - var(--workspace-cell) - var(--feedback-cell));
 }
 
 /* The sheet's edge, drawn once above all columns (pointer-events: none): a 1 px line under the
@@ -125,7 +129,7 @@
    its body leaves the pane's room free (padding) and its header row reaches over that room (a
    negative margin into the padding, inside the zone's clip box), so the row and its cells stay
    where they are. No stacking context of its own: the status line (z-index 10) stays above a pane
-   lying over the zone (narrow windows and full view: z-index 9). The body and a chat's side panel
+   lying over the zone (full view: z-index 9). The body and a chat's side panel
    start right under the header row. */
 .main-slot {
   --zone-room: 0px; --caption-space: var(--zone-room);
@@ -171,13 +175,7 @@
 .shell > .app-frame.strip-in-row.pane-full > .global-pane > .workspace-pane { padding-top: calc(var(--header-h) + 1px); background-clip: content-box; pointer-events: none; }
 .shell > .app-frame.strip-in-row.pane-full > .global-pane > .workspace-pane > * { pointer-events: auto; }
 .shell > .app-frame.strip-in-row.pane-full > .global-pane .browser-strip { position: absolute; top: 0; right: 0; width: calc(var(--pane-size) - 1px); } /* in flow it is the pane less its 1 px padding */
-/* Narrow windows: the pane floats over the content below the row instead of squeezing the chat (under the status
-   line), its strip never in the row. */
-@media (max-width: 875px) {
-  .shell > .app-frame.with-pane, .shell > .app-frame.sidebar-closed.with-pane { --pane-reserve: 0px; }
-  .shell > .app-frame > .pane-row-room { width: 0; }
-  .global-pane { width: min(var(--pane-width, 400px), 100%); box-shadow: var(--shadow-panel); }
-}
+/* B-080: no narrow-window float – the pane's width yields there (--pane-size above), so it never lies over the chat. */
 .boot { display: grid; place-items: center; height: 100%; background: var(--chrome); color: var(--muted); }
 
 /* ---------------------------------------------------------------- rail */

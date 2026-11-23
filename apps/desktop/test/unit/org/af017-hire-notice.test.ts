@@ -7,8 +7,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { Org } from '../../../src/runtime/org/service.ts';
-import { PromptTemplates } from '../../../src/runtime/context/templates.ts';
-import { standingRuleValues } from '../../../src/runtime/org/hire.ts';
 import { agentOrgTools } from '../../../src/runtime/tools/builtin/agents-org.ts';
 import { defaultSettings } from '../../../src/runtime/settings/defaults.ts';
 import type { NotificationInput, RuntimeServices } from '../../../src/runtime/contracts.ts';
@@ -18,11 +16,9 @@ import { groupRows, isHireLine } from '../../../src/ui/chat/message-rows.ts';
 import { clock, memoryDb, recordingBus, RESOURCES } from '../store/helpers.ts';
 
 const settings = defaultSettings({ locale: 'en-US', timezone: 'UTC' });
-const prompts = new PromptTemplates(() => path.join(RESOURCES, 'prompts'));
 
 function setup(options: { failing?: boolean } = {}) {
-  const standingRules = (values?: Readonly<Record<string, string>>) => prompts.renderText('agent-default', { ...standingRuleValues(settings), ...values });
-  const org = new Org({ db: memoryDb(), bus: recordingBus().bus, clock: clock(), templatesDir: path.join(RESOURCES, 'agents'), standingRules });
+  const org = new Org({ db: memoryDb(), bus: recordingBus().bus, clock: clock(), templatesDir: path.join(RESOURCES, 'agents') });
   const lines: Array<{ conversationId: string; line: StatusLine; authorId?: string }> = [];
   const notes: NotificationInput[] = [];
   const chats = { status: (conversationId: string, line: StatusLine, opts: { authorId?: string } = {}) => { if (options.failing) throw new Error('db gone'); lines.push({ conversationId, line, authorId: opts.authorId }); } };
@@ -64,11 +60,11 @@ test('a split posts into its parent chat; a hire without any chat still notifies
   assert.equal(none.notes[0].conversationId, undefined);
 });
 
-test('a team hire announces every new agent; a refused hire announces nothing', async () => {
+test('a team hire announces every new agent (a second of the same name becomes "Ida 2" since the 0.3.16 merge)', async () => {
   const { create, lines, notes } = setup();
-  await create({ agents: [{ name: 'Ida', role: 'Designer' }, { name: 'Designer', role: 'Designer' }] }, { conversationId: 'cnv_1' });
-  assert.deepEqual(lines.map((entry) => entry.line.details?.name), ['Ida']);
-  assert.equal(notes.length, 1);
+  await create({ agents: [{ name: 'Ida', role: 'Designer' }, { name: 'Ida', role: 'Designer' }] }, { conversationId: 'cnv_1' });
+  assert.deepEqual(lines.map((entry) => entry.line.details?.name), ['Ida', 'Ida 2']);
+  assert.equal(notes.length, 2, 'one notification per new agent');
 });
 
 test('a failing chat or notification never fails the hire', async () => {

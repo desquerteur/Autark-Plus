@@ -1,15 +1,16 @@
 // Setup assistant, pure rules (src/ui/onboarding/first-run-model.ts, AF-002): when the layer shows, the step order
-// (About you, AI, tools, first agent – no voice, team or permission card), each step's one sentence, whether any model
-// can answer, the profile write with the language, and the language list.
+// (About you, AI, tools, first agent – no voice, team or permission card; upstream 0.3.16's choice card is the first
+// step's "Connect to my other device"), each step's one sentence, whether any model can answer, the profile write with
+// the language and the PC access (B-085), the public-library tick, and the language list.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Account, ModelInfo } from '../../../src/shared/model/providers.ts';
 import type { Settings } from '../../../src/shared/model/system.ts';
 import {
-  CARDS, FIRST_STEP, LAYER_VIEWS, STEP_INFO, cardOf, firstRunShown, languageOptions, nextStep, noUsableModel, previousStep, profilePatch, stepText,
+  CARDS, FIRST_STEP, LAYER_VIEWS, STEP_INFO, cardOf, firstRunShown, languageOptions, libraryPatch, nextStep, noUsableModel, previousStep, profilePatch, stepText,
 } from '../../../src/ui/onboarding/first-run-model.ts';
 import { sentences } from '../../../src/ui/tour/spotlight-model.ts';
 
@@ -48,7 +49,7 @@ test('every step says in one sentence what it is for and has a title', () => {
   }
 });
 
-test('About you writes the trimmed name and company and the language, only what changed', () => {
+test('About you writes the trimmed name and company, the language and the PC access, only what changed', () => {
   assert.deepEqual(profilePatch({ name: '', company: '' }, '  Ada ', ' Lovelace GmbH '), { name: 'Ada', company: 'Lovelace GmbH' });
   assert.deepEqual(profilePatch({ name: 'Ada', company: 'X' }, 'Ada', 'Y'), { company: 'Y' });
   assert.equal(profilePatch({ name: 'Ada', company: '' }, ' Ada', ''), undefined, 'nothing changed: no write');
@@ -56,6 +57,19 @@ test('About you writes the trimmed name and company and the language, only what 
   assert.deepEqual(profilePatch({ name: 'Ada', company: '', language: 'en' }, 'Ada', '', 'de'), { language: 'de' });
   assert.equal(profilePatch({ name: 'Ada', company: '', language: 'de' }, 'Ada', '', 'de'), undefined, 'the same language: no write');
   assert.equal(profilePatch({ name: 'Ada', company: '', language: 'de' }, 'Ada', '', 'Deutsch!'), undefined, 'never a value the settings refuse');
+  // B-085: the PC access choice (upstream's About card, now on About you)
+  assert.deepEqual(profilePatch({ name: 'Ada', company: '' }, 'Ada', '', undefined, 'careful'), { pcAccess: 'careful' });
+  assert.equal(profilePatch({ name: 'Ada', company: '' }, 'Ada', '', undefined, 'whole'), undefined, 'absent is whole: no write');
+  assert.deepEqual(profilePatch({ name: 'Ada', company: '', pcAccess: 'careful' }, 'Ada', '', undefined, 'whole'), { pcAccess: 'whole' }, 'set up again: back to whole');
+  assert.equal(profilePatch({ name: 'Ada', company: '', pcAccess: 'careful' }, 'Ada', ''), undefined, 'Back without the choice keeps it');
+});
+
+test('the public-library tick writes only a change: left ticked nothing, unticked publish false', () => {
+  assert.equal(libraryPatch(undefined, true), undefined, 'a new PC, left ticked: absent counts as on, no write');
+  assert.deepEqual(libraryPatch(undefined, false), { publish: false }, 'unticked on the first run');
+  assert.deepEqual(libraryPatch({ publish: true }, false), { publish: false });
+  assert.equal(libraryPatch({ publish: false }, false), undefined, 'set up again with sharing already off: kept');
+  assert.deepEqual(libraryPatch({ publish: false }, true), { publish: true }, 'ticked again');
 });
 
 test('the language list keeps the PC\'s own code selected, also a longer one', () => {
@@ -85,4 +99,15 @@ test('the assistant\'s cards are the four step files; the voice, team, key-dialo
   const root = path.resolve(import.meta.dirname, '..', '..', '..', 'src', 'ui', 'onboarding');
   for (const gone of ['TeamCard.tsx', 'KeyDialog.tsx', 'ModelRows.tsx', 'VoiceCard.tsx', 'voice-model.ts', 'setup-notice.ts', 'AboutCard.tsx']) assert.equal(existsSync(path.join(root, gone)), false, gone);
   for (const card of ['ProfileCard.tsx', 'AiCard.tsx', 'ConnectorsCard.tsx', 'AgentCard.tsx']) assert.ok(existsSync(path.join(root, card)), card);
+});
+
+test('the first step offers "Connect to my other device" (upstream B-085\'s choice card); no video player in the layer; the AI step has Back', () => {
+  const root = path.resolve(import.meta.dirname, '..', '..', '..', 'src', 'ui', 'onboarding');
+  const firstRun = readFileSync(path.join(root, 'FirstRun.tsx'), 'utf8');
+  const code = firstRun.replace(/^\/\/.*$/gm, '');
+  assert.ok(!/TourPlayer/.test(code), 'no player in the layer');
+  assert.ok(!/<ChoiceCard/.test(code), 'the choice card is not mounted');
+  assert.match(firstRun, /<ProfileCard key="profile" onConnect=\{connect\} \/>/);
+  assert.match(readFileSync(path.join(root, 'ProfileCard.tsx'), 'utf8'), />Connect to my other device</);
+  assert.match(readFileSync(path.join(root, 'AiCard.tsx'), 'utf8'), /previousStep\('ai'\)[\s\S]*>Back</, 'the AI card has Back');
 });

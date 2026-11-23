@@ -1,21 +1,34 @@
 // The iPhone web app's peer channel to its PC (B-078 follow-up): the dialing side of Autark's handshake
 // (runtime/devices/handshake.ts – ephemeral X25519, both device keys sign the transcript, HKDF into one AES-256-GCM key
 // per direction) and the encrypted JSON channel after it (devices/channel.ts: [u64 counter][ciphertext‖tag], counters
-// strictly increasing), over one meeting-server tunnel – as Android's relay/PeerChannel.java does it. Sends and opens run
+// strictly increasing), over one meeting-server tunnel – as Android's relay/PeerChannel.java does it – or (F25 P3) over a
+// WebRTC data channel (rtc.ts), where the same handshake runs again with the same pinned PC key. Sends and opens run
 // through ordered queues (WebCrypto is asynchronous); a message that arrives before anyone listens waits for the first
 // listener. Owns: the handshake and the framing. Never: accepts a PC key other than the paired one, or a text frame after
 // the handshake.
 
 import { b64url, concat, fromB64url, fromUtf8, random, readU64, same, u64, utf8, type Bytes } from './bytes.ts';
 import { aesKey, hkdf, newX25519, open, seal, Serial, sha256, sign, verify, x25519, type DeviceKey } from './crypto.ts';
-import { textOf, type Tunnel } from './tunnel.ts';
+import { textOf } from './tunnel.ts';
+
+/** What the handshake and the channel run over: a meeting-server tunnel (tunnel.ts) or a data channel (rtc.ts RtcPipe). */
+export interface Wire {
+  readonly closed: boolean;
+  /** A handshake text frame. */
+  sendText(text: string): Promise<void> | void;
+  /** A channel frame (already encrypted). */
+  sendBinary(data: Bytes): Promise<void> | void;
+  onMessage(listener: (data: Bytes, isText: boolean) => void): void;
+  onClose(listener: () => void): void;
+  close(): void;
+}
 
 const MAX_FRAME = 8 * 1024 * 1024;
 const BACKLOG = 256;
 
 export class SecureChannel {
   closed = false;
-  private readonly tunnel: Tunnel;
+  private readonly tunnel: Wire;
   private readonly send_: Promise<CryptoKey>;
   private readonly receive_: Promise<CryptoKey>;
   private sendCounter = 0n;
@@ -26,7 +39,7 @@ export class SecureChannel {
   private readonly closeListeners: Array<() => void> = [];
   private backlog: unknown[] = [];
 
-  constructor(tunnel: Tunnel, sendKey: Bytes, receiveKey: Bytes) {
+  constructor(tunnel: Wire, sendKey: Bytes, receiveKey: Bytes) {
     this.tunnel = tunnel;
     this.send_ = aesKey(sendKey);
     this.receive_ = aesKey(receiveKey);
@@ -97,7 +110,7 @@ function key32(value: unknown): Bytes | undefined {
 }
 
 /** Runs the handshake as the dialing side over `tunnel`; the PC must prove the key `pcPub`. */
-export async function connectChannel(tunnel: Tunnel, self: { key: DeviceKey; deviceId: string }, pcPub: Uint8Array, timeoutMs = 15_000): Promise<SecureChannel> {
+export async function connectChannel(tunnel: Wire, self: { key: DeviceKey; deviceId: string }, pcPub: Uint8Array, timeoutMs = 15_000): Promise<SecureChannel> {
   let channel: SecureChannel | undefined;
   let answer: ((text: string | undefined) => void) | undefined;
   const reply = new Promise<string | undefined>((resolve) => { answer = resolve; });

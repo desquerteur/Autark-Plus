@@ -1,14 +1,17 @@
 // What a person's device may call (F-52), speech: so people talk in live calls (and dictate) like the
 // owner's phone – the page records an utterance, uploads it and has the PC's transcription service turn it
 // into text (shared/voice/conversation.ts, lib/dictation.ts). The person variants are narrow:
-//  * files.upload takes only an utterance – audio, at most UTTERANCE_MAX_BYTES (one inline upload), at most
+//  * files.upload takes an utterance or a screenshot. A screenshot (a JPEG/PNG/WebP image of the same size limit, for
+//    the to-do button's quick task) is recorded as the person's own upload (person_uploads, no chat), so they may
+//    attach it to their quick task (tasks.quickCreate, rpc-tasks.ts) and read it, nobody else; an utterance is audio, at most UTTERANCE_MAX_BYTES (one inline upload), at most
 //    UTTERANCE_LIMITS per person and ten minutes (well above continuous speech; 'rate_limited' beyond). The
 //    blob is attached to nothing, so no one may read it (people/access.ts mayReadFile wants an attachment of
 //    a readable message) and the person cannot attach it either (their files go through people/uploads.ts);
 //    it is queued for the blob clean-up at once, due after TRANSCRIBE_WINDOW_MS (files/cleanup.ts keeps
 //    what something uses), so an utterance nobody transcribes does not stay on the owner's disk;
 //  * voice.transcribe transcribes only an utterance this person uploaded in the last TRANSCRIBE_WINDOW_MS,
-//    once (kept in memory per person, bounded) – never another file of the PC; the people's transcriptions
+//    once (kept in memory per person, bounded; B-082: a hearing that failed may be asked again in the window)
+//    – never another file of the PC; the people's transcriptions
 //    run one after another (one per person, a short queue), so they bill the owner's speech-to-text account
 //    once per utterance and never hold both of the transcriber's dictation slots (the owner keeps one);
 //  * models.list tells only whether speech-to-text is there: the transcription-capable models with their
@@ -24,7 +27,7 @@ import { FUNCTION_OFF } from '../../shared/model/providers.ts';
 import { useValue } from '../../shared/model/models-uses.ts';
 import type { ModelInfo } from '../../shared/model/providers.ts';
 import { reclaimerOf } from '../files/cleanup.ts';
-import { base64Length, decodeBase64 } from '../rpc/uploads.ts';
+import { base64Length, decodeBase64, safeFileName } from '../rpc/uploads.ts';
 import { bad, input, onlyKeys, optText, text } from '../rpc/params.ts';
 import type { HandlerTable } from '../rpc/table.ts';
 import { caller } from './rpc-base.ts';
@@ -39,6 +42,7 @@ export const PEOPLE_HEARING_MAX = 8;
 const TEN_MINUTES = 10 * 60_000;
 const RECENT_PER_PERSON = 24;
 const AUDIO_MIME = /^audio\/[a-z0-9.+-]+(?:\s*;.*)?$/i;
+const IMAGE_MIME = /^image\/(?:jpeg|png|webp)$/i;
 const AUDIO_NAME = /\.(?:webm|ogg|oga|opus|m4a|mp4|mp3|wav|aac|flac)$/i;
 const LANGUAGE = /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/;
 const FILE_ID = /^[0-9a-f]{64}$/i;
@@ -118,8 +122,9 @@ export function registerPersonVoice(table: HandlerTable): void {
     onlyKeys(o, ['name', 'mime', 'dataBase64']);
     const name = text(o, 'name', { max: 200 });
     const mime = optText(o, 'mime', { max: 120 });
-    if (mime !== undefined ? !AUDIO_MIME.test(mime) : !AUDIO_NAME.test(name)) {
-      throw new WorkforceError('forbidden', 'Only recorded speech can be sent from here.', { details: { reason: 'utterance_only' } });
+    const image = mime !== undefined && IMAGE_MIME.test(mime);
+    if (!image && (mime !== undefined ? !AUDIO_MIME.test(mime) : !AUDIO_NAME.test(name))) {
+      throw new WorkforceError('forbidden', 'Only recorded speech and screenshots can be sent from here.', { details: { reason: 'utterance_only' } });
     }
     const bytes = decodeBase64(text(o, 'dataBase64', { max: base64Length(UTTERANCE_MAX_BYTES) + 4 }), 'dataBase64');
     if (!bytes.length) bad('dataBase64', 'recorded audio');
@@ -129,6 +134,15 @@ export function registerPersonVoice(table: HandlerTable): void {
     list.admit(person.id, bytes.length, before);
     const ref = await ctx.services.files.put(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), name, mime);
     const now = ctx.services.clock.now();
+    if (image) {
+      const safe = safeFileName(name);
+      ctx.services.db.run(
+        `INSERT INTO person_uploads (file_id, person_id, conversation_id, name, size, created_at) VALUES (?, ?, '', ?, ?, ?)
+         ON CONFLICT(person_id, file_id, conversation_id) DO UPDATE SET name = excluded.name, created_at = excluded.created_at`,
+        [ref.id, person.id, safe, ref.size, now],
+      );
+      return { ...ref, name: safe, createdAt: now };
+    }
     list.note(person.id, ref.id, now);
     // Bytes the store already had are not this upload's to give back; a new utterance goes after the window.
     if (ref.createdAt >= before) {
@@ -139,19 +153,26 @@ export function registerPersonVoice(table: HandlerTable): void {
   table.addPerson('voice.transcribe', (params, ctx) => {
     const person = caller(ctx);
     const o = input(params);
-    onlyKeys(o, ['fileId', 'language']);
+    // B-082: `before` (the take's earlier words, the person's own) and `live` (a call line) as for the owner; a
+    // `chatId` is taken and left unused – a chat's context stays the owner's.
+    onlyKeys(o, ['fileId', 'language', 'chatId', 'before', 'live']);
     const fileId = text(o, 'fileId', { max: 64 });
     if (!FILE_ID.test(fileId)) bad('fileId', 'the id of a recorded utterance');
     const language = optText(o, 'language', { max: 16 });
     if (language !== undefined && !LANGUAGE.test(language)) bad('language', 'a language code like "de" or "en-US"');
+    optText(o, 'chatId', { max: 64 });
+    const before = optText(o, 'before', { max: 2_000, multiline: true, allowEmpty: true });
+    if (o.live !== undefined && o.live !== true) bad('live', 'true or left out');
     const list = recentOf(ctx.services);
     const own = fileId.toLowerCase();
     if (!list.has(person.id, own, ctx.services.clock.now())) {
       throw new WorkforceError('forbidden', 'Only your own recording from just now can be transcribed, once.', { details: { reason: 'not_your_utterance' } });
     }
     if (list.busy(person.id)) throw new WorkforceError('conflict', 'Your last recording is still being transcribed. Try again in a moment.');
-    list.take(person.id, own, ctx.services.clock.now());
-    return list.hear(person.id, () => ctx.extras.voice.transcribe({ fileId: own, language }));
+    const takenAt = ctx.services.clock.now();
+    list.take(person.id, own, takenAt);
+    return list.hear(person.id, () => ctx.extras.voice.transcribe({ fileId: own, language, ...(before ? { before } : {}), ...(o.live === true ? { live: true as const } : {}) }))
+      .catch((error: unknown) => { list.note(person.id, own, takenAt); throw error; }); // B-082: not heard – "Transcribe again" can ask once more
   });
   table.addPerson('models.list', (_params, ctx) => {
     caller(ctx);

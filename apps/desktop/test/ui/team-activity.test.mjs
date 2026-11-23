@@ -54,12 +54,12 @@ test('Team activity: agent rooms stay listed after a reload; the To-do chat is i
   const first = (await rpc.call('chats.list'))[0];
 
   // The Manager opens a room without the human and finishes a task there.
-  await rpc.call('messages.send', { conversationId: first.id, body: `Open a room [[tool:chat.create {"title":"Launch research","agentIds":["${manager.id}"]}]]` });
+  await rpc.call('messages.send', { conversationId: first.id, body: `Open a room [[tool:chat.create {"title":"Launch research","members":["${manager.id}"]}]]` });
   const room = await rpc.waitFor('conversation.upserted', (chat) => chat.title === 'Launch research', 90_000);
   await rpc.call('messages.send', { conversationId: first.id, body: `Plan it [[tool:tasks.create {"title":"Compare venues","chatId":"${room.id}","doneWhen":"Three venues compared"}]]` });
   const task = await rpc.waitFor('task.upserted', (item) => item.title === 'Compare venues', 90_000);
   assert.equal(task.conversationId, room.id);
-  await rpc.call('tasks.complete', { id: task.id });
+  await rpc.call('tasks.finish', { id: task.id });
 
   // The human leaves another chat; a to-do creates the To-do chat.
   const left = await rpc.call('chats.create', { title: 'Old project', agentIds: [manager.id] });

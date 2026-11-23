@@ -31,7 +31,7 @@ export default function changelog(rel) {
     title: 'Changelog',
     description: `Every public release of ${site.name} (formerly Proactive Agent Workforce): versions, dates, what changed and the download files. Current version ${rel.windows.version}.`,
     body: (root) => `
-${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</em>', lead: `${site.name} ships often. Each release lists what changed and how it was checked; the full verification notes live on GitHub. Older notes describe those versions: some of what they name, such as the guardian and the permission modes, has been removed since. Earlier releases carry the working name Workforce.`, actions: `<a class="btn btn--ghost btn--lg" href="${release.releasesUrl}" rel="noopener">${icon('github')}All releases on GitHub</a><a class="btn btn--ghost btn--lg" href="${root}changelog/feed.xml">RSS feed</a>` })}
+${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</em>', lead: `${site.name} ships often. Each release lists what changed and how it was checked; the full verification notes live on GitHub. The changelog starts with 0.3.3, the first release in OpenAutark.`, actions: `<a class="btn btn--ghost btn--lg" href="${release.releasesUrl}" rel="noopener">${icon('github')}All releases on GitHub</a><a class="btn btn--ghost btn--lg" href="${root}changelog/feed.xml">RSS feed</a>` })}
 <section class="section section--tight">
   <div class="wrap">
     ${list.length ? list.map((r, i) => `
@@ -40,7 +40,7 @@ ${pageHero({ root, crumb: 'Changelog', title: 'Every release, <em>in the open.</
       <div class="release__body">
         <h2 class="h4">${esc(titleOf(r))}</h2>
         <div class="prose" style="font-size:15.5px">${summary(r.notes || '')}</div>
-        <div class="release__files">${r.assets.filter((a) => !/blockmap/.test(a.name)).map((a) => `<a href="${esc(a.url)}" rel="nofollow">${esc(a.name)}${/\.txt$/.test(a.name) ? '' : ` · ${mb(a.size)}`}</a>`).join('')}<a href="${esc(r.url)}" rel="noopener">Full notes →</a></div>
+        <div class="release__files">${r.assets.filter((a) => !/blockmap/.test(a.name)).map((a) => `<a href="${esc(r.url)}" rel="noopener">${esc(a.name)}${/\.txt$/.test(a.name) ? '' : ` · ${mb(a.size)}`}</a>`).join('')}<a href="${esc(r.url)}" rel="noopener">Full notes →</a></div>
       </div>
     </article>`).join('') : `<p class="lead">The release list could not be loaded while this page was built. <a href="${release.releasesUrl}" rel="noopener">See every release on GitHub</a>.</p>`}
   </div>

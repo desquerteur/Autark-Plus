@@ -95,7 +95,7 @@ const prepareTodo = defineTool<{ taskId: string; note: string; links?: Array<{ l
 /** Why this task cannot be prepared; undefined when it can. */
 function refusal(task: TaskView): ToolOutput | undefined {
   if (task.assigneeKind !== 'human') return failure(`Task ${task.id} is not a to-do of the person. Work on it with the task tools instead.`);
-  if (task.status === 'done' || task.status === 'cancelled') return failure(`Task ${task.id} is finished already.`);
+  if (task.status === 'done' || task.status === 'dropped') return failure(`Task ${task.id} is finished already.`);
   return undefined;
 }
 

@@ -8,7 +8,9 @@
 // (shared/text/chat-names.ts displayTitle names it after the other member). The mark holds while both of
 // the pair are members and ends when one of them leaves (chat/members-change.ts keepDirectPair), so a pair
 // never gets a second default 1:1. B-078 D7: a 1:1 stays two – nobody joins it (members-change.ts refuses);
-// work someone hands on from a 1:1 goes to the giver's own 1:1 with the receiver (workRoomFor).
+// work someone hands on from a 1:1 goes to the giver's own 1:1 with the receiver (workRoomFor). KI-Runde 17.11.2026: a
+// chat a person is in keeps its members the same way (keepsItsMembers) – work handed on from it to an agent who is not
+// in it goes to the giver's 1:1 with that agent, so nobody is seated in a room the person reads by a task.
 // B-050 K1, Nachtrag Runde 4 ("Standardmäßig soll es mit jedem Agent … einen Chat geben"): the owner's default
 // 1:1 with every active agent – sub-agents too – exists from the start (keepOwnerDirects: backfilled at start in
 // one transaction, a hire or a restored agent gets it right after the org announces it); an empty one posts no line,
@@ -107,15 +109,21 @@ export function findOrCreateDirect(s: DirectDeps, a: string, b: string, opts: { 
   });
 }
 
+/** A chat work never brings anyone into: a default 1:1 (it stays two) or a chat a person (the owner or a person of the organisation) is in. */
+export function keepsItsMembers(s: Pick<RuntimeServices, 'chats'>, chat: { id: string; settings: { direct?: boolean } }): boolean {
+  return isDirect(chat) || s.chats.members(chat.id).some((member) => member.kind === 'human' && member.leftAt === undefined);
+}
+
 /**
  * B-078 D7: the chat where `receiver` works on what `by` hands it from `chatId`: `chatId` itself when the receiver
- * is in it or it is no default 1:1; else the default 1:1 of `by` and the receiver (found or made) – the status line
- * stays in `chatId`. The system or the receiver itself as `by`, or no chat: `chatId` unchanged.
+ * is in it or it is a room of agents only; else (a default 1:1, a chat a person is in) the default 1:1 of `by` and the
+ * receiver (found or made) – the status line stays in `chatId`. The system or the receiver itself as `by`, or no chat:
+ * `chatId` unchanged.
  */
 export function workRoomFor(s: DirectDeps, chatId: string | undefined, by: string, receiver: string): string | undefined {
   if (!chatId || by === receiver || by === SYSTEM_ID) return chatId;
   const chat = s.chats.get(chatId);
-  if (!chat || !isDirect(chat)) return chatId;
+  if (!chat || !keepsItsMembers(s, chat)) return chatId;
   if (s.chats.members(chatId).some((member) => member.memberId === receiver && member.leftAt === undefined)) return chatId;
   return findOrCreateDirect(s, by, receiver, { createdBy: by });
 }

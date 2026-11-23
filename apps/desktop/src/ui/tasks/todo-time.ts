@@ -28,9 +28,12 @@ type Listed = Pick<Task, 'assigneeKind' | 'status' | 'waitingOn' | 'widget' | 'd
 
 type TodoSortable = Pick<Task, 'priority' | 'dueAt' | 'createdAt'> & Partial<Pick<Task, 'widget' | 'createdBy' | 'status' | 'assigneeKind'>>;
 
+/** The clock compareTodos reads ringing by (the store re-sorts as time passes). */
+const clock = () => Date.now();
+
 /** The calm My day order: ringing → due ↑ (none last) → priority ↓ → age. */
 export function compareTodos(a: TodoSortable, b: TodoSortable): number {
-  const rank = (task: TodoSortable) => (task.status !== undefined && isRinging({ status: task.status, assigneeKind: task.assigneeKind ?? 'human' }) ? 0 : 1);
+  const rank = (task: TodoSortable) => (task.status !== undefined && isRinging({ status: task.status, assigneeKind: task.assigneeKind ?? 'human', widget: task.widget }, clock()) ? 0 : 1);
   return rank(a) - rank(b)
     || (a.dueAt ?? Number.MAX_SAFE_INTEGER) - (b.dueAt ?? Number.MAX_SAFE_INTEGER)
     || b.priority - a.priority
@@ -133,7 +136,7 @@ export function nextListChange(list: ReadonlyArray<Listed & Pick<Task, 'dueAt'>>
     }
     days = true;
     const left = at - now;
-    if (left > LATER_MS && !isRinging(task) && !waitsForRing(task)) consider(at - LATER_MS);
+    if (left > LATER_MS && !isRinging(task, now) && !waitsForRing(task)) consider(at - LATER_MS);
     consider(at - DAY_MS);
     if (left > HOUR_MS) consider(at - HOUR_MS);
     else if (left > 0) consider(at - (Math.ceil(left / MINUTE_MS) - 1) * MINUTE_MS);

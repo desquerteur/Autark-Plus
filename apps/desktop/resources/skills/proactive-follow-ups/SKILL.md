@@ -19,7 +19,7 @@ without being asked. So do I - visibly and quietly; what I do not follow up, nob
 
 ## The follow-through question
 Before I close a task, I ask myself: **what follows from this?** I go through these categories:
-- **Monitor** - does it keep working? (site uptime, render queue, delivery status)
+- **Monitor** - does it keep working? (site uptime, backups and free disk, render queue, delivery status)
 - **Respond** - will people react? (comments, replies, emails, reviews)
 - **Document** - should someone find this later? (notes, knowledge, changelog)
 - **Clean up** - temp files, test accounts, trial subscriptions, old branches
@@ -27,7 +27,7 @@ Before I close a task, I ask myself: **what follows from this?** I go through th
 - **Deadlines** - renewals, expiries, payment dates, follow-up meetings
 
 The small ones I do now; the ones that need time I schedule.
-What the human would not want I leave out; when unsure, I schedule it and mention it - a visible,
+What the person would not want I leave out; when unsure, I schedule it and mention it - a visible,
 cancellable schedule is better than a silent assumption or a question.
 
 ## Schedules and self-reminders
@@ -36,7 +36,7 @@ cancellable schedule is better than a silent assumption or a question.
   comments, reply to questions, flag anything sensitive."
 - A **routine** is a recurring schedule, usually with an end: daily for 14 days, weekly ×4 (`until`
   or `count`). One that runs for good has a reason I can name.
-- Timing is one `when` for every schedule tool: `{"once": "+2h"}` (or a time like
+- Timing is one `when` for every schedule tool: `{"at": "+2h"}` (or a time like
   `"2026-10-26T09:00"` – without a zone it is the profile time zone) or `{"repeat": {…}}` with one of
   `"every": "1d"`, `"times": ["09:00", "17:30"]` or `"cron": "0 18 * * 1"`, plus optional `days`
   (`["mon", "wed"]`), `window`, `start`, `until`, `count` and `ifMissed`. I check the next runs the tool
@@ -52,6 +52,7 @@ cancellable schedule is better than a silent assumption or a question.
 | YouTube video published | comments after 2 h, then daily for 7 days, then weekly ×4 |
 | Social post | replies after 1 h and 24 h |
 | Website deployed | uptime check daily ×14; analytics look after 7 days |
+| Backup, sync or any job that runs by itself (set up or repaired) | its failure path posts one line into our chat itself (connector token, skill chat-bridge); where it cannot reach us, a daily look at its last good run and free disk |
 | Invoice sent | check payment at due date; polite reminder 7 days after |
 | Application / request sent | check for an answer after the stated response time |
 | Subscription started | reminder 3 days before renewal with keep/cancel choice |
@@ -61,7 +62,7 @@ cancellable schedule is better than a silent assumption or a question.
 1. I fetch new comments since the last run.
 2. I reply to questions and genuine feedback in the channel voice; like or heart good ones.
 3. Obvious spam and scams I hide or report. A calm answer or none beats an argument.
-4. Complaints, legal threats, press, partnerships and anything I am unsure about go to the human or
+4. Complaints, legal threats, press, partnerships and anything I am unsure about go to the person or
    manager with a short summary. They speak for the company there.
 5. Recurring questions I note - they are ideas for the next video or the description.
 6. I report when something notable happened; otherwise a quiet line in the task.
@@ -72,4 +73,3 @@ check they would otherwise wonder about). There is no fixed report format.
 
 ## Pitfalls
 - Unprompted digests nobody asked for. A follow-up of mine has a purpose.
-- Schedules without an end date.

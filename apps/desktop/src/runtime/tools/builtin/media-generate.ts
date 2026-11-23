@@ -8,23 +8,22 @@
 
 import { GENERATE_LIMITS, IMAGE_QUALITIES, IMAGE_SIZES, SPEECH_FORMATS, type ImageQuality, type ImageSize, type SpeechFormat } from '../../media/generate.ts';
 import type { ToolDef } from '../types.ts';
-import { MEDIA_DESCRIBE_HINT } from './media-common.ts';
 import { avGenerationTools } from './media-generate-av.ts';
+import { NAME, STORED } from './media-common.ts';
 import { describedAs, generationTool } from './media-generate-flow.ts';
 import { clip } from './util.ts';
 
-const NAME = { type: 'string', minLength: 1, maxLength: 80, description: 'file name without extension' } as const;
 
 type ImageArgs = { prompt: string; size?: ImageSize; quality?: ImageQuality; name?: string };
 
 const image = generationTool<ImageArgs>({
   name: 'media.image',
   kind: 'image',
-  description: `Create an image from a description (the image model in Settings, else the ChatGPT plan). Stores it in the media library (tag "generated") and returns its fileId and a ready \`\`\`ui media block. A paid model costs money like any purchase. ${MEDIA_DESCRIBE_HINT}`,
+  description: `Makes a real picture with an image model – what I draw in code (SVG, HTML, canvas) is a layout, not a picture. It runs on the image model in Settings, else on the person's ChatGPT plan through Codex, and stores the picture. ${STORED}`,
   inputSchema: {
     type: 'object',
     properties: {
-      prompt: { type: 'string', minLength: 1, maxLength: GENERATE_LIMITS.promptChars, description: 'what the image shows: subject, style, composition, text in it' },
+      prompt: { type: 'string', minLength: 1, maxLength: GENERATE_LIMITS.promptChars, description: 'Subject, style, composition, text in it.' },
       size: { type: 'string', enum: [...IMAGE_SIZES] }, quality: { type: 'string', enum: [...IMAGE_QUALITIES] },
       name: NAME,
     },
@@ -42,14 +41,14 @@ type SpeakArgs = { text: string; voice?: string; format?: SpeechFormat; language
 const speak = generationTool<SpeakArgs>({
   name: 'media.speak',
   kind: 'speech',
-  description: `Turn text into speech (the speech model in Settings, else the local voice) in my voice (agents.update voice) or the one given. Stores the audio in the media library (tag "generated") and returns its fileId and a ready \`\`\`ui media block. Up to ${GENERATE_LIMITS.speechChars} characters per call. A paid model costs money like any purchase.`,
+  description: `Turns up to ${GENERATE_LIMITS.speechChars} characters of text into speech and stores it. ${STORED}`,
   inputSchema: {
     type: 'object',
     properties: {
       text: { type: 'string', minLength: 1, maxLength: GENERATE_LIMITS.speechChars },
-      voice: { type: 'string', maxLength: 40, description: 'voice of the speech model, e.g. "nova"; the local voice takes 0-9' },
-      format: { type: 'string', enum: [...SPEECH_FORMATS], description: 'the local voice always makes wav' },
-      language: { type: 'string', maxLength: 8, description: 'ISO code, e.g. "de"; default: the text\'s' },
+      voice: { type: 'string', maxLength: 40, description: 'Default my voice; the local voice takes 0–9.' },
+      format: { type: 'string', enum: [...SPEECH_FORMATS], description: 'The local voice makes wav.' },
+      language: { type: 'string', maxLength: 8, description: "ISO code; default the text's." },
       name: NAME,
     },
     required: ['text'], additionalProperties: false,

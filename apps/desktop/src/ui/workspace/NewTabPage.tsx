@@ -7,7 +7,8 @@
 // from; Media is the library with its search (MediaLibrary.tsx); Files opens the data folder; Agents lists the agents –
 // "Browsing now" marks one whose own browser is open – and opens an agent's own browser. The rows are plain text with their
 // icon; hover and press change colour only. AF-008: the panels come in the order Settings › Appearance gives them, and
-// the hidden ones stay out.
+// the hidden ones stay out. B-081: the Files row has one cell per linked CEO PC at its end (the remote
+// blue dot and the PC's name, muted while offline) that opens that PC's data folder (linked-pcs.ts pcRoot).
 // Owns: that page and its lists. Never: tab logic (pages.ts) or what a panel shows.
 
 import type { ComponentChildren, JSX } from 'preact';
@@ -27,21 +28,39 @@ import { byActivity } from '../chat/list-order.ts';
 import type { AppTab } from './browser-model.ts';
 import { browserSessions, watchBrowserSessions } from './BrowserTab.tsx';
 import { openFileTab, openFolderTab, pathMenu } from './file-tabs.ts';
+import { pcRoot, rootPcs, watchLinkedPcs } from './linked-pcs.ts';
 import { openPanel } from './pages.ts';
 import { useSpace } from './space.ts';
 import { userPages } from './user-pages.ts';
 
 type Chooser = 'notes' | 'agents';
 
-export function Row(props: { icon?: IconName; lead?: ComponentChildren; label: string; hint?: string; disabled?: boolean; menu?: ReturnType<typeof useContextMenu>; onClick: () => void }) {
+/** `side`: more cells in the same line after the row (the Files row's PC cells). */
+export function Row(props: { icon?: IconName; lead?: ComponentChildren; label: string; hint?: string; disabled?: boolean; menu?: ReturnType<typeof useContextMenu>; side?: ComponentChildren; onClick: () => void }) {
   return (
-    <li>
+    <li class={props.side ? 'new-tab-split' : undefined}>
       <button type="button" class="new-tab-row" disabled={props.disabled} {...props.menu} onClick={props.onClick}>
         <span class="new-tab-icon" aria-hidden="true">{props.lead ?? <Icon name={props.icon!} size={16} />}</span>
         <span class="new-tab-label">{props.label}</span>
         {props.hint && <span class="new-tab-hint">{props.hint}</span>}
       </button>
+      {props.side}
     </li>
+  );
+}
+
+/** One cell per linked CEO PC after the Files row: that PC's data folder, in this tab's place. */
+function PcCells(props: { id: string; space: string }) {
+  return (
+    <>
+      {rootPcs().map((pc) => (
+        <button key={pc.id} type="button" class={`new-tab-side${pc.status === 'online' ? '' : ' is-offline'}`} title={`Files on ${pc.name}`}
+          onClick={() => { pcRoot(pc.id).then((root) => openFolderTab(root.path, props.id, props.space, pc.id), (error: unknown) => toastError(error, `Could not open ${pc.name}`)); }}>
+          <span class="new-tab-side-dot" aria-hidden="true" />
+          <span class="new-tab-side-name">{pc.name}</span>
+        </button>
+      ))}
+    </>
   );
 }
 
@@ -77,6 +96,7 @@ export function NewTabPage(props: { id: string }) {
   const { id } = props;
   const space = useSpace();
   const [pick, setPick] = useState<Chooser | null>(null);
+  useEffect(() => { watchLinkedPcs(); }, []); // the Files row's PC cells
   if (pick) {
     return (
       <div class="new-tab">
@@ -99,7 +119,7 @@ export function NewTabPage(props: { id: string }) {
     work: () => (!isMobile.value ? <Row key="work" icon="list-checks" label={DESTINATIONS.tasks} onClick={() => open({ kind: 'work' })} /> : null),
     notes: () => <Row key="notes" icon="file-text" label="Notes" onClick={notes} />,
     media: () => (can('media.list') ? <Row key="media" icon="image" label="Media" onClick={() => open({ kind: 'media' })} /> : null),
-    files: () => (can('files.listPath') ? <Row key="files" icon="folder" label="Files" onClick={files} /> : null),
+    files: () => (can('files.listPath') ? <Row key="files" icon="folder" label="Files" onClick={files} side={rootPcs().length ? <PcCells id={id} space={space} /> : undefined} /> : null),
     agents: () => <Row key="agents" icon="users-three" label="Agents" onClick={() => setPick('agents')} />,
   };
   return (

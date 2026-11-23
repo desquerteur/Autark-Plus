@@ -1,7 +1,7 @@
 // Secret form fields typed by the person (PM6): before an answer to a `form` ask reaches the task
 // service, every secret field's value is stored encrypted in the vault – for every agent (owner 29.10.2026: a general
 // store like skills; the person narrows it in Settings), with the field's `domain` as its source (provenance, never a
-// binding – the secret works everywhere, card data included) – and replaced by its handle `secret://<id>`. All answer paths use it: blocks.answer and tasks.complete (desktop
+// binding – the secret works everywhere, card data included) – and replaced by its handle `secret://<id>`. All answer paths use it: blocks.answer and tasks.finish (desktop
 // and PWA) and a linked PC's answer (devices/linked-todos.ts), through answerWithSecrets. A connection that is
 // not secure (a phone on plain LAN http) is refused before anything is stored. Retries never
 // pile up copies: a to-do that is already answered stores nothing (its typed values are dropped),
@@ -75,7 +75,7 @@ export function secretKind(field: { name?: string; label?: string }, value?: str
   return 'password';
 }
 
-function secretFields(block: UiBlock | undefined): SecretField[] {
+export function secretFields(block: UiBlock | undefined): SecretField[] {
   if (block?.type !== 'form' || !Array.isArray(block.fields)) return [];
   return (block.fields as Array<Record<string, unknown>>)
     .filter((field) => field?.kind === 'secret' && typeof field.name === 'string')

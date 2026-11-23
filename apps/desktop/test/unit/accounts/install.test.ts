@@ -1,12 +1,17 @@
 // B-051 L1: Codex installs without Node.js – the official standalone installer first (Windows
 // install.ps1, POSIX install.sh) with the caller's env plus CODEX_NON_INTERACTIVE=1, `npm i -g` only when
 // that failed and npm exists, one clear error when every route failed; Claude Code keeps its own
-// installer and text. A route counts only when the CLI is found afterwards (a forced lookup).
+// installer and text. A route counts only when the CLI is found afterwards (a forced lookup). B-080 wave 3: PowerShell 7
+// by Microsoft's per-user installer where none is found (pwshInstaller, ensurePwsh); review: progress off, telemetry
+// opt-out, a run that leaves no pwsh.exe throws with its exit and the free disk space.
 // Owns: nothing in production. Never runs a real installer (scripted supervisor and finder).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { INSTALL_FAILED, INSTALL_OFF_IN_DEMO, installCli } from '../../../src/runtime/accounts/install.ts';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { ensurePwsh, INSTALL_FAILED, INSTALL_OFF_IN_DEMO, installCli, pwshInstaller } from '../../../src/runtime/accounts/install.ts';
 import type { ExecutableFinder } from '../../../src/runtime/accounts/executables.ts';
 import { fakeSpawn, testSupervisor, type SpawnCall } from '../engines/fakes.ts';
 
@@ -123,4 +128,65 @@ test('B-051 integration: demo mode never runs a real installer (an installed CLI
   }
   const there = rig({ codex: '/bin/codex' }, () => 0);
   assert.equal(await installCli('codex', { supervisor: there.supervisor, finder: there.finder, platform: 'linux', demo: true }), false);
+});
+
+// B-080 wave 3 (live 08.–09.11.2026: Codex's Windows PowerShell 5.1 piped "Nächste" into python as "N?chste"): PowerShell 7
+// for the engines' shells, by Microsoft's official per-user installer – constant arguments, no admin, PATH untouched.
+test('B-080 wave 3: pwshInstaller is Microsoft\'s per-user installer with constant arguments into %LOCALAPPDATA%\\Microsoft\\powershell', () => {
+  const route = pwshInstaller(ENV);
+  assert.equal(route.command, 'powershell.exe');
+  assert.deepEqual(route.env, { ...ENV, POWERSHELL_TELEMETRY_OPTOUT: '1' }, 'the caller env plus the telemetry opt-out');
+  assert.equal(ENV.POWERSHELL_TELEMETRY_OPTOUT, undefined, 'the caller env object is not changed');
+  const own = { ...ENV, powershell_telemetry_optout: '0' };
+  assert.equal(pwshInstaller(own).env, own, 'a value of its own (any spelling) stays');
+  assert.deepEqual(route.args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+  assert.equal(route.args.length, 4);
+  assert.match(route.args[3], /Invoke-RestMethod 'https:\/\/aka\.ms\/install-powershell\.ps1'/);
+  assert.ok(route.args[3].indexOf("$ProgressPreference = 'SilentlyContinue'") < route.args[3].indexOf('Invoke-RestMethod'), 'progress records off before the script runs (Expand-Archive on 5.1)');
+  assert.ok(route.args[3].includes("$to = Join-Path $env:LOCALAPPDATA 'Microsoft\\powershell'") && route.args[3].includes('-Destination $to'), 'the per-user folder');
+  assert.ok(route.args[3].includes("Test-Path -LiteralPath (Join-Path $to 'pwsh.exe')"), 'counts only with pwsh.exe there');
+  assert.doesNotMatch(route.args[3], /-UseMSI|-AddToPath|RunAs|Verb|Machine/i, 'no MSI, no admin, no PATH change');
+  assert.deepEqual(pwshInstaller(ENV), route, 'constant: the same every time');
+});
+
+test('B-080 wave 3: ensurePwsh runs nothing off Windows and nothing in demo mode', async () => {
+  const r = rig({}, () => 0);
+  const env: NodeJS.ProcessEnv = { PATH: 'C:\\nothing', LOCALAPPDATA: 'C:\\nowhere-local', ProgramFiles: 'C:\\nowhere-programs' };
+  for (const deps of [{ platform: 'linux' as const }, { platform: 'darwin' as const }, { platform: 'win32' as const, demo: true }]) {
+    assert.equal(await ensurePwsh({ supervisor: r.supervisor, env, ...deps }), false);
+  }
+  assert.equal(r.calls.length, 0, 'nothing is spawned');
+});
+
+test('B-080 wave 3: ensurePwsh runs the installer once on Windows where no pwsh is found; a found pwsh runs nothing', { skip: process.platform !== 'win32' ? 'Windows paths' : undefined }, async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'wf-install-pwsh-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env: NodeJS.ProcessEnv = { PATH: path.join(root, 'nothing'), LOCALAPPDATA: path.join(root, 'local'), ProgramFiles: path.join(root, 'programs') };
+  const user = path.join(root, 'local', 'Microsoft', 'powershell');
+  const install = rig({}, (call) => {
+    if (call.command === 'powershell.exe') { mkdirSync(user, { recursive: true }); writeFileSync(path.join(user, 'pwsh.exe'), ''); }
+    return 0;
+  });
+  assert.equal(await ensurePwsh({ supervisor: install.supervisor, env, platform: 'win32' }), true, 'installed now');
+  assert.equal(install.calls.length, 1);
+  assert.deepEqual([install.calls[0].command, ...install.calls[0].args], [pwshInstaller(env).command, ...pwshInstaller(env).args]);
+  assert.deepEqual(install.calls[0].options.stdio, ['ignore', 'ignore', 'ignore']);
+  assert.equal(await ensurePwsh({ supervisor: install.supervisor, env, platform: 'win32' }), false, 'found now: nothing runs again');
+  assert.equal(install.calls.length, 1);
+
+  const failing = rig({}, () => 1);
+  const other = path.join(root, 'other');
+  mkdirSync(other, { recursive: true });
+  const empty: NodeJS.ProcessEnv = { PATH: path.join(root, 'nothing'), LOCALAPPDATA: other, ProgramFiles: path.join(root, 'programs') };
+  await assert.rejects(ensurePwsh({ supervisor: failing.supervisor, env: empty, platform: 'win32' }),
+    (error: Error) => error.message.startsWith('PowerShell 7\'s installer ended with exit code 1 and left no pwsh.exe; ') && error.message.includes(` GB free on the drive of ${other}`),
+    'a failed install names its exit and the free disk space (main.ts logs it)');
+  const hanging = rig({}, () => 'hang');
+  await assert.rejects(ensurePwsh({ supervisor: hanging.supervisor, env: empty, platform: 'win32', timeoutMs: 20 }), (error: Error) => error.message.startsWith('PowerShell 7\'s installer was stopped at its time limit and left no pwsh.exe; '));
+  assert.equal(hanging.calls[0].child.killed, true, 'stopped at the time limit');
+  const system = path.join(root, 'programs', 'PowerShell', '7');
+  mkdirSync(system, { recursive: true });
+  writeFileSync(path.join(system, 'pwsh.exe'), '');
+  assert.equal(await ensurePwsh({ supervisor: failing.supervisor, env: empty, platform: 'win32' }), false);
+  assert.equal(failing.calls.length, 1, '%ProgramFiles%\\PowerShell\\7 counts as found');
 });

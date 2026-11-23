@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "autark-library",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-17",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "autark-library", "database_id": "d0c7c294-de1f-4097-9741-649c250859b3" }
+  ],
+  "routes": [{ "pattern": "library.openautark.com", "custom_domain": true }],
+  "observability": { "enabled": true }
+}

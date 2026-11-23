@@ -35,7 +35,7 @@ test("a chat turn's input carries the text of an attached .docx (extracted ahead
     const attachment = { fileId: file.id, name: file.name, mime: file.mime, size: file.size };
     t.h.chats.send({ conversationId: t.chat.id, body: 'summarise the plan', authorId: 'human', attachments: [attachment] });
     await t.context.prepare({ agentId: 'ag_ada', conversationId: t.chat.id, sinceSeq: 0 });
-    const text = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0, full: false }).text;
+    const text = t.context.delta({ agent: t.h.org.require('ag_ada'), conversationId: t.chat.id, sinceSeq: 0 }).text;
     assert.match(text, /\[Attached file: Plan\.docx\]/);
     assert.match(text, /# Quarterly plan/, text);
     assert.match(text, /\| Mara \| 2026-11-01 \|/);

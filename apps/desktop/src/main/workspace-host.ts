@@ -4,7 +4,9 @@
 // and fully transparent, and its pages run unthrottled; there they take real input and answer pictures, with the app
 // window open or closed. It exists only while it holds a page. A page goes back when it is shown (workspace-browser.ts)
 // or after AGENT_IDLE_MS without an agent, as an agent's own browser idles out; a page only the person watched from
-// another PC or a phone (B-076) goes back when that watch ends – watching is no agent's use.
+// another PC or a phone (B-076) goes back when that watch ends – watching is no agent's use. B-081: while watched, a page
+// here has the watcher's box as its size (`size`, from the caster), so the live picture is the watcher's shape; the
+// window grows to hold its largest page.
 // Owns: the host window, who is on it and the agents' last use. Never: decides which tab an agent means or closes a page.
 
 import { BaseWindow, type WebContentsView } from 'electron';
@@ -24,6 +26,9 @@ export class PageHost {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly pages = new Set<string>();
   private readonly usedAt = new Map<string, number>();
+  /** B-081: a watcher's box per page (kept while the watch runs, so a page that comes here later takes it too). */
+  private readonly sizes = new Map<string, { width: number; height: number }>();
+  private readonly views = new Map<string, WebContentsView>();
   private readonly idle = agentIdle();
   private readonly leave: (id: string) => void;
 
@@ -51,16 +56,43 @@ export class PageHost {
       this.window.setOpacity(0); this.window.setIgnoreMouseEvents(true); this.window.showInactive();
     }
     this.window.contentView.addChildView(view);
-    view.setBounds(PAGE); view.setVisible(true);
+    this.views.set(id, view);
+    view.setBounds(this.boundsOf(id)); view.setVisible(true);
     view.webContents.setBackgroundThrottling(false);
     this.pages.add(id);
+    this.grow();
     this.timer ??= setTimeout(() => this.sweep(), this.idle);
+  }
+
+  /** B-081: the watcher's box for `id` (undefined: the watch ended, the host's own size again); true when the page is here now. */
+  size(id: string, box: { width: number; height: number } | undefined): boolean {
+    if (box) this.sizes.set(id, { width: box.width, height: box.height }); else this.sizes.delete(id);
+    const view = this.pages.has(id) ? this.views.get(id) : undefined;
+    if (!view) return false;
+    this.grow();
+    view.setBounds(this.boundsOf(id));
+    return true;
+  }
+
+  private boundsOf(id: string): { x: number; y: number; width: number; height: number } {
+    const box = this.sizes.get(id);
+    return box ? { x: 0, y: 0, width: box.width, height: box.height } : PAGE;
+  }
+
+  /** The window holds its largest page (a page outside it would be cut). */
+  private grow(): void {
+    if (!this.window) return;
+    let width = PAGE.width, height = PAGE.height;
+    for (const id of this.pages) { const b = this.boundsOf(id); width = Math.max(width, b.width); height = Math.max(height, b.height); }
+    const [w, h] = this.window.getContentSize();
+    if (w !== width || h !== height) this.window.setContentSize(width, height);
   }
 
   /** The page moves into `into` (hidden), or to no window at all, where it waits for a next use or the memory saver. */
   release(id: string, view: WebContentsView, into: BaseWindow | null): void {
     if (!this.pages.delete(id)) return;
-    if (!view.webContents.isDestroyed()) view.webContents.setBackgroundThrottling(true);
+    this.views.delete(id);
+    if (view.webContents && !view.webContents.isDestroyed()) view.webContents.setBackgroundThrottling(true);
     if (into) into.contentView.addChildView(view); else this.window?.contentView.removeChildView(view);
     view.setVisible(false);
     this.end();
@@ -69,6 +101,8 @@ export class PageHost {
   /** The tab is gone. */
   forget(id: string, view: WebContentsView): void {
     this.usedAt.delete(id);
+    this.sizes.delete(id);
+    this.views.delete(id);
     if (!this.pages.delete(id)) return;
     this.window?.contentView.removeChildView(view);
     this.end();

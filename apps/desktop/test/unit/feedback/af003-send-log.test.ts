@@ -61,7 +61,8 @@ test('AF-003: no connection is a clear error, keeps the report on the PC, is log
     assert.ok(error instanceof WorkforceError);
     assert.equal(error.code, 'unavailable');
     assert.equal(error.details?.reason, 'offline');
-    assert.match(error.message, /could not be sent right now: the feedback server is not reachable\. Check the internet connection\. Your report is saved on this PC/);
+    // upstream 0.3.16 (drop.ts): the panel's line above already says the report is saved on this PC, so the error names only why
+    assert.match(error.message, /could not be sent right now: the feedback server is not reachable\. Check the internet connection; try again later/);
     assert.doesNotMatch(error.message, /fetch failed|TypeError/, 'no raw transport text');
     return true;
   });
@@ -116,10 +117,10 @@ test('AF-003: where sending is not set up, saving says so in the log and Send fa
 test('AF-003: the start logs once whether this build can send', () => {
   const ready = setup();
   ready.service().start();
-  assert.equal(ready.lines('feedback sending is set up')[0]?.data?.project, PROJECT);
+  assert.equal(ready.lines('feedback sending set up')[0]?.data?.project, PROJECT);
   const none = setup({ receiver: null });
   none.service().start();
-  assert.equal(none.lines('feedback sending is not set up: reports stay on this PC (no valid receiver.json)')[0]?.level, 'warn');
+  assert.equal(none.lines('feedback sending not set up: reports stay on this PC')[0]?.level, 'warn');
 });
 
 test('AF-003: the report number is the first eight letters and digits of the receipt, upper case; failures map to log fields', () => {

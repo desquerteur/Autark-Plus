@@ -1,8 +1,8 @@
 // Owns: bounded, validated submissions and non-content receipts. Never: remote URLs from a sender.
 import type { Payload, StoredReport } from './types.ts';
-import { FEEDBACK_IMAGE_LIMIT } from '../../../apps/desktop/src/shared/model/feedback-delivery.ts';
+import { FEEDBACK_SEALED_LIMIT } from '../../../apps/desktop/src/shared/model/feedback-delivery.ts';
 
-export const MAX_IMAGE_BYTES = FEEDBACK_IMAGE_LIMIT;
+export const MAX_IMAGE_BYTES = FEEDBACK_SEALED_LIMIT;
 export const MAX_REQUEST_BYTES = 1_500_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

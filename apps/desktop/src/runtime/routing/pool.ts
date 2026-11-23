@@ -2,7 +2,16 @@
 // and not excluded → capability needs → not "never" for the category → inside the agent's policy band –, the mode's
 // minimum tier as a preference (models below it only when none at or above it is connected), the accounts that can
 // run each model now (its provider and listed accounts, healthy for that model – accounts.candidates gets it –, not
-// excluded), and pay-per-use API keys only as a spill-over (unless Settings allow them or nothing else is left).
+// excluded), and pay-per-use API keys only as a spill-over (unless Settings allow them or nothing else is left) – a key
+// holding a plan's monthly API credits (B-083 Account.credits) is no pay-per-use key (score.ts isPaid): it competes like a plan,
+// and accounts.candidates (accounts/candidates.ts) lists it before the same model's paying keys, whatever their priority.
+// Last, the newest version of each model family (models/family.ts) stands for the older ones that can run now (owner
+// 14.11.2026: "Warum Fabel Fünf. Eins … 5.2"): an older version leaves the entries while a newer one of its family is in
+// them, and entryFor maps a named older version to it. A pin of the older version still runs it (unusable is unchanged).
+// 17.11.2026 (the model settles): `runs` answers whether one model can run this turn at all – usable, inside the band, with an
+// account under the same spill-over rule –, whatever its tier or version: the model a live session is on stays while it can.
+// `whole` is the same pool as if every enabled account were healthy and nothing excluded: what Auto would choose when
+// everything runs, so a choice made only because a model cannot run now is known as a stand-in (router.ts).
 // Owns: these filters, their order and why a single model is unusable (for pins).
 // Never: scores or picks a model, reads the policy itself, or changes state.
 
@@ -10,6 +19,7 @@ import type { RouteRequest, RuntimeServices } from '../contracts.ts';
 import type { Account, ModelInfo } from '../../shared/model/providers.ts';
 import type { EffectivePolicy } from './policies.ts';
 import { NEVER, isPaid, strengthOf, tierRank, unmetNeed, withinTiers, type Tier } from './score.ts';
+import { compareVersions, familyOf } from '../models/family.ts';
 
 export interface PoolInput {
   s: RuntimeServices;
@@ -31,9 +41,15 @@ export interface Pool {
   tiered: ModelInfo[];
   suitable: ModelInfo[];
   bounded: ModelInfo[];
-  /** Runnable models with their accounts. */
+  /** Runnable models with their accounts, each family at its newest version among them. */
   entries: PoolEntry[];
+  /** The entries as they would be with every enabled account healthy and no model or account excluded. */
+  whole(): PoolEntry[];
+  /** The entry that runs for a model: its own, else the newest version of its family among the entries. */
+  entryFor(model: ModelInfo): PoolEntry | undefined;
   accountsFor(model: ModelInfo): Account[];
+  /** The model with the accounts that run it this turn, whatever its tier or version; undefined = it cannot run now. */
+  runs(model: ModelInfo): PoolEntry | undefined;
   /** Why the model cannot run at all: 'unavailable', an unmet need or 'never'; undefined = it can. */
   unusable(model: ModelInfo): string | undefined;
   inBand(model: ModelInfo): boolean;
@@ -65,16 +81,54 @@ export function buildPool(input: PoolInput): Pool {
   };
 
   // Stage-wise filtering keeps the reason when nothing is left.
-  const connected = input.models.filter((model) => model.available && !exclude.has(model.id));
-  const capable = connected.filter((model) => !unmetNeed(model, needs, structured(model)));
-  const atTier = capable.filter(tierOk);
-  const tiered = atTier.length ? atTier : capable; // the mode's tier is a preference, never a refusal
-  const suitable = tiered.filter((model) => strengthOf(model, category) > NEVER);
-  const bounded = suitable.filter(inBand);
-  let all = bounded.map((model) => ({ model, accounts: accountsFor(model) })).filter((entry) => entry.accounts.length > 0);
-  // Pay-per-use API keys are a spill-over only when the user allowed it (or nothing else exists).
-  if (!allowPaid && all.some((entry) => entry.accounts.some((account) => !isPaid(account)))) {
-    all = all.map((entry) => ({ model: entry.model, accounts: entry.accounts.filter((account) => !isPaid(account)) })).filter((entry) => entry.accounts.length > 0);
+  const stages = (connected: ModelInfo[]) => {
+    const capable = connected.filter((model) => !unmetNeed(model, needs, structured(model)));
+    const atTier = capable.filter(tierOk);
+    const tiered = atTier.length ? atTier : capable; // the mode's tier is a preference, never a refusal
+    const suitable = tiered.filter((model) => strengthOf(model, category) > NEVER);
+    return { connected, capable, tiered, suitable, bounded: suitable.filter(inBand) };
+  };
+  /** The runnable entries of `bounded` with `accounts`: pay-per-use API keys only as a spill-over (unless the user allowed them). */
+  const entriesOf = (bounded: ModelInfo[], accounts: (model: ModelInfo) => Account[]) => {
+    let all = bounded.map((model) => ({ model, accounts: accounts(model) })).filter((entry) => entry.accounts.length > 0);
+    const unpaidOnly = !allowPaid && all.some((entry) => entry.accounts.some((account) => !isPaid(account)));
+    if (unpaidOnly) {
+      all = all.map((entry) => ({ model: entry.model, accounts: entry.accounts.filter((account) => !isPaid(account)) })).filter((entry) => entry.accounts.length > 0);
+    }
+    return { entries: newestOnly(all), unpaidOnly };
+  };
+  const { connected, capable, tiered, suitable, bounded } = stages(input.models.filter((model) => model.available && !exclude.has(model.id)));
+  const { entries, unpaidOnly } = entriesOf(bounded, accountsFor);
+  const whole = () => entriesOf(stages(input.models.filter((model) => model.available)).bounded, (model) => s.accounts.list()
+    .filter((account) => account.provider === model.provider && account.enabled && (!model.accounts.length || model.accounts.includes(account.id)))).entries;
+  const runs = (model: ModelInfo): PoolEntry | undefined => {
+    if (unusable(model) || !inBand(model)) return undefined;
+    const accounts = accountsFor(model).filter((account) => !unpaidOnly || !isPaid(account));
+    return accounts.length ? { model, accounts } : undefined;
+  };
+  const entryFor = (model: ModelInfo): PoolEntry | undefined => {
+    const own = entries.find((entry) => entry.model.id === model.id);
+    if (own) return own;
+    const named = familyOf(model.model);
+    const newer = entries.filter((entry) => {
+      const { family, version } = familyOf(entry.model.model);
+      return family === named.family && compareVersions(version, named.version) > 0;
+    });
+    return newer.find((entry) => entry.model.provider === model.provider) ?? newer[0];
+  };
+  return { connected, capable, tiered, suitable, bounded, entries, whole, entryFor, accountsFor, runs, unusable, inBand };
+}
+
+/** The entries without a model whose family has a newer version among them (models/family.ts reads both from the id). */
+export function newestOnly<T extends { model: ModelInfo }>(entries: readonly T[]): T[] {
+  const top = new Map<string, number[]>();
+  for (const { model } of entries) {
+    const { family, version } = familyOf(model.model);
+    const best = top.get(family);
+    if (!best || compareVersions(version, best) > 0) top.set(family, version);
   }
-  return { connected, capable, tiered, suitable, bounded, entries: all, accountsFor, unusable, inBand };
+  return entries.filter(({ model }) => {
+    const { family, version } = familyOf(model.model);
+    return compareVersions(version, top.get(family)!) === 0;
+  });
 }

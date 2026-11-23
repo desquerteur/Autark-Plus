@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const provider = process.env.WORKFORCE_E2E_REAL;
 
@@ -34,14 +34,14 @@ test(`real ${provider ?? 'provider'} turn through the runtime`, { skip: !provide
   await client.call('models.setPolicy', { agentId: manager.id, conversationId: chat.id, policy: { pin: model.id, effort: model.efforts.includes('low') ? 'low' : model.defaultEffort } });
 
   await client.call('messages.send', { conversationId: chat.id, body: 'Reply with exactly the word: pong' });
-  const reply = await client.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 240_000);
+  const reply = await client.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 240_000);
   t.diagnostic(`model ${model.id}: ${reply.body.slice(0, 200)}`);
   assert.match(reply.body, /pong/i);
   // A real workforce tool call (Codex: dynamic tools, Claude Code: the MCP hub).
   await client.call('messages.send', { conversationId: chat.id, body: 'Use your task tool to create a task titled "Real tool check" in this chat, then reply with: created' });
   const task = await client.waitFor('task.upserted', (item) => item.conversationId === chat.id && /real tool check/i.test(item.title), 240_000);
   t.diagnostic(`task ${task.id} owner ${task.assigneeId ?? '-'}`);
-  await client.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && /created/i.test(message.body), 240_000);
+  await client.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && /created/i.test(message.body), 240_000);
   const runs = await client.call('agents.runs', { id: manager.id });
   assert.ok(runs.some((run) => run.status === 'done'), 'the run is journaled as done');
 });

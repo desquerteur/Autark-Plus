@@ -25,7 +25,7 @@ for (const provider of ['codex', 'claude'] as const) {
     t.after(async () => { await supervisor.killAll(); await rm(temp, { recursive: true, force: true }); });
     const finder = new ExecutableFinder();
     const account: Account = { id: 'live_quota', provider, label: provider, home, auth: 'cli',
-      enabled: true, state: 'unknown', rotation: false, priority: 0, detected: false, createdAt: 0 };
+      enabled: true, state: 'unknown', priority: 0, detected: false, createdAt: 0 };
     const began = Date.now();
     let check;
     if (provider === 'codex') {

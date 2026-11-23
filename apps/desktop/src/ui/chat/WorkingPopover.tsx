@@ -2,37 +2,29 @@
 // it over the content – anchored to the always reserved sub line, so nothing in the header or the
 // chat moves, and it stays open while a run hands over to the next one. One row per member working
 // in this chat (live-text.ts workingRows, ordered by start): avatar and name (both open the agent's
-// page – where else it works and what it does in parallel), the model it runs on now · effort in a
-// fixed slot at the line's end, its live note (a disclosure: the row expands to the run's live steps,
-// the newest few like the live block – team/run-items.tsx – and the agent's newest words) and its
-// task. B-057: a running split group is one row ("3 of 5 parts working", its goal where a run names its model) that
-// opens to its split rows. B-075: the rows and an open row's steps and newest words come from the chat's rows (the
-// summary's live runs, each run's row with its meta.live) – the same popover on every device.
+// page – its activity log, where else it works), the model it runs on now · effort in a fixed slot at the line's
+// end, what it does now (its step, else its note) and its task. B-057: a running split group is one row ("3 of 5 parts
+// working") that opens to its split rows. The rows come from the chat's live bar (the summary's `live`, chat/live.ts).
 // "Stop all agent work" (shell/work-stop.ts) stays its last entry for whoever may stop. On a
 // phone the popover is a bottom sheet (mobile.css).
-// Owns: the popover's markup and which rows are open. Never: stops one agent, invents a model or
+// Feedback 16.11.2026 (F20, owner – supersedes "no Stop in the chat" of 21.10.): each agent's row has its own Stop for
+// whoever may cancel runs – it ends only that agent's current run (runs.cancel), so in a group the others keep working.
+// Owns: the popover's markup and which rows are open. Never: stops other agents than the row's, invents a model or
 // steps the runtime did not report, or polls.
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ConversationSummary } from '../../shared/model/chat.ts';
 import { AgentAvatar, Icon, Popover, Spinner } from '../lib/ui.tsx';
-import { agentMap, messagesFor, tasks } from '../lib/store.ts';
+import { StopRun } from './StopRun.tsx';
+import { agentMap, tasks } from '../lib/store.ts';
 import { go } from '../lib/router.ts';
 import { can } from '../lib/session.ts';
-import { plainPreview } from '../lib/format.ts';
 import { openTaskDetail } from '../tasks/jump.ts';
-import { RunItemList } from '../team/run-items.tsx';
-import { stepItems } from '../team/step-view.ts';
 import { stopAllWork, workAction, workStop } from '../shell/work-stop.ts';
-import { isLiveWork } from './message-rows.ts';
-import { liveWords } from './run-line.ts';
-import { liveRuns, workingRows, type WorkingRow } from './live-text.ts';
+import { liveRuns, stoppableRun, workingRows, type WorkingRow } from './live-text.ts';
 import { SplitList } from '../splits/SplitRows.tsx'; // B-057
-import { liveGroupsOf, splitGroups, watchSplits } from '../splits/split-model.ts';
-import { groupStart, groupWorking } from '../splits/split-text.ts';
+import { splitGroups, watchSplits } from '../splits/split-model.ts';
 
-/** Steps an open row shows before "+N earlier steps" – as many as the live block. */
-const ROW_STEPS = 6;
 /** The popover's width on the desktop (clamped to the window, lib/popover.tsx). */
 const WIDTH = 360;
 
@@ -64,10 +56,7 @@ export function WorkingPopover(props: { chat: Chat; anchor: HTMLElement | null; 
     return () => cancelAnimationFrame(frame);
   }, [open]);
   if (!open) return null;
-  const list = messagesFor(chat.id).value;
-  const metaOf = (runId: string) => list.find((message) => message.runId === runId && isLiveWork(message))?.meta;
-  const groups = liveGroupsOf(chat.id).map((group) => ({ id: group.id, agentId: group.agentId, startedAt: groupStart(group), note: groupWorking(group), goal: group.goal })); // B-057: one row per running split group (its goal in the model slot)
-  const rows = workingRows(chat, liveRuns(chat), (id) => agentMap.value.get(id)?.name, metaOf, groups);
+  const rows = workingRows(chat, liveRuns(chat), (id) => agentMap.value.get(id)?.name);
   const toggle = (key: string) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -80,7 +69,7 @@ export function WorkingPopover(props: { chat: Chat; anchor: HTMLElement | null; 
         <div class="menu-section">
           <div class="menu-title">Working now</div>
           {rows.length
-            ? <ul class="working-rows">{rows.map((row) => <Row key={row.key} row={row} chatId={chat.id} open={expanded.has(row.key)} onToggle={() => toggle(row.key)} onLeave={onClose} />)}</ul>
+            ? <ul class="working-rows">{rows.map((row) => <Row key={row.key} row={row} open={expanded.has(row.key)} onToggle={() => toggle(row.key)} onLeave={onClose} />)}</ul>
             : <p class="working-empty">Nobody is working right now</p>}
         </div>
         {stop && (
@@ -99,8 +88,9 @@ export function WorkingPopover(props: { chat: Chat; anchor: HTMLElement | null; 
   );
 }
 
-function Row(props: { row: WorkingRow; chatId: string; open: boolean; onToggle: () => void; onLeave: () => void }) {
+function Row(props: { row: WorkingRow; open: boolean; onToggle: () => void; onLeave: () => void }) {
   const { row, open } = props;
+  const runId = stoppableRun(row, can('runs.cancel'));
   const toAgent = () => { props.onLeave(); go.agent(row.agentId); };
   const task = row.taskId ? tasks.value.find((item) => item.id === row.taskId) : undefined;
   const note = <span class="working-row-note">{row.note}</span>;
@@ -111,8 +101,9 @@ function Row(props: { row: WorkingRow; chatId: string; open: boolean; onToggle: 
         <div class="working-row-head">
           <button type="button" class="working-row-name" onClick={toAgent}>{row.name}</button>
           <span class="working-row-model tabular" title={row.model || undefined}>{row.model}</span>
+          {runId && <StopRun runId={runId} name={row.name} class="working-row-stop" />}
         </div>
-        {row.runId || row.groupId
+        {row.groupId
           ? <button type="button" class="working-row-toggle" aria-expanded={open} onClick={props.onToggle}>
             <Icon name={open ? 'caret-down' : 'caret-right'} size={12} />{note}
           </button>
@@ -122,25 +113,9 @@ function Row(props: { row: WorkingRow; chatId: string; open: boolean; onToggle: 
             <Icon name="list-checks" size={14} /><span>{task?.title ?? 'Task'}</span>
           </button>
         )}
-        {open && row.runId && <RowDetail runId={row.runId} agentId={row.agentId} chatId={props.chatId} />}
         {open && row.groupId && <GroupDetail groupId={row.groupId} />}
       </div>
     </li>
-  );
-}
-
-/** An open row: the run's live steps (newest few, from its row's meta.live) and the agent's newest words (its body). */
-function RowDetail(props: { runId: string; agentId: string; chatId: string }) {
-  const message = messagesFor(props.chatId).value.find((item) => item.runId === props.runId && isLiveWork(item));
-  const live = message?.meta.live;
-  const items = stepItems(props.runId, live?.steps ?? []);
-  const words = liveWords({ body: message?.body });
-  return (
-    <div class="working-row-detail">
-      <RunItemList items={items} live window={ROW_STEPS} earlier={live?.more} class="live-steps" />
-      {!items.length && !words && <p class="working-row-empty">No steps yet</p>}
-      {words && <p class="working-row-words" aria-live="polite">{plainPreview(words, 240)}</p>}
-    </div>
   );
 }
 

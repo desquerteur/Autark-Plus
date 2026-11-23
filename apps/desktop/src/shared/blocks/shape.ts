@@ -7,6 +7,7 @@
 import { LIMITS } from './catalog.ts';
 import type { BlockType, UiBlock } from './catalog.ts';
 import { cell, isObj, normalizeAmount, parseDuration, slug, str, toBool, toNumber } from './coerce.ts';
+import { parseCues } from './cues.ts';
 import type { Obj } from './coerce.ts';
 import { validateBlock } from './validate.ts';
 
@@ -224,6 +225,16 @@ export const SHAPERS: Partial<Record<BlockType, Shaper>> = {
   record(block, source) {
     if (!block.script) { const script = pick(source, ['text', 'teleprompter']); if (script) block.script = script; }
     if (block.maxSeconds !== undefined && (block.maxSeconds as number) <= 0) delete block.maxSeconds;
+    // A voice-over (task_2xr88cmc): the video to speak to and the lines with their times (cues.ts); only a voice is recorded.
+    if (!block.video) { const video = pick(source, ['videoPath', 'video_path', 'videoFile']); if (video) block.video = video; }
+    const lines = block.cues ?? source.lines ?? source.subtitles;
+    if (lines !== undefined) {
+      const parsed = parseCues(lines);
+      if (parsed.problem !== undefined) return parsed.problem;
+      block.cues = parsed.cues;
+    }
+    if (block.cues && !block.video && !block.fileId) return '"video" missing for the "cues"';
+    if (block.video || block.fileId) block.mode = 'audio';
   },
   upload(block, source) {
     if (!block.label) block.label = pick(source, ['text', 'title', 'instructions']) ?? 'Files';
@@ -244,4 +255,3 @@ const FIELD_ALIASES: Record<string, string> = {
   checkbox: 'toggle', boolean: 'toggle', bool: 'toggle', dropdown: 'select', choice: 'select', int: 'number', integer: 'number',
   datetime: 'date', link: 'url', mail: 'email', string: 'text',
 };
-

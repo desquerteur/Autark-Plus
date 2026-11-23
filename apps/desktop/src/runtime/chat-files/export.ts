@@ -56,7 +56,7 @@ export async function exportChats(s: Services, input: { conversationIds: readonl
   for (const id of fileIds) {
     if (!/^[0-9a-f]{64}$/.test(id) || !s.files.get(id)) continue; // a file the store no longer has stays a reference
     await mkdir(path.join(dir, FILES_DIR), { recursive: true });
-    await copyFile(s.files.path(id), path.join(dir, FILES_DIR, id));
+    await copyFile(await s.files.local(id), path.join(dir, FILES_DIR, id)); // B-080: bytes from another of the person's PCs are pulled first
     files++;
   }
   return { dir, chats: chats.length, messages, files };

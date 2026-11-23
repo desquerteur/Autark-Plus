@@ -1,16 +1,20 @@
 // Model policies at three scopes and how the router combines them:
-//   agent        → agents.model_policy (org.update)          – set by the user or a manager
-//   chat + agent → conversation.settings.models/efforts[agentId] – the chat's hard pin ("Always use
-//                  this model", API clients' messages.send model) and effort; a chat-scope setPolicy
-//                  replaces the choice whole
+//   agent        → agents.model_policy (org.update)          – set by the user or a manager; `pin` is the agent's start
+//                  model and `pinBy` who set it (B-083). 17.11.2026: it is the explicit choice that stands – the model
+//                  the agent runs on from where its context next starts anew (router.ts); without one Auto settles it
+//   chat + agent → conversation.settings.modelHints (else an older chat's models) / efforts / temperatures[agentId] –
+//                  the person's suggestion in the chat (the composer chip). 13.11.2026 (owner: "einfach nur da, wird der
+//                  KI so erklärt"): information for the AI, never routing – chatChoice reads it for the person's new
+//                  line (context/render.ts suggestionTag) and the AI's model tools; a chat-scope setPolicy replaces model
+//                  and effort whole
 //   global       → kv ns 'routing', key 'default_policy'      – defaults for every agent; never a
 //                  cost mode (23.10.2026: one global cost mode, Settings.routing.costMode – a
 //                  global setPolicy with costMode writes it there; migration 55 moved stored ones) and
 //                  never a pin (01.11.2026: the default model is the Work use, Settings.routing.work – a
 //                  global setPolicy with a pin writes it there; an older stored pin moves there once)
-// Owns: validation of ModelPolicy input, get/set per scope, the PolicyApi factory for RPC and
-// `effectivePolicy` (global defaults → agent → chat choice; the default model is the Work use, router.ts).
-// Never: routes (router.ts does) or lets a chat scope store bounds (only pin/effort live there).
+// Owns: validation of ModelPolicy input (B-083: `pinBy` kept, name ≤ 80 characters), get/set per scope, the PolicyApi
+// factory for RPC, chatChoice and `effectivePolicy` (global defaults → agent; the default model is the Work use, router.ts).
+// Never: routes (router.ts does), lets a chat scope store bounds (only pin/effort live there) or lets the chat choice route.
 
 import type { RuntimeServices } from '../contracts.ts';
 import type { PolicyApi } from '../rpc/extras.ts';
@@ -32,6 +36,8 @@ export const TIER_ORDER: ReadonlyArray<ModelInfo['tier']> = ['local', 'small', '
 const COST_MODES: ReadonlySet<string> = new Set(['economy', 'balanced', 'best']);
 const MAX_LIST = 50;
 const MAX_ID = 200;
+const MAX_NAME = 80;
+const MAX_TEMPERATURE = 2;
 
 function bad(message: string): never {
   throw new WorkforceError('bad_request', message);
@@ -84,7 +90,18 @@ export function cleanPolicy(value: unknown): ModelPolicy {
   if (avoid) policy.avoid = avoid;
   const account = modelId(raw.account, 'the account'); // AF-021: the agent's default account ('auto' = none)
   if (account) policy.account = account;
+  const pinBy = setBy(raw.pinBy);
+  if (pinBy) policy.pinBy = pinBy;
   return policy;
+}
+
+/** B-083: who set the start model (a name of at most MAX_NAME characters, when); anything else is dropped. */
+function setBy(value: unknown): ModelPolicy['pinBy'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const name = typeof raw.name === 'string' ? raw.name.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, MAX_NAME) : '';
+  if (!name || typeof raw.at !== 'number' || !Number.isFinite(raw.at)) return undefined;
+  return { name, at: raw.at, ...(raw.self === true ? { self: true } : {}) };
 }
 
 function isEmpty(policy: ModelPolicy | undefined): boolean {
@@ -125,13 +142,18 @@ export function defaultPolicy(services: RuntimeServices): ModelPolicy | undefine
   return rest;
 }
 
-/** The sticky composer choice of one agent in one chat ('auto' = no pin). */
-export function chatChoice(services: RuntimeServices, conversationId: string | undefined, agentId: string): { pin?: string; effort?: Effort } {
+/**
+ * The person's suggestion for one agent in one chat (the composer chip): the model (modelHints, else an older chat's
+ * `models` entry), the effort and the temperature (0..2) – information for the AI, never a route ('auto' = none).
+ */
+export function chatChoice(services: RuntimeServices, conversationId: string | undefined, agentId: string): { pin?: string; effort?: Effort; temperature?: number } {
   if (!conversationId) return {};
   const settings = services.chats.get(conversationId)?.settings;
-  const pin = settings?.models?.[agentId];
-  const effort = normalizeEffort(settings?.efforts?.[agentId]);
-  return { pin: typeof pin === 'string' && pin && pin !== 'auto' ? pin : undefined, effort };
+  const pin = settings?.modelHints?.[agentId] ?? settings?.models?.[agentId];
+  const effort = settings?.efforts?.[agentId] === 'auto' ? undefined : normalizeEffort(settings?.efforts?.[agentId]);
+  const temperature = settings?.temperatures?.[agentId];
+  const warmth = typeof temperature === 'number' && temperature >= 0 && temperature <= MAX_TEMPERATURE ? { temperature } : {};
+  return { pin: typeof pin === 'string' && pin && pin !== 'auto' ? pin : undefined, effort, ...warmth };
 }
 
 export function getPolicy(services: RuntimeServices, scope: PolicyScope): ModelPolicy | null {
@@ -159,7 +181,7 @@ export function setPolicy(services: RuntimeServices, scope: PolicyScope, policy:
   const target = resolveScope(services, scope);
   if (target.kind === 'global') {
     // One global cost mode (Settings.routing.costMode) and one default model (the Work use, Settings.routing.work).
-    const { costMode, pin, ...rest } = clean;
+    const { costMode, pin, pinBy: _by, ...rest } = clean;
     if (costMode || pin) services.settings.update({ routing: { ...(costMode ? { costMode } : {}), ...(pin ? { work: pin } : {}) } });
     const kv = new KvRepo(services.db);
     if (isEmpty(rest)) kv.delete(POLICY_NS, DEFAULT_POLICY_KEY);
@@ -194,12 +216,13 @@ export function createPolicyApi(services: () => RuntimeServices): PolicyApi {
   };
 }
 
-/** The policy the router applies for one agent in one chat, with where each part came from. */
+/** The policy the router applies for one agent, with where each part came from. */
 export interface EffectivePolicy {
-  pin?: { modelId: string; source: 'chat' | 'agent' };
-  /** Fixed effort of the agent policy (wins over the chat choice). */
+  /** B-083: the agent's start model – it runs where the agent's context starts anew; the agent's own request there beats it.
+   *  `self`: the agent set it itself (model.set) – it runs inside the band on the accounts Auto uses (router.ts). */
+  pin?: { modelId: string; source: 'agent'; self?: true };
+  /** Fixed effort of the agent policy (the agent's own request comes first – previous.ts startEffort). */
   agentEffort?: Effort;
-  chatEffort?: Effort;
   defaultEffort?: Effort;
   floorTier?: ModelInfo['tier'];
   ceilingTier?: ModelInfo['tier'];
@@ -208,13 +231,10 @@ export interface EffectivePolicy {
   avoid: string[];
 }
 
-export function effectivePolicy(services: RuntimeServices, agent: Agent, conversationId?: string): EffectivePolicy {
+export function effectivePolicy(services: RuntimeServices, agent: Agent): EffectivePolicy {
   let agentPolicy: ModelPolicy = {};
   try { agentPolicy = cleanPolicy(agent.modelPolicy); } catch { agentPolicy = {}; } // tolerate old rows
   const global = defaultPolicy(services) ?? {};
-  const chat = chatChoice(services, conversationId, agent.id);
-  const pin = chat.pin ? { modelId: chat.pin, source: 'chat' as const }
-    : agentPolicy.pin ? { modelId: agentPolicy.pin, source: 'agent' as const } : undefined;
   // Agent bounds override the defaults; a conflict created by mixing them drops the default.
   let floorTier = agentPolicy.floorTier ?? global.floorTier;
   let ceilingTier = agentPolicy.ceilingTier ?? global.ceilingTier;
@@ -223,7 +243,8 @@ export function effectivePolicy(services: RuntimeServices, agent: Agent, convers
     else floorTier = undefined;
   }
   return {
-    pin, agentEffort: agentPolicy.effort, chatEffort: chat.effort, defaultEffort: global.effort, floorTier, ceilingTier,
+    ...(agentPolicy.pin ? { pin: { modelId: agentPolicy.pin, source: 'agent' as const, ...(agentPolicy.pinBy?.self ? { self: true as const } : {}) } } : {}),
+    agentEffort: agentPolicy.effort, defaultEffort: global.effort, floorTier, ceilingTier,
     costMode: agentPolicy.costMode ?? global.costMode,
     prefer: [...new Set([...(agentPolicy.prefer ?? []), ...(global.prefer ?? [])])],
     avoid: [...new Set([...(agentPolicy.avoid ?? []), ...(global.avoid ?? [])])],

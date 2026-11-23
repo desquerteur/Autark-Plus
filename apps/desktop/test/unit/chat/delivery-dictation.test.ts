@@ -1,7 +1,8 @@
 // Tests for B-078 T7.1 (src/runtime/chat/delivery-dictation.ts through chat/delivery.ts): a person's line that is
 // only a recording, while speech to text is ready and its bytes are here, wakes nobody until its transcript arrives
 // ('message.updated' with a body / meta.dictation) – then once; without a transcript it is delivered after the wait;
-// without speech to text, with text, or for an agent's line nothing waits.
+// without speech to text, with text, or for an agent's line nothing waits. B-080 F6: a bare recording whose files row
+// is here but whose bytes are not (written on another PC, which transcribes it) waits the same way for the synced update.
 // Owns: these assertions only. Never: real speech to text or engines.
 
 import { test } from 'node:test';
@@ -16,12 +17,15 @@ import { agent, harness } from './harness.ts';
 const HERE = fileURLToPath(import.meta.url); // a file that exists: "the recording's bytes are on this PC"
 const VOICE = [{ fileId: 'f'.repeat(64), name: 'voice.webm', mime: 'audio/webm;codecs=opus', size: 1200 }];
 
-function setup(options: { stt?: string; bytes?: boolean; waitMs?: number } = {}) {
+function setup(options: { stt?: string; bytes?: boolean; row?: boolean; waitMs?: number } = {}) {
   const h = harness();
   h.org.add(agent('ag_tom', 'Tom'));
   const services = h.services as RuntimeServices & Record<string, unknown>;
   services.stt = { state: () => options.stt ?? 'ready' } as unknown as RuntimeServices['stt'];
-  services.files = { path: () => (options.bytes === false ? `${HERE}.missing` : HERE) } as unknown as RuntimeServices['files'];
+  services.files = {
+    path: () => (options.bytes === false ? `${HERE}.missing` : HERE),
+    get: (id: string) => (options.row ? { id, name: 'voice.webm', mime: VOICE[0].mime, size: VOICE[0].size, createdAt: 1 } : undefined),
+  } as unknown as RuntimeServices['files'];
   services.delivery = new DeliveryServiceImpl(services, { dictationWaitMs: options.waitMs ?? 60_000 });
   const chat = h.chats.create({ agentIds: ['ag_tom'], createdBy: HUMAN_ID });
   const voice = () => h.chats.send({ conversationId: chat.id, authorId: HUMAN_ID, body: '', attachments: VOICE });
@@ -82,4 +86,22 @@ test('T7.1: nothing waits without speech to text, without the bytes here, or for
   const h = setup();
   h.chats.send({ conversationId: h.chat.id, authorId: HUMAN_ID, body: 'Listen to this', attachments: VOICE });
   assert.deepEqual(h.woken(), ['ag_tom'], 'a line with text is delivered at once');
+});
+
+test('B-080 F6: a recording written on another PC (its files row here, its bytes not) waits for the synced update of the writer, then wakes once', async () => {
+  for (const stt of ['ready', 'missing']) {
+    const h = setup({ bytes: false, row: true, stt });
+    const message = h.voice();
+    assert.deepEqual(h.woken(), [], `held (speech to text here: ${stt})`);
+    h.transcribe(message.id, 'Bitte buche den Zug für Montag');
+    assert.deepEqual(h.woken(), ['ag_tom'], 'the synced body delivers it');
+  }
+  const failed = setup({ bytes: false, row: true });
+  const message = failed.voice();
+  failed.bus.emit('message.updated', { ...message, meta: { dictation: { fileId: VOICE[0].fileId, failed: true } } });
+  assert.deepEqual(failed.woken(), ['ag_tom'], 'nothing heard there: delivered as it is');
+  const late = setup({ bytes: false, row: true, waitMs: 20 });
+  late.voice();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(late.woken(), ['ag_tom'], 'a writer on an older build sends no update: the same wait, then delivered');
 });

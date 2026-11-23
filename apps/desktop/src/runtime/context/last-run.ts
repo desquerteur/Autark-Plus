@@ -25,6 +25,7 @@ export interface LastRun {
   trigger?: string;
   model?: string;
   effort?: string;
+  temperature?: number; // B-083: the turn's temperature (absent: none)
   status?: string;
   endedAt: number;
   /** The turn's input text as the engine got it (its text parts joined). */
@@ -87,7 +88,7 @@ function steps(items: readonly RunItem[], redact: Redact): string[] {
 
 /** The file's text: what it is, the turn's facts, its input, its steps in order, its final text. */
 export function lastRunText(run: LastRun, redact: Redact = (text) => text): string {
-  const facts = [run.trigger, run.model, run.effort && `effort ${run.effort}`, run.status, new Date(run.endedAt).toISOString()].filter(Boolean).join(' · ');
+  const facts = [run.trigger, run.model, run.effort && `effort ${run.effort}`, run.temperature !== undefined && `temperature ${run.temperature}`, run.status, new Date(run.endedAt).toISOString()].filter(Boolean).join(' · ');
   const all = steps(run.items, redact);
   const head = [
     '<!-- What I did on my last turn, written by the app when the turn ended (secrets replaced by their handles, long parts cut); editing it changes nothing. The system prompt of that turn is last-prompt.md beside it; earlier turns: Team › Runs. -->',

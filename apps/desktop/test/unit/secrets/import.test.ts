@@ -254,8 +254,8 @@ test('secrets.import (agent tool) reads a file on the PC by its path and returns
     const file = path.join(dir, 'Chrome Passwords.csv');
     writeFileSync(file, CHROME.replace('nopass.example,https://nopass.example/,ada,,\r\n', ''));
     const tool = secretTools.find((entry) => entry.name === 'secrets.import')!;
-    assert.match(tool.description, /^Import a password export or a key\/value file on this PC into the catalog/);
-    assert.match(tool.description, /Give its path – the app reads it, so no value reaches me \(opening it with Read or cat would bring every value into my context\)/);
+    assert.match(tool.description, /^Imports a password export or key\/value file from this PC into the catalog\./);
+    assert.match(tool.description, /The app reads it, so no value reaches me \(reading it myself would\)/);
     const ctx = { services: { secrets: v, clock } as unknown as RuntimeServices, agent: { id: 'agt_a', name: 'A' } } as unknown as ToolContext;
     const out = await tool.run({ path: file }, ctx);
     const text = JSON.stringify(out);

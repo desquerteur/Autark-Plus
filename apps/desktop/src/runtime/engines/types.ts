@@ -41,7 +41,7 @@ export interface EngineForkResult { ref: string; generation?: number }
  */
 export interface RebuildItem {
   itemId: string;
-  kind: string; // m | t | s | r | a | f
+  kind: string; // m | t | s | r | a | f | c (a hand-over: replayed as my own text)
   role: 'user' | 'assistant' | 'tool';
   text: string;
   stamp?: string;
@@ -63,7 +63,7 @@ export interface EngineRebuildInput {
   tools: ToolSpec[];
   /** Every tool name the turn offers (native and through the hub). */
   toolNames: string[];
-  /** The turn's prompt sections (the new session starts with them). */
+  /** The turn's prompt: the new session starts with `stable` as its system prompt; `volatile` goes in its first turn's input. */
   system: { stable: string; volatile: string };
   /** The new session's generation (the superseded one's + 1). */
   generation: number;
@@ -126,9 +126,23 @@ export type EngineEvent =
   // `output`: an engine-native tool's full output text, bounded (Codex command output and file diffs, Claude
   // tool_result content) for the run journal.
   | { type: 'tool_end'; callId: string; ok: boolean; summary: string; output?: string }
-  | ({ type: 'usage'; inputTokens: number; outputTokens: number; contextTokens?: number; costUsd?: number } & CacheTokens)
+  // costUsd: what the engine reports (Claude Code: the session's running total); modelCalls: the turn's model calls so far,
+  // from an engine that counts them in its stream (Claude Code's message_start).
+  | ({ type: 'usage'; inputTokens: number; outputTokens: number; contextTokens?: number; costUsd?: number; modelCalls?: number } & CacheTokens)
   | { type: 'limits'; limits: AccountLimits }
-  | { type: 'status'; note: string }; // short live status ("running tests")
+  | { type: 'status'; note: string } // short live status ("running tests")
+  // B-080: the engine started a fresh native session for this turn (Claude Code --session-id at its system/init, Codex after
+  // thread/start) – the executor binds it at once, so a kill or restart mid-turn resumes it instead of starting over.
+  | { type: 'session'; ref: string; generation: number }
+  // B-080: Engine.setModel switched the running turn to `model` (provider id) at `effort`. FIXES-3 C1: Claude Code says so once
+  // a request runs on it; Codex when it applied the switch (turn/settings/update), before its next request – open under C1.
+  | { type: 'model'; model: string; effort: Effort }
+  // B-080: the engine's own background work (a Claude Code background shell) started or ended; the turn lasts while
+  // it runs, and the stall watch counts it as a call in flight (agents/stall-watch.ts).
+  | { type: 'background'; id: string; running: boolean }
+  // KI-Runde 17.11.2026: the engine compacted the session's history by itself in this turn – its own count before and after and how
+  // long it took, where it reports them (Claude Code compact_boundary, Codex contextCompaction); the executor journals it as a run note.
+  | { type: 'compacted'; before?: number; after?: number; ms?: number };
 
 export interface EngineTurnInput {
   runId: string;
@@ -138,10 +152,18 @@ export interface EngineTurnInput {
   effort: Effort;
   /** B-078 (D14, D16): the sampling temperature 0..2 the agent asked for (model.set). http/compatible.ts sends it; http/openai.ts and
    *  http/anthropic.ts send it to models that take one and drop it for reasoning/thinking models (engines/http/temperature.ts);
-   *  the Claude Code, Codex and ACP CLIs ignore it. */
+   *  the Codex and ACP CLIs ignore it. B-083: openai.ts sends it to a reasoning model only at effort none
+   *  (GPT-6 Sol/Luna, 6.1 Terra, gpt-5.1+); compatible.ts drops it for Gemini 3+ and follows anthropicTemperature (only at
+   *  effort none) / openAiTemperature for gateway ids. Owner 09.11.: thinking is never turned off for it – Claude takes a
+   *  temperature only without thinking, so Claude Code sends none and the Anthropic API only to the older models that run
+   *  without thinking anyway (http/anthropic.ts anthropicTemperature). */
   temperature?: number;
-  session?: { ref: string; generation: number }; // resume target (engines with sessions)
-  system: { stable: string; volatile: string }; // prompt sections (stable prefix is cache-friendly)
+  /** Resume target (engines with sessions); `contextTokens`: the engine's own count of it after its last request (Codex tells a repeat of that request's usage by it). */
+  session?: { ref: string; generation: number; contextTokens?: number };
+  /** `stable`: the system prompt, the same text for every session of an agent while its key holds. `volatile`: the live context
+   *  for this turn (all of it on a new or rebuilt session, what changed on a resumed one) – every engine sends it as the first
+   *  block of this turn's input (shared.ts contextText), never in a system prompt or instructions. */
+  system: { stable: string; volatile: string };
   input: TurnInputItem[]; // only what is new for this turn (or the full projection for stateless engines)
   tools: ToolSpec[]; // our workforce tools for this turn
   callTool: (name: string, args: unknown, callId: string) => Promise<ToolOutput>;
@@ -152,6 +174,13 @@ export interface EngineTurnInput {
   signal: AbortSignal;
   /** A turn that changes nothing (helpers): Codex opens a read-only sandbox, ACP rejects permission requests. */
   readOnly?: boolean;
+  /**
+   * KI-Runde 17.11.2026: the caller keeps this lean, tool-less conversation for more turns – a call's voice, which says one
+   * line at a time for as long as the call runs (decision/engine-runner.ts createChatOpener). The engine answers with its
+   * session, holds it open between the turns and takes the next line on it; an engine that cannot leaves `session` out,
+   * and every line is its own turn.
+   */
+  keep?: true;
   /** What the subconscious shows this turn: real tool calls with outputs in the main AI's history, as if it had made them (each engine's injectTrace). */
   trace?: SubconsciousTrace;
   /** AF-013: the agent's access for this turn (runtime/access/turn.ts). Absent: full access, every engine as before AF-013. */
@@ -221,6 +250,9 @@ export interface AccountCheck {
   message?: string;
 }
 
+/** What a kept conversation opens with (Engine.keepOpen): the account, model and effort, its stable part and its folder. */
+export type KeepOpenInput = Pick<EngineTurnInput, 'account' | 'model' | 'effort' | 'system' | 'cwd'>;
+
 export interface Engine {
   readonly id: EngineId;
   readonly caps: EngineCaps;
@@ -235,12 +267,23 @@ export interface Engine {
   run(input: EngineTurnInput): Promise<EngineTurnResult>;
   /** Steer a running turn with extra input (important messages). */
   steer?(runId: string, text: string): Promise<boolean>;
+  /**
+   * B-080 (model.set now): the running turn goes on with `model` (provider id) at `effort` from its next request, and the
+   * turn's events say so ('model' – when, per engine, its comment says); false when it cannot (no turn running here, not
+   * started yet, the engine refused).
+   */
+  setModel?(runId: string, model: string, effort: Effort): Promise<boolean>;
   /** A call of the subconscious into a running turn's history, as a real tool call and its output (the turn's own input.trace is for its start). */
   tell?(runId: string, call: TraceCall): Promise<boolean>;
   /** LEAN: an engine with a start-up cost (a server process per account) says whether this account's is up now; absent = no start-up cost. */
   warm?(account: Account): boolean;
   /** LEAN: starts this account's server ahead of a likely helper call (no model call); it idles out as usual. */
   prewarm?(account: Account): Promise<void>;
+  /**
+   * KI-Runde 17.11.2026 (decision 7.1): opens a `keep` conversation before its first line – the session starts with its system
+   * prompt and waits; the first line brings the ref it answers. Absent: the first line opens the session.
+   */
+  keepOpen?(input: KeepOpenInput): Promise<{ ref: string; generation: number }>;
   /** Free processes (idle kill / shutdown). */
   dispose(): Promise<void>;
   /**
@@ -267,4 +310,19 @@ export interface Engine {
    * the app's own isolated homes (privacy/native-history.ts).
    */
   purgeHistories?(account: Account): Promise<{ purged: boolean; message?: string }>;
+  /**
+   * Owner 07.11.2026 (Codex): this account's app-server lent to a dictation heard by the plan's realtime voice
+   * (voice/codex-hear.ts runs the protocol); throws when the server cannot start.
+   */
+  realtime?(account: Account): Promise<RealtimeLink>;
+}
+
+/** Engine.realtime: requests and notifications of the account's server, a hold against its idle shutdown, and a thread's base settings. */
+export interface RealtimeLink {
+  request<T = unknown>(method: string, params?: unknown, timeoutMs?: number): Promise<T>;
+  onNotification(listener: (note: { method: string; params: Record<string, unknown> }) => void): () => void;
+  /** Marks the session as running, so the server does not idle out under it; returns its end. */
+  hold(): () => void;
+  /** thread/start settings of the server's own folder: cwd, approval policy, read-only sandbox, untrusted folder (isolation.ts). */
+  thread: { config?: Record<string, unknown> } & Record<string, unknown>;
 }

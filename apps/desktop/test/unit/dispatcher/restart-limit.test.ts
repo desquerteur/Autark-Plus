@@ -1,5 +1,6 @@
-// AF-001 – automatic restarts are limited: an agent whose task turns keep "doing something" is continued by the ownership
-// loop 1 s after each turn (tasks/ownership.ts); past RESTART_LIMIT such restarts in the window its next automatic turn
+// AF-001 – automatic restarts are limited: an agent whose task keeps coming back to it as a 'retry' wake (upstream 0.3.16:
+// the task watcher's retry/recheck/stuck looks, tasks/watch.ts + next.ts wakeReason; before, the ownership loop) is
+// continued 1 s after each turn here; past RESTART_LIMIT such restarts in the window its next automatic turn
 // waits out the cooldown (its wake stays queued, due at the cooldown's end – nothing is dropped), one warning goes to the
 // log and one quiet line into the chat. A person's message is no automatic restart: it still runs at once. After the
 // cooldown the task continues. model.set now counts as a restart too and is refused while the agent cools down.
@@ -10,9 +11,10 @@ import assert from 'node:assert/strict';
 import { agent } from '../chat/harness.ts';
 import { flush, openWakes, setup } from './fakes.ts';
 import { RestartGuard, automaticGroup, RESTART_COOLDOWN_MS, RESTART_LIMIT, RESTART_WINDOW_MS } from '../../../src/runtime/agents/restart-guard.ts';
-import { CONTINUE_MS } from '../../../src/runtime/tasks/ownership.ts';
 import type { Wake } from '../../../src/runtime/contracts.ts';
 
+/** The pause before the next automatic turn in this test (the old ownership loop's CONTINUE_MS). */
+const CONTINUE_MS = 1000;
 const LIMIT = { limit: 3, windowMs: 60_000, cooldownMs: 300_000 };
 
 function capture() {
@@ -59,11 +61,12 @@ test('an agent continuing its own task endlessly is held after the limit; a mess
   const task = h.tasks.create({ conversationId: chat.id, title: 'Keep polishing the report', assigneeId: 'ag_tom', createdBy: 'human' });
   await flush();
 
-  /** The running turn "did something" and ends; the ownership loop plans the next one in CONTINUE_MS. */
+  /** The running turn ends; the task's next look comes back as a 'retry' wake in CONTINUE_MS (what tasks/watch.ts sends). */
   const endTurn = async () => {
     const call = h.executor.last();
-    h.ownership.afterTurn({ agentId: 'ag_tom', taskId: task.id, runId: call.request.runId, outcome: 'done', progressed: true });
     call.finish();
+    await flush();
+    h.wakes.wake({ agentId: 'ag_tom', reason: 'retry', conversationId: chat.id, taskId: task.id, dueAt: h.clock.now() + CONTINUE_MS, note: 'Going on with the report.', coalesceKey: `task:${task.id}` });
     await flush();
   };
   /** Time passes until the follow-up is due and the scheduler's one timer fires. */

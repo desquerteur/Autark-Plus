@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startRuntime } from './lib/runtime-client.mjs';
+import { MESSAGE_EVENTS, startRuntime } from './lib/runtime-client.mjs';
 
 const enabled = process.env.WORKFORCE_E2E_REAL === 'switch';
 const order = { cheap: 0, strong: 1, frontier: 2 };
@@ -40,12 +40,12 @@ test('real engine switch after a tool call, then a cancel and a further turn', {
   await client.call('models.setPolicy', { agentId: manager.id, conversationId: chat.id, policy: pinOf(codex) });
   const asked = await client.call('messages.send', { conversationId: chat.id, body: 'Use your task tool to create a task titled "Switch check alpha" in this chat, then reply with: created' });
   const task = await client.waitFor('task.upserted', (item) => item.conversationId === chat.id && /switch check alpha/i.test(item.title), 240_000);
-  await client.waitFor('message.updated', finalAfter(asked.seq, /created/i), 240_000);
+  await client.waitFor(MESSAGE_EVENTS, finalAfter(asked.seq, /created/i), 240_000);
   t.diagnostic(`1 · ${codex.id} created ${task.id} with its tool`);
 
   await client.call('models.setPolicy', { agentId: manager.id, conversationId: chat.id, policy: pinOf(claude) });
   const question = await client.call('messages.send', { conversationId: chat.id, body: 'What is the exact title of the task that was created in this chat a moment ago? Reply with the title only.' });
-  const named = await client.waitFor('message.updated', finalAfter(question.seq), 240_000);
+  const named = await client.waitFor(MESSAGE_EVENTS, finalAfter(question.seq), 240_000);
   t.diagnostic(`2 · ${claude.id} after the switch: ${named.body.slice(0, 120)}`);
   assert.match(named.body, /switch check alpha/i, 'the new engine knows what the tool did before the switch');
   const switched = (await client.call('agents.runs', { id: manager.id })).find((run) => run.conversationId === chat.id && run.status === 'done' && run.engine === 'claude');
@@ -64,6 +64,6 @@ test('real engine switch after a tool call, then a cancel and a further turn', {
   assert.equal(ended.status, 'interrupted', 'the cancelled turn ends interrupted');
 
   const after = await client.call('messages.send', { conversationId: chat.id, body: 'Reply with exactly the word: after' });
-  const reply = await client.waitFor('message.updated', finalAfter(after.seq, /after/i), 240_000);
+  const reply = await client.waitFor(MESSAGE_EVENTS, finalAfter(after.seq, /after/i), 240_000);
   t.diagnostic(`4 · after the cancel: ${reply.body.slice(0, 80)}`);
 });

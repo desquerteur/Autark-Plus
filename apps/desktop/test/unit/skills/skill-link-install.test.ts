@@ -11,12 +11,19 @@ import path from 'node:path';
 import { SkillLinks, PREVIEW_MS, type SkillLinksDeps } from '../../../src/runtime/skills/links/service.ts';
 import { readRecord } from '../../../src/runtime/skills/links/install.ts';
 import { discoverSkills } from '../../../src/runtime/skills/discover.ts';
-import { findSkills } from '../../../src/runtime/tools/builtin/skills-find.ts';
+import { lexicalScore, listedSkills, queryWords } from '../../../src/runtime/tools/builtin/skills-find.ts';
 import { GENERAL_MODE } from '../../../src/runtime/modes/service.ts';
 import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
 import type { FileRef } from '../../../src/shared/model/system.ts';
 import { COMMIT, fakeFetch, githubZip, library, skillMd, zip } from './links-fixture.ts';
+
+/** What skills.find offers an agent for a query since the 0.3.16 merge: its listed skills, best word match first. */
+const findSkills = (services: RuntimeServices, agent: Parameters<typeof listedSkills>[1], mode: Parameters<typeof listedSkills>[2], query: string) => {
+  const words = queryWords(query);
+  return listedSkills(services, agent, mode).map((hit) => ({ hit, score: lexicalScore(words, `${hit.info.name} ${hit.info.description}`) }))
+    .filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score).map((entry) => entry.hit);
+};
 
 const agent = (id: string, name = id): Agent => ({ id, name, role: '', avatar: { kind: 'initials', value: 'A' }, instructions: '', mode: 'general', skills: [], modelPolicy: {}, status: 'idle', createdBy: 'human', createdAt: 0, updatedAt: 0 });
 const PDF_MD = skillMd('pdf', 'Fill and read PDF forms. Use when a task involves PDF files.');

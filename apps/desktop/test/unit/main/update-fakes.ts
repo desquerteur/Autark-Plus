@@ -1,11 +1,37 @@
 // Fakes for the UpdateService tests (SM12): one-shot fake timers, a scripted electron-updater
 // (like the real one it reports a failure as event AND rejection; `hold` keeps a check running)
 // and a service harness on win32 that records states, opened URLs and the install order.
+// B-080: desktopDeps – DesktopUpdates' wiring on win32 recording the drain order (with the version a pause names).
 // Owns: these fakes only. Never: electron, network or real timers.
 
 import type { UpdateState } from '../../../src/shared/model/system.ts';
 import { UpdateService } from '../../../src/main/updates/update-service.ts';
 import type { UpdateServiceOptions, Updater } from '../../../src/main/updates/update-service.ts';
+import { inactiveUpdater, type DesktopUpdatesDeps } from '../../../src/main/updates-wiring.ts';
+
+/** B-080: DesktopUpdates' deps on win32; `order` records drafts, pause[:to], resume, stop and start. */
+export function desktopDeps(overrides: Partial<DesktopUpdatesDeps> = {}) {
+  const order: string[] = [];
+  const deps: DesktopUpdatesDeps = {
+    updater: inactiveUpdater(),
+    packaged: true, enabled: true, platform: 'win32', arch: 'x64', version: '0.2.0',
+    autoDownload: () => true,
+    setAutoDownload: async () => {},
+    renderer: { rendererReady: true, prepareRestart: async () => { order.push('drafts'); return true; } },
+    idleSeconds: () => 600,
+    runtime: {
+      readiness: async () => ({ ready: true }),
+      prepareRestart: async (cancel, to) => { order.push(cancel ? 'resume' : `pause${to ? `:${to}` : ''}`); },
+      stop: async () => { order.push('stop'); },
+      start: () => { order.push('start'); },
+    },
+    publish: () => {},
+    setTimer: () => 0,
+    clearTimer: () => {},
+    ...overrides,
+  };
+  return { deps, order };
+}
 
 export const settle = async () => { for (let n = 0; n < 5; n++) await new Promise((resolve) => setImmediate(resolve)); };
 

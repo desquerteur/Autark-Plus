@@ -1,0 +1,31 @@
+/* The chat's live bar above the composer (ui/chat/LiveBar.tsx): one 28 px line per agent or part at work – dot, name,
+   what it does (ellipsis), the time, and (F21) the agent's Stop in a fixed 92 px slot at the row's end, wide enough for
+   "Stopping…", so the line never changes width; a split part's slot stays empty. Same axis and width as the composer and the question
+   strip (ask-strip.css); at most four lines show, more scroll inside the bar (a stable gutter), so the messages above
+   keep their room. Hover only colours the line. Tokens only – light and dark – and phone width.
+   Owns: .live-bar*. Never: colours outside tokens.css. */
+.live-bar {
+  --col-inset: clamp(16px, 5cqi, 24px);
+  display: flex; flex: none; flex-direction: column; box-sizing: border-box; width: min(var(--message-max), calc((100cqi - 2 * var(--col-inset)) / var(--chat-zoom, 1)));
+  max-height: calc(4 * 28px + 8px); margin: 0 auto 6px; padding: 4px; overflow-y: auto; scrollbar-gutter: stable;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+}
+.live-bar-row { display: flex; flex: none; align-items: center; gap: 2px; width: 100%; }
+.live-bar-line {
+  display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; height: 28px; padding: 0 8px; border-radius: 8px;
+  color: var(--secondary); font-size: 13px; text-align: left; white-space: nowrap;
+}
+.live-bar-stop { display: flex; flex: none; justify-content: flex-end; width: 92px; }
+.live-bar-stop > .stop-run { height: 28px; border-radius: 8px; }
+.live-bar-line:hover { background: var(--hover); color: var(--text); }
+.live-bar-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: avatar-working 1.2s ease-in-out infinite alternate; }
+.live-bar-name { flex: 0 0 auto; max-width: 40%; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; } /* 17.11.2026 (Mika): never squeezed by a long text – "Theo", not "T." – only past 40% it is cut */
+.live-bar-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.live-bar-text::before { content: '· '; color: var(--muted); }
+.live-bar-time { flex: none; color: var(--muted); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .live-bar-dot { animation: none; } }
+@media (pointer: coarse) { .live-bar-line, .live-bar-stop > .stop-run { height: 34px; } .live-bar { max-height: calc(4 * 34px + 8px); } }
+.mobile-shell .live-bar { width: auto; margin: 0 10px 6px; } /* the phone composer's side margin (mobile.css) */
+/* AF-004 (Autark-Plus): a split part sits under its agent's line (LiveBar.tsx treeOrder) – indented 22 px with a 1 px --line guide. */
+.live-bar-line[data-part] { position: relative; padding-left: 30px; }
+.live-bar-line[data-part]::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 15px; width: 1px; background: var(--line); }

@@ -4,8 +4,9 @@
 //   exists here (a folder missing too may be another PC's – a linked PC's result), a missing relative one only
 //   "could not tell" (it may live in a task's own worktree); a line reference (":12", ":12:5", "#L12") is tried
 //   without it, and on Windows a Git Bash path ("/c/Users/…") is read as "C:\Users\…";
-// - a link (an http(s) URL in ref or label): one HEAD request (GET when HEAD is not allowed, body not read),
-//   redirects followed, LINK_TIMEOUT_MS; 404/410 is a confident no – except on hosts that answer 404 for a private
+// - a link (an http(s) URL in ref or label): one GET request, its body cancelled unread (B-080, live 05./07.11.2026:
+//   awsconnect.at answers HEAD with 404 and GET with 200 – HEAD flagged a live page as gone twice), redirects followed,
+//   LINK_TIMEOUT_MS; 404/410 is a confident no – except on hosts that answer 404 for a private
 //   page without its login (GitHub, GitLab, Bitbucket, Azure DevOps: PRIVATE_404) –, a network error, timeout or 5xx
 //   "could not tell", everything else (2xx, 3xx, 401/403/429 – the page exists behind a login or a limit) answers.
 // At most MAX_CHECKS targets per result, each once, all in parallel. No retries, no polling.
@@ -21,7 +22,7 @@ import type { EvidenceCheck, EvidenceChecker } from '../contracts/evidence.ts';
 export const MAX_CHECKS = 8;
 export const LINK_TIMEOUT_MS = 8000;
 
-export type CheckFetch = (url: string, init: { method: 'HEAD' | 'GET'; signal: AbortSignal; redirect: 'follow'; headers: Record<string, string> }) => Promise<Response>;
+export type CheckFetch = (url: string, init: { method: 'GET'; signal: AbortSignal; redirect: 'follow'; headers: Record<string, string> }) => Promise<Response>;
 export type CheckStat = (file: string) => Promise<{ size: number; isDirectory(): boolean } | undefined>;
 
 const URL_RE = /^https?:\/\/\S+$/i;
@@ -96,11 +97,8 @@ async function checkLink(target: string, doFetch: CheckFetch, outer?: AbortSigna
   timer.unref?.();
   const headers = { 'user-agent': 'Mozilla/5.0 (Autark evidence check)', accept: '*/*' };
   try {
-    let response = await doFetch(target, { method: 'HEAD', signal: controller.signal, redirect: 'follow', headers });
-    if (response.status === 405 || response.status === 501) {
-      response = await doFetch(target, { method: 'GET', signal: controller.signal, redirect: 'follow', headers });
-      try { await response.body?.cancel(); } catch { /* nothing to read */ }
-    }
+    const response = await doFetch(target, { method: 'GET', signal: controller.signal, redirect: 'follow', headers });
+    try { await response.body?.cancel(); } catch { /* nothing to read */ }
     const status = response.status;
     if ((status === 404 || status === 410) && PRIVATE_404.test(hostOf(response.url || target))) {
       return { kind: 'link', target, ok: undefined, line: `link not checked (HTTP ${status} – this host answers so for private pages too): ${short(target)}` };

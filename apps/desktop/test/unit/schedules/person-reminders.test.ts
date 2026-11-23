@@ -47,8 +47,8 @@ test('snooze rings the same item; done and skip survive restart without affectin
   assert.equal(h.scheduler.get(schedule.id)!.history![0].personActions!.at(-1)!.until, until);
   h.clock.advance(5 * M); h.scheduler.tick();
   assert.equal(h.tasks.todos().length, 1);
-  assert.equal(h.tasks.get(task.id)!.status, 'needs_you');
-  h.tasks.setStatus(task.id, 'done', 'human');
+  assert.equal(h.tasks.get(task.id)!.status, 'open');
+  h.tasks.finish(task.id, { status: 'done', summary: 'Done' }, 'human');
   const actions = h.scheduler.get(schedule.id)!.history![0].personActions!;
   assert.deepEqual(actions.map(a => a.state), ['pending', 'snoozed', 'pending', 'done']);
   h.scheduler.stop();
@@ -66,7 +66,7 @@ test('removing or cancelling a My day reminder records skip and keeps the source
   h.tasks.remove(h.tasks.todos()[0].id, 'human');
   assert.equal(outcomeText(h.scheduler.get(schedule.id)!.history![0]), 'Skipped');
   h.clock.advance(M); h.scheduler.tick();
-  h.tasks.setStatus(h.tasks.todos()[0].id, 'cancelled', 'human');
+  h.tasks.finish(h.tasks.todos()[0].id, { status: 'dropped', summary: 'Skipped' }, 'human');
   assert.equal(outcomeText(h.scheduler.get(schedule.id)!.history![1]), 'Skipped');
   assert.equal(h.scheduler.get(schedule.id)!.active, true);
   h.scheduler.stop();

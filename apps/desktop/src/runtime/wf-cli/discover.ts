@@ -5,8 +5,9 @@
 // <data>/runtime.json {port, token, pid} is what the runtime writes once it listens (main.ts).
 // B-044: that data dir is the documented Workforce folder – its generated README.md names wf as the way other
 // programs control the app (root/readme.ts); agents may use it too.
-// AF-001: run by an agent (AUTARK_AGENT_TOKEN set by the app, engines/agent-token.ts), the Endpoint also holds that agent's
-// identity and hands it over with the Hello: the runtime then writes what this wf sends into chats as that agent.
+// B-085: run by an agent of that same data folder (AUTARK_AGENT beside AUTARK_DATA), the Hello names the agent, so
+// what it writes is that agent's (http/ws.ts checks it). AF-001: where the app also set the agent's signed identity
+// (AUTARK_AGENT_TOKEN, engines/agent-token.ts), the Hello carries that instead – the runtime refuses one it did not issue.
 // Owns: the per-OS default data dir, reading and checking runtime.json, the Endpoint that holds
 // the owner token (and an agent's identity). Never: prints, logs or serialises a token (they are private fields that only
 // Endpoint.hello() and Endpoint.redact() use); never connects anywhere or writes files.
@@ -14,7 +15,7 @@
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AGENT_TOKEN_ENV, PROTOCOL_VERSION } from '../../shared/api/protocol.ts';
+import { AGENT_ENV, AGENT_TOKEN_ENV, PROTOCOL_VERSION } from '../../shared/api/protocol.ts';
 import type { Hello } from '../../shared/api/protocol.ts';
 
 /** Electron's app name – package.json `productName` – names the userData folder (unit-tested against package.json). */
@@ -52,8 +53,10 @@ export class Endpoint {
   readonly dataDir: string;
   readonly port: number;
   readonly pid?: number;
+  /** B-085: the agent this wf runs for (agentOf), sent with the Hello when no identity token is held. */
+  readonly agent?: string;
   readonly #token: string;
-  /** AF-001: the agent identity of the agent running this wf (AUTARK_AGENT_TOKEN) – the runtime then writes as that agent. */
+  /** AF-001: the signed identity of the agent running this wf (AUTARK_AGENT_TOKEN) – the runtime then writes as that agent. */
   readonly #agent?: string;
 
   constructor(input: { dataDir: string; port: number; token: string; pid?: number; agent?: string }) {
@@ -61,7 +64,9 @@ export class Endpoint {
     this.port = input.port;
     this.pid = input.pid;
     this.#token = input.token;
-    this.#agent = input.agent;
+    // `agent`: an AF-001 identity token (wfa1.…, kept private like the owner token) or a B-085 agent id
+    if (input.agent?.startsWith('wfa1.')) this.#agent = input.agent;
+    else if (input.agent) this.agent = input.agent;
   }
 
   get url(): string {
@@ -70,12 +75,13 @@ export class Endpoint {
 
   /** True when this wf runs for an agent (it acts with the owner's rights, but writes as the agent). */
   get asAgent(): boolean {
-    return this.#agent !== undefined;
+    return this.#agent !== undefined || this.agent !== undefined;
   }
 
   /** The first frame on `/ws` – the only place the tokens are handed out. */
   hello(): Hello {
-    return { protocol: PROTOCOL_VERSION, token: this.#token, client: 'cli', ...(this.#agent ? { agent: this.#agent } : {}) };
+    const agent = this.#agent ?? this.agent;
+    return { protocol: PROTOCOL_VERSION, token: this.#token, client: 'cli', ...(agent ? { agent } : {}) };
   }
 
   /** Replaces the tokens wherever they would appear in output (defence in depth). */
@@ -117,7 +123,7 @@ export function discover(options: { data?: string }, env: DiscoverEnv): Discover
     // Never send the token to whatever may listen on that port now.
     return { ok: false, dataDir, reason: 'stopped', message: `The app that wrote ${file} is no longer running. ${start}` };
   }
-  return { ok: true, endpoint: new Endpoint({ dataDir, port: info.port, token: info.token, pid: info.pid, agent: agentIdentity(env, dataDir, flavor) }) };
+  return { ok: true, endpoint: new Endpoint({ dataDir, port: info.port, token: info.token, pid: info.pid, agent: agentIdentity(env, dataDir, flavor) ?? agentOf(env, dataDir) }) };
 }
 
 /**
@@ -131,6 +137,19 @@ export function agentIdentity(env: Pick<DiscoverEnv, 'env' | 'platform'>, dataDi
   if (!own || !flavor.isAbsolute(own)) return token; // as defaultDataDir: only an absolute AUTARK_DATA names a folder
   const same = (a: string, b: string) => (env.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
   return same(flavor.resolve(own), flavor.resolve(dataDir)) ? token : undefined;
+}
+
+/**
+ * B-085: the agent whose process runs this wf – AGENT_ENV, set by the app for an agent's shells (engines/wf-shim.ts) –
+ * when AUTARK_DATA is this same data folder (a wf aimed at another company writes as the person there).
+ */
+export function agentOf(env: Pick<DiscoverEnv, 'platform' | 'env' | 'cwd'>, dataDir: string): string | undefined {
+  const agent = env.env[AGENT_ENV]?.trim();
+  const own = env.env.AUTARK_DATA?.trim();
+  if (!agent || !own || !/^[\w.:-]{1,128}$/.test(agent)) return undefined;
+  const flavor = env.platform === 'win32' ? path.win32 : path.posix;
+  const norm = (dir: string) => { const full = flavor.resolve(env.cwd, dir); return env.platform === 'win32' ? full.toLowerCase() : full; };
+  return norm(own) === norm(dataDir) ? agent : undefined;
 }
 
 /** {port, token, pid?} from runtime.json text; undefined when anything is off. */

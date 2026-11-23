@@ -16,7 +16,6 @@
 
 import { HUMAN_ID } from '../../../shared/ids.ts';
 import { OWNER_ALIAS } from '../../../shared/model/people.ts';
-import type { TaskStatus } from '../../../shared/model/tasks.ts';
 import type { RuntimeServices } from '../../contracts.ts';
 import type { Db } from '../../db/database.ts';
 import { membership } from '../../people/access.ts';
@@ -99,7 +98,7 @@ export function markOrigin(db: Db, item: Unit, peer: string, now: number): void 
 const cameFrom = (db: Db, key: string) => new KvRepo(db).get<string>(ORIGIN, key);
 
 /** A to-do of the person's own on their PC that their company sees too: open and not "Only me". */
-const ownOpen = (row: Wire) => !Number(row.private ?? 0) && !['done', 'cancelled'].includes(String(row.status));
+const ownOpen = (row: Wire) => !Number(row.private ?? 0) && !['done', 'dropped', 'cancelled'].includes(String(row.status));
 
 /**
  * Whether this PC's company is only the person's seat at `peer` (started for it, "+" › Join a company as employee): no
@@ -121,7 +120,7 @@ export function seatAt(db: Db, peer: string, now = Date.now()): boolean {
 /** On an employee's seat PC: the person's own open to-dos (assigned to them, not "Only me"), for the first link-up. */
 export function ownTodos(db: Db, peer: string): string[] {
   if (!seatAt(db, peer)) return [];
-  return db.all<{ id: string }>("SELECT id FROM tasks WHERE assignee_kind = 'human' AND assignee_id IS NULL AND private = 0 AND status NOT IN ('done', 'cancelled')").map((row) => String(row.id));
+  return db.all<{ id: string }>("SELECT id FROM tasks WHERE assignee_kind = 'human' AND assignee_id IS NULL AND private = 0 AND status NOT IN ('done', 'dropped', 'cancelled')").map((row) => String(row.id));
 }
 
 /**
@@ -187,9 +186,12 @@ export function moveStatus(s: Pick<RuntimeServices, 'tasks' | 'log'>, move: Stat
   try {
     if (move.status === 'done') {
       const summary = (move.result as { summary?: unknown } | undefined)?.summary;
-      s.tasks.complete(move.id, { summary: typeof summary === 'string' && summary.trim() ? summary : 'Done', evidence: [], verification: 'reported_by_human' }, personId);
-    } else {
-      s.tasks.setStatus(move.id, move.status as TaskStatus, personId);
+      s.tasks.finish(move.id, { status: 'done', summary: typeof summary === 'string' && summary.trim() ? summary : 'Done' }, personId);
+    } else if (move.status === 'dropped' || move.status === 'cancelled') {
+      const summary = (move.result as { summary?: unknown } | undefined)?.summary;
+      s.tasks.finish(move.id, { status: 'dropped', summary: typeof summary === 'string' && summary.trim() ? summary : 'Dropped' }, personId);
+    } else if (move.status === 'open') {
+      s.tasks.update(move.id, { status: 'open' }, personId);
     }
   } catch (error) {
     s.log.warn('synced task status not applied', { taskId: move.id, error: String((error as Error)?.message ?? error) });

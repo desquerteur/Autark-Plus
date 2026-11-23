@@ -1,12 +1,14 @@
-// Owns: adaptive shell deadlines, cancellation races and process-tree termination. Never: runs an install or contacts a model.
+// Adaptive shell deadlines, cancellation races and process-tree termination; B-080 wave 3: what the command printed
+// since the last review (newOutputChars) and UTF-8 decoded across reads. The subconscious's choice itself:
+// test/unit/subconscious/tool-timeout.test.ts.
+// Owns: these assertions only. Never: runs an install or contacts a model.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { runCommand } from '../../../src/runtime/tools/builtin/command.ts';
 import { defaultShell, type ShellSpawn } from '../../../src/runtime/tools/builtin/files.ts';
-import { initialTimeoutSeconds, reviewToolTimeout, TIMEOUT_REVIEW_MS, type ToolTimeoutDecision } from '../../../src/runtime/tools/timeout.ts';
-import { chooseToolTimeout } from '../../../src/runtime/subconscious/tool-timeout.ts';
-import type { RuntimeServices, DecisionRequest } from '../../../src/runtime/contracts.ts';
+import { initialTimeoutSeconds, NO_DECISION, reviewToolTimeout, TIMEOUT_REVIEW_MS, type ToolTimeoutDecision } from '../../../src/runtime/tools/timeout.ts';
+import type { RuntimeServices } from '../../../src/runtime/contracts.ts';
 import type { ToolContext } from '../../../src/runtime/tools/types.ts';
 
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -37,6 +39,21 @@ test('initial estimates distinguish actual commands and explicit review interval
   assert.equal(initialTimeoutSeconds('Grep', { pattern: 'npm install' }), 15);
   assert.equal(initialTimeoutSeconds('shell', { command: 'something', timeoutSeconds: 27 }), 27);
   assert.equal(initialTimeoutSeconds('shell', { command: ['npm', 'install'] }), 300);
+});
+
+test('B-080: the call\'s own limit comes first, in each form the engines send it (live 07.11.: 66 calls with their own timeout were reviewed at 60 s)', () => {
+  assert.equal(initialTimeoutSeconds('Bash', { command: 'python x.py', timeout: 600000 }), 600, 'Claude Code Bash/PowerShell: ms');
+  assert.equal(initialTimeoutSeconds('PowerShell', { command: 'python x.py', timeout: 120000 }), 120, 'Claude Code PowerShell: ms');
+  assert.equal(initialTimeoutSeconds('TaskOutput', { task_id: 'b1', timeout: 30000 }), 30, 'Claude Code TaskOutput: ms');
+  assert.equal(initialTimeoutSeconds('shell', { command: 'npm test', timeout: 60 }), 60, 'an ACP shell (Kimi Code): seconds');
+  assert.equal(initialTimeoutSeconds('shell', { command: 'npm test', timeout: 300 }), 300, 'an ACP shell: 300 s stays 300 s, not 1 s');
+  assert.equal(initialTimeoutSeconds('shell', { command: 'python x.py', timeout_ms: 90000 }), 90, 'Codex shell: ms');
+  assert.equal(initialTimeoutSeconds('shell.exec', { command: 'python x.py', timeoutSeconds: 30 }), 30);
+  assert.equal(initialTimeoutSeconds('Bash', { command: 'sleep 100', timeout: 100500 }), 101, 'whole seconds, rounded up');
+  assert.equal(initialTimeoutSeconds('Bash', { command: 'make', timeout: 7_200_000 }), 1800, 'at most MAX_TIMEOUT_SECONDS');
+  assert.equal(initialTimeoutSeconds('shell', { command: 'rg x' }), 15);
+  assert.equal(initialTimeoutSeconds('shell', { command: 'npm install' }), 300);
+  assert.equal(initialTimeoutSeconds('Bash', { command: 'npm install', timeout: 0 }), 300, 'no usable own limit: the estimate by kind');
 });
 
 test('wait twice then abort: one process, chosen deadlines, partial output and decisions reach main AI', async (t) => {
@@ -103,21 +120,94 @@ test('parent abort releases a command even when its fake process and review igno
   assert.equal(stopped.isError, true); assert.equal(f.spawned(), 1);
 });
 
-test('a stuck subconscious review has its own deadline and returns abort', async (t) => {
+test('B-080: a stuck subconscious review has its own deadline, and the call keeps running for the same time again', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(() => new Promise(() => {}));
   const pending = reviewToolTimeout(f.ctx, { tool: 'shell', args: {}, elapsedSeconds: 15, timeoutSeconds: 15, output: '' });
   await flush(); t.mock.timers.tick(TIMEOUT_REVIEW_MS); await flush();
-  assert.equal((await pending).action, 'abort');
+  assert.deepEqual(await pending, { action: 'wait', seconds: 15, reason: NO_DECISION });
+  const none = fixture(undefined);
+  assert.deepEqual(await reviewToolTimeout(none.ctx, { tool: 'shell', args: {}, elapsedSeconds: 60, timeoutSeconds: 60, output: '' }), { action: 'wait', seconds: 60, reason: NO_DECISION }, 'no subconscious: no stop either');
 });
 
-test('choice-only decision model receives timeout as tool output and chooses seconds', async () => {
-  const requests: DecisionRequest[] = [];
-  const services = { decisions: { decide: async (request: DecisionRequest) => { requests.push(request); return { choice: 'Wait 120 seconds', confidence: 0.95, by: 'systemone' }; } } } as unknown as RuntimeServices;
-  const result = await chooseToolTimeout(services, { tool: 'shell', args: { command: 'npm install' }, elapsedSeconds: 300, timeoutSeconds: 300, output: 'downloading', agent: { name: 'Ada' } as ToolContext['agent'], signal: new AbortController().signal });
-  assert.deepEqual(result, { action: 'wait', seconds: 120, reason: 'The decision model chose another 120 seconds.', by: 'systemone' });
-  assert.match(requests[0].context!, /Tool output.*\n.*"status":"timeout".*"stillRunning":true.*downloading/);
-  assert.ok(requests[0].options?.includes('Abort'));
+// B-080 wave 3 (live 08.–09.11.2026: a scan still printing paths was aborted – the review saw only the last 6000
+// characters, never whether anything came since its last look): each review learns what the command printed since then.
+test('B-080 wave 3: each review gets newOutputChars since the review before – printing gives > 0, silence 0; secrets stay masked', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const seen: Array<{ newOutputChars?: number; output: string }> = [];
+  const replies: ToolTimeoutDecision[] = [{ action: 'wait', seconds: 2, reason: 'working' }, { action: 'wait', seconds: 2, reason: 'working' }, { action: 'abort', reason: 'hangs' }];
+  const f = fixture(async (input) => { seen.push({ newOutputChars: input.newOutputChars, output: input.output }); return replies.shift()!; });
+  const pending = runCommand(f.shell, f.ctx, { command: 'scan', cwd: '.', timeoutSeconds: 1 });
+  await flush();
+  f.stdout.emit('data', 'abc');
+  t.mock.timers.tick(1000); await flush();
+  f.stdout.emit('data', 'path sensitive-value');
+  t.mock.timers.tick(2000); await flush();
+  t.mock.timers.tick(2000); await flush();
+  const result = await pending;
+  assert.deepEqual(seen.map((input) => input.newOutputChars), [3, 20, 0], 'since the start, then since each look');
+  assert.ok(seen.every((input) => !input.output.includes('sensitive-value')), 'the review sees the handle, not the value');
+  assert.match(seen[1].output, /path secret:\/\/s1$/);
+  assert.equal(f.commandSignal()?.aborted, true, 'a sure abort kills the command');
+  assert.equal(result.isError, true);
+});
+
+// B-080 wave 3 review (the next wait starts only after a review, which can take up to TIMEOUT_REVIEW_MS): the seconds a
+// review names and the characters it counts cover the same span – from the last observation on.
+test('B-080 wave 3 review: secondsSinceLastLook spans the same time as newOutputChars, a slow review included', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const seen: Array<{ secondsSinceLastLook?: number; timeoutSeconds: number; newOutputChars?: number }> = [];
+  const replies: ToolTimeoutDecision[] = [{ action: 'wait', seconds: 2, reason: 'working' }, { action: 'abort', reason: 'hangs' }];
+  let release: (() => void) | undefined;
+  const f = fixture(async (input) => {
+    seen.push({ secondsSinceLastLook: input.secondsSinceLastLook, timeoutSeconds: input.timeoutSeconds, newOutputChars: input.newOutputChars });
+    if (seen.length === 1) await new Promise<void>((resolve) => { release = resolve; });
+    return replies.shift()!;
+  });
+  const pending = runCommand(f.shell, f.ctx, { command: 'scan', cwd: '.', timeoutSeconds: 1 });
+  await flush();
+  t.mock.timers.tick(1000); await flush();
+  f.stdout.emit('data', 'during the review');
+  t.mock.timers.tick(5000); // the first review takes 5 s
+  release!(); await flush(); await flush();
+  t.mock.timers.tick(2000); await flush();
+  await pending;
+  assert.deepEqual(seen, [
+    { secondsSinceLastLook: 1, timeoutSeconds: 1, newOutputChars: 0 },
+    { secondsSinceLastLook: 7, timeoutSeconds: 2, newOutputChars: 17 },
+  ], 'the 5 s of the review and what came during it are both in the second look');
+});
+
+test('B-080 wave 3: no decision keeps the command running and it is looked at again after the same time', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let reviews = 0;
+  const f = fixture(async () => { reviews++; throw new Error('backend down'); });
+  const pending = runCommand(f.shell, f.ctx, { command: 'scan', cwd: '.', timeoutSeconds: 1 });
+  await flush();
+  t.mock.timers.tick(1000); await flush();
+  assert.equal(reviews, 1);
+  assert.equal(f.commandSignal()?.aborted, false, 'still running');
+  t.mock.timers.tick(1000); await flush();
+  assert.equal(reviews, 2, 'the same wait again');
+  f.stdout.emit('data', 'done'); f.child.emit('close', 0);
+  const result = await pending;
+  const text = result.content[0].type === 'text' ? result.content[0].text : '';
+  assert.equal(result.isError, false);
+  assert.ok(text.includes(NO_DECISION) && text.endsWith('exit 0\ndone'), text);
+});
+
+// B-080 wave 3 (live: command.ts decoded each read on its own – a letter split across two reads became two U+FFFD).
+test('B-080 wave 3: a UTF-8 letter split across two reads stays whole', async () => {
+  const f = fixture(undefined);
+  const pending = runCommand(f.shell, f.ctx, { command: 'print', cwd: '.', timeoutSeconds: 60 });
+  await flush();
+  f.stdout.emit('data', Buffer.from('Gr'));
+  f.stdout.emit('data', Buffer.from([0xC3]));
+  f.stdout.emit('data', Buffer.from([0xBC, 0xC3]));
+  f.stdout.emit('data', Buffer.from([0x9F, 0x65]));
+  f.child.emit('close', 0);
+  const result = await pending;
+  assert.equal(result.content[0].type === 'text' ? result.content[0].text : '', 'exit 0\nGrüße');
 });
 
 test('default shell abort closes the real shell and its long-running descendant', { timeout: 30_000 }, async () => {

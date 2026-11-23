@@ -14,7 +14,11 @@ export interface AppPaths {
   ui: string;
   sandboxLib: string; // app/ui/sandbox (wf.js)
   icon: string;
+  /** The video preview window's page script (scripts/build.mjs: app/media-preview-page.js). */
+  previewPage: string;
   data: string; // userData
+  /** Main's folder for the preview copies being written (the runtime stores each and removes it). */
+  previews: string;
   blobs: string; // content-addressed files written by the runtime
   logs: string;
   windowState: string;
@@ -36,7 +40,9 @@ export function appPaths(input: PathInput): AppPaths {
     ui: path.join(build, 'ui'),
     sandboxLib: path.join(build, 'ui', 'sandbox'),
     icon: path.join(root, 'assets', 'icon.png'),
+    previewPage: path.join(build, 'media-preview-page.js'),
     data,
+    previews: path.join(data, 'previews'),
     blobs: path.join(data, 'blobs'),
     logs: path.join(data, 'logs'),
     windowState: path.join(data, 'window-state.json'),

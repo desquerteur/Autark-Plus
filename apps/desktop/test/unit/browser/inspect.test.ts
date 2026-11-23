@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browserTools } from '../../../src/runtime/browser/tools.ts';
 import { BODY_MAX, CONSOLE_MAX, PageLog, safeHeaders, safeUrl } from '../../../src/runtime/browser/devtools.ts';
-import { HUMAN_CHECK_NOTE, isHumanCheck } from '../../../src/runtime/browser/human-check.ts';
+import { isHumanCheck } from '../../../src/runtime/browser/human-check.ts';
 import type { ToolDef } from '../../../src/runtime/tools/types.ts';
 import { cleanupB055, scriptBrowser, ScriptPage, textOf, toolCtx } from './b055-fakes.ts';
 
@@ -107,7 +107,7 @@ test('wait: ends on the page\'s own signal (text, change, idle, url) and answers
   await browser.close();
 });
 
-test('human check: detected from what the page shows, never from a footer; reported as one line, nobody is notified', async () => {
+test('human check: detected from what the page shows, never from a footer; no instruction is added and nobody is notified', async () => {
   assert.equal(isHumanCheck({ title: 'Just a moment...', url: 'https://shop.test/', snapshot: '' }), true);
   assert.equal(isHumanCheck({ title: 'Login', url: 'https://shop.test/', snapshot: '- iframe "reCAPTCHA" [ref=e4]:\n  - checkbox "I\'m not a robot" [ref=f1e2]' }), true);
   assert.equal(isHumanCheck({ title: 'Login', url: 'https://shop.test/', snapshot: '- iframe "Widget containing a Cloudflare security challenge" [ref=e3]' }), true);
@@ -117,7 +117,8 @@ test('human check: detected from what the page shows, never from a footer; repor
   const { tools, page, ctx, notified, browser } = await opened('https://shop.test/login');
   page.snapshot = '- iframe "reCAPTCHA" [ref=e4]:\n  - checkbox "I\'m not a robot" [ref=f1e2]';
   const text = textOf(await tool(tools, 'browser.snapshot').run({}, ctx));
-  assert.ok(text.endsWith(HUMAN_CHECK_NOTE), text);
+  // the page's own "I'm not a robot" stays in the body; what is gone is any line telling the agent what to do with it
+  assert.doesNotMatch(text, /turned my browser away|where: 'chrome'|I name it to them|click it themselves|hand (?:it )?off/i, text);
   assert.deepEqual(notified, []);
   await browser.close();
 });

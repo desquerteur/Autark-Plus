@@ -52,7 +52,7 @@ export function issueLabels(kind: FeedbackKind): string[] {
 
 /** The first line of the report, shortened to a title. */
 export function issueTitle(report: Pick<FeedbackReport, 'kind' | 'text'>): string {
-  const first = report.text.split('\n').map((line) => line.trim()).find(Boolean) ?? report.kind;
+  const first = report.text.split('\n').map((line) => line.trim()).find(Boolean) ?? report.kind ?? '';
   const clean = first.replace(/\s+/g, ' ').replace(/^[#>*\-\s]+/, '');
   const title = clean.length > TITLE_MAX ? `${clean.slice(0, TITLE_MAX - 1).trimEnd()}…` : clean;
   return title || 'Report from the app';
@@ -66,7 +66,7 @@ const KIND_TEXT: Record<FeedbackKind, string> = { bug: 'Bug', idea: 'Idea', chan
  */
 export function issueBody(report: FeedbackReport, include: IssueInclude = {}, log?: string): string {
   const lines = [
-    `### Kind`, KIND_TEXT[report.kind], '',
+    `### Kind`, KIND_TEXT[report.kind ?? 'bug'], '',
     `### What happened`, report.text.trim(), '',
     `### App version`, report.context.version, '',
     `### OS`, report.context.os, '',
@@ -88,7 +88,7 @@ export function newIssueUrl(repo: string, title: string, body: string, labels: r
 export function issueDraft(report: FeedbackReport, repo: string, include: IssueInclude = {}, log?: string): IssueDraft {
   const title = issueTitle(report);
   const body = issueBody(report, include, log);
-  const labels = issueLabels(report.kind);
+  const labels = issueLabels(report.kind ?? 'bug'); // a report without a kind (an older client) files as a bug
   return { repo, title, body, labels, url: newIssueUrl(repo, title, body, labels) };
 }
 

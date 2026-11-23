@@ -1,6 +1,6 @@
 // Chat details › Scheduled: this chat's scheduled messages, agent reminders, routines and human timers
-// (schedules.list by conversation) – the title, the rule in words when it repeats ("Every Monday at 09:00"), the next run,
-// the level when not Normal. The row's right-click menu: Pause/Resume, Edit (the person's own scheduled message: the
+// (schedules.list by conversation) – the title, the rule in words when it repeats ("Every Monday at 09:00"), the next run
+// or its state (No next run · Paused · Ended – the one rule of tasks/schedule-state.ts), the level when not Normal. The row's right-click menu: Pause/Resume, Edit (the person's own scheduled message: the
 // composer opens in schedule mode with it, composer/schedule-mode.ts) and Delete. A message is scheduled from the composer
 // ("Schedule…"); an agent sets up its own ("send this every Monday at 9"). Kept fresh by schedule.upserted / schedule.removed events.
 // Owns: the list. Never: builds specs or creates schedules.
@@ -19,6 +19,10 @@ import { useContextMenu } from '../../lib/context-menu.tsx';
 import { editableSchedule } from '../composer/schedule-form.ts';
 import { editSchedule, localZone } from '../composer/schedule-mode.ts';
 import { repeats, ruleLine } from '../composer/schedule-rule.ts';
+import { byNextRun, scheduleState, type ScheduleState } from '../../tasks/schedule-state.ts';
+
+/** The meta line of a schedule without a next run (the one state rule: tasks/schedule-state.ts). */
+const STATE_TEXT: Record<Exclude<ScheduleState, 'next'>, string> = { none: 'No next run', paused: 'Paused', ended: 'Ended' };
 
 const KIND: Record<Schedule['kind'], { icon: IconName; label: string }> = {
   message: { icon: 'chat-text', label: 'Message' },
@@ -79,6 +83,7 @@ function ScheduleRow(props: { schedule: Schedule }) {
     ],
   }]);
   const owner = schedule.ownerId === 'human' ? undefined : agentName(schedule.ownerId);
+  const state = scheduleState(schedule);
   return (
     <li class={`details-schedule${schedule.active ? '' : ' is-paused'}`} {...menu}>
       <Icon name={kind.icon} size={16} title={kind.label} />
@@ -86,9 +91,9 @@ function ScheduleRow(props: { schedule: Schedule }) {
         <span class="details-schedule-title">{schedule.title}</span>
         {repeats(schedule.spec) && <span class="details-schedule-rule">{ruleLine(schedule.spec, { tz: schedule.spec.tz || localZone() })}</span>}
         <span class="details-schedule-meta tabular">
-          {schedule.active
-            ? schedule.nextAt ? <time dateTime={new Date(schedule.nextAt).toISOString()} title={fullDate(schedule.nextAt)}>Next {whenText(schedule.nextAt)}</time> : 'No next run'
-            : 'Paused'}
+          {state === 'next'
+            ? <time dateTime={new Date(schedule.nextAt!).toISOString()} title={fullDate(schedule.nextAt!)}>Next {whenText(schedule.nextAt!)}</time>
+            : STATE_TEXT[state] /* B-080: a stopped schedule nobody paused has used up its runs */}
           {schedule.payload.silent ? ' · Silent' : schedule.payload.priority === 'important' && ' · Important'}
           {owner && ` · ${owner}`}
         </span>
@@ -102,7 +107,7 @@ export function Schedules(props: { conversationId: string }) {
   const { list, error } = useChatSchedules(props.conversationId, allowed);
   if (!allowed) return null;
   // by the next run only: pausing keeps it, so a row stays where it was when it is paused or resumed from its menu
-  const all = (list ?? []).slice().sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity) || a.createdAt - b.createdAt);
+  const all = (list ?? []).slice().sort(byNextRun);
   return (
     <section class="details-section" aria-label="Scheduled">
       <h3 class="details-heading">Scheduled</h3>

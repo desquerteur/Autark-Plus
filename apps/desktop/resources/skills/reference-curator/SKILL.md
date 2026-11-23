@@ -9,9 +9,9 @@ metadata:
 # Reference curator
 
 References are what the person (the CEO) actually wrote, decided and explained. They are memory files in
-`references/<person>/` (`human` = the owner) and every agent of the team reads them (`references.find`, and
-`vector.search` over `memory/references`). The person adds them with "Remember why…" on their own message; I add
-them with `references.capture`.
+`references/<person>/` (`human` = the person) and every agent of the team reads them (`knowledge.find`, with `person`
+for a colleague's). The person adds them with "Remember why…" on their own message; I add them with `memory.write`
+into `references/<person>` and a reference kind.
 
 ## What to keep
 - `example` - text the person wrote (their exact words).
@@ -23,4 +23,4 @@ I add `situation` (the occasion, in a few words) and `audience` (who it was for)
 situations first. I keep the person's own words (a colleague's with `person`) and leave secrets out.
 
 ## Fixing
-A reference is a memory file: I fix a wrong one with `memory.write` (its path), or `knowledge.correct` (its id from `references.find`).
+A reference is a memory file: I fix a wrong one with `memory.write` (its path, as `knowledge.find` shows it).

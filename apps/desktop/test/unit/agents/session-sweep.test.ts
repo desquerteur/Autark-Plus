@@ -2,7 +2,8 @@
 // ref saved again) and tells the bind listeners of a new ref; SessionSweep deletes a recorded session only after
 // the agent finished a turn in that chat after it AND 24 h passed, not while the ref is bound again or a turn of
 // the agent runs, keeps waiting for an unusable account, drops records of engines without deleteSession and after
-// 3 failed attempts – started once and on every new binding (no timer).
+// 3 failed attempts – started once and on every new binding (no timer). B-080: Codex's "no rollout found" (a delete that
+// already happened) drops the record with an info line, without a warning or a retry.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +16,8 @@ import { KEEP_SUPERSEDED_MS, ORPHAN_AGE_MS, SessionSweep, transcriptFiles } from
 import { KvRepo } from '../../../src/runtime/store/kv.ts';
 import type { Engine } from '../../../src/runtime/engines/types.ts';
 import type { Account, EngineId } from '../../../src/shared/model/providers.ts';
+import { CodexEngine } from '../../../src/runtime/engines/codex/engine.ts';
+import { fakeFinder, fakeSpawn, testSupervisor } from '../engines/fakes.ts';
 
 const binding = (patch: Partial<SessionBinding> = {}): SessionBinding => ({
   agentId: 'ag_1', conversationId: 'c_1', engine: 'codex', accountId: 'acc_codex', ref: 'thr_1', generation: 1, cursorSeq: 0, updatedAt: 1000, ...patch,
@@ -172,4 +175,27 @@ test('sweep: started once, then every new binding sweeps (no timer)', async () =
   h.store.save(binding({ ref: 'thr_newer', agentId: 'ag_4' }));
   await ticks();
   assert.deepEqual(h.deleted, ['thr_9'], 'after stop a binding no longer sweeps');
+});
+
+test('B-080: a thread Codex already deleted ("no rollout found") is dropped with an info line – no warning, no retry', async () => {
+  const h = setup();
+  const { spawn } = fakeSpawn(({ child }) => {
+    child.onLine = (msg) => {
+      if (msg.method === 'initialize') child.send({ id: msg.id, result: { userAgent: 'fake' } });
+      else if (msg.method === 'thread/delete') child.send({ id: msg.id, error: { code: -32600, message: `no rollout found for thread id ${msg.params.threadId}` } });
+      else if (msg.id !== undefined && msg.method) child.send({ id: msg.id, error: { code: -32601, message: 'nope' } });
+    };
+  });
+  const codex = new CodexEngine({ supervisor: testSupervisor(spawn), finder: fakeFinder({ codex: '/bin/codex' }), cwd: '/tmp', version: '0.2.0' });
+  const lines: Array<[string, string, Record<string, unknown> | undefined]> = [];
+  const log = { debug: () => {}, error: () => {}, info: (m: string, d?: Record<string, unknown>) => lines.push(['info', m, d]), warn: (m: string, d?: Record<string, unknown>) => lines.push(['warn', m, d]) };
+  const accounts = () => [{ id: 'acc_codex', provider: 'codex', label: 'Codex', auth: 'cli', enabled: true, state: 'ok', priority: 0, detected: false, createdAt: 0 } as Account];
+  const sweep = new SessionSweep({ db: h.db, clock: h.clock, log, engine: (id) => (id === 'codex' ? codex : undefined), accounts });
+  h.kv.set(SUPERSEDED_NS, 'codex:acc_codex:01a1bb05', { agentId: 'ag_1', conversationId: 'c_1', engine: 'codex', accountId: 'acc_codex', ref: '01a1bb05', at: h.clock.now() } satisfies SupersededSession, h.clock.now());
+  h.run('run_done', 'done', h.clock.now() + 1);
+  h.clock.advance(KEEP_SUPERSEDED_MS + 10);
+  await sweep.sweep();
+  await codex.dispose();
+  assert.deepEqual(h.records(), [], 'the record is dropped');
+  assert.deepEqual(lines, [['info', 'superseded session deleted', { engine: 'codex', outcome: 'missing' }]]);
 });

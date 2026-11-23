@@ -8,6 +8,10 @@
 // grow with it (an older PC without that method: the one PC stays); a 401/403 there is `refused` (removed on the PC).
 // A removed phone hears nothing at all (the PC unpins it, so no PC is ever online for it): after 60 s with the meeting
 // server answering and no channel, `unanswered` tells the shell, which offers Forget.
+// F25 P3 (18.11.2026): on the channel through the tunnel (A) the page also tries the direct way to that PC (rtc.ts, the
+// browser's WebRTC; RtcPlan says when), once the PC has said something on A. Once the PC says ready on the data channel (B), B is the page's: new streams go
+// there, the PC UI's WebSocket on A ends and reopens there (the page hears autarkResume); HTTP requests on A run out. A
+// stays open and idle. When B ends (or A ends), the page is back on A at once. A browser without WebRTC stays on A.
 // Owns: connecting, reconnecting, the pins and the current mux. Never: stores anything itself (the shell does), polls the
 // PC, or talks to a PC it does not pin.
 
@@ -16,6 +20,7 @@ import { fromB64url, fromUtf8, utf8, type Bytes } from './bytes.ts';
 import { connectChannel, type SecureChannel } from './channel.ts';
 import { fingerprint } from './crypto.ts';
 import { headerOf, httpFetch } from './http.ts';
+import { browserRtc, RtcPlan, RtcWay, type RtcEnv } from './rtc.ts';
 import { RelayLink, type WsFactory } from './relay.ts';
 import type { Saved } from './store.ts';
 import { StreamMux } from './streams.ts';
@@ -40,6 +45,8 @@ export interface ConnectionOptions {
   unanswered?(unanswered: boolean): void;
   unansweredMs?: number;
   now?(): number;
+  /** F25: the browser's WebRTC (default: this browser's, if it has one); null: the page stays on its tunnel. */
+  rtc?: RtcEnv | null;
 }
 
 export const UNANSWERED_MS = 60_000;
@@ -62,10 +69,20 @@ export class Connection {
   private lastStatus = '';
   private unansweredTimer: ReturnType<typeof setTimeout> | undefined;
   private unansweredSaid = false;
+  private readonly rtcEnv: RtcEnv | undefined;
+  private readonly plan = new RtcPlan();
+  private way: RtcWay | undefined;
+  /** The mux on B while B carries the page. */
+  private direct: StreamMux | undefined;
+  private rtcTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The channel A the PC has said something on: its rtc listener is attached (a hello sent sooner can sit in the
+   * backlog of the PC's channel, which goes to its first listener only, and is never answered). */
+  private heard: SecureChannel | undefined;
 
   constructor(options: ConnectionOptions) {
     this.options = options;
     this.saved = options.saved;
+    this.rtcEnv = options.rtc === null ? undefined : options.rtc ?? browserRtc();
   }
 
   start(): void {
@@ -80,14 +97,26 @@ export class Connection {
     this.timer = undefined;
     if (this.unansweredTimer) clearTimeout(this.unansweredTimer);
     this.unansweredTimer = undefined;
+    if (this.rtcTimer) clearTimeout(this.rtcTimer);
+    this.rtcTimer = undefined;
+    this.way?.close('closed');
     this.channel?.close();
     this.link?.close();
     this.link = undefined;
     for (const wake of [...this.waiters]) wake();
   }
 
-  /** The current mux, or undefined. */
-  get mux(): StreamMux | undefined { return this.current && !this.current.closed ? this.current : undefined; }
+  /** The current mux (B's while the direct way carries), or undefined. */
+  get mux(): StreamMux | undefined {
+    if (this.direct && !this.direct.closed && this.way?.carrying) return this.direct;
+    return this.current && !this.current.closed ? this.current : undefined;
+  }
+
+  /** F25: how the page reaches its PC now – 'rtc' (directly) or 'relay' (through the tunnel); undefined: not at all. */
+  get via(): 'rtc' | 'relay' | undefined { return this.mux ? (this.mux === this.direct ? 'rtc' : 'relay') : undefined; }
+
+  /** F25: how the last try or way ended (for the tests and a status line; never an address). */
+  lastRtc: string | undefined;
 
   /** The PC the channel goes to now. */
   get pc(): string | undefined { return this.mux ? this.pcFp : undefined; }
@@ -110,6 +139,7 @@ export class Connection {
   nudge(hiddenMs = 0): void {
     if (this.stopped) return;
     this.attempt = 0;
+    this.plan.check(); // a resume or a network change: the direct way is tried again at once
     if (hiddenMs > HIDDEN_REDIAL_MS || !this.link?.isUp()) { this.drop(); this.kick(); return; }
     const link = this.link;
     void link.probe(3_000).then((alive) => {
@@ -204,7 +234,13 @@ export class Connection {
       this.current = mux;
       this.pcFp = fp;
       this.openedAt = (this.options.now ?? Date.now)();
+      channel.onMessage((value) => {
+        const message = value as Record<string, unknown> | null;
+        if (message?.t === 'rtc' && this.way?.a === channel) this.way.signal(message);
+        if (this.heard !== channel) { this.heard = channel; this.rtcStep(); }
+      });
       channel.onClose(() => {
+        if (this.way?.a === channel) this.way.close('closed');
         if (this.channel !== channel) return;
         this.channel = undefined;
         this.current = undefined;
@@ -225,7 +261,47 @@ export class Connection {
     } finally {
       this.running = false;
       if (this.again) { this.again = false; this.kick(); }
+      else this.rtcStep();
     }
+  }
+
+  /** F25: starts a try of the direct way on A when the plan says so, else waits for the moment it does (one timer). */
+  private rtcStep(): void {
+    if (this.rtcTimer) { clearTimeout(this.rtcTimer); this.rtcTimer = undefined; }
+    const env = this.rtcEnv;
+    const a = this.channel;
+    const fp = this.pcFp;
+    if (this.stopped || !env || !a || a.closed || !fp || this.heard !== a) return;
+    if (this.way && this.way.state !== 'over') { if (this.way.a === a) return; this.way.close('moved'); }
+    const now = (this.options.now ?? Date.now)();
+    if (!this.plan.due(a, now)) {
+      const wait = this.plan.wait(a, now);
+      if (wait !== undefined) this.rtcTimer = setTimeout(() => { this.rtcTimer = undefined; this.rtcStep(); }, wait);
+      return;
+    }
+    const pc = this.saved.pcs.find((row) => row.fingerprint === fp);
+    if (!pc) return;
+    const way = new RtcWay(a, { key: this.saved.key, deviceId: this.saved.deviceId }, fromB64url(pc.publicKey), {
+      ready: (ready) => {
+        if (ready !== this.way || !ready.b || this.stopped) return;
+        this.plan.carried();
+        this.lastRtc = 'ok';
+        this.direct = new StreamMux(ready.b);
+        this.current?.endLasting(); // the PC UI's socket reopens on B; HTTP requests on A run out
+        this.say(`Connected to ${this.nameOf(fp)} directly.`, true);
+      },
+      over: (ended, outcome, wasReady) => {
+        this.plan.ended(ended.a, outcome, (this.options.now ?? Date.now)());
+        this.lastRtc = outcome;
+        if (ended !== this.way) return;
+        this.way = undefined;
+        this.direct = undefined;
+        if (wasReady && this.mux) this.say(`Connected to ${this.nameOf(fp)}.`, true); // back on A: the page hears resume
+        this.rtcStep();
+      },
+    }, env);
+    this.way = way;
+    way.start();
   }
 
   /** phone.pcs: my PCs with their keys (each key checked against its fingerprint); new ones get pinned. */

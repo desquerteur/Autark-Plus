@@ -1,6 +1,8 @@
-/* Team: the team sidebar (agents nested under their manager, height-limited report blocks, status ring/dot +
-   one-line status), the agent page (identity, facts, editor, model, skills, schedules, runs with tool calls; its
-   Browser view's two fixed halves: its own browser live, its area), the name dropdown in a page header and the hire dialog.
+/* Team: the org tree (TeamTree.tsx – in the sidebar and read-only on the desktop Team page: agents nested under their
+   manager, 20 px per level with a 1 px guide under an open parent, status ring/dot + one-line status, group headings),
+   the agent page (identity, facts, editor, model, skills, schedules with their "Paused (n)" fold; its
+   Browser view's two fixed halves: its own browser live, its area), the activity log and its step lines (shown on the
+   agent's Work page, whose own parts are agent-work.css), the name dropdown in a page header and the hire dialog.
    Owns: classes from src/ui/team/*. Never: colors outside tokens.css. */
 
 /* ---------------------------------------------------------------- status avatar */
@@ -16,11 +18,13 @@
 /* ---------------------------------------------------------------- sidebar */
 .team-nav { padding: 12px 0 18px; }
 .team-rows { display: flex; flex-direction: column; }
-.team-space + .team-space { margin-top: 10px; }
-.team-space-title { padding: 10px 20px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.team-space + .team-space { margin-top: 12px; }
+/* group headings (People, Agents, one per space) read as headings: text colour, a size above the rows' preview */
+.team-space-title { padding: 10px 20px 6px; color: var(--text); font-size: 13px; font-weight: 600; line-height: 18px; }
+/* one 20 px step per level; the caret slot (24 px) sits at 4 px + depth × 20 px */
 .team-row {
   position: relative; display: flex; align-items: center; min-height: 52px;
-  padding: 0 12px 0 calc(4px + var(--depth, 0) * 14px); color: var(--text);
+  padding: 0 12px 0 calc(4px + var(--depth, 0) * 20px); color: var(--text);
 }
 .team-row:hover { background: var(--hover); }
 .team-row.active { background: var(--selected); }
@@ -31,8 +35,21 @@
 .team-row-open { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; align-self: stretch; min-width: 0; padding: 6px 0; color: inherit; text-align: left; }
 .team-row-open:focus-visible { outline: none; }
 .team-row-text { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
-.team-reports { display: flex; flex-direction: column; }
-.team-reports.limited { max-height: 264px; overflow: hidden auto; overscroll-behavior: contain; box-shadow: inset 0 -1px 0 var(--line); }
+/* an open parent's reports: in the list's own scroll (no inner box). Each report's branch (its row, its open subtree,
+   its splits; --depth is the report's) draws the parent's 1 px guide beside itself, under the parent's caret – the last
+   one only down to its row's middle, so the guide ends at the last direct report; above the rows' hover so it never
+   breaks, never hit-tested */
+.team-branch, .team-reports { position: relative; display: flex; flex-direction: column; }
+.team-reports > .team-branch::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: calc(var(--depth, 1) * 20px - 4px); z-index: 1;
+  width: 1px; background: var(--line); pointer-events: none;
+}
+.team-reports > .team-branch:last-child::before { bottom: auto; height: 26px; }
+/* a report whose space differs from the one it sits in: "Acme GmbH · <status>" – the space first, as its own label
+   that never shrinks behind a long status (the status takes the ellipsis) */
+.row-preview.team-row-sub { display: flex; }
+.team-row-space { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; color: var(--secondary); }
+.team-row-status { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .team-empty { padding: 8px 20px; }
 /* the collapsed "Archived (n)" group at the end of the list (ArchivedGroup.tsx): one fixed toggle row, opening adds rows below it only */
 .team-archived { margin-top: 10px; }
@@ -45,7 +62,10 @@
 .team-view, .agent-view { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--surface); }
 .team-scroll, .agent-scroll { flex: 1 1 auto; min-height: 0; overflow: hidden auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .agent-column { max-width: 740px; margin: 0 auto; padding: 24px clamp(16px, 4vw, 40px) 56px; }
-.team-view > .empty-state { padding: 24px clamp(16px, 4vw, 40px); } /* #/team's pointer to the sidebar, off the zone's edge */
+/* #/team on a computer (TeamView.tsx): the headline and the whole tree, read-only, in a calm column */
+.team-overview { max-width: 740px; margin: 0 auto; padding: 20px clamp(16px, 4vw, 40px) 56px; }
+.team-headline { padding: 0 20px 6px; color: var(--secondary); font-size: 13px; line-height: 18px; }
+.team-overview .team-row { border-radius: var(--r-md); }
 
 /* ---------------------------------------------------------------- agent page */
 .agent-column > .spinner { display: block; margin: 24px auto; }
@@ -87,7 +107,6 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 /* a heading as the last shown block would stand alone over "Show more" (its text is hidden): it goes too */
 .agent-instructions-text.clipped > :is(h1, h2, h3, h4, h5, h6):nth-child(3) { display: none; }
 .agent-instructions .text-button { font-size: 12px; }
-.agent-runs { margin-top: 8px; }
 /* the Browser view (AgentBrowser.tsx): two halves of the page, never sized by their content – the live view of the
    agent's own browser above, its area (a workspace surface on agent:<id>) below, one 1 px line between; in the area's
    full view the area alone takes the view */
@@ -99,27 +118,34 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 /* the shown tab stays inside the area; the address field's suggestions may reach over its page */
 .agent-area > .workspace-pane > :last-child { min-height: 0; overflow: hidden; }
 
-/* ---------------------------------------------------------------- runs */
-.run-list, .run-items { margin: 0; padding: 0; list-style: none; }
-.run-row { border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
-.run-head { display: flex; align-items: center; gap: 8px; }
-.run-toggle { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; min-height: 52px; padding: 8px 6px; border-radius: var(--r-md); color: var(--text); text-align: left; }
-.run-toggle:hover { background: var(--hover); }
-.run-state { display: grid; place-items: center; flex: none; width: 18px; color: var(--secondary); }
-.run-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--field); }
-.run-dot.done { background: var(--success); }
-.run-dot.failed { background: var(--danger); }
-.run-dot.unknown { background: var(--warn); }
-.run-text { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
-.run-title, .run-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-title { font-size: 14px; }
-.run-meta { color: var(--muted); font-size: 12px; }
-.run-time { flex: none; color: var(--muted); font-size: 11px; }
+/* ---------------------------------------------------------------- activity log (AgentLog.tsx): oldest on top, the
+   newest at the bottom; per turn a muted system line (time, its mark, what started it), its step lines on a thread
+   below the mark, a closing system line. The agent's own words (updates, answers) read in the text colour. */
+.agent-log { margin-top: 8px; }
+.agent-log > .empty-state { padding: 8px 0; }
+.log-list { margin: 0; padding: 0; list-style: none; }
+.log-earlier { margin: 0 0 6px; }
+.log-day { margin: 14px 0 2px; padding: 0 4px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.log-list > .log-day:first-child { margin-top: 0; }
+.log-system { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 4px; color: var(--muted); font-size: 12px; }
+.log-system > .button { flex: none; height: 24px; min-height: 24px; padding: 0 8px; }
+.log-time { flex: none; width: 40px; font-size: 11px; }
+.log-mark { display: inline-grid; flex: none; place-items: center; width: 16px; height: 16px; color: var(--secondary); }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--secondary); }
+.log-dot.done { background: var(--success); }
+.log-dot.failed { background: var(--danger); }
+.log-dot.unknown { background: var(--warn); }
+.log-system-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-end.failed .log-system-text { color: var(--danger); }
+.log-route { margin: 0 4px 2px 76px; font-size: 11px; }
+.log-steps.run-items { margin: 0 0 0 59px; }
+.log-error.run-error { margin-left: 76px; }
+.log-steps .run-item:is(.commentary, .answer) .run-item-text { color: var(--text); font-size: 13px; }
+.log-steps .run-item.answer > .run-item-head[aria-expanded=true]:not(:hover) { background: none; }
 .run-error { margin: 0 6px 8px 36px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
-.run-route { margin: 0 6px 6px 36px; font-size: 12px; }
 .run-loading { padding: 10px 36px; }
-.run-items { margin: 0 0 12px 30px; padding-left: 12px; border-left: 1px solid var(--line); }
-.run-items > .empty-state, .run-list ~ .empty-state { padding: 8px 0; }
+.run-items { margin: 0 0 12px 30px; padding: 0 0 0 12px; border-left: 1px solid var(--line); list-style: none; }
+.run-items > .empty-state { padding: 8px 0; }
 /* D5 step lines (run-items.tsx): one 24 px line each – a fixed 16 px icon slot (a spinner while the call
    runs), the verb, the target with an ellipsis; red when it failed; a thought is muted and shimmers while
    it is written. Nothing on the line changes size between running and done. */
@@ -134,7 +160,7 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 .run-item-target.mono { font: 12px/1.4 var(--mono); }
 .run-item.failed :is(.run-item-icon, .run-item-verb, .run-item-target) { color: var(--danger); }
 .run-item.failed .run-item-icon .icon { opacity: 1; }
-.run-item:is(.reasoning, .answer, .more) :is(.run-item-verb, .run-item-target) { color: var(--muted); }
+.run-item:is(.reasoning, .answer, .more, .system) :is(.run-item-verb, .run-item-target) { color: var(--muted); }
 .run-item.approval.failed .run-item-verb { color: var(--danger); }
 .run-item.reasoning.live .run-item-head :is(.run-item-verb, .run-item-target) {
   background: var(--shimmer-text) 0 0 / 250% 100%;
@@ -166,9 +192,10 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 
 /* ---------------------------------------------------------------- touch */
 @media (pointer: coarse) {
-  .team-row,
-.run-toggle { min-height: 56px; }
+  .team-row { min-height: 56px; }
   .team-caret { width: 36px; height: 44px; }
+  .team-nav .team-reports > .team-branch::before { left: calc(var(--depth, 1) * 20px + 2px); } /* the wider touch caret's middle (the read-only page has none) */
+  .team-reports > .team-branch:last-child::before { height: 28px; }
   .run-item-head { min-height: 44px; }
 }
 .mobile-shell .agent-column { padding: 4px 16px calc(24px + env(safe-area-inset-bottom)); } /* the stack's reserved notice line above is the top air (mobile.css) */
@@ -233,6 +260,12 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 .agent-row-text { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
 .agent-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .agent-row-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.agent-human { display: block; width: 100%; height: 104px; resize: none; line-height: 1.5; margin: 4px 0; } /* a fixed cell: typing scrolls inside */
 .agent-work-link { margin: -16px 0 24px; padding: 0; font-size: 13px; }
+/* a folded group at a section's end – "Paused (n)" under Schedules, "N older open" / "N waiting" on the Work page
+   (agent-work.css): one fixed toggle row like "Archived (n)", opening it only adds rows below */
+.agent-fold-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0 6px; color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; }
+.agent-fold-toggle:hover { color: var(--text); }
+@media (pointer: coarse) { .agent-fold-toggle { min-height: 44px; } }
 /* the phone's Add: a quiet text button at the top of the team list (the side header has the plus on a computer) */
 .team-add { display: block; padding: 8px 20px; font-size: 14px; }

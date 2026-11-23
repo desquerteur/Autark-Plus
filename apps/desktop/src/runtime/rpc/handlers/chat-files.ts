@@ -1,6 +1,7 @@
 // RPC handlers of B-050 for whole chats: chats.direct (K1 – the caller's default 1:1, found,
 // adopted or created by runtime/chat/direct.ts; opening an archived one brings it back into the list)
-// and chats.export (K8 – owner only: it writes a folder of this PC, given as an absolute path). The owner and their devices with 'chat' act as the
+// and chats.export (K8: it writes a folder of this PC, given as an absolute path – so the rule of the paths, PATH_RULE: the
+// owner and, 16.11.2026, the owner's own phone on a secure transport). The owner and their devices with 'chat' act as the
 // owner ('human'); people of the organisation reach only person variants (rpc/table.ts addPerson –
 // their chats.direct is in people/rpc-chats.ts).
 // Owns: param checks and scope rules of these methods. Never: business logic (runtime/chat/direct.ts,
@@ -12,6 +13,7 @@ import { exportChats } from '../../chat-files/export.ts';
 import { findOrCreateDirect } from '../../chat/direct.ts';
 import { bad, id, ids, input, onlyKeys, optText } from '../params.ts';
 import type { HandlerTable } from '../table.ts';
+import { PATH_RULE } from './files-path.ts';
 import { rememberConversation } from './system.ts';
 
 const CHAT = { capability: 'chat' } as const;
@@ -40,5 +42,5 @@ export function register(table: HandlerTable): void {
     if (!conversationIds.length) bad('conversationIds', 'at least one chat id');
     const dir = optText(o, 'dir', { max: 1024 });
     return exportChats(ctx.services, { conversationIds, dir: dir === undefined ? undefined : folderPath(dir, 'dir') });
-  });
+  }, PATH_RULE);
 }

@@ -34,6 +34,15 @@ export function problemText(problem: StartProblem, backups: readonly UpgradeBack
         title: 'Your data could not be read',
         body: [kept ? 'Restore a copy from before an update, or export diagnostics.' : 'Export diagnostics to find out more.'],
       };
+    case 'keyring_unavailable':
+      return {
+        title: 'Autark needs an unlocked system keyring',
+        body: [
+          'Autark did not open your data or enable features that use secrets.',
+          'If you already use Autark, unlock the same keyring used for this profile. On a new setup, enable GNOME Keyring or KWallet in your desktop session.',
+          'Then quit Autark completely and open it again.',
+        ],
+      };
     case 'crash_loop':
     default:
       return {

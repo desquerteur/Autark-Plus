@@ -1,13 +1,10 @@
-// Pure helpers for the compact step lines of a run (D5, team/run-items.tsx – the chat's live block,
-// the "Worked … · N steps" disclosure and Team › agent › Runs): a tool call's line (the runtime's
+// Pure helpers for the compact step lines of a run (D5, team/run-items.tsx – the agent's activity log, split rows): a tool call's line (the runtime's
 // journaled step for engine-native calls, else shared/text/step-label.ts from its name, arguments
 // and summary) with its icon, the "Thought · <headline>" line of a reasoning summary, the one-line
 // final answer's branch ("Kept internal" / "Posted quietly" / "Posted") and
-// the live list's window (the newest few, "+N earlier"). B-075: a run's step values from its chat row (meta.live.steps,
-// meta.lines) become the items the same list renders (stepItems) – on every device, without the run journal.
+// the live list's window (the newest few, "+N earlier") and the merge of a live run item into a loaded list (mergeItem).
 // Owns: these rules (unit-tested in test/unit/ui/step-view.test.ts). Never: imports the store, rpc or the DOM.
 
-import type { LiveStep } from '../../shared/model/chat.ts';
 import type { RunItem } from '../../shared/model/runs.ts';
 import { reasoningHeadline, stepLabel, type StepKind, type StepLabel } from '../../shared/text/step-label.ts';
 import type { IconName } from '../lib/icons.tsx';
@@ -71,24 +68,12 @@ export function liveWindow<T>(entries: readonly T[], max = 6, all = false): { hi
   return { hidden: entries.length - max, shown: entries.slice(-max) };
 }
 
-/**
- * B-075: step values as run items for RunItemList – a step is a call (its result when it no longer runs, failed
- * when it failed), a thought a reasoning summary ("Thought · <headline>", written while `running`). They carry no
- * input or output: the row never holds one.
- */
-export function stepItems(runId: string, steps: readonly LiveStep[]): RunItem[] {
-  const items: RunItem[] = [];
-  steps.forEach((step, index) => {
-    const base = { runId, createdAt: 0, effectStatus: 'none' as const };
-    if (step.thought) {
-      items.push({ ...base, id: `${runId}:${index}`, seq: items.length, kind: 'reasoning', data: { summary: `**${step.target}**`, live: step.running === true } });
-      return;
-    }
-    const callId = `${runId}:${index}`;
-    items.push({ ...base, id: callId, seq: items.length, kind: 'tool_call', data: { callId, step: { kind: step.kind, verb: step.verb, active: step.active, target: step.target } } });
-    if (!step.running) items.push({ ...base, id: `${callId}:result`, seq: items.length, kind: 'tool_result', data: { callId, ok: step.failed !== true } });
-  });
-  return items;
+/** A live `run.item` (new, or an update of a known item such as a settled effect) merged by id, in seq order. */
+export function mergeItem(list: readonly RunItem[], item: RunItem): RunItem[] {
+  const index = list.findIndex((entry) => entry.id === item.id);
+  if (index >= 0) return list.map((entry, at) => (at === index ? item : entry));
+  const next = [...list, item];
+  return next.length > 1 && next[next.length - 2].seq > item.seq ? next.sort((a, b) => a.seq - b.seq) : next;
 }
 
 /** True for an entry the person reads as a line (not a reasoning item without words, not an answer's later journal part). */

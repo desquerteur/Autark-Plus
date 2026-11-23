@@ -47,8 +47,10 @@ test('claude: a new session gets --session-id and both prompt parts; a resumed o
   assert.equal(flag(first.args, '--effort'), 'medium');
   const promptFile = flag(first.args, '--system-prompt-file')!; // B-049 F2: our prompt replaces Claude Code's
   assert.ok(promptFile.startsWith(path.join(TEMP, 'claude-run_1-')), 'the prompt file lives in the temp dir');
-  assert.equal(h.written.get(promptFile), 'STABLE\n\n__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__\n\nVOLATILE');
-  assert.deepEqual(userLines(first.child)[0].message.content, [{ type: 'text', text: 'hello' }]);
+  assert.equal(h.written.get(promptFile), 'STABLE', 'the stable prompt only');
+  assert.deepEqual(userLines(first.child)[0].message.content, [
+    { type: 'text', text: '<live>\nVOLATILE\n</live>' }, { type: 'text', text: 'hello' },
+  ], 'a new session gets the live context in the message, like a resumed one');
   assert.ok(h.removed.includes(promptFile), 'the prompt file is deleted after the turn');
 
   const resumed = await h.engine.run(input({ session: fresh.session, system: { stable: 'STABLE', volatile: 'VOLATILE2' } }).input);
@@ -58,9 +60,9 @@ test('claude: a new session gets --session-id and both prompt parts; a resumed o
   assert.equal(flag(second.args, '--resume'), fresh.session!.ref);
   assert.equal(second.args.includes('--session-id'), false);
   const resumedPrompt = flag(second.args, '--system-prompt-file')!;
-  assert.equal(h.written.get(resumedPrompt), 'STABLE', 'Claude Code replays the first system prompt: only the stable part');
+  assert.equal(h.written.get(resumedPrompt), 'STABLE', 'the same stable prompt');
   assert.deepEqual(userLines(second.child)[0].message.content, [
-    { type: 'text', text: '<workforce-context>\nVOLATILE2\n</workforce-context>' }, { type: 'text', text: 'hello' },
+    { type: 'text', text: '<live>\nVOLATILE2\n</live>' }, { type: 'text', text: 'hello' },
   ]);
   assert.ok(h.removed.includes(resumedPrompt));
   await h.engine.dispose();
@@ -140,7 +142,7 @@ test('claude stream: visible work updates, final answer, subagent isolation, too
     { type: 'tool_end', callId: 'tu_1', ok: true, summary: 'All tests passed', output: 'All tests passed' },
     { type: 'tool_end', callId: 'tu_2', ok: false, summary: 'Refused by policy', output: 'Refused by policy' },
   ]);
-  assert.deepEqual(of('usage'), [{ type: 'usage', inputTokens: 1000, outputTokens: 40, cacheReadTokens: 900, contextTokens: 1000, costUsd: 0.12 }]);
+  assert.deepEqual(of('usage'), [{ type: 'usage', inputTokens: 1000, outputTokens: 40, cacheReadTokens: 900, contextTokens: 1000, costUsd: 0.12, modelCalls: 1 }], 'package C: one main-thread message_start, one model call');
 });
 
 test('claude stream: without partial deltas the assistant text is emitted once per block', async () => {

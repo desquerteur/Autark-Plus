@@ -3,15 +3,18 @@
 // each opening their page; agents with the tiny "AI"), for the owner their devices, and one link to their work
 // (Work filtered to them; the caller's own is My day) and, for the owner, their next days (PersonCalendar.tsx, B-078,
 // last on the page so its late arrival moves nothing). The NAME in the header is the dropdown with the person
-// menu (menus.ts personMenu: Message · Edit · Invite a device · Devices and chats · Remove access); a right click
+// menu (menus.ts personMenu: Message · Edit · Invite a device · Devices and chats · Remove access, or Remove for one who
+// never joined – F14: such a person is no report of anyone yet); a right click
 // on the page opens the same. On the phone Back is the header's lead (the stack's one top row – shell/views.ts
-// ownsTopRow) and this page mounts the person dialogs the sidebar mounts on a computer. The caller's own page
+// ownsTopRow), the feedback cell ends it (feedback/cell.tsx) and this page mounts the person dialogs the sidebar
+// mounts on a computer. The caller's own page
 // ('human') names them as the profile button does.
+// 17.11.2026: "Invite a device" / "Invite again" shows its invite card at the top of this page (no modal).
 // Renders before the people list is loaded (a spinner) and says so when the person is unknown.
 // Owns: the person page. Never: changes people itself (the dialogs do) or shows messages of a person's chats.
 
 import { useEffect } from 'preact/hooks';
-import type { Person } from '../../shared/model/people.ts';
+import { hasJoined, type Person } from '../../shared/model/people.ts';
 import { AgentAvatar, EmptyState, HumanAvatar, Spinner } from '../lib/ui.tsx';
 import { Header, backCell } from '../lib/header.tsx';
 import { useContextMenu } from '../lib/context-menu.tsx';
@@ -23,9 +26,11 @@ import { managerOf, statusLabel, topPersonId } from './people-model.ts';
 import { ensureSpaces } from './org-state.ts';
 import { AiTag } from './parts.tsx';
 import { personMenu } from './menus.ts';
-import { PersonDialogs } from './person-dialogs.tsx';
+import { closeInvite, inviteOpen, PersonDialogs } from './person-dialogs.tsx';
+import { PersonInvite } from './PersonInvite.tsx';
 import { PersonCalendar } from './PersonCalendar.tsx';
 import { TitleMenu } from './TitleMenu.tsx';
+import { phoneFeedbackCells } from '../feedback/cell.tsx';
 
 /** A link to a member of the org: a person's page or an agent's insight. */
 function MemberLink(props: { id: string }) {
@@ -41,7 +46,7 @@ function Facts(props: { person: Person; admin: boolean }) {
   const { person } = props;
   const top = topPersonId(people.value) === person.id;
   const reports = [
-    ...people.value.filter((entry) => entry.managerId === person.id && entry.status !== 'revoked').map((entry) => entry.id),
+    ...people.value.filter((entry) => entry.managerId === person.id && entry.status !== 'revoked' && hasJoined(entry)).map((entry) => entry.id), // F14: invited ones once they join
     ...agents.value.filter((agent) => !agent.archivedAt && (agent.managerId === person.id || (top && !agent.managerId))).map((agent) => agent.id),
   ];
   const boss = person.managerId ? managerOf(person.managerId, { isAgent: (id) => agentMap.value.has(id), isPerson: (id) => people.value.some((entry) => entry.id === id), personSession: false }) : undefined;
@@ -76,6 +81,7 @@ export interface PersonViewProps {
 export function PersonView(props: PersonViewProps) {
   const { personId } = props;
   useEffect(() => { ensureSpaces(); }, []);
+  useEffect(() => () => closeInvite(personId), [personId]); // the invite card goes with its page
   const admin = can('people.save');
   const person = people.value.find((entry) => entry.id === personId);
   const menu = useContextMenu(() => (person ? personMenu(person) : []));
@@ -86,7 +92,7 @@ export function PersonView(props: PersonViewProps) {
   if (!person && (waiting || can('people.list'))) {
     return (
       <div class="team-view person-view">
-        <Header zone="main" class="person-header" lead={lead} title={name} />
+        <Header zone="main" class="person-header" lead={lead} title={name} cells={phoneFeedbackCells()} />
         <div class="agent-scroll"><div class="agent-column">{waiting ? <Spinner /> : <EmptyState>This person is not in the organisation.</EmptyState>}</div></div>
       </div>
     );
@@ -95,9 +101,10 @@ export function PersonView(props: PersonViewProps) {
   const role = [person?.title, status === 'Active' ? '' : status].filter(Boolean).join(' · ');
   return (
     <div class="team-view person-view">
-      <Header zone="main" class="person-header" lead={lead} title={person ? <TitleMenu name={name} sections={() => personMenu(person)} /> : name} />
+      <Header zone="main" class="person-header" lead={lead} title={person ? <TitleMenu name={name} sections={() => personMenu(person)} /> : name} cells={phoneFeedbackCells()} />
       <div class="agent-scroll">
         <div class="agent-column" {...menu}>
+          {person && inviteOpen(personId) && <PersonInvite person={person} onClose={() => closeInvite()} />}
           <section class="agent-profile" aria-label="Identity">
             <div class="agent-identity">
               <AgentAvatar agentId={personId} size={64} />

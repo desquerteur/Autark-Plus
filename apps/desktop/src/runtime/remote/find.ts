@@ -2,18 +2,23 @@
 // (the LAN hello answers, devices/discovery.ts) and then at the meeting server (it knows the PCs
 // that accept requests by Remote ID; one still connecting is waited for – a free host wakes slowly);
 // a typed address is asked directly (/.well-known/workforce).
-// Every answer is only a hint: its key must give the typed Remote ID, and the request itself proves
+// Every answer is only a hint: its key must give the typed Remote ID – or (B-084) its chain must prove that key belongs
+// to that person code (remote/code.ts belongs) –, and the request itself proves
 // that key (remote/sas.ts). Answers naming the same device with different keys stay separate (an
 // impostor never hides the real PC); the first one that matches is asked. Nothing found: not_found
 // says what was searched and what to do, and names a meeting server that is off or not reachable.
-// Owns: candidate search, filtering and the not_found text. Never: trusts a candidate whose key does not match the typed Remote ID.
+// Owns: candidate search, filtering and the not_found text. Never: trusts a candidate whose key neither gives the typed Remote ID nor proves it belongs to it.
 
 import { WorkforceError } from '../../shared/errors.ts';
 import type { Candidate } from '../devices/discovery.ts';
-import { remoteIdOf, type RemoteTarget } from './id.ts';
+import { belongs } from './code.ts';
+import type { RemoteTarget } from './id.ts';
 
-/** A PC found for a target: where to send the request (http(s) base URLs or the meeting server's `relay:<fp>`). */
-export interface Found { deviceId: string; name: string; fingerprint: string; addresses: string[] }
+/**
+ * A PC found for a target: where to send the request (http(s) base URLs or the meeting server's `relay:<fp>`); `chain`:
+ * its chain to a person code (remote/code.ts) when it answered for one.
+ */
+export interface Found { deviceId: string; name: string; fingerprint: string; addresses: string[]; chain?: unknown }
 
 export interface FindDeps {
   self: string;
@@ -47,7 +52,7 @@ export async function findTarget(deps: FindDeps, target: RemoteTarget): Promise<
     if (known && known.deviceId !== deps.self) return [{ ...known, addresses: [target.address] }];
     throw new WorkforceError('not_found', notFoundText(target));
   }
-  const matches = (found: Found) => found.deviceId !== deps.self && remoteIdOf(found.fingerprint) === target.remoteId;
+  const matches = (found: Found) => found.deviceId !== deps.self && belongs(target.remoteId, found.fingerprint, found.chain);
   const near = (await (deps.lan?.().catch((): Candidate[] => []) ?? Promise.resolve([]))).filter(matches);
   if (near.length) return near;
   let gap: string | undefined;

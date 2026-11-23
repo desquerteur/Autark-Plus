@@ -21,7 +21,7 @@ import type { MediaInfo } from '../../../shared/model/media.ts';
 import type { ModelInfo } from '../../../shared/model/providers.ts';
 import { pcmOf } from '../../media/hear-any.ts';
 import type { ToolContent, ToolContext } from '../types.ts';
-import { failure } from '../types.ts';
+import { FILE_ID_PROPERTY, failure } from '../types.ts';
 import { MEDIA_DESCRIBE_HINT, mediaFileId, readableMedia, referencedPart, untilStopped, view } from './media-common.ts';
 import { hearsHere, soundModel, soundsOf, soundsView, startTranscript, waitTranscript, within } from './media-hearing.ts';
 import { LISTEN_SPAN_MS } from './media-listen-plan.ts';
@@ -70,12 +70,12 @@ async function soundsFor(ctx: ToolContext, info: MediaInfo): Promise<Record<stri
 
 export const look = defineTool<{ fileId: string; frames?: number }>({
   name: 'media.look',
-  description: `Watch a stored video: returns up to ${KEYFRAME_LIMITS.frames} keyframes as images (the opening shot and the biggest scene changes first, then evenly over its time; JPEG ≤ ${KEYFRAME_LIMITS.edge} px), each with its timestamp, an excerpt of the transcript and the sounds recognised on this PC (sounds: label, when, confidence – tags, not a description). ${LOOK_NOTE} fileId: the 64-character name at the end of the file's "stored at" path.`,
+  description: 'Watches a stored video as keyframes with timestamps, transcript and sounds. The opening shot and the biggest scene changes come first; the sounds are tags, not a description.',
   inputSchema: {
     type: 'object',
     properties: {
-      fileId: { type: 'string', minLength: 64, maxLength: 1000 },
-      frames: { type: 'integer', minimum: 1, maximum: KEYFRAME_LIMITS.frames, description: `how many frames, default ${KEYFRAME_LIMITS.defaultFrames}` },
+      fileId: FILE_ID_PROPERTY,
+      frames: { type: 'integer', minimum: 1, maximum: KEYFRAME_LIMITS.frames, description: `Up to ${KEYFRAME_LIMITS.frames}; default ${KEYFRAME_LIMITS.defaultFrames}.` },
     },
     required: ['fileId'], additionalProperties: false,
   },

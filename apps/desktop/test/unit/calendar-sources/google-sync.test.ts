@@ -16,7 +16,7 @@ import { vienna } from './ics-fixtures.ts';
 test('without a client ID Google is not configured and connecting is refused; the environment can provide one', async () => {
   const w = world();
   assert.deepEqual(w.sources.google(), { configured: false, connected: false });
-  await assert.rejects(w.sources.connectGoogle(), /needs a client ID/);
+  await assert.rejects(w.sources.connectGoogle(), /secret address in iCal format/, '16.11.: the refusal names the way that works');
   assert.equal(w.loopback.isOpen(), false);
   const fromEnv = world({ env: { WORKFORCE_GOOGLE_CLIENT_ID: CLIENT } });
   assert.equal(fromEnv.sources.google().configured, true);

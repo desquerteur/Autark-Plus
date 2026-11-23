@@ -1,5 +1,5 @@
 // B-048 E4.5: a turn reports what it runs on (TurnRequest.onRoute → the activity's model, modelName,
-// effort, engine) at route time – before the engine runs – and again after every rebuild of the turn:
+// effort, engine; B-080: and its account) at route time – before the engine runs – and again after every rebuild of the turn:
 // a session renewal and a failover to another account or model. bindTurn also hands the engine and
 // the input's cursor to the dispatcher, and a failing listener never breaks the turn.
 // Owns: these assertions only. Never: real engines, timers or network.
@@ -45,7 +45,7 @@ test('bindTurn hands the engine and the cursor over and reports the route; a fai
   bindTurn(request, turn);
   assert.equal(request.control.engine, h.engine);
   assert.equal(request.control.lastSeq, 7);
-  assert.deepEqual(routes, [{ model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude' }]);
+  assert.deepEqual(routes, [{ model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude', accountId: h.account.id }]);
   const failing = h.request({ onRoute: () => { throw new Error('the window is gone'); } });
   assert.doesNotThrow(() => bindTurn(failing, turn));
   assert.equal(failing.control.engine, h.engine, 'the handles are set before the report');
@@ -56,7 +56,7 @@ test('route time: the model is reported before the engine runs', async () => {
   Object.assign(h.services, { router: { route: async () => h.route } });
   const outcome = await h.run(() => ({ text: 'Hi', stop: 'done' }));
   assert.equal(outcome.status, 'done');
-  assert.deepEqual(h.routes, [{ model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude' }]);
+  assert.deepEqual(h.routes, [{ model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude', accountId: h.account.id }]);
   assert.deepEqual(h.atRun, [1], 'known when the engine starts');
 });
 
@@ -70,8 +70,8 @@ test('a failover reports the new account\'s model and effort before the second a
   const outcome = await h.run((call) => (call === 1 ? LIMIT : { text: 'Done on the backup.', stop: 'done' }));
   assert.equal(outcome.status, 'done');
   assert.deepEqual(h.routes, [
-    { model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude' },
-    { model: 'claude:claude-sonnet-5', modelName: 'Claude Sonnet 5', effort: 'high', engine: 'claude' },
+    { model: 'claude:claude-opus-5-5', modelName: 'Claude Opus 5.5', effort: 'medium', engine: 'claude', accountId: h.account.id },
+    { model: 'claude:claude-sonnet-5', modelName: 'Claude Sonnet 5', effort: 'high', engine: 'claude', accountId: backup.id },
   ]);
   assert.deepEqual(h.atRun, [1, 2], 'each attempt runs on the route reported last');
 });

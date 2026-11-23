@@ -1,7 +1,7 @@
 // B-076: this PC's side tabs watched from another PC or a phone (src/runtime/browser/side-view.ts) on a manual clock and
 // a fake host: pulls are keyed by tab (a tab never gets another's frame), each pull renews the cast at most once per
-// RENEW_MS and the last release turns it off PULL_GRACE_MS later; the owner gets a frame every 500 ms, a phone every
-// 1000 ms, a linked PC passing on its caller keeps that caller's gap and slot; a failed cast is the state's reason and
+// RENEW_MS and the last release turns it off PULL_GRACE_MS later; the owner gets a frame every 100 ms, a phone every
+// 300 ms (B-081), a linked PC passing on its caller keeps that caller's gap and slot; a failed cast is the state's reason and
 // leaves no pull spinning; input lands on the newest frame's viewport in the page's CSS pixels (its zoom applied); a
 // dialog the page opens travels in the state and its answer goes to main as nav.
 // Owns: these assertions only. Never: real timers, Electron or a socket.
@@ -86,23 +86,23 @@ test('a pull renews the cast and answers the page and the PC; frames are kept pe
   assert.equal(other.state.tab, B);
 });
 
-test('the owner (and a linked PC passing on its owner) gets a frame every 500 ms, a phone every 1000 ms', async () => {
-  assert.deepEqual(sideCaller('owner'), { caller: 'owner', gapMs: 500 });
-  assert.deepEqual(sideCaller('dev_phone'), { caller: 'dev_phone', gapMs: 1000 });
-  assert.deepEqual(sideCaller('dev_b', 'owner'), { caller: 'dev_b/owner', gapMs: 500 });
-  assert.deepEqual(sideCaller('dev_b', 'dev_phone'), { caller: 'dev_b/dev_phone', gapMs: 1000 });
+test('the owner (and a linked PC passing on its owner) gets a frame every 100 ms, a phone every 300 ms (B-081)', async () => {
+  assert.deepEqual(sideCaller('owner'), { caller: 'owner', gapMs: 100 });
+  assert.deepEqual(sideCaller('dev_phone'), { caller: 'dev_phone', gapMs: 300 });
+  assert.deepEqual(sideCaller('dev_b', 'owner'), { caller: 'dev_b/owner', gapMs: 100 });
+  assert.deepEqual(sideCaller('dev_b', 'dev_phone'), { caller: 'dev_b/dev_phone', gapMs: 300 });
   const r = rig();
   const start = await r.pull('dev_phone', A);
   r.update(A, 'F1');
   const one = await r.pull('dev_phone', A, { state: start.state.at });
   assert.equal(one.frame?.data, 'F1');
-  await r.timers.advance(300);
+  await r.timers.advance(100);
   r.update(A, 'F2');
   let answered: SidePull | undefined;
   void r.pull('dev_phone', A, { state: one.state.at, frame: one.frame!.at }).then((reply) => { answered = reply; });
-  await r.timers.advance(600);
+  await r.timers.advance(150);
   assert.equal(answered, undefined, 'a phone waits for its gap');
-  await r.timers.advance(100);
+  await r.timers.advance(50);
   assert.equal((answered as SidePull | undefined)?.frame?.data, 'F2');
 });
 

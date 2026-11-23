@@ -98,12 +98,12 @@ export function blockLine(opts: PromptOptions = {}): string {
   const rare = app ? '; rarely an ```app mini-tool' : '';
   if (opts.helpTool) {
     const examples = EXAMPLE_TYPES.filter(type => specsFor('display', tier).some(spec => spec.type === type));
-    return ['## Rich answers', `Markdown by default; ${diagrams} and \`\`\`ui blocks (${examples.join(', ')}, quick replies to the human …) only when clearly faster to grasp, max ~3 per message – ${opts.helpTool} "blocks" lists every type with its fields${app ? ' and the ```app mini-tool' : ''}.`].join('\n');
+    return ['## Rich answers', `Markdown is my default; a ${diagrams} or \`\`\`ui block (${examples.join(', ')}, quick replies to the person …) where it is faster to grasp than text – ${opts.helpTool} "blocks" lists every type with its fields${app ? ' and the ```app mini-tool' : ''}.`].join('\n');
   }
   const names = (kind: BlockSpec['kind']) => specsFor(kind, tier).map(spec => spec.type).join(', ');
   return [
     '## Rich answers',
-    `Markdown by default; a block only when clearly faster to grasp (max ~3 per message): ${diagrams} or \`\`\`ui JSON {"type":…} – display: ${names('display')}; quick replies to the human (important:true puts one on their list): ${names('ask')}${rare}.`,
+    `Markdown is my default; a block where it is faster to grasp than text: ${diagrams} or \`\`\`ui JSON {"type":…} – display: ${names('display')}; quick replies to the person (important:true puts one on their list): ${names('ask')}${rare}.`,
   ].join('\n');
 }
 
@@ -167,6 +167,8 @@ const LIMIT_NOTES: Record<string, string> = {
   table: `Max ${LIMITS.tableRows} rows; columns: [string | {key,label,align?}], rows: [[…]] or [{…}].`,
   chart: `Max ${LIMITS.chartPoints} points; "y" may be one key or a list of keys (several series).`,
   choice: `Max ${LIMITS.choiceOptions} options: [string | {label,value?,hint?}].`,
+  record: 'Voice-over: with "video" the person hears nothing and speaks to the picture; the take is a WAV whose second 0 is second 0 of the video (audio/wav, attached). Up to 200 lines, text ≤ 400 characters, start < end, a line may overlap the one before by 0.3 s at most.\n'
+    + 'Example: {"type":"record","video":"exports/drone-v3.mp4","cues":[{"text":"Welcome to the valley.","start":0,"end":3.5},{"text":"Here the camera turns left.","start":4,"end":9}],"instructions":"Speak calmly"}',
 };
 
 const EXAMPLES: Record<string, string> = {

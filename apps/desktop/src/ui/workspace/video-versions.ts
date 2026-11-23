@@ -16,6 +16,11 @@ const VERSION_MARKS = [
   /[\s._-]+\d{8}(?:[\s._-]?\d{4,6})?$/, // -20261021, -20261021-1530
 ];
 
+/** 17.11.2026: what a player streams for a video – its light preview copy when it has one (a heavy export would stall on a phone or the relay), else the file; Open and Download stay the original. */
+export function playbackId(info: Pick<MediaInfo, 'fileId' | 'previewFileId'>): string {
+  return info.previewFileId ?? info.fileId;
+}
+
 /** The versions of one render share this key: the file name without its folder, extension and version marks. */
 export function renderKey(name: string): string {
   const base = (name.split(/[\\/]/).pop() ?? name).toLowerCase().replace(/\.[a-z0-9]{1,5}$/, '');
