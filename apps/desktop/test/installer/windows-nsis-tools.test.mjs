@@ -81,7 +81,7 @@ test('packaging awaits plugin preparation before importing builder; outer PE end
   assert.match(signing, /await bindInstaller/);
 });
 
-const realProject = new URL('../../../../../../../apps/desktop/', import.meta.url);
+const realProject = new URL('../../', import.meta.url);
 test('RealProjectPreflightFixture: actual package config and actual installer include, mocked tools and inspector, no Azure', async t => {
   const options = await fixture(t);
   const { fileURLToPath } = await import('node:url');

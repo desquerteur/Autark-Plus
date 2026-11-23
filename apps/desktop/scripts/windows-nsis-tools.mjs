@@ -40,8 +40,9 @@ export async function prepareNsisTools({ config, projectDir, reportDir = path.re
     const stat = await lstat(path.join(resources, 'installer.nsh'));
     if (stat.isSymbolicLink() || !stat.isFile() || path.join(resources, 'installer.nsh') !== reviewedInclude) throw new Error('Installer include path needs explicit coverage review.');
     includeHash = createHash('sha256').update(await readFile(reviewedInclude)).digest('hex');
-    if (includeHash !== '065e041ac434945a5ee2f079b9efd68e8d3b14fc0149b2f935e6dbf952563d8f') throw new Error('Installer include bytes need explicit coverage review.');
-    // Reviewed exact bytes (19.11.2026, 0.3.15) use nsExec only; no nested includes or plugin directories. Two File
+    if (includeHash !== '249a5d0999d5978538611dd2b8299283a9ecda064fc11f08850713c63d078238') throw new Error('Installer include bytes need explicit coverage review.');
+    // Reviewed Plus bytes (23.11.2026): upstream 0.3.15 plus HKCU Explorer-entry cleanup on uninstall.
+    // Uses nsExec only; no nested includes or plugin directories. Two File
     // sources from the project: resources/broker/install.ps1 (a script) and resources/broker/AutarkDesktopBroker.exe,
     // which the installer unpacks and starts – that PE is signed (or a valid own signature verified) here.
     brokerSource = await inspector(path.resolve(projectDir, 'resources/broker/AutarkDesktopBroker.exe'), 'Sign', true);
