@@ -50,7 +50,9 @@ test('Settings › Models: Google Gemini – Google sign-in or API key', { timeo
   assert.equal(await buttons.getByRole('button', { name: 'Google Gemini', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await panel.getByLabel('Name').getAttribute('placeholder'), 'Gemini', 'the first one is "Gemini"');
   for (const label of ['Sign in with Google', 'API key', 'Cancel']) assert.equal(await panel.getByRole('button', { name: label, exact: true }).count(), 1, label);
-  assert.match(await panel.locator('.gemini-add-hint').textContent(), /Gemini CLI.*several/);
+  const hint = await panel.locator('.gemini-add-hint').textContent();
+  assert.match(hint, /Gemini CLI.*Google Workspace/);
+  assert.match(hint, /API key.*Google AI Studio/);
   await panel.scrollIntoViewIfNeeded();
   await shot('gemini-01-panel-light');
   await page.emulateMedia({ colorScheme: 'dark' });

@@ -262,6 +262,19 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
   // ---- the panels: Activity
   const panel = async (name) => {
     await strip().getByRole('button', { name: 'New tab', exact: true }).click();
+    if (name === 'Activity' || name === 'Screen') {
+      // B-078 removed these chooser entries; persisted legacy tabs still work.
+      assert.equal(await page.locator('.new-tab-row', { hasText: name }).count(), 0);
+      const id = await page.locator('.browser-strip-tab.selected').getAttribute('data-tab');
+      await until('the blank tab persisted', async () => (await file('side-tabs.json')).spaces.global.tabs.some((tab) => tab.id === id));
+      const state = await file('side-tabs.json');
+      const tab = state.spaces.global.tabs.find((entry) => entry.id === id);
+      tab.panel = name.toLowerCase();
+      delete tab.url;
+      await writeFile(path.join(profile, 'side-tabs.json'), `${JSON.stringify(state, null, 1)}\n`);
+      await waitShown(name);
+      return;
+    }
     await page.locator('.new-tab-row', { hasText: name }).first().click();
   };
   await panel('Activity');
