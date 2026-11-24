@@ -2,11 +2,12 @@
 // seats, floor, call history and recap went) in an isolated test profile with the demo engine, Chromium's fake
 // microphone fed with silence (no utterance is cut, nothing is sent) and a localhost fake speech-to-text server
 // (registered as a local 'vllm' account, like e2e/runtime-speech.test.mjs):
-//   * the call cell "Talk" in a first and then a second chat starts the voice conversation: the status line over the
-//     main zone shows one line per chat ("<chat> · listening" / "on hold"), each with End; the cell turns "End voice"
-//     in the same box – the header's cells do not move;
-//   * opening the first chat makes it the listening one (the focused chat listens);
-//   * End on the second leaves one conversation; the cell's "End voice" ends the last and its line goes;
+//   * the call cell "Talk" in a first and then a second chat starts the voice conversation; the cell turns "End voice"
+//     in the same box – the header's cells do not move. B-085: the open chat's listening call shows on its call view,
+//     so the status line over the main zone carries only the other chats' conversations ("<chat> · on hold", with
+//     Open and End);
+//   * opening the first chat makes it the listening one (the focused chat listens) and puts the second on hold;
+//   * End on the second's line leaves one conversation; the cell's "End voice" ends the last;
 //   * a dictation in the composer ends the running conversations first (one microphone);
 //   * each conversation is a call of this PC in its chat: one call card "Running" that shows how long it ran once it
 //     ended (its row: meta.call with participant 'device:pc'); talking again is a new call;
@@ -124,8 +125,8 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
     await endVoice.waitFor({ timeout: 20_000 });
   });
   await minimize();
-  const one = await waitLines((now) => now.length === 1 && /Launch plan · (starting|listening)/.test(now[0]), 'the first chat talks');
-  assert.equal(one.length, 1);
+  // B-085: the open chat's listening call has no status line – its call view and the cell show it.
+  await waitLines((now) => now.length === 0, 'the open chat talks without a status line');
   // The call is one bubble in the chat, written by this PC (B-085: a compact card whose accessible name is the title;
   // its toggle reads "Transcript").
   const bubbles = page.locator('.message-scroller .call-transcript');
@@ -141,14 +142,14 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
   assert.equal((await callRows())[0]?.meta.call.participant, 'device:pc');
   await shot('call-00-one');
 
-  // Talk in the second chat: two lines, the newer one listens, the older one waits on hold; End per chat.
+  // Talk in the second chat: the newer one listens (no line, it is open), the older one waits on hold in the line.
   await open(research);
   await talk.click();
   await endVoice.waitFor({ timeout: 20_000 });
   await minimize();
-  const both = await waitLines((now) => now.length === 2 && now.some((text) => /Launch plan · on hold/.test(text)), 'both chats, the older one on hold');
-  assert.ok(both.some((text) => /Research · (starting|listening)/.test(text)), `the newer one listens: ${both.join(' | ')}`);
-  assert.equal(await voiceLines.getByRole('button', { name: 'End', exact: true }).count(), 2, 'End per chat');
+  await waitLines((now) => now.length === 1 && /Launch plan · on hold/.test(now[0]), 'the older chat on hold');
+  assert.equal(await voiceLines.getByRole('button', { name: 'End', exact: true }).count(), 1, 'End on the waiting chat');
+  assert.equal(await voiceLines.getByRole('button', { name: 'Open', exact: true }).count(), 1, 'Open on the waiting chat');
   await shot('call-01-two-light');
   const geometry = await page.evaluate(() => {
     const line = document.querySelector('.status-host .status-note[data-notice^="voice:"]').getBoundingClientRect();
@@ -162,7 +163,7 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
 
   // The focused chat listens: opening Launch plan makes it the listening one.
   await open(plan);
-  await waitLines((now) => now.some((text) => /Launch plan · (listening|starting)/.test(text)) && now.some((text) => /Research · on hold/.test(text)), 'the opened chat listens');
+  await waitLines((now) => now.length === 1 && /Research · on hold/.test(now[0]), 'the opened chat listens, the other waits');
 
   await size(420, 860);
   await page.waitForTimeout(600);
@@ -184,10 +185,10 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
   await size(1280, 820);
   await page.waitForTimeout(600);
 
-  // End on Research's line leaves one; the cell's "End voice" ends the last and the line goes.
+  // End on Research's line leaves one (the open chat's, without a line); the cell's "End voice" ends the last.
   await voiceLines.filter({ hasText: 'Research' }).getByRole('button', { name: 'End', exact: true }).click();
-  const left = await waitLines((now) => now.length === 1, 'one conversation left');
-  assert.match(left[0], /Launch plan/);
+  await waitLines((now) => now.length === 0, 'one conversation left, the open one');
+  await endVoice.waitFor({ timeout: 5_000 });
   await expectStable(page, headerCells, async () => {
     await endVoice.click();
     await talk.waitFor({ timeout: 10_000 });
@@ -198,9 +199,9 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
   // A dictation ends a running conversation first (one microphone).
   await talk.click();
   await minimize();
-  await waitLines((now) => now.length === 1, 'talking again');
+  await endVoice.waitFor({ timeout: 20_000 }); // talking again
   await page.locator('.composer button[aria-label="Dictate"]').click();
-  await waitLines((now) => now.length === 0, 'the dictation ended the conversation');
+  await talk.waitFor({ timeout: 15_000 }); // the dictation ended the conversation
   await page.locator('.composer button[aria-label="Stop dictation"]').click({ timeout: 10_000 }).catch(() => undefined);
   await talk.waitFor({ timeout: 15_000 });
   await waitTitles((now) => now.length === 2 && now.every((title) => /^Call · .+ · \d+:\d{2}$/.test(title)), 'talking again was a second call, ended by the dictation');
