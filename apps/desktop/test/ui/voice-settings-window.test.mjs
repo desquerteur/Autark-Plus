@@ -147,7 +147,7 @@ test('Settings › Models: the Voice group, the voice conversation use saved, th
   await bubble.locator('.message.human', { hasText: 'Hello in the call' }).waitFor({ timeout: 15_000 }); // the row itself, in full
   assert.equal(await bubble.count(), 1, 'one bubble for the call');
   assert.match((await bubble.getAttribute('aria-label') ?? '').trim(), /^Call · .+ · running$/, 'the card is named by the call title (B-085)');
-  assert.equal((await bubble.locator('.call-transcript-toggle').textContent()).trim(), 'Transcript');
+  assert.equal((await bubble.locator('.call-transcript-toggle').textContent()).trim(), 'Hide transcript', 'open while the call runs (upstream 0.3.16 toggle label)');
   await until(async () => (await bubble.locator('.message.agent').count()) > 0, 'the answer is a line of the call, shown as its message');
   assert.equal(await page.locator('.message-column > .message.human', { hasText: 'Hello in the call' }).count(), 0, 'the line is folded into the call, no row of its own');
   await shot('voice-settings-07-talk-in-chat');

@@ -64,7 +64,7 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   rpc = await connect(info.port, info.token, 'cli');
 
   // AF-010: this test measures the chat's tabs docked above the messages (their place since B-072); right is the default now
-  await rpc.call('settings.update', { appearance: { chatDock: { place: 'top' } } });
+  await rpc.call('settings.update', { onboarding: { step: 'done' }, appearance: { chatDock: { place: 'top' } } }); // past the first-run layer, which covers My day (views.ts firstRunActive)
   const agents = await rpc.call('agents.list');
   const manager = agents.find((agent) => agent.template === 'manager');
   const other = agents.find((agent) => agent.id !== manager.id) ?? (await rpc.call('agents.create', { name: 'Ava' }));
@@ -109,9 +109,10 @@ test('nothing moves: searches, rail, workspace cell, details panel, chat area, c
   const atBottom = () => page.evaluate(() => { const el = document.querySelector('.message-scroller'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
   assert.equal(await atBottom(), true, 'the chat opens at the newest message');
   await expectStable(page, head, async () => { await rpc.call('settings.get').then((current) => rpc.call('settings.update', { preferences: { workspaceOpen: !current.preferences.workspaceOpen } })); await page.locator('.global-pane').waitFor(); });
-  assert.equal(await cell.getAttribute('aria-pressed'), 'true');
+  assert.equal(await cell.getAttribute('aria-pressed'), 'false', "in a chat the globe is the chat's tabs (e2c49b8): a global pane opened elsewhere leaves it unpressed");
   assert.equal(await page.locator('.app-frame.strip-in-row').count(), 0, 'the default pane: its strip under the row, not cramped into it');
-  const clear = await page.evaluate(() => document.querySelector('.frame-workspace-cell[data-cell="browser"]').getBoundingClientRect().right <= document.querySelector('.global-pane').getBoundingClientRect().left + 0.5);
+  // The frame's globe sits in its right-hand cell (e2c49b8, one browser button), so the chat header's own cells are measured.
+  const clear = await page.evaluate(() => document.querySelector('.chat-header [data-cell="call"]').getBoundingClientRect().right <= document.querySelector('.global-pane').getBoundingClientRect().left + 0.5);
   assert.ok(clear, 'the chat\'s cells stay left of the pane');
   await page.waitForTimeout(100);
   assert.equal(await atBottom(), true, 'the narrower chat stays at the newest message');
