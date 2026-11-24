@@ -20,7 +20,8 @@ test('feedback without a configured sender: Save keeps the report on this PC and
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
   const env = { ...process.env, WORKFORCE_TEST_DATA: profile, WORKFORCE_FAKE_ENGINE: '1', ELECTRON_ENABLE_LOGGING: '0' };
-  delete env.WORKFORCE_FEEDBACK_ORIGIN; // no operator endpoint for this start
+  delete env.WORKFORCE_FEEDBACK_ORIGIN;
+  env.WORKFORCE_FEEDBACK_RECEIVER = path.join(profile, 'no-receiver.json'); // the build ships resources/feedback/receiver.json; this start has none
   const app = await electron.launch({ executablePath: electronPath, args: [root], cwd: root, timeout: 60_000, env });
   let rpc;
   t.after(async () => {
@@ -56,7 +57,7 @@ test('feedback without a configured sender: Save keeps the report on this PC and
   await shot('feedback-local-panel-light');
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
   await dialog.locator('.feedback-done', { hasText: 'Saved on this PC – sending is not set up.' }).waitFor();
-  assert.equal(await dialog.locator('.feedback-message').textContent(), '', 'saving is no error');
+  assert.equal(await dialog.locator('.feedback-message:not(.feedback-issue .feedback-message)').textContent(), '', 'saving is no error'); // the Autark-Plus GitHub issue offer has its own line
   assert.equal(await dialog.getByRole('button', { name: 'Send', exact: true }).count(), 0);
   const saved = (await rpc.call('feedback.list')).find((report) => report.text === 'The sidebar width needs attention');
   assert.equal(saved?.status, 'local');

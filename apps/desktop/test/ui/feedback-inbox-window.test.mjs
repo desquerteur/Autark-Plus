@@ -99,7 +99,7 @@ test('feedback privacy is available before sending; the team inbox reads text an
   await inbox.locator('.feedback-inbox-text').getByText(report.text, { exact: true }).waitFor();
   await inbox.getByRole('img', { name: 'Feedback screenshot' }).waitFor();
   await page.waitForFunction(() => document.querySelector('.feedback-inbox-image img')?.naturalWidth === 48);
-  assert.equal(delivery.docs.size, 0, 'opened and saved on the team PC, then deleted from mailbox');
+  assert.equal(delivery.docs.size, 1, 'opened and saved on the team PC; the letter stays in the mailbox for the other team PCs (inbox.ts, 16.11.2026)');
   const received = (await rpc.call('feedback.inboxList'))[0];
   assert.equal((await rpc.call('feedback.inboxScreenshot', { id: received.id })).dataBase64, image);
   await inbox.getByRole('button', { name: 'Refresh', exact: true }).waitFor({ state: 'visible' });

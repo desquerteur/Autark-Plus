@@ -39,16 +39,18 @@ function remembered(): boolean | undefined {
 const sendsItself = !bridge && builtInReceiver() !== null;
 export const feedbackSending = signal<boolean | undefined>(sendsItself ? true : remembered());
 let asking: Promise<void> | undefined;
-let answered = false;
 
-/** The current answer (undefined while unknown); asked on first use and again when the session changes until it answered. */
+/**
+ * The current answer (undefined while unknown); asked each time a panel using it mounts and when the session changes.
+ * 24.11.2026: no longer asked only once per page – a receiver set up while the app runs (Settings › Feedback,
+ * `wf feedback setup`) turned the panel into Send only after a restart. The last answer shows meanwhile.
+ */
 export function useFeedbackSending(): boolean | undefined {
   const info = session.value;
   useEffect(() => {
-    if (answered || sendsItself) return;
+    if (sendsItself) return;
     asking ??= rpc.call('feedback.status')
       .then((status) => {
-        answered = true;
         feedbackSending.value = status.sending === true;
         try { storage()?.setItem(SENDING_KEY, status.sending === true ? '1' : '0'); } catch { /* storage blocked */ }
       })
