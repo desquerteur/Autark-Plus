@@ -26,7 +26,8 @@ const shownKey = (message: Message) => `${message.id}:${message.state}:${message
 /**
  * Calls `handle` for every pushed event until the stream ends; `handle` returns true when it
  * printed something. `ready` is the stderr hint shown once the subscription is live; `prime`
- * runs right after subscribing (so nothing falls between a read and the subscription).
+ * runs right after subscribing (so nothing falls between a read and the subscription). Frames
+ * pushed while `prime` runs are held and handled after it, so they see what it read.
  */
 export async function follow(ctx: Ctx, topics: Topic[], ready: string, handle: (event: string, data: unknown) => boolean, prime?: () => Promise<void>): Promise<void> {
   const count = integer(ctx.parsed, 'count', 1, MAX_COUNT);
@@ -39,11 +40,17 @@ export async function follow(ctx: Ctx, topics: Topic[], ready: string, handle: (
   done.catch(() => undefined); // a late failure after the end must not become an unhandled rejection
   const finish = () => { stopped = true; resolveDone(); };
   const fail = (error: unknown) => { stopped = true; rejectDone(error); };
-  const off = ctx.rpc.onEvent((event, data) => {
+  /** Frames pushed while `prime` reads; undefined once it is done (or when there is none). */
+  let held: Array<[string, unknown]> | undefined = prime ? [] : undefined;
+  const dispatch = (event: string, data: unknown) => {
     if (stopped) return;
     try {
       if (handle(event, data) && count !== undefined && ++printed >= count) finish();
     } catch (error) { fail(error); }
+  };
+  const off = ctx.rpc.onEvent((event, data) => {
+    if (held) held.push([event, data]);
+    else dispatch(event, data);
   });
   const onAbort = () => {
     if (count !== undefined && ctx.timedOut()) fail(new CliError('timeout', `${printed} of ${count} arrived before the timeout.`));
@@ -53,7 +60,12 @@ export async function follow(ctx: Ctx, topics: Topic[], ready: string, handle: (
   void ctx.rpc.lost.then(fail);
   try {
     await ctx.rpc.call('events.subscribe', { topics });
-    await prime?.();
+    if (prime) {
+      await prime();
+      const frames = held ?? [];
+      held = undefined;
+      for (const [event, data] of frames) dispatch(event, data);
+    }
     ctx.out.note(ready);
     if (ctx.signal.aborted) onAbort();
     await done;

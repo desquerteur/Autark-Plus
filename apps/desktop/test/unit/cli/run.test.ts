@@ -199,6 +199,23 @@ test('watch: prints new final messages and status lines once, skips streaming an
   assert.equal(timed.code, 0, 'a watch without --count simply ends at the timeout');
 });
 
+test('watch: a frame pushed while the recent messages load waits for them, so an ended message stays quiet', async (t) => {
+  const topic = `chat:${launch.id}`;
+  const old = message({ id: 'msg_old', seq: 3, conversationId: launch.id, authorId: manager.id, authorKind: 'agent', body: 'Old answer' });
+  const runtime = await fakeRuntime({
+    'messages.list': (_params, fake) => {
+      // The update frame goes out before the list answer: the race the held frames close.
+      fake.push('message.updated', old, topic);
+      setTimeout(() => fake.push('message.created', message({ id: 'msg_new', seq: 9, conversationId: launch.id, authorId: manager.id, authorKind: 'agent', body: 'New answer' }), topic), 20);
+      return [old];
+    },
+  });
+  t.after(() => runtime.stop());
+  const result = await wf(['watch', 'Launch', '--count', '1'], { runtime });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(result.out, '14:02  Manager: New answer\n');
+});
+
 test('watch: the runtime stopping ends it with 5', async (t) => {
   const runtime = await fakeRuntime({
     'events.subscribe': (_params, fake) => { setTimeout(() => fake.closeAll(1001), 20); return { ok: true }; },
