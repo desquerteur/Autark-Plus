@@ -99,7 +99,7 @@ test('pages: a file in <data>/pages is a tab that reaches the app', { timeout: 4
 
   // ---- a new file shows up on an open "+" page, without a reload, below the fixed rows
   await newTab();
-  await row('Screen').waitFor();
+  await row('Notes').waitFor();
   assert.equal(await row('board').count(), 0);
   await writeFile(path.join(pages, 'board.html'), BOARD('First', api));
   await row('board').waitFor({ timeout: 10_000 });
@@ -169,11 +169,13 @@ await wf.ready; line.textContent = 'tock ' + (await wf.rpc('system.info')).versi
   await frame().locator('#list li', { hasText: 'Added later' }).waitFor({ timeout: 10_000 });
   await shot('04b-skill-example');
 
-  // ---- the task that waits, as the person sees it
+  // ---- the task that waits, as the person sees it: their own to-dos live on My day, not Work (work-model.ts onWork),
+  // and one that waits on another task shows only once it is open
   await newTab();
-  await row('Work').click();
-  await page.locator('.workspace-pane', { hasText: 'Build the page' }).waitFor({ timeout: 15_000 });
-  await shot('04c-work-waiting');
+  await row('My day').click();
+  await page.locator('.workspace-pane .pane-view', { hasText: 'Write the copy' }).waitFor({ timeout: 15_000 });
+  assert.equal(await page.locator('.workspace-pane .pane-view', { hasText: 'Build the page' }).count(), 0, 'a to-do that waits on another task is not on My day yet');
+  await shot('04c-day-waiting');
 
   // ---- wf.open opens a website tab beside the page
   await strip().locator('.browser-strip-tab', { hasText: 'example' }).click();

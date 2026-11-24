@@ -264,7 +264,16 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
     await strip().getByRole('button', { name: 'New tab', exact: true }).click();
     await page.locator('.new-tab-row', { hasText: name }).first().click();
   };
-  await panel('Activity');
+  // B-078 took Activity and Screen off the "+" page; a tab of either kind still opens – here through side-tabs.json.
+  const kept = async (kind) => {
+    await until('layout in the file', async () => Boolean((await file('side-tabs.json').catch(() => null))?.spaces?.global));
+    const tabs = await file('side-tabs.json');
+    tabs.spaces.global.tabs.push({ id: kind, panel: kind });
+    tabs.spaces.global.shown = kind;
+    await writeFile(path.join(profile, 'side-tabs.json'), `${JSON.stringify(tabs, null, 1)}
+`);
+  };
+  await kept('activity');
   await page.locator('.pane-activity .activity-row').first().waitFor();
   assert.equal(await shownTitle(), 'Activity');
   assert.ok(await page.locator('.activity-row', { hasText: manager.name }).count(), 'the agents are listed');
@@ -272,7 +281,7 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
   await page.emulateMedia({ colorScheme: 'dark' }); await shot('10-activity-dark'); await page.emulateMedia({ colorScheme: 'light' });
 
   // ---- Mark a region on the Screen tab (the picture is this PC's screen: no screenshot of it is kept)
-  await panel('Screen');
+  await kept('screen');
   await page.locator('.pane-screen').waitFor();
   await bar().getByRole('button', { name: 'Browser menu' }).click();
   await page.getByRole('menuitem', { name: 'Mark a region' }).click();

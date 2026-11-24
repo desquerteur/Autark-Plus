@@ -81,7 +81,7 @@ tab. Editing it reloads the open tab; deleting it removes it. It runs in a frame
 <h3>Open tasks</h3><ul id="list"></ul>
 <script>
   async function draw() {
-    const tasks = await wf.rpc('tasks.list', { status: ['open', 'working'] });
+    const tasks = await wf.rpc('tasks.list', { status: ['open'] });
     list.replaceChildren(...tasks.map((task) => Object.assign(document.createElement('li'), { textContent: task.title })));
   }
   wf.ready.then(draw);
