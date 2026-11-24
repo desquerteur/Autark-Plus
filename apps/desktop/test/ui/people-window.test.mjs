@@ -201,6 +201,8 @@ test('Team › People: add, invite, join, chat member, task owner, and the perso
   // B-044 visual pass: what she may do lives in her Edit dialog – her row shows no line of permission words
   const scopesOf = async () => (await rpc.call('people.list')).find((person) => person.id === anna.id).scopes;
   assert.doesNotMatch((await row.textContent()) ?? '', /spaces|Starts chats|tasks for agents/, 'no permission jargon on the row');
+  assert.deepEqual(await scopesOf(), { spaces: 'all', startChats: true, assignAgents: true }); // a new person works with your agents by default (upstream b0dd8c0)
+  await rights((edit) => edit.getByRole('checkbox', { name: 'Works with your agents' }).uncheck());
   assert.deepEqual(await scopesOf(), { spaces: [], startChats: true, assignAgents: true }); // whose agents she works with – not "No agents" (agents may report to her)
   await rights((edit) => edit.getByRole('checkbox', { name: 'Works with your agents' }).check());
   assert.deepEqual(await scopesOf(), { spaces: 'all', startChats: true, assignAgents: true });

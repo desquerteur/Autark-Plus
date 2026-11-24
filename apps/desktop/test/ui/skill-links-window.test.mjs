@@ -126,7 +126,7 @@ test('Settings › Skills: Add from link – link, preview with two skills, scri
   await size(1280, 820);
   await page.waitForTimeout(600);
   await reopen();
-  await dialog.getByRole('button', { name: 'Back' }).click();
+  await dialog.getByRole('button', { name: 'Back', exact: true }).click(); // the frame's Feedback button also matches "Back" loosely
   await dialog.locator('#skill-link-url').waitFor({ timeout: 5_000 });
 
   t.diagnostic(`screenshots: ${shots}`);

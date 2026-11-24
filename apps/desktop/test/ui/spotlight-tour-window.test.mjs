@@ -194,8 +194,8 @@ test('spotlight tour: every main part once, missing targets skipped, saved, resu
     if (step.id === 'composer') break;
     await dialog.locator('.spotlight-next').click();
   }
-  assert.deepEqual(seen, ['welcome', 'rail', 'composer'], 'sidebar and chat list skipped silently');
-  assert.equal((await current()).progress.split(' / ')[0], '3', 'the progress counts only what is shown');
+  assert.deepEqual(seen, ['welcome', 'rail', 'projects', 'composer'], 'sidebar and chat list skipped silently; the Projects step (AF-018) points at the rail, which stays');
+  assert.equal((await current()).progress.split(' / ')[0], '4', 'the progress counts only what is shown');
   await shot('spotlight-missing-skipped');
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 10_000 });

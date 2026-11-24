@@ -72,7 +72,7 @@ test('settings: providers as a file, free model names, protocols', { timeout: 30
   assert.deepEqual([mine.provider, mine.label, mine.baseUrl], ['compatible', 'My server', 'https://llm.example.test/v1']);
 
   await page.evaluate(() => { location.hash = '#/settings/models'; });
-  const rows = page.locator('#settings-uses .use-row');
+  const rows = page.locator('#settings-uses .use-row:not(.fallback-row)'); // AF-023 "If used up" rows share .use-row
   await rows.first().waitFor({ timeout: 20_000 });
   await page.waitForFunction(() => document.querySelectorAll('#settings-uses .use-dot').length > 0 && document.querySelectorAll('#settings-uses .use-dot.pending').length === 0, undefined, { timeout: 60_000 });
   await page.getByText('My server', { exact: true }).first().waitFor({ timeout: 15_000 });
