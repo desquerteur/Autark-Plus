@@ -262,6 +262,17 @@ test('Chrome features: history, reopen, keys, zoom, mute, DevTools, Mark a regio
   // ---- the panels: Activity
   const panel = async (name) => {
     await strip().getByRole('button', { name: 'New tab', exact: true }).click();
+    if (name === 'Activity' || name === 'Screen') {
+      // B-078 removed these chooser entries; persisted legacy tabs still work.
+      assert.equal(await page.locator('.new-tab-row', { hasText: name }).count(), 0);
+      const state = await file('side-tabs.json');
+      const id = `legacy-${name.toLowerCase()}`;
+      state.spaces.global.tabs.push({ id, panel: name.toLowerCase() });
+      state.spaces.global.shown = id;
+      await writeFile(path.join(profile, 'side-tabs.json'), `${JSON.stringify(state, null, 1)}\n`);
+      await waitShown(name);
+      return;
+    }
     await page.locator('.new-tab-row', { hasText: name }).first().click();
   };
   // B-078 took Activity and Screen off the "+" page; a tab of either kind still opens – here through side-tabs.json.

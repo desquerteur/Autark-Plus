@@ -18,7 +18,7 @@
     "typecheck": "tsc -p tsconfig.shared.json && tsc -p tsconfig.runtime.json && tsc -p tsconfig.main.json && tsc -p tsconfig.ui.json",
     "boundaries": "node scripts/check-boundaries.mjs",
     "test": "node --test --test-concurrency=2 \"test/unit/**/*.test.ts\"",
-    "test:ui": "node scripts/build.mjs && node --test --test-concurrency=1 \"test/ui/**/*.test.mjs\"",
+    "test:ui": "node scripts/build.mjs && node --import ./test/ui/lib/scale-one.mjs --test --test-concurrency=1 \"test/ui/**/*.test.mjs\"",
     "test:e2e": "node --test --test-concurrency=1 \"test/e2e/**/*.test.mjs\"",
     "test:live": "node --test --test-concurrency=1 \"test/live/*.test.ts\"",
     "check": "npm run typecheck && npm run boundaries && npm test",

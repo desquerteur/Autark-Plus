@@ -273,6 +273,9 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
 
   // ---- Ctrl+L on another app tab stays a new tab (the global pane)
   const pane = page.locator('.global-pane');
+  // Deleting the chat and leaving its area can close the workspace surface.
+  // Open it explicitly before checking the global pane's keyboard behavior.
+  if (!(await pane.isVisible())) await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
   await pane.locator('.browser-strip-tab').first().waitFor();
   await pane.locator('.browser-strip').getByRole('button', { name: 'New tab', exact: true }).click();
   await pane.locator('.new-tab .new-tab-row', { hasText: 'Work' }).first().click();
