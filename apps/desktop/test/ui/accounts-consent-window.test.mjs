@@ -267,7 +267,7 @@ test('Settings › Models: a found plan login is offered (Use / Not here); On/Of
   assert.equal(await codex.locator('.account-limit').count(), 0, 'no bars before a first reading – an empty bar would read as used up');
   assert.equal((await codex.locator('.account-limit-pending').textContent())?.trim(), 'Limits show once they have been read.');
   assert.equal(await claude.locator('.account-limit').count(), 2, 'a plan with a reading keeps both bars');
-  assert.match((await claude.locator('.account-hint').textContent()) ?? '', /^Max plan/, 'the plan tier as the person knows it');
+  assert.match((await claude.locator('.account-hint').textContent()) ?? '', /^Max subscription/, 'the plan tier as the person knows it (AF-009 kindText)');
   await shot('08-used-1280-light');
 
   // ---- Remove: visible button, the confirm names the company's other PCs
