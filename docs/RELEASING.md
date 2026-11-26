@@ -36,8 +36,8 @@ commits. A plain `git tag vX.Y.Z` / `git push <remote> vX.Y.Z` can therefore pub
 - Tag locally as `autark-plus/vX.Y.Z` and push it explicitly as `refs/tags/vX.Y.Z` (command above). Never push a tag by
   its bare name from this clone, and never `git push --tags`.
 - Fetch upstream without tags: `git config remote.upstream.tagOpt --no-tags` (set once per clone).
-- Before publishing, check the remote tag: `git ls-remote https://github.com/desquerteur/Autark-Plus.git refs/tags/vX.Y.Z`
-  must show the release commit.
+- Before publishing, check the remote tag: `git ls-remote https://github.com/desquerteur/Autark-Plus.git 'refs/tags/vX.Y.Z*'`
+  must show the release commit (use the peeled `^{}` entry for an annotated tag).
 - Desktop tags are `vX.Y.Z`; `android-vX.Y.Z` tags on Autark-Plus are older APK-only releases.
 
 ## CI

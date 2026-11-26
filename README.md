@@ -296,7 +296,7 @@ curl -fsSL https://raw.githubusercontent.com/desquerteur/Autark-Plus/main/script
 ```
 
 The installer verifies the release checksum, starts Autark as its own unprivileged user, and prints a pairing link/code.
-The script runs as root: review it first if required by your server policy. See [server setup and removal](docs/headless-linux.md).
+The script runs as root: review it first if required by your server policy. See [server setup and removal](docs/headless-linux.md) and the [v0.4.0 runtime checks and limits](docs/releases/v0.4.0-runtime-tests.md). Debian/Ubuntu x64 systemd-container checks pass; native ARM64, a real Proxmox host and real Mac launch remain unverified.
 
 ### Desktop and Android
 
@@ -469,7 +469,6 @@ details in [services/remote-relay/README.md](services/remote-relay/README.md).
 | `apps/android/` | The Android app, a thin client that shows the PC's phone interface through the encrypted device link |
 | `apps/website/` | The product website, a dependency-free static site generator |
 | `services/remote-relay/` | The meeting server for devices in different networks |
-| `services/library/` | The public library service behind `library.openautark.com`: a Cloudflare Worker with a D1 database ([its README](services/library/README.md)) |
 | `services/feedback/` | A discontinued feedback-receiver prototype, kept for reference only; the app does not use it ([its README](services/feedback/README.md)) |
 | `scripts/desktop-release/` | Release-environment scripts for Linux and macOS builds |
 | `library/` | The public library of skills and notes Autark's agents share ([library/README.md](library/README.md)) |
