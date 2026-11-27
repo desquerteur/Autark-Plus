@@ -7,6 +7,7 @@
 
 import { WorkforceError } from '../../../shared/errors.ts';
 import { HUMAN_ID } from '../../../shared/ids.ts';
+import { MAX_SYSTEM_MD } from '../../../shared/model/agent-core.ts';
 import type { Agent } from '../../../shared/model/org.ts';
 import { PERSONALITY_FIELDS, personalityProblem, type AgentPersonality } from '../../../shared/model/personality.ts';
 import '../../../shared/api/methods-personality.ts'; // the method shapes (module augmentation)
@@ -22,7 +23,7 @@ import type { HandlerTable } from '../table.ts';
 const CHAT = { capability: 'chat' } as const;
 const MANAGE = { capability: 'manage' } as const;
 /** SYSTEM.md's cap (org/patch.ts). */
-const SYSTEM_MAX = 20_000;
+const SYSTEM_MAX = MAX_SYSTEM_MD;
 
 // Since the 0.3.16 merge the team's standard is the "# How I work" part on top of SYSTEM.md (org/system-parts.ts): the
 // Personality page edits only the part from the role heading on and keeps that top part as it is.

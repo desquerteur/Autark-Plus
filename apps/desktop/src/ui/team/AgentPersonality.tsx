@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import '../../shared/api/methods-personality.ts'; // personality.* (module augmentation)
 import type { AgentPersonalityInfo } from '../../shared/api/methods-personality.ts';
+import { MAX_SYSTEM_MD } from '../../shared/model/agent-core.ts';
 import type { Agent } from '../../shared/model/org.ts';
 import {
   applyPresetToAgent, globalPersonality, matchingPreset, PERSONALITY_INSTRUCTIONS_MAX, type AgentPersonality, type PersonalityField,
@@ -56,7 +57,7 @@ function RoleEditor(props: { agent: Agent; info: AgentPersonalityInfo; readOnly:
       <p class="agent-section-hint">{info.standard
         ? 'Its own part of SYSTEM.md, from “## My role” on. The team’s standard “How I work” above it stays as it is.'
         : 'Its whole SYSTEM.md (it has no team standard above its role).'} Applies at its next answer.</p>
-      <textarea class="set-textarea mono agent-role-input" aria-label={`${agent.name}'s role`} rows={10} maxLength={20_000} value={draft} disabled={props.readOnly}
+      <textarea class="set-textarea mono agent-role-input" aria-label={`${agent.name}'s role`} rows={10} maxLength={MAX_SYSTEM_MD} value={draft} disabled={props.readOnly}
         onInput={(event) => setDraft((event.currentTarget as HTMLTextAreaElement).value)} />
       {!props.readOnly && (
         <div class="agent-editor-actions">

@@ -26,11 +26,27 @@ import { PERSONALITY_FILE, readAgentPersonality } from '../../../src/runtime/per
 import { agentFolder } from '../../../src/runtime/agent-core/layout.ts';
 import type { AgentPersonalityInfo } from '../../../src/shared/api/methods-personality.ts';
 import type { Agent } from '../../../src/shared/model/org.ts';
+import { MAX_SYSTEM_MD } from '../../../src/shared/model/agent-core.ts';
 import {
   applyPreset, applyPresetToAgent, DEFAULT_PERSONALITY, effectivePersonality, matchingPreset, PERSONALITY_PRESETS,
 } from '../../../src/shared/model/personality.ts';
 
 const HEAD = '## My personality';
+
+test('role editor accepts a SYSTEM.md above the old 20k cap and keeps the shared size limit', async (t) => {
+  const f = setup(t);
+  const instructions = `# How I work\n${'Standard. '.repeat(2200)}\n\n## My role\nEditor.`;
+  f.org.agents.set(f.vid.id, { ...f.vid, instructions });
+  const role = `## My role\n${'Role. '.repeat(3500)}`;
+  const agent = await f.client.call<Agent>('personality.setRole', { agentId: f.vid.id, role, base: instructions });
+  assert.ok(agent.instructions.startsWith('# How I work\nStandard. '));
+  assert.ok(agent.instructions.endsWith(role.trim()));
+  for (const field of ['role', 'base']) {
+    await assert.rejects(f.client.call('personality.setRole', {
+      agentId: f.vid.id, role: '## My role\nEditor.', [field]: 'x'.repeat(MAX_SYSTEM_MD + 1),
+    }), (error: { code?: string }) => error.code === 'bad_request');
+  }
+});
 const STANDARD = '# How I work\nThis company is my own work.\n\n## My role\nVideo editor: short cuts, fast pace.\n\n## What I have here\n- This PC is my workplace.';
 
 function setup(t: TestContext) {
