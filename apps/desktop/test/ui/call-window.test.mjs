@@ -77,7 +77,8 @@ test('call cell: two voice conversations, the focused chat listens, End per chat
   const page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => { if (message.type() === 'error' && !/Autofill|DevTools|Electron Security Warning/i.test(message.text())) errors.push(message.text()); });
+  // B-082: a fresh profile has no turn models yet – the page asks app://app/turn/ for them, gets 404 and keeps its level fallback (lib/turn-models.ts)
+  page.on('console', (message) => { if (message.type() === 'error' && !/Autofill|DevTools|Electron Security Warning/i.test(message.text()) && !(message.location()?.url ?? '').startsWith('app://app/turn/')) errors.push(`${message.text()}${message.location()?.url ? ` (${message.location().url})` : ''}`); });
   await page.waitForSelector('.shell', { timeout: 60_000 });
   const size = (width, height) => app.evaluate(({ BrowserWindow }, [w, h]) => { const [win] = BrowserWindow.getAllWindows(); win.setMinimumSize(320, 480); win.setSize(w, h); }, [width, height]);
   await size(1280, 820);
