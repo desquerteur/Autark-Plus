@@ -1,6 +1,6 @@
 // Owns: the Electron check of AF-003 ("feedback does not work, nothing in the log") against a local fake of the team's
 // mailbox (WORKFORCE_FEEDBACK_RECEIVER, unpackaged only): from the header's feedback cell a Bug and an Idea are sent,
-// each confirmed with "Sent to the team." and "Report no. …" (the receipt the mailbox holds), both arrive with their
+// each confirmed by the toast "Feedback sent · No. …" (the receipt the mailbox holds; the overlay closes at once), both arrive with their
 // kind, Settings › Feedback lists both as sent with their number; then the mailbox goes away (server not reachable)
 // and Send says "Not sent." with the reason as an alert and offers "Send again"; runtime.log has a line for every
 // save, delivery and the failure (with its reason), never the report text.
@@ -50,20 +50,24 @@ test('AF-003: a Bug and an Idea reach the local mailbox and read as sent with th
   assert.deepEqual(await rpc.call('feedback.status'), { sending: true, receiving: false }, 'the app sends to the local fake mailbox');
   const shot = (name) => page.screenshot({ path: path.join(shots, `${name}.png`) });
   const cell = page.locator('.frame-feedback-cell').getByRole('button', { name: 'Feedback', exact: true });
-  const menu = page.locator('.popover.feedback-menu');
+  // 0.3.16 UI: the feedback form is an overlay with a dock; a confirmed send closes it and says so in a toast.
+  const menu = page.locator('dialog.feedback-overlay[open]');
+  const dock = menu.locator('.feedback-dock');
+  const toast = page.locator('.status-note[data-notice^="toast-"]', { hasText: /^Feedback sent/ });
 
-  /** Opens the menu, picks the kind, writes the text, presses Send; returns the menu after the result line appeared. */
-  const send = async (kind, text) => {
+  /** Opens the overlay, picks the kind, writes the text, presses Send; a confirmed send closes the overlay, any other keeps its result line. */
+  const send = async (kind, text, { sent = true } = {}) => {
     await cell.click();
-    await menu.waitFor();
-    const group = menu.getByRole('radiogroup', { name: 'Kind of feedback' });
+    await dock.waitFor();
+    const group = dock.getByRole('radiogroup', { name: 'Kind of feedback' });
     await group.getByRole('radio', { name: kind, exact: true }).click();
     assert.equal(await group.getByRole('radio', { name: kind, exact: true }).getAttribute('aria-checked'), 'true');
-    await menu.getByRole('textbox', { name: 'Your feedback' }).fill(text);
-    await menu.locator('.feedback-thumb img').waitFor(); // the window shot is part of the report
+    await dock.getByRole('textbox', { name: 'Your feedback' }).fill(text);
+    await menu.locator('.feedback-stage img').waitFor(); // the window shot is part of the report
     await shot(`af003-form-${kind.toLowerCase()}`);
-    await menu.getByRole('button', { name: 'Send', exact: true }).click();
-    await menu.locator('.feedback-done').waitFor();
+    await dock.getByRole('button', { name: 'Send', exact: true }).click();
+    if (sent) await menu.waitFor({ state: 'detached', timeout: 15_000 });
+    else await menu.locator('.feedback-done').waitFor();
   };
   const reportOf = async (text) => (await rpc.call('feedback.list')).find((report) => report.text === text);
 
@@ -71,18 +75,16 @@ test('AF-003: a Bug and an Idea reach the local mailbox and read as sent with th
   const sentNumbers = [];
   for (const [kind, text] of [['Bug', 'AF-003: the sidebar flickers when I resize'], ['Idea', 'AF-003: please add a compact list view']]) {
     await send(kind, text);
-    await menu.locator('.feedback-done.ok', { hasText: 'Sent to the team.' }).waitFor();
     const report = await reportOf(text);
     assert.equal(report.status, 'sent');
     assert.equal(report.kind, kind.toLowerCase());
     const number = report.receiptId.replace(/-/g, '').slice(0, 8).toUpperCase();
-    assert.equal((await menu.locator('.feedback-receipt-number').textContent()).trim(), `Report no. ${number}`);
-    assert.equal(await menu.getByRole('button', { name: 'Copy the report number' }).count(), 1);
-    assert.equal(await menu.locator('.feedback-message').textContent(), '', 'no error');
+    const line = toast.filter({ hasText: `Feedback sent · No. ${number}` });
+    await line.waitFor({ timeout: 5_000 });
+    assert.equal(await line.getByRole('button', { name: 'Copy', exact: true }).count(), 1, 'the number can be copied');
     sentNumbers.push([kind.toLowerCase(), number, report.receiptId]);
     await shot(`af003-sent-${kind.toLowerCase()}`);
-    await page.keyboard.press('Escape');
-    await menu.waitFor({ state: 'detached', timeout: 5_000 });
+    await toast.first().waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
   }
 
   // 2. Both arrived at the local mailbox, with their kind, text, screenshot and the same id the sender shows.
@@ -99,14 +101,14 @@ test('AF-003: a Bug and an Idea reach the local mailbox and read as sent with th
   }
   await shot('af003-settings-sent');
 
-  // 4. The server goes away: Send says "Not sent." and why, keeps the report and offers "Send again".
+  // 4. The server goes away: Send says "Not sent." and that it goes by itself later, keeps the report and offers "Send again".
   await delivery.close(); mailboxOpen = false;
-  await send('Bug', 'AF-003: sent while the server is down');
-  await menu.locator('.feedback-done.failed', { hasText: 'Not sent. Your report is saved on this PC.' }).waitFor();
+  await send('Bug', 'AF-003: sent while the server is down', { sent: false });
+  await menu.locator('.feedback-done', { hasText: 'Not sent. Your report is saved on this PC.' }).waitFor();
   const alert = menu.getByRole('alert');
-  await alert.filter({ hasText: 'the feedback server is not reachable' }).waitFor();
+  await alert.filter({ hasText: 'Not sent yet – it goes by itself when the connection is back.' }).waitFor(); // notSentLine for 'offline'
   assert.equal(await menu.getByRole('button', { name: 'Send again', exact: true }).count(), 1);
-  assert.equal(await menu.locator('.feedback-receipt').count(), 0, 'no number without delivery');
+  assert.equal(await menu.getByText(/No\. [0-9A-F]{8}/).count(), 0, 'no number without delivery');
   assert.equal((await reportOf('AF-003: sent while the server is down')).status, 'local', 'kept on this PC');
   await shot('af003-offline-light');
   await page.emulateMedia({ colorScheme: 'dark' }); await shot('af003-offline-dark'); await page.emulateMedia({ colorScheme: 'light' });
@@ -114,7 +116,7 @@ test('AF-003: a Bug and an Idea reach the local mailbox and read as sent with th
   // 5. The runtime log has every step – and no report text.
   const log = (await readFile(path.join(profile, 'logs', 'runtime.log'), 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const named = (msg) => log.filter((entry) => entry.msg === msg);
-  assert.equal(named('feedback sending is set up').length, 1, 'the start says it can send');
+  assert.equal(named('feedback sending set up').length, 1, 'the start says it can send');
   assert.equal(named('feedback saved').length, 3);
   assert.deepEqual(named('feedback sent').map((entry) => entry.data?.receipt).sort(), sentNumbers.map(([, , receipt]) => receipt).sort());
   const failed = named('feedback send failed');
