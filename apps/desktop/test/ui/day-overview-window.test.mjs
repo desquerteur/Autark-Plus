@@ -275,7 +275,7 @@ test('the leftovers: models cells, skill title, settings.json in the tab, Ctrl+L
   const pane = page.locator('.global-pane');
   // Deleting the chat and leaving its area can close the workspace surface.
   // Open it explicitly before checking the global pane's keyboard behavior.
-  if (!(await pane.isVisible())) await page.locator('.frame-workspace-cell[data-cell="browser"] button').click();
+  if (!(await pane.isVisible())) await page.locator('.frame-workspace-cell[data-cell="workspace"] button').click(); // outside a chat the cell is the global pane's (WindowBar.tsx WorkspaceCell)
   await pane.locator('.browser-strip-tab').first().waitFor();
   await pane.locator('.browser-strip').getByRole('button', { name: 'New tab', exact: true }).click();
   await pane.locator('.new-tab .new-tab-row', { hasText: 'Work' }).first().click();
