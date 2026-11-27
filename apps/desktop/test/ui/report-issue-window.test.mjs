@@ -1,4 +1,4 @@
-// Owns: the Electron check of Autark-Plus "Report issue": after Save the feedback menu shows the GitHub issue exactly
+// Owns: the Electron check of Autark-Plus "Report issue": after Save the feedback overlay's dock shows the GitHub issue exactly
 // as it would go out (title, labels from-app + bug, the body with version and OS, no chat id or e-mail), the two ticks
 // add the page and the log excerpt only when ticked, and without a connected GitHub app "Open on GitHub" opens the
 // prefilled github.com new-issue page. Settings › Feedback › Review offers the same preview. Light, dark and phone width.
@@ -20,6 +20,7 @@ test('Report issue: preview after Save, ticks, and the prefilled GitHub page wit
   const shots = process.env.SCREENSHOTS ? path.resolve(process.env.SCREENSHOTS) : path.join(profile, 'shots');
   await mkdir(shots, { recursive: true });
   const env = { ...process.env, WORKFORCE_TEST_DATA: profile, WORKFORCE_FAKE_ENGINE: '1', ELECTRON_ENABLE_LOGGING: '0' };
+  env.WORKFORCE_FEEDBACK_RECEIVER = path.join(profile, 'no-receiver.json'); // the build ships resources/feedback/receiver.json; without one the dock offers Save and nothing leaves the PC
   const app = await electron.launch({ executablePath: electronPath, args: [root], cwd: root, timeout: 60_000, env });
   let rpc;
   t.after(async () => {
@@ -47,7 +48,9 @@ test('Report issue: preview after Save, ticks, and the prefilled GitHub page wit
   const cell = page.locator('.frame-feedback-cell').getByRole('button', { name: 'Feedback', exact: true });
   await cell.waitFor({ timeout: 15_000 });
   await cell.click();
-  const menu = page.locator('.popover.feedback-menu');
+  // 0.3.16 UI: the feedback form is the dock at the bottom of a snapshot overlay; the issue offer sits under its result line.
+  const menu = page.locator('dialog.feedback-overlay[open]');
+  await menu.locator('.feedback-dock').waitFor({ timeout: 15_000 });
   await menu.getByRole('textbox', { name: 'Your feedback' }).fill('Schedules list stays empty after a restart\nmail me at max@example.de');
   await menu.getByRole('button', { name: 'Save', exact: true }).click();
   const issue = menu.locator('.feedback-issue');
