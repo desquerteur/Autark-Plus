@@ -58,9 +58,9 @@ binary was built from the source tag you are reading.
 ## Feature matrix
 
 One place for everything: what comes from the original Autark, what Autark-Plus adds, and what is still missing or planned on either side.
-As of **21 November 2026** (release **0.3.11**, `main` at `fda74c1`).
+As of **27 November 2026** (release **0.4.0**, `main` at `97e3396`).
 
-**Status:** ✅ **Done** – in the released 0.3.11 · ✅ **Done on main** – merged, ships with the next release ·
+**Status:** ✅ **Done** – in the released 0.4.0 · ✅ **Done on main** – merged, ships with the next release ·
 🔄 **In progress** – being built or merged · 🗓️ **Planned** – has an issue, not started · ⏭️ **Not taken** – on purpose, reason given
 
 **Upstream:** Autark-Plus extras and fixes that fit the original are proposed to it as issues on [teydra/OpenAutark](https://github.com/teydra/OpenAutark/issues) (#7–#29, filed 21 November 2026); the *Upstream* column links the issue or says why a row was not proposed.
@@ -96,65 +96,67 @@ Everything here is on top of the original; where the original already had a thin
 | **Agent from a folder** | Pick, drag in or right-click a folder; the agent reads `CLAUDE.md` / `AGENTS.md` and the project's skills | ✅ Done | [82d540f](https://github.com/desquerteur/Autark-Plus/commit/82d540f) | - | [#9](https://github.com/teydra/OpenAutark/issues/9) |
 | **Agent directory** | Every agent in one place, grouped by project, team or status | ✅ Done | [f310ffc](https://github.com/desquerteur/Autark-Plus/commit/f310ffc) | - | [#10](https://github.com/teydra/OpenAutark/issues/10) |
 | **Accounts and fallback** | Several accounts per provider; account choice per chat and per agent; "If used up" order; effort slider ([page](docs/ACCOUNTS_AND_GEMINI.md)) | ✅ Done | [c2419fc](https://github.com/desquerteur/Autark-Plus/commit/c2419fc), [6635a01](https://github.com/desquerteur/Autark-Plus/commit/6635a01) (65 tests) | Merge with upstream's declining-model skip: [#35](https://github.com/desquerteur/Autark-Plus/issues/35) | [#11](https://github.com/teydra/OpenAutark/issues/11) |
-| **Google Gemini accounts** | Sign in with Google (Gemini CLI installed for you) or an API key; several accounts; quota-aware | ✅ Done; sign-in hang fixed on main | [509b0e6](https://github.com/desquerteur/Autark-Plus/commit/509b0e6), fix [3fa2dca](https://github.com/desquerteur/Autark-Plus/commit/3fa2dca) ([#24](https://github.com/desquerteur/Autark-Plus/issues/24)) | In 0.3.11 the sign-in can still hang; the fix ships with the next release | [#12](https://github.com/teydra/OpenAutark/issues/12) |
-| **Grok accounts** | Grok Build plan (SuperGrok / X Premium+) on the ACP engine; current xAI models | ✅ Done on main | [03322f3](https://github.com/desquerteur/Autark-Plus/commit/03322f3) ([#28](https://github.com/desquerteur/Autark-Plus/issues/28)) | - | [#13](https://github.com/teydra/OpenAutark/issues/13) |
-| **Plan limit bars** | No empty "5-hour limit" bar for plans that report only a weekly window | ✅ Done on main | [b560c13](https://github.com/desquerteur/Autark-Plus/commit/b560c13) ([#25](https://github.com/desquerteur/Autark-Plus/issues/25)) | - | [#28](https://github.com/teydra/OpenAutark/issues/28) (bug fix) |
+| **Google Gemini accounts** | Sign in with Google (Gemini CLI installed for you) or an API key; several accounts; quota-aware | ✅ Done (sign-in hang fixed in 0.4.0) | [509b0e6](https://github.com/desquerteur/Autark-Plus/commit/509b0e6), fix [3fa2dca](https://github.com/desquerteur/Autark-Plus/commit/3fa2dca) ([#24](https://github.com/desquerteur/Autark-Plus/issues/24)) | - | [#12](https://github.com/teydra/OpenAutark/issues/12) |
+| **Grok accounts** | Grok Build plan (SuperGrok / X Premium+) on the ACP engine; current xAI models | ✅ Done | [03322f3](https://github.com/desquerteur/Autark-Plus/commit/03322f3) ([#28](https://github.com/desquerteur/Autark-Plus/issues/28)) | - | [#13](https://github.com/teydra/OpenAutark/issues/13) |
+| **Plan limit bars** | No empty "5-hour limit" bar for plans that report only a weekly window | ✅ Done | [b560c13](https://github.com/desquerteur/Autark-Plus/commit/b560c13) ([#25](https://github.com/desquerteur/Autark-Plus/issues/25)) | - | [#28](https://github.com/teydra/OpenAutark/issues/28) (bug fix) |
 | **Access modes** | Read only, ask first, automatic in the project folder, full access; per agent and per chat; rules and approval requests | ✅ Done | [646cc7e](https://github.com/desquerteur/Autark-Plus/commit/646cc7e) | - | [#14](https://github.com/teydra/OpenAutark/issues/14) |
 | **Personality** | Tone, address, language, emoji, length, free text; global and per agent; presets | ✅ Done | [f4301fe](https://github.com/desquerteur/Autark-Plus/commit/f4301fe) | - | [#15](https://github.com/teydra/OpenAutark/issues/15) |
 | **Appearance and layout** | Own themes with live preview; layout by drag and drop; chat tabs dockable on every side; reset to default | ✅ Done | [abee4cb](https://github.com/desquerteur/Autark-Plus/commit/abee4cb), [af54b20](https://github.com/desquerteur/Autark-Plus/commit/af54b20) | Window test `chat-dock` fails here ([#27](https://github.com/desquerteur/Autark-Plus/issues/27)) | [#16](https://github.com/teydra/OpenAutark/issues/16) |
-| **App-wide scale** | Text and UI size 80–150 %, separate for PC and phone, Ctrl +/−/0 | ✅ Done on main | [00d7e10](https://github.com/desquerteur/Autark-Plus/commit/00d7e10) ([#30](https://github.com/desquerteur/Autark-Plus/issues/30)) | - | [#17](https://github.com/teydra/OpenAutark/issues/17) |
+| **App-wide scale** | Text and UI size 80–150 %, separate for PC and phone, Ctrl +/−/0 | ✅ Done | [00d7e10](https://github.com/desquerteur/Autark-Plus/commit/00d7e10) ([#30](https://github.com/desquerteur/Autark-Plus/issues/30)) | - | [#17](https://github.com/teydra/OpenAutark/issues/17) |
 | **One browser button** | One globe in the title row: the chat's tabs inside a chat, the global pane elsewhere | ✅ Done | [e2c49b8](https://github.com/desquerteur/Autark-Plus/commit/e2c49b8) | - | [#18](https://github.com/teydra/OpenAutark/issues/18) |
-| **Connectors** | GitHub, Google, Notion, Slack, Discord, your own MCP server (stdio or HTTP), `mcpServers` JSON import; a closed local app shows as "not running" | ✅ Done (quiet Fusion status on main) | [087fa6a](https://github.com/desquerteur/Autark-Plus/commit/087fa6a), [bdd68b0](https://github.com/desquerteur/Autark-Plus/commit/bdd68b0) ([#26](https://github.com/desquerteur/Autark-Plus/issues/26)) | - | [#19](https://github.com/teydra/OpenAutark/issues/19), fix [#29](https://github.com/teydra/OpenAutark/issues/29) |
+| **Connectors** | GitHub, Google, Notion, Slack, Discord, your own MCP server (stdio or HTTP), `mcpServers` JSON import; a closed local app shows as "not running" | ✅ Done (quiet Fusion status since 0.4.0) | [087fa6a](https://github.com/desquerteur/Autark-Plus/commit/087fa6a), [bdd68b0](https://github.com/desquerteur/Autark-Plus/commit/bdd68b0) ([#26](https://github.com/desquerteur/Autark-Plus/issues/26)) | - | [#19](https://github.com/teydra/OpenAutark/issues/19), fix [#29](https://github.com/teydra/OpenAutark/issues/29) |
 | **Skills from links** | Install from a GitHub URL, a `SKILL.md` or a ZIP, with preview and later updates | ✅ Done | [bb66882](https://github.com/desquerteur/Autark-Plus/commit/bb66882), live test [764fc70](https://github.com/desquerteur/Autark-Plus/commit/764fc70) | - | [#20](https://github.com/teydra/OpenAutark/issues/20) |
 | **Composer** | Send turns into Stop while an agent works; per-chat prompt queue; dictate and send by itself | ✅ Done | [5cc53ca](https://github.com/desquerteur/Autark-Plus/commit/5cc53ca), [f149012](https://github.com/desquerteur/Autark-Plus/commit/f149012), [e0fe7a3](https://github.com/desquerteur/Autark-Plus/commit/e0fe7a3) | - | [#21](https://github.com/teydra/OpenAutark/issues/21) |
 | **Calls** | A call screen that looks like a call: status, duration, mute, hang-up, call card with transcript | ✅ Done | [7a4f141](https://github.com/desquerteur/Autark-Plus/commit/7a4f141) | Not tested with a real voice model | [#22](https://github.com/teydra/OpenAutark/issues/22) |
-| **Schedules tab** | Own sidebar and phone tab: list, form, plain-words rules, next runs, history, pause / run now / edit / delete; reminders for you | ✅ Done | [b478028](https://github.com/desquerteur/Autark-Plus/commit/b478028), [b700695](https://github.com/desquerteur/Autark-Plus/commit/b700695) ([#20](https://github.com/desquerteur/Autark-Plus/issues/20)) | Reminders in My day: [#34](https://github.com/desquerteur/Autark-Plus/issues/34) | [#23](https://github.com/teydra/OpenAutark/issues/23) |
+| **Schedules tab** | Own sidebar and phone tab: list, form, plain-words rules, next runs, history, pause / run now / edit / delete; reminders for you | ✅ Done | [b478028](https://github.com/desquerteur/Autark-Plus/commit/b478028), [b700695](https://github.com/desquerteur/Autark-Plus/commit/b700695) ([#20](https://github.com/desquerteur/Autark-Plus/issues/20)) | Reminders in My day: done on main ([6757333](https://github.com/desquerteur/Autark-Plus/commit/6757333), [#34](https://github.com/desquerteur/Autark-Plus/issues/34)) | [#23](https://github.com/teydra/OpenAutark/issues/23) |
 | **Onboarding** | Four-step setup and a 24-step spotlight tour | ✅ Done | [bdd8353](https://github.com/desquerteur/Autark-Plus/commit/bdd8353) | Window test `spotlight-tour` not confirmed green ([#27](https://github.com/desquerteur/Autark-Plus/issues/27)) | [#24](https://github.com/teydra/OpenAutark/issues/24) |
 | **Agents write as agents** | Chat tools always available; `wf` messages carry the agent's name; restarts capped; no inherited agent token in `shell.exec` | ✅ Done | [7c6be7c](https://github.com/desquerteur/Autark-Plus/commit/7c6be7c), [f4d8192](https://github.com/desquerteur/Autark-Plus/commit/f4d8192) ([#2](https://github.com/desquerteur/Autark-Plus/issues/2)) | - | [#25](https://github.com/teydra/OpenAutark/issues/25) |
-| **Report issue → GitHub** | A feedback report becomes an issue in this repository, with a duplicate check | ✅ Done; look-up fix on main | [a4df521](https://github.com/desquerteur/Autark-Plus/commit/a4df521), fix [c195b66](https://github.com/desquerteur/Autark-Plus/commit/c195b66) ([#29](https://github.com/desquerteur/Autark-Plus/issues/29)) | In 0.3.11 a title with an open bracket can fail; fixed on main | Not proposed: fork-only (upstream has its own feedback receiver) |
+| **Report issue → GitHub** | A feedback report becomes an issue in this repository, with a duplicate check | ✅ Done (look-up fix in 0.4.0) | [a4df521](https://github.com/desquerteur/Autark-Plus/commit/a4df521), fix [c195b66](https://github.com/desquerteur/Autark-Plus/commit/c195b66) ([#29](https://github.com/desquerteur/Autark-Plus/issues/29)) | - | Not proposed: fork-only (upstream has its own feedback receiver) |
 | **Feedback** | Sent, confirmed with a number, failures visible and logged | ✅ Done | [6b2090e](https://github.com/desquerteur/Autark-Plus/commit/6b2090e) | No feedback receiver configured; reports go to GitHub issues instead | Not proposed: upstream 0.3.8 covers it |
-| **Updates from this repository** | Source, channel and automatic check in Settings; Windows update helper without console windows; 0.3.10 → 0.3.11 updated by itself ([page](docs/UPDATES.md)) | ✅ Done | [3d00dd2](https://github.com/desquerteur/Autark-Plus/commit/3d00dd2), [074dda6](https://github.com/desquerteur/Autark-Plus/commit/074dda6), [3c0c762](https://github.com/desquerteur/Autark-Plus/commit/3c0c762) ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)) | 0.3.8 cannot install updates by itself: install 0.3.11 once by hand | Fix [#27](https://github.com/teydra/OpenAutark/issues/27) (missing installer); the update source is fork-only, the helper console upstream fixed itself |
+| **Updates from this repository** | Source, channel and automatic check in Settings; Windows update helper without console windows; 0.3.10 → 0.3.11 updated by itself ([page](docs/UPDATES.md)) | ✅ Done | [3d00dd2](https://github.com/desquerteur/Autark-Plus/commit/3d00dd2), [074dda6](https://github.com/desquerteur/Autark-Plus/commit/074dda6), [3c0c762](https://github.com/desquerteur/Autark-Plus/commit/3c0c762) ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)) | 0.3.8 cannot install updates by itself: install 0.4.0 once by hand | Fix [#27](https://github.com/teydra/OpenAutark/issues/27) (missing installer); the update source is fork-only, the helper console upstream fixed itself |
 | **Local release builds** | One script builds Windows x64, macOS arm64/x64, Linux x64/arm64 (tar.gz, AppImage, deb) and the Android APK with checksums ([RELEASING](docs/RELEASING.md)) | ✅ Done | [e9000e3](https://github.com/desquerteur/Autark-Plus/commit/e9000e3), [3a0572a](https://github.com/desquerteur/Autark-Plus/commit/3a0572a) | GitHub Actions locked on this account, so builds run on the release PC | Not proposed: workaround, upstream builds in CI |
 | **Headless Linux** | Run without a window as a service; pair a browser or phone with a link and code ([page](docs/LINUX_HEADLESS.md)) | ✅ Done | [8b6696b](https://github.com/desquerteur/Autark-Plus/commit/8b6696b) (11 tests) | **Not yet run on a real Linux host** | [#26](https://github.com/teydra/OpenAutark/issues/26) |
 
 ### 3. Original features still missing or planned
 
-The original moved on from 0.3.6 to 0.3.16 after Autark-Plus branched off. All of it is being merged in one real `git merge` of the
-original's 0.3.16 into Autark-Plus. The merge is done locally and is being tested; it is **not on `main` yet**. Every Autark-Plus
-feature from section 2 stays; where both sides solve the same thing, the note says how they fit together.
+The original moved on from 0.3.6 to 0.3.16 after Autark-Plus branched off. All of it came in with one real `git merge` of the
+original's 0.3.16 ([612ee15](https://github.com/desquerteur/Autark-Plus/commit/612ee158), brought up to date in
+[f62ba72](https://github.com/desquerteur/Autark-Plus/commit/f62ba727)). It is **on `main`** and ships with the release after 0.4.0.
+No upstream change from 0.3.6 to 0.3.16 was left out; only the rows marked *Planned* or *Not taken* below are not in Autark-Plus.
+Every Autark-Plus feature from section 2 stays; where both sides solve the same thing, the note says how they fit together.
 
 | Original feature (version) | Status in Autark-Plus | Note |
 | --- | --- | --- |
-| Subconscious per turn: opens notes, keeps the model, adjusts effort (0.3.6) | 🔄 In progress (upstream merge) | Our effort slider stays your override |
-| One context per agent across chats; condensed tool output; context folding after a step (0.3.6, 0.3.10) | 🔄 In progress (upstream merge) | Lower cost, fewer new sessions |
-| Public skill library at library.openautark.com (0.3.6) | 🔄 In progress (upstream merge) | Sits beside *Skills from links* |
-| `SYSTEM.md` is the whole prompt; new colleagues pick their name; parts start fresh from their brief (0.3.6) | 🔄 In progress (upstream merge) | Compatible with *Personality* |
-| Live bar above the input, addressed messages, agent activity list (0.3.6) | 🔄 In progress (upstream merge) | Coexists with our prompt queue and Stop button |
-| Manager greeting on first start, intro video (0.3.6) | 🔄 In progress (upstream merge) | Runs after our four-step setup |
-| Phone: Codex/Claude sign-in, re-sign-in task, more PC settings (0.3.6) | 🔄 In progress (upstream merge) | |
-| Dictation through the ChatGPT plan in one call; correction of the local fallback (0.3.6, 0.3.8) | 🔄 In progress (upstream merge) | Coexists with dictate-and-send |
-| Quitting stays quit; updates always go through (0.3.6, 0.3.11) | 🔄 In progress (upstream merge) | Complements our update-helper fix ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)) |
-| Private closing text no longer leaks into a chat; two companies on one PC no longer share a port (0.3.7) | 🔄 In progress (upstream merge) | Bug fixes |
-| Stop per agent beside the live line (0.3.8) | 🔄 In progress (upstream merge) | Extends our Send → Stop |
-| Account rail with only accounts in use, "Paused on <PC>"; "why nothing can run" line (0.3.8) | 🔄 In progress (upstream merge) | Merged with our account pictures and fallback rows |
-| One Claude Code / Codex login per PC for all companies; moving a Claude login between companies (0.3.8) | 🔄 In progress (upstream merge) | Our separate Gemini CLI homes stay |
-| Feedback: auto-close, mark done, expiry, frozen-window report with painting, Ctrl+Shift+F, crash report (0.3.8) | 🔄 In progress (upstream merge) | *Report issue → GitHub* stays on top |
-| Chats: partial copy, Copy/Reply, swipe to reply, record audio/video/photo, mask typed secrets (0.3.8) | 🔄 In progress (upstream merge) | |
-| Team page with roles, sub-agent chats under the manager, work page and Stop across linked PCs (0.3.8) | 🔄 In progress (upstream merge) | |
-| People & devices: add-person page, second CEO, pairing on any own device, direct Android connect (0.3.8) | 🔄 In progress (upstream merge) | |
-| Settings: Security tab (full access / careful, text for every agent, change log), search in settings, export/import/delete companies (0.3.8) | 🔄 In progress (upstream merge) | Our per-agent access modes stay |
-| Model choice and tool-call fixes; restart pause that never ended (0.3.8) | 🔄 In progress (upstream merge) | Bug fixes |
-| Direct device-to-device over WebRTC; your own meeting server (0.3.10) | 🔄 In progress (upstream merge) | Fits headless Linux |
-| About 95 % less phone traffic (0.3.10) | 🔄 In progress (upstream merge) | |
-| Model stays with an agent; cost per turn; fewer messages, one tool call (0.3.10) | 🔄 In progress (upstream merge) | Our manual model / effort choice stays |
-| Call voice as its own session; camera, screen and cut-out sharing in calls (0.3.10, 0.3.13) | 🔄 In progress (upstream merge) | Our call screen stays |
-| My day 2: next steps, change log with undo, morning briefing; floating to-do button; search own chats; share a web tab (0.3.10) | 🔄 In progress (upstream merge) | Schedules reminders in My day: [#34](https://github.com/desquerteur/Autark-Plus/issues/34) |
-| Account consent, extra usage per plan (0.3.10) | 🔄 In progress (upstream merge) | |
-| A declining model is skipped for the turn (0.3.12) | 🔄 In progress (upstream merge) | One chain with our account fallback: [#35](https://github.com/desquerteur/Autark-Plus/issues/35) |
-| Update another PC from Settings › Devices (0.3.13) | 🔄 In progress (upstream merge) | Uses our update source |
-| Names as given; "CEO" / "You" not taken as your name; cancel a dictation; Claude Code self-update fix (0.3.13, 0.3.14) | 🔄 In progress (upstream merge) | Bug fixes |
-| Android 0.3.15 – 0.3.17: bubble, to-do dot, ringing calls, wake PC, open app by name (0.3.9 – 0.3.15) | 🔄 In progress (upstream merge) | Our own APK build picks them up |
-| Model picker with providers and full model IDs; side-tab and notification fixes (main after 0.3.16) | 🔄 In progress (upstream merge) | Merged with our model menu |
+| Subconscious per turn: opens notes, keeps the model, adjusts effort (0.3.6) | ✅ Done on main | Our effort slider stays your override |
+| One context per agent across chats; condensed tool output; context folding after a step (0.3.6, 0.3.10) | ✅ Done on main | Lower cost, fewer new sessions |
+| Public skill library at library.openautark.com (0.3.6) | ✅ Done on main | Sits beside *Skills from links* |
+| `SYSTEM.md` is the whole prompt; new colleagues pick their name; parts start fresh from their brief (0.3.6) | ✅ Done on main | Compatible with *Personality* |
+| Live bar above the input, addressed messages, agent activity list (0.3.6) | ✅ Done on main | Coexists with our prompt queue and Stop button |
+| Manager greeting on first start, intro video (0.3.6) | ✅ Done on main | Runs after our four-step setup |
+| Phone: Codex/Claude sign-in, re-sign-in task, more PC settings (0.3.6) | ✅ Done on main | |
+| Dictation through the ChatGPT plan in one call; correction of the local fallback (0.3.6, 0.3.8) | ✅ Done on main | Coexists with dictate-and-send |
+| Quitting stays quit; updates always go through (0.3.6, 0.3.11) | ✅ Done on main | Complements our update-helper fix ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)) |
+| Private closing text no longer leaks into a chat; two companies on one PC no longer share a port (0.3.7) | ✅ Done on main | Bug fixes |
+| Stop per agent beside the live line (0.3.8) | ✅ Done on main | Extends our Send → Stop |
+| Account rail with only accounts in use, "Paused on <PC>"; "why nothing can run" line (0.3.8) | ✅ Done on main | Merged with our account pictures and fallback rows |
+| One Claude Code / Codex login per PC for all companies; moving a Claude login between companies (0.3.8) | ✅ Done on main | Our separate Gemini CLI homes stay |
+| Feedback: auto-close, mark done, expiry, frozen-window report with painting, Ctrl+Shift+F, crash report (0.3.8) | ✅ Done on main | *Report issue → GitHub* stays on top |
+| Chats: partial copy, Copy/Reply, swipe to reply, record audio/video/photo, mask typed secrets (0.3.8) | ✅ Done on main | |
+| Team page with roles, sub-agent chats under the manager, work page and Stop across linked PCs (0.3.8) | ✅ Done on main | |
+| People & devices: add-person page, second CEO, pairing on any own device, direct Android connect (0.3.8) | ✅ Done on main | |
+| Settings: Security tab (full access / careful, text for every agent, change log), search in settings, export/import/delete companies (0.3.8) | ✅ Done on main | Our per-agent access modes stay |
+| Model choice and tool-call fixes; restart pause that never ended (0.3.8) | ✅ Done on main | Bug fixes |
+| Direct device-to-device over WebRTC; your own meeting server (0.3.10) | ✅ Done on main | Fits headless Linux |
+| About 95 % less phone traffic (0.3.10) | ✅ Done on main | |
+| Model stays with an agent; cost per turn; fewer messages, one tool call (0.3.10) | ✅ Done on main | Our manual model / effort choice stays |
+| Call voice as its own session; camera, screen and cut-out sharing in calls (0.3.10, 0.3.13) | ✅ Done on main | Our call screen stays |
+| My day 2: next steps, change log with undo, morning briefing; floating to-do button; search own chats; share a web tab (0.3.10) | ✅ Done on main | Schedules reminders show in My day ([6757333](https://github.com/desquerteur/Autark-Plus/commit/6757333), [#34](https://github.com/desquerteur/Autark-Plus/issues/34)) |
+| Account consent, extra usage per plan (0.3.10) | ✅ Done on main | |
+| A declining model is skipped for the turn (0.3.12) | ✅ Done on main | One chain with our account fallback: [#35](https://github.com/desquerteur/Autark-Plus/issues/35) |
+| Update another PC from Settings › Devices (0.3.13) | ✅ Done on main | Uses our update source |
+| Names as given; "CEO" / "You" not taken as your name; cancel a dictation; Claude Code self-update fix (0.3.13, 0.3.14) | ✅ Done on main | Bug fixes |
+| Android 0.3.15 – 0.3.17: bubble, to-do dot, ringing calls, wake PC, open app by name (0.3.9 – 0.3.15) | ✅ Done on main | Our own APK build picks them up |
+| Model picker with providers and full model IDs; side-tab and notification fixes (main after 0.3.16) | ✅ Done on main | Merged with our model menu |
 | Security modes *Trust AI* / *Secure mode* with switches the runtime enforces | 🗓️ Planned upstream | Not in the original's 0.3.16 source either; comes with a later merge. Our [access modes](#2-what-autark-plus-adds) cover per agent and chat today. Docs text: [#33](https://github.com/desquerteur/Autark-Plus/issues/33) |
 | Signed Windows installer | 🗓️ Planned ([#31](https://github.com/desquerteur/Autark-Plus/issues/31)) | The original's certificate belongs to its publisher; Autark-Plus needs its own |
 | macOS packages | ✅ Done in 0.4.0 ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)) | arm64 and x64 zips, cross-built on Linux and ad-hoc signed; **not yet started on a real Mac** |
@@ -165,8 +167,8 @@ feature from section 2 stays; where both sides solve the same thing, the note sa
 
 | Planned | Status | Issue | Upstream |
 | --- | --- | --- | --- |
-| Reminders from Schedules show up in My day | 🗓️ Planned | [#34](https://github.com/desquerteur/Autark-Plus/issues/34) | [#23](https://github.com/teydra/OpenAutark/issues/23) (in Schedules) |
-| One fallback chain: used-up account and declining model in one ordered list | 🗓️ Planned (after the upstream merge) | [#35](https://github.com/desquerteur/Autark-Plus/issues/35) | [#11](https://github.com/teydra/OpenAutark/issues/11) (in Accounts) |
+| Reminders from Schedules show up in My day | ✅ Done on main | [#34](https://github.com/desquerteur/Autark-Plus/issues/34), [6757333](https://github.com/desquerteur/Autark-Plus/commit/6757333) | [#23](https://github.com/teydra/OpenAutark/issues/23) (in Schedules) |
+| One fallback chain: used-up account and declining model in one ordered list | 🗓️ Planned (upstream merge is in) | [#35](https://github.com/desquerteur/Autark-Plus/issues/35) | [#11](https://github.com/teydra/OpenAutark/issues/11) (in Accounts) |
 | Graphical live view of what every agent is doing (agent-office style) | 🗓️ Planned, on hold until approved | [#12](https://github.com/desquerteur/Autark-Plus/issues/12) | Not proposed: on hold |
 | Fix the 22 failing Electron window tests | 🔄 In progress | [#27](https://github.com/desquerteur/Autark-Plus/issues/27) | Not proposed: our own test setup |
 | Own Windows code-signing certificate | 🗓️ Planned | [#31](https://github.com/desquerteur/Autark-Plus/issues/31) | Not proposed: upstream signs its own builds |
@@ -392,16 +394,15 @@ opened chats, work, my day, team, projects, settings, models, skills and updates
 
 ## Open points
 
-What is not finished or not proven, as of 0.3.11 and `main` on 21 November 2026. The planned work is in the
+What is not finished or not proven, as of 0.4.0 and `main` on 27 November 2026. The planned work is in the
 [feature matrix](#4-autark-plus-extras-still-planned) and the [issues](https://github.com/desquerteur/Autark-Plus/issues).
 
-- **Gemini sign-in can hang in 0.3.11.** *Sign in with Google* can stay on "Installing Gemini CLI …". This is fixed on `main` and ships with the next release ([#24](https://github.com/desquerteur/Autark-Plus/issues/24), [details](docs/ACCOUNTS_AND_GEMINI.md#known-problem)).
-- **The original's 0.3.6 – 0.3.16 is not merged yet.** The merge is done locally and being tested ([section 3](#3-original-features-still-missing-or-planned)).
+- **The original's 0.3.6 – 0.3.16 is on `main` but not released yet.** It ships with the release after 0.4.0 ([section 3](#3-original-features-still-missing-or-planned)).
 - **22 window tests fail** on the release PC. These are test-only failures ([#27](https://github.com/desquerteur/Autark-Plus/issues/27), [report](docs/TEST_RESULTS.md#still-open-22-failing-ui-window-tests-not-fixed)).
 - **Headless Linux has not run on a real Linux host.** Only the start, pairing and the script's syntax were tested, on Windows ([#36](https://github.com/desquerteur/Autark-Plus/issues/36), [page](docs/LINUX_HEADLESS.md#what-was-not-tested)).
 - **No feedback receiver** is configured. In-app reports go to GitHub issues through *Report issue* instead.
 - **Installers are unsigned** ([#31](https://github.com/desquerteur/Autark-Plus/issues/31)), so Windows SmartScreen asks once (see [Installing](#installing)). The macOS apps (since 0.4.0) are ad-hoc signed without Apple notarization and **have not been started on a real Mac yet** ([#32](https://github.com/desquerteur/Autark-Plus/issues/32)).
-- **0.3.8 does not install updates by itself.** Install 0.3.11 once by hand; from 0.3.10 on, updates install by themselves ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)).
+- **0.3.8 does not install updates by itself.** Install 0.4.0 once by hand; from 0.3.10 on, updates install by themselves ([#1](https://github.com/desquerteur/Autark-Plus/issues/1)).
 - **Switching from the original app is rough.** The original's uninstaller can fail and its newer data schema cannot be opened here (see the box under [Installing](#installing)).
 - **Not run:** live provider tests (they cost money), lint.
 
