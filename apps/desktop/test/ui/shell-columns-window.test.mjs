@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { connect } from '../e2e/lib/runtime-client.mjs';
+import { resumeNativePages } from './lib/native-pages.mjs';
 import { expectStable } from './lib/stable.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -166,7 +167,10 @@ test('persistent desktop columns and real browser pane tabs', { timeout: 180_000
   const field = bar.getByRole('textbox', { name: 'Website address' });
   const strip = page.locator('.global-pane .browser-strip');
   const title = () => page.evaluate(() => document.querySelector('.global-pane .browser-strip-tab.selected .browser-strip-title')?.textContent ?? '');
-  const waitTitle = (expected) => page.waitForFunction((want) => document.querySelector('.global-pane .browser-strip-tab.selected .browser-strip-title')?.textContent === want, expected, { timeout: 15_000 });
+  const waitTitle = async (expected) => {
+    await resumeNativePages(app);
+    await page.waitForFunction((want) => document.querySelector('.global-pane .browser-strip-tab.selected .browser-strip-title')?.textContent === want, expected, { timeout: 15_000 });
+  };
   await strip.getByRole('button', { name: 'New tab', exact: true }).click();
   await field.waitFor();
   await field.fill(address);

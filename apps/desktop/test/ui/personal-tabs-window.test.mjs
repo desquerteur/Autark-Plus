@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { connect } from '../e2e/lib/runtime-client.mjs';
+import { resumeNativePages } from './lib/native-pages.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -60,7 +61,10 @@ test('website tabs come back after a restart; an agent\'s browser.show opens a t
   await page.locator('.global-pane .browser-bar').waitFor();
 
   /** The tab shown in a surface ('.global-pane' or '.chat-area'), and its list. */
-  const shownIn = (where, expected, timeout = 15_000) => page.waitForFunction(([scope, want]) => document.querySelector(`${scope} .browser-strip-tab.selected .browser-strip-title`)?.textContent === want, [where, expected], { timeout });
+  const shownIn = async (where, expected, timeout = 15_000) => {
+    await resumeNativePages(app);
+    await page.waitForFunction(([scope, want]) => document.querySelector(`${scope} .browser-strip-tab.selected .browser-strip-title`)?.textContent === want, [where, expected], { timeout });
+  };
   const tabsMenu = () => page.getByRole('menu', { name: 'Tabs' });
   const allTabs = async (where) => { // the surface's menu › All tabs
     await page.locator(where).getByRole('button', { name: 'Browser menu' }).click();

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { connect } from '../e2e/lib/runtime-client.mjs';
+import { resumeNativePages } from './lib/native-pages.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,11 +97,14 @@ test('a chat\'s tabs dock right, move by drag, float, size and stay after a rest
   const shownPages = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children
     .filter((view) => view.constructor.name === 'WebContentsView' && view.getVisible() && view.getBounds().width > 10)
     .map((view) => ({ url: view.webContents.getURL(), ...view.getBounds() })));
-  const pageInside = async (selector, url) => until(`the page on its slot inside ${selector}`, async () => {
-    const area = await box(selector);
-    const shown = (await shownPages()).find((view) => view.url.startsWith(url));
-    return area && shown && shown.x >= area.x - 1 && shown.x + shown.width <= area.right + 1 && shown.y >= area.y - 1 && shown.y + shown.height <= area.bottom + 1 ? shown : null;
-  });
+  const pageInside = async (selector, url) => {
+    await resumeNativePages(app);
+    return until(`the page on its slot inside ${selector}`, async () => {
+      const area = await box(selector);
+      const shown = (await shownPages()).find((view) => view.url.startsWith(url));
+      return area && shown && shown.x >= area.x - 1 && shown.x + shown.width <= area.right + 1 && shown.y >= area.y - 1 && shown.y + shown.height <= area.bottom + 1 ? shown : null;
+    });
+  };
   const dockOf = async () => (await settingsOf(profile)).appearance?.chatDock;
   /** Drags with the mouse from the middle of `selector` to (x, y) in small steps (a real drag, past the 5 px start). */
   const drag = async (selector, x, y) => {
@@ -217,8 +221,10 @@ test('a chat\'s tabs dock right, move by drag, float, size and stay after a rest
   await page.locator('.chat-column > .chat-area.dock-bottom').waitFor({ timeout: 30_000 });
   assert.deepEqual(await dockOf(), saved, 'the same dock after the restart');
   await sleep(1500); t.diagnostic(`after restart: dock=${await page.locator('.chat-area').getAttribute('data-dock')} file=${JSON.stringify(await dockOf())} pages=${JSON.stringify(await shownPages())} area=${JSON.stringify(await box('.chat-area'))}`);
-  const shownTitle = await page.locator('.chat-area .browser-strip-tab.selected .browser-strip-title').textContent();
-  await pageInside('.chat-area', `${address}/${encodeURIComponent(shownTitle).replace(/%20/g, '%20')}`);
+  const restored = (await tabsFile()).spaces[space];
+  const restoredUrl = restored.tabs.find((tab) => tab.id === restored.shown)?.url;
+  assert.ok(restoredUrl, 'the saved selected tab has an address');
+  await pageInside('.chat-area', restoredUrl);
   assert.ok(Math.abs((await box('.chat-area')).height - 140) <= 2, 'at its saved height');
   await shot('af010-07-after-restart-light');
   assert.deepEqual(errors, [], 'no renderer exceptions');
