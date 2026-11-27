@@ -143,7 +143,16 @@ test('the side pane: tab strip, address row, panels as tabs, full view', { timeo
   assert.equal(await bar.getByText('Site number 1').count(), 0, 'no title beside it');
   await page.waitForTimeout(500);
   assert.equal(await nativeVisible(), 1, 'the page is shown');
-  const slotBox = await page.locator('.browser-native-slot').boundingBox();
+  // B-080 (native-surface.ts pageBounds): a column-resize grip on the slot's edge keeps its pointer – the page begins beside it
+  const slotBox = await page.locator('.browser-native-slot').evaluate((element) => {
+    const r = element.getBoundingClientRect();
+    let left = r.left; let right = r.right;
+    for (const grip of [...document.querySelectorAll('.column-resize')].map((g) => g.getBoundingClientRect())) {
+      if (grip.left <= left && grip.right > left) left = grip.right;
+      if (grip.right >= right && grip.left < right) right = grip.left;
+    }
+    return { x: left, y: r.top, width: right - left, height: r.height };
+  });
   const viewBox = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find((view) => view.constructor.name === 'WebContentsView' && view.getVisible()).getBounds());
   for (const side of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(slotBox[side] - viewBox[side]) <= 1, `the native page lies on its slot under the two rows (${side}: ${viewBox[side]} / ${slotBox[side]})`);
   await shot('03-website-light');
