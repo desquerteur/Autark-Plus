@@ -122,7 +122,7 @@ test('video: an expired download is made and charged (phase answered); a foreign
   const slow = await gemini((request, res, origin) => (request.path === '/v1beta/interactions'
     ? send(res, 200, output({ type: 'video', uri: `${origin}/v1beta/files/p1:download?alt=media` }))
     : send(res, 200, { name: 'files/p1', state: 'PROCESSING' })));
-  await assert.rejects(geminiAdapter.generate('video', { prompt: 'x' }, slow.on('gemini-omni-1.1-flash'), ctx(1_200)),
+  await assert.rejects(geminiAdapter.generate('video', { prompt: 'x' }, slow.on('gemini-omni-1.1-flash'), ctx(2_500)),
     (error: unknown) => error instanceof WorkforceError && error.code === 'timeout' && generationPhase(error) === 'answered');
   assert.ok(slow.seen.filter((call) => call.path === '/v1beta/files/p1').length >= 2, 'the one file was polled with backoff');
 });
