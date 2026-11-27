@@ -242,11 +242,12 @@ test('splits, part 2: popover group row, Runs › parts, merge conflict and side
   // (b) Team › agent › Activity log: the turn that split; its "Split" line opens to the parts; nothing above moves.
   const STEP = '[data-test-run="split"] .run-item.split-step';
   const runsOf = async () => {
-    await go(`#/team/${manager.id}`, '.agent-log .log-turn');
-    // the one turn in "Launch check" is the run that split there (group 1 was split in "Site title")
-    const row = page.locator('.agent-log .log-turn', { has: page.locator('.log-system-text', { hasText: 'Launch check' }) });
+    await go(`#/team/${manager.id}/work`, '.agent-log .log-turn');
+    // A returned part can already have woken another turn in this chat. Name the
+    // actual parent run rather than assuming that its chat has exactly one turn.
+    const row = page.locator(`.agent-log .log-turn[data-run-id="${g2.parentRunId}"]`);
     await row.first().waitFor({ timeout: 15_000 });
-    assert.equal(await row.count(), 1, 'one turn of that chat');
+    assert.equal(await row.count(), 1, 'one parent turn for the split group');
     const above = await row.evaluate((el) => {
       const rows = [...document.querySelectorAll('.agent-log .log-turn')];
       const index = rows.indexOf(el);
