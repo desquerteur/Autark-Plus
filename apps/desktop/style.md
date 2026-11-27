@@ -114,3 +114,6 @@ screen's look changes.
 - My day reuses the standard HumanItem row, check widget, due-time meta and snooze menu.
 - A source Schedule button sits beside the more menu, outside the expand button; it reuses `.text-button` theme color, font, focus and spacing without new assets or typography.
 - Schedules history keeps its layout and shows In My day / Done / Snoozed / Skipped for person reminders.
+
+## Agent profile hint containment (27 November 2026)
+- The standalone hint below **From you** is a block within its section. It keeps the existing 12 px muted type, single line and ellipsis, but cannot widen the profile scroll area at narrow desktop widths (720 px window with sidebar) or on phones. No colors, spacing, fonts or other row hints change.

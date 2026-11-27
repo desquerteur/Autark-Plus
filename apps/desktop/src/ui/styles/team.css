@@ -261,6 +261,8 @@ button.agent-link:hover { text-decoration: underline; text-underline-offset: 2px
 .agent-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .agent-row-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .agent-human { display: block; width: 100%; height: 104px; resize: none; line-height: 1.5; margin: 4px 0; } /* a fixed cell: typing scrolls inside */
+/* The standalone From you hint is not a flex child: give its ellipsis a bounded box. */
+.agent-human + .agent-row-hint { display: block; }
 .agent-work-link { margin: -16px 0 24px; padding: 0; font-size: 13px; }
 /* a folded group at a section's end – "Paused (n)" under Schedules, "N older open" / "N waiting" on the Work page
    (agent-work.css): one fixed toggle row like "Archived (n)", opening it only adds rows below */

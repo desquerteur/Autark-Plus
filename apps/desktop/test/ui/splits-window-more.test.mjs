@@ -152,7 +152,21 @@ test('splits, part 2: popover group row, Runs › parts, merge conflict and side
   const shot = async (name) => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(shots, `${name}.png`) }); };
   /** The same view light, then dark (light again after). */
   const shots2 = async (name) => { await shot(`${name}-light`); await page.emulateMedia({ colorScheme: 'dark' }); await shot(`${name}-dark`); await page.emulateMedia({ colorScheme: 'light' }); };
-  const noProblems = async (where) => { assert.deepEqual(await page.evaluate(layoutProblems), [], `layout at ${where}`); };
+  const noProblems = async (where) => {
+    const problems = await page.evaluate(layoutProblems);
+    if (problems.length) {
+      await shot('layout-failure');
+      t.diagnostic(JSON.stringify(await page.evaluate(() => {
+        const root = document.querySelector('.agent-scroll');
+        const box = root?.getBoundingClientRect();
+        return [...(root?.querySelectorAll('*') ?? [])].map((el) => {
+          const r = el.getBoundingClientRect(); const css = getComputedStyle(el);
+          return { cls: el.className, text: el.textContent?.slice(0, 100), left: r.left, right: r.right, width: r.width, minWidth: css.minWidth, overflow: css.overflowX };
+        }).filter((r) => box && r.width && r.right > box.right + 1).slice(0, 30);
+      })));
+    }
+    assert.deepEqual(problems, [], `layout at ${where}`);
+  };
   const go = async (hash, ready) => { await page.evaluate((h) => { location.hash = h; }, hash); await page.locator(ready).first().waitFor({ timeout: 20_000 }); };
   /** [left, top, width, height, bottom] of the first match, rounded; null when there is none. */
   const box = (sel) => page.evaluate((s) => { const r = document.querySelector(s)?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height, r.bottom].map(Math.round) : null; }, sel);
@@ -381,7 +395,10 @@ test('splits, part 2: popover group row, Runs › parts, merge conflict and side
   await shots2('more-10-worktree-part-phone');
   // The sidebar is there from 720 px on (a phone's Team tab is the overview): its narrowest window.
   await size(720, 800);
-  await go(`#/team/${manager.id}`, '.team-splits .team-split-goal');
+  // The sidebar already exists on the split page: wait for the destination, not
+  // that persistent sidebar, before measuring the profile at the new width.
+  await go(`#/team/${manager.id}`, '.agent-profile');
+  await goals.first().waitFor();
   assert.ok((await goals.evaluateAll((list) => list.map((el) => Math.round(el.getBoundingClientRect().height)))).every((h) => h === 24 || h === 28), 'one line (28 px on touch)');
   await noProblems('team sidebar 720×800');
   await shots2('more-11-sidebar-goals-720');
