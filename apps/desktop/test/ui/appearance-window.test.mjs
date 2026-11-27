@@ -143,7 +143,16 @@ test('Settings › Appearance: an own theme, panels in order, the dock – kept 
   await page.locator('textarea.composer-input').fill(`[[tool:browser.show {"url":"${address}/plan","where":"chat"}]]`);
   await page.locator('button.send-button').click();
   await until('the page inside the chat\'s tabs at 110 %', async () => {
-    const area = await page.locator('.chat-area .browser-native-slot').evaluate((element) => { const r = element.getBoundingClientRect(); return { x: r.left, y: r.top, right: r.right, bottom: r.bottom }; }).catch(() => null);
+    // B-080 (native-surface.ts pageBounds): a column-resize grip on the slot's edge keeps its pointer – the page begins beside it
+    const area = await page.locator('.chat-area .browser-native-slot').evaluate((element) => {
+      const r = element.getBoundingClientRect();
+      let x = r.left; let right = r.right;
+      for (const grip of [...document.querySelectorAll('.column-resize')].map((g) => g.getBoundingClientRect())) {
+        if (grip.left <= x && grip.right > x) x = grip.right;
+        if (grip.right >= right && grip.left < right) right = grip.left;
+      }
+      return { x, y: r.top, right, bottom: r.bottom };
+    }).catch(() => null);
     const views = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children
       .filter((view) => view.constructor.name === 'WebContentsView' && view.getVisible() && view.getBounds().width > 10).map((view) => view.getBounds()));
     return area && views.some((view) => Math.abs(view.x - area.x) <= 2 && Math.abs(view.y - area.y) <= 2 && Math.abs(view.x + view.width - area.right) <= 2);
