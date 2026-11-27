@@ -60,11 +60,28 @@ test('call view: full and mini, phases, mute, hang up, the call card – desktop
   const full = page.locator('.call-view.full');
   const mini = page.locator('.call-view.mini');
   const status = full.locator('.call-status');
+  // Every phase the call view shows, in order, recorded in the page: the mock agent's "working" can last less than a
+  // poll, so `phase` also takes it from the record; every other phase is waited for as the view's current one.
+  await page.evaluate(() => {
+    const w = window;
+    w.__phases = [];
+    const note = () => {
+      const view = document.querySelector('.call-view');
+      const now = view ? `${view.classList.contains('full') ? 'full' : 'mini'}:${view.getAttribute('data-phase')}` : 'gone';
+      if (w.__phases[w.__phases.length - 1] !== now) w.__phases.push(now);
+    };
+    new MutationObserver(note).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-phase', 'class'] });
+  });
+  let seenPhases = 0;
   const phase = async (view, wanted, what) => {
+    const kind = (await view.evaluate((element) => (element.classList.contains('full') ? 'full' : 'mini')).catch(() => null)) ?? (String(view).includes('mini') ? 'mini' : 'full');
     for (const end = Date.now() + 20_000; Date.now() < end; await page.waitForTimeout(100)) {
-      if ((await view.getAttribute('data-phase').catch(() => null)) === wanted) return;
+      if ((await view.getAttribute('data-phase').catch(() => null)) === wanted) return; // what follows reads the view in it
+      const all = await page.evaluate(() => window.__phases);
+      const at = wanted === 'working' ? all.indexOf(`${kind}:${wanted}`, seenPhases) : -1;
+      if (at >= 0) { seenPhases = at + 1; return; }
     }
-    assert.fail(`timed out: ${what} (${await view.getAttribute('data-phase').catch(() => 'gone')})`);
+    assert.fail(`timed out: ${what} (${await view.getAttribute('data-phase').catch(() => 'gone')}; seen ${JSON.stringify((await page.evaluate(() => window.__phases)).slice(seenPhases))})`);
   };
 
   // Start: the call view lies over the whole window and connects.
@@ -112,11 +129,12 @@ test('call view: full and mini, phases, mute, hang up, the call card – desktop
   await full.getByRole('button', { name: 'Hang up', exact: true }).click();
   await full.waitFor({ state: 'detached', timeout: 5_000 });
   await cell.locator('button[aria-label="Talk"]').waitFor({ timeout: 10_000 });
-  const card = page.locator('.message-scroller .call-card').last();
+  // the call's row in the chat (chat/call/CallTranscript.tsx: .call-row-title "Call with …", .call-row-end its length)
+  const card = page.locator('.message-scroller .call-transcript').last();
   await card.waitFor({ timeout: 10_000 });
-  for (const end = Date.now() + 10_000; Date.now() < end && !/^\d+:\d{2}$/.test((await card.locator('.call-card-length').textContent()).trim()); await page.waitForTimeout(150));
-  assert.match((await card.locator('.call-card-length').textContent()).trim(), /^\d+:\d{2}$/, 'the ended call shows how long it ran');
-  assert.match(await card.locator('.call-card-title').textContent(), /^Call with /);
+  for (const end = Date.now() + 10_000; Date.now() < end && !/^\d+:\d{2}$/.test((await card.locator('.call-row-end').textContent()).trim()); await page.waitForTimeout(150));
+  assert.match((await card.locator('.call-row-end').textContent()).trim(), /^\d+:\d{2}$/, 'the ended call shows how long it ran');
+  assert.match(await card.locator('.call-row-title').textContent(), /^Call with /);
   const toggle = card.locator('.call-transcript-toggle');
   assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'the transcript waits behind its disclosure');
   await toggle.click();
@@ -140,11 +158,11 @@ test('call view: full and mini, phases, mute, hang up, the call card – desktop
   const fits = await page.evaluate(() => {
     const view = document.querySelector('.call-view.full').getBoundingClientRect();
     const controls = [...document.querySelectorAll('.call-view.full .call-control-button')].map((el) => el.getBoundingClientRect());
-    return { overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, width: view.width, inside: controls.every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight), count: controls.length };
+    return { overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, width: view.width, inside: controls.every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight), count: controls.length, boxes: controls.map((rect) => [Math.round(rect.left), Math.round(rect.right), Math.round(rect.bottom)]), iw: innerWidth, ih: innerHeight };
   });
   assert.ok(fits.overflow <= 1, `no horizontal scroll (${fits.overflow}px)`);
-  assert.equal(fits.count, 4);
-  assert.ok(fits.inside, 'every control on screen');
+  assert.ok(fits.count === 4 || fits.count === 6, `Mute, Audio output, Live captions, Hang up – and Camera and Screen where this PC can share them (B-085, CallOverlay.tsx) (${fits.count})`);
+  assert.ok(fits.inside, `every control on screen (${JSON.stringify(fits)})`);
   const ring = await full.evaluate((view) => ({ scale: view.style.getPropertyValue('--call-ring'), speaker: view.dataset.speaker, animation: getComputedStyle(view.querySelector('.call-ring')).animationName }));
   assert.equal(ring.scale, '1', 'reduced motion: the ring does not grow');
   assert.equal(ring.speaker, 'agent', 'its colour still says who speaks');
@@ -157,9 +175,9 @@ test('call view: full and mini, phases, mute, hang up, the call card – desktop
   await shot('call-view-08-phone-mini');
   await mini.getByRole('button', { name: 'Hang up', exact: true }).click();
   await mini.waitFor({ state: 'detached', timeout: 5_000 });
-  await page.locator('.message-scroller .call-card').nth(1).waitFor({ timeout: 10_000 });
+  await page.locator('.message-scroller .call-transcript').nth(1).waitFor({ timeout: 10_000 });
   await page.waitForTimeout(800);
-  await page.locator('.message-scroller .call-card').last().scrollIntoViewIfNeeded();
+  await page.locator('.message-scroller .call-transcript').last().scrollIntoViewIfNeeded();
   await shot('call-view-09-phone-card');
 
   assert.deepEqual(errors, [], 'no renderer errors');
