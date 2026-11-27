@@ -96,7 +96,8 @@ test('Archived: the confirm counts open tasks, the section survives a reload, Un
   // Archived again: the agent keeps working there, and its important message brings the chat back.
   await rpc.call('chats.archive', { id: chat.id });
   await mainRow.waitFor({ state: 'detached', timeout: 10_000 });
-  await rpc.call('messages.send', { conversationId: chat.id, body: 'Tell me loudly [[tool:chat.send {"text":"The venue cancelled","urgent":true}]]' });
+  // agents post an important line as a <chat to … push> block (there is no chat.send tool any more; runtime-archive e2e does the same)
+  await rpc.call('messages.send', { conversationId: chat.id, body: `Tell me loudly <chat to="${chat.id}" push>The venue cancelled</chat>` });
   const line = await rpc.waitFor('message.created', (message) => message.conversationId === chat.id && message.meta?.status?.type === 'unarchived', 90_000);
   assert.equal(line.body, `Unarchived: important message from ${manager.name}`);
   await mainRow.waitFor({ timeout: 15_000 });
