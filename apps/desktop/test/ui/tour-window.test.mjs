@@ -147,7 +147,7 @@ test('feedback tour: palette → dialog poster → play → seek through every p
   await page.emulateMedia({ colorScheme: 'light' });
 
   // hold the dock's mic: it listens; let go: the words come into the field
-  await seek(firstOn('listen') + 900);
+  await seek(firstOn('listen') + 1500); // timeline.ts: 'Listening…' comes 1.3 s into the hold
   assert.ok(await player.locator('.tour-dock .tour-mic.active').isVisible(), 'the mic listens while held');
   assert.match(await player.locator('.tour-caption').textContent(), /Listening/);
   await shot('tour-05-listening-light');
@@ -217,7 +217,7 @@ test('feedback tour: palette → dialog poster → play → seek through every p
     const stage = await player.locator('.tour-stage-box').boundingBox();
     const scene = await player.locator('.tour-scene').boundingBox();
     assert.ok(scene.width <= stage.width + 1 && scene.height <= stage.height + 1, `the scene fits its box at ${label}`);
-    assert.ok(Math.abs(scene.width / scene.height - 1.6) < 0.01, `aspect kept at ${label} (the opening's computer tour)`);
+    assert.ok(Math.abs(scene.width / scene.height - 1.6) < 0.01, `aspect kept at ${label} (the opening's computer tour): ${JSON.stringify({ scene, stage })}`);
     await shot(`tour-12-frozen-${label}`);
     await page.emulateMedia({ colorScheme: 'dark' });
     await shot(`tour-12-frozen-${label}-dark`);

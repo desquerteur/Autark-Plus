@@ -7,7 +7,7 @@
 // Owns: mounting the player while `tourOpen` is true. Never: the timeline or the scene.
 
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { closeTour, tourAutoplay, tourOpen } from './open.ts';
+import { closeTour, tourAutoplay, tourOpen, tourVariant } from './open.ts';
 import type { Variant } from './scene-layout.ts';
 import { TOUR_TITLE, TourPlayer } from './TourPlayer.tsx';
 
@@ -17,7 +17,8 @@ export function TourDialog(props: { phone?: boolean }) {
 }
 
 function TourModal(props: { variant: Variant }) {
-  const [variant] = useState(props.variant);
+  // the opening's variant, also when the shell mounts this afresh after a layout switch (open.ts tourVariant)
+  const [variant] = useState(() => tourVariant.peek() ?? (tourVariant.value = props.variant));
   const ref = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
     const dialog = ref.current;
