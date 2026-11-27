@@ -5,7 +5,7 @@
 //   * Voice conversation starts on This PC (voice.realtime 'off'); with an OpenAI key (a local OpenAI-shaped model list stands
 //     in for OpenAI) the key is offered and picking it saves routing.voice "<key id>:gpt-realtime" and voice.realtime 'auto';
 //     back to This PC saves 'off'; the row never moves;
-//   * a Google key without a listed Live model: picking it saves gemini-3.8-live, and the row names that key, not the first one;
+//   * a second locally verified key: picking it saves its account id, and the row names that key, not the first one;
 //   * the speech models group names this PC's models with their actions (nothing is downloaded here);
 //   * a line said live is a line of this device's call: the chat shows the call as one bubble ("Call · <time> · running",
 //     open while it runs) holding the line and the answer, and with a duration once it ended;
@@ -117,20 +117,20 @@ test('Settings › Models: the Voice group, the voice conversation use saved, th
     await page.waitForTimeout(200);
   });
 
-  // A Google key beside that one: offered for Voice with Gemini Live's default. Only Google's own address makes a connection a
-  // Google one, so this made-up key may meet Google's model list once; what follows does not depend on the answer.
-  const gemini = await rpc.call('accounts.add', { provider: 'google', label: 'Gemini key', apiKey: 'g-test-voice-0000000000' });
+  // A second verified key tests the account selection without contacting a real provider.
+  // A made-up Google key is rejected and correctly falls back to the first usable key;
+  // it cannot prove that a valid selected account is shown. Gemini defaults have unit coverage.
+  const second = await rpc.call('accounts.add', { provider: 'openai', label: 'Second voice key', apiKey: 'sk-test-voice-second-0000000000', baseUrl: openai.url });
   await provider.click();
-  await page.getByRole('option', { name: 'Gemini key' }).click();
-  await until(async () => /(^|:)gemini-3\.8-live$/.test((await current()).routing.voice ?? ''), 'routing.voice names Gemini Live');
-  assert.equal(gemini.provider, 'google');
+  await page.getByRole('option', { name: 'Second voice key', exact: true }).click();
+  await until(async () => (await current()).routing.voice === `${second.id}:gpt-realtime`, 'routing.voice names the second account');
   assert.equal((await voice()).realtime, 'auto', 'picking a model turns Realtime voice on');
-  await until(async () => /Gemini key/.test(await provider.textContent()), 'the row names the chosen key, not the first one');
-  await shot('voice-settings-06-gemini-live');
+  await until(async () => /Second voice key/.test(await provider.textContent()), 'the row names the chosen key, not the first one');
+  await shot('voice-settings-06-second-key');
   await provider.click();
   await page.getByRole('option', { name: 'This PC', exact: true }).click();
   await until(async () => (await voice()).realtime === 'off', 'voice.realtime off again');
-  await rpc.call('accounts.remove', { id: gemini.id });
+  await rpc.call('accounts.remove', { id: second.id });
   await rpc.call('accounts.remove', { id: key.id });
 
   // A line said live in a chat with one agent, in the real composition: stored quiet as a call line; the fake model's answer to
