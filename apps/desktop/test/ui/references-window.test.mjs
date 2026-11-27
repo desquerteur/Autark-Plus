@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
-import { connect } from '../e2e/lib/runtime-client.mjs';
+import { connect, MESSAGE_EVENTS } from '../e2e/lib/runtime-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
@@ -56,7 +56,7 @@ test('references: Remember why… on an own message keeps the example and the re
   await page.evaluate((id) => { location.hash = `#/chat/${id}`; }, chat.id);
   await page.locator('.message-scroller').waitFor({ timeout: 15_000 });
   const own = await rpc.call('messages.send', { conversationId: chat.id, body: 'We keep the price and add a second revision round instead of a discount.' });
-  const answer = await rpc.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 60_000);
+  const answer = await rpc.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final', 60_000);
   const item = (id) => page.locator(`[data-message-id="${id}"]`);
   await item(answer.id).locator('.message-content').waitFor({ timeout: 15_000 });
   await item(own.id).locator('.message-content').waitFor({ timeout: 15_000 });

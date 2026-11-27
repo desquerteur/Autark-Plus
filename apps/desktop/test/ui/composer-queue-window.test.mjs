@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
-import { connect } from '../e2e/lib/runtime-client.mjs';
+import { connect, MESSAGE_EVENTS } from '../e2e/lib/runtime-client.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
@@ -134,7 +134,7 @@ test('AF-016: queue three prompts while an agent works, edit and reorder them, t
   // Resume: one after another, each after the agent's answer.
   await list.getByRole('button', { name: 'Resume' }).click();
   await list.waitFor({ state: 'detached', timeout: 60_000 });
-  const done = rpc.waitFor('message.updated', (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && /announcement|changelog|v1\.2/.test(message.body) && /v1\.2/.test(message.body), 60_000);
+  const done = rpc.waitFor(MESSAGE_EVENTS, (message) => message.conversationId === chat.id && message.authorId === manager.id && message.state === 'final' && /announcement|changelog|v1\.2/.test(message.body) && /v1\.2/.test(message.body), 60_000);
   await done;
   const messages = (await rpc.call('messages.list', { conversationId: chat.id, limit: 50 })).filter((message) => message.state === 'final' || message.authorKind === 'human');
   assert.deepEqual(messages.filter((message) => message.authorKind === 'human').map((message) => message.body).slice(1), order, 'sent in the queue\'s order');
