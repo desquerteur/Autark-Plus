@@ -56,7 +56,12 @@ export function WorkingPopover(props: { chat: Chat; anchor: HTMLElement | null; 
     return () => cancelAnimationFrame(frame);
   }, [open]);
   if (!open) return null;
-  const rows = workingRows(chat, liveRuns(chat), (id) => agentMap.value.get(id)?.name);
+  const rows = workingRows(chat, liveRuns(chat), (id) => agentMap.value.get(id)?.name).map((row) => {
+    // Live summaries carry the group id and counts, not its goal. Reading the signal here
+    // also fills the reserved model slot when the coalesced splits.list read completes.
+    const group = row.groupId ? splitGroups.value.get(row.groupId) : undefined;
+    return group ? { ...row, model: group.goal } : row;
+  });
   const toggle = (key: string) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key); else next.add(key);
