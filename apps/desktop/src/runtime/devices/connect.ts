@@ -180,7 +180,11 @@ export function createDevices(input: DevicesInput): Devices {
     linked: () => hasLinkedPc(mesh.list()) || hasRelayPhone(devicesRepo.list({ kinds: ['phone'] })), // F29: my phone's direct socket
     // B-078: the home router maps the peer port while it listens (a test profile never touches the router)
     ...(process.env.WORKFORCE_TEST_DATA || process.env.WORKFORCE_FAKE_ENGINE === '1' ? {} : { portmap: new PortMap({ log: () => s.log }) }),
-    ...(loopbackOnly() ? { hosts: () => ['127.0.0.1'] } : {}), // a window test's listener stays on this PC (no Windows Firewall question on a shared screen)
+    ...(loopbackOnly() ? {
+      hosts: () => ['127.0.0.1'],
+      // Discovery must advertise the same interface the isolated listener actually binds.
+      advertise: (port: number) => [`http://127.0.0.1:${port}`],
+    } : {}), // a window test's listener stays on this PC (no Windows Firewall question on a shared screen)
   });
   peer = listener;
   const meet = new Meeting({

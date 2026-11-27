@@ -130,14 +130,14 @@ test('Settings › Devices: Remote ID, nearby PCs, a request with the same code,
     await page.emulateMedia({ colorScheme: 'light' });
     await request.getByRole('button', { name: 'Accept' }).click();
     await request.waitFor({ state: 'detached', timeout: 15_000 });
-    await devices.locator('.device-row .set-row-label', { hasText: towerName }).first().waitFor({ timeout: 30_000 });
+    await page.locator('#settings-devices .device-row .set-row-label', { hasText: towerName }).first().waitFor({ timeout: 30_000 });
     await nearby.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => undefined); // a linked PC is not offered again
   } else {
     t.diagnostic('this machine has no LAN or tailnet address – the request part is not run');
   }
 
   // A device row's right-click menu: Rename inline.
-  const deviceRow = devices.locator('.device-row').first();
+  const deviceRow = page.locator('#settings-devices .device-row').first();
   if (await deviceRow.count()) {
     const id0 = (await rpc.call('devices.list')).filter((device) => device.status !== 'revoked' && device.status !== 'pairing')
       .sort((a, b) => Number(b.self) - Number(a.self) || Number(b.kind === 'pc') - Number(a.kind === 'pc') || a.name.localeCompare(b.name))[0];

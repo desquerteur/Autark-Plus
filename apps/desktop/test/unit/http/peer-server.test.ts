@@ -31,7 +31,7 @@ const device = (patch: Partial<Device>): Device => ({
   id: 'dev_other00000001', name: 'Tower', kind: 'pc', role: 'home', fingerprint: 'ab', addresses: [], caps: {}, status: 'offline', self: false, ...patch,
 });
 
-function fixture(options: { mode?: PeerMode; port?: number; linked?: boolean; hosts?: string[] | null; interfaces?: Interfaces; remembered?: number; pairing?: () => PairingHttp; portmap?: PeerServerDeps['portmap'] } = {}) {
+function fixture(options: { mode?: PeerMode; port?: number; linked?: boolean; hosts?: string[] | null; interfaces?: Interfaces; remembered?: number; pairing?: () => PairingHttp; portmap?: PeerServerDeps['portmap']; advertise?: PeerServerDeps['advertise'] } = {}) {
   const config = { mode: options.mode ?? 'lan', port: options.port ?? 0 };
   let linked = options.linked ?? false;
   let hostCalls = 0;
@@ -54,6 +54,7 @@ function fixture(options: { mode?: PeerMode; port?: number; linked?: boolean; ho
     linked: () => linked,
     hosts: options.hosts === null ? undefined : () => { hostCalls++; return options.hosts ?? ['127.0.0.1']; },
     interfaces: () => options.interfaces ?? INTERFACES,
+    advertise: options.advertise,
     remember: { get: () => remembered.at(-1), set: (port) => { stored.push(port); remembered.push(port); } },
     fallbackAddresses: () => ['http://10.9.9.9:47811'],
     ...(options.portmap ? { portmap: options.portmap } : {}),
@@ -335,4 +336,15 @@ test('linked PCs and the peer settings', () => {
   assert.deepEqual(settings.devices, { peer: 'lan', peerPort: 47812, findable: true, relay: DEFAULT_RELAY, rtc: true, stun: ['stun:stun.cloudflare.com:3478'] }); // F25: WebRTC way on, Cloudflare's STUN; B-072: Autark's own meeting server
   assert.throws(() => validateSettings({ ...settings, devices: { peer: 'wifi' as PeerMode, peerPort: 47812 } }), /devices\.peer/);
   assert.throws(() => validateSettings({ ...settings, devices: { peer: 'lan', peerPort: 70_000 } }), /devices\.peerPort/);
+});
+
+test('an isolated loopback listener advertises reachable loopback endpoints', async () => {
+  const f = fixture({ advertise: (port) => [`http://127.0.0.1:${port}`] });
+  try {
+    await f.server.start();
+    const release = await f.server.hold();
+    assert.deepEqual(f.server.state().addresses, [`http://127.0.0.1:${f.server.port()}`]);
+    assert.equal((await request(f.server.port()!, { path: '/.well-known/workforce' })).status, 200);
+    release();
+  } finally { await f.server.close(); }
 });

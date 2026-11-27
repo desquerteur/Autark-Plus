@@ -51,6 +51,8 @@ export interface PeerServerDeps {
   /** Listen addresses per mode (default 0.0.0.0, or this PC's tailnet IPv4 addresses). Tests: 127.0.0.1. */
   hosts?: (mode: PeerListenMode) => string[];
   interfaces?: InterfacesFn;
+  /** Advertised endpoints for an injected listener (tests bind only to loopback). */
+  advertise?: (port: number, mode: PeerListenMode) => string[];
   /** Extra Host names to accept (the MagicDNS name). */
   allowedHosts?: () => string[];
   /** Peer addresses to advertise while this listener is not open (the runtime server on the LAN). */
@@ -156,6 +158,7 @@ export class PeerServer {
 
   /** Base URLs other PCs dial – read now (DHCP and VPNs change them); the fallback while closed. */
   addresses(): string[] {
+    if (this.open && this.deps.advertise) return this.deps.advertise(this.open.port, this.open.mode).slice(0, MAX_PEER_ADDRESSES);
     const mapped = this.open && this.keeper?.url();
     if (this.open) return [...(mapped ? [mapped] : []), ...peerAddresses(this.open.port, this.deps.interfaces, this.open.mode)].slice(0, MAX_PEER_ADDRESSES);
     try { return this.deps.fallbackAddresses?.() ?? []; } catch { return []; }
