@@ -2,7 +2,8 @@
 // The agent's turn hangs on a native tool ([[hang:bash …]]), so it keeps working until it is stopped:
 //   * while it works and the field is empty, Send's round cell holds Stop (a square, data-tour="run-stop") at exactly
 //     Send's place; a draft brings Send back (the message would still reach the running agent);
-//   * a click on Stop ends the run: Send is back and the run's block reads "Stopped" well within 2 s, nothing works;
+//   * a click on Stop ends the run: Send is back and the run has ended well within 2 s, nothing works (a stopped turn that
+//     wrote nothing posts nothing – agents/turn-finish.ts – so there is no "Stopped" block to wait for);
 //   * Esc in the empty field stops the next run, and Esc with the focus in the chat outside a field the one after;
 //   * light, dark and phone width (no horizontal page scroll); no renderer errors.
 // Run: npm run build && node --test test/ui/composer-stop-window.test.mjs   SCREENSHOTS=<dir> keeps the screenshots.
@@ -78,9 +79,10 @@ test('AF-012: Send turns into Stop while an agent works; click and Esc stop it w
     await stop.waitFor({ timeout: 15_000 });
     return runId;
   };
-  /** Runs `act` (the Stop) and measures until Send is back and the run's block reads Stopped. */
+  /** Runs `act` (the Stop) and measures until Send is back and the run has ended (the Stop cell is gone). */
   const stopped = async (runId, act) => {
-    const ended = rpc.waitFor('message.updated', (message) => message.runId === runId && message.state === 'stopped', 15_000);
+    const seen = new Set(rpc.events.map((frame) => frame.data));
+    const ended = rpc.waitFor('agent.activity', (event) => !seen.has(event) && !event.active.some((run) => run.runId === runId), 15_000);
     // Measured in the page from the click or key press (Playwright's own round trips are not the app's time).
     await page.evaluate(() => {
       const w = window;
@@ -88,11 +90,10 @@ test('AF-012: Send turns into Stop while an agent works; click and Esc stop it w
       const mark = () => { if (!w.__stop.input) w.__stop.input = performance.now(); };
       addEventListener('pointerdown', mark, { capture: true, once: true });
       addEventListener('keydown', mark, { capture: true, once: true });
-      const shownBefore = document.querySelectorAll('.working-message.stopped').length;
       const check = () => {
         if (!w.__stop.input) return;
         if (!w.__stop.send && document.querySelector('.composer .send-button[aria-label="Send"]')) w.__stop.send = performance.now();
-        if (!w.__stop.shown && document.querySelectorAll('.working-message.stopped').length > shownBefore) w.__stop.shown = performance.now();
+        if (!w.__stop.shown && !document.querySelector('.composer [data-tour="run-stop"]')) w.__stop.shown = performance.now();
         if (w.__stop.send && w.__stop.shown) observer.disconnect();
       };
       const observer = new MutationObserver(check);
@@ -101,7 +102,6 @@ test('AF-012: Send turns into Stop while an agent works; click and Esc stop it w
     await act();
     await send.waitFor({ timeout: 10_000 });
     await ended;
-    await page.locator('.working-message.stopped', { hasText: 'Stopped' }).last().waitFor({ timeout: 10_000 });
     const { input, send: sendAt, shown } = await page.evaluate(() => window.__stop);
     const back = Math.round(sendAt - input);
     const done = Math.round(Math.max(sendAt, shown) - input);
