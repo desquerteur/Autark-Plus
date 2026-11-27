@@ -240,7 +240,10 @@ test('the right phone: offer and answer inside its tunnel, the handshake again o
 
   const ok = lines.find((line) => line.message === 'phone rtc' && line.data?.outcome === 'ok');
   assert.ok(ok, `the try is logged (${textOf(outcomes())})`);
-  assert.deepEqual([ok.data?.local, ok.data?.remote, ok.data?.net], ['host', 'host', 'wifi'], 'with candidate types and the phone\'s network kind');
+  // The remote side is 'host', or 'prflx' when the phone's connectivity check outruns its trickled candidate
+  // (a normal ICE race under load) – both are this PC's own addresses, which the UDP check above already pins.
+  assert.deepEqual([ok.data?.local, ok.data?.net], ['host', 'wifi'], 'with the local candidate type and the phone\'s network kind');
+  assert.ok(['host', 'prflx'].includes(String(ok.data?.remote)), `remote candidate is host or prflx, not ${ok.data?.remote}`);
   for (const address of ownAddresses) assert.equal(textOf(lines).includes(`"${address}"`) || textOf(lines).includes(` ${address} `), false, `no log line names ${address}`);
   assert.equal(IPV4.test(textOf(lines)), false, 'no IPv4 address in any log line');
 
