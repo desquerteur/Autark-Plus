@@ -124,7 +124,7 @@ test('setup steps and Back; Start → the Manager\'s chat and the tour, no setup
   await rpc.call('settings.update', { onboarding: { hints: ['day', 'tasks', 'chats', 'chat', 'team', 'settings', 'apps', 'skills', 'secrets', 'devices', 'pane'] } });
   const human = (await rpc.call('messages.list', { conversationId: chatId, limit: 20 })).filter((message) => message.authorKind === 'human');
   assert.equal(human.length, 1, "the start text, once, as the person's line");
-  assert.match(human[0].body, /^Automatic message/);
+  assert.match(human[0].body, /^Sent by Autark when I clicked Start:/); // onboarding/brief.ts start text
 
   // Home (My day): no setup line.
   await go('#/home');
