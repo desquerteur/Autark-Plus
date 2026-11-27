@@ -231,7 +231,15 @@ test('My day: input, row menu (snooze, remove), calendar slot and block, handed 
   // 8. "Next", the rows and a passed time (17.11.2026, My day package 1). An agent asks four things the way agents do:
   //    each High or normal with a due time, which places its block there (tools/builtin/tasks.ts placeOnMyDay).
   await size(1280, 900);
+  // Earlier calendar/menu fixtures must not compete for the one expanded stale row.
+  for (const task of await rpc.call('todos.list', { limit: 200 })) {
+    await rpc.call('todos.remove', { id: task.id });
+  }
   const now = Date.now();
+  // The earlier auto-kind calendar fixture can be an appointment, not a to-do.
+  // Its fixed 16:00 slot otherwise conflicts with a relative past-time ask at night.
+  const previous = await rpc.call('calendar.list', { from: now - 86_400_000, to: now + 2 * 86_400_000 });
+  for (const event of previous.events) await rpc.call('calendar.remove', { id: event.id });
   const iso = (at) => new Date(at).toISOString();
   const morning = new Date(now); morning.setDate(morning.getDate() + 1); morning.setHours(8, 0, 0, 0);
   const evening = new Date(now); evening.setDate(evening.getDate() + 1); evening.setHours(18, 0, 0, 0);
@@ -286,7 +294,7 @@ test('My day: input, row menu (snooze, remove), calendar slot and block, handed 
   assert.match((await passedHint.locator('.day-stale-text').textContent()) ?? '', /^Was planned for (Yesterday )?\d{2}:\d{2}\. When does it suit you\?$/);
   const answers = (await passedHint.getByRole('button').allTextContents()).map((text) => text.trim());
   assert.equal(answers[0], 'Now');
-  assert.ok(answers.length < 3 || /^Today \d{2}:\d{2}$/.test(answers[1] ?? ''), `a free time says its day ("Today 16:20", not "16:20"): ${answers.join(' | ')}`);
+  assert.ok(answers.slice(1, -2).every((answer) => /^Today \d{2}:\d{2}$/.test(answer)), `an optional free time says its day ("Today 16:20", not "16:20"): ${answers.join(' | ')}`);
   assert.ok(answers.includes('Tomorrow 08:00') && answers.at(-1) === 'Not needed', `the answers: ${answers.join(' | ')}`);
   assert.equal(await view.locator('.day-stale').count(), 1, 'only the passed one asks');
   const laterToggle = view.getByRole('button', { name: /^Later \d+$/ });
@@ -338,6 +346,9 @@ test('My day: input, row menu (snooze, remove), calendar slot and block, handed 
   await rpc.call('messages.send', { conversationId: launch.id, body: create({ title: 'Send the booth photos to the printer', dueAt: iso(now - 4 * 60 * 60_000), estimateMin: 5 }) });
   await until(async () => Boolean(await todoOf('Send the booth photos to the printer')), 'the second passed ask', 60_000);
   const printer = (await todoOf('Send the booth photos to the printer')).id;
+  await row(printer).locator('.day-stale, .day-stale-chip').waitFor({ timeout: 10_000 });
+  const printerChip = row(printer).locator('.day-stale-chip');
+  if (await printerChip.isVisible()) await printerChip.click();
   await row(printer).locator('.day-stale').getByRole('button', { name: 'Not needed' }).click();
   await until(async () => !(await listed(printer)), 'declined: off the list');
   // Ticking one off: "Done since yesterday" names it.

@@ -39,9 +39,30 @@ test('Emergency stop shortcut: registered only while agents work, also with the 
   await page.waitForSelector('.shell', { timeout: 60_000 });
   const info = JSON.parse(await readFile(path.join(profile, 'runtime.json'), 'utf8'));
   rpc = await connect(info.port, info.token, 'cli');
-  const registered = (keys = KEYS) => app.evaluate(({ globalShortcut }, accelerator) => globalShortcut.isRegistered(accelerator), keys);
+  // The live host/another company may legitimately own the production keys while its
+  // agents work. Keep the production request unchanged, but map its OS registration
+  // to a free accelerator inside this isolated Electron process. This still tests
+  // real OS registration/unregistration; it never steals or stops the host's work.
+  const physicalKeys = await app.evaluate(({ globalShortcut }, accelerator) => {
+    const register = globalShortcut.register.bind(globalShortcut);
+    const unregister = globalShortcut.unregister.bind(globalShortcut);
+    for (const candidate of [accelerator, 'Control+Alt+Shift+F12', 'Control+Alt+Shift+F11', 'Control+Alt+Shift+F10']) {
+      if (!register(candidate, () => {})) continue;
+      unregister(candidate);
+      if (candidate !== accelerator) {
+        globalShortcut.register = (keys, callback) => register(keys === accelerator ? candidate : keys, callback);
+        globalShortcut.unregister = (keys) => unregister(keys === accelerator ? candidate : keys);
+      }
+      return candidate;
+    }
+    return null;
+  }, KEYS);
+  assert.ok(physicalKeys, 'a real OS accelerator must be available for the isolated test');
+  t.diagnostic(`emergency shortcut request ${KEYS}; isolated OS registration ${physicalKeys}`);
+  const registered = (keys = physicalKeys) => app.evaluate(({ globalShortcut }, accelerator) => globalShortcut.isRegistered(accelerator), keys);
   const until = async (want, label) => {
     for (let i = 0; i < 75; i++) { if (await registered() === want) return; await page.waitForTimeout(200); }
+    t.diagnostic(`runtime work state: ${JSON.stringify(await rpc.call('work.state'))}`);
     assert.fail(`${label}: the shortcut is ${want ? 'not ' : ''}registered`);
   };
 
