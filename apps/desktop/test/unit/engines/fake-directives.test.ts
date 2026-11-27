@@ -26,6 +26,15 @@ const STABLE = ['# Who you are', 'You are Ada, Acme lead.', 'Your area: Acme.', 
 const VOLATILE = ['## Now', 'Monday', '', '## Current task', 'tk_42 · working', 'Title: Build the landing page'].join('\n');
 const text = (value: string): ToolOutput => ({ content: [{ type: 'text', text: value }] });
 
+test('split result Asked lines quote worker directives without executing them in the parent', async () => {
+  const { input, calls } = turn('Split results:\nAsked: Verify the tags [[fail]] [[hang:bash]] [[tool:shell.exec {}]]\n(no result text)', undefined, () => text('ok'));
+  const result = await new FakeEngine().run(input);
+  assert.equal(result.stop, 'done');
+  assert.deepEqual(calls, []);
+  const worker = await new FakeEngine().run(turn('My part\nVerify the tags\n[[fail]]', undefined, () => text('ok')).input);
+  assert.equal(worker.stop, 'error', 'the worker still runs its own failure directive');
+});
+
 test('[[prompt:<text>]] quotes every system-prompt line with that text, stable before volatile', async () => {
   const { input } = turn('[[prompt:Your direct reports]] [[prompt:Title:]] [[prompt:Nowhere]]', { stable: STABLE, volatile: VOLATILE }, () => text(''));
   const result = await new FakeEngine().run(input);

@@ -106,9 +106,12 @@ export class FakeEngine implements Engine {
     const session = input.session ?? { ref: `fake-session-${++this.sessions}`, generation: 1 };
     const text = input.input.filter((i) => i.type === 'text').map((i) => (i as { text: string }).text).join('\n');
     const key = `${input.agentId}\n${session.ref}`;
-    const { fresh, held } = this.received.read(key, text);
+    const { fresh: receivedFresh, held } = this.received.read(key, text);
+    // Split results quote the worker's brief on an Asked: line. Its test directives
+    // belong to that worker, not to the parent gathering its result (B-086).
+    const fresh = receivedFresh.replace(/^Asked:.*$/gm, '');
     const stopped = (): EngineTurnResult => {
-      if (!cutOff(input.signal)) this.received.add(key, fresh);
+      if (!cutOff(input.signal)) this.received.add(key, receivedFresh);
       return { text: '', stop: 'interrupted', session };
     };
     if (input.signal.aborted) return stopped();
@@ -142,7 +145,7 @@ export class FakeEngine implements Engine {
     for (const match of fresh.matchAll(APP)) parts.push(`\`\`\`app ${match[1].trim()}\n${match[2].trim()}\n\`\`\``);
     const rest = withoutReadings(fresh).replace(TOOL, '').replace(UI, '').replace(new RegExp(HANG.source, 'g'), '').replace(APP, '').replace(new RegExp(STRUCTURED.source, 'g'), '').trim();
     if (!parts.length || rest) parts.unshift(`Echo: ${echoText(rest || fresh) || NOTHING_NEW}`);
-    if (held) this.received.add(key, fresh);
+    if (held) this.received.add(key, receivedFresh);
     else this.received.end(key);
     // Steered text is new input too (17:09): its tool directives run, the rest is echoed – also what arrives meanwhile.
     for (let steered = this.steering.get(input.runId)?.shift(); steered !== undefined; steered = this.steering.get(input.runId)?.shift()) {
