@@ -162,7 +162,17 @@ test('#30 Settings › Appearance › Scale: live, app-wide, Ctrl +/−/0, layou
   await page.locator('textarea.composer-input').fill(`[[tool:browser.show {"url":"${address}/plan","where":"chat"}]]`);
   await page.locator('button.send-button').click();
   await until('the page exactly in the chat\'s tabs at 150 %', async () => {
-    const area = await page.locator('.chat-area .browser-native-slot').evaluate((element) => { const r = element.getBoundingClientRect(); const z = Number(getComputedStyle(document.documentElement).zoom) || 1; return { x: r.left * z, y: r.top * z, right: r.right * z, bottom: r.bottom * z, raw: [r.left, r.top, r.right] }; }).catch(() => null);
+    // B-080 (native-surface.ts pageBounds): a column-resize grip on the slot's edge keeps its pointer – the page begins beside it
+    const area = await page.locator('.chat-area .browser-native-slot').evaluate((element) => {
+      const r = element.getBoundingClientRect();
+      let left = r.left; let right = r.right;
+      for (const grip of [...document.querySelectorAll('.column-resize')].map((g) => g.getBoundingClientRect())) {
+        if (grip.left <= left && grip.right > left) left = grip.right;
+        if (grip.right >= right && grip.left < right) right = grip.left;
+      }
+      const z = Number(getComputedStyle(document.documentElement).zoom) || 1;
+      return { x: left * z, y: r.top * z, right: right * z, bottom: r.bottom * z, raw: [left, r.top, right] };
+    }).catch(() => null);
     const views = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children
       .filter((view) => view.constructor.name === 'WebContentsView' && view.getVisible() && view.getBounds().width > 10).map((view) => view.getBounds()));
     const match = (box) => views.some((view) => Math.abs(view.x - box.x) <= 3 && Math.abs(view.y - box.y) <= 3 && Math.abs(view.x + view.width - box.right) <= 3);
