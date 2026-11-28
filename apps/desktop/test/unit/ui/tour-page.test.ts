@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { bundleTourPage } from '../../../scripts/tour-page.mjs';
 import { VIDEO_SEEN_KEY, firstVideoHere } from '../../../src/ui/pwa/native.ts';
+import { closeTour, openTour, tourOpen, tourVariant } from '../../../src/ui/tour/open.ts';
 
 const source = (file: string) => readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8');
 
@@ -44,6 +45,18 @@ test('the iPhone web app plays it once, on its first start after pairing; elsewh
   assert.match(shell, /useEffect\(\(\) => \{ if \(firstVideoHere\(\)\) openTour\(\{ autoplay: true \}\); \}, \[\]\);/);
   assert.match(shell, /<TourDialog phone=\{isMobile\.value\} \/>/, 'the phone layout plays the phone\'s tour');
   const dialog = source('src/ui/tour/TourDialog.tsx');
-  assert.match(dialog, /const \[variant\] = useState\(props\.variant\);/, 'the opening\'s variant stays while it plays');
+  assert.match(dialog, /const \[variant\] = useState\(\(\) => tourVariant\.peek\(\) \?\? \(tourVariant\.value = props\.variant\)\);/, 'the opening\'s variant stays while it plays, also across a remount');
   assert.match(dialog, /<TourPlayer onDone=\{closeTour\} autoplay=\{tourAutoplay\.peek\(\)\} variant=\{variant\} \/>/);
+});
+
+test('the opening\'s variant is kept while the tour is open and cleared when it closes', () => {
+  closeTour();
+  assert.equal(tourVariant.value, null, 'closed: no variant');
+  openTour();
+  assert.equal(tourOpen.value, true);
+  tourVariant.value = 'phone'; // what TourDialog stores on its first mount
+  assert.equal(tourVariant.peek() ?? 'desktop', 'phone', 'a remount after a breakpoint switch reads the opening\'s variant');
+  closeTour();
+  assert.equal(tourOpen.value, false);
+  assert.equal(tourVariant.value, null, 'the next opening chooses afresh');
 });
